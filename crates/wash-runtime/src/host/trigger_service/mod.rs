@@ -58,7 +58,7 @@ pub(crate) use capability::decode_bind_reply;
 #[cfg(feature = "host-component-plugins")]
 use capability::{admit_and_spawn_call, drain_plugin_resources, flush_pending_resource_drops};
 pub(crate) use http::HttpTask;
-use messaging::{HANDLE_MESSAGE, MESSAGING_HANDLER, MessagingTask};
+use messaging::{HANDLE_MESSAGE, MESSAGING_HANDLERS, MessagingTask};
 
 /// A host-invoked handler export the TriggerService serves, carrying the receiver end
 /// of its delivery channel. The paired sender is handed to the host-side ingress
@@ -68,8 +68,8 @@ use messaging::{HANDLE_MESSAGE, MESSAGING_HANDLER, MessagingTask};
 pub enum Ingress {
     /// `wasi:http/handler@0.3` — the HTTP server delivers requests here.
     Http(tokio::sync::mpsc::Receiver<ServiceHttpJob>),
-    /// `wasmcloud:messaging/handler@0.2.0` — the messaging subscriber delivers
-    /// received messages here.
+    /// `wasmcloud:messaging/handler` (`@0.3.0` or `@0.2.0`) — the messaging
+    /// subscriber delivers received messages here.
     Messaging(tokio::sync::mpsc::Receiver<MessagingJob>),
     /// Cross-store capability calls for a host component plugin. `funcs` lists
     /// every exported function to resolve up front; `rx` delivers the calls;
@@ -103,15 +103,23 @@ impl Ingress {
                 })
             }
             Ingress::Messaging(rx) => {
-                // Look up the p2 `handle-message` export up front; it's invoked
-                // dynamically (there is no accessor-driven p3 messaging binding).
-                let iface = instance
-                    .get_export(&mut *store, None, MESSAGING_HANDLER)
-                    .with_context(|| format!("service is missing {MESSAGING_HANDLER} export"))?
-                    .1;
+                // Look up the `handle-message` export up front; it's invoked
+                // dynamically, which serves either handler revision. Prefer the
+                // async `@0.3.0` interface and fall back to `@0.2.0`, so a
+                // service built before the async revision still resolves.
+                let (handler, iface) = MESSAGING_HANDLERS
+                    .iter()
+                    .find_map(|name| {
+                        instance
+                            .get_export(&mut *store, None, name)
+                            .map(|(_, iface)| (*name, iface))
+                    })
+                    .with_context(|| {
+                        format!("service exports none of: {}", MESSAGING_HANDLERS.join(", "))
+                    })?;
                 let func_idx = instance
                     .get_export(&mut *store, Some(&iface), HANDLE_MESSAGE)
-                    .with_context(|| format!("{MESSAGING_HANDLER} is missing {HANDLE_MESSAGE}"))?
+                    .with_context(|| format!("{handler} is missing {HANDLE_MESSAGE}"))?
                     .1;
                 Ok(PreparedIngress::Messaging {
                     instance: *instance,

@@ -1,6 +1,8 @@
 mod in_memory;
 #[cfg(feature = "wasm_component_model_implements")]
 mod multiplexed;
+#[cfg(feature = "wasm_component_model_implements")]
+mod multiplexed_async;
 mod nats;
 
 pub use in_memory::InMemoryMessaging;
@@ -9,7 +11,236 @@ pub use multiplexed::{
     BrokerMessage, InMemoryMsgBackend, InMemoryMsgProvider, MsgBackend, MsgId, MsgProvider,
     MultiplexedMessaging, NatsMsgBackend, NatsMsgProvider,
 };
+#[cfg(feature = "wasm_component_model_implements")]
+pub use multiplexed_async::MultiplexedAsyncMessaging;
 pub use nats::NatsMessaging;
+
+/// A messaging failure, classified into the named cases of the async
+/// `wasmcloud:messaging@0.3.0` `error` variant.
+///
+/// The two messaging surfaces disagree on how an error is spelled: `@0.2.0`
+/// returns a bare `string`, `@0.3.0` a non-exhaustive variant. Producers of an
+/// error therefore classify once, into this type, and each host impl lowers it —
+/// to a string via [`Display`](std::fmt::Display) for the sync path, into the WIT
+/// variant for the async one (see `multiplexed_async`).
+///
+/// Every case carries the human-readable detail. The sync path prints it, so its
+/// error strings are unchanged from before this type existed; the async path
+/// keeps it only for [`MsgError::Other`], since the WIT's named cases have no
+/// payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MsgError {
+    /// The subject is malformed, empty, or otherwise rejected by the broker.
+    SubjectInvalid(String),
+    /// The component is not permitted to publish to this subject.
+    AccessDenied(String),
+    /// A `request` did not receive a reply within its `timeout_ms`.
+    Timeout(String),
+    /// The broker is unreachable or otherwise unavailable.
+    BrokerUnavailable(String),
+    /// The message body exceeded the broker's maximum payload size.
+    MessageTooLarge(String),
+    /// A quota or rate limit was exceeded.
+    QuotaExceeded(String),
+    /// A backend-specific failure that maps to no named case above.
+    Other(String),
+}
+
+impl std::fmt::Display for MsgError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let detail = match self {
+            MsgError::SubjectInvalid(d)
+            | MsgError::AccessDenied(d)
+            | MsgError::Timeout(d)
+            | MsgError::BrokerUnavailable(d)
+            | MsgError::MessageTooLarge(d)
+            | MsgError::QuotaExceeded(d)
+            | MsgError::Other(d) => d,
+        };
+        f.write_str(detail)
+    }
+}
+
+impl std::error::Error for MsgError {}
+
+/// The lowering used by the sync `@0.2.0` surface, whose WIT `error` is a `string`.
+impl From<MsgError> for String {
+    fn from(e: MsgError) -> Self {
+        e.to_string()
+    }
+}
+
+/// Expands the conversions between this crate's messaging vocabulary and one
+/// `bindgen!`-generated `@0.3.0` surface.
+///
+/// Each messaging plugin has its own `bindgen!` invocation — they implement the
+/// generated host traits for different backends, so they cannot share one — and
+/// each therefore gets its own `error` and `broker-message` Rust types even
+/// though the WIT is a single package. The conversions are identical in every
+/// case, so they are written once here and expanded per module rather than
+/// copied three times and left to drift.
+///
+/// Note this is the only capability that needs such a thing, which is why no
+/// sibling has one: `wasmcloud:keyvalue` and `wasmcloud:blobstore` asyncified
+/// only their *multiplexed* plugin, leaving one async `bindgen!` apiece and so
+/// nothing to share (keyvalue's exported `watcher` is declared in WIT but never
+/// served host-side). Messaging asyncifies all three plugins, because its
+/// exported `handler` — the subscription path, served by the standalone NATS and
+/// in-memory plugins that `wash dev` and `wash host` register — is the half of
+/// the capability that receives messages.
+///
+/// Generates, in the invoking module:
+/// * `impl From<MsgError> for <async error>` — the named WIT cases carry no
+///   payload, so their host-side detail is dropped; it survives only on `other`.
+/// * `to_async_message` / `from_async_message` — `@0.2.0` and `@0.3.0` declare
+///   the same `broker-message` fields but generate distinct Rust types.
+macro_rules! async_messaging_conversions {
+    (error: $async_error:ty, sync_message: $sync_msg:ty, async_message: $async_msg:ty $(,)?) => {
+        impl From<$crate::plugin::wasmcloud_messaging::MsgError> for $async_error {
+            fn from(e: $crate::plugin::wasmcloud_messaging::MsgError) -> Self {
+                use $crate::plugin::wasmcloud_messaging::MsgError as E;
+                match e {
+                    E::SubjectInvalid(_) => Self::SubjectInvalid,
+                    E::AccessDenied(_) => Self::AccessDenied,
+                    E::Timeout(_) => Self::Timeout,
+                    E::BrokerUnavailable(_) => Self::BrokerUnavailable,
+                    E::MessageTooLarge(_) => Self::MessageTooLarge,
+                    E::QuotaExceeded(_) => Self::QuotaExceeded,
+                    E::Other(d) => Self::Other(d),
+                }
+            }
+        }
+
+        // Aliased so the record can be built by name: a `ty` macro fragment
+        // cannot itself head a struct literal, but an alias to one can.
+        type SyncBrokerMessage = $sync_msg;
+        type AsyncBrokerMessageAlias = $async_msg;
+
+        /// Convert this module's `@0.2.0` `broker-message` into its `@0.3.0` one.
+        #[allow(dead_code)]
+        fn to_async_message(msg: SyncBrokerMessage) -> AsyncBrokerMessageAlias {
+            AsyncBrokerMessageAlias {
+                subject: msg.subject,
+                body: msg.body,
+                reply_to: msg.reply_to,
+            }
+        }
+
+        /// Convert this module's `@0.3.0` `broker-message` into its `@0.2.0` one.
+        #[allow(dead_code)]
+        fn from_async_message(msg: AsyncBrokerMessageAlias) -> SyncBrokerMessage {
+            SyncBrokerMessage {
+                subject: msg.subject,
+                body: msg.body,
+                reply_to: msg.reply_to,
+            }
+        }
+    };
+}
+
+pub(crate) use async_messaging_conversions;
+
+/// Expands the per-message handler dispatch shared by the standalone plugins.
+///
+/// A subscriber loop pre-instantiates the component once and then invokes its
+/// `handle-message` export per message. Which export that is depends on the
+/// revision the guest was built against, so this generates a two-variant
+/// `HandlerPre`/`HandlerProxy` pair that resolves the revision once, at
+/// pre-instantiation, and dispatches on it thereafter.
+///
+/// Both standalone plugins need exactly this over their own `bindgen!` types
+/// (see [`async_messaging_conversions`] for why the types are per-module), so it
+/// is written once here.
+macro_rules! messaging_handler_dispatch {
+    (sync: $sync:ident, async: $async:ident $(,)?) => {
+        /// A pre-instantiated messaging handler component, at whichever revision
+        /// of `wasmcloud:messaging/handler` it exports.
+        enum HandlerPre {
+            V0_2($sync::MessagingPre<$crate::engine::ctx::SharedCtx>),
+            V0_3($async::AsyncMessagingPre<$crate::engine::ctx::SharedCtx>),
+        }
+
+        /// An instantiated handler, ready to receive one message.
+        enum HandlerProxy {
+            V0_2($sync::Messaging),
+            V0_3($async::AsyncMessaging),
+        }
+
+        impl HandlerPre {
+            /// Resolve the exported handler revision, preferring the async
+            /// `@0.3.0` one. `MessagingPre::new` is what actually type-checks the
+            /// export against a revision, so trying `@0.3.0` first and falling
+            /// back is both the check and the selection.
+            fn new(
+                instance_pre: wasmtime::component::InstancePre<$crate::engine::ctx::SharedCtx>,
+            ) -> wasmtime::Result<Self> {
+                match $async::AsyncMessagingPre::new(instance_pre.clone()) {
+                    Ok(p) => Ok(HandlerPre::V0_3(p)),
+                    Err(async_err) => match $sync::MessagingPre::new(instance_pre) {
+                        Ok(p) => Ok(HandlerPre::V0_2(p)),
+                        // Report the `@0.3.0` failure too: a guest that meant to
+                        // export the async handler but got it subtly wrong would
+                        // otherwise only ever be reported against `@0.2.0`.
+                        Err(sync_err) => Err(sync_err.context(format!(
+                            "component exports neither wasmcloud:messaging/handler@0.3.0 \
+                             ({async_err:#}) nor @0.2.0"
+                        ))),
+                    },
+                }
+            }
+
+            async fn instantiate(
+                &self,
+                store: &mut wasmtime::Store<$crate::engine::ctx::SharedCtx>,
+            ) -> wasmtime::Result<HandlerProxy> {
+                match self {
+                    HandlerPre::V0_2(p) => p.instantiate_async(store).await.map(HandlerProxy::V0_2),
+                    HandlerPre::V0_3(p) => p.instantiate_async(store).await.map(HandlerProxy::V0_3),
+                }
+            }
+        }
+
+        impl HandlerProxy {
+            /// Deliver one message, normalizing the handler's `result` to a
+            /// `Result<(), String>` for the ack/log path — `@0.2.0` already
+            /// returns a string, `@0.3.0` an `error` variant rendered via its
+            /// `Debug`.
+            async fn call_handle_message(
+                &self,
+                store: &mut wasmtime::Store<$crate::engine::ctx::SharedCtx>,
+                msg: &types::BrokerMessage,
+            ) -> wasmtime::Result<Result<(), String>> {
+                match self {
+                    HandlerProxy::V0_2(proxy) => {
+                        proxy
+                            .wasmcloud_messaging0_2_0_handler()
+                            .call_handle_message(store, msg)
+                            .await
+                    }
+                    // An `async func` export binds through the concurrent ABI,
+                    // so it takes an `Accessor` and must be driven inside
+                    // `run_concurrent` — which also lets the guest await its own
+                    // imports (e.g. replying via `consumer.publish`) while the
+                    // host keeps the store pumping.
+                    HandlerProxy::V0_3(proxy) => {
+                        let async_msg = to_async_message(msg.clone());
+                        store
+                            .run_concurrent(async move |accessor| {
+                                proxy
+                                    .wasmcloud_messaging0_3_0_handler()
+                                    .call_handle_message(accessor, async_msg)
+                                    .await
+                            })
+                            .await?
+                            .map(|r| r.map_err(|e| format!("{e:?}")))
+                    }
+                }
+            }
+        }
+    };
+}
+
+pub(crate) use messaging_handler_dispatch;
 
 /// Returns `true` if the world exports the `wasmcloud:messaging/handler`
 /// interface at any version. Matches via [`WitInterface::contains`] rather
@@ -18,6 +249,22 @@ pub use nats::NatsMessaging;
 pub(crate) fn exports_messaging_handler(world: &crate::wit::WitWorld) -> bool {
     let handler = crate::wit::WitInterface::from("wasmcloud:messaging/handler");
     world.exports.iter().any(|e| e.contains(&handler))
+}
+
+/// Returns `true` if the workload declared its `wasmcloud:messaging` host
+/// interface at the async revision (`>= 0.3.0`).
+///
+/// A versionless declaration is deliberately *not* async: it cannot be told
+/// apart from a `@0.2.0` one, and binding the wrong ABI fails at instantiation
+/// with an opaque type mismatch. Declaring the version is how a workload selects
+/// a surface, and defaulting to sync keeps pre-`@0.3.0` workloads working.
+pub(crate) fn declares_async_messaging(interfaces: &crate::plugin::WitInterfaces<'_>) -> bool {
+    const ASYNC_MIN: semver::Version = semver::Version::new(0, 3, 0);
+    interfaces.iter().any(|i| {
+        i.namespace == "wasmcloud"
+            && i.package == "messaging"
+            && i.version.as_ref().is_some_and(|v| *v >= ASYNC_MIN)
+    })
 }
 
 /// Parses a comma-separated `subscriptions` config value into trimmed,
@@ -35,9 +282,69 @@ pub(crate) fn parse_subscriptions(raw: Option<&str>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{exports_messaging_handler, parse_subscriptions};
+    use super::{
+        MsgError, declares_async_messaging, exports_messaging_handler, parse_subscriptions,
+    };
+    use crate::plugin::WitInterfaces;
     use crate::wit::{WitInterface, WitWorld};
     use std::collections::HashSet;
+
+    fn messaging_iface(version: Option<&str>) -> WitInterface {
+        WitInterface {
+            namespace: "wasmcloud".to_string(),
+            package: "messaging".to_string(),
+            interfaces: ["consumer".to_string()].into_iter().collect(),
+            version: version.map(|v| semver::Version::parse(v).unwrap()),
+            config: std::collections::HashMap::new(),
+            name: None,
+        }
+    }
+
+    /// Which surface a workload gets is decided by the version it declares.
+    #[test]
+    fn async_surface_selected_by_declared_version() {
+        for (version, expected) in [
+            (Some("0.3.0"), true),
+            (Some("0.4.0"), true),
+            (Some("0.2.0"), false),
+        ] {
+            let set = HashSet::from([messaging_iface(version)]);
+            assert_eq!(
+                declares_async_messaging(&WitInterfaces::new(&set)),
+                expected,
+                "version {version:?}"
+            );
+        }
+    }
+
+    /// A versionless declaration must resolve to the SYNC surface: it is
+    /// indistinguishable from a `@0.2.0` one, and defaulting the other way would
+    /// silently break every workload written before `@0.3.0` existed.
+    #[test]
+    fn versionless_declaration_defaults_to_sync() {
+        let set = HashSet::from([messaging_iface(None)]);
+        assert!(!declares_async_messaging(&WitInterfaces::new(&set)));
+    }
+
+    /// An unrelated package must never flip the messaging surface.
+    #[test]
+    fn other_packages_do_not_select_the_async_surface() {
+        let mut iface = messaging_iface(Some("0.3.0"));
+        iface.package = "keyvalue".to_string();
+        let set = HashSet::from([iface]);
+        assert!(!declares_async_messaging(&WitInterfaces::new(&set)));
+    }
+
+    /// The sync `@0.2.0` surface prints the classified error's detail verbatim,
+    /// so its error strings are unchanged from before `MsgError` existed.
+    #[test]
+    fn sync_lowering_preserves_error_text() {
+        let text: String = MsgError::Timeout("request timed out after 5000ms".into()).into();
+        assert_eq!(text, "request timed out after 5000ms");
+        let text: String =
+            MsgError::BrokerUnavailable("failed to send message: broken pipe".into()).into();
+        assert_eq!(text, "failed to send message: broken pipe");
+    }
 
     #[test]
     fn recognizes_exported_handler_at_any_version() {

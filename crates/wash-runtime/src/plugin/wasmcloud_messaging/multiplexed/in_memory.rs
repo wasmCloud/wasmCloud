@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 
 use crate::plugin::multiplex::BackendProvider;
 
-use super::{BrokerMessage, MsgBackend, MsgId};
+use super::{BrokerMessage, MsgBackend, MsgError, MsgId};
 
 /// An in-memory [`MsgBackend`] that records published messages and answers
 /// `request` by echoing it back as its own reply. Each instance is isolated.
@@ -39,7 +39,7 @@ impl MsgBackend for InMemoryMsgBackend {
         subject: String,
         body: Vec<u8>,
         _timeout_ms: u32,
-    ) -> Result<BrokerMessage, String> {
+    ) -> Result<BrokerMessage, MsgError> {
         // Loopback: echo the request back as its own reply.
         self.published.write().await.push(BrokerMessage {
             subject: subject.clone(),
@@ -53,7 +53,7 @@ impl MsgBackend for InMemoryMsgBackend {
         })
     }
 
-    async fn publish(&self, msg: BrokerMessage) -> Result<(), String> {
+    async fn publish(&self, msg: BrokerMessage) -> Result<(), MsgError> {
         self.published.write().await.push(msg);
         Ok(())
     }

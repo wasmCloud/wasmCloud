@@ -43,6 +43,10 @@ use crate::FixtureKind;
 /// spec.
 const FIXTURES: &[(&str, FixtureKind)] = &[
     ("messaging-echo", FixtureKind::P2),
+    // The async counterpart: same echo round-trip, but against
+    // `wasmcloud:messaging@0.3.0`, so the e2e covers both revisions on a real
+    // NATS bus rather than only the sync one.
+    ("messaging-echo-p3", FixtureKind::P3),
     ("keyvalue-implements", FixtureKind::P2),
     ("http-handler-p2", FixtureKind::P2),
     // Host component plugin fixtures (P3 async): kv-plugin serves acme:kv/store

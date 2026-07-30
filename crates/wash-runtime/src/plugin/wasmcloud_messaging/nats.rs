@@ -16,8 +16,47 @@ mod bindings {
     });
 }
 
-use bindings::wasmcloud::messaging::consumer::Host;
-use bindings::wasmcloud::messaging::types;
+/// Bindings for the async `wasmcloud:messaging@0.3.0` surface, served off the
+/// same NATS client. A separate `bindgen!` (rather than one shared module)
+/// because each plugin implements the generated host traits for its own backend
+/// — the same arrangement the sync world already uses across the three plugins.
+mod async_bindings {
+    crate::wasmtime::component::bindgen!({
+        world: "async-messaging",
+        imports: { default: async | trappable | tracing },
+        exports: { default: async | tracing },
+    });
+}
+
+// The two messaging surfaces, imported symmetrically: `*P2` is the sync
+// `@0.2.0` binding, `*P3` the async `@0.3.0` one. Both are generated from the
+// same WIT package but by different `bindgen!` invocations, so they are
+// unrelated Rust types with identical names — aliasing both at the top keeps
+// every use site below reading as a straight p2/p3 pair.
+use bindings::wasmcloud::messaging0_2_0::consumer::{self as consumer_p2, Host as HostP2};
+use bindings::wasmcloud::messaging0_2_0::types::{self, Host as TypesHostP2};
+
+use async_bindings::wasmcloud::messaging0_3_0::consumer::{
+    self as consumer_p3, Host as HostP3, HostWithStore as HostWithStoreP3,
+};
+use async_bindings::wasmcloud::messaging0_3_0::types::{
+    self as types_p3, BrokerMessage as AsyncBrokerMessage, Error as AsyncMsgError,
+    Host as TypesHostP3,
+};
+use wasmtime::component::Accessor;
+
+use super::MsgError;
+
+super::async_messaging_conversions! {
+    error: AsyncMsgError,
+    sync_message: types::BrokerMessage,
+    async_message: AsyncBrokerMessage,
+}
+
+super::messaging_handler_dispatch! {
+    sync: bindings,
+    async: async_bindings,
+}
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::{ResolvedWorkload, WorkloadItem};
@@ -90,7 +129,7 @@ impl NatsMessaging {
     }
 }
 
-impl<'a> Host for ActiveCtx<'a> {
+impl<'a> HostP2 for ActiveCtx<'a> {
     #[instrument(name = "wasmcloud.messaging.request", skip_all, fields(subject = %subject, timeout_ms))]
     async fn request(
         &mut self,
@@ -146,7 +185,93 @@ impl<'a> Host for ActiveCtx<'a> {
     }
 }
 
-impl<'a> types::Host for ActiveCtx<'a> {}
+impl<'a> TypesHostP2 for ActiveCtx<'a> {}
+
+/// The async `@0.3.0` consumer, over the same NATS client as the sync one.
+///
+/// `async func`s bind through wasmtime's concurrent ABI, so these are `async
+/// fn`s on `SharedCtx` taking an [`Accessor`] rather than `&mut self` methods on
+/// `ActiveCtx`. Errors are classified into [`MsgError`] and lowered into the WIT
+/// `error` variant. Note this differs from the sync `publish` above, which
+/// *traps* the guest on a publish failure; the async surface reports it as an
+/// ordinary `result` error, which is what the WIT says it is.
+impl<T: 'static + Send> HostWithStoreP3<T> for SharedCtx {
+    async fn request(
+        accessor: &Accessor<T, Self>,
+        subject: String,
+        body: Vec<u8>,
+        timeout_ms: u32,
+    ) -> wasmtime::Result<Result<AsyncBrokerMessage, AsyncMsgError>> {
+        let plugin =
+            accessor.with(|mut a| a.get().try_get_plugin::<NatsMessaging>(PLUGIN_MESSAGING_ID))?;
+
+        let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
+        let request_future = plugin.client.request(subject, body.into());
+
+        let resp = match tokio::time::timeout(timeout_duration, request_future).await {
+            Ok(Ok(msg)) => msg,
+            Ok(Err(e)) => return Ok(Err(classify_request(&e).into())),
+            Err(_) => {
+                warn!("request timed out after {timeout_ms}ms");
+                return Ok(Err(AsyncMsgError::Timeout));
+            }
+        };
+        Ok(Ok(AsyncBrokerMessage {
+            subject: resp.subject.to_string(),
+            reply_to: resp.reply.as_ref().map(|r| r.to_string()),
+            body: resp.payload.into(),
+        }))
+    }
+
+    async fn publish(
+        accessor: &Accessor<T, Self>,
+        msg: AsyncBrokerMessage,
+    ) -> wasmtime::Result<Result<(), AsyncMsgError>> {
+        let plugin =
+            accessor.with(|mut a| a.get().try_get_plugin::<NatsMessaging>(PLUGIN_MESSAGING_ID))?;
+
+        let result = if let Some(reply_to) = msg.reply_to {
+            plugin
+                .client
+                .publish_with_reply(msg.subject, reply_to, msg.body.into())
+                .await
+        } else {
+            plugin.client.publish(msg.subject, msg.body.into()).await
+        };
+        Ok(result.map_err(|e| classify_publish(&e).into()))
+    }
+}
+
+impl HostP3 for ActiveCtx<'_> {}
+impl TypesHostP3 for ActiveCtx<'_> {}
+
+/// Classify an `async_nats` request failure into a [`MsgError`].
+///
+/// `NoResponders` has no named WIT case — the broker is healthy and the subject
+/// is valid, there is simply nothing subscribed — so it stays `Other` rather
+/// than being misreported as a timeout or an unavailable broker.
+pub(super) fn classify_request(e: &async_nats::RequestError) -> MsgError {
+    use async_nats::RequestErrorKind::*;
+    let detail = format!("failed to send request: {e}");
+    match e.kind() {
+        TimedOut => MsgError::Timeout(detail),
+        InvalidSubject => MsgError::SubjectInvalid(detail),
+        MaxPayloadExceeded => MsgError::MessageTooLarge(detail),
+        Other => MsgError::BrokerUnavailable(detail),
+        NoResponders => MsgError::Other(detail),
+    }
+}
+
+/// Classify an `async_nats` publish failure into a [`MsgError`].
+pub(super) fn classify_publish(e: &async_nats::PublishError) -> MsgError {
+    use async_nats::PublishErrorKind::*;
+    let detail = format!("failed to send message: {e}");
+    match e.kind() {
+        InvalidSubject => MsgError::SubjectInvalid(detail),
+        MaxPayloadExceeded => MsgError::MessageTooLarge(detail),
+        Send => MsgError::BrokerUnavailable(detail),
+    }
+}
 
 #[async_trait::async_trait]
 impl HostPlugin for NatsMessaging {
@@ -154,13 +279,20 @@ impl HostPlugin for NatsMessaging {
         PLUGIN_MESSAGING_ID
     }
 
+    /// Serves both messaging revisions. A workload selects one by the version on
+    /// its `wasmcloud:messaging` host-interface entry; a versionless entry gets
+    /// the sync `@0.2.0` surface, preserving the behaviour of workloads written
+    /// before `@0.3.0` existed.
     fn world(&self) -> WitWorld {
         WitWorld {
-            imports: HashSet::from([WitInterface::from(
-                "wasmcloud:messaging/consumer,types@0.2.0",
-            )]),
-
-            exports: HashSet::from([WitInterface::from("wasmcloud:messaging/handler@0.2.0")]),
+            imports: HashSet::from([
+                WitInterface::from("wasmcloud:messaging/consumer,types@0.2.0"),
+                WitInterface::from("wasmcloud:messaging/consumer,types@0.3.0"),
+            ]),
+            exports: HashSet::from([
+                WitInterface::from("wasmcloud:messaging/handler@0.2.0"),
+                WitInterface::from("wasmcloud:messaging/handler@0.3.0"),
+            ]),
         }
     }
 
@@ -184,14 +316,22 @@ impl HostPlugin for NatsMessaging {
         let interface_subscriptions = interface.config.get("subscriptions").cloned();
         let interface_consumer_group = interface.config.get(CONSUMER_GROUP_CONFIG).cloned();
 
-        bindings::wasmcloud::messaging::types::add_to_linker::<_, SharedCtx>(
-            component_handle.linker(),
-            extract_active_ctx,
-        )?;
-        bindings::wasmcloud::messaging::consumer::add_to_linker::<_, SharedCtx>(
-            component_handle.linker(),
-            extract_active_ctx,
-        )?;
+        // Bind only the revision(s) the workload actually declared: the two
+        // surfaces are separate linker instances, and binding one a component
+        // never imports is harmless but binding the wrong one is not.
+        if super::declares_async_messaging(&interfaces) {
+            types_p3::add_to_linker::<_, SharedCtx>(component_handle.linker(), extract_active_ctx)?;
+            consumer_p3::add_to_linker::<_, SharedCtx>(
+                component_handle.linker(),
+                extract_active_ctx,
+            )?;
+        } else {
+            types::add_to_linker::<_, SharedCtx>(component_handle.linker(), extract_active_ctx)?;
+            consumer_p2::add_to_linker::<_, SharedCtx>(
+                component_handle.linker(),
+                extract_active_ctx,
+            )?;
+        }
 
         let local_subscriptions = component_handle
             .local_resources()
@@ -280,10 +420,9 @@ impl HostPlugin for NatsMessaging {
         // pre-instantiate; its receive loop delivers to the running service
         // instead. Only components get a `MessagingPre` for per-message work.
         let pre = match workload.instantiate_pre(component_id).await {
-            Ok(instance_pre) => Some(
-                bindings::MessagingPre::new(instance_pre)
-                    .context("failed to instantiate messaging pre")?,
-            ),
+            Ok(instance_pre) => {
+                Some(HandlerPre::new(instance_pre).context("failed to instantiate messaging pre")?)
+            }
             Err(e) => {
                 trace!(component_id, error = %e, "no per-message instance (long-lived service); messages delivered to the service");
                 None
@@ -419,7 +558,7 @@ impl HostPlugin for NatsMessaging {
                             }
                             Ok(s) => s,
                         };
-                        let proxy = match pre.instantiate_async(&mut store).await {
+                        let proxy = match pre.instantiate(&mut store).await {
                             Err(e) => {
                                 warn!("failed to instantiate component {component_id}: {e}");
                                 continue;
@@ -450,7 +589,6 @@ impl HostPlugin for NatsMessaging {
                                 &mut store,
                                 async move |store| {
                                     proxy
-                                        .wasmcloud_messaging_handler()
                                         .call_handle_message(store, &msg)
                                         .instrument(span)
                                         .await

@@ -41,16 +41,17 @@ mod bindings {
     });
 }
 
-pub use bindings::wasmcloud::messaging::types::BrokerMessage;
+pub use bindings::wasmcloud::messaging0_2_0::types::BrokerMessage;
 
 /// The "implements id" threaded through every consumer host method: the backend
 /// a given named import is bound to. `Arc` so it is cheaply `Clone`d into each
 /// per-import closure, as `named_imports` requires.
 pub type MsgId = Arc<dyn MsgBackend>;
 
+pub use super::MsgError;
+
 /// A messaging backend (a NATS cluster, an in-memory loopback, ...). The
-/// unified surface the named consumer host impl dispatches onto. Errors are the
-/// WIT `error` (a `string`).
+/// unified surface both the sync and async consumer host impls dispatch onto.
 #[async_trait::async_trait]
 pub trait MsgBackend: Send + Sync {
     async fn request(
@@ -58,11 +59,11 @@ pub trait MsgBackend: Send + Sync {
         subject: String,
         body: Vec<u8>,
         timeout_ms: u32,
-    ) -> Result<BrokerMessage, String>;
-    async fn publish(&self, msg: BrokerMessage) -> Result<(), String>;
+    ) -> Result<BrokerMessage, MsgError>;
+    async fn publish(&self, msg: BrokerMessage) -> Result<(), MsgError>;
 }
 
-impl<'a> bindings::named_imports::wasmcloud::messaging::consumer::Host for ActiveCtx<'a> {
+impl<'a> bindings::named_imports::wasmcloud::messaging0_2_0::consumer::Host for ActiveCtx<'a> {
     #[instrument(name = "wasmcloud.messaging.request", skip_all, fields(subject = %subject, timeout_ms = timeout_ms))]
     async fn request(
         &mut self,
@@ -71,7 +72,12 @@ impl<'a> bindings::named_imports::wasmcloud::messaging::consumer::Host for Activ
         body: Vec<u8>,
         timeout_ms: u32,
     ) -> wasmtime::Result<Result<BrokerMessage, String>> {
-        Ok(id.request(subject, body, timeout_ms).await)
+        // `@0.2.0`'s WIT error is a bare `string`, so the classified backend
+        // error is lowered via its `Display`.
+        Ok(id
+            .request(subject, body, timeout_ms)
+            .await
+            .map_err(Into::into))
     }
 
     #[instrument(name = "wasmcloud.messaging.publish", skip_all, fields(subject = %msg.subject))]
@@ -80,13 +86,13 @@ impl<'a> bindings::named_imports::wasmcloud::messaging::consumer::Host for Activ
         id: MsgId,
         msg: BrokerMessage,
     ) -> wasmtime::Result<Result<(), String>> {
-        Ok(id.publish(msg).await)
+        Ok(id.publish(msg).await.map_err(Into::into))
     }
 }
 
 // `types` has no host functions or resources, so it is bound via the regular
 // (non-named) path; only `consumer` is multiplexed per import.
-impl<'a> bindings::wasmcloud::messaging::types::Host for ActiveCtx<'a> {}
+impl<'a> bindings::wasmcloud::messaging0_2_0::types::Host for ActiveCtx<'a> {}
 
 const DEFAULT_BACKEND: &str = "in-memory";
 const MULTIPLEXED_MESSAGING_ID: &str = "wasmcloud-messaging-multiplexed";
@@ -163,11 +169,11 @@ impl HostPlugin for MultiplexedMessaging {
 
         // `types` carries only record definitions; bind it via the regular
         // path (no per-import routing needed).
-        bindings::wasmcloud::messaging::types::add_to_linker::<_, SharedCtx>(
+        bindings::wasmcloud::messaging0_2_0::types::add_to_linker::<_, SharedCtx>(
             linker,
             extract_active_ctx,
         )?;
-        bindings::named_imports::wasmcloud::messaging::consumer::add_to_linker::<_, SharedCtx>(
+        bindings::named_imports::wasmcloud::messaging0_2_0::consumer::add_to_linker::<_, SharedCtx>(
             linker,
             &component,
             |name| self.mux.resolve(&registry, name),
