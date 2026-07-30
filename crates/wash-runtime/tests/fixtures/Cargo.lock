@@ -329,6 +329,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-egress-plugin"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
+name = "http-egress-plugin-caller"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
 name = "http-handler-p2"
 version = "0.0.0"
 dependencies = [
@@ -685,7 +700,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "secrets-host"
+name = "secrets-consumer-plugin"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
+name = "secrets-consumer-plugin-caller"
 version = "0.0.0"
 dependencies = [
  "wit-bindgen 0.59.0",

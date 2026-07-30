@@ -81,6 +81,7 @@ uuid = { workspace = true, features = ["v4"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["sync", "net", "macros"] }
 tracing = { workspace = true }
+zeroize = { workspace = true }
 wasmtime = { workspace = true, features = ["anyhow", "component-model", "component-model-async", "cranelift", "pooling-allocator", "gc", "gc-null", "threads"] }
 wasmtime-wasi = { workspace = true, features = ["p3"] }
 wasmtime-wasi-io = { workspace = true }

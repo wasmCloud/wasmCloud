@@ -6151,6 +6151,7 @@ dependencies = [
  "wat",
  "webpki-roots 0.26.11",
  "wit-component 0.253.0",
+ "zeroize",
 ]
 
 [[package]]

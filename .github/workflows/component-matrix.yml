@@ -1,0 +1,113 @@
+name: component-matrix
+
+# Reusable workflow shared by examples.yml and templates.yml:
+# computes the build matrix for an ITEMS-driven, paths-filter-gated
+# component workflow, and asserts ITEMS matches what's actually on disk.
+# Factored out because gen-filters.mjs / plan-matrix.mjs / coverage-matrix.mjs
+# were already built to take their whole contract via env vars — only the
+# job wiring around them (checkout, step order, `if:` conditions) was still
+# a hand-copied ~55 lines per caller.
+#
+# `plan` and `coverage` stay two internal jobs (not merged into one) so a
+# `coverage` failure surfaces as its own status rather than being folded
+# into `plan`'s — callers see this reusable workflow's own overall result
+# via `needs.<call-site-job>.result`, which already reflects both.
+
+on:
+  workflow_call:
+    inputs:
+      items:
+        description: "JSON array shaped like plan-matrix.mjs's ITEMS."
+        required: true
+        type: string
+      shared-paths:
+        description: "JSON array of path patterns appended to every paths-filter group."
+        required: true
+        type: string
+      discovery-root:
+        description: "Directory coverage-matrix.mjs scans, e.g. 'examples'."
+        required: true
+        type: string
+      require-files:
+        description: >
+          JSON array of filenames required alongside .wash/config.yaml for a
+          directory to count as enrollable, e.g. '["Cargo.toml"]'. Default
+          '[]' (no extra requirement).
+        required: false
+        type: string
+        default: "[]"
+      require-readme:
+        description: "true to require README.md at each enrolled top-level directory."
+        required: false
+        type: boolean
+        default: false
+      canary-label:
+        description: "PR label name that forces every item to build, e.g. 'examples-canary'."
+        required: true
+        type: string
+    outputs:
+      matrix:
+        description: "JSON `{include: [...]}` for `strategy.matrix`."
+        value: ${{ jobs.plan.outputs.matrix }}
+      has_items:
+        description: "'true' if at least one item will build."
+        value: ${{ jobs.plan.outputs.has_items }}
+
+# Reusable workflow: declaring elevated scopes here would require every
+# caller's `uses:` job to grant the full superset. Keep this empty and let
+# each job below request only what it needs (see docker-build-push.yml for
+# the same pattern).
+permissions: {}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      matrix: ${{ steps.compute.outputs.matrix }}
+      has_items: ${{ steps.compute.outputs.has_items }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Generate paths-filter config from ITEMS
+        if: github.event_name == 'pull_request'
+        env:
+          ITEMS: ${{ inputs.items }}
+          SHARED_PATHS: ${{ inputs.shared-paths }}
+          OUTPUT: ${{ runner.temp }}/filters.yml
+        run: node .github/scripts/gen-filters.mjs
+
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          filters: ${{ runner.temp }}/filters.yml
+
+      - name: Compute build matrix
+        id: compute
+        env:
+          ITEMS: ${{ inputs.items }}
+          CHANGED: ${{ steps.filter.outputs.changes }}
+          EVENT_NAME: ${{ github.event_name }}
+          CANARY: ${{ contains(github.event.pull_request.labels.*.name, inputs.canary-label) }}
+        run: node .github/scripts/plan-matrix.mjs
+
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Assert ITEMS matches disk
+        env:
+          ITEMS: ${{ inputs.items }}
+          DISCOVERY_ROOT: ${{ inputs.discovery-root }}
+          REQUIRE_FILES: ${{ inputs.require-files }}
+          REQUIRE_README: ${{ inputs.require-readme }}
+        run: node .github/scripts/coverage-matrix.mjs
