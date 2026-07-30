@@ -53,8 +53,11 @@ members = [
     "kv-plugin-caller",
     "kv-plugin-service",
     "badlifecycle",
-    "secrets-host",
     "secrets-caller",
+    "secrets-consumer-plugin",
+    "secrets-consumer-plugin-caller",
+    "http-egress-plugin",
+    "http-egress-plugin-caller",
 ]
 
 [workspace.dependencies]
