@@ -1,0 +1,20 @@
+package wasmcloud:messaging@0.3.0;
+
+/// The producing side of a broker: operations a component calls to send messages.
+interface consumer {
+  use types.{broker-message, error};
+
+  /// Perform a request operation on a subject, resolving once the reply arrives.
+  ///
+  /// Because this is an `async func`, a component may have many requests
+  /// outstanding concurrently; awaiting one does not block the instance.
+  ///
+  /// Returns `error::timeout` if no reply arrives within `timeout-ms`.
+  request: async func(subject: string, body: list<u8>, timeout-ms: u32) -> result<broker-message, error>;
+
+  /// Publish a message to a subject without awaiting a response.
+  ///
+  /// Resolving indicates the broker accepted the message, not that any subscriber
+  /// received it.
+  publish: async func(msg: broker-message) -> result<_, error>;
+}

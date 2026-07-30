@@ -11,6 +11,7 @@ members = [
     "cpu-usage-service",
     "messaging-handler",
     "messaging-echo",
+    "messaging-echo-p3",
     "inter-component-call-caller",
     "inter-component-call-callee",
     "inter-component-call-middleware",

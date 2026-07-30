@@ -22,13 +22,25 @@ pub type MessagingJob = (
     tokio::sync::oneshot::Sender<Result<(), String>>,
 );
 
-/// Interface + function names for the messaging handler export.
-pub(super) const MESSAGING_HANDLER: &str = "wasmcloud:messaging/handler@0.2.0";
+/// Interface names for the messaging handler export, newest first.
+///
+/// A service may export either revision: `@0.3.0`, whose `handle-message` is an
+/// `async func` returning `result<_, error-variant>`, or the original `@0.2.0`
+/// returning `result<_, string>`. Resolution prefers the async one and falls
+/// back, so a component built before the async revision keeps working.
+pub(super) const MESSAGING_HANDLERS: [&str; 2] = [
+    "wasmcloud:messaging/handler@0.3.0",
+    "wasmcloud:messaging/handler@0.2.0",
+];
 pub(super) const HANDLE_MESSAGE: &str = "handle-message";
 
 /// Handles one inbound message on the shared service instance by invoking the
-/// p2 `handle-message` export via the dynamic concurrent path (there is no
-/// accessor-driven p3 messaging binding), and reports its `result<_, string>`.
+/// `handle-message` export via the dynamic concurrent path, and reports its
+/// `result`.
+///
+/// `call_concurrent` drives an async-lifted (`@0.3.0`) export just as well as a
+/// sync (`@0.2.0`) one, so one code path serves both revisions; only the error
+/// payload differs, which [`lift_handler_result`] handles by shape.
 ///
 /// A handler `Err(string)` is an ordinary application outcome, reported on
 /// `result_tx` only. A guest *trap*, however, leaves the shared instance
@@ -77,7 +89,7 @@ impl AccessorTask<SharedCtx> for MessagingTask {
             .call_concurrent(accessor, &[message], &mut results)
             .await
         {
-            Ok(()) => lift_result_string(results.first()),
+            Ok(()) => lift_handler_result(results.first()),
             Err(e) => {
                 let _ = result_tx.send(Err(format!("handle-message trapped: {e:#}")));
                 return Err(e.context("messaging handler trapped; restarting the trigger service"));
@@ -88,16 +100,67 @@ impl AccessorTask<SharedCtx> for MessagingTask {
     }
 }
 
-/// Lift a `result<_, string>` value into a Rust `Result`, mapping the `err` case
-/// to its string (empty when the payload is absent).
-fn lift_result_string(v: Option<&Val>) -> Result<(), String> {
+/// Lift the handler's `result` into a Rust `Result`, rendering the `err` payload
+/// to a display string for the ack/log path.
+///
+/// Both handler revisions land here and are told apart by the payload's shape,
+/// so neither the caller nor the ingress has to track which one the service
+/// exports:
+///
+/// * `@0.2.0` — `result<_, string>`, so the payload is a [`Val::String`].
+/// * `@0.3.0` — `result<_, error>`, so it is a [`Val::Variant`]. Payload-less
+///   cases render as the case name (`timeout`); `other` renders as
+///   `other: <detail>`, keeping the backend's message.
+fn lift_handler_result(v: Option<&Val>) -> Result<(), String> {
     match v {
         Some(Val::Result(Ok(_))) => Ok(()),
         Some(Val::Result(Err(Some(boxed)))) => match &**boxed {
             Val::String(s) => Err(s.clone()),
+            Val::Variant(case, None) => Err(case.clone()),
+            Val::Variant(case, Some(payload)) => match &**payload {
+                Val::String(s) => Err(format!("{case}: {s}")),
+                other => Err(format!("{case}: {other:?}")),
+            },
             other => Err(format!("{other:?}")),
         },
         Some(Val::Result(Err(None))) => Err(String::new()),
         other => Err(format!("unexpected result value: {other:?}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lifts_ok() {
+        assert_eq!(lift_handler_result(Some(&Val::Result(Ok(None)))), Ok(()));
+    }
+
+    /// `@0.2.0` returns `result<_, string>`.
+    #[test]
+    fn lifts_v0_2_string_error() {
+        let v = Val::Result(Err(Some(Box::new(Val::String("boom".into())))));
+        assert_eq!(lift_handler_result(Some(&v)), Err("boom".to_string()));
+    }
+
+    /// `@0.3.0`'s payload-less cases render as the bare case name.
+    #[test]
+    fn lifts_v0_3_unit_variant_error() {
+        let v = Val::Result(Err(Some(Box::new(Val::Variant("timeout".into(), None)))));
+        assert_eq!(lift_handler_result(Some(&v)), Err("timeout".to_string()));
+    }
+
+    /// `other` is the one `@0.3.0` case carrying detail; it must survive.
+    #[test]
+    fn lifts_v0_3_other_variant_error_with_detail() {
+        let v = Val::Result(Err(Some(Box::new(Val::Variant(
+            "other".into(),
+            Some(Box::new(Val::String("no responders".into()))),
+        )))));
+        assert_eq!(
+            lift_handler_result(Some(&v)),
+            Err("other: no responders".to_string())
+        );
     }
 }

@@ -1,0 +1,41 @@
+package wasmcloud:messaging@0.3.0;
+
+/// Types common to message broker interactions.
+///
+/// Unlike `wasmcloud:messaging@0.2.0`, every broker operation in this package is an `async func`.
+/// A single component can keep many publishes and requests in flight at once, so an inbound HTTP
+/// request no longer stalls the whole instance while a `request` waits on its reply.
+interface types {
+  /// A message sent to or received from a broker
+  record broker-message {
+    subject: string,
+    body: list<u8>,
+    reply-to: option<string>,
+  }
+
+  /// The set of errors which may be raised by functions in this package.
+  ///
+  /// Following the wasip3 convention, this enumerates specific named cases rather
+  /// than a bare `string`. It is intentionally non-exhaustive: future versions may
+  /// add cases, and generated bindings are marked non-exhaustive accordingly, so
+  /// consumers must always include a catch-all arm. Backend-specific failures that
+  /// do not map to a named case are reported via `other`.
+  variant error {
+    /// The subject is malformed, empty, or otherwise rejected by the broker.
+    subject-invalid,
+    /// The requesting component is not permitted to publish to this subject.
+    access-denied,
+    /// A `request` did not receive a reply within its `timeout-ms`.
+    timeout,
+    /// The broker is currently unreachable or otherwise unavailable. The operation
+    /// may succeed if retried later.
+    broker-unavailable,
+    /// The message body exceeded the broker's maximum payload size.
+    message-too-large,
+    /// The operation was rejected because a quota or rate limit was exceeded.
+    quota-exceeded,
+    /// Some other implementation-specific error has occurred (e.g. I/O). Used for
+    /// backend-specific failures that do not map to a named case above.
+    other(string),
+  }
+}

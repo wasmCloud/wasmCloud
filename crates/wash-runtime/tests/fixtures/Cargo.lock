@@ -590,6 +590,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "messaging-echo-p3"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "messaging-handler"
 version = "0.1.0"
 dependencies = [

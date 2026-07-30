@@ -1,0 +1,13 @@
+package wasmcloud:messaging@0.3.0;
+
+/// The consuming side of a broker: implemented by components that subscribe.
+interface handler {
+  use types.{broker-message, error};
+
+  /// Callback invoked when a message is received from a subscription.
+  ///
+  /// As an `async func` this may await other operations — including
+  /// `consumer.publish` to reply on `msg.reply-to` — while the host continues to
+  /// deliver further messages to the same instance concurrently.
+  handle-message: async func(msg: broker-message) -> result<_, error>;
+}
