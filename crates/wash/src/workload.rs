@@ -162,7 +162,7 @@ pub fn resolve_component_workload(
 ///
 /// `owner` names the declaring scope (e.g. `"workload"` or
 /// `"dev component 'hello'"`) in error messages.
-fn resolve_environment_layer(
+pub(crate) fn resolve_environment_layer(
     env: Option<&EnvironmentLayer>,
     owner: &str,
     configs: &BTreeMap<String, ConfigSource>,
@@ -270,6 +270,12 @@ impl ConfigSource {
             out.extend(parsed);
         }
 
+        if let Some(dir) = self.dir.as_ref() {
+            let parsed = resolve_dir(dir, project_dir)
+                .with_context(|| format!("failed to read `dir:` for config source '{name}'"))?;
+            out.extend(parsed);
+        }
+
         extend_from_env(&self.from_env, "config source", name, &mut out)?;
         Ok(out)
     }
@@ -325,9 +331,76 @@ impl SecretSource {
             out.extend(parsed);
         }
 
+        if let Some(dir) = self.dir.as_ref() {
+            let parsed = resolve_dir(dir, project_dir)
+                .with_context(|| format!("failed to read `dir:` for secret source '{name}'"))?;
+            out.extend(parsed);
+        }
+
         extend_from_env(&self.from_env, "secret source", name, &mut out)?;
         Ok(out)
     }
+}
+
+/// Reads every regular file directly inside `dir` as one key-value entry
+/// (filename = key, UTF-8 file content = value) — the shape a Kubernetes
+/// ConfigMap/Secret volume mount projects. Entries whose name starts with
+/// `.` are skipped (kubelet's own `..data`/`..<timestamp>` bookkeeping, and
+/// the conventional way to "hide" an entry from a directory listing).
+/// Symlinks are followed deliberately: a kubelet-projected volume is itself
+/// a symlink farm, atomically swapped on rotation.
+fn resolve_dir(dir: &Path, project_dir: &Path) -> Result<HashMap<String, String>> {
+    let resolved_dir = resolve_contained_path(dir, project_dir).context("unsafe `dir:` path")?;
+    let mut out = HashMap::new();
+    let entries = std::fs::read_dir(&resolved_dir)
+        .with_context(|| format!("could not read directory {}", resolved_dir.display()))?;
+    for entry in entries {
+        let entry = entry
+            .with_context(|| format!("could not read directory {}", resolved_dir.display()))?;
+        let file_name = entry.file_name();
+        let Some(key) = file_name.to_str() else {
+            bail!(
+                "entry {} in {} is not valid UTF-8",
+                file_name.to_string_lossy(),
+                resolved_dir.display()
+            );
+        };
+        if key.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        // Resolve the symlink and require the real target to stay under
+        // `resolved_dir` itself. A kubelet-projected volume's symlink farm
+        // (`key -> ..data/<timestamp>/key`) always resolves within its own
+        // mount root, so this passes; a `dir:` entry symlinked to point
+        // somewhere else on disk (e.g. `~/.ssh/id_rsa`). The same
+        // CVE-2025-62725-class risk `file:`'s containment check exists to
+        // stop is rejected instead of silently read.
+        let canonical = path
+            .canonicalize()
+            .with_context(|| format!("could not resolve {}", path.display()))?;
+        if !canonical.starts_with(&resolved_dir) {
+            bail!(
+                "entry {} in `dir:` {} resolves outside the mounted directory ({})",
+                key,
+                resolved_dir.display(),
+                canonical.display()
+            );
+        }
+        // `fs::metadata` (not `DirEntry::metadata`, which behaves like
+        // `lstat` and would see every kubelet-projected entry as a
+        // symlink) follows the symlink to the real backing file.
+        let is_file = std::fs::metadata(&canonical)
+            .with_context(|| format!("could not stat {}", canonical.display()))?
+            .is_file();
+        if !is_file {
+            continue;
+        }
+        let value = std::fs::read_to_string(&canonical)
+            .with_context(|| format!("could not read {}", canonical.display()))?;
+        out.insert(key.to_string(), value);
+    }
+    Ok(out)
 }
 
 /// Reads each named env var and inserts it into `out`. `kind` is the
@@ -754,6 +827,7 @@ mod tests {
         let source = ConfigSource {
             inline: HashMap::from([(var.clone(), "from_inline".into())]),
             file: Some(f.clone()),
+            dir: None,
             from_env: vec![var.clone()],
         };
         let out = source.resolve("c", project.path()).unwrap();
@@ -771,6 +845,69 @@ mod tests {
             "from_file",
             "file must win over inline"
         );
+    }
+
+    #[test]
+    fn dir_source_reads_one_file_per_key_like_a_k8s_volume_mount() {
+        // A Kubernetes ConfigMap/Secret volume mount projects one regular
+        // file per key (in practice via a symlink farm); `dir:` reads that
+        // shape directly — filename is the key, content is the value.
+        let project = TempDir::new().unwrap();
+        let mount = project.path().join("mounted");
+        std::fs::create_dir(&mount).unwrap();
+        std::fs::write(mount.join("etcd-prefix"), "/wasmcloud/secrets").unwrap();
+        std::fs::write(mount.join("api-key"), "s3cr3t-value").unwrap();
+        // Kubelet bookkeeping entries (`..data`, `..2024_01_01.../`) must be
+        // ignored, not read as keys.
+        std::fs::create_dir(mount.join("..2024_01_01_00_00_00.123456789")).unwrap();
+        std::fs::write(
+            mount.join("..2024_01_01_00_00_00.123456789/api-key"),
+            "stale",
+        )
+        .unwrap();
+
+        let source = ConfigSource {
+            dir: Some(mount),
+            ..Default::default()
+        };
+        let out = source.resolve("mounted", project.path()).unwrap();
+        assert_eq!(out.len(), 2, "hidden bookkeeping entries must be skipped");
+        assert_eq!(out.get("etcd-prefix").unwrap(), "/wasmcloud/secrets");
+        assert_eq!(out.get("api-key").unwrap(), "s3cr3t-value");
+    }
+
+    #[test]
+    fn dir_source_follows_symlinks_like_a_projected_volume() {
+        // The real K8s shape: the top-level entry is a symlink into a
+        // timestamped target directory, not a regular file directly.
+        use std::os::unix::fs::symlink;
+
+        let project = TempDir::new().unwrap();
+        let mount = project.path().join("mounted");
+        // The timestamped target lives *inside* the mount root, same as a
+        // real kubelet-projected volume, not beside it.
+        let target_dir = mount.join("..2024_01_01_00_00_00.123456789");
+        std::fs::create_dir(&mount).unwrap();
+        std::fs::create_dir(&target_dir).unwrap();
+        std::fs::write(target_dir.join("api-key"), "s3cr3t-value").unwrap();
+        symlink(target_dir.join("api-key"), mount.join("api-key")).unwrap();
+
+        let source = SecretSource {
+            dir: Some(mount),
+            ..Default::default()
+        };
+        let out = source.resolve("mounted", project.path(), None).unwrap();
+        assert_eq!(out.get("api-key").unwrap(), "s3cr3t-value");
+    }
+
+    #[test]
+    fn dir_source_rejects_unsafe_path() {
+        let project = TempDir::new().unwrap();
+        let source = ConfigSource {
+            dir: Some(PathBuf::from("../../etc")),
+            ..Default::default()
+        };
+        assert!(source.resolve("escape", project.path()).is_err());
     }
 
     #[test]

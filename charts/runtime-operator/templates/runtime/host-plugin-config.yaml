@@ -1,0 +1,96 @@
+{{- /*
+Per-hostgroup ConfigMap holding a `wash host` config file (--config) for
+hostPlugins entries that declare config/configFrom/secretFrom/allowedHosts/
+allowedIpNameLookups — fields with no `--host-plugin` CLI equivalent (deliberately:
+a secret must never appear on the command line / in `kubectl describe pod`).
+
+Rendered only when at least one such entry exists for the hostgroup; entries
+with none of those fields keep rendering as a plain `--host-plugin=...` arg in
+deployment.yaml, unchanged.
+
+`configFrom`/`secretFrom` name plain Kubernetes ConfigMaps/Secrets in this
+release's namespace. deployment.yaml projects each referenced one as a volume
+under /etc/wasmcloud/host-plugin-{config,secrets}/<name> — the same directory
+shape `dir:` (crates/wash/src/config.rs) reads (one file per key, matching how
+Kubernetes itself projects a ConfigMap/Secret volume). The config file below
+declares a `configs:`/`secrets:` catalog entry per referenced name, pointing
+`dir:` at that exact mount path, so `host.hostPlugins[].configFrom/secretFrom`
+resolve by name exactly like `workload.environment.configFrom/secretFrom`
+already do. Only the host process reads these paths — the target plugin only
+ever calls e.g. `wasmcloud:secrets::get(...)`.
+*/}}
+{{- $top := . }}
+{{- range .Values.runtime.hostGroups }}
+{{- $ns := default $top.Release.Namespace .namespace }}
+{{- $partition := include "runtime-operator.hostPluginPartition" . | fromJson }}
+{{- $fileBacked := $partition.fileBacked }}
+{{- if $fileBacked }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hostgroup-{{ .name }}-host-config
+  namespace: {{ $ns }}
+  labels:
+    wasmcloud.com/name: hostgroup
+    wasmcloud.com/hostgroup: {{ .name }}
+    {{- include "runtime-operator.labels" $top | nindent 4 }}
+data:
+  config.yaml: |
+    {{- $configNames := $partition.configFromNames }}
+    {{- $secretNames := $partition.secretFromNames }}
+    {{- if $configNames }}
+    configs:
+      {{- range $configNames }}
+      {{ . }}:
+        dir: /etc/wasmcloud/host-plugin-config/{{ . }}
+      {{- end }}
+    {{- end }}
+    {{- if $secretNames }}
+    secrets:
+      {{- range $secretNames }}
+      {{ . }}:
+        dir: /etc/wasmcloud/host-plugin-secrets/{{ . }}
+      {{- end }}
+    {{- end }}
+    host:
+      hostPlugins:
+        {{- range $fileBacked }}
+        - id: {{ .id }}
+          {{- if .image }}
+          image: {{ .image }}
+          {{- if .pullPolicy }}
+          pullPolicy: {{ .pullPolicy }}
+          {{- end }}
+          {{- if .digest }}
+          expectedDigest: {{ .digest }}
+          {{- end }}
+          {{- else if .file }}
+          file: {{ .file }}
+          {{- end }}
+          {{- if .maxRestarts }}
+          maxRestarts: {{ .maxRestarts }}
+          {{- end }}
+          {{- with .config }}
+          config:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .configFrom }}
+          configFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .secretFrom }}
+          secretFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .allowedHosts }}
+          allowedHosts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .allowedIpNameLookups }}
+          allowedIpNameLookups:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
+---
+{{- end }}
+{{- end }}

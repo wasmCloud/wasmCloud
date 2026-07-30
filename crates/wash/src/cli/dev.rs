@@ -99,6 +99,11 @@ impl CliCommand for DevCommand {
                 .build(),
         ))?;
 
+        // `wasmcloud:secrets`, served from each workload's bind-time
+        // `secretFrom`-resolved config, same as `wash host`.
+        host_builder = host_builder
+            .with_plugin(Arc::new(plugin::wasmcloud_secrets::WasmcloudSecrets::new()))?;
+
         // Shared data-plane NATS connection, mirroring `wash host`
         // `--data-nats-url`. When `dev.data_nats_url` is set it backs
         // blobstore, keyvalue, and messaging unless a per-plugin config overrides
@@ -149,22 +154,6 @@ impl CliCommand for DevCommand {
             debug!("WASI Blobstore plugin registered with in-memory backend");
         }
 
-        // Host component plugins: WebAssembly components that provide host
-        // capabilities, each in its own supervised store. Fetched (local file or
-        // OCI) and registered before the host starts.
-        #[cfg(feature = "host-component-plugins")]
-        for hp in &dev_config.host_plugins {
-            let spec = hp.to_spec()?;
-            let plugin = wash_runtime::plugin::component_host::load_component_plugin(
-                &spec,
-                &engine,
-                oci_config.clone(),
-            )
-            .await
-            .with_context(|| format!("failed to load host component plugin '{}'", spec.id))?;
-            host_builder = host_builder.with_plugin(plugin)?;
-            debug!(id = %spec.id, "host component plugin registered");
-        }
         #[cfg(not(feature = "host-component-plugins"))]
         ensure!(
             dev_config.host_plugins.is_empty(),
@@ -302,6 +291,32 @@ impl CliCommand for DevCommand {
             host_builder =
                 host_builder.with_plugin(Arc::new(plugin::wasi_webgpu::WebGpu::default()))?;
             debug!("WASI WebGPU plugin registered");
+        }
+
+        // Host component plugins: WebAssembly components that provide host
+        // capabilities, each in its own supervised store. Fetched (local file or
+        // OCI) and registered before the host starts — last, so every native
+        // plugin above is already registered and a loading plugin's own
+        // capability imports (config, secrets, keyvalue, ...) can resolve
+        // against the full native set.
+        #[cfg(feature = "host-component-plugins")]
+        {
+            let native_plugins = host_builder.native_plugins();
+            let http_handler = host_builder.http_handler();
+            for hp in &dev_config.host_plugins {
+                let spec = hp.to_spec(&config, project_dir, Some(project_dir))?;
+                let plugin = wash_runtime::plugin::component_host::load_component_plugin(
+                    &spec,
+                    &engine,
+                    oci_config.clone(),
+                    &native_plugins,
+                    http_handler.clone(),
+                )
+                .await
+                .with_context(|| format!("failed to load host component plugin '{}'", spec.id))?;
+                host_builder = host_builder.with_plugin(plugin)?;
+                debug!(id = %spec.id, "host component plugin registered");
+            }
         }
 
         // Build and start the host
