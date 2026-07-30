@@ -1,4 +1,4 @@
-package wasmcloud:secrets@2.0.0;
+package wasmcloud:secrets@2.1.0;
 
 /// Opaque-handle access to a secrets backend. Returning `secret` rather than
 /// the underlying value lets the host gate reveal independently of lookup.

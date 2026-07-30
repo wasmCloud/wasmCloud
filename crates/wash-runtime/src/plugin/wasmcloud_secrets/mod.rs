@@ -232,8 +232,8 @@ impl HostPlugin for WasmcloudSecrets {
     fn world(&self) -> WitWorld {
         WitWorld {
             imports: HashSet::from([
-                WitInterface::from("wasmcloud:secrets/store,reveal@2.0.0"),
-                WitInterface::from("wasmcloud:secrets/secret@2.0.0"),
+                WitInterface::from("wasmcloud:secrets/store,reveal@2.1.0"),
+                WitInterface::from("wasmcloud:secrets/secret@2.1.0"),
             ]),
             exports: HashSet::new(),
         }

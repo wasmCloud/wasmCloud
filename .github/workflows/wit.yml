@@ -16,8 +16,10 @@ name: wit
 #             component with `wash wit build`, enriches it with
 #             provenance via `wasm-tools metadata add` (source repo,
 #             commit SHA, license, etc.), asserts wit/<pkg>/wkg.lock
-#             is committed and in sync, and uploads the enriched wasm
-#             bundle as a workflow artifact. Emits a matrix describing
+#             is committed and in sync, checks a stable version already at
+#             the destination for drift against what was just built (see
+#             check-wit-drift.mjs), and uploads the enriched
+#             wasm bundle as a workflow artifact. Emits a matrix describing
 #             the packages.
 #   publish   matrix-fans over validate's output (one job per package);
 #             downloads the exact wasm validate built, pushes it via
@@ -43,6 +45,7 @@ on:
     # users always see a result.
     paths:
       - '.github/workflows/wit.yml'
+      - '.github/actions/oci-push-with-digest/**'
       - '.github/tool-versions.env'
       - 'wit/**'
 
@@ -78,6 +81,7 @@ jobs:
           filters: |
             relevant:
               - '.github/workflows/wit.yml'
+              - '.github/actions/oci-push-with-digest/**'
               - '.github/tool-versions.env'
               - 'wit/**'
 
@@ -200,6 +204,18 @@ jobs:
         # is easier to get right in JS than in bash string-concat).
         run: node .github/scripts/build-wit-matrix.mjs
 
+      - name: Check for silent drift against already-published stable versions
+        # `publish`'s immutability check means a stable version that's
+        # already at the destination silently skips the push including
+        # when source drifted out from under it without a version bump.
+        # Fail here naming the package to bump. Implementation lives in
+        # check-wit-drift.mjs (needs to shell out to docker/wash/wasm-tools
+        # and parse the matrix JSON).
+        if: steps.list.outputs.has_packages == 'true'
+        env:
+          MATRIX: ${{ steps.list.outputs.matrix }}
+        run: node .github/scripts/check-wit-drift.mjs
+
       - name: Upload built wasm bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -261,48 +277,17 @@ jobs:
 
       - name: Push and attest
         id: push
-        env:
-          REF: ${{ matrix.ref }}
-          ARTIFACT: wit-build/${{ matrix.artifact }}
-          VERSION: ${{ matrix.version }}
-        run: |
-          set -euo pipefail
-          # Immutable for stable versions: if `${VERSION}` has no `-`
-          # pre-release suffix and the destination tag already exists,
-          # skip the push entirely. SemVer build metadata (`+build.42`)
-          # is correctly treated as stable. Pre-release tags (-rc.N,
-          # -draft, etc.) may be moved by re-running this workflow.
-          # Distinguish three outcomes: tag exists (skip), manifest
-          # unknown (proceed), any other error from the inspect (abort).
-          if [[ ! "${VERSION}" =~ - ]]; then
-            if INSPECT_ERR=$(docker manifest inspect "${REF}" 2>&1 >/dev/null); then
-              echo "${REF} already exists at the destination and version is stable — skipping (immutable)"
-              echo "skipped=true" >> "${GITHUB_OUTPUT}"
-              exit 0
-            elif echo "${INSPECT_ERR}" | grep -qiE 'manifest unknown|no such manifest|not found'; then
-              echo "${REF} not yet published — proceeding with push"
-            else
-              echo "destination check for ${REF} failed — refusing to push" >&2
-              echo "${INSPECT_ERR}" >&2
-              exit 1
-            fi
-          fi
-          # `wash -o json oci push` wraps the response as
-          # `{ "success": true, "data": { "digest": "sha256:…" } }`.
-          # `.digest` fallback is for older wash builds that emitted
-          # the unwrapped form.
-          PUSH_OUT=$(wash -o json oci push "${REF}" "${ARTIFACT}")
-          echo "${PUSH_OUT}"
-          DIGEST=$(echo "${PUSH_OUT}" | jq -r '.data.digest // .digest // empty')
-          if [[ -z "${DIGEST}" ]]; then
-            echo "wash oci push did not report a manifest digest for ${REF}" >&2
-            exit 1
-          fi
-          echo "digest=${DIGEST}" >> "${GITHUB_OUTPUT}"
-          echo "skipped=false" >> "${GITHUB_OUTPUT}"
+        uses: ./.github/actions/oci-push-with-digest
+        with:
+          ref: ${{ matrix.ref }}
+          artifact: wit-build/${{ matrix.artifact }}
+          # Stable WIT versions (no `-` pre-release suffix) are immutable;
+          # pre-release tags (-rc.N, -draft, etc.) may be moved by
+          # re-running this workflow while iterating.
+          mutable-prerelease: "true"
 
       - name: Attest pushed manifest
-        if: steps.push.outputs.skipped == 'false'
+        if: steps.push.outputs.published == 'true'
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-name: ${{ matrix.subject }}
