@@ -87,6 +87,17 @@ pub struct HostCommand {
     #[arg(long = "tls-ca-path")]
     pub tls_ca_path: Option<PathBuf>,
 
+    /// Extra CA certificate bundle files (PEM) trusted for outbound HTTPS
+    /// requests made by components (`wasi:http` outgoing handler). Use this to
+    /// reach hosts behind a corporate or otherwise private CA. May be repeated
+    /// or comma-separated.
+    #[arg(
+        long = "http-client-ca-path",
+        env = "WASH_HTTP_CLIENT_CA_PATHS",
+        value_delimiter = ','
+    )]
+    pub http_client_ca_paths: Vec<PathBuf>,
+
     /// Enable WASI WebGPU support
     #[cfg(all(
         not(target_os = "windows"),
@@ -309,17 +320,32 @@ impl CliCommand for HostCommand {
 
         if let Some(addr) = self.http_addr {
             let http_router = wash_runtime::host::http::DynamicRouter::default();
-            let ingress = if let (Some(cert_path), Some(key_path)) =
-                (&self.tls_cert_path, &self.tls_key_path)
-            {
+
+            // Outbound (egress) trust roots: extra CAs for components calling
+            // HTTPS hosts behind a private CA. Distinct from the ingress TLS
+            // options below, which configure the HTTP *server*.
+            let outgoing_handler = if self.http_client_ca_paths.is_empty() {
+                wash_runtime::host::http::DefaultOutgoingHandler::default()
+            } else {
+                let tls = wash_runtime::host::http_client::ClientTlsOptions {
+                    extra_ca_paths: self.http_client_ca_paths.clone(),
+                    ..Default::default()
+                }
+                .build()
+                .context("failed to load outbound HTTP client CA certificates")?;
+                wash_runtime::host::http::DefaultOutgoingHandler::with_tls_config(tls)
+            };
+
+            let mut ingress_builder = wash_runtime::host::http::Ingress::builder(http_router, addr)
+                .outgoing_handler(outgoing_handler);
+            if let (Some(cert_path), Some(key_path)) = (&self.tls_cert_path, &self.tls_key_path) {
                 let mut tls = wash_runtime::host::http::TlsConfig::new(cert_path, key_path);
                 if let Some(ca) = self.tls_ca_path.as_deref() {
                     tls = tls.with_ca(ca);
                 }
-                wash_runtime::host::http::Ingress::new_with_tls(http_router, addr, tls).await?
-            } else {
-                wash_runtime::host::http::Ingress::new(http_router, addr).await?
-            };
+                ingress_builder = ingress_builder.tls(tls);
+            }
+            let ingress = ingress_builder.build().await?;
             cluster_host_builder = cluster_host_builder.with_http_handler(Arc::new(ingress));
         }
 

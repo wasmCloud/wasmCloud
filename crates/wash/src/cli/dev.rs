@@ -161,8 +161,31 @@ impl CliCommand for DevCommand {
         );
 
         let http_handler = wash_runtime::host::http::DevRouter::default();
+
+        // Outbound (egress) trust roots: extra CAs for the component's outgoing
+        // HTTPS calls. Distinct from `tls_*_path` below, which configure the
+        // ingress HTTP server.
+        let outgoing_handler = if dev_config.http_client_ca_paths.is_empty() {
+            wash_runtime::host::http::DefaultOutgoingHandler::default()
+        } else {
+            let tls = wash_runtime::host::http_client::ClientTlsOptions {
+                extra_ca_paths: dev_config.http_client_ca_paths.clone(),
+                ..Default::default()
+            }
+            .build()
+            .context("failed to load dev.http_client_ca_paths CA certificates")?;
+            debug!(
+                paths = ?dev_config.http_client_ca_paths,
+                "extra CA certificates trusted for outbound HTTPS"
+            );
+            wash_runtime::host::http::DefaultOutgoingHandler::with_tls_config(tls)
+        };
+
         // TODO(#19): Only spawn the server if the component exports wasi:http
         // Configure HTTP server with optional TLS, enable HTTP Server
+        let mut ingress_builder =
+            wash_runtime::host::http::Ingress::builder(http_handler, http_addr.parse()?)
+                .outgoing_handler(outgoing_handler);
         let protocol = if let (Some(cert_path), Some(key_path)) =
             (&dev_config.tls_cert_path, &dev_config.tls_key_path)
         {
@@ -189,24 +212,16 @@ impl CliCommand for DevCommand {
             if let Some(ca) = dev_config.tls_ca_path.as_deref() {
                 tls = tls.with_ca(ca);
             }
-            let ingress = wash_runtime::host::http::Ingress::new_with_tls(
-                http_handler,
-                http_addr.parse()?,
-                tls,
-            )
-            .await?;
-
-            host_builder = host_builder.with_http_handler(Arc::new(ingress));
+            ingress_builder = ingress_builder.tls(tls);
 
             debug!("TLS configured - server will use HTTPS");
             "https"
         } else {
             debug!("No TLS configuration provided - server will use HTTP");
-            let ingress =
-                wash_runtime::host::http::Ingress::new(http_handler, http_addr.parse()?).await?;
-            host_builder = host_builder.with_http_handler(Arc::new(ingress));
             "http"
         };
+        let ingress = ingress_builder.build().await?;
+        host_builder = host_builder.with_http_handler(Arc::new(ingress));
 
         // Add logging plugin
         host_builder =

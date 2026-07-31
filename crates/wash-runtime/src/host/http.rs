@@ -435,12 +435,37 @@ pub trait OutgoingHandler: Send + Sync + 'static {
         options: Option<wasmtime_wasi_http::p3::RequestOptions>,
         fut: crate::host::http_p3::P3RequestErrorFuture,
     ) -> crate::host::http_p3::P3SendFuture;
+
+    /// TLS configuration used for host-mediated egress that bypasses
+    /// `send_request`/`send_request_p3` (currently the gRPC fast path).
+    /// `None` (the default) means the process-wide default trust roots.
+    fn client_tls_config(&self) -> Option<Arc<rustls::ClientConfig>> {
+        None
+    }
 }
 
-/// Default [`OutgoingHandler`] — defers to `wasmtime_wasi_http::p2::default_send_request` (P2)
-/// and `wasmtime_wasi_http::p3::default_send_request` (P3).
-#[derive(Default)]
-pub struct DefaultOutgoingHandler;
+/// Default [`OutgoingHandler`] — wasmtime's default per-request transport, but
+/// with configurable TLS trust roots (webpki + platform native certificates +
+/// optional extra CA bundles; see
+/// [`crate::host::http_client::ClientTlsOptions`]).
+pub struct DefaultOutgoingHandler {
+    tls: Arc<rustls::ClientConfig>,
+}
+
+impl Default for DefaultOutgoingHandler {
+    fn default() -> Self {
+        Self::with_tls_config(crate::host::http_client::default_client_tls_config())
+    }
+}
+
+impl DefaultOutgoingHandler {
+    /// Create a handler that verifies outbound TLS against `tls` (see
+    /// [`crate::host::http_client::ClientTlsOptions`] for building one with
+    /// extra CA bundles).
+    pub fn with_tls_config(tls: Arc<rustls::ClientConfig>) -> Self {
+        Self { tls }
+    }
+}
 
 impl OutgoingHandler for DefaultOutgoingHandler {
     fn send_request(
@@ -450,14 +475,13 @@ impl OutgoingHandler for DefaultOutgoingHandler {
         config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
     ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
     {
-        // Spawn the default handler ourselves (rather than calling
-        // `default_send_request`) so the request can be wrapped in a client
+        // Spawn the send ourselves so the request can be wrapped in a client
         // span and the response status recorded once it arrives.
         let span = outbound_client_span(request.method(), request.uri());
+        let tls = self.tls.clone();
         let handle = wasmtime_wasi::runtime::spawn(
             async move {
-                let result =
-                    wasmtime_wasi_http::p2::default_send_request_handler(request, config).await;
+                let result = crate::host::http_client::send_request_p2(tls, request, config).await;
                 match &result {
                     Ok(incoming) => record_outbound_status(incoming.resp.status()),
                     Err(_) => record_outbound_error(),
@@ -475,12 +499,15 @@ impl OutgoingHandler for DefaultOutgoingHandler {
         options: Option<wasmtime_wasi_http::p3::RequestOptions>,
         _fut: crate::host::http_p3::P3RequestErrorFuture,
     ) -> crate::host::http_p3::P3SendFuture {
-        Box::new(async move {
-            use http_body_util::BodyExt;
-            let (res, io) = wasmtime_wasi_http::p3::default_send_request(request, options).await?;
-            let io: crate::host::http_p3::P3RequestErrorFuture = Box::new(io);
-            Ok((res.map(BodyExt::boxed_unsync), io))
-        })
+        Box::new(crate::host::http_client::send_request_p3(
+            self.tls.clone(),
+            request,
+            options,
+        ))
+    }
+
+    fn client_tls_config(&self) -> Option<Arc<rustls::ClientConfig>> {
+        Some(self.tls.clone())
     }
 }
 
@@ -866,7 +893,7 @@ impl<T: Router> IngressBuilder<T, DefaultOutgoingHandler> {
     fn new(router: T, addr: SocketAddr) -> Self {
         Self {
             router,
-            outgoing_handler: DefaultOutgoingHandler,
+            outgoing_handler: DefaultOutgoingHandler::default(),
             addr,
             tls: None,
         }
@@ -1147,7 +1174,11 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
             ));
         }
         if is_grpc_request(&request) {
-            return Ok(send_grpc_request(request, config));
+            let tls = self
+                .outgoing_handler
+                .client_tls_config()
+                .unwrap_or_else(crate::host::http_client::default_client_tls_config);
+            return Ok(send_grpc_request(request, config, tls));
         }
         self.outgoing_handler
             .send_request(workload_id, request, config)
@@ -1174,7 +1205,11 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 ))
             })
         } else if is_grpc_request(&request) {
-            send_grpc_request_p3(request, options)
+            let tls = self
+                .outgoing_handler
+                .client_tls_config()
+                .unwrap_or_else(crate::host::http_client::default_client_tls_config);
+            send_grpc_request_p3(request, options, tls)
         } else {
             self.outgoing_handler
                 .send_request_p3(workload_id, request, options, fut)
@@ -1876,11 +1911,12 @@ fn is_grpc_request<B>(req: &hyper::Request<B>) -> bool {
 fn send_grpc_request(
     request: hyper::Request<HyperOutgoingBody>,
     config: OutgoingRequestConfig,
+    tls: Arc<rustls::ClientConfig>,
 ) -> HostFutureIncomingResponse {
     let span = outbound_client_span(request.method(), request.uri());
     let handle = wasmtime_wasi::runtime::spawn(
         async move {
-            let result = send_grpc_request_handler(request, config).await;
+            let result = send_grpc_request_handler(request, config, tls).await;
             match &result {
                 Ok(incoming) => {
                     record_outbound_status(incoming.resp.status());
@@ -1904,6 +1940,7 @@ async fn send_grpc_request_handler(
         first_byte_timeout,
         between_bytes_timeout,
     }: OutgoingRequestConfig,
+    tls: Arc<rustls::ClientConfig>,
 ) -> Result<IncomingResponse, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> {
     use tokio::net::TcpStream;
     use tokio::time::timeout;
@@ -1928,12 +1965,7 @@ async fn send_grpc_request_handler(
     let (mut sender, worker) = if use_tls {
         use rustls::pki_types::ServerName;
 
-        let root_cert_store = rustls::RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.into(),
-        };
-        let mut config = rustls::ClientConfig::builder()
-            .with_root_certificates(root_cert_store)
-            .with_no_client_auth();
+        let mut config = (*tls).clone();
         config.alpn_protocols = vec![b"h2".to_vec()];
 
         let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
@@ -2021,8 +2053,9 @@ async fn send_grpc_request_handler(
 fn send_grpc_request_p3(
     request: hyper::Request<crate::host::http_p3::P3Body>,
     options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+    tls: Arc<rustls::ClientConfig>,
 ) -> crate::host::http_p3::P3SendFuture {
-    Box::new(send_grpc_request_p3_handler(request, options))
+    Box::new(send_grpc_request_p3_handler(request, options, tls))
 }
 
 /// Response-body wrapper enforcing a between-bytes read timeout on a streaming
@@ -2032,9 +2065,9 @@ fn send_grpc_request_p3(
 /// fires (or the stream ends / errors), releasing the underlying HTTP/2 stream
 /// and TCP connection eagerly instead of leaving it pinned until the guest
 /// drops its body handle.
-struct TimedBody<B> {
-    inner: Option<B>,
-    interval: tokio::time::Interval,
+pub(crate) struct TimedBody<B> {
+    pub(crate) inner: Option<B>,
+    pub(crate) interval: tokio::time::Interval,
 }
 
 impl<B> hyper::body::Body for TimedBody<B>
@@ -2093,6 +2126,7 @@ where
 async fn send_grpc_request_p3_handler(
     mut request: hyper::Request<crate::host::http_p3::P3Body>,
     options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+    tls: Arc<rustls::ClientConfig>,
 ) -> crate::host::http_p3::P3SendResult {
     use tokio::net::TcpStream;
     use tokio::time::timeout;
@@ -2129,12 +2163,7 @@ async fn send_grpc_request_p3_handler(
     let (mut sender, _worker) = if use_tls {
         use rustls::pki_types::ServerName;
 
-        let root_cert_store = rustls::RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.into(),
-        };
-        let mut config = rustls::ClientConfig::builder()
-            .with_root_certificates(root_cert_store)
-            .with_no_client_auth();
+        let mut config = (*tls).clone();
         config.alpn_protocols = vec![b"h2".to_vec()];
 
         let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
