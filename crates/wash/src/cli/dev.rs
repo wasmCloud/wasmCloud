@@ -649,11 +649,24 @@ fn build_workload_host_interfaces(
             if interface.namespace == "wasi" && interface.package == "config" {
                 any_imports_wasi_config = true;
             }
-            if !base
-                .iter()
-                .any(|i| i.namespace == interface.namespace && i.package == interface.package)
+            // One workload-level entry per namespace:package. Introspection
+            // yields one WitInterface PER IMPORT INSTANCE (`interfaces` is a
+            // single name), so same-package instances must union their
+            // interface names into the existing entry — dropping them here
+            // loses whichever of e.g. `wasmcloud:secrets/store`/`reveal`
+            // iterates second. The entry's other fields (config, name, version)
+            // are kept from whatever declared it first — notably a user's explicit
+            // `dev.host_interfaces` entry.
+            match base
+                .iter_mut()
+                .find(|i| i.namespace == interface.namespace && i.package == interface.package)
             {
-                base.push(interface.clone());
+                Some(existing) => {
+                    existing
+                        .interfaces
+                        .extend(interface.interfaces.iter().cloned());
+                }
+                None => base.push(interface.clone()),
             }
         }
     }

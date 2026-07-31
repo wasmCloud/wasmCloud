@@ -801,7 +801,7 @@ async fn link_native_imports(
         return Ok(linker);
     }
 
-    let plugin_component = WorkloadComponent::new(
+    let mut plugin_component = WorkloadComponent::new(
         id,
         id,
         id,
@@ -813,6 +813,14 @@ async fn link_native_imports(
         Arc::new(std::sync::Mutex::new(loopback::Network::default())),
         InstancePolicy::Ephemeral,
     );
+    // `WorkloadComponent::new` assigns a random UUID as the component id, but
+    // the plugin's own store identifies itself as `(id, id)`
+    // ([`build_plugin_store`]'s `Ctx::builder(id, id)`). A native that keys
+    // per-COMPONENT state at bind (e.g. `DynamicConfig`'s `wasi:config` map)
+    // would store this plugin's config under the UUID and never find it again
+    // at call time. Re-key the synthetic component to the plugin id so
+    // bind-time state and call-time identity agree.
+    plugin_component.metadata.id = Arc::from(id);
     let component_id: Arc<str> = Arc::from(plugin_component.metadata().id());
 
     let mut synthetic =
