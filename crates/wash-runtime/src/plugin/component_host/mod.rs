@@ -251,6 +251,7 @@ pub struct ComponentHostPlugin {
     state: Arc<ComponentHostPluginState>,
 }
 
+#[bon::bon]
 impl ComponentHostPlugin {
     /// Build a host component plugin from a compiled wasm `component` and the
     /// `engine` it will run on. `id` must be unique across the host's plugins.
@@ -274,22 +275,28 @@ impl ComponentHostPlugin {
     /// `wasi:http`/DNS egress the same way a workload's `LocalResources` do;
     /// `http_handler` is what its outgoing HTTP calls are actually sent
     /// through (typically the host's own, via `HostBuilder::http_handler`).
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// `native_plugins`, `config`, `allowed_hosts`, `allowed_ip_name_lookups`,
+    /// and `http_handler` all default to empty/`None` — most callers (tests
+    /// especially) only care about a handful of these.
+    #[builder(finish_fn = build)]
     pub async fn new(
         id: &'static str,
         wasm: &[u8],
         engine: Engine,
-        native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
-        config: &HashMap<String, String>,
-        allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
-        allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
+        #[builder(default)] native_plugins: HashMap<&'static str, Arc<dyn HostPlugin>>,
+        #[builder(default)] config: HashMap<String, String>,
+        #[builder(default)] allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
+        #[builder(default)] allowed_ip_name_lookups: Arc<
+            [crate::host::allowed_ip_name::AllowedIpName],
+        >,
         http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
     ) -> anyhow::Result<Self> {
         // Defense-in-depth: re-filter to natives only. Both real call sites
         // already pass a pre-filtered map (`HostBuilder::native_plugins()`),
         // so this is a no-op today, but it makes the cycle-safety invariant
         // hold by construction here too, not just at the caller.
-        let native_plugins = native_only(native_plugins);
+        let native_plugins = native_only(&native_plugins);
         let state = Arc::new(ComponentHostPluginState {
             id,
             tx: ArcSwapOption::empty(),
@@ -306,7 +313,7 @@ impl ComponentHostPlugin {
         });
 
         let (exports, lifecycle, pre) =
-            build_plugin_linker(&engine, id, wasm, &state, &native_plugins, config).await?;
+            build_plugin_linker(&engine, id, wasm, &state, &native_plugins, &config).await?;
 
         let world = WitWorld {
             imports: exports.iter().map(|e| e.wit.clone()).collect(),
@@ -432,18 +439,18 @@ pub async fn load_component_plugin(
         .with_context(|| format!("loading host component plugin '{}'", spec.id))?;
 
     let id = intern_plugin_id(&spec.id);
-    let mut plugin = ComponentHostPlugin::new(
-        id,
-        &loaded.bytes,
-        engine.clone(),
-        native_plugins,
-        &spec.config,
-        Arc::clone(&spec.allowed_hosts),
-        Arc::clone(&spec.allowed_ip_name_lookups),
-        http_handler,
-    )
-    .await
-    .with_context(|| format!("failed to build host component plugin '{}'", spec.id))?;
+    let mut plugin = ComponentHostPlugin::builder()
+        .id(id)
+        .wasm(&loaded.bytes)
+        .engine(engine.clone())
+        .native_plugins(native_plugins.clone())
+        .config(spec.config.clone())
+        .allowed_hosts(Arc::clone(&spec.allowed_hosts))
+        .allowed_ip_name_lookups(Arc::clone(&spec.allowed_ip_name_lookups))
+        .maybe_http_handler(http_handler)
+        .build()
+        .await
+        .with_context(|| format!("failed to build host component plugin '{}'", spec.id))?;
     if let Some(max_restarts) = spec.max_restarts {
         plugin = plugin.with_max_restarts(max_restarts);
     }

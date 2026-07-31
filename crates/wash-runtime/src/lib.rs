@@ -11,6 +11,7 @@ pub mod wit;
 
 #[cfg(feature = "oci")]
 pub mod component_source;
+pub mod config_source;
 
 #[cfg(feature = "oci")]
 pub mod oci;

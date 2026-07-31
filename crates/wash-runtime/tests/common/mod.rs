@@ -362,18 +362,15 @@ async fn start_host_with_component_plugin_router(
     )?;
     let native_plugins = builder.native_plugins();
     let http_handler = builder.http_handler();
-    let mut plugin = ComponentHostPlugin::new(
-        plugin_id,
-        plugin_wasm,
-        engine.clone(),
-        &native_plugins,
-        &HashMap::new(),
-        Arc::from([]),
-        Arc::from([]),
-        http_handler,
-    )
-    .await
-    .context("failed to build host component plugin")?;
+    let mut plugin = ComponentHostPlugin::builder()
+        .id(plugin_id)
+        .wasm(plugin_wasm)
+        .engine(engine.clone())
+        .native_plugins(native_plugins)
+        .maybe_http_handler(http_handler)
+        .build()
+        .await
+        .context("failed to build host component plugin")?;
     if let Some(max_restarts) = max_restarts {
         plugin = plugin.with_max_restarts(max_restarts);
     }

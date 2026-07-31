@@ -39,7 +39,30 @@ spec:
         wasmcloud.com/name: hostgroup
         wasmcloud.com/hostgroup: {{ .name }}
         {{- include "runtime.podLabels" $top | nindent 8 }}
+      {{- /* The pod spec below is otherwise byte-identical across a
+             hostPlugins config/configFrom/secretFrom edit — only the
+             ConfigMap host-plugin-config.yaml renders changes — so without
+             this checksum a `helm upgrade` re-renders the ConfigMap but
+             never rolls the Deployment, and the host keeps serving the old
+             config it read once at startup until an unrelated restart.
+
+             Hashed against this group's own partition, not the ConfigMap
+             template's rendered output: host-plugin-config.yaml ranges over
+             every group in runtime.hostGroups, so hashing its `include`
+             output would give every group's Deployment the SAME checksum —
+             any one group's plugin-config edit would then roll every host in
+             the cluster. The partition (fileBacked entries + configFrom/
+             secretFrom names) is an exact proxy for what the ConfigMap
+             renders for this group alone (the mount paths are static), so
+             hashing it scopes the checksum correctly per group. */}}
+      {{- $annotations := dict }}
+      {{- if $fileBackedPlugins }}
+      {{- $_ := set $annotations "checksum/host-plugin-config" (include "runtime-operator.hostPluginPartition" . | sha256sum) }}
+      {{- end }}
       {{- with $top.Values.runtime.podAnnotations }}
+      {{- $annotations = merge $annotations . }}
+      {{- end }}
+      {{- with $annotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}

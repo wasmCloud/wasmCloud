@@ -8,8 +8,8 @@ interface ops {
 
 /// Host component plugin exporting a real capability plus a deliberately
 /// malformed `wasmcloud:host/workload-lifecycle` — used to assert that
-/// `ComponentHostPlugin::new` rejects a mismatched lifecycle signature at
-/// registration.
+/// `ComponentHostPlugin::builder().build()` rejects a mismatched lifecycle
+/// signature at registration.
 world badlifecycle {
     export ops;
     export wasmcloud:host/workload-lifecycle@0.1.0;

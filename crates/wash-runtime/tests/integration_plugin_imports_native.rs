@@ -91,32 +91,30 @@ async fn test_host_component_plugin_imports_native_secrets() -> Result<()> {
         .with_plugin(Arc::new(WasmcloudSecrets::new()))?;
 
     // The plugin's own resolved bind-time config — in production this comes
-    // from the plugin's own `config`/`configFrom`/`secretFrom` manifest entry
-    // (Phase E/F); here it's supplied directly, as `load_component_plugin`'s
-    // real callers eventually will via `ComponentPluginSpec.config`.
+    // from the plugin's own `config`/`configFrom`/`secretFrom` manifest entry;
+    // here it's supplied directly, as `load_component_plugin`'s real callers
+    // do via `ComponentPluginSpec.config`.
     //
     // `api-key` backs the plugin's dynamic `store.get` import. `db-password`
     // backs its labeled `wasmcloud:secrets/secret` import, validated
-    // structurally at `ComponentHostPlugin::new`, before the plugin is even
-    // instantiated.
+    // structurally at `ComponentHostPlugin::builder().build()`, before the
+    // plugin is even instantiated.
     let plugin_config = HashMap::from([
         ("api-key".to_string(), "s3cr3t-value".to_string()),
         ("db-password".to_string(), "hunter2".to_string()),
     ]);
     let native_plugins = builder.native_plugins();
     let http_handler = builder.http_handler();
-    let plugin = ComponentHostPlugin::new(
-        PLUGIN_ID,
-        CONSUMER_PLUGIN_WASM,
-        engine,
-        &native_plugins,
-        &plugin_config,
-        Arc::from([]),
-        Arc::from([]),
-        http_handler,
-    )
-    .await
-    .context("secrets-consumer-plugin should link against the native secrets plugin")?;
+    let plugin = ComponentHostPlugin::builder()
+        .id(PLUGIN_ID)
+        .wasm(CONSUMER_PLUGIN_WASM)
+        .engine(engine)
+        .native_plugins(native_plugins)
+        .config(plugin_config)
+        .maybe_http_handler(http_handler)
+        .build()
+        .await
+        .context("secrets-consumer-plugin should link against the native secrets plugin")?;
 
     let host = builder.with_plugin(Arc::new(plugin))?.build()?;
     let host = host.start().await.context("failed to start host")?;
@@ -161,7 +159,7 @@ async fn test_host_component_plugin_imports_native_secrets() -> Result<()> {
 /// label `db-password` — a labeled import needs no declaration or call to be
 /// checked: the label itself, present in the plugin's own component type, is
 /// what the host validates against its resolved config. A host started with
-/// that key missing fails at `ComponentHostPlugin::new` — plugin
+/// that key missing fails at `ComponentHostPlugin::builder().build()` — plugin
 /// *construction*, before the plugin is even instantiated, let alone started
 /// — naming the missing label.
 #[tokio::test]
@@ -179,17 +177,15 @@ async fn test_missing_labeled_secret_fails_plugin_construction() -> Result<()> {
     let plugin_config = HashMap::from([("api-key".to_string(), "s3cr3t-value".to_string())]);
     let native_plugins = builder.native_plugins();
     let http_handler = builder.http_handler();
-    let result = ComponentHostPlugin::new(
-        PLUGIN_ID,
-        CONSUMER_PLUGIN_WASM,
-        engine,
-        &native_plugins,
-        &plugin_config,
-        Arc::from([]),
-        Arc::from([]),
-        http_handler,
-    )
-    .await;
+    let result = ComponentHostPlugin::builder()
+        .id(PLUGIN_ID)
+        .wasm(CONSUMER_PLUGIN_WASM)
+        .engine(engine)
+        .native_plugins(native_plugins)
+        .config(plugin_config)
+        .maybe_http_handler(http_handler)
+        .build()
+        .await;
     let Err(err) = result else {
         panic!("plugin construction must fail when a labeled secret's config is missing");
     };

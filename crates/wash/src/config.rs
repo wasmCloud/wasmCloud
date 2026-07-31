@@ -263,105 +263,11 @@ pub struct WorkloadConfig {
     pub allowed_ip_name_lookups: Vec<AllowedIpName>,
 }
 
-/// One layer of environment variables.
-///
-/// Inline values are written directly; `configFrom` / `secretFrom` reference
-/// named entries in the top-level `configs:` / `secrets:` blocks by name. On
-/// key conflicts later entries win, in order: inline → configFrom → secretFrom
-/// (matches K8s `envFrom` semantics).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, bon::Builder)]
-#[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub struct EnvironmentLayer {
-    /// Inline plain values. Suitable for non-sensitive defaults.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub config: HashMap<String, String>,
-    /// Names of entries in the top-level `configs:` block.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub config_from: Vec<String>,
-    /// Names of entries in the top-level `secrets:` block.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub secret_from: Vec<String>,
-}
-
-/// A source of non-sensitive key-value pairs for a `configs:` entry.
-///
-/// Multiple fields can be set on a single entry. They merge last-wins in the
-/// order `inline` → `file` → `fromEnv` (matches K8s ConfigMap merge
-/// semantics). Resolution lives in [`crate::workload`] as
-/// [`ConfigSource::resolve`].
-///
-/// See [`SecretSource`] for the sibling type that carries the stricter
-/// posture (file-mode check, in-repo-tree warning, etc.). The two share
-/// today's wire schema but are deliberately distinct types so secret
-/// handling can never be applied to a config and vice versa.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, bon::Builder)]
-#[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub struct ConfigSource {
-    /// Literal key-value entries supplied inline.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub inline: HashMap<String, String>,
-    /// Path to a `.env`-format file. Relative paths resolve against the
-    /// project directory.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file: Option<PathBuf>,
-    /// Path to a directory of one-file-per-key entries — the shape a
-    /// Kubernetes ConfigMap/Secret volume mount projects (filename = key,
-    /// file content = value), unlike `file:`'s single `.env`-format blob.
-    /// Entries whose name starts with `.` are skipped (kubelet's own
-    /// `..data`/`..<timestamp>` bookkeeping). Relative paths resolve
-    /// against the project directory.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dir: Option<PathBuf>,
-    /// Names of environment variables to pull from the developer's shell.
-    /// Each name is read at resolve time via [`std::env::var`]; a missing
-    /// variable is a hard error.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub from_env: Vec<String>,
-}
-
-/// A source of sensitive key-value pairs for a `secrets:` entry.
-///
-/// Same wire shape as [`ConfigSource`] today, but a distinct Rust type so
-/// the stricter resolve-time posture (Unix file mode `0600`/`0400`,
-/// `O_NOFOLLOW` open + `fstat` perm check, in-repo-tree warning, no value
-/// snippets in error / log output) can only be applied here. Resolution
-/// lives in [`crate::workload`] as [`SecretSource::resolve`].
-///
-/// The two types may diverge in the future (e.g. a future `rotation`
-/// field that only makes sense for secrets) — keeping them separate now
-/// avoids retrofitting the type split later.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, bon::Builder)]
-#[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub struct SecretSource {
-    /// Literal key-value entries supplied inline. Convenient for dev /
-    /// test; do not commit production secrets this way.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub inline: HashMap<String, String>,
-    /// Path to a `.env`-format file. Relative paths resolve against the
-    /// project directory. The file must be Unix mode `0600` or `0400`
-    /// and must not escape the project directory via `..` or symlink.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file: Option<PathBuf>,
-    /// Path to a directory of one-file-per-key entries — the shape a
-    /// Kubernetes Secret volume mount projects (filename = key, file
-    /// content = value). Unlike `file:`, entries here are read by
-    /// following symlinks: a kubelet-projected volume is itself a
-    /// symlink farm (`..data/<key>`, atomically swapped on rotation), a
-    /// different trust boundary than a project-repo `file:` — the
-    /// anti-symlink-race posture that path enforces doesn't apply to a
-    /// kubelet-managed mount. Entries whose name starts with `.` are
-    /// skipped. Relative paths resolve against the project directory.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dir: Option<PathBuf>,
-    /// Names of environment variables to pull from the developer's shell.
-    /// Each name is read at resolve time via [`std::env::var`]; a missing
-    /// variable is a hard error.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub from_env: Vec<String>,
-}
+// The `configs:`/`secrets:` source model moved to wash-runtime so every
+// embedder resolves these the same way (see
+// `wash_runtime::config_source`). Re-exported here because this module is
+// the documented home of the config schema.
+pub use wash_runtime::config_source::{ConfigSource, EnvironmentLayer, SecretSource};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DevVolume {
@@ -578,7 +484,7 @@ impl HostPluginConfig {
     ) -> Result<wash_runtime::plugin::ComponentPluginSpec> {
         let mut spec = self.to_spec_unresolved()?;
         let owner = format!("host_plugins '{}'", self.id);
-        spec.config = crate::workload::resolve_environment_layer(
+        spec.config = wash_runtime::config_source::resolve_environment_layer(
             Some(&self.environment),
             &owner,
             &config.config_sources,
@@ -1593,7 +1499,7 @@ dev:
         // `host.hostPlugins` mirrors `dev.host_plugins`'s shape but adds
         // `config`/`configFrom`/`secretFrom` (this plugin's own bind-time
         // config, resolved the same way `workload.environment` is) and
-        // `allowedHosts`/`allowedIpNameLookups` (Phase C).
+        // `allowedHosts`/`allowedIpNameLookups`.
         let yaml = r#"
 configs:
   etcd-connection-settings:

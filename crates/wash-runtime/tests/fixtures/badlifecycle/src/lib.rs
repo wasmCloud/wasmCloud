@@ -5,8 +5,9 @@
 //! copy of the interface (`host-bad/workload-lifecycle.wit`) rather than the
 //! canonical one, so the Rust signatures below are the ones wit-bindgen
 //! generates from that wrong WIT — nothing is being coerced into the real
-//! shape. Used only to assert that `ComponentHostPlugin::new` rejects the
-//! mismatched signature at registration; the hooks are never invoked.
+//! shape. Used only to assert that `ComponentHostPlugin::builder().build()`
+//! rejects the mismatched signature at registration; the hooks are never
+//! invoked.
 
 mod bindings {
     #![allow(unsafe_code)]

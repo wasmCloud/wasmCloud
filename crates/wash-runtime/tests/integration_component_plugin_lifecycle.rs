@@ -707,17 +707,12 @@ async fn test_lifecycle_bind_reports_workload_service() -> Result<()> {
 #[tokio::test]
 async fn test_reserved_lifecycle_export_not_workload_matchable() -> Result<()> {
     let engine = Engine::builder().build()?;
-    let plugin = ComponentHostPlugin::new(
-        PLUGIN_ID,
-        KV_PLUGIN_WASM,
-        engine,
-        &HashMap::new(),
-        &HashMap::new(),
-        Arc::from([]),
-        Arc::from([]),
-        None,
-    )
-    .await?;
+    let plugin = ComponentHostPlugin::builder()
+        .id(PLUGIN_ID)
+        .wasm(KV_PLUGIN_WASM)
+        .engine(engine)
+        .build()
+        .await?;
     let world = plugin.world();
     assert!(
         world
@@ -739,24 +734,19 @@ async fn test_reserved_lifecycle_export_not_workload_matchable() -> Result<()> {
 
 /// A malformed lifecycle signature (here `on-workload-bind` takes a bare
 /// string instead of the `workload-info` record) is rejected at registration —
-/// `ComponentHostPlugin::new` fails with a clear message — rather than being
-/// accepted and failing on the first workload deploy.
+/// `ComponentHostPlugin::builder().build()` fails with a clear message —
+/// rather than being accepted and failing on the first workload deploy.
 #[tokio::test]
 async fn test_malformed_lifecycle_signature_rejected_at_registration() -> Result<()> {
     let engine = Engine::builder().build()?;
-    let err = ComponentHostPlugin::new(
-        "badlifecycle-plugin",
-        BADLIFECYCLE_WASM,
-        engine,
-        &HashMap::new(),
-        &HashMap::new(),
-        Arc::from([]),
-        Arc::from([]),
-        None,
-    )
-    .await
-    .map(|_| ())
-    .expect_err("a malformed lifecycle signature must be rejected at construction");
+    let err = ComponentHostPlugin::builder()
+        .id("badlifecycle-plugin")
+        .wasm(BADLIFECYCLE_WASM)
+        .engine(engine)
+        .build()
+        .await
+        .map(|_| ())
+        .expect_err("a malformed lifecycle signature must be rejected at construction");
     let msg = format!("{err:#}");
     assert!(
         msg.contains("on-workload-bind") && msg.contains("workload-info record"),
@@ -772,17 +762,12 @@ async fn test_malformed_lifecycle_signature_rejected_at_registration() -> Result
 #[tokio::test]
 async fn test_lifecycle_hooks_driven_directly() -> Result<()> {
     let engine = Engine::builder().build()?;
-    let plugin = ComponentHostPlugin::new(
-        PLUGIN_ID,
-        KV_PLUGIN_WASM,
-        engine,
-        &HashMap::new(),
-        &HashMap::new(),
-        Arc::from([]),
-        Arc::from([]),
-        None,
-    )
-    .await?;
+    let plugin = ComponentHostPlugin::builder()
+        .id(PLUGIN_ID)
+        .wasm(KV_PLUGIN_WASM)
+        .engine(engine)
+        .build()
+        .await?;
     plugin.start().await?;
 
     // A bind exercising every optional field of the typed records: an instance
@@ -831,17 +816,12 @@ async fn test_lifecycle_hooks_driven_directly() -> Result<()> {
 #[tokio::test]
 async fn test_lifecycle_bind_fails_when_plugin_not_running() -> Result<()> {
     let engine = Engine::builder().build()?;
-    let plugin = ComponentHostPlugin::new(
-        PLUGIN_ID,
-        KV_PLUGIN_WASM,
-        engine,
-        &HashMap::new(),
-        &HashMap::new(),
-        Arc::from([]),
-        Arc::from([]),
-        None,
-    )
-    .await?;
+    let plugin = ComponentHostPlugin::builder()
+        .id(PLUGIN_ID)
+        .wasm(KV_PLUGIN_WASM)
+        .engine(engine)
+        .build()
+        .await?;
 
     let matched = acme_kv_matched(&[]);
     let err = plugin
@@ -885,17 +865,12 @@ async fn start_host_keeping_plugin_router(
     let ingress = Ingress::new(router, addr.parse()?).await?;
     let bound_addr = ingress.addr();
     let plugin = Arc::new(
-        ComponentHostPlugin::new(
-            PLUGIN_ID,
-            KV_PLUGIN_WASM,
-            engine.clone(),
-            &HashMap::new(),
-            &HashMap::new(),
-            Arc::from([]),
-            Arc::from([]),
-            None,
-        )
-        .await?,
+        ComponentHostPlugin::builder()
+            .id(PLUGIN_ID)
+            .wasm(KV_PLUGIN_WASM)
+            .engine(engine.clone())
+            .build()
+            .await?,
     );
     let host = HostBuilder::new()
         .with_engine(engine)
@@ -916,18 +891,13 @@ async fn start_host_with_lifecycle_timeout(
     let engine = Engine::builder().build()?;
     let ingress = Ingress::new(DynamicRouter::default(), addr.parse()?).await?;
     let bound_addr = ingress.addr();
-    let plugin = ComponentHostPlugin::new(
-        PLUGIN_ID,
-        KV_PLUGIN_WASM,
-        engine.clone(),
-        &HashMap::new(),
-        &HashMap::new(),
-        Arc::from([]),
-        Arc::from([]),
-        None,
-    )
-    .await?
-    .with_lifecycle_call_timeout(timeout);
+    let plugin = ComponentHostPlugin::builder()
+        .id(PLUGIN_ID)
+        .wasm(KV_PLUGIN_WASM)
+        .engine(engine.clone())
+        .build()
+        .await?
+        .with_lifecycle_call_timeout(timeout);
     let host = HostBuilder::new()
         .with_engine(engine)
         .with_http_handler(Arc::new(ingress))
@@ -1087,17 +1057,12 @@ async fn test_lifecycle_optional_fields_round_trip() -> Result<()> {
 #[tokio::test]
 async fn test_plugin_without_lifecycle_export_is_unaffected() -> Result<()> {
     let engine = Engine::builder().build()?;
-    let plugin = ComponentHostPlugin::new(
-        "bridge-backend-plugin",
-        BRIDGE_BACKEND_WASM,
-        engine,
-        &HashMap::new(),
-        &HashMap::new(),
-        Arc::from([]),
-        Arc::from([]),
-        None,
-    )
-    .await?;
+    let plugin = ComponentHostPlugin::builder()
+        .id("bridge-backend-plugin")
+        .wasm(BRIDGE_BACKEND_WASM)
+        .engine(engine)
+        .build()
+        .await?;
     plugin.start().await?;
 
     let matched: HashSet<WitInterface> = [WitInterface::from("wasmcloud:bridge/ops@0.1.0")]
