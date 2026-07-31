@@ -261,18 +261,13 @@ fn setup_bare_host(call: Call) -> Warm {
             .await
             .unwrap();
         let addr = ingress.addr();
-        let plugin = ComponentHostPlugin::new(
-            PLUGIN_ID,
-            KV_PLUGIN_WASM,
-            engine.clone(),
-            &HashMap::new(),
-            &HashMap::new(),
-            Arc::from([]),
-            Arc::from([]),
-            None,
-        )
-        .await
-        .expect("failed to build host component plugin");
+        let plugin = ComponentHostPlugin::builder()
+            .id(PLUGIN_ID)
+            .wasm(KV_PLUGIN_WASM)
+            .engine(engine.clone())
+            .build()
+            .await
+            .expect("failed to build host component plugin");
         let host = HostBuilder::new()
             .with_engine(engine)
             .with_http_handler(Arc::new(ingress))
@@ -421,16 +416,13 @@ fn setup_lifecycle(bind_first: bool) -> Lifecycle {
     let rt = Runtime::new().expect("tokio runtime");
     let engine = Engine::builder().build().expect("engine");
     let plugin = rt
-        .block_on(ComponentHostPlugin::new(
-            PLUGIN_ID,
-            KV_PLUGIN_WASM,
-            engine,
-            &HashMap::new(),
-            &HashMap::new(),
-            Arc::from([]),
-            Arc::from([]),
-            None,
-        ))
+        .block_on(
+            ComponentHostPlugin::builder()
+                .id(PLUGIN_ID)
+                .wasm(KV_PLUGIN_WASM)
+                .engine(engine)
+                .build(),
+        )
         .expect("failed to build host component plugin");
     let workload = UnresolvedWorkload::new(
         LIFECYCLE_WORKLOAD_ID,
@@ -541,16 +533,13 @@ fn setup_stopped_plugin(_unused: bool) -> Stopped {
     let rt = Runtime::new().expect("tokio runtime");
     let engine = Engine::builder().build().expect("engine");
     let plugin = rt
-        .block_on(ComponentHostPlugin::new(
-            PLUGIN_ID,
-            KV_PLUGIN_WASM,
-            engine,
-            &HashMap::new(),
-            &HashMap::new(),
-            Arc::from([]),
-            Arc::from([]),
-            None,
-        ))
+        .block_on(
+            ComponentHostPlugin::builder()
+                .id(PLUGIN_ID)
+                .wasm(KV_PLUGIN_WASM)
+                .engine(engine)
+                .build(),
+        )
         .expect("failed to build host component plugin");
     Stopped { rt, plugin }
 }

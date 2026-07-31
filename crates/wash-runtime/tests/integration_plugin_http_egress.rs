@@ -2,14 +2,13 @@
 //! egress, secured by its own `allowedHosts` policy — independent of any
 //! workload's.
 //!
-//! `wasi:http/outgoing-handler` already links into a plugin's store
-//! unconditionally once the plugin imports it; before Phase C, every outgoing
-//! call simply trapped ("http client not available") because the plugin's own
-//! store never carried an `allowed_hosts` policy or a real HTTP handler.
-//! `http-egress-plugin` exports a bespoke `acme:httpegress/fetch` capability
-//! that makes one outgoing GET and reports the *policy* outcome (not the
-//! upstream's own status) as a string, driven end to end over HTTP through
-//! the `http-egress-plugin-caller` workload.
+//! `wasi:http/outgoing-handler` links into a plugin's store unconditionally
+//! once the plugin imports it; without an `allowed_hosts` policy and a real
+//! HTTP handler on the plugin's own store, every outgoing call would simply
+//! trap ("http client not available"). `http-egress-plugin` exports a bespoke
+//! `acme:httpegress/fetch` capability that makes one outgoing GET and reports
+//! the *policy* outcome (not the upstream's own status) as a string, driven
+//! end to end over HTTP through the `http-egress-plugin-caller` workload.
 
 #![cfg(feature = "host-component-plugins")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -129,18 +128,16 @@ async fn start_host_with_egress_plugin(
     let native_plugins = builder.native_plugins();
     let http_handler = builder.http_handler();
 
-    let plugin = ComponentHostPlugin::new(
-        PLUGIN_ID,
-        EGRESS_PLUGIN_WASM,
-        engine,
-        &native_plugins,
-        &HashMap::new(),
-        allowed_hosts.into(),
-        Arc::from([]),
-        http_handler,
-    )
-    .await
-    .context("http-egress-plugin should link cleanly")?;
+    let plugin = ComponentHostPlugin::builder()
+        .id(PLUGIN_ID)
+        .wasm(EGRESS_PLUGIN_WASM)
+        .engine(engine)
+        .native_plugins(native_plugins)
+        .allowed_hosts(allowed_hosts.into())
+        .maybe_http_handler(http_handler)
+        .build()
+        .await
+        .context("http-egress-plugin should link cleanly")?;
 
     let host = builder.with_plugin(Arc::new(plugin))?.build()?;
     let host = host.start().await.context("failed to start host")?;

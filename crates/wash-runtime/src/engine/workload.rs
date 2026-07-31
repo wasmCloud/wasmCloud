@@ -2843,9 +2843,9 @@ mod tests {
     /// A named binding whose `name` matches a registered plugin id routes
     /// exclusively to that plugin — not to a different plugin that also
     /// serves the same raw interface, and without either plugin needing
-    /// `supports_named_instances()`. This is the routing axis Phase D adds
-    /// (e.g. a workload picking a specific `wasmcloud:secrets` backend by
-    /// plugin id), distinct from the `(implements ..)` multiplexer.
+    /// `supports_named_instances()`. This routing axis (e.g. a workload
+    /// picking a specific `wasmcloud:secrets` backend by plugin id) is
+    /// distinct from the `(implements ..)` multiplexer.
     #[tokio::test]
     async fn test_named_binding_routes_to_plugin_by_id() {
         let iface = WitInterface::from("wasi:blobstore/container");
@@ -2903,7 +2903,7 @@ mod tests {
 
     /// A named binding whose `name` does NOT match any registered plugin id
     /// falls through to the existing world-matching path unchanged (e.g. an
-    /// `(implements ..)` multiplex label) — Phase D's id-routing check is
+    /// `(implements ..)` multiplex label) — the id-routing check is
     /// additive, not a replacement.
     #[tokio::test]
     async fn test_named_binding_falls_through_when_name_is_not_a_plugin_id() {
