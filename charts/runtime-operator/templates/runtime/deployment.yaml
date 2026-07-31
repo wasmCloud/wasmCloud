@@ -46,18 +46,20 @@ spec:
              never rolls the Deployment, and the host keeps serving the old
              config it read once at startup until an unrelated restart.
 
-             Hashed against this group's own partition, not the ConfigMap
-             template's rendered output: host-plugin-config.yaml ranges over
-             every group in runtime.hostGroups, so hashing its `include`
-             output would give every group's Deployment the SAME checksum —
-             any one group's plugin-config edit would then roll every host in
-             the cluster. The partition (fileBacked entries + configFrom/
-             secretFrom names) is an exact proxy for what the ConfigMap
-             renders for this group alone (the mount paths are static), so
-             hashing it scopes the checksum correctly per group. */}}
+             Hashes the config file helper directly, for this group only:
+             host-plugin-config.yaml ranges over every group, so hashing THAT
+             template's output would give every group the same checksum and
+             one group's edit would roll every host in the cluster.
+
+             The reloader annotations cover what a checksum structurally
+             cannot — the contents of the ConfigMaps/Secrets this file only
+             references by name. See the helper. */}}
       {{- $annotations := dict }}
       {{- if $fileBackedPlugins }}
-      {{- $_ := set $annotations "checksum/host-plugin-config" (include "runtime-operator.hostPluginPartition" . | sha256sum) }}
+      {{- $configFile := include "runtime-operator.hostPluginConfigFile" $partition }}
+      {{- $_ := set $annotations "checksum/host-plugin-config" ($configFile | sha256sum) }}
+      {{- $reloader := include "runtime-operator.hostPluginReloaderAnnotations" $partition | fromYaml }}
+      {{- $annotations = merge $annotations $reloader }}
       {{- end }}
       {{- with $top.Values.runtime.podAnnotations }}
       {{- $annotations = merge $annotations . }}

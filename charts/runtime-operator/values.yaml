@@ -392,6 +392,18 @@ runtime:
       #                   — a host component plugin is operator-controlled
       #                   and more privileged than a workload, so it gets no
       #                   ergonomic allow-all default.
+      #
+      # Editing any of these rolls the host automatically (the Deployment
+      # carries a checksum over the rendered config file). Rotating the
+      # CONTENTS of a ConfigMap/Secret named by `configFrom`/`secretFrom` is
+      # different: the host resolves that file once, at startup, and the
+      # kubelet updates the projected volume in place, so a running host keeps
+      # serving what it read at boot. The Deployment carries
+      # `{configmap,secret}.reloader.stakater.com/reload` annotations naming
+      # exactly those objects — install stakater/Reloader and a rotation rolls
+      # the host on its own. Without that controller the annotations are
+      # inert, and a rotation needs a manual `kubectl rollout restart`.
+      #
       #   allowedIpNameLookups  names this plugin's own
       #                   `wasi:sockets/ip-name-lookup` calls may resolve.
       #                   Omitted/empty denies every lookup.

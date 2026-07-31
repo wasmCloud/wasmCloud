@@ -225,6 +225,119 @@ with `fromJson`.
 {{- end }}
 
 {{/*
+The `wash host` config file (--config) for ONE host group's file-backed
+hostPlugins entries, rendered at column 0 so callers indent it where they need
+it.
+
+Two callers, and that is the point: host-plugin-config.yaml projects it into a
+ConfigMap, and deployment.yaml hashes it into a `checksum/host-plugin-config`
+pod annotation so an edit rolls the host (which reads this file once, at
+startup). Hashing the real rendered output rather than the values it derives
+from means a change to the shape of this file — not just to a value in it —
+also rolls the pod.
+
+Takes a `hostPluginPartition` result, passed in rather than recomputed so each
+caller evaluates it exactly once.
+
+`configFrom`/`secretFrom` name plain Kubernetes ConfigMaps/Secrets in the
+release namespace. deployment.yaml projects each referenced one as a volume
+under /etc/wasmcloud/host-plugin-{config,secrets}/<name> — the directory shape
+`dir:` (wash_runtime::config_source) reads, one file per key, matching how
+Kubernetes itself projects a ConfigMap/Secret volume. The catalog below points
+`dir:` at that exact mount path, so `host.hostPlugins[].configFrom/secretFrom`
+resolve by name exactly like `workload.environment.configFrom/secretFrom` do.
+Only the host process reads these paths — the target plugin only ever calls
+e.g. `wasmcloud:secrets`'s `get`.
+*/}}
+{{- define "runtime-operator.hostPluginConfigFile" -}}
+{{- $partition := . }}
+{{- $configNames := $partition.configFromNames }}
+{{- $secretNames := $partition.secretFromNames }}
+{{- if $configNames }}
+configs:
+  {{- range $configNames }}
+  {{ . }}:
+    dir: /etc/wasmcloud/host-plugin-config/{{ . }}
+  {{- end }}
+{{- end }}
+{{- if $secretNames }}
+secrets:
+  {{- range $secretNames }}
+  {{ . }}:
+    dir: /etc/wasmcloud/host-plugin-secrets/{{ . }}
+  {{- end }}
+{{- end }}
+host:
+  hostPlugins:
+    {{- range $partition.fileBacked }}
+    - id: {{ .id }}
+      {{- if .image }}
+      image: {{ .image }}
+      {{- if .pullPolicy }}
+      pullPolicy: {{ .pullPolicy }}
+      {{- end }}
+      {{- if .digest }}
+      expectedDigest: {{ .digest }}
+      {{- end }}
+      {{- else if .file }}
+      file: {{ .file }}
+      {{- end }}
+      {{- if .maxRestarts }}
+      maxRestarts: {{ .maxRestarts }}
+      {{- end }}
+      {{- with .config }}
+      config:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .configFrom }}
+      configFrom:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .secretFrom }}
+      secretFrom:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .allowedHosts }}
+      allowedHosts:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .allowedIpNameLookups }}
+      allowedIpNameLookups:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+
+{{/*
+Reloader annotations naming the ConfigMaps/Secrets a host group's plugin config
+references.
+
+The host reads its config file once, at startup, and the kubelet updates a
+projected volume in place — so rotating a ConfigMap/Secret named by
+`configFrom`/`secretFrom` changes the bytes on disk while the running host goes
+on serving the values it resolved at boot. The `checksum/host-plugin-config`
+annotation cannot catch this: the referenced objects live outside this chart,
+and their contents are not part of any value it renders.
+
+These annotations delegate that to stakater/Reloader, which watches the named
+objects and rolls the Deployment when their data changes. They are inert
+without the controller installed, so they cost nothing when it isn't — but
+without it, rotation genuinely does not reach a running host until something
+else restarts it.
+
+Takes the same `hostPluginPartition` result as `runtime-operator.hostPluginConfigFile`.
+*/}}
+{{- define "runtime-operator.hostPluginReloaderAnnotations" -}}
+{{- $partition := . }}
+{{- if $partition.configFromNames }}
+configmap.reloader.stakater.com/reload: {{ join "," $partition.configFromNames | quote }}
+{{- end }}
+{{- if $partition.secretFromNames }}
+secret.reloader.stakater.com/reload: {{ join "," $partition.secretFromNames | quote }}
+{{- end }}
+{{- end }}
+
+{{/*
 Create the imagePullSecrets section for the chart.
 */}}
 {{- define "runtime-operator.imagePullSecrets" -}}
