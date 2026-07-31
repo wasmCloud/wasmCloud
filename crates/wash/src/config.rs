@@ -580,6 +580,14 @@ pub struct DevConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_ca_path: Option<PathBuf>,
 
+    /// Extra CA certificate bundle files (PEM) trusted for *outbound* HTTPS
+    /// requests made by the component (`wasi:http` outgoing handler). Use this
+    /// to reach hosts behind a corporate or otherwise private CA. Unlike
+    /// `tls_ca_path` (which configures the ingress HTTP server), these apply
+    /// to requests the component sends out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub http_client_ca_paths: Vec<PathBuf>,
+
     /// Enable WASI WebGPU support in the dev environment. Only supported on non-Windows platforms.
     #[serde(default)]
     pub wasi_webgpu: bool,

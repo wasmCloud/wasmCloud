@@ -6121,6 +6121,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rustix",
  "rustls",
+ "rustls-native-certs",
  "semver",
  "serde",
  "serde_json",

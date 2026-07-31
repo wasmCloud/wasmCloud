@@ -65,6 +65,7 @@ use sysinfo::SystemMonitor;
 pub mod allowed_hosts;
 pub mod allowed_ip_name;
 pub mod http;
+pub mod http_client;
 pub mod http_p3;
 #[cfg(feature = "host-component-plugins")]
 pub(crate) mod job_registry;
