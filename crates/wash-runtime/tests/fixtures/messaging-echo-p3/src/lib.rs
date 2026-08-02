@@ -11,10 +11,12 @@
 //! observable end-to-end: a test publishes through a backend, then reads the
 //! count back over HTTP.
 //!
-//! It is a service (exports `wasi:cli/run`) so the trigger service co-drives one
-//! long-lived instance. That matters for the count: a per-message component
-//! would get a fresh linear memory per message and `MSG_COUNT` would always read
-//! back as zero.
+//! It runs as a service, so the trigger service keeps ONE long-lived instance.
+//! That is what makes the count observable: a per-message component would get a
+//! fresh linear memory per message and `MSG_COUNT` would always read back as
+//! zero. `wasi:cli/run` is exported because the host's bind path for this
+//! workload shape still expects it, but it has no work to do and returns
+//! immediately — the instance is held open by the ingress serve loops.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -44,12 +46,12 @@ struct Component;
 
 impl RunGuest for Component {
     async fn run() -> Result<(), ()> {
-        use crate::bindings::wasi::clocks::monotonic_clock;
-        // Keep the service alive; the trigger service co-drives this loop
-        // concurrently with message and HTTP handling on the same instance.
-        loop {
-            monotonic_clock::wait_for(1_000_000).await;
-        }
+        // Nothing to co-drive: this fixture's work is entirely in its handler
+        // exports. Returning immediately does NOT end the service — the trigger
+        // service holds `run_concurrent` open on the ingress serve loops, and
+        // `cli/run` returning is only logged. The instance (and so `MSG_COUNT`)
+        // survives across messages either way.
+        Ok(())
     }
 }
 

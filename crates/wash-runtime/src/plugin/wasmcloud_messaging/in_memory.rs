@@ -16,7 +16,7 @@ const MAX_QUEUE_SIZE: usize = 10000;
 
 /// A component's message inbox, shared between the publisher side
 /// (`route_to_subscribers`) and the component's processing task.
-type Inbox = Arc<RwLock<VecDeque<types::BrokerMessage>>>;
+type Inbox = Arc<RwLock<VecDeque<types_p2::BrokerMessage>>>;
 
 mod bindings {
     crate::wasmtime::component::bindgen!({
@@ -44,7 +44,7 @@ mod async_bindings {
 // unrelated Rust types with identical names — aliasing both at the top keeps
 // every use site below reading as a straight p2/p3 pair.
 use bindings::wasmcloud::messaging0_2_0::consumer::{self as consumer_p2, Host as HostP2};
-use bindings::wasmcloud::messaging0_2_0::types::{self, Host as TypesHostP2};
+use bindings::wasmcloud::messaging0_2_0::types::{self as types_p2, Host as TypesHostP2};
 
 use async_bindings::wasmcloud::messaging0_3_0::consumer::{
     self as consumer_p3, Host as HostP3, HostWithStore as HostWithStoreP3,
@@ -60,7 +60,7 @@ use crate::plugin::WorkloadTracker;
 
 super::async_messaging_conversions! {
     error: AsyncMsgError,
-    sync_message: types::BrokerMessage,
+    sync_message: types_p2::BrokerMessage,
     async_message: AsyncBrokerMessage,
 }
 
@@ -74,7 +74,7 @@ super::messaging_handler_dispatch! {
 /// [`ComponentData`]).
 #[derive(Default)]
 struct WorkloadData {
-    pending_requests: Arc<RwLock<HashMap<String, oneshot::Sender<types::BrokerMessage>>>>,
+    pending_requests: Arc<RwLock<HashMap<String, oneshot::Sender<types_p2::BrokerMessage>>>>,
 }
 
 /// Per-component tracking data. Each handler component has its own subject
@@ -125,7 +125,7 @@ fn subscriptions_match(subscriptions: &[String], subject: &str) -> bool {
 async fn route_to_subscribers(
     plugin: &InMemoryMessaging,
     workload_id: &str,
-    msg: &types::BrokerMessage,
+    msg: &types_p2::BrokerMessage,
 ) -> Result<(), MsgError> {
     let targets: Vec<(Inbox, Arc<Notify>)> = {
         let lock = plugin.tracker.read().await;
@@ -165,7 +165,7 @@ async fn do_request(
     subject: String,
     body: Vec<u8>,
     timeout_ms: u32,
-) -> wasmtime::Result<Result<types::BrokerMessage, MsgError>> {
+) -> wasmtime::Result<Result<types_p2::BrokerMessage, MsgError>> {
     let pending_requests = {
         let lock = plugin.tracker.read().await;
         match lock.get_workload_data(workload_id) {
@@ -187,7 +187,7 @@ async fn do_request(
     }
 
     // Create the request message with reply_to set
-    let msg = types::BrokerMessage {
+    let msg = types_p2::BrokerMessage {
         subject,
         reply_to: Some(reply_to.clone()),
         body,
@@ -230,7 +230,7 @@ async fn do_request(
 async fn do_publish(
     plugin: &InMemoryMessaging,
     workload_id: &str,
-    msg: types::BrokerMessage,
+    msg: types_p2::BrokerMessage,
 ) -> wasmtime::Result<Result<(), MsgError>> {
     let pending_requests = {
         let lock = plugin.tracker.read().await;
@@ -290,7 +290,7 @@ impl InMemoryMessaging {
         route_to_subscribers(
             self,
             workload_id,
-            &types::BrokerMessage {
+            &types_p2::BrokerMessage {
                 subject: subject.to_string(),
                 reply_to: None,
                 body,
@@ -314,7 +314,7 @@ impl<'a> HostP2 for ActiveCtx<'a> {
         subject: String,
         body: Vec<u8>,
         timeout_ms: u32,
-    ) -> wasmtime::Result<Result<types::BrokerMessage, String>> {
+    ) -> wasmtime::Result<Result<types_p2::BrokerMessage, String>> {
         let plugin = self.try_get_plugin::<InMemoryMessaging>(PLUGIN_MESSAGING_MEMORY_ID)?;
         let workload_id = self.ctx.workload_id.to_string();
         Ok(do_request(&plugin, &workload_id, subject, body, timeout_ms)
@@ -323,7 +323,10 @@ impl<'a> HostP2 for ActiveCtx<'a> {
     }
 
     #[instrument(name = "wasmcloud.messaging.publish", skip_all, fields(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>")))]
-    async fn publish(&mut self, msg: types::BrokerMessage) -> wasmtime::Result<Result<(), String>> {
+    async fn publish(
+        &mut self,
+        msg: types_p2::BrokerMessage,
+    ) -> wasmtime::Result<Result<(), String>> {
         let plugin = self.try_get_plugin::<InMemoryMessaging>(PLUGIN_MESSAGING_MEMORY_ID)?;
         let workload_id = self.ctx.workload_id.to_string();
         Ok(do_publish(&plugin, &workload_id, msg)
@@ -445,7 +448,7 @@ impl HostPlugin for InMemoryMessaging {
                 extract_active_ctx,
             )?;
         } else {
-            types::add_to_linker::<_, SharedCtx>(component_handle.linker(), extract_active_ctx)?;
+            types_p2::add_to_linker::<_, SharedCtx>(component_handle.linker(), extract_active_ctx)?;
             consumer_p2::add_to_linker::<_, SharedCtx>(
                 component_handle.linker(),
                 extract_active_ctx,
