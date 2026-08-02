@@ -208,7 +208,7 @@ macro_rules! messaging_handler_dispatch {
             async fn call_handle_message(
                 &self,
                 store: &mut wasmtime::Store<$crate::engine::ctx::SharedCtx>,
-                msg: &types::BrokerMessage,
+                msg: &types_p2::BrokerMessage,
             ) -> wasmtime::Result<Result<(), String>> {
                 match self {
                     HandlerProxy::V0_2(proxy) => {
