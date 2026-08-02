@@ -6,15 +6,18 @@ package wasmcloud:echo-p3;
 // surface at once — the host invokes the exported handler through the
 // concurrent ABI, and the guest awaits an imported `publish` from inside it.
 //
-// It is a *service* (exports `wasi:cli/run`) so the trigger service co-drives
-// one long-lived instance: a per-message component would get a fresh linear
-// memory each time, and the handled-message count could never be observed.
-// `wasi:http/handler` reports that count, so a test can publish through a
-// backend and read it back over HTTP — the same trick the `msg-counter` fixture
-// uses for the sync surface.
+// It runs as a *service*, so the trigger service keeps one long-lived instance:
+// a per-message component would get a fresh linear memory each time, and the
+// handled-message count could never be observed. `wasi:http/handler` reports
+// that count, so a test can publish through a backend and read it back over
+// HTTP — the same trick the `msg-counter` fixture uses for the sync surface.
+//
+// `wasi:cli/run` is exported because the host's bind path for this workload
+// shape still expects it (dropping it fails the workload before any message is
+// routed), but this fixture has no long-running work of its own, so its `run`
+// returns immediately.
 world echo-p3 {
     import wasmcloud:messaging/consumer@0.3.0;
-    import wasi:clocks/monotonic-clock@0.3.0;
     import wasi:http/types@0.3.0;
 
     export wasi:cli/run@0.3.0;

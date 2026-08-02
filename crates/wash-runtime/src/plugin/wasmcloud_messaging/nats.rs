@@ -34,7 +34,7 @@ mod async_bindings {
 // unrelated Rust types with identical names — aliasing both at the top keeps
 // every use site below reading as a straight p2/p3 pair.
 use bindings::wasmcloud::messaging0_2_0::consumer::{self as consumer_p2, Host as HostP2};
-use bindings::wasmcloud::messaging0_2_0::types::{self, Host as TypesHostP2};
+use bindings::wasmcloud::messaging0_2_0::types::{self as types_p2, Host as TypesHostP2};
 
 use async_bindings::wasmcloud::messaging0_3_0::consumer::{
     self as consumer_p3, Host as HostP3, HostWithStore as HostWithStoreP3,
@@ -49,7 +49,7 @@ use super::MsgError;
 
 super::async_messaging_conversions! {
     error: AsyncMsgError,
-    sync_message: types::BrokerMessage,
+    sync_message: types_p2::BrokerMessage,
     async_message: AsyncBrokerMessage,
 }
 
@@ -136,7 +136,7 @@ impl<'a> HostP2 for ActiveCtx<'a> {
         subject: String,
         body: Vec<u8>,
         timeout_ms: u32,
-    ) -> wasmtime::Result<Result<types::BrokerMessage, String>> {
+    ) -> wasmtime::Result<Result<types_p2::BrokerMessage, String>> {
         let plugin = self.try_get_plugin::<NatsMessaging>(PLUGIN_MESSAGING_ID)?;
 
         let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
@@ -154,7 +154,7 @@ impl<'a> HostP2 for ActiveCtx<'a> {
             }
         };
         let reply_to = resp.reply.as_ref().map(|r| r.to_string());
-        Ok(Ok(types::BrokerMessage {
+        Ok(Ok(types_p2::BrokerMessage {
             subject: resp.subject.to_string(),
             reply_to,
             body: resp.payload.into(),
@@ -162,7 +162,10 @@ impl<'a> HostP2 for ActiveCtx<'a> {
     }
 
     #[instrument(name = "wasmcloud.messaging.publish", skip_all, fields(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>")))]
-    async fn publish(&mut self, msg: types::BrokerMessage) -> wasmtime::Result<Result<(), String>> {
+    async fn publish(
+        &mut self,
+        msg: types_p2::BrokerMessage,
+    ) -> wasmtime::Result<Result<(), String>> {
         let plugin = self.try_get_plugin::<NatsMessaging>(PLUGIN_MESSAGING_ID)?;
 
         let subject = msg.subject;
@@ -326,7 +329,7 @@ impl HostPlugin for NatsMessaging {
                 extract_active_ctx,
             )?;
         } else {
-            types::add_to_linker::<_, SharedCtx>(component_handle.linker(), extract_active_ctx)?;
+            types_p2::add_to_linker::<_, SharedCtx>(component_handle.linker(), extract_active_ctx)?;
             consumer_p2::add_to_linker::<_, SharedCtx>(
                 component_handle.linker(),
                 extract_active_ctx,
@@ -565,7 +568,7 @@ impl HostPlugin for NatsMessaging {
                             }
                             Ok(p) => p,
                         };
-                        let msg = types::BrokerMessage {
+                        let msg = types_p2::BrokerMessage {
                             subject,
                             reply_to,
                             body,
