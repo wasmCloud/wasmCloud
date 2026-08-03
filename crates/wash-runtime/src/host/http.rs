@@ -444,9 +444,12 @@ pub trait OutgoingHandler: Send + Sync + 'static {
     }
 }
 
-/// Default [`OutgoingHandler`] — wasmtime's default per-request transport, but
-/// with configurable TLS trust roots (see
-/// [`crate::host::http_client::ClientTlsOptions`]).
+/// Default [`OutgoingHandler`] — sends requests through per-workload
+/// keep-alive connection pools ([`crate::host::http_client::WorkloadClients`])
+/// so a workload's repeated and concurrent requests to the same authority
+/// reuse connections instead of exhausting ephemeral ports, while components
+/// never share a TCP connection with each other. TLS trust roots are
+/// configurable (see [`crate::host::http_client::ClientTlsOptions`]).
 ///
 /// Construction does no I/O: unless a configuration is supplied up front, the
 /// TLS configuration (and any trust-store read) is built lazily on first use.
@@ -454,7 +457,7 @@ pub trait OutgoingHandler: Send + Sync + 'static {
 pub struct DefaultOutgoingHandler {
     /// Set eagerly by [`Self::with_tls_config`]; populated lazily with the
     /// process-wide default roots otherwise.
-    tls: OnceLock<Arc<rustls::ClientConfig>>,
+    clients: OnceLock<crate::host::http_client::WorkloadClients>,
 }
 
 impl DefaultOutgoingHandler {
@@ -463,8 +466,8 @@ impl DefaultOutgoingHandler {
     /// extra CA bundles).
     pub fn with_tls_config(tls: Arc<rustls::ClientConfig>) -> Self {
         let cell = OnceLock::new();
-        let _ = cell.set(tls);
-        Self { tls: cell }
+        let _ = cell.set(crate::host::http_client::WorkloadClients::new(tls));
+        Self { clients: cell }
     }
 
     /// Build a handler from [`ClientTlsOptions`] — the shared wiring for CLI
@@ -483,17 +486,19 @@ impl DefaultOutgoingHandler {
         }
     }
 
-    fn tls(&self) -> Arc<rustls::ClientConfig> {
-        self.tls
-            .get_or_init(crate::host::http_client::default_client_tls_config)
-            .clone()
+    fn clients(&self) -> &crate::host::http_client::WorkloadClients {
+        self.clients.get_or_init(|| {
+            crate::host::http_client::WorkloadClients::new(
+                crate::host::http_client::default_client_tls_config(),
+            )
+        })
     }
 }
 
 impl OutgoingHandler for DefaultOutgoingHandler {
     fn send_request(
         &self,
-        _workload_id: &str,
+        workload_id: &str,
         request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
         config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
     ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
@@ -501,10 +506,10 @@ impl OutgoingHandler for DefaultOutgoingHandler {
         // Spawn the send ourselves so the request can be wrapped in a client
         // span and the response status recorded once it arrives.
         let span = outbound_client_span(request.method(), request.uri());
-        let tls = self.tls();
+        let client = self.clients().client(workload_id);
         let handle = wasmtime_wasi::runtime::spawn(
             async move {
-                let result = crate::host::http_client::send_request_p2(tls, request, config).await;
+                let result = client.send_request_p2(request, config).await;
                 match &result {
                     Ok(incoming) => record_outbound_status(incoming.resp.status()),
                     Err(_) => record_outbound_error(),
@@ -517,20 +522,20 @@ impl OutgoingHandler for DefaultOutgoingHandler {
     }
     fn send_request_p3(
         &self,
-        _workload_id: &str,
+        workload_id: &str,
         request: hyper::Request<crate::host::http_p3::P3Body>,
         options: Option<wasmtime_wasi_http::p3::RequestOptions>,
         _fut: crate::host::http_p3::P3RequestErrorFuture,
     ) -> crate::host::http_p3::P3SendFuture {
-        Box::new(crate::host::http_client::send_request_p3(
-            self.tls(),
-            request,
-            options,
-        ))
+        let client = self.clients().client(workload_id);
+        Box::new(async move {
+            let (res, io) = client.send_request_p3(request, options).await?;
+            Ok((res, io))
+        })
     }
 
     fn client_tls_config(&self) -> Option<Arc<rustls::ClientConfig>> {
-        Some(self.tls())
+        Some(self.clients().tls_config())
     }
 }
 
@@ -2180,9 +2185,10 @@ async fn send_grpc_request_p3_handler(
         .map(|body| TimedBody::new(body, between_bytes_timeout).boxed_unsync());
 
     // The connection driver *is* the request-error future: it must stay
-    // pending while the guest reads the body (wasmtime aborts it otherwise —
-    // see the matching comment in `http_client::send_request_p3`), and a
-    // connection failure propagates to the guest instead of being dropped.
+    // pending while the guest reads the body (wasmtime keeps it alive for the
+    // body's lifetime only while it polls pending — see `p3::host::handler` —
+    // and the `AbortOnDropJoinHandle` aborts the connection when dropped), and
+    // a connection failure propagates to the guest instead of being dropped.
     let io: crate::host::http_p3::P3RequestErrorFuture = Box::new(conn_worker);
     Ok((resp, io))
 }
@@ -2310,7 +2316,7 @@ mod tests {
     /// P3 sibling of [`grpc_path_picks_up_configured_roots`]: the configured
     /// roots must apply, and the returned request-error future must poll
     /// pending so wasmtime keeps the connection alive while the guest reads
-    /// the body (the same latent bug fixed in `http_client::send_request_p3`).
+    /// the body.
     #[tokio::test]
     async fn grpc_p3_path_picks_up_configured_roots_and_keeps_connection_alive() {
         use core::task::{Context as TaskContext, Waker};
