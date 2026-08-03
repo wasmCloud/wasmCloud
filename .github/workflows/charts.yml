@@ -31,7 +31,9 @@ jobs:
           filters: |
             relevant:
               - 'charts/**'
+              - 'runtime-operator/config/crd/bases/**'
               - '.github/workflows/charts.yml'
+              - 'Makefile'
 
   test:
     needs:
@@ -45,6 +47,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-go
+      - name: Check bundled CRDs
+        run: make helm-crds-check
       - name: Render
         run: make helm-render
 
