@@ -69,6 +69,9 @@ the linker componentizes the result into a wasip3 component (imports
 1. `wasi:http` to receive registry requests (wasip3 `handler@0.3.0`)
 2. `wasmcloud:blobstore` to persist blobs, manifests, and tags
 3. `wasi:random` to mint upload-session identifiers
+4. `wasmcloud:secrets` (`store` + `reveal`) to supply the HTTP Basic auth
+   credentials (`registry-username` / `registry-password`), served by a
+   secrets backend such as a host component plugin
 
 ## Supported endpoints
 
@@ -227,7 +230,11 @@ this registry.
 
 ## Limitations
 
-- There is no authentication.
+- Authentication is HTTP Basic only, enforced on every request (including the
+  `/v2/` version probe). If the secrets backend doesn't serve both
+  `registry-username` and `registry-password`, the registry denies all
+  requests rather than serving unauthenticated. Token auth (the OCI auth
+  flow real registries use) is not implemented.
 - **Streaming** takes advantage of the native `wasmcloud:blobstore` `stream<u8>`
   bodies where it can: blob **pulls** (`GET`) pipe the blobstore `get-data`
   stream straight into the HTTP response, and **monolithic** blob pushes stream
