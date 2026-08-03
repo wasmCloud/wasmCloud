@@ -170,8 +170,7 @@ pub(crate) async fn send_request_p2(
         request.headers_mut().insert(hyper::header::HOST, value);
     }
 
-    let authority =
-        request_authority(&request, use_tls).ok_or(ErrorCode::HttpRequestUriInvalid)?;
+    let authority = request_authority(&request, use_tls).ok_or(ErrorCode::HttpRequestUriInvalid)?;
 
     let tcp_stream = timeout(connect_timeout, TcpStream::connect(&authority))
         .await
@@ -276,8 +275,7 @@ pub(crate) async fn send_request_p3(
         request.headers_mut().insert(hyper::header::HOST, value);
     }
 
-    let authority =
-        request_authority(&request, use_tls).ok_or(ErrorCode::HttpRequestUriInvalid)?;
+    let authority = request_authority(&request, use_tls).ok_or(ErrorCode::HttpRequestUriInvalid)?;
 
     let tcp_stream = timeout(connect_timeout, TcpStream::connect(&authority))
         .await
