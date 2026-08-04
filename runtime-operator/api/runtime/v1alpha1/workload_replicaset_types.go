@@ -64,7 +64,7 @@ type WorkloadReplicaSetStatus struct {
 // +kubebuilder:printcolumn:name="REPLICAS",type=integer,JSONPath=`.spec.replicas`
 // +kubebuilder:printcolumn:name="READY",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 
-// WorkloadReplicaSet is the Schema for the artifacts API.
+// WorkloadReplicaSet maintains a specified number of running Workload replicas; it is normally created and managed by a WorkloadDeployment.
 type WorkloadReplicaSet struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

@@ -33,7 +33,8 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Host is the Schema for the Hosts API.
+        description: Host represents a running wasmCloud host that workloads can be
+          scheduled onto.
         properties:
           apiVersion:
             description: |-
