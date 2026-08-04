@@ -32,7 +32,9 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Workload is the Schema for the artifacts API.
+        description: Workload defines a set of WebAssembly components and services
+          to run on wasmCloud hosts, with the configuration, volumes, and host interfaces
+          they use.
         properties:
           apiVersion:
             description: |-

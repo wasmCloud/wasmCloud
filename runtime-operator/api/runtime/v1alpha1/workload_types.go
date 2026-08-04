@@ -385,7 +385,7 @@ type WorkloadStatus struct {
 // +kubebuilder:printcolumn:name="READY",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 
-// Workload is the Schema for the artifacts API.
+// Workload defines a set of WebAssembly components and services to run on wasmCloud hosts, with the configuration, volumes, and host interfaces they use.
 type Workload struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

@@ -35,7 +35,7 @@ type HostStatus struct {
 // +kubebuilder:printcolumn:name="READY",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 
-// Host is the Schema for the Hosts API.
+// Host represents a running wasmCloud host that workloads can be scheduled onto.
 type Host struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
