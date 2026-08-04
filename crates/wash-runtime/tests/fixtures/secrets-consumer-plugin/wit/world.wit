@@ -1,0 +1,37 @@
+package acme:secretsproxy@0.1.0;
+
+/// A bespoke capability this plugin exports, so a workload can drive the
+/// plugin's own `wasmcloud:secrets` imports indirectly (through the plugin's
+/// cross-store capability call) instead of importing `wasmcloud:secrets`
+/// directly itself.
+interface store {
+    /// Resolve `key` through the plugin's own dynamic (`store.get`)
+    /// `wasmcloud:secrets` import, revealing it as a string. `none` if
+    /// unbound.
+    get-secret: async func(key: string) -> option<string>;
+
+    /// Resolve the plugin's `db-password` labeled `wasmcloud:secrets/secret`
+    /// import — no key argument, since the label alone identifies it.
+    /// `none` if unbound (should not happen: a missing `db-password` config
+    /// entry fails plugin construction, before this could ever be called).
+    get-db-password: async func() -> option<string>;
+}
+
+/// Host component plugin that imports the native `wasmcloud:secrets`
+/// capability (never another component plugin — resolved at plugin-load time
+/// against the host's registered natives) and re-exports values from it,
+/// demonstrating both ways a plugin can get secrets from its own resolved
+/// bind-time config:
+///
+/// - `store`/`reveal`, dynamically keyed by a runtime string — a key missing
+///   from the plugin's resolved config is only discovered when `store.get`
+///   returns `not-found`.
+/// - a labeled `wasmcloud:secrets/secret` import (`db-password`) — the label
+///   itself, present in this world, is what the host checks against its
+///   resolved config, before the plugin is even instantiated.
+world secrets-consumer-plugin {
+    import wasmcloud:secrets/store@2.1.0;
+    import wasmcloud:secrets/reveal@2.1.0;
+    import db-password: wasmcloud:secrets/secret@2.1.0;
+    export store;
+}

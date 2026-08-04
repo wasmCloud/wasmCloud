@@ -53,7 +53,7 @@ fn kv_store_iface(name: &str) -> WitInterface {
         namespace: "wasmcloud".to_string(),
         package: "keyvalue".to_string(),
         interfaces: ["store".to_string()].into_iter().collect(),
-        version: Some(semver::Version::parse("0.1.0").unwrap()),
+        version: Some(semver::Version::parse("0.2.0").unwrap()),
         config: HashMap::from([("backend".to_string(), "in-memory".to_string())]),
         name: Some(name.to_string()),
     }

@@ -42,7 +42,7 @@ unnecessary_box_returns = 'deny'
 
 [dependencies]
 wstd = "0.6"
-wit-bindgen = "0.57"
+wit-bindgen = "0.60"
 wasip2 = "1.0"
 serde_json = "1.0"
 

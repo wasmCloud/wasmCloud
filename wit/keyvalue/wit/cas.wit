@@ -1,4 +1,4 @@
-package wasmcloud:keyvalue@0.1.0;
+package wasmcloud:keyvalue@0.2.0;
 
 /// A keyvalue interface that provides compare-and-swap (optimistic concurrency) for a single key.
 ///

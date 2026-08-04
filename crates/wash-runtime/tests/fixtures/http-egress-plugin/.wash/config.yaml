@@ -2,4 +2,4 @@ build:
   # `wash build` runs `wit fetch` (resolving the wkg.toml local refs), then this
   # command; a wasm32-wasip1 core module is wrapped into a component afterward.
   command: cargo build --target wasm32-wasip1 --release
-  component_path: ../target/wasm32-wasip1/release/secrets_host.wasm
+  component_path: ../target/wasm32-wasip1/release/http_egress_plugin.wasm

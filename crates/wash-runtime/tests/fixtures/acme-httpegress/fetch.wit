@@ -1,0 +1,17 @@
+package acme:httpegress@0.1.0;
+
+/// A bespoke, single-function capability a host component plugin exports, so
+/// a workload can drive the plugin's own `wasi:http/outgoing-handler` import
+/// indirectly (through the plugin's cross-store capability call) instead of
+/// importing `wasi:http` directly itself.
+interface fetch {
+    /// Send a plain HTTP GET to `host` and report the outcome as a status
+    /// string, NOT the upstream's own status — so a test can tell "the
+    /// wasmCloud host's allowed_hosts policy denied this" apart from "the
+    /// upstream responded with some status":
+    ///
+    /// - "200"       — request reached upstream (whatever its own status was)
+    /// - "403"       — denied by the plugin's own allowed_hosts policy
+    /// - "error: .." — any other failure (DNS, network, ...)
+    fetch: async func(host: string) -> string;
+}

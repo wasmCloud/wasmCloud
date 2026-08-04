@@ -357,8 +357,7 @@ runtime:
       wasmProposals: []
       # -- Host component plugins for this host group: WebAssembly components
       # that provide a host capability, each served from its own supervised
-      # store to every workload that imports its interface. Rendered as
-      # `--host-plugin=...` args.
+      # store to every workload that imports its interface.
       #
       # Requires a wash image built with the `host-component-plugins` feature
       # (not enabled in release images yet); a host handed a plugin it cannot
@@ -369,13 +368,65 @@ runtime:
       # (always | ifNotPresent | never, image only), `maxRestarts`, `digest`
       # (image only).
       #
-      # Example:
+      # A plugin entry with none of `config`/`configFrom`/`secretFrom`/
+      # `allowedHosts`/`allowedIpNameLookups` set renders as a plain
+      # `--host-plugin=...` CLI arg (unchanged from before). Setting any of
+      # those five instead renders the WHOLE entry into a `wash host` config
+      # file (`--config`) mounted into the pod — never a CLI arg, so a secret
+      # never appears on the command line:
+      #
+      #   config          literal key-value pairs, this plugin's own
+      #                   bind-time config (delivered via the same
+      #                   `wasmcloud:secrets`-style `on-workload-bind` hook a
+      #                   workload gets, never written to a file the plugin
+      #                   itself reads).
+      #   configFrom      names of ConfigMaps (in this release's namespace)
+      #                   to merge in, last-source-wins over `config`. Each
+      #                   name's ConfigMap is projected as a volume and read
+      #                   by the HOST process only — see deployment.yaml.
+      #   secretFrom      names of Secrets (same namespace), merged in last
+      #                   (wins over `config`/`configFrom`). Same
+      #                   host-only-reads-the-mount posture.
+      #   allowedHosts    this plugin's own `wasi:http/outgoing-handler`
+      #                   allowlist. Omitted/empty denies every outbound host
+      #                   — a host component plugin is operator-controlled
+      #                   and more privileged than a workload, so it gets no
+      #                   ergonomic allow-all default.
+      #
+      # Editing any of these rolls the host automatically (the Deployment
+      # carries a checksum over the rendered config file). Rotating the
+      # CONTENTS of a ConfigMap/Secret named by `configFrom`/`secretFrom` is
+      # different: the host resolves that file once, at startup, and the
+      # kubelet updates the projected volume in place, so a running host keeps
+      # serving what it read at boot. The Deployment carries
+      # `{configmap,secret}.reloader.stakater.com/reload` annotations naming
+      # exactly those objects — install stakater/Reloader and a rotation rolls
+      # the host on its own. Without that controller the annotations are
+      # inert, and a rotation needs a manual `kubectl rollout restart`.
+      #
+      #   allowedIpNameLookups  names this plugin's own
+      #                   `wasi:sockets/ip-name-lookup` calls may resolve.
+      #                   Omitted/empty denies every lookup.
+      #
+      # Examples:
       #
       #   hostPlugins:
       #     - id: acme-kv
       #       image: ghcr.io/acme/kv-host:1.0.0
       #       pullPolicy: ifNotPresent
       #       maxRestarts: 3
+      #     - id: etcd-secrets
+      #       image: ghcr.io/example/etcd-secrets:1.0.0
+      #       allowedHosts:
+      #         - https://etcd.internal:2379
+      #       allowedIpNameLookups:
+      #         - etcd.internal
+      #       config:
+      #         etcd-prefix: /wasmcloud/secrets
+      #       configFrom:
+      #         - etcd-connection-settings
+      #       secretFrom:
+      #         - etcd-client-cert
       hostPlugins: []
       http:
         enabled: true

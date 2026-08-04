@@ -1815,6 +1815,18 @@ impl UnresolvedWorkload {
         }
     }
 
+    /// Removes and returns the component `id`, if present.
+    ///
+    /// Used by the host-component-plugin loader, which represents a loading
+    /// plugin's own native-capability imports as a synthetic single-component
+    /// workload purely to reuse `bind_plugins`'s matching/rollback logic, then
+    /// recovers the (now-linked) component this way instead of exposing the
+    /// backing map.
+    #[cfg(feature = "host-component-plugins")]
+    pub(crate) fn take_component(&mut self, id: &str) -> Option<WorkloadComponent> {
+        self.components.remove(id)
+    }
+
     /// Bind this workload to the host plugins based on the requested
     /// interfaces. Returns a list of plugins and the component IDs they were bound to.
     #[allow(clippy::type_complexity)]
@@ -1892,6 +1904,27 @@ impl UnresolvedWorkload {
                 // Find interfaces that this plugin can satisfy for this component
                 let mut matching_interfaces = HashSet::new();
                 for wit_interface in required_interfaces.iter() {
+                    // A named binding whose name matches a registered plugin
+                    // id directly routes to exactly that plugin — the id IS
+                    // the routing key, so this bypasses the
+                    // named/unnamed `supports_named_instances()` deferral
+                    // below entirely (that deferral is for the closed,
+                    // native-only multiplexer's own `(implements ..)`
+                    // labels, a separate routing axis). A plugin still has to
+                    // actually serve the interface to be matched; a name that
+                    // doesn't resolve to any registered plugin id falls
+                    // through to the existing world-matching path unchanged
+                    // (e.g. a `(implements ..)` multiplex label).
+                    if let Some(name) = &wit_interface.name
+                        && plugins.contains_key(name.as_str())
+                    {
+                        if name.as_str() == *plugin_id
+                            && plugin_interfaces.includes_bidirectional(wit_interface)
+                        {
+                            matching_interfaces.insert(wit_interface.clone());
+                        }
+                        continue;
+                    }
                     // Check if plugin supports this interface
                     if plugin_interfaces.includes_bidirectional(wit_interface) {
                         // an `(implements ..)` named interface is served only
@@ -2805,6 +2838,105 @@ mod tests {
                      registering host functions"
             );
         }
+    }
+
+    /// A named binding whose `name` matches a registered plugin id routes
+    /// exclusively to that plugin — not to a different plugin that also
+    /// serves the same raw interface, and without either plugin needing
+    /// `supports_named_instances()`. This routing axis (e.g. a workload
+    /// picking a specific `wasmcloud:secrets` backend by plugin id) is
+    /// distinct from the `(implements ..)` multiplexer.
+    #[tokio::test]
+    async fn test_named_binding_routes_to_plugin_by_id() {
+        let iface = WitInterface::from("wasi:blobstore/container");
+
+        let default_plugin = Arc::new(MockPlugin::new(
+            "blobstore-default",
+            vec![],
+            vec![iface.clone()],
+        ));
+        let custom_plugin = Arc::new(MockPlugin::new(
+            "blobstore-custom",
+            vec![],
+            vec![iface.clone()],
+        ));
+
+        let mut plugins = HashMap::new();
+        plugins.insert(
+            default_plugin.id(),
+            default_plugin.clone() as Arc<dyn HostPlugin>,
+        );
+        plugins.insert(
+            custom_plugin.id(),
+            custom_plugin.clone() as Arc<dyn HostPlugin>,
+        );
+
+        let mut named_iface = iface.clone();
+        named_iface.name = Some("blobstore-custom".to_string());
+
+        let components = vec![create_test_component("component1")];
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            components,
+            vec![named_iface],
+        );
+
+        let bound_plugins = workload.bind_plugins(&plugins).await.unwrap();
+
+        assert_eq!(
+            custom_plugin.get_call_count("on_workload_bind"),
+            1,
+            "the plugin registered under the requested name must be bound"
+        );
+        assert_eq!(
+            default_plugin.get_call_count("on_workload_bind"),
+            0,
+            "a different plugin that also serves the raw interface must NOT be bound \
+             when the binding names a specific plugin id"
+        );
+        assert_eq!(bound_plugins.len(), 1);
+        assert_eq!(bound_plugins[0].0.id(), "blobstore-custom");
+    }
+
+    /// A named binding whose `name` does NOT match any registered plugin id
+    /// falls through to the existing world-matching path unchanged (e.g. an
+    /// `(implements ..)` multiplex label) — the id-routing check is
+    /// additive, not a replacement.
+    #[tokio::test]
+    async fn test_named_binding_falls_through_when_name_is_not_a_plugin_id() {
+        let iface = WitInterface::from("wasi:blobstore/container");
+        let plugin = Arc::new(
+            MockPlugin::new("blobstore-plugin", vec![], vec![iface.clone()])
+                .with_named_instance_support(),
+        );
+
+        let mut plugins = HashMap::new();
+        plugins.insert(plugin.id(), plugin.clone() as Arc<dyn HostPlugin>);
+
+        let mut named_iface = iface.clone();
+        named_iface.name = Some("team-a".to_string());
+
+        let components = vec![create_test_component("component1")];
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            components,
+            vec![named_iface],
+        );
+
+        let bound_plugins = workload.bind_plugins(&plugins).await.unwrap();
+
+        assert_eq!(
+            plugin.get_call_count("on_workload_bind"),
+            1,
+            "a name with no matching plugin id must still resolve via world-matching"
+        );
+        assert_eq!(bound_plugins.len(), 1);
     }
 
     /// Tests basic plugin binding with one plugin and one component.

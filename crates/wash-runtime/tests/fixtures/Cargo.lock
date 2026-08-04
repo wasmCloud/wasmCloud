@@ -30,7 +30,7 @@ checksum = "8b75356056920673b02621b35afd0f7dda9306d03c79a30f5c56c44cf256e3de"
 name = "badlifecycle"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -43,28 +43,28 @@ checksum = "c4512299f36f043ab09a583e57bceb5a5aab7a73db1805848e8fef3c9e8c78b3"
 name = "blobstore-default-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "blobstore-implements-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "bridge-backend"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "bridge-service"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -89,7 +89,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 name = "cli-service-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -98,14 +98,14 @@ version = "0.1.0"
 dependencies = [
  "sysinfo",
  "tokio",
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "cron-component"
 version = "0.1.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -113,21 +113,21 @@ name = "cron-service"
 version = "0.1.0"
 dependencies = [
  "tokio",
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "ephemeral-callee-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "ephemeral-caller-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -294,7 +294,7 @@ dependencies = [
 name = "http-blobstore-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -325,6 +325,21 @@ name = "http-counter"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "http-egress-plugin"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
+name = "http-egress-plugin-caller"
+version = "0.0.0"
+dependencies = [
  "wit-bindgen 0.59.0",
 ]
 
@@ -332,28 +347,28 @@ dependencies = [
 name = "http-handler-p2"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "http-handler-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "http-ip-name-lookup"
 version = "0.1.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "http-ip-name-lookup-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -361,7 +376,7 @@ name = "http-loopback-gateway"
 version = "0.0.0"
 dependencies = [
  "futures",
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -370,7 +385,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -404,35 +419,35 @@ dependencies = [
 name = "inter-component-call-callee"
 version = "0.1.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "inter-component-call-caller"
 version = "0.1.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "inter-component-call-middleware"
 version = "0.1.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "inter-component-call-p3-callee"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "inter-component-call-p3-caller"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -446,49 +461,49 @@ name = "keyvalue-counter"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "keyvalue-default-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "keyvalue-implements"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "keyvalue-implements-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "kv-plugin"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "kv-plugin-caller"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "kv-plugin-service"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -536,21 +551,21 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 name = "messaging-echo"
 version = "0.1.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "messaging-handler"
 version = "0.1.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "msg-counter"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -603,14 +618,14 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 name = "postgres-implements"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "postgres-stream-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -660,35 +675,42 @@ checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 name = "res-caller-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "res-producer-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "res-sink-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "secrets-caller"
 version = "0.0.0"
 dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "secrets-consumer-plugin"
+version = "0.0.0"
+dependencies = [
  "wit-bindgen 0.59.0",
 ]
 
 [[package]]
-name = "secrets-host"
+name = "secrets-consumer-plugin-caller"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -756,7 +778,7 @@ name = "socket-test-p3"
 version = "0.0.0"
 dependencies = [
  "futures",
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -772,42 +794,42 @@ dependencies = [
 name = "stream-consumer-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "stream-pacer-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "stream-producer-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "svc-counter"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "svc-http-proxy"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "svc-no-run"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -815,7 +837,7 @@ name = "svc-tcp-echo"
 version = "0.0.0"
 dependencies = [
  "futures",
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -847,7 +869,7 @@ dependencies = [
 name = "tls-echo-client-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -932,12 +954,12 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
-version = "0.253.0"
+version = "0.254.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59972d6cd272259de647b7c1f1912e45e289c75ffd4be04e10695507cd7e1b59"
+checksum = "09480d646178e5fdd12bb06e812d0af9a3a191dbc9cd697fdc86687beade7393"
 dependencies = [
  "leb128fmt",
- "wasmparser 0.253.0",
+ "wasmparser 0.254.0",
 ]
 
 [[package]]
@@ -958,14 +980,14 @@ dependencies = [
 
 [[package]]
 name = "wasm-metadata"
-version = "0.253.0"
+version = "0.254.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3f45816ef616806f48498bcd831377de578c4fa51db0c83ab8ceb78cc13523b"
+checksum = "b01df5f3b4ca7881e843f3bc0fb8a3905d79c68692250dcb8e33e698705ccdb6"
 dependencies = [
  "anyhow",
  "indexmap",
- "wasm-encoder 0.253.0",
- "wasmparser 0.253.0",
+ "wasm-encoder 0.254.0",
+ "wasmparser 0.254.0",
 ]
 
 [[package]]
@@ -999,9 +1021,9 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
-version = "0.253.0"
+version = "0.254.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19db11f87d2486580e1e8b6f494c54df7e0566b87d0b599db843c24019667339"
+checksum = "d5769a29f799fbab136aaf65b4fe5384cd7d93fe6fc9ba0dcb6c8382a1f16e27"
 dependencies = [
  "bitflags",
  "hashbrown 0.17.1",
@@ -1163,13 +1185,13 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen"
-version = "0.59.0"
+version = "0.60.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94c5e45f6d4cfaca727c1c48989ab3e05bb289bf84fbad226e1cfbbef2c04b7f"
+checksum = "a301904d6657d6364c758d869e5389d05d393b16d5b65db60b4f03cbe71bb80d"
 dependencies = [
  "bitflags",
  "futures",
- "wit-bindgen-rust-macro 0.59.0",
+ "wit-bindgen-rust-macro 0.60.0",
 ]
 
 [[package]]
@@ -1185,13 +1207,13 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-core"
-version = "0.59.0"
+version = "0.60.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05cf25dc4bb1981c16aa549ec66c6762b7752bfb8b7c3b3936ae13100298dc72"
+checksum = "48521bb96e56cbb9e031ad306c80dc20e89e69e49ada02781ee06f60fbcb545f"
 dependencies = [
  "anyhow",
  "heck",
- "wit-parser 0.253.0",
+ "wit-parser 0.254.0",
 ]
 
 [[package]]
@@ -1230,18 +1252,18 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-rust"
-version = "0.59.0"
+version = "0.60.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "407ee2b474af1a366766fe91b8255b7935e5e3c3afb9c304e91ac3d154287ff1"
+checksum = "3df3fe9b9a0066f82fd0c2f07f79d0ffc0f85c53fa5f998516d8722712479042"
 dependencies = [
  "anyhow",
  "heck",
  "indexmap",
  "prettyplease",
  "syn",
- "wasm-metadata 0.253.0",
- "wit-bindgen-core 0.59.0",
- "wit-component 0.253.0",
+ "wasm-metadata 0.254.0",
+ "wit-bindgen-core 0.60.0",
+ "wit-component 0.254.0",
 ]
 
 [[package]]
@@ -1261,9 +1283,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-rust-macro"
-version = "0.59.0"
+version = "0.60.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37386eba32427684ffe37a0f765f63ce2ece03efb1ad28c23cf69562fdc67ec0"
+checksum = "d689c4bc9d6af067c651cfba444766343c9a4bdef15fad1e2efab95c0c277af0"
 dependencies = [
  "anyhow",
  "macro-string",
@@ -1271,8 +1293,8 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
- "wit-bindgen-core 0.59.0",
- "wit-bindgen-rust 0.59.0",
+ "wit-bindgen-core 0.60.0",
+ "wit-bindgen-rust 0.60.0",
 ]
 
 [[package]]
@@ -1296,9 +1318,9 @@ dependencies = [
 
 [[package]]
 name = "wit-component"
-version = "0.253.0"
+version = "0.254.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbbd2500ac3488489ee8c6e59b79d7e47e6da5bfb019efd35d5dca57b78af624"
+checksum = "b0e65bb94c369b3c4741ce3d1d2704b1fec93db7c540df0e521a097e7ceeb5be"
 dependencies = [
  "anyhow",
  "bitflags",
@@ -1307,10 +1329,10 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "wasm-encoder 0.253.0",
- "wasm-metadata 0.253.0",
- "wasmparser 0.253.0",
- "wit-parser 0.253.0",
+ "wasm-encoder 0.254.0",
+ "wasm-metadata 0.254.0",
+ "wasmparser 0.254.0",
+ "wit-parser 0.254.0",
 ]
 
 [[package]]
@@ -1333,9 +1355,9 @@ dependencies = [
 
 [[package]]
 name = "wit-parser"
-version = "0.253.0"
+version = "0.254.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d997b8e5920fcbeec742b58e583325d6419a6aca617ae8075c406a61c65ba8a"
+checksum = "1655131e4f7d3f0cb141f6eca71315ca40eff0f3d4de7cff0a82bacedd8c89b4"
 dependencies = [
  "anyhow",
  "hashbrown 0.17.1",
@@ -1347,7 +1369,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "unicode-ident",
- "wasmparser 0.253.0",
+ "wasmparser 0.254.0",
 ]
 
 [[package]]

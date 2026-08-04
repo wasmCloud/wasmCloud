@@ -34,6 +34,10 @@ helm-build:
 helm-render:
 	helm template -n example-ns example-name charts/runtime-operator
 
+.PHONY: helm-crds-check
+helm-crds-check:
+	diff --recursive --unified runtime-operator/config/crd/bases charts/runtime-operator/crds
+
 .PHONY: helm-install
 helm-install:
 	helm upgrade --install --create-namespace -n wasmcloud-system -f charts/runtime-operator/values.local.yaml operator-dev charts/runtime-operator
@@ -41,4 +45,3 @@ helm-install:
 .PHONY: helm-uninstall
 helm-uninstall:
 	helm delete -n wasmcloud-system --ignore-not-found --cascade foreground operator-dev
-

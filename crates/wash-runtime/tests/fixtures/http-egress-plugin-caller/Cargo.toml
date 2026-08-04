@@ -1,5 +1,5 @@
 [package]
-name = "secrets-host"
+name = "http-egress-plugin-caller"
 edition = "2021"
 version = "0.0.0"
 

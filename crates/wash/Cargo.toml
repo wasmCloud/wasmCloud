@@ -75,12 +75,6 @@ wasm-pkg-core = { workspace = true }
 wash-runtime = { workspace = true, features = ["washlet", "oci", "wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "wasi-otel"] }
 wit-component = { workspace = true }
 
-# `O_NOFOLLOW` for the secret-file-open hardening in `crate::workload`.
-# Unix-only. Windows has no portable equivalent.
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
-
 [build-dependencies]
 anyhow = { workspace = true, default-features = true }
 tonic-prost-build = { workspace = true, default-features = true }

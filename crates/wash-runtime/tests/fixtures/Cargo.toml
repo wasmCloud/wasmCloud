@@ -53,8 +53,11 @@ members = [
     "kv-plugin-caller",
     "kv-plugin-service",
     "badlifecycle",
-    "secrets-host",
     "secrets-caller",
+    "secrets-consumer-plugin",
+    "secrets-consumer-plugin-caller",
+    "http-egress-plugin",
+    "http-egress-plugin-caller",
 ]
 
 [workspace.dependencies]
@@ -67,4 +70,4 @@ tokio = { version = "1", default-features = false, features = ["sync", "macros",
 wstd = "0.6"
 wasmcloud-component = "0.2.0"
 wgpu = { git = "https://github.com/wasi-gfx/wgpu.git", rev = "898122bf2cace048e63f065181a86459edb28205", default-features = false, features = ["wasi", "wgsl"] }
-wit-bindgen = "0.59.0"
+wit-bindgen = "0.60.0"

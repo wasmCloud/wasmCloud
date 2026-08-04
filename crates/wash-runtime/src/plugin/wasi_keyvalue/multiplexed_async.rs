@@ -1,7 +1,7 @@
 //! # Multiplexed async `wasmcloud:keyvalue` (implements-routed)
 //!
 //! The async-native counterpart to [`super::multiplexed`]. Binds
-//! `wasmcloud:keyvalue@0.1.0` whose every backend operation is an `async func`
+//! `wasmcloud:keyvalue@0.2.0` whose every backend operation is an `async func`
 //! (no `wasi:io/poll`) via the same `(implements ..)` / `named_imports`
 //! mechanism, routing each named import to a [`KvBackend`].
 //!
@@ -400,7 +400,7 @@ impl HostPlugin for MultiplexedAsyncKeyValue {
     fn world(&self) -> WitWorld {
         WitWorld {
             imports: HashSet::from([WitInterface::from(
-                "wasmcloud:keyvalue/store,atomics,cas,batch@0.1.0",
+                "wasmcloud:keyvalue/store,atomics,cas,batch@0.2.0",
             )]),
             ..Default::default()
         }

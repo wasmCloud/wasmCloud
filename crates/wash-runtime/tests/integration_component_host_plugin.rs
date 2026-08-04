@@ -22,36 +22,14 @@ use wash_runtime::types::{LocalResources, WorkloadState, WorkloadStopRequest};
 
 mod common;
 use common::{
-    component_workload_request, kv_plugin_caller_host_interfaces, start_host_with_component_plugin,
-    start_host_with_component_plugin_by_host, start_host_with_component_plugin_max_restarts,
-    start_host_with_p3_http_handler,
+    component_workload_request, kv_plugin_caller_host_interfaces, req,
+    start_host_with_component_plugin, start_host_with_component_plugin_by_host,
+    start_host_with_component_plugin_max_restarts, start_host_with_p3_http_handler,
 };
 
 const KV_PLUGIN_WASM: &[u8] = include_bytes!("wasm/kv_plugin.wasm");
 const KV_PLUGIN_CALLER_WASM: &[u8] = include_bytes!("wasm/kv_plugin_caller.wasm");
 const PLUGIN_ID: &str = "acme-kv-plugin";
-
-/// GET `http://{addr}{path}` with the `HOST` header selecting the workload,
-/// returning the status and body text.
-async fn req(
-    client: &reqwest::Client,
-    addr: &std::net::SocketAddr,
-    host: &str,
-    path: &str,
-) -> Result<(reqwest::StatusCode, String)> {
-    let resp = timeout(
-        Duration::from_secs(15),
-        client
-            .get(format!("http://{addr}{path}"))
-            .header("HOST", host)
-            .send(),
-    )
-    .await
-    .context("request timed out")??;
-    let status = resp.status();
-    let body = resp.text().await?;
-    Ok((status, body))
-}
 
 /// A `kv-plugin-caller` workload addressed by `host`.
 fn caller_workload(host: &str) -> wash_runtime::types::WorkloadStartRequest {

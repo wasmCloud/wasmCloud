@@ -986,6 +986,37 @@ impl HostBuilder {
         Ok(self)
     }
 
+    /// Every native (non-component) plugin registered so far — what a host
+    /// component plugin's own capability imports resolve against
+    /// ([`crate::plugin::component_host::load_component_plugin`]). Excludes
+    /// any component plugin already registered, so a loading plugin can never
+    /// import from another component plugin, only from host natives.
+    ///
+    /// A snapshot, not a live view: call this (and [`Self::http_handler`])
+    /// only after every native plugin and the HTTP handler are registered,
+    /// then load host component plugins last. Registering a native or
+    /// calling [`Self::with_http_handler`] afterward has no effect on a
+    /// component plugin already loaded from an earlier snapshot — a missing
+    /// native fails loudly at that plugin's construction (an unresolved
+    /// import), but a missing HTTP handler fails silently until the plugin's
+    /// first outbound call traps with "http client not available".
+    #[cfg(feature = "host-component-plugins")]
+    pub fn native_plugins(&self) -> HashMap<&'static str, Arc<dyn HostPlugin>> {
+        crate::plugin::component_host::native_only(&self.plugins)
+    }
+
+    /// The HTTP handler registered so far, if any — what a host component
+    /// plugin's own `wasi:http/outgoing-handler` calls are sent through, the
+    /// same handler a workload's outgoing calls use.
+    ///
+    /// A snapshot, not a live view — see [`Self::native_plugins`]'s doc for
+    /// the ordering this requires and the silent-until-first-call failure
+    /// mode of getting it wrong.
+    #[cfg(feature = "host-component-plugins")]
+    pub fn http_handler(&self) -> Option<Arc<dyn crate::host::http::HostHandler>> {
+        self.http_handler.clone()
+    }
+
     /// Registers the multiplexed plugin set from
     /// [`crate::plugin::multiplexed_plugins`], which is what makes
     /// `(implements ..)` named imports resolvable. Without it, every

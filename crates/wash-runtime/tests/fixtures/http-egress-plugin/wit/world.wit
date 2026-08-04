@@ -1,0 +1,8 @@
+package acme:httpegressplugin@0.1.0;
+
+/// Host component plugin that imports `wasi:http/outgoing-handler`, gated by
+/// this plugin's own `allowedHosts` policy — never a workload's.
+world http-egress-plugin {
+    import wasi:http/outgoing-handler@0.2.2;
+    export acme:httpegress/fetch@0.1.0;
+}

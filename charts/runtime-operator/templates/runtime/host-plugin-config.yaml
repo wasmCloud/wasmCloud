@@ -1,0 +1,34 @@
+{{- /*
+Per-hostgroup ConfigMap holding a `wash host` config file (--config) for
+hostPlugins entries that declare config/configFrom/secretFrom/allowedHosts/
+allowedIpNameLookups — fields with no `--host-plugin` CLI equivalent (deliberately:
+a secret must never appear on the command line / in `kubectl describe pod`).
+
+Rendered only when at least one such entry exists for the hostgroup; entries
+with none of those fields keep rendering as a plain `--host-plugin=...` arg in
+deployment.yaml, unchanged.
+
+The file's contents come from the `runtime-operator.hostPluginConfigFile`
+helper, which deployment.yaml also hashes for its `checksum/host-plugin-config`
+pod annotation — see that helper for what the file declares and why.
+*/}}
+{{- $top := . }}
+{{- range .Values.runtime.hostGroups }}
+{{- $ns := default $top.Release.Namespace .namespace }}
+{{- $partition := include "runtime-operator.hostPluginPartition" . | fromJson }}
+{{- if $partition.fileBacked }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hostgroup-{{ .name }}-host-config
+  namespace: {{ $ns }}
+  labels:
+    wasmcloud.com/name: hostgroup
+    wasmcloud.com/hostgroup: {{ .name }}
+    {{- include "runtime-operator.labels" $top | nindent 4 }}
+data:
+  config.yaml: |
+{{ include "runtime-operator.hostPluginConfigFile" $partition | trim | indent 4 }}
+---
+{{- end }}
+{{- end }}
