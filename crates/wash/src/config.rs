@@ -508,6 +508,45 @@ pub struct HostConfig {
     pub host_plugins: Vec<HostPluginConfig>,
 }
 
+/// Built-in trust roots for outbound HTTPS from components, before any extra
+/// CA bundles are layered on top. CLI/config mirror of
+/// [`wash_runtime::host::http_client::TrustRoots`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum HttpClientTrustRoots {
+    /// Compiled-in webpki (Mozilla) roots plus the platform's native store.
+    /// The native store honours `SSL_CERT_FILE`/`SSL_CERT_DIR`.
+    WebpkiAndNative,
+    /// Compiled-in webpki roots only — reproducible, ignores the host
+    /// environment. The default, matching the behavior before this option
+    /// existed.
+    #[default]
+    Webpki,
+    /// Platform native store only.
+    Native,
+    /// No built-in roots: trust exactly the configured extra CA bundles.
+    ExtraOnly,
+}
+
+impl HttpClientTrustRoots {
+    // serde's `skip_serializing_if` hands the field by reference.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+impl From<HttpClientTrustRoots> for wash_runtime::host::http_client::TrustRoots {
+    fn from(roots: HttpClientTrustRoots) -> Self {
+        match roots {
+            HttpClientTrustRoots::WebpkiAndNative => Self::WebpkiAndNative,
+            HttpClientTrustRoots::Webpki => Self::Webpki,
+            HttpClientTrustRoots::Native => Self::Native,
+            HttpClientTrustRoots::ExtraOnly => Self::ExtraOnly,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DevConfig {
     /// Command to run the component in dev mode
@@ -580,12 +619,20 @@ pub struct DevConfig {
     pub tls_ca_path: Option<PathBuf>,
 
     /// Extra CA certificate bundle files (PEM) trusted for *outbound* HTTPS
-    /// requests made by the component (`wasi:http` outgoing handler). Use this
-    /// to reach hosts behind a corporate or otherwise private CA. Unlike
-    /// `tls_ca_path` (which configures the ingress HTTP server), these apply
-    /// to requests the component sends out.
+    /// requests made by the component (`wasi:http` outgoing handler), layered
+    /// on top of `http_client_trust_roots`. Use this to reach hosts behind a
+    /// corporate or otherwise private CA. Unlike `tls_ca_path` (which
+    /// configures the ingress HTTP server), these apply to requests the
+    /// component sends out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub http_client_ca_paths: Vec<PathBuf>,
+
+    /// Built-in trust roots for the component's *outbound* HTTPS requests,
+    /// before `http_client_ca_paths` bundles are layered on top. Defaults to
+    /// `webpki`; set `webpki-and-native` to also trust the platform store
+    /// (which honours `SSL_CERT_FILE`/`SSL_CERT_DIR`).
+    #[serde(default, skip_serializing_if = "HttpClientTrustRoots::is_default")]
+    pub http_client_trust_roots: HttpClientTrustRoots,
 
     /// Enable WASI WebGPU support in the dev environment. Only supported on non-Windows platforms.
     #[serde(default)]

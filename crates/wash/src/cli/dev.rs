@@ -162,24 +162,16 @@ impl CliCommand for DevCommand {
 
         let http_handler = wash_runtime::host::http::DevRouter::default();
 
-        // Outbound (egress) trust roots: extra CAs for the component's outgoing
-        // HTTPS calls. Distinct from `tls_*_path` below, which configure the
-        // ingress HTTP server.
-        let outgoing_handler = if dev_config.http_client_ca_paths.is_empty() {
-            wash_runtime::host::http::DefaultOutgoingHandler::default()
-        } else {
-            let tls = wash_runtime::host::http_client::ClientTlsOptions {
+        // Outbound (egress) trust roots for the component's outgoing HTTPS
+        // calls. Distinct from `tls_*_path` below, which configure the ingress
+        // HTTP server.
+        let outgoing_handler = wash_runtime::host::http::DefaultOutgoingHandler::from_tls_options(
+            wash_runtime::host::http_client::ClientTlsOptions {
+                roots: dev_config.http_client_trust_roots.into(),
                 extra_ca_paths: dev_config.http_client_ca_paths.clone(),
-                ..Default::default()
-            }
-            .build()
-            .context("failed to load dev.http_client_ca_paths CA certificates")?;
-            debug!(
-                paths = ?dev_config.http_client_ca_paths,
-                "extra CA certificates trusted for outbound HTTPS"
-            );
-            wash_runtime::host::http::DefaultOutgoingHandler::with_tls_config(tls)
-        };
+            },
+        )
+        .context("failed to load dev.http_client_ca_paths CA certificates")?;
 
         // TODO(#19): Only spawn the server if the component exports wasi:http
         // Configure HTTP server with optional TLS, enable HTTP Server

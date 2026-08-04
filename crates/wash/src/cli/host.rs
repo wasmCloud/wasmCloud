@@ -10,7 +10,7 @@ use wash_runtime::{
 };
 
 use crate::cli::{CliCommand, CliContext, CommandOutput};
-use crate::config::load_config;
+use crate::config::{HttpClientTrustRoots, load_config};
 
 #[derive(Debug, Clone, Args)]
 pub struct HostCommand {
@@ -88,15 +88,33 @@ pub struct HostCommand {
     pub tls_ca_path: Option<PathBuf>,
 
     /// Extra CA certificate bundle files (PEM) trusted for outbound HTTPS
-    /// requests made by components (`wasi:http` outgoing handler). Use this to
-    /// reach hosts behind a corporate or otherwise private CA. May be repeated
-    /// or comma-separated.
+    /// requests made by components (`wasi:http` outgoing handler), layered on
+    /// top of `--http-client-trust-roots`. Use this to reach hosts behind a
+    /// corporate or otherwise private CA.
+    ///
+    /// Accepts a comma-separated list and/or repeated flags, e.g.
+    /// `--http-client-ca-path /etc/wash/ca/corp.pem,/etc/wash/ca/staging.pem`.
+    /// Paths must not contain commas.
     #[arg(
         long = "http-client-ca-path",
         env = "WASH_HTTP_CLIENT_CA_PATHS",
         value_delimiter = ','
     )]
     pub http_client_ca_paths: Vec<PathBuf>,
+
+    /// Built-in trust roots for outbound HTTPS requests made by components,
+    /// before `--http-client-ca-path` bundles are layered on top.
+    /// `webpki-and-native` also trusts the platform store (honouring
+    /// `SSL_CERT_FILE`/`SSL_CERT_DIR`); `extra-only` trusts exactly the
+    /// configured bundles — the corporate-CA case of pinning a single
+    /// private root.
+    #[arg(
+        long = "http-client-trust-roots",
+        env = "WASH_HTTP_CLIENT_TRUST_ROOTS",
+        value_enum,
+        default_value = "webpki"
+    )]
+    pub http_client_trust_roots: HttpClientTrustRoots,
 
     /// Enable WASI WebGPU support
     #[cfg(all(
@@ -324,17 +342,14 @@ impl CliCommand for HostCommand {
             // Outbound (egress) trust roots: extra CAs for components calling
             // HTTPS hosts behind a private CA. Distinct from the ingress TLS
             // options below, which configure the HTTP *server*.
-            let outgoing_handler = if self.http_client_ca_paths.is_empty() {
-                wash_runtime::host::http::DefaultOutgoingHandler::default()
-            } else {
-                let tls = wash_runtime::host::http_client::ClientTlsOptions {
-                    extra_ca_paths: self.http_client_ca_paths.clone(),
-                    ..Default::default()
-                }
-                .build()
-                .context("failed to load outbound HTTP client CA certificates")?;
-                wash_runtime::host::http::DefaultOutgoingHandler::with_tls_config(tls)
-            };
+            let outgoing_handler =
+                wash_runtime::host::http::DefaultOutgoingHandler::from_tls_options(
+                    wash_runtime::host::http_client::ClientTlsOptions {
+                        roots: self.http_client_trust_roots.into(),
+                        extra_ca_paths: self.http_client_ca_paths.clone(),
+                    },
+                )
+                .context("failed to load --http-client-ca-path CA certificates")?;
 
             let mut ingress_builder = wash_runtime::host::http::Ingress::builder(http_router, addr)
                 .outgoing_handler(outgoing_handler);
