@@ -29,7 +29,7 @@ type ArtifactStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 
-// Artifact is the Schema for the artifacts API.
+// Artifact represents a WebAssembly component image that can be fetched and cached for use by workloads.
 type Artifact struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

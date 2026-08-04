@@ -17,7 +17,8 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Artifact is the Schema for the artifacts API.
+        description: Artifact represents a WebAssembly component image that can be
+          fetched and cached for use by workloads.
         properties:
           apiVersion:
             description: |-

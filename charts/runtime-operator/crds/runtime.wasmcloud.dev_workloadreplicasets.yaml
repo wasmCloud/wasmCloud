@@ -24,7 +24,8 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: WorkloadReplicaSet is the Schema for the artifacts API.
+        description: WorkloadReplicaSet maintains a specified number of running Workload
+          replicas; it is normally created and managed by a WorkloadDeployment.
         properties:
           apiVersion:
             description: |-
