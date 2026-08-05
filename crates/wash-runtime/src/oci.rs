@@ -321,7 +321,7 @@ impl CredentialResolver {
 }
 
 /// OCI pull policy
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OciPullPolicy {
     /// ️ Always pull the component from the registry
     Always,
@@ -388,18 +388,6 @@ pub async fn pull_component(
     let reference_parsed = Reference::try_from(reference)
         .with_context(|| format!("invalid OCI reference: {reference}"))?;
 
-    // Configure OCI client
-    let client_config = ClientConfig {
-        protocol: if config.insecure {
-            ClientProtocol::Http
-        } else {
-            ClientProtocol::Https
-        },
-        ..Default::default()
-    };
-
-    let client = Client::new(client_config);
-
     // Setup credential resolver
     let credential_resolver = CredentialResolver::new(config.credentials);
     let auth = credential_resolver
@@ -411,15 +399,73 @@ pub async fn pull_component(
         .cache_dir
         .as_ref()
         .map(|dir| CacheManager::new(dir.clone()));
+
+    // Always attempt HTTPS first. `insecure` grants permission to *fall back*
+    // to plain HTTP when the HTTPS attempt fails (e.g. an in-cluster registry
+    // that serves no TLS) — it must not downgrade registries that do serve
+    // TLS, or a host with the flag set can no longer pull from ghcr.io and
+    // friends, which reject or redirect plain-HTTP API calls.
+    let https_attempt = pull_component_with_protocol(
+        ClientProtocol::Https,
+        reference,
+        &reference_parsed,
+        &auth,
+        cache_manager.as_ref(),
+        pull_policy,
+        config.timeout,
+    )
+    .await;
+    match https_attempt {
+        Ok(result) => Ok(result),
+        Err(https_err) if config.insecure => {
+            debug!(
+                registry = reference_parsed.registry(),
+                err = ?https_err,
+                "HTTPS pull failed; retrying over plain HTTP (insecure registries allowed)"
+            );
+            pull_component_with_protocol(
+                ClientProtocol::Http,
+                reference,
+                &reference_parsed,
+                &auth,
+                cache_manager.as_ref(),
+                pull_policy,
+                config.timeout,
+            )
+            .await
+            .with_context(|| format!("pull over HTTPS also failed with: {https_err:#}"))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// One pull attempt over a fixed [`ClientProtocol`]. Split out of
+/// [`pull_component`] so the insecure path can retry the whole flow — cache
+/// freshness check included — over plain HTTP after an HTTPS failure.
+async fn pull_component_with_protocol(
+    protocol: ClientProtocol,
+    reference: &str,
+    reference_parsed: &Reference,
+    auth: &oci_client::secrets::RegistryAuth,
+    cache_manager: Option<&CacheManager>,
+    pull_policy: OciPullPolicy,
+    timeout: Option<Duration>,
+) -> Result<(Vec<u8>, String)> {
+    // Configure OCI client
+    let client_config = ClientConfig {
+        protocol,
+        ..Default::default()
+    };
+
+    let client = Client::new(client_config);
+
     if let Some(cache_manager) = &cache_manager {
         // Check cache first
         if pull_policy != OciPullPolicy::Always && cache_manager.is_cached(reference).await {
             debug!("Found cached artifact");
             let (component_data, digest) = cache_manager.read_cached(reference).await?;
 
-            let fetched_digest = client
-                .fetch_manifest_digest(&reference_parsed, &auth)
-                .await?;
+            let fetched_digest = client.fetch_manifest_digest(reference_parsed, auth).await?;
 
             if digest == fetched_digest {
                 return Ok((component_data, digest));
@@ -435,8 +481,8 @@ pub async fn pull_component(
 
     // Pull the component using oci-client
     let pull_future = client.pull(
-        &reference_parsed,
-        &auth,
+        reference_parsed,
+        auth,
         vec![
             WASM_LAYER_MEDIA_TYPE,
             #[allow(deprecated)]
@@ -445,7 +491,7 @@ pub async fn pull_component(
     );
 
     // Apply timeout if configured, otherwise just await the pull
-    let image_data = if let Some(timeout) = config.timeout {
+    let image_data = if let Some(timeout) = timeout {
         tokio::time::timeout(timeout, pull_future)
             .await
             .with_context(|| {
