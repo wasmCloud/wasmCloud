@@ -454,6 +454,18 @@ pub trait OutgoingHandler: Send + Sync + 'static {
         None
     }
 
+    /// Pooled HTTP/2 transport for `workload_id`'s gRPC egress.
+    ///
+    /// gRPC requests never reach `send_request`/`send_request_p3` — the
+    /// runtime routes them itself, because the protocol requires HTTP/2 — but
+    /// a handler that pools can serve them here instead, so they reuse
+    /// connections and draw on the same connection budget as the workload's
+    /// ordinary egress. `None` (the default) leaves the runtime to open one
+    /// HTTP/2 connection per request.
+    fn grpc_transport(&self, _workload_id: &str) -> Option<crate::host::http_client::PooledClient> {
+        None
+    }
+
     /// Called when a workload is stopped (unbound from the host).
     ///
     /// Implementations holding per-workload state — connection pools, TLS
@@ -589,6 +601,10 @@ impl OutgoingHandler for DefaultOutgoingHandler {
 
     fn client_tls_config(&self) -> Option<Arc<rustls::ClientConfig>> {
         Some(self.clients().tls_config())
+    }
+
+    fn grpc_transport(&self, workload_id: &str) -> Option<crate::host::http_client::PooledClient> {
+        Some(self.clients().client(workload_id))
     }
 
     fn on_workload_unbind(&self, workload_id: &str) {
@@ -1293,16 +1309,17 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 wasmtime_wasi_http::p2::bindings::http::types::ErrorCode::HttpRequestDenied,
             ));
         }
+        // The gRPC path is selected by the guest via a
+        // `content-type: application/grpc` header, and needs HTTP/2 rather
+        // than the HTTP/1.1 the ordinary egress pool speaks. A pooling
+        // handler serves it from its own per-workload HTTP/2 pool, under the
+        // same connection budget; otherwise the runtime opens a connection
+        // per request.
         if is_grpc_request(&request) {
-            // The gRPC fast path (selected by the guest via a
-            // `content-type: application/grpc` header) opens its own
-            // per-request HTTP/2 connection: it bypasses the pooled client,
-            // so `http_client::ConnectionLimits` does not bound it. Exposure
-            // is limited because these connections are request-scoped (no
-            // idle accumulation) — a workload holds at most one per in-flight
-            // request — but bringing this path under the pooled, permit-
-            // bounded client is part of the gRPC pooling follow-up.
-            return Ok(send_grpc_request(request, config, self.grpc_tls()));
+            return Ok(match self.outgoing_handler.grpc_transport(workload_id) {
+                Some(client) => send_pooled_grpc_request(client, request, config),
+                None => send_grpc_request(request, config, self.grpc_tls()),
+            });
         }
         self.outgoing_handler
             .send_request(workload_id, request, config)
@@ -1329,10 +1346,15 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 ))
             })
         } else if is_grpc_request(&request) {
-            // Guest-selected per-request HTTP/2 path, not bounded by
-            // `ConnectionLimits` — see the matching comment in
+            // Guest-selected HTTP/2 path — see the matching comment in
             // `outgoing_request`.
-            send_grpc_request_p3(request, options, self.grpc_tls())
+            match self.outgoing_handler.grpc_transport(workload_id) {
+                Some(client) => Box::new(async move {
+                    let (res, io) = client.send_grpc_request_p3(request, options).await?;
+                    Ok((res, io))
+                }),
+                None => send_grpc_request_p3(request, options, self.grpc_tls()),
+            }
         } else {
             self.outgoing_handler
                 .send_request_p3(workload_id, request, options, fut)
@@ -2062,6 +2084,32 @@ fn is_grpc_request<B>(req: &hyper::Request<B>) -> bool {
 }
 
 /// Send a gRPC request over HTTP/2.
+/// Send a P2 gRPC request through a handler's pooled HTTP/2 transport.
+/// Mirrors [`send_grpc_request`]'s span and status recording; the connection
+/// lifetime belongs to the pool rather than to this request.
+fn send_pooled_grpc_request(
+    client: crate::host::http_client::PooledClient,
+    request: hyper::Request<HyperOutgoingBody>,
+    config: OutgoingRequestConfig,
+) -> HostFutureIncomingResponse {
+    let span = outbound_client_span(request.method(), request.uri());
+    let handle = wasmtime_wasi::runtime::spawn(
+        async move {
+            let result = client.send_grpc_request_p2(request, config).await;
+            match &result {
+                Ok(incoming) => {
+                    record_outbound_status(incoming.resp.status());
+                    record_grpc_status(incoming.resp.headers());
+                }
+                Err(_) => record_outbound_error(),
+            }
+            Ok(result)
+        }
+        .instrument(span),
+    );
+    HostFutureIncomingResponse::pending(handle)
+}
+
 fn send_grpc_request(
     request: hyper::Request<HyperOutgoingBody>,
     config: OutgoingRequestConfig,

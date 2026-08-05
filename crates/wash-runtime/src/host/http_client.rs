@@ -572,12 +572,25 @@ async fn send_head(
     result.map_err(HeadError::Send)
 }
 
+/// Which protocol a connector negotiates, over ALPN for HTTPS and by prior
+/// knowledge for cleartext.
+#[derive(Clone, Copy)]
+enum Alpn {
+    Http1,
+    H2,
+}
+
 /// A pooled outbound HTTP client with configurable TLS trust roots.
 ///
-/// Cloning is cheap and shares the underlying connection pool.
+/// Holds two pools — HTTP/1.1 for ordinary egress and HTTP/2 for the gRPC
+/// fast path — drawing on one shared connection budget, so a workload's total
+/// footprint is bounded across both protocols.
+///
+/// Cloning is cheap and shares the underlying connection pools.
 #[derive(Clone)]
 pub struct PooledClient {
     client: PoolClient,
+    grpc: PoolClient,
     tls: Arc<rustls::ClientConfig>,
 }
 
@@ -609,41 +622,52 @@ impl PooledClient {
         permit_wait: Duration,
     ) -> Self {
         crate::init_crypto();
-        let mut http = HttpConnector::new();
-        // The inner connector sees https URIs too; scheme handling belongs to
-        // the wrapping HttpsConnector.
-        http.enforce_http(false);
-        http.set_nodelay(true);
-        // A fresh per-client session store, so workloads never share a TLS
-        // session-ticket cache (see [`isolated_resumption`]).
+        // One session store, and one exhaustion-warning throttle, shared by
+        // both protocols: they belong to the workload, not to a pool.
         let tls_config = isolated_resumption(&tls);
-        let https = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_tls_config(tls_config)
-            .https_or_http()
-            // HTTP/1.1 only, and deliberately so: an HTTP/1.1 pooled
-            // connection is checked out exclusively for one request at a time,
-            // which is what lets per-workload pools guarantee components never
-            // share a socket. Enabling HTTP/2 here would multiplex concurrent
-            // streams over a single TCP connection — and with any pool sharing
-            // wider than per-workload, put multiple components' requests on
-            // the same socket simultaneously. That materially changes the
-            // isolation story; do not flip this switch casually.
-            .enable_http1()
-            .wrap_connector(http);
-        let connector = BoundedConnector {
-            inner: https,
-            workload,
-            workload_permits,
-            global_permits,
-            permit_wait,
-            last_permit_warning: Arc::new(std::sync::Mutex::new(None)),
+        let last_permit_warning = Arc::new(std::sync::Mutex::new(None));
+        let connector = |alpn: Alpn| {
+            let mut http = HttpConnector::new();
+            // The inner connector sees https URIs too; scheme handling belongs
+            // to the wrapping HttpsConnector.
+            http.enforce_http(false);
+            http.set_nodelay(true);
+            let builder = hyper_rustls::HttpsConnectorBuilder::new()
+                .with_tls_config(tls_config.clone())
+                .https_or_http();
+            let inner = match alpn {
+                Alpn::Http1 => builder.enable_http1().wrap_connector(http),
+                Alpn::H2 => builder.enable_http2().wrap_connector(http),
+            };
+            BoundedConnector {
+                inner,
+                workload: workload.clone(),
+                workload_permits: workload_permits.clone(),
+                global_permits: global_permits.clone(),
+                permit_wait,
+                last_permit_warning: last_permit_warning.clone(),
+            }
         };
-        let client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
-            .pool_timer(TokioTimer::new())
-            .pool_idle_timeout(POOL_IDLE_TIMEOUT)
-            .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
-            .build(connector);
-        Self { client, tls }
+        let pool = || {
+            let mut builder = hyper_util::client::legacy::Client::builder(TokioExecutor::new());
+            builder
+                .pool_timer(TokioTimer::new())
+                .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+                .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST);
+            builder
+        };
+        // Ordinary egress is HTTP/1.1 only, and deliberately so: an HTTP/1.1
+        // pooled connection is checked out exclusively for one request at a
+        // time, so a component never shares a socket even with itself. gRPC
+        // has no such option — the protocol requires HTTP/2 — so its pool
+        // multiplexes a workload's own concurrent streams onto one connection.
+        // Both stay per-workload, which is what keeps connection-scoped server
+        // state (auth, rate-limit attribution, sticky LB) from crossing
+        // between components; widening either pool beyond one workload would
+        // break that, whatever the protocol.
+        let client = pool().build(connector(Alpn::Http1));
+        let grpc = pool().http2_only(true).build(connector(Alpn::H2));
+        Self { client, grpc, tls }
     }
 
     /// The TLS configuration this client verifies servers against.
@@ -651,9 +675,27 @@ impl PooledClient {
         self.tls.clone()
     }
 
-    /// Send a P2 outgoing request through the pool.
+    /// Send a P2 outgoing request through the HTTP/1.1 pool.
     pub(crate) async fn send_request_p2(
         &self,
+        request: hyper::Request<HyperOutgoingBody>,
+        config: OutgoingRequestConfig,
+    ) -> Result<IncomingResponse, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> {
+        self.p2(&self.client, request, config).await
+    }
+
+    /// Send a P2 gRPC request through the HTTP/2 pool.
+    pub(crate) async fn send_grpc_request_p2(
+        &self,
+        request: hyper::Request<HyperOutgoingBody>,
+        config: OutgoingRequestConfig,
+    ) -> Result<IncomingResponse, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> {
+        self.p2(&self.grpc, request, config).await
+    }
+
+    async fn p2(
+        &self,
+        pool: &PoolClient,
         request: hyper::Request<HyperOutgoingBody>,
         config: OutgoingRequestConfig,
     ) -> Result<IncomingResponse, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> {
@@ -666,7 +708,7 @@ impl PooledClient {
             between_bytes_timeout,
         } = config;
         let request = request.map(|body| body.map_err(|e| Box::new(e) as BoxError).boxed_unsync());
-        let resp = send_head(&self.client, request, connect_timeout, first_byte_timeout)
+        let resp = send_head(pool, request, connect_timeout, first_byte_timeout)
             .await
             .map_err(|err| {
                 use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
@@ -685,13 +727,37 @@ impl PooledClient {
         })
     }
 
-    /// Send a P3 outgoing request through the pool.
+    /// Send a P3 outgoing request through the HTTP/1.1 pool.
     ///
     /// The returned future reports the request-body upload outcome to the
     /// guest: `Ok(())` once the body has been fully pulled, or the body's own
     /// error if producing it failed.
     pub(crate) async fn send_request_p3(
         &self,
+        request: hyper::Request<P3Body>,
+        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+    ) -> Result<
+        (hyper::Response<P3Body>, P3RequestErrorFuture),
+        wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
+    > {
+        self.p3(&self.client, request, options).await
+    }
+
+    /// Send a P3 gRPC request through the HTTP/2 pool.
+    pub(crate) async fn send_grpc_request_p3(
+        &self,
+        request: hyper::Request<P3Body>,
+        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+    ) -> Result<
+        (hyper::Response<P3Body>, P3RequestErrorFuture),
+        wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
+    > {
+        self.p3(&self.grpc, request, options).await
+    }
+
+    async fn p3(
+        &self,
+        pool: &PoolClient,
         request: hyper::Request<P3Body>,
         options: Option<wasmtime_wasi_http::p3::RequestOptions>,
     ) -> Result<
@@ -720,7 +786,7 @@ impl PooledClient {
         .boxed_unsync();
         let request = hyper::Request::from_parts(parts, body);
 
-        let resp = send_head(&self.client, request, connect_timeout, first_byte_timeout)
+        let resp = send_head(pool, request, connect_timeout, first_byte_timeout)
             .await
             .map_err(|err| match err {
                 HeadError::ConnectTimeout => ErrorCode::ConnectionTimeout,
@@ -1396,6 +1462,48 @@ mod tests {
         spawn_counting_server_with_delay(Duration::ZERO).await
     }
 
+    /// Cleartext HTTP/2 (h2c, prior knowledge) server that counts accepted
+    /// connections and answers every request with `200 ok` — the shape a gRPC
+    /// backend presents.
+    async fn spawn_counting_h2c_server()
+    -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let conns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let conns_clone = conns.clone();
+        tokio::spawn(async move {
+            loop {
+                let (stream, _) = match listener.accept().await {
+                    Ok(accepted) => accepted,
+                    Err(_) => return,
+                };
+                conns_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let service = hyper::service::service_fn(
+                        |_req: hyper::Request<hyper::body::Incoming>| async {
+                            Ok::<_, std::convert::Infallible>(hyper::Response::new(
+                                http_body_util::Full::new(Bytes::from_static(b"ok")),
+                            ))
+                        },
+                    );
+                    let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+        (addr, conns)
+    }
+
+    fn grpc_request(uri: &str) -> hyper::Request<HyperOutgoingBody> {
+        hyper::Request::builder()
+            .uri(uri)
+            .method(hyper::Method::POST)
+            .header(hyper::header::CONTENT_TYPE, "application/grpc")
+            .body(HyperOutgoingBody::default())
+            .unwrap()
+    }
+
     fn p2_config(use_tls: bool) -> OutgoingRequestConfig {
         OutgoingRequestConfig {
             use_tls,
@@ -1621,6 +1729,78 @@ mod tests {
             conns.load(std::sync::atomic::Ordering::SeqCst),
             2,
             "invalidate must drop the old pool so the rebuilt client cannot reuse its connections"
+        );
+    }
+
+    /// gRPC egress must reuse pooled HTTP/2 connections rather than opening
+    /// one per request — the same ephemeral-port exhaustion this module
+    /// exists to prevent applies to a component talking gRPC.
+    #[tokio::test]
+    async fn grpc_requests_reuse_the_pooled_h2_connection() {
+        let (addr, conns) = spawn_counting_h2c_server().await;
+        let client = PooledClient::new(default_client_tls_config());
+        let uri = format!("http://{addr}/svc.Test/Call");
+
+        for _ in 0..20 {
+            let response = client
+                .send_grpc_request_p2(grpc_request(&uri), p2_config(false))
+                .await
+                .expect("gRPC request should succeed");
+            assert_eq!(response.resp.status(), 200);
+            let _ = response.resp.into_body().collect().await;
+        }
+
+        let opened = conns.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            opened <= 2,
+            "expected connection reuse across 20 sequential gRPC requests, \
+             but the server saw {opened} connections"
+        );
+    }
+
+    /// gRPC and ordinary egress draw on one connection budget, so a workload
+    /// cannot evade its cap by switching protocols.
+    #[tokio::test]
+    async fn grpc_and_http_egress_share_the_workload_budget() {
+        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
+
+        let (grpc_addr, _grpc_conns) = spawn_counting_h2c_server().await;
+        let (http_addr, http_conns) = spawn_counting_server().await;
+        let clients =
+            WorkloadClients::with_limits(default_client_tls_config(), test_limits(1, 100));
+        let client = clients.client("workload-a");
+
+        // One gRPC connection, left idle in the h2 pool still holding the
+        // workload's only permit.
+        let response = client
+            .send_grpc_request_p2(
+                grpc_request(&format!("http://{grpc_addr}/svc.Test/Call")),
+                p2_config(false),
+            )
+            .await
+            .expect("gRPC request should succeed");
+        let _ = response.resp.into_body().collect().await;
+
+        let err = client
+            .send_request_p2(
+                p2_request(&format!("http://{http_addr}/")),
+                OutgoingRequestConfig {
+                    use_tls: false,
+                    connect_timeout: TEST_PERMIT_WAIT / 5,
+                    first_byte_timeout: Duration::from_secs(30),
+                    between_bytes_timeout: Duration::from_secs(30),
+                },
+            )
+            .await
+            .expect_err("the gRPC connection holds the workload's only permit");
+        assert!(
+            matches!(err, ErrorCode::ConnectionTimeout),
+            "expected ConnectionTimeout, got {err:?}"
+        );
+        assert_eq!(
+            http_conns.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no HTTP/1.1 connection should have been opened over the budget"
         );
     }
 
