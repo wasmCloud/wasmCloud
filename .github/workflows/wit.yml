@@ -256,6 +256,14 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.validate.outputs.matrix) }}
     steps:
+      # `Push and attest` below runs a repo-local composite action, which
+      # the runner can only resolve from a checked-out workspace. This must
+      # precede `Download built wasm bundle`: checkout cleans the workspace
+      # and would otherwise delete the downloaded artifact.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       # wash pushes and emits the OCI manifest digest in its JSON output
       # (see "Push and attest" below). The destination-exists check uses
       # `docker manifest inspect` so it shares credentials with
