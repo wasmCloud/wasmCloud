@@ -410,6 +410,17 @@ impl Router for DynamicRouter {
 
 /// Trait for custom outgoing HTTP egress. gRPC requests (P2 and P3) are
 /// handled by the runtime before this trait is called.
+///
+/// # `workload_id` is a trust boundary
+///
+/// The `workload_id` passed to `send_request`/`send_request_p3` must be the
+/// host-assigned identifier of the workload instance making the request —
+/// never empty, never derived from guest-controllable data, and never shared
+/// between workloads. Implementations (the default one included) key
+/// per-workload state on it: connection pools, TLS session-resumption stores,
+/// and connection budgets. Two callers presenting the same `workload_id`
+/// collapse into one identity and inherit each other's keep-alive connections
+/// and TLS session tickets.
 pub trait OutgoingHandler: Send + Sync + 'static {
     /// Send a P2 outgoing HTTP request for the given `workload_id`.
     fn send_request(
@@ -442,6 +453,16 @@ pub trait OutgoingHandler: Send + Sync + 'static {
     fn client_tls_config(&self) -> Option<Arc<rustls::ClientConfig>> {
         None
     }
+
+    /// Called when a workload is stopped (unbound from the host).
+    ///
+    /// Implementations holding per-workload state — connection pools, TLS
+    /// session stores, connection-budget permits — should release it now
+    /// rather than letting it linger until idle expiry: a stopped workload's
+    /// pooled connections would otherwise stay open (pinning host-wide
+    /// connection permits) for up to the pool idle timeout after the workload
+    /// is gone. The default is a no-op for stateless implementations.
+    fn on_workload_unbind(&self, _workload_id: &str) {}
 }
 
 /// Default [`OutgoingHandler`] — sends requests through per-workload
@@ -568,6 +589,14 @@ impl OutgoingHandler for DefaultOutgoingHandler {
 
     fn client_tls_config(&self) -> Option<Arc<rustls::ClientConfig>> {
         Some(self.clients().tls_config())
+    }
+
+    fn on_workload_unbind(&self, workload_id: &str) {
+        // `get()`, not `clients()`: if no request ever ran there is no cache
+        // to clean and nothing to lazily build for the purpose.
+        if let Some(clients) = self.clients.get() {
+            clients.invalidate(workload_id);
+        }
     }
 }
 
@@ -1156,6 +1185,10 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         self.workload_handles.write().await.remove(workload_id);
         self.service_handlers.write().await.remove(workload_id);
         self.messaging_handlers.write().await.remove(workload_id);
+        // Drop the stopped workload's egress state (pooled connections, TLS
+        // session store, pinned connection permits) instead of letting it
+        // linger until idle expiry.
+        self.outgoing_handler.on_workload_unbind(workload_id);
 
         Ok(())
     }
