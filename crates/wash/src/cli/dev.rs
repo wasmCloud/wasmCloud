@@ -162,6 +162,13 @@ impl CliCommand for DevCommand {
 
         let http_handler = wash_runtime::host::http::DevRouter::default();
 
+        let http_client_connection_wait = dev_config
+            .http_client_connection_wait
+            .as_deref()
+            .map(humantime::parse_duration)
+            .transpose()
+            .context("dev.http_client_connection_wait is not a valid duration (e.g. `5s`)")?;
+
         // Outbound (egress) trust roots for the component's outgoing HTTPS
         // calls. Distinct from `tls_*_path` below, which configure the ingress
         // HTTP server.
@@ -175,6 +182,7 @@ impl CliCommand for DevCommand {
         .with_connection_limits(crate::config::outbound_connection_limits(
             dev_config.http_client_max_connections,
             dev_config.http_client_max_connections_per_workload,
+            http_client_connection_wait,
         )?);
 
         // TODO(#19): Only spawn the server if the component exports wasi:http
