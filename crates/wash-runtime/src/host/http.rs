@@ -2171,8 +2171,15 @@ pub(crate) struct TimedBody<B> {
 impl<B> TimedBody<B> {
     /// Wrap `inner`, erroring with `ConnectionReadTimeout` when more than
     /// `between_bytes_timeout` passes between frames.
+    ///
+    /// The period is clamped to a non-zero minimum: the guest sets this value
+    /// through `wasi:http` request-options, which accepts zero, and
+    /// `tokio::time::interval` panics on a zero period. A clamped period keeps
+    /// the meaning a zero timeout asks for — the next frame must already be
+    /// ready or the body errors.
     pub(crate) fn new(inner: B, between_bytes_timeout: Duration) -> Self {
-        let mut interval = tokio::time::interval(between_bytes_timeout);
+        let period = between_bytes_timeout.max(Duration::from_nanos(1));
+        let mut interval = tokio::time::interval(period);
         interval.reset();
         Self {
             inner: Some(inner),
@@ -2333,6 +2340,7 @@ mod tests {
             crate::host::http_client::ConnectionLimits {
                 max_per_workload: 1,
                 max_total: 2,
+                ..Default::default()
             },
         );
         let got = handler

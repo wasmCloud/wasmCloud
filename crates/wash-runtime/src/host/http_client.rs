@@ -41,7 +41,9 @@ use anyhow::Context as _;
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use http_body_util::combinators::UnsyncBoxBody;
-use hyper_util::client::legacy::connect::{Connected, Connection, HttpConnector};
+use hyper_util::client::legacy::connect::{
+    CaptureConnection, Connected, Connection, HttpConnector, capture_connection,
+};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use tokio::net::TcpStream;
@@ -74,12 +76,13 @@ const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 ///
 /// The cap must sit above a workload's realistic burst concurrency: every
 /// connection returned to a full pool is closed, so a cap below the burst
-/// size churns exactly the sockets this pool exists to keep. Measured on the
-/// cosmos-data http-concurrent-load example (10 inbound × 3 outbound
-/// concurrent): a cap of 4 opened 1625 connections for 3000 requests, while
-/// 32 opened 31. Idle connections above actual demand still close after
-/// [`POOL_IDLE_TIMEOUT`], so the steady-state cost tracks real usage, not
-/// this cap.
+/// size churns exactly the sockets this pool exists to keep. Measured by
+/// driving a component that fans each of 10 concurrent inbound requests out
+/// to 3 concurrent outbound ones, against a backend counting accepted TCP
+/// connections: over 3000 outbound requests, a cap of 4 opened 1625
+/// connections while a cap of 32 opened 31. Idle connections above actual
+/// demand still close after [`POOL_IDLE_TIMEOUT`], so the steady-state cost
+/// tracks real usage, not this cap.
 const POOL_MAX_IDLE_PER_HOST: usize = 32;
 
 /// How long a workload's pooled client survives without that workload making a
@@ -110,6 +113,14 @@ const MAX_CONNECTIONS_PER_WORKLOAD: usize = 128;
 /// traffic.
 const MAX_TOTAL_CONNECTIONS: usize = 512;
 
+/// Default for [`ConnectionLimits::permit_wait`]. Kept well below the
+/// request-timeout defaults (600s) so saturation surfaces as a prompt,
+/// classifiable connect timeout instead of a long hang.
+const PERMIT_WAIT: Duration = Duration::from_secs(5);
+
+/// Shortest gap between two [`warn_permits_exhausted`] lines for one workload.
+const PERMIT_WARN_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Bounds on live outbound connections (in-flight or idle in a pool).
 ///
 /// A permit is held for the whole life of an established connection and
@@ -118,8 +129,8 @@ const MAX_TOTAL_CONNECTIONS: usize = 512;
 /// caps only gate opening *new* connections. When a cap is reached, a request
 /// waits for a permit or for an idle pooled connection, whichever frees first
 /// (hyper races the two and abandons the pending connect if reuse wins); if
-/// neither arrives within [`PERMIT_WAIT`], the request fails with a connect
-/// timeout.
+/// neither arrives within [`permit_wait`](Self::permit_wait), the request
+/// fails with a connect timeout.
 ///
 /// Note that idle pooled connections pin permits until they age out
 /// ([`POOL_IDLE_TIMEOUT`]), so `max_total` should be sized for the number of
@@ -132,6 +143,21 @@ pub struct ConnectionLimits {
     pub max_per_workload: usize,
     /// Host-wide maximum live connections across all workloads combined.
     pub max_total: usize,
+    /// How long a connect attempt waits for permits before failing with a
+    /// timeout.
+    ///
+    /// This deadline must exist: hyper's pool spawns an already-started
+    /// connect to completion in the background when idle-connection reuse
+    /// wins the checkout race, and such an abandoned attempt parked on the
+    /// semaphore would otherwise camp there indefinitely — holding the pool
+    /// alive (which pins the very idle-connection permits it is waiting for)
+    /// and grabbing freed permits to open connections nobody asked for.
+    ///
+    /// A guest's own `connect_timeout` bounds its request independently (see
+    /// [`send_head`]), so this wait caps only how long an abandoned attempt —
+    /// one no request is still waiting on — may camp on the semaphore. Tests
+    /// that deliberately wait one out shorten it.
+    pub permit_wait: Duration,
 }
 
 impl Default for ConnectionLimits {
@@ -139,33 +165,10 @@ impl Default for ConnectionLimits {
         Self {
             max_per_workload: MAX_CONNECTIONS_PER_WORKLOAD,
             max_total: MAX_TOTAL_CONNECTIONS,
+            permit_wait: PERMIT_WAIT,
         }
     }
 }
-
-/// How long a connect attempt waits for [`ConnectionLimits`] permits before
-/// failing with a timeout.
-///
-/// This deadline must exist: hyper's pool spawns an already-started connect
-/// to completion in the background when idle-connection reuse wins the
-/// checkout race, and such an abandoned attempt parked on the semaphore would
-/// otherwise camp there indefinitely — holding the pool alive (which pins the
-/// very idle-connection permits it is waiting for) and grabbing freed permits
-/// to open connections nobody asked for. Kept well below the request-timeout
-/// defaults (600s) so saturation surfaces as a prompt, classifiable connect
-/// timeout instead of a long hang.
-///
-/// Note this also means a guest's `connect_timeout` longer than this wait is
-/// effectively capped at it while the budget is exhausted: the request fails
-/// after [`PERMIT_WAIT`], not after the guest's configured timeout.
-#[cfg(not(test))]
-const PERMIT_WAIT: Duration = Duration::from_secs(5);
-/// Test override: the connection-bound tests deliberately wait out abandoned
-/// connect attempts parked on the semaphore, and the property under test is
-/// value-independent — the production 5s would only slow CI and invite
-/// timing flake on loaded runners.
-#[cfg(test)]
-const PERMIT_WAIT: Duration = Duration::from_secs(1);
 
 /// Built-in roots to start from before layering on
 /// [`ClientTlsOptions::extra_ca_paths`].
@@ -511,6 +514,64 @@ fn tls_server_name(authority: &str) -> Option<rustls::pki_types::ServerName<'sta
         .map(|name| name.to_owned())
 }
 
+/// Why awaiting a response head failed, before it is mapped to the P2 or P3
+/// `ErrorCode` (which are distinct types).
+enum HeadError {
+    /// No connection became usable within the guest's `connect_timeout`.
+    ConnectTimeout,
+    /// A connection was in hand, but the head did not arrive within the
+    /// guest's `first_byte_timeout`.
+    ReadTimeout,
+    /// The transport failed; [`classify_client_error`] sorts out the cause.
+    Send(hyper_util::client::legacy::Error),
+}
+
+/// Resolve once `captured` has a connection, discarding the metadata.
+async fn wait_connected(captured: &mut CaptureConnection) {
+    let _ = captured.wait_for_connection_metadata().await;
+}
+
+/// Await a response head under wasmtime's two-phase timeout budget.
+///
+/// `connect_timeout` bounds only the wait for a usable connection — reusing an
+/// idle pooled connection satisfies it immediately, while a fresh connect (and
+/// any wait for a [`ConnectionLimits`] permit) must finish inside it — and
+/// `first_byte_timeout` then bounds the head itself. Keeping the two phases
+/// distinct preserves the guest-visible timings and error codes of wasmtime's
+/// per-request transport; a single combined deadline would let a short
+/// `connect_timeout` paired with a long `first_byte_timeout` wait out the sum.
+///
+/// hyper-util reports connection establishment through the request's
+/// [`capture_connection`] extension, which it sets for reused and freshly
+/// opened connections alike. That signal never arrives when connecting fails,
+/// so the send future is raced alongside it to surface connect errors.
+async fn send_head(
+    client: &PoolClient,
+    mut request: hyper::Request<ClientBody>,
+    connect_timeout: Duration,
+    first_byte_timeout: Duration,
+) -> Result<hyper::Response<hyper::body::Incoming>, HeadError> {
+    let mut captured = capture_connection(&mut request);
+    let send = client.request(request);
+    tokio::pin!(send);
+
+    let settled = tokio::select! {
+        biased;
+        result = &mut send => Some(result),
+        () = wait_connected(&mut captured) => None,
+        () = tokio::time::sleep(connect_timeout) => return Err(HeadError::ConnectTimeout),
+    };
+    let result = match settled {
+        // The send resolved before a connection was ever observed — a connect
+        // failure, or a response that beat the notification.
+        Some(result) => result,
+        None => timeout(first_byte_timeout, send)
+            .await
+            .map_err(|_| HeadError::ReadTimeout)?,
+    };
+    result.map_err(HeadError::Send)
+}
+
 /// A pooled outbound HTTP client with configurable TLS trust roots.
 ///
 /// Cloning is cheap and shares the underlying connection pool.
@@ -529,18 +590,23 @@ impl PooledClient {
         let limits = ConnectionLimits::default();
         Self::bounded(
             tls,
+            None,
             Arc::new(Semaphore::new(limits.max_per_workload)),
             Arc::new(Semaphore::new(limits.max_total)),
+            limits.permit_wait,
         )
     }
 
     /// Create a client whose new connections each hold one permit from
-    /// `workload_permits` (this client's own budget) and one from
-    /// `global_permits` (shared host-wide) for the connection's lifetime.
+    /// `workload_permits` (the budget of the workload named by `workload`, if
+    /// any) and one from `global_permits` (shared host-wide) for the
+    /// connection's lifetime.
     fn bounded(
         tls: Arc<rustls::ClientConfig>,
+        workload: Option<Arc<str>>,
         workload_permits: Arc<Semaphore>,
         global_permits: Arc<Semaphore>,
+        permit_wait: Duration,
     ) -> Self {
         crate::init_crypto();
         let mut http = HttpConnector::new();
@@ -566,8 +632,11 @@ impl PooledClient {
             .wrap_connector(http);
         let connector = BoundedConnector {
             inner: https,
+            workload,
             workload_permits,
             global_permits,
+            permit_wait,
+            last_permit_warning: Arc::new(std::sync::Mutex::new(None)),
         };
         let client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
             .pool_timer(TokioTimer::new())
@@ -597,15 +666,16 @@ impl PooledClient {
             between_bytes_timeout,
         } = config;
         let request = request.map(|body| body.map_err(|e| Box::new(e) as BoxError).boxed_unsync());
-        // A pooled request has no separate connect phase (the pool may reuse a
-        // live connection), so the head must arrive within the combined budget.
-        let head_timeout = connect_timeout.saturating_add(first_byte_timeout);
-        let resp = tokio::time::timeout(head_timeout, self.client.request(request))
+        let resp = send_head(&self.client, request, connect_timeout, first_byte_timeout)
             .await
-            .map_err(|_| {
-                wasmtime_wasi_http::p2::bindings::http::types::ErrorCode::ConnectionReadTimeout
-            })?
-            .map_err(|e| classify_client_error(&e).into_p2())?;
+            .map_err(|err| {
+                use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
+                match err {
+                    HeadError::ConnectTimeout => ErrorCode::ConnectionTimeout,
+                    HeadError::ReadTimeout => ErrorCode::ConnectionReadTimeout,
+                    HeadError::Send(e) => classify_client_error(&e).into_p2(),
+                }
+            })?;
         Ok(IncomingResponse {
             resp: resp.map(|body| body.map_err(hyper_request_error).boxed_unsync()),
             // Connection lifecycle is owned by the pool; there is no
@@ -650,11 +720,13 @@ impl PooledClient {
         .boxed_unsync();
         let request = hyper::Request::from_parts(parts, body);
 
-        let head_timeout = connect_timeout.saturating_add(first_byte_timeout);
-        let resp = tokio::time::timeout(head_timeout, self.client.request(request))
+        let resp = send_head(&self.client, request, connect_timeout, first_byte_timeout)
             .await
-            .map_err(|_| ErrorCode::ConnectionReadTimeout)?
-            .map_err(|e| classify_client_error(&e).into_p3())?;
+            .map_err(|err| match err {
+                HeadError::ConnectTimeout => ErrorCode::ConnectionTimeout,
+                HeadError::ReadTimeout => ErrorCode::ConnectionReadTimeout,
+                HeadError::Send(e) => classify_client_error(&e).into_p3(),
+            })?;
 
         let resp = resp.map(|body| {
             crate::host::http::TimedBody::new(body, between_bytes_timeout).boxed_unsync()
@@ -688,9 +760,16 @@ impl PooledClient {
 pub struct WorkloadClients {
     tls: Arc<rustls::ClientConfig>,
     limits: ConnectionLimits,
-    /// Host-wide budget shared by every workload's client; per-workload
-    /// budgets are created fresh per client in [`Self::client`].
+    /// Host-wide budget shared by every workload's client.
     global_permits: Arc<Semaphore>,
+    /// Per-workload budgets, held apart from [`Self::clients`] so that a
+    /// client rebuilt for a workload draws on the same budget its predecessor
+    /// did. A replaced client's connections keep their permits until they
+    /// close, and those permits have to keep counting against the workload
+    /// that opened them — a budget minted alongside each client would let one
+    /// workload hold `max_per_workload` twice over while the old connections
+    /// drain.
+    workload_permits: moka::sync::Cache<String, Arc<Semaphore>>,
     clients: moka::sync::Cache<String, PooledClient>,
 }
 
@@ -707,6 +786,9 @@ impl WorkloadClients {
             tls,
             limits,
             global_permits: Arc::new(Semaphore::new(limits.max_total)),
+            workload_permits: moka::sync::Cache::builder()
+                .time_to_idle(WORKLOAD_CLIENT_IDLE)
+                .build(),
             clients: moka::sync::Cache::builder()
                 .time_to_idle(WORKLOAD_CLIENT_IDLE)
                 .build(),
@@ -722,11 +804,19 @@ impl WorkloadClients {
     /// connections and TLS session tickets (see
     /// [`crate::host::http::OutgoingHandler`]).
     pub fn client(&self, workload_id: &str) -> PooledClient {
+        // Looked up on every call, not just on a client-cache miss, so both
+        // caches see the same idle window and a workload's budget cannot
+        // expire out from under a client that is still serving it.
+        let permits = self.workload_permits.get_with_by_ref(workload_id, || {
+            Arc::new(Semaphore::new(self.limits.max_per_workload))
+        });
         self.clients.get_with_by_ref(workload_id, || {
             PooledClient::bounded(
                 self.tls.clone(),
-                Arc::new(Semaphore::new(self.limits.max_per_workload)),
+                Some(Arc::from(workload_id)),
+                permits,
                 self.global_permits.clone(),
+                self.limits.permit_wait,
             )
         })
     }
@@ -739,6 +829,10 @@ impl WorkloadClients {
     /// release their permits, when those requests finish). A subsequent
     /// [`Self::client`] call for the same ID builds a fresh client with a
     /// fresh TLS session-resumption store.
+    ///
+    /// The workload's connection budget deliberately survives, so that the
+    /// draining connections stay charged to it; it ages out on its own idle
+    /// window ([`WORKLOAD_CLIENT_IDLE`]) once nothing refers to the workload.
     pub fn invalidate(&self, workload_id: &str) {
         self.clients.invalidate(workload_id);
         // moka may defer dropping the evicted value to a maintenance pass;
@@ -762,8 +856,15 @@ impl WorkloadClients {
 #[derive(Clone)]
 struct BoundedConnector {
     inner: hyper_rustls::HttpsConnector<HttpConnector>,
+    /// The workload this connector belongs to, named in the exhaustion
+    /// warning. `None` for a standalone [`PooledClient::new`] client.
+    workload: Option<Arc<str>>,
     workload_permits: Arc<Semaphore>,
     global_permits: Arc<Semaphore>,
+    permit_wait: Duration,
+    /// When this workload last logged permit exhaustion; see
+    /// [`warn_permits_exhausted`].
+    last_permit_warning: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
 }
 
 impl tower_service::Service<hyper::Uri> for BoundedConnector {
@@ -783,8 +884,11 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
         // behind (the usual tower clone-and-swap).
         let mut inner = self.inner.clone();
         std::mem::swap(&mut self.inner, &mut inner);
+        let workload = self.workload.clone();
         let workload_permits = self.workload_permits.clone();
         let global_permits = self.global_permits.clone();
+        let permit_wait = self.permit_wait;
+        let last_permit_warning = self.last_permit_warning.clone();
         Box::pin(async move {
             // Acquire order (workload, then global) is fixed everywhere, and
             // waiters hold no resource another waiter needs, so waiting on
@@ -804,10 +908,15 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
                         Ok::<_, std::io::Error>((workload, global))
                     }
                 };
-            let permits = tokio::time::timeout(PERMIT_WAIT, acquire)
+            let permits = tokio::time::timeout(permit_wait, acquire)
                 .await
                 .map_err(|_| {
-                    warn_permits_exhausted(&workload_permits, &global_permits);
+                    warn_permits_exhausted(
+                        &last_permit_warning,
+                        workload.as_deref(),
+                        &workload_permits,
+                        &global_permits,
+                    );
                     std::io::Error::new(
                         std::io::ErrorKind::TimedOut,
                         "outbound connection limit reached (per-workload or host-wide)",
@@ -828,24 +937,29 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
 /// is what failed the request; whichever reported count is 0 is the
 /// exhausted budget.
 ///
-/// Rate-limited to one line per 5s host-wide: a saturated budget times out
-/// every parked connect attempt in the same instant (including attempts
-/// hyper abandoned after idle-connection reuse won the checkout race), and
-/// a workload that keeps its budget pinned would otherwise flood the log.
-fn warn_permits_exhausted(workload_permits: &Semaphore, global_permits: &Semaphore) {
-    use std::sync::Mutex;
-    use std::time::Instant;
-    static LAST_WARN: Mutex<Option<Instant>> = Mutex::new(None);
-
-    let mut last = LAST_WARN.lock().unwrap_or_else(|e| e.into_inner());
-    if last.is_none_or(|at| at.elapsed() >= Duration::from_secs(5)) {
-        *last = Some(Instant::now());
+/// Rate-limited to one line per [`PERMIT_WARN_INTERVAL`] *per workload*: a
+/// saturated budget times out every parked connect attempt in the same
+/// instant (including attempts hyper abandoned after idle-connection reuse
+/// won the checkout race), so an unthrottled log would flood. Throttling per
+/// workload rather than host-wide keeps one workload that pins its own budget
+/// from masking another workload's report of the host-wide cap.
+fn warn_permits_exhausted(
+    last_warning: &std::sync::Mutex<Option<std::time::Instant>>,
+    workload: Option<&str>,
+    workload_permits: &Semaphore,
+    global_permits: &Semaphore,
+) {
+    let mut last = last_warning.lock().unwrap_or_else(|e| e.into_inner());
+    if last.is_none_or(|at| at.elapsed() >= PERMIT_WARN_INTERVAL) {
+        *last = Some(std::time::Instant::now());
         drop(last);
         warn!(
+            workload_id = workload.unwrap_or("<none>"),
             workload_permits_available = workload_permits.available_permits(),
             global_permits_available = global_permits.available_permits(),
             "outbound connect timed out waiting for a connection permit; \
-             a ConnectionLimits budget is exhausted (logged at most once per 5s)"
+             a ConnectionLimits budget is exhausted (logged at most once per \
+             {PERMIT_WARN_INTERVAL:?} per workload)"
         );
     }
 }
@@ -1012,36 +1126,55 @@ impl SendError {
     }
 }
 
-/// Drill into an `io::Error`, returning the most specific nested error kind
-/// and whether a rustls error (TLS failure) is wrapped inside.
+/// What the nested layers of an `io::Error` say about a failed connect.
+struct IoErrorFacts {
+    /// The most specific error kind found, ignoring `Other` placeholders.
+    kind: std::io::ErrorKind,
+    /// A rustls error is wrapped inside, so the TLS handshake is what failed.
+    tls: bool,
+    /// Some layer reports a name-resolution failure (see [`is_resolver_error`]).
+    resolver: bool,
+}
+
+/// Drill into an `io::Error`, gathering what its nested layers say.
+///
+/// Every layer is inspected for all three facts, since which one carries the
+/// signal varies: the resolver's message and the most specific error kind can
+/// sit at different depths.
 ///
 /// `io::Error::source()` skips the wrapped error itself (it returns the
 /// *wrapped error's* source), so nested `io::Error` layers — hyper-rustls
 /// wraps tokio-rustls' error, which wraps the rustls error — are only
 /// reachable via `get_ref()`.
-fn unwrap_io_error(io: &std::io::Error) -> (std::io::ErrorKind, bool) {
+fn unwrap_io_error(io: &std::io::Error) -> IoErrorFacts {
     fn as_dyn<'a>(
         e: &'a (dyn std::error::Error + Send + Sync + 'static),
     ) -> &'a (dyn std::error::Error + Send + Sync + 'static) {
         e
     }
-    let mut kind = io.kind();
+    let mut facts = IoErrorFacts {
+        kind: io.kind(),
+        tls: false,
+        resolver: is_resolver_error(io),
+    };
     let mut cur = io.get_ref().map(as_dyn);
     while let Some(e) = cur {
         if e.downcast_ref::<rustls::Error>().is_some() {
-            return (kind, true);
+            facts.tls = true;
+            return facts;
         }
         match e.downcast_ref::<std::io::Error>() {
             Some(inner) => {
                 if inner.kind() != std::io::ErrorKind::Other {
-                    kind = inner.kind();
+                    facts.kind = inner.kind();
                 }
+                facts.resolver |= is_resolver_error(inner);
                 cur = inner.get_ref().map(as_dyn);
             }
             None => break,
         }
     }
-    (kind, false)
+    facts
 }
 
 /// Walk an error's source chain looking for a `T`.
@@ -1088,15 +1221,15 @@ fn classify_client_error(err: &hyper_util::client::legacy::Error) -> SendError {
             return SendError::TlsProtocol;
         }
         if let Some(io) = find_in_chain::<std::io::Error>(err) {
-            let (kind, is_tls) = unwrap_io_error(io);
-            if is_tls {
+            let facts = unwrap_io_error(io);
+            if facts.tls {
                 warn!(err = %format!("{err:?}"), "outbound TLS protocol error");
                 return SendError::TlsProtocol;
             }
-            return match kind {
+            return match facts.kind {
                 std::io::ErrorKind::AddrNotAvailable => SendError::Dns,
                 std::io::ErrorKind::TimedOut => SendError::ConnectionTimeout,
-                _ if is_resolver_error(io) => SendError::Dns,
+                _ if facts.resolver => SendError::Dns,
                 _ => SendError::ConnectionRefused,
             };
         }
@@ -1114,6 +1247,23 @@ fn classify_client_error(err: &hyper_util::client::legacy::Error) -> SendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Shorter than the production [`PERMIT_WAIT`]: the connection-bound tests
+    /// deliberately wait out abandoned connect attempts parked on the
+    /// semaphore, and the properties they assert hold at any value, so the
+    /// production 5s would only slow CI and invite timing flake on loaded
+    /// runners.
+    const TEST_PERMIT_WAIT: Duration = Duration::from_secs(1);
+
+    /// [`ConnectionLimits`] with the given caps and the shortened
+    /// [`TEST_PERMIT_WAIT`].
+    fn test_limits(max_per_workload: usize, max_total: usize) -> ConnectionLimits {
+        ConnectionLimits {
+            max_per_workload,
+            max_total,
+            permit_wait: TEST_PERMIT_WAIT,
+        }
+    }
 
     #[test]
     fn default_tls_config_builds() {
@@ -1330,6 +1480,117 @@ mod tests {
             .unwrap()
     }
 
+    /// A guest may set any `between-bytes-timeout`, including zero, and
+    /// `tokio::time::interval` panics on a zero period — so the response-body
+    /// wrapper must clamp it rather than take the host down.
+    #[tokio::test]
+    async fn zero_between_bytes_timeout_is_not_a_panic() {
+        let (addr, _conns) = spawn_counting_server().await;
+        let client = PooledClient::new(default_client_tls_config());
+        let options = wasmtime_wasi_http::p3::RequestOptions {
+            connect_timeout: None,
+            first_byte_timeout: None,
+            between_bytes_timeout: Some(Duration::ZERO),
+        };
+
+        let (response, _io) = client
+            .send_request_p3(p3_request(&format!("http://{addr}/")), Some(options))
+            .await
+            .expect("a zero between-bytes timeout must not fail the request head");
+        assert_eq!(response.status(), 200);
+        // Whether the body reads or times out depends on frame arrival; the
+        // point is that it resolves instead of panicking.
+        let _ = tokio::time::timeout(
+            Duration::from_secs(3),
+            BodyExt::collect(response.into_body()),
+        )
+        .await
+        .expect("body read should resolve");
+    }
+
+    /// `connect_timeout` must bound only the wait for a connection, not the
+    /// response head: a server that is quick to accept but slow to answer must
+    /// still get the full `first_byte_timeout`.
+    #[tokio::test]
+    async fn connect_timeout_does_not_bound_the_response_head() {
+        let (addr, _conns) = spawn_counting_server_with_delay(Duration::from_millis(400)).await;
+        let client = PooledClient::new(default_client_tls_config());
+
+        let response = client
+            .send_request_p2(
+                p2_request(&format!("http://{addr}/")),
+                OutgoingRequestConfig {
+                    use_tls: false,
+                    connect_timeout: Duration::from_millis(150),
+                    first_byte_timeout: Duration::from_secs(5),
+                    between_bytes_timeout: Duration::from_secs(5),
+                },
+            )
+            .await
+            .expect("a slow head must not be charged against the connect budget");
+        assert_eq!(response.resp.status(), 200);
+    }
+
+    /// When no connection can be had, it is the guest's `connect_timeout`
+    /// that must end the request — with `ConnectionTimeout`, and at its own
+    /// deadline rather than at whatever the transport happens to give up on.
+    /// Starvation is forced with a host-wide cap of one connection held by a
+    /// slow in-flight request.
+    ///
+    /// The elapsed-time bound is what makes this test meaningful: a request
+    /// blocked on a permit also ends at [`ConnectionLimits::permit_wait`], so
+    /// only a failure that lands well inside that window shows the guest's
+    /// budget was the one being honoured.
+    #[tokio::test]
+    async fn connect_timeout_fires_before_the_first_byte_budget() {
+        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
+
+        let connect_timeout = TEST_PERMIT_WAIT / 5;
+        let (addr, _conns) = spawn_counting_server_with_delay(TEST_PERMIT_WAIT * 2).await;
+        let clients = WorkloadClients::with_limits(default_client_tls_config(), test_limits(1, 1));
+        let uri = format!("http://{addr}/");
+
+        // Occupy the only permit for the duration of the slow request.
+        let busy = clients.client("workload-a");
+        let busy_uri = uri.clone();
+        let busy = tokio::spawn(async move {
+            let response = busy
+                .send_request_p2(p2_request(&busy_uri), p2_config(false))
+                .await
+                .expect("the first request should get the only connection");
+            let _ = response.resp.into_body().collect().await;
+        });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let started = tokio::time::Instant::now();
+        let err = clients
+            .client("workload-b")
+            .send_request_p2(
+                p2_request(&uri),
+                OutgoingRequestConfig {
+                    use_tls: false,
+                    connect_timeout,
+                    first_byte_timeout: Duration::from_secs(30),
+                    between_bytes_timeout: Duration::from_secs(30),
+                },
+            )
+            .await
+            .expect_err("no permit is available, so the connect budget must expire");
+        let elapsed = started.elapsed();
+
+        assert!(
+            matches!(err, ErrorCode::ConnectionTimeout),
+            "expected ConnectionTimeout, got {err:?}"
+        );
+        assert!(
+            elapsed < TEST_PERMIT_WAIT,
+            "the guest's {connect_timeout:?} connect budget must end the request, \
+             but it took {elapsed:?} — at or past the {TEST_PERMIT_WAIT:?} permit deadline, \
+             so the guest's budget was not what bounded it"
+        );
+        let _ = busy.await;
+    }
+
     /// Stopping a workload must drop its pooled client: the next client for
     /// the same ID gets a fresh pool (and a fresh TLS session-resumption
     /// store) instead of inheriting the previous holder's connections.
@@ -1361,6 +1622,61 @@ mod tests {
             2,
             "invalidate must drop the old pool so the rebuilt client cannot reuse its connections"
         );
+    }
+
+    /// Replacing a workload's client must not hand it a second connection
+    /// budget: the outgoing client's connections keep their permits until they
+    /// close, so a fresh budget would let one workload hold
+    /// `max_per_workload` twice over while the old connections drain.
+    #[tokio::test]
+    async fn rebuilt_client_shares_the_workload_connection_budget() {
+        let (addr, _conns) = spawn_counting_server_with_delay(TEST_PERMIT_WAIT * 2).await;
+        let clients =
+            WorkloadClients::with_limits(default_client_tls_config(), test_limits(1, 100));
+        let uri = format!("http://{addr}/");
+
+        // A request slow enough to still hold the workload's only connection
+        // when it is invalidated below.
+        let busy_client = clients.client("workload-a");
+        let busy_uri = uri.clone();
+        let busy = tokio::spawn(async move {
+            if let Ok(response) = busy_client
+                .send_request_p2(p2_request(&busy_uri), p2_config(false))
+                .await
+            {
+                let _ = response.resp.into_body().collect().await;
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let budget = clients
+            .workload_permits
+            .get("workload-a")
+            .expect("the workload has a budget once it has a client");
+        assert_eq!(
+            budget.available_permits(),
+            0,
+            "the in-flight connection should hold the workload's only permit"
+        );
+
+        clients.invalidate("workload-a");
+        let _rebuilt = clients.client("workload-a");
+        let rebuilt_budget = clients
+            .workload_permits
+            .get("workload-a")
+            .expect("the budget must outlive the client it was created with");
+        assert!(
+            Arc::ptr_eq(&budget, &rebuilt_budget),
+            "the rebuilt client must draw on the workload's existing budget"
+        );
+        assert_eq!(
+            rebuilt_budget.available_permits(),
+            0,
+            "the draining connection must still be charged to the workload"
+        );
+
+        busy.abort();
+        let _ = busy.await;
     }
 
     /// Resolver failures and refused connects must keep classifying to the
@@ -1515,13 +1831,8 @@ mod tests {
     #[tokio::test]
     async fn per_workload_connection_bound_holds_under_burst() {
         let (addr, conns) = spawn_counting_server_with_delay(Duration::from_millis(50)).await;
-        let clients = WorkloadClients::with_limits(
-            default_client_tls_config(),
-            ConnectionLimits {
-                max_per_workload: 2,
-                max_total: 100,
-            },
-        );
+        let clients =
+            WorkloadClients::with_limits(default_client_tls_config(), test_limits(2, 100));
         let uri = format!("http://{addr}/");
 
         let requests = (0..8).map(|_| {
@@ -1552,13 +1863,7 @@ mod tests {
     #[tokio::test]
     async fn global_connection_bound_holds_across_workloads() {
         let (addr, conns) = spawn_counting_server_with_delay(Duration::from_millis(50)).await;
-        let clients = WorkloadClients::with_limits(
-            default_client_tls_config(),
-            ConnectionLimits {
-                max_per_workload: 4,
-                max_total: 2,
-            },
-        );
+        let clients = WorkloadClients::with_limits(default_client_tls_config(), test_limits(4, 2));
         let uri = format!("http://{addr}/");
 
         // Workload A bursts 4 concurrent requests; the global cap of 2 must
@@ -1585,10 +1890,10 @@ mod tests {
         // Drop workload A's client (cache eviction). Its pool stays alive
         // until the burst's abandoned connect attempts — spawned to
         // completion by hyper and parked on the exhausted global semaphore —
-        // give up at [`PERMIT_WAIT`]; the pool then drops, closing A's idle
-        // connections and releasing their permits.
+        // give up at [`TEST_PERMIT_WAIT`]; the pool then drops, closing A's
+        // idle connections and releasing their permits.
         clients.invalidate("workload-a");
-        let deadline = tokio::time::Instant::now() + PERMIT_WAIT + Duration::from_secs(3);
+        let deadline = tokio::time::Instant::now() + TEST_PERMIT_WAIT + Duration::from_secs(3);
         while clients.global_permits.available_permits() == 0 {
             assert!(
                 tokio::time::Instant::now() < deadline,
