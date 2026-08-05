@@ -42,11 +42,11 @@ on:
           - wasmtime_serve
           - gungraun_plugin
       ref_a:
-        description: baseline ref (branch, tag, sha, or #PR)
+        description: "baseline ref (branch, tag, sha, or #PR)"
         type: string
         default: main
       ref_b:
-        description: candidate ref (branch, tag, sha, or #PR) — required
+        description: "candidate ref (branch, tag, sha, or #PR) — required"
         type: string
         required: true
 

@@ -15,7 +15,7 @@ on:
           - wasmtime_serve
           - gungraun_plugin
       ref:
-        description: git ref to bench (branch, tag, or sha; default = the workflow ref)
+        description: "git ref to bench (branch, tag, sha, or #PR; default = the workflow ref)"
         type: string
         default: ""
   # Auto-populate the releases timeline: when a tag is published, run the
@@ -57,7 +57,12 @@ jobs:
     timeout-minutes: 1
     outputs:
       benches: ${{ steps.set.outputs.benches }}
+      # `ref` is the label recorded on each data row; `checkout_ref` is what
+      # actions/checkout is given. They differ only for a pull-request ref,
+      # where the row says `pull/123` but the checkout needs the full
+      # refs/pull/123/head.
       ref: ${{ steps.set.outputs.ref }}
+      checkout_ref: ${{ steps.set.outputs.checkout_ref }}
     env:
       # Subset of inputs.bench.options to run automatically on `release:
       # published`. wasmtime_* are reference baselines for wasmtime itself
@@ -75,17 +80,43 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT" = "release" ]; then
-            echo "benches=${RELEASE_BENCHES}" >> "$GITHUB_OUTPUT"
-            echo "ref=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+            benches="${RELEASE_BENCHES}"
+            ref="${RELEASE_TAG}"
+            checkout_ref="${RELEASE_TAG}"
           else
-            echo "benches=[\"${INPUT_BENCH}\"]" >> "$GITHUB_OUTPUT"
+            benches="[\"${INPUT_BENCH}\"]"
             ref="${INPUT_REF:-${DEFAULT_REF}}"
             # Normalize to the short name (main, v2.5.2) so it matches
             # GITHUB_REF_NAME's style and, when it's a tag, passes the
             # releases view's strict-semver ref filter.
             ref="${ref#refs/heads/}"; ref="${ref#refs/tags/}"
-            echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+            checkout_ref="${ref}"
+            case "$ref" in
+              '#'* | pull/* | pr/*)
+                # Same spellings compare-bench.sh's resolve_sha accepts, so
+                # `#123` means the same thing in both bench workflows.
+                #
+                # GitHub publishes refs/pull/N/head on the base repo for fork
+                # PRs too, so actions/checkout fetches it directly — no API
+                # call, which keeps this job checkout-free at `permissions: {}`.
+                num="${ref#\#}"; num="${num#pull/}"; num="${num#pr/}"
+                if ! [[ "$num" =~ ^[0-9]+$ ]]; then
+                  echo "invalid pull-request ref '${ref}' (expected #N, pull/N, or pr/N)" >&2
+                  exit 1
+                fi
+                # The row is labelled `pull/N` rather than refs/pull/N/head:
+                # `sha` on the same row already pins the exact commit, so the
+                # label only has to say which PR it came from.
+                ref="pull/${num}"
+                checkout_ref="refs/pull/${num}/head"
+                ;;
+            esac
           fi
+          {
+            echo "benches=${benches}"
+            echo "ref=${ref}"
+            echo "checkout_ref=${checkout_ref}"
+          } >> "$GITHUB_OUTPUT"
 
   bench:
     needs: matrix
@@ -118,7 +149,7 @@ jobs:
       - name: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.matrix.outputs.ref }}
+          ref: ${{ needs.matrix.outputs.checkout_ref }}
           fetch-depth: 0
           # Don't leave the GITHUB_TOKEN in .git/config; the bench host
           # then runs untrusted user code (the bench under test) and we
@@ -161,13 +192,25 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+      # A pull-request ref is benched for its step summary and artifact only —
+      # it never reaches S3. Two reasons, both of which apply equally to the
+      # raw-head-sha spelling that has always been possible here:
+      #
+      #   - The trends timeline tracks merged history. A PR row would sit in
+      #     it labelled `pull/N` forever, describing code that may never land.
+      #   - `cargo bench` has by this point run the ref's build scripts and
+      #     proc macros on a persistent self-hosted host. Not assuming the AWS
+      #     role afterwards keeps that code and these credentials in disjoint
+      #     runs, rather than relying on it to have been well-behaved.
       - name: configure aws credentials
+        if: ${{ success() && !startsWith(needs.matrix.outputs.ref, 'pull/') }}
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: ${{ secrets.WASMCLOUD_BENCH_AWS_ROLE_ARN }}
           aws-region: ${{ secrets.WASMCLOUD_BENCH_S3_REGION }}
 
       - name: push results to s3 + invalidate CloudFront
+        if: ${{ success() && !startsWith(needs.matrix.outputs.ref, 'pull/') }}
         env:
           WASMCLOUD_BENCH_S3_BUCKET: ${{ secrets.WASMCLOUD_BENCH_S3_BUCKET }}
           WASMCLOUD_BENCH_CF_DISTRIBUTION_ID: ${{ secrets.WASMCLOUD_BENCH_CF_DISTRIBUTION_ID }}
