@@ -133,6 +133,18 @@ pub struct HostCommand {
     )]
     pub http_client_max_connections_per_workload: Option<usize>,
 
+    /// How long an outbound request waits for a connection slot once one of
+    /// the caps above is reached, before failing with a connect timeout
+    /// (e.g. `5s`, `500ms`). A component's own `connect-timeout` bounds its
+    /// request independently, so this only decides how long an attempt
+    /// nothing is waiting on may hold a slot reservation.
+    #[arg(
+        long = "http-client-connection-wait",
+        env = "WASH_HTTP_CLIENT_CONNECTION_WAIT",
+        value_parser = humantime::parse_duration
+    )]
+    pub http_client_connection_wait: Option<Duration>,
+
     /// Enable WASI WebGPU support
     #[cfg(all(
         not(target_os = "windows"),
@@ -370,6 +382,7 @@ impl CliCommand for HostCommand {
                 .with_connection_limits(crate::config::outbound_connection_limits(
                     self.http_client_max_connections,
                     self.http_client_max_connections_per_workload,
+                    self.http_client_connection_wait,
                 )?);
 
             let mut ingress_builder = wash_runtime::host::http::Ingress::builder(http_router, addr)

@@ -549,14 +549,22 @@ impl From<HttpClientTrustRoots> for wash_runtime::host::http_client::TrustRoots 
 
 /// Resolve the outbound [`ConnectionLimits`] from optional config/CLI
 /// overrides — the shared wiring for `wash host` and `wash dev`. `None`
-/// keeps the runtime's built-in default for that cap.
+/// keeps the runtime's built-in default for that setting.
 ///
 /// [`ConnectionLimits`]: wash_runtime::host::http_client::ConnectionLimits
 pub fn outbound_connection_limits(
     max_connections: Option<usize>,
     max_connections_per_workload: Option<usize>,
+    connection_wait: Option<std::time::Duration>,
 ) -> anyhow::Result<wash_runtime::host::http_client::ConnectionLimits> {
     let mut limits = wash_runtime::host::http_client::ConnectionLimits::default();
+    if let Some(permit_wait) = connection_wait {
+        anyhow::ensure!(
+            !permit_wait.is_zero(),
+            "http_client_connection_wait must be greater than zero"
+        );
+        limits.permit_wait = permit_wait;
+    }
     if let Some(max_total) = max_connections {
         anyhow::ensure!(
             max_total > 0,
@@ -683,6 +691,15 @@ pub struct DevConfig {
     /// built-in limit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub http_client_max_connections_per_workload: Option<usize>,
+
+    /// How long an outbound request waits for a connection slot once one of
+    /// the caps above is reached, before failing with a connect timeout.
+    /// A humantime duration such as `5s` or `500ms`; defaults to the
+    /// runtime's built-in wait. A component's own `connect-timeout` bounds
+    /// its request independently, so this only decides how long an attempt
+    /// nothing is waiting on may hold a slot reservation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_client_connection_wait: Option<String>,
 
     /// Enable WASI WebGPU support in the dev environment. Only supported on non-Windows platforms.
     #[serde(default)]
@@ -1139,11 +1156,41 @@ fn check_url_scheme(field: &str, value: &str, expected: &[&str], errors: &mut Ve
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     #[test]
     fn build_no_command_is_ok() {
         assert!(BuildConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn outbound_connection_limits_defaults_when_unset() {
+        let limits = outbound_connection_limits(None, None, None).unwrap();
+        let defaults = wash_runtime::host::http_client::ConnectionLimits::default();
+        assert_eq!(limits.max_total, defaults.max_total);
+        assert_eq!(limits.max_per_workload, defaults.max_per_workload);
+        assert_eq!(limits.permit_wait, defaults.permit_wait);
+    }
+
+    #[test]
+    fn outbound_connection_limits_applies_overrides() {
+        let limits =
+            outbound_connection_limits(Some(64), Some(8), Some(Duration::from_millis(250)))
+                .unwrap();
+        assert_eq!(limits.max_total, 64);
+        assert_eq!(limits.max_per_workload, 8);
+        assert_eq!(limits.permit_wait, Duration::from_millis(250));
+    }
+
+    /// Every knob is a hard bound, so a zero would wedge outbound HTTP
+    /// entirely — reject it at startup rather than at the first request.
+    #[test]
+    fn outbound_connection_limits_reject_zero() {
+        assert!(outbound_connection_limits(Some(0), None, None).is_err());
+        assert!(outbound_connection_limits(None, Some(0), None).is_err());
+        assert!(outbound_connection_limits(None, None, Some(Duration::ZERO)).is_err());
     }
 
     #[test]
