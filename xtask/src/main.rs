@@ -89,6 +89,7 @@ const P2_FIXTURES: &[&str] = &[
     "inter-component-call-callee",
     "inter-component-call-middleware",
     "http-allowed-hosts",
+    "http-egress-pool",
     "http-ip-name-lookup",
     "keyvalue-counter",
     "keyvalue-implements",
