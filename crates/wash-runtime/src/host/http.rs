@@ -2000,7 +2000,13 @@ async fn send_grpc_request_handler(
     let tcp_stream = connect_tcp(&authority, connect_timeout).await?;
 
     let (mut sender, worker) = if use_tls {
-        let stream = connect_tls(tls, &authority, tcp_stream).await?;
+        // The cached gRPC TLS configuration shares its resumption store
+        // behind an `Arc`; give this connection its own so TLS session
+        // tickets never resume across workloads (see
+        // `http_client::PooledClient::bounded`).
+        let mut config = (*tls).clone();
+        config.resumption = rustls::client::Resumption::in_memory_sessions(256);
+        let stream = connect_tls(Arc::new(config), &authority, tcp_stream).await?;
         let (sender, conn) = timeout(
             connect_timeout,
             http2::handshake(TokioExecutor::new(), TokioIo::new(stream)),
@@ -2154,7 +2160,13 @@ async fn send_grpc_request_p3_handler(
         .map_err(ErrorCode::from)?;
 
     let (mut sender, conn_worker) = if use_tls {
-        let stream = connect_tls(tls, &authority, tcp_stream)
+        // The cached gRPC TLS configuration shares its resumption store
+        // behind an `Arc`; give this connection its own so TLS session
+        // tickets never resume across workloads (see
+        // `http_client::PooledClient::bounded`).
+        let mut config = (*tls).clone();
+        config.resumption = rustls::client::Resumption::in_memory_sessions(256);
+        let stream = connect_tls(Arc::new(config), &authority, tcp_stream)
             .await
             .map_err(ErrorCode::from)?;
         let (sender, conn) = timeout(
