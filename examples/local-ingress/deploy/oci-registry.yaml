@@ -1,0 +1,93 @@
+# In-cluster OCI registry, served by the examples/oci-registry component as a
+# WorkloadDeployment. Push targets:
+#
+#   - from the laptop:  registry.localhost.cosmonic.sh
+#       (public wildcard DNS for 127.0.0.1; laptop :80 → kind node :30950 →
+#        Traefik → the Ingress below → the oci-registry Service)
+#   - from inside the cluster (image pulls by the wash hosts):
+#       oci-registry.default.svc:80  (adjust the namespace if you deploy
+#       elsewhere; the operator registers Service DNS aliases with the host
+#       router. The explicit :80 is the port this Service publishes)
+#
+# The registry speaks plain HTTP, so the hosts pulling from it need
+# `--allow-insecure-registries` (see deploy/values.local-ingress.yaml) and
+# laptop-side pushes need `wash oci push --insecure`.
+#
+# Requires a wash host image built with the `wasm_component_model_implements`
+# feature: the component imports the async `wasmcloud:blobstore@0.1.0`
+# interface, which that feature's multiplexed host plugin provides.
+apiVersion: v1
+kind: Service
+metadata:
+  name: oci-registry
+spec:
+  # No selector: the runtime-operator maintains this Service's EndpointSlice,
+  # pointing at the host pods that run the workload (see
+  # WorkloadDeployment.spec.kubernetes.service.name below).
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+---
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: oci-registry
+spec:
+  replicas: 1
+  kubernetes:
+    service:
+      # Ties the Service above to this workload: the operator manages the
+      # EndpointSlice and injects Service DNS host-aliases
+      # (oci-registry.<namespace>, oci-registry.<namespace>.svc) into the
+      # host's HTTP router, so in-cluster pulls resolve to this workload.
+      name: oci-registry
+  template:
+    spec:
+      hostSelector:
+        hostgroup: default
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            # Laptop-facing hostname, routed in by the Traefik Ingress below.
+            host: registry.localhost.cosmonic.sh
+        # Async blobstore backing the registry's blobs, manifests, and tags.
+        # The filesystem backend rooted under /tmp (a writable emptyDir in the
+        # host pod) survives workload restarts, but not pod restarts — fine
+        # for a demo registry, don't keep anything precious in it.
+        - namespace: wasmcloud
+          package: blobstore
+          version: 0.1.0
+          interfaces:
+            - blobstore
+            - container
+            - types
+          config:
+            backend: filesystem
+            root: /tmp/oci-registry
+      components:
+        - name: oci-registry
+          image: ghcr.io/wasmcloud/components/oci-registry:0.1.0
+---
+# Traefik route: registry.localhost.cosmonic.sh → the oci-registry Service.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: oci-registry
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: registry.localhost.cosmonic.sh
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: oci-registry
+                port:
+                  number: 80

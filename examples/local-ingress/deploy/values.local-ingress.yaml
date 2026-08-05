@@ -1,0 +1,95 @@
+# The Runtime Gateway is deprecated as of wasmCloud 2.0.3. HTTP traffic to
+# workloads is now routed by the operator via EndpointSlices tied to standard
+# Kubernetes Services (see a WorkloadDeployment's
+# spec.template.spec.kubernetes.service.name field).
+#
+# The gateway is disabled here so its NodePort Service does not collide with
+# workload Services on port 30950. To re-enable it (e.g. for backwards
+# compatibility with 2.0.2 manifests), set `gateway.enabled: true` and add a
+# service block such as:
+#
+#   gateway:
+#     enabled: true
+#     service:
+#       type: NodePort
+#       nodePorts:
+#         http: 30950
+#
+# See https://wasmcloud.com/docs/kubernetes-operator/operator-manual/helm-values
+# for the full gateway configuration reference.
+gateway:
+  enabled: false
+
+operator:
+  image:
+    tag: "2.5.2"
+#     repository: "runtime-operator"
+#     registry: ""
+#     pull_policy: Never
+    
+runtime:
+  image:
+    registry: ""
+    repository: wash
+    pull_policy: Never
+    tag: "local-ingress"
+  hostGroups:
+    - name: default
+      replicas: 1
+      service:
+        type: ClusterIP
+      webgpu:
+        enabled: false
+      http:
+        enabled: true
+        port: 80
+        # Same-host local routing: outgoing requests to a hostname a
+        # co-located workload serves (its `host`/`host-aliases` config) are
+        # served in-memory instead of leaving the pod. Renders
+        # `--http-local-routing` on the host args.
+        localRouting: true
+      # The in-cluster oci-registry workload (deploy/oci-registry.yaml) serves
+      # plain HTTP, so hosts must be allowed to pull workload images from
+      # non-TLS registries.
+      extraArgs:
+        - "--allow-insecure-registries"
+      resources:
+        requests:
+          memory: "64Mi"
+          cpu: "250m" # 0.25 CPU cores
+        limits:
+          memory: "512Mi"
+          cpu: "500m" # 0.5 CPU cores
+    # - name: default
+    #   namespace: "namespace-b"
+    #   replicas: 1
+    #   service:
+    #     type: ClusterIP
+    #   webgpu:
+    #     enabled: false
+    #   http:
+    #     enabled: true
+    #     port: 80
+    #   resources:
+    #     requests:
+    #       memory: "64Mi"
+    #       cpu: "250m" # 0.25 CPU cores
+    #     limits:
+    #       memory: "512Mi"
+    #       cpu: "500m" # 0.5 CPU cores
+    # - name: default-gpu
+    #   replicas: 1
+    #   service:
+    #     type: ClusterIP
+    #   webgpu:
+    #     enabled: true
+    #   http:
+    #     enabled: true
+    #     port: 80
+    #   resources:
+    #     requests:
+    #       memory: "64Mi"
+    #       cpu: "250m" # 0.25 CPU cores
+    #     limits:
+    #       memory: "512Mi"
+    #       cpu: "500m" # 0.5 CPU cores
