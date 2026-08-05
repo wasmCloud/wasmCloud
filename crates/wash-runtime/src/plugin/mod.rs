@@ -525,6 +525,11 @@ pub fn multiplexed_plugins() -> Vec<std::sync::Arc<dyn HostPlugin>> {
             .with_provider(Arc::new(wasmcloud_messaging::InMemoryMsgProvider))
             .with_provider(Arc::new(wasmcloud_messaging::NatsMsgProvider)),
     ));
+    plugins.push(Arc::new(
+        wasmcloud_messaging::MultiplexedAsyncMessaging::new()
+            .with_provider(Arc::new(wasmcloud_messaging::InMemoryMsgProvider))
+            .with_provider(Arc::new(wasmcloud_messaging::NatsMsgProvider)),
+    ));
 
     plugins
 }

@@ -333,14 +333,14 @@ name = "http-egress-plugin"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "http-egress-plugin-caller"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -555,6 +555,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "messaging-echo-p3"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "messaging-handler"
 version = "0.1.0"
 dependencies = [
@@ -703,7 +710,7 @@ dependencies = [
 name = "secrets-consumer-plugin"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]

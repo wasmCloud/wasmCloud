@@ -1,28 +1,19 @@
-package wasmcloud:messaging@0.2.0;
+package wasmcloud:messaging@0.3.0;
 
-/// Types common to message broker interactions
-interface types {
-  /// A message sent to or received from a broker
-  record broker-message {
-    subject: string,
-    body: list<u8>,
-    reply-to: option<string>,
-  }
+/// The `wasmcloud:messaging/imports` world is for components that only produce
+/// messages — publishing to subjects and issuing request/reply calls.
+world imports {
+  import types;
+  import consumer;
 }
 
-interface handler {
-  use types.{broker-message};
+/// The `wasmcloud:messaging/handler-service` world is implemented by components
+/// that consume a subscription. The host delivers each received message to the
+/// exported `handler`, and the component may also produce messages itself (for
+/// example, to reply on a message's `reply-to` subject).
+world handler-service {
+  import types;
+  import consumer;
 
-  /// Callback handled to invoke a function when a message is received from a subscription
-  handle-message: func(msg: broker-message) -> result<_, string>;
-}
-
-interface consumer {
-  use types.{broker-message};
-
-  /// Perform a request operation on a subject
-  request: func(subject: string, body: list<u8>, timeout-ms: u32) -> result<broker-message, string>;
-
-  /// Publish a message to a subject without awaiting a response
-  publish: func(msg: broker-message) -> result<_, string>;
+  export handler;
 }
