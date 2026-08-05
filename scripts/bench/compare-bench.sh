@@ -14,9 +14,12 @@
 #     median of the three is what the delta is computed from.
 #
 # Side effects:
-#   - Switches the working tree (git checkout). Saves and restores the
-#     original HEAD on exit (including failure) so a hung run doesn't
-#     leave the repo in a detached state.
+#   - Switches the working tree (git checkout --force, so any uncommitted
+#     changes are discarded — this assumes the disposable CI checkout on
+#     the bench host, not a developer's tree). Saves and restores the
+#     original branch — or the commit, when started detached — on exit
+#     (including failure) so a hung run doesn't strand the repo on a
+#     comparison ref.
 #   - Writes per-run snapshots to ${WASMCLOUD_BENCH_COMPARE_DIR:-/tmp/bench-compare}/{a,b}/.
 #   - `bench-tools delta` (invoked at the end) writes the rendered
 #     markdown delta to both stdout and ${WASMCLOUD_BENCH_COMPARE_DIR}/delta.md.
@@ -84,7 +87,11 @@ sha_a=$(resolve_sha "$ref_a")
 sha_b=$(resolve_sha "$ref_b")
 short_a=$(git rev-parse --short=12 "$sha_a")
 short_b=$(git rev-parse --short=12 "$sha_b")
-saved_head=$(git rev-parse HEAD)
+# Prefer the branch name over the commit it points at: `git rev-parse HEAD`
+# yields a sha, and checking a sha back out lands detached — the exact state
+# the cleanup trap below exists to avoid. Falls back to the sha when we
+# started detached already, which is all that can be restored then.
+saved_head=$(git symbolic-ref --quiet --short HEAD || git rev-parse HEAD)
 
 mkdir -p "${compare_dir}/a" "${compare_dir}/b"
 
@@ -126,10 +133,15 @@ fi
 # restore itself fails, log it loudly: the operator needs to know the
 # worktree is in an unexpected state, otherwise the next local run picks
 # up half-applied state from the comparison.
+#
+# --force for the same reason as the checkout in run_one: the tree is
+# dirty by the time we get here (run-bench.sh and cargo's stale-lock
+# repair both write into it), and a non-forcing checkout would refuse,
+# stranding the host on a comparison ref.
 cleanup() {
   rc=$?
-  if ! git checkout --quiet "$saved_head" 2>/dev/null; then
-    echo "::warning::failed to restore worktree to ${saved_head:0:12}; worktree may be on a comparison ref" >&2
+  if ! git checkout --quiet --force "$saved_head" 2>/dev/null; then
+    echo "::warning::failed to restore worktree to ${saved_head}; worktree may be on a comparison ref" >&2
   fi
   exit $rc
 }
@@ -153,10 +165,15 @@ snapshot() {
   done
 }
 
+# --force because the bench host's tree is a disposable CI checkout and is
+# expected to be dirty between iterations: run-bench.sh writes into it, and
+# checking out a ref whose lockfile predates the current cargo leaves a
+# repaired Cargo.lock behind. Without --force the checkout aborts on those
+# local modifications and the whole comparison fails partway through.
 run_one() {
   local side="$1" sha="$2" iter="$3"
   step "[${side} iter ${iter}] checkout ${sha:0:12} and run ${bench}"
-  git checkout --quiet --detach "$sha"
+  git checkout --quiet --detach --force "$sha"
   "${script_dir}/run-bench.sh" "$bench"
   snapshot "$side" "$iter"
 }
