@@ -67,6 +67,9 @@ jobs:
       - name: Build
         working-directory: runtime-gateway
         run: go build -v ./
+      - name: Test
+        working-directory: runtime-gateway
+        run: go test -v ./...
 
   gate:
     needs:

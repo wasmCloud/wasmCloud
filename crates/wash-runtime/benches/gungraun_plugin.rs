@@ -229,6 +229,7 @@ impl Call {
                     local_resources: LocalResources::default(),
                     pool_size: 0,
                     max_invocations: 0,
+                    max_concurrency: 0,
                 }],
                 host_interfaces: self.host_interfaces(),
                 volumes: vec![],

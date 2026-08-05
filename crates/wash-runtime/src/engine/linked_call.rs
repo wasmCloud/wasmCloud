@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 use tokio::time::timeout;
-use tracing::trace;
+use tracing::{debug, trace};
 use wasmtime::component::{
     Accessor, ComponentExportIndex, InstancePre, Val,
     types::{ComponentFunc, Type},
@@ -34,7 +34,8 @@ use wasmtime_wasi::WasiCtxBuilder;
 #[cfg(feature = "wasi-tls")]
 use crate::engine::ctx::SharedTlsProvider;
 use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx, StoreActiveCtxGuard};
-use crate::engine::instance_pool::{self, ComponentInstance, InstancePool};
+use crate::engine::instance_driver::{InstanceJob, LinkedJob};
+use crate::engine::instance_pool::{self, ComponentInstance, Dispatch, InstancePool};
 use crate::engine::store::relocate::{self, Relocated, bridgeable_element_type};
 use crate::engine::store::stream_pump::Done;
 use crate::engine::value::{carries_cross_store_handle, lift_results, lower_params};
@@ -660,53 +661,18 @@ async fn invoke_ephemeral_relocated(
 
 /// Run a plain-value async linked call.
 ///
-/// The store is short-lived by default: built, invoked, and dropped per call
-/// so its core-instance slots are reclaimed immediately. A component that has
-/// opted into warm instances (`pool_size > 0`) instead reuses one parked by an
-/// earlier call and, if the call returns cleanly, parks it again — skipping
-/// the context build, the store allocation and the instantiation, and letting
-/// the guest keep whatever it cached in linear memory. See
-/// [`InstancePool`] for the rules that bound how long an instance lives.
+/// A component that keeps instances warm serves this on one of them, alongside
+/// whatever else that instance already has in flight (see
+/// [`crate::engine::instance_driver`]). Otherwise — and when every warm
+/// instance is busy and the pool is full — the call runs in a store built,
+/// invoked and dropped for it alone, so its core-instance slots are reclaimed
+/// immediately.
 async fn invoke_ephemeral_plain(
     params: &[Val],
     results: &mut [Val],
     inv: &LinkedExportInvocation,
     ephemeral_call: &EphemeralLinkedCall,
 ) -> wasmtime::Result<()> {
-    let pool = callee_instance_pool(ephemeral_call).await;
-
-    // A warm instance if one is parked, otherwise a cold store. A burst past
-    // `pool_size` is served cold rather than queued, so pooling never adds
-    // latency it did not save.
-    let warm = match pool.as_ref().and_then(|pool| pool.checkout()) {
-        Some(warm) => {
-            trace!(
-                name = %inv.import_name,
-                fn_name = %inv.export_name,
-                invocations = warm.invocations,
-                "reusing warm instance for ephemeral dynamic export"
-            );
-            warm
-        }
-        None => {
-            let mut store = new_ephemeral_store(ephemeral_call)
-                .await
-                .map_err(|e| wasmtime::format_err!("{e:#}"))?;
-            let instance = inv.pre.instantiate_async(&mut store).await?;
-            ComponentInstance {
-                store,
-                instance,
-                invocations: 0,
-            }
-        }
-    };
-
-    let params_buf = params.to_vec();
-    let mut results_buf = vec![Val::Bool(false); results.len()];
-    let call_import_name = inv.import_name.clone();
-    let call_export_name = inv.export_name.clone();
-    let func_idx = inv.func_idx;
-
     trace!(
         name = %inv.import_name,
         fn_name = %inv.export_name,
@@ -714,16 +680,81 @@ async fn invoke_ephemeral_plain(
         "invoking ephemeral dynamic export"
     );
 
-    // The store travels into the task and back out with the result, so a
-    // caller cancelled mid-call (the `AbortOnDrop`) drops the store with the
-    // task instead of returning a half-finished instance to the pool.
+    let pool = callee_instance_pool(ephemeral_call).await;
+
+    // The params travel into the pooled job. A job the pool declines hands
+    // them back, so the cold path below reuses that allocation rather than
+    // cloning them a second time.
+    let mut declined_params = None;
+
+    if let Some(pool) = pool.as_ref() {
+        let (reply, reply_rx) = tokio::sync::oneshot::channel();
+        let job = InstanceJob::Linked(Box::new(LinkedJob {
+            func_idx: inv.func_idx,
+            params: params.to_vec(),
+            results_len: results.len(),
+            import_name: inv.import_name.clone(),
+            export_name: inv.export_name.clone(),
+            reply,
+        }));
+        let outcome = match pool.offer(job) {
+            Dispatch::Sent => Ok(()),
+            // The pool has room. Build and instantiate the store out here,
+            // where awaiting is allowed and where a component that fails to
+            // instantiate reports that failure to this call rather than only
+            // to the log.
+            Dispatch::NeedsInstance(job) => {
+                let mut store = new_ephemeral_store(ephemeral_call).await.map_err(|e| {
+                    wasmtime::format_err!("new pooled store creation failed: {e:#}")
+                })?;
+                let instance = inv.pre.instantiate_async(&mut store).await?;
+                pool.install(ComponentInstance { store, instance }, job)
+            }
+            Dispatch::Saturated(job) => Err(job),
+        };
+        match outcome {
+            Ok(()) => {
+                let vals = reply_rx
+                    .await
+                    .map_err(|_| wasmtime::format_err!("pooled instance dropped the call"))??;
+                write_results(vals, results)?;
+                trace!(
+                    name = %inv.import_name,
+                    fn_name = %inv.export_name,
+                    ?results,
+                    "invoked ephemeral dynamic export"
+                );
+                return Ok(());
+            }
+            // Every warm instance was busy; run it in a store of its own.
+            Err(declined) => {
+                debug!(
+                    name = %inv.import_name,
+                    fn_name = %inv.export_name,
+                    "warm instances saturated; serving this call from a store of its own"
+                );
+                if let InstanceJob::Linked(job) = declined {
+                    declined_params = Some(job.params);
+                }
+            }
+        }
+    }
+
+    let mut store = new_ephemeral_store(ephemeral_call)
+        .await
+        .map_err(|e| wasmtime::format_err!("new ephemeral store creation failed: {e:#}"))?;
+    let instance = inv.pre.instantiate_async(&mut store).await?;
+
+    let params_buf = declined_params.unwrap_or_else(|| params.to_vec());
+    let mut results_buf = vec![Val::Bool(false); results.len()];
+    let call_import_name = inv.import_name.clone();
+    let call_export_name = inv.export_name.clone();
+    let func_idx = inv.func_idx;
+
+    // The store travels into the task, so a caller cancelled mid-call drops it
+    // with the task rather than leaving it running.
     let mut task = AbortOnDrop(tokio::task::spawn(async move {
-        let ComponentInstance {
-            mut store,
-            instance,
-            invocations,
-        } = warm;
-        let outcome = store
+        store
             .run_concurrent(async move |accessor| {
                 let func = accessor.with(|mut access| -> wasmtime::Result<_> {
                     instance.get_func(&mut access, func_idx).with_context(|| {
@@ -745,43 +776,12 @@ async fn invoke_ephemeral_plain(
             })
             .await
             .map_err(|e| wasmtime::format_err!("{e:#}"))
-            .and_then(|inner| inner);
-        (
-            ComponentInstance {
-                store,
-                instance,
-                invocations,
-            },
-            outcome,
-        )
+            .and_then(|inner| inner)
     }));
-    let (warm, outcome) = (&mut task.0)
+    let vals = (&mut task.0)
         .await
-        .map_err(|e| wasmtime::format_err!("ephemeral linked call task failed: {e}"))?;
-
-    // Park only after a clean return. A trap, a timeout or a host error may
-    // have left the guest mid-operation, so those retire the instance — the
-    // next call then starts from a cold store. Anything not parked is dropped
-    // here rather than at the end of the call, so an unpooled component still
-    // reclaims its core-instance slots the moment the call returns.
-    let call_result = match (outcome, pool) {
-        (Ok(vals), Some(pool)) => {
-            pool.release(warm);
-            vals
-        }
-        (Ok(vals), None) => {
-            drop(warm);
-            vals
-        }
-        (Err(e), _) => {
-            drop(warm);
-            return Err(e);
-        }
-    };
-
-    for (i, v) in call_result.into_iter().enumerate() {
-        *results.get_mut(i).context("result index out of bounds")? = v;
-    }
+        .map_err(|e| wasmtime::format_err!("ephemeral linked call task failed: {e}"))??;
+    write_results(vals, results)?;
 
     trace!(
         name = %inv.import_name,
@@ -790,6 +790,14 @@ async fn invoke_ephemeral_plain(
         "invoked ephemeral dynamic export"
     );
 
+    Ok(())
+}
+
+/// Copy a call's returned values into the caller's result slots.
+fn write_results(vals: Vec<Val>, results: &mut [Val]) -> wasmtime::Result<()> {
+    for (i, v) in vals.into_iter().enumerate() {
+        *results.get_mut(i).context("result index out of bounds")? = v;
+    }
     Ok(())
 }
 

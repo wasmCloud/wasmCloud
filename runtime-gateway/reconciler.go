@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -16,6 +17,26 @@ const (
 	gatewayHostFinalizerName     = "runtime.wasmcloud.dev/gateway-host-finalizer"
 )
 
+// dropGatewayFinalizer removes a gateway finalizer from obj if it carries one.
+//
+// The gateway's routing tables live only in the process that built them, so
+// there is nothing to release once that process is gone. A gateway finalizer
+// outlives it, though: a cluster whose gateway has been scaled down, removed,
+// or replaced is left with objects that can never finish deleting, so strip the
+// finalizer wherever it turns up.
+func dropGatewayFinalizer(ctx context.Context, c client.Client, obj client.Object, finalizer string) error {
+	if !controllerutil.ContainsFinalizer(obj, finalizer) {
+		return nil
+	}
+
+	base := obj.DeepCopyObject().(client.Object)
+	controllerutil.RemoveFinalizer(obj, finalizer)
+	// A merge patch replaces the finalizer list wholesale, so patch under
+	// optimistic lock: without it a stale copy would silently restore
+	// finalizers the operator has since removed, or drop ones it has added.
+	return c.Patch(ctx, obj, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+}
+
 // WorkloadReconciler
 type WorkloadReconciler struct {
 	client.Client
@@ -27,23 +48,22 @@ func (a *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	workload := &runtimev1alpha1.Workload{}
 	if err := a.Get(ctx, req.NamespacedName, workload); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if apierrors.IsNotFound(err) {
+			// A deletion can reach the reconciler after the object is gone, so
+			// the registry indexes routes by object key: that is all this has
+			// left to identify them by. Skipping it would keep proxying to the
+			// workload until the gateway restarts.
+			return ctrl.Result{}, a.Registry.DeregisterWorkload(ctx, req.NamespacedName)
+		}
+		return ctrl.Result{}, err
 	}
 
-	// Handle deletion: run cleanup and remove our finalizer before etcd removes
-	// the object. Without this, a deleted object may disappear from the cache
-	// before the reconciler runs, leaving stale HostTracker entries.
+	if err := dropGatewayFinalizer(ctx, a.Client, workload, gatewayWorkloadFinalizerName); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	if workload.DeletionTimestamp != nil {
-		if controllerutil.ContainsFinalizer(workload, gatewayWorkloadFinalizerName) {
-			if err := a.deregisterWorkload(ctx, workload); err != nil {
-				log.Error(err, "failed to deregister workload on deletion")
-				return ctrl.Result{}, err
-			}
-			base := workload.DeepCopy()
-			controllerutil.RemoveFinalizer(workload, gatewayWorkloadFinalizerName)
-			return ctrl.Result{}, a.Patch(ctx, workload, client.MergeFrom(base))
-		}
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, a.Registry.DeregisterWorkload(ctx, req.NamespacedName)
 	}
 
 	// workload hasn't been placed, do nothing
@@ -53,41 +73,26 @@ func (a *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	hostname := workloadHostname(workload)
 
-	// no hostname configured, nothing to register
+	// no hostname configured, nothing to route
 	if hostname == "" {
-		return ctrl.Result{}, nil
-	}
-
-	// Ensure our finalizer is present so we can deregister on deletion.
-	if !controllerutil.ContainsFinalizer(workload, gatewayWorkloadFinalizerName) {
-		base := workload.DeepCopy()
-		controllerutil.AddFinalizer(workload, gatewayWorkloadFinalizerName)
-		return ctrl.Result{}, a.Patch(ctx, workload, client.MergeFrom(base))
+		return ctrl.Result{}, a.Registry.DeregisterWorkload(ctx, req.NamespacedName)
 	}
 
 	log.Info("Reconciling Workload")
 
 	if workload.Status.IsAvailable() {
-		if err := a.Registry.RegisterWorkload(ctx, workload.Status.HostID, workload.Status.WorkloadID, hostname); err != nil {
+		if err := a.Registry.RegisterWorkload(ctx, req.NamespacedName, workload.Status.HostID, workload.Status.WorkloadID, hostname); err != nil {
 			log.Error(err, "failed to register workload")
 			return ctrl.Result{}, err
 		}
 	} else {
-		if err := a.Registry.DeregisterWorkload(ctx, workload.Status.HostID, workload.Status.WorkloadID, hostname); err != nil {
+		if err := a.Registry.DeregisterWorkload(ctx, req.NamespacedName); err != nil {
 			log.Error(err, "failed to deregister workload")
 			return ctrl.Result{}, err
 		}
 	}
 
 	return ctrl.Result{}, nil
-}
-
-func (a *WorkloadReconciler) deregisterWorkload(ctx context.Context, workload *runtimev1alpha1.Workload) error {
-	hostname := workloadHostname(workload)
-	if hostname == "" {
-		return nil
-	}
-	return a.Registry.DeregisterWorkload(ctx, workload.Status.HostID, workload.Status.WorkloadID, hostname)
 }
 
 func workloadHostname(workload *runtimev1alpha1.Workload) string {
@@ -130,40 +135,31 @@ func (a *HostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	host := &runtimev1alpha1.Host{}
 	if err := a.Get(ctx, req.NamespacedName, host); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-
-	// Handle deletion: deregister before etcd removes the object. Without this,
-	// the host may vanish from the cache before we can clean up HostTracker.
-	if host.DeletionTimestamp != nil {
-		if controllerutil.ContainsFinalizer(host, gatewayHostFinalizerName) {
-			if err := a.Registry.DeregisterHost(ctx, host.HostID); err != nil {
-				log.Error(err, "failed to deregister host on deletion")
-				return ctrl.Result{}, err
-			}
-			base := host.DeepCopy()
-			controllerutil.RemoveFinalizer(host, gatewayHostFinalizerName)
-			return ctrl.Result{}, a.Patch(ctx, host, client.MergeFrom(base))
+		if apierrors.IsNotFound(err) {
+			// See the Workload reconciler: the object is gone, so its key is
+			// all that identifies what it registered.
+			return ctrl.Result{}, a.Registry.DeregisterHost(ctx, req.NamespacedName)
 		}
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, err
 	}
 
-	// Ensure our finalizer is present so we can deregister on deletion.
-	if !controllerutil.ContainsFinalizer(host, gatewayHostFinalizerName) {
-		base := host.DeepCopy()
-		controllerutil.AddFinalizer(host, gatewayHostFinalizerName)
-		return ctrl.Result{}, a.Patch(ctx, host, client.MergeFrom(base))
+	if err := dropGatewayFinalizer(ctx, a.Client, host, gatewayHostFinalizerName); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if host.DeletionTimestamp != nil {
+		return ctrl.Result{}, a.Registry.DeregisterHost(ctx, req.NamespacedName)
 	}
 
 	log.Info("Reconciling Host")
 
 	if host.Status.IsAvailable() {
-		if err := a.Registry.RegisterHost(ctx, host.HostID, host.Hostname, int(host.HTTPPort)); err != nil {
+		if err := a.Registry.RegisterHost(ctx, req.NamespacedName, host.HostID, host.Hostname, int(host.HTTPPort)); err != nil {
 			log.Error(err, "failed to register host")
 			return ctrl.Result{}, err
 		}
 	} else {
-		if err := a.Registry.DeregisterHost(ctx, host.HostID); err != nil {
+		if err := a.Registry.DeregisterHost(ctx, req.NamespacedName); err != nil {
 			log.Error(err, "failed to deregister host")
 			return ctrl.Result{}, err
 		}

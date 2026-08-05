@@ -462,7 +462,7 @@ impl std::fmt::Debug for WorkloadComponent {
             .field("id", &self.metadata.id.as_ref())
             .field("workload_id", &self.metadata.workload_id.as_ref())
             .field("volume_mounts", &self.metadata.volume_mounts)
-            .field("has_warm_instances", &self.instances.enabled())
+            .field("has_warm_instances", &self.instances.warms_instances())
             .finish()
     }
 }

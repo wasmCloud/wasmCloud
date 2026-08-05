@@ -83,6 +83,7 @@ fn setup_warm(flavor: Flavor) -> Warm {
                     local_resources: LocalResources::default(),
                     pool_size: 0,
                     max_invocations: 0,
+                    max_concurrency: 1,
                 }],
                 host_interfaces: http_host_interfaces(flavor.host_header()),
                 volumes: vec![],

@@ -87,12 +87,25 @@ message WitWorld {
 message Component {
   string image = 1;
   LocalResources local_resources = 2;
+  // The instance limits below are signed because they mirror the Kubernetes
+  // CRD fields a workload sets them through (WorkloadComponent in the
+  // runtime-operator), and the Kubernetes API convention is signed integers.
+  // Nothing reads a negative one as a distinct value: zero and negative alike
+  // mean "not configured", decoded in one place on the receiving side.
   sint32 pool_size = 3;
   sint32 max_invocations = 4;
   // Optional credentials for pulling the image from a private registry
   ImagePullSecret image_pull_secret = 5;
   string name = 6;
   ImagePullPolicy image_pull_policy = 7;
+  // How many calls one warm instance may serve at the same time.
+  //
+  // Unset or below 1 means one, which is what a component gets without
+  // asking: an instance serves a single call at a time. Raising it lets an
+  // instance overlap calls while it awaits I/O, and is only safe for a guest
+  // that yields rather than blocks -- a guest driving its own executor with a
+  // blocking call must stay at one. Only meaningful alongside pool_size.
+  sint32 max_concurrency = 8;
 }
 
 message LocalResources {

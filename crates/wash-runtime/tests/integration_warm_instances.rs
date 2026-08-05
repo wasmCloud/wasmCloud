@@ -71,6 +71,7 @@ async fn start_pair_with_caller_pool(
                     local_resources: LocalResources::default(),
                     pool_size: caller_pool_size,
                     max_invocations: 0,
+                    max_concurrency: 1,
                 },
                 Component {
                     name: "ephemeral-callee".to_string(),
@@ -79,6 +80,7 @@ async fn start_pair_with_caller_pool(
                     local_resources: LocalResources::default(),
                     pool_size: callee_pool_size,
                     max_invocations: callee_max_invocations,
+                    max_concurrency: 1,
                 },
             ],
             host_interfaces: http_only_host_interfaces(host_header),
@@ -99,6 +101,7 @@ async fn start_http_component(
     host_header: &'static str,
     pool_size: i32,
     max_invocations: i32,
+    max_concurrency: i32,
 ) -> Result<(std::net::SocketAddr, impl HostApi)> {
     let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
 
@@ -116,6 +119,7 @@ async fn start_http_component(
                 local_resources: LocalResources::default(),
                 pool_size,
                 max_invocations,
+                max_concurrency,
             }],
             host_interfaces: http_only_host_interfaces(host_header),
             volumes: vec![],
@@ -250,7 +254,7 @@ async fn max_invocations_retires_a_warm_instance() -> Result<()> {
 /// request by default, which is what `pool_size` is meant to avoid.
 #[tokio::test]
 async fn pooled_component_serving_http_reuses_a_warm_instance() -> Result<()> {
-    let (addr, _host) = start_http_component("warm-http", 1, 0).await?;
+    let (addr, _host) = start_http_component("warm-http", 1, 0, 1).await?;
 
     let counts = http_call_counts(addr, "warm-http", 5).await?;
 
@@ -266,7 +270,7 @@ async fn pooled_component_serving_http_reuses_a_warm_instance() -> Result<()> {
 /// request, so nothing carries over.
 #[tokio::test]
 async fn unpooled_component_serving_http_is_fresh_per_request() -> Result<()> {
-    let (addr, _host) = start_http_component("cold-http", 0, 0).await?;
+    let (addr, _host) = start_http_component("cold-http", 0, 0, 1).await?;
 
     let counts = http_call_counts(addr, "cold-http", 4).await?;
 
@@ -287,7 +291,7 @@ async fn unpooled_component_serving_http_is_fresh_per_request() -> Result<()> {
 #[tokio::test]
 async fn a_warm_instance_survives_many_requests() -> Result<()> {
     const REQUESTS: usize = 3000;
-    let (addr, _host) = start_http_component("warm-soak", 1, 0).await?;
+    let (addr, _host) = start_http_component("warm-soak", 1, 0, 1).await?;
 
     let counts = http_call_counts(addr, "warm-soak", REQUESTS).await?;
 
@@ -309,7 +313,7 @@ async fn a_warm_instance_survives_many_requests() -> Result<()> {
 /// `max_invocations` applies to the HTTP path too.
 #[tokio::test]
 async fn max_invocations_retires_an_http_instance() -> Result<()> {
-    let (addr, _host) = start_http_component("warm-http-retire", 1, 2).await?;
+    let (addr, _host) = start_http_component("warm-http-retire", 1, 2, 1).await?;
 
     let counts = http_call_counts(addr, "warm-http-retire", 6).await?;
 

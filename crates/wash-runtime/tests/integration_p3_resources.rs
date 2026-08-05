@@ -50,6 +50,7 @@ fn component(name: &str, bytes: &'static [u8]) -> Component {
         local_resources: LocalResources::default(),
         pool_size: 1,
         max_invocations: 100,
+        max_concurrency: 1,
     }
 }
 

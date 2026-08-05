@@ -1,0 +1,15 @@
+package wasmcloud:test-p3@0.1.0;
+
+/// A p3 HTTP handler that *awaits* rather than computes: each request parks on
+/// the monotonic clock before replying. That makes it a stand-in for the
+/// I/O-bound guest — one waiting on a database or an outbound call — and it is
+/// what makes per-instance concurrency measurable. A handler that returns
+/// immediately has nothing to overlap, so it cannot tell a concurrent instance
+/// from a serial one.
+world http-sleeper {
+    import wasi:http/types@0.3.0;
+    import wasi:clocks/types@0.3.0;
+    import wasi:clocks/monotonic-clock@0.3.0;
+
+    export wasi:http/handler@0.3.0;
+}

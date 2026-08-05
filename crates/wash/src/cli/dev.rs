@@ -440,6 +440,7 @@ struct SidecarComponent {
     /// `maxInvocations`, `None` where the config left them unset.
     pool_size: Option<i32>,
     max_invocations: Option<i32>,
+    max_concurrency: Option<i32>,
 }
 
 /// Thin wrapper around [`build_workload`]: extracts dev-component
@@ -487,6 +488,7 @@ async fn create_workload(
             workload,
             pool_size: dev_component.pool_size,
             max_invocations: dev_component.max_invocations,
+            max_concurrency: dev_component.max_concurrency,
         });
     }
 
@@ -603,6 +605,7 @@ fn build_workload(
             local_resources: local_resources_for(resolved_workload),
             pool_size: UNSET_LIMIT,
             max_invocations: UNSET_LIMIT,
+            max_concurrency: UNSET_LIMIT,
         });
 
         if let Some(service_bytes) = service_bytes {
@@ -626,6 +629,7 @@ fn build_workload(
             // `InstancePolicy`.
             pool_size: sidecar.pool_size.unwrap_or(UNSET_LIMIT),
             max_invocations: sidecar.max_invocations.unwrap_or(UNSET_LIMIT),
+            max_concurrency: sidecar.max_concurrency.unwrap_or(UNSET_LIMIT),
         });
     }
 
@@ -812,6 +816,7 @@ mod tests {
             workload,
             pool_size: None,
             max_invocations: None,
+            max_concurrency: None,
         }
     }
 
@@ -1110,6 +1115,7 @@ mod tests {
             workload: ResolvedWorkload::default(),
             pool_size: None,
             max_invocations: None,
+            max_concurrency: None,
         }];
 
         let workload = build_workload(

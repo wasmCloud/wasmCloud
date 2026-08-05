@@ -35,7 +35,7 @@ use wash_runtime::{
 
 mod common;
 use common::{
-    component_workload_request, default_counter_resources, get_status,
+    component_workload_request, default_counter_resources, get_status, get_status_and_body,
     http_counter_host_interfaces_with_aliases, start_host_with_dynamic_router,
 };
 
@@ -340,9 +340,10 @@ async fn test_dynamic_router_unknown_host_returns_404() -> Result<()> {
     let client = reqwest::Client::new();
 
     // A bound host succeeds (sanity check)
+    let (status, body) = get_status_and_body(&client, addr, "known.local").await?;
     assert!(
-        get_status(&client, addr, "known.local").await?.is_success(),
-        "bound host should succeed"
+        status.is_success(),
+        "bound host should succeed; got {status} with body {body:?}"
     );
 
     // An unbound host will return 404
@@ -372,11 +373,15 @@ async fn test_dynamic_router_aliases_removed_on_unbind() -> Result<()> {
 
     let client = reqwest::Client::new();
 
-    // Sanity check: the primary host and both aliases route while bound.
+    // Sanity check: the primary host and both aliases route while bound. On
+    // failure, surface what actually came back — the guest's 500 carries its
+    // error in the body, and a bare status has already cost one CI archaeology
+    // session too many.
     for hostname in std::iter::once(primary).chain(aliases) {
+        let (status, body) = get_status_and_body(&client, addr, hostname).await?;
         assert!(
-            get_status(&client, addr, hostname).await?.is_success(),
-            "{hostname} should route while the workload is bound"
+            status.is_success(),
+            "{hostname} should route while the workload is bound; got {status} with body {body:?}"
         );
     }
 
