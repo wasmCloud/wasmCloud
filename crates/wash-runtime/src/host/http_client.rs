@@ -342,6 +342,20 @@ pub(crate) async fn connect_tcp(
         })
 }
 
+/// Clone a TLS client configuration with a fresh, private session-resumption
+/// store.
+///
+/// `ClientConfig::clone` shares the resumption store behind an `Arc`, and
+/// rustls resumes sessions across clones — so every client (or connection)
+/// built from a shared base configuration would otherwise share one TLS
+/// session-ticket cache, letting an upstream server correlate two workloads
+/// via a resumed session, against this module's isolation promise.
+pub(crate) fn isolated_resumption(tls: &rustls::ClientConfig) -> rustls::ClientConfig {
+    let mut config = tls.clone();
+    config.resumption = rustls::client::Resumption::in_memory_sessions(256);
+    config
+}
+
 /// Run a TLS client handshake over an established TCP stream, using
 /// `authority`'s host portion as the SNI server name.
 pub(crate) async fn connect_tls(
@@ -496,14 +510,9 @@ impl PooledClient {
         // the wrapping HttpsConnector.
         http.enforce_http(false);
         http.set_nodelay(true);
-        let mut tls_config = (*tls).clone();
-        // A fresh per-client session store: `ClientConfig::clone` shares the
-        // resumption store behind an `Arc`, and rustls resumes sessions across
-        // clones, so without this every workload would share one TLS
-        // session-ticket cache — letting an upstream server correlate two
-        // workloads via a resumed session, against this module's isolation
-        // promise.
-        tls_config.resumption = rustls::client::Resumption::in_memory_sessions(256);
+        // A fresh per-client session store, so workloads never share a TLS
+        // session-ticket cache (see [`isolated_resumption`]).
+        let tls_config = isolated_resumption(&tls);
         let https = hyper_rustls::HttpsConnectorBuilder::new()
             .with_tls_config(tls_config)
             .https_or_http()
@@ -720,20 +729,24 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
             // waiters hold no resource another waiter needs, so waiting on
             // both cannot deadlock. `acquire_owned` only errors when the
             // semaphore is closed, which never happens.
-            let acquire = async {
-                let workload = workload_permits
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| std::io::Error::other("outbound connection limiter closed"))?;
-                let global = global_permits
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| std::io::Error::other("outbound connection limiter closed"))?;
-                Ok::<_, std::io::Error>((workload, global))
-            };
+            let acquire =
+                {
+                    let workload_permits = workload_permits.clone();
+                    let global_permits = global_permits.clone();
+                    async move {
+                        let workload = workload_permits.acquire_owned().await.map_err(|_| {
+                            std::io::Error::other("outbound connection limiter closed")
+                        })?;
+                        let global = global_permits.acquire_owned().await.map_err(|_| {
+                            std::io::Error::other("outbound connection limiter closed")
+                        })?;
+                        Ok::<_, std::io::Error>((workload, global))
+                    }
+                };
             let permits = tokio::time::timeout(PERMIT_WAIT, acquire)
                 .await
                 .map_err(|_| {
+                    warn_permits_exhausted(&workload_permits, &global_permits);
                     std::io::Error::new(
                         std::io::ErrorKind::TimedOut,
                         "outbound connection limit reached (per-workload or host-wide)",
@@ -745,6 +758,34 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
                 _permits: permits,
             })
         })
+    }
+}
+
+/// Log that a connect attempt gave up waiting for [`ConnectionLimits`]
+/// permits. The guest only sees a generic connect timeout, so this is the
+/// operator's signal that the connection budget — not the upstream server —
+/// is what failed the request; whichever reported count is 0 is the
+/// exhausted budget.
+///
+/// Rate-limited to one line per 5s host-wide: a saturated budget times out
+/// every parked connect attempt in the same instant (including attempts
+/// hyper abandoned after idle-connection reuse won the checkout race), and
+/// a workload that keeps its budget pinned would otherwise flood the log.
+fn warn_permits_exhausted(workload_permits: &Semaphore, global_permits: &Semaphore) {
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static LAST_WARN: Mutex<Option<Instant>> = Mutex::new(None);
+
+    let mut last = LAST_WARN.lock().unwrap_or_else(|e| e.into_inner());
+    if last.is_none_or(|at| at.elapsed() >= Duration::from_secs(5)) {
+        *last = Some(Instant::now());
+        drop(last);
+        warn!(
+            workload_permits_available = workload_permits.available_permits(),
+            global_permits_available = global_permits.available_permits(),
+            "outbound connect timed out waiting for a connection permit; \
+             a ConnectionLimits budget is exhausted (logged at most once per 5s)"
+        );
     }
 }
 
