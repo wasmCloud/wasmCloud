@@ -340,6 +340,28 @@ impl From<ConnectError> for wasmtime_wasi_http::p3::bindings::http::types::Error
     }
 }
 
+/// Whether an I/O error is a name-resolution failure.
+///
+/// Unix surfaces `getaddrinfo` failures with this fixed message prefix (the
+/// same match wasmtime's default transport uses), or occasionally as
+/// `AddrNotAvailable`. Windows surfaces them as WSA error codes — matched by
+/// number, not message, because Windows error strings are localized. (The
+/// Windows arm is an improvement over wasmtime's transport, which
+/// misclassifies Windows resolver failures as connection-refused.)
+fn is_resolver_error(err: &std::io::Error) -> bool {
+    if err.kind() == std::io::ErrorKind::AddrNotAvailable {
+        return true;
+    }
+    if err
+        .to_string()
+        .starts_with("failed to lookup address information")
+    {
+        return true;
+    }
+    // WSAHOST_NOT_FOUND, WSATRY_AGAIN, WSANO_RECOVERY, WSANO_DATA.
+    cfg!(windows) && matches!(err.raw_os_error(), Some(11001..=11004))
+}
+
 /// Open a TCP connection to `authority` within `connect_timeout`, mapping
 /// failures the way wasmtime's default transport does.
 pub(crate) async fn connect_tcp(
@@ -349,15 +371,12 @@ pub(crate) async fn connect_tcp(
     timeout(connect_timeout, TcpStream::connect(authority))
         .await
         .map_err(|_| ConnectError::Timeout)?
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::AddrNotAvailable => ConnectError::Dns,
-            _ if e
-                .to_string()
-                .starts_with("failed to lookup address information") =>
-            {
+        .map_err(|e| {
+            if is_resolver_error(&e) {
                 ConnectError::Dns
+            } else {
+                ConnectError::Refused
             }
-            _ => ConnectError::Refused,
         })
 }
 
@@ -1041,10 +1060,11 @@ fn find_in_chain<'a, T: std::error::Error + 'static>(
 
 /// Classify a pooled-client send error into the guest-visible categories.
 ///
-/// This walks hyper-util/hyper/rustls error chains via downcasts and
-/// string-matches one resolver message — a mirror of wasmtime's
-/// `default_send_request` mappings that will not fail loudly if those crates
-/// restructure their errors. When upgrading hyper-util, hyper, or wasmtime,
+/// This walks hyper-util/hyper/rustls error chains via downcasts and matches
+/// resolver failures per platform (see [`is_resolver_error`]) — a mirror of
+/// wasmtime's `default_send_request` mappings that will not fail loudly if
+/// those crates restructure their errors. When upgrading hyper-util, hyper,
+/// or wasmtime,
 /// re-diff this against `wasmtime_wasi_http`'s mapping; the
 /// `connect_failures_classify_to_dns_and_refused` test pins the two
 /// classifications guests most commonly match on.
@@ -1076,12 +1096,7 @@ fn classify_client_error(err: &hyper_util::client::legacy::Error) -> SendError {
             return match kind {
                 std::io::ErrorKind::AddrNotAvailable => SendError::Dns,
                 std::io::ErrorKind::TimedOut => SendError::ConnectionTimeout,
-                _ if io
-                    .to_string()
-                    .starts_with("failed to lookup address information") =>
-                {
-                    SendError::Dns
-                }
+                _ if is_resolver_error(io) => SendError::Dns,
                 _ => SendError::ConnectionRefused,
             };
         }
@@ -1351,7 +1366,10 @@ mod tests {
     /// Resolver failures and refused connects must keep classifying to the
     /// error codes wasmtime's default transport produces — guests match on
     /// these, and `classify_client_error`'s chain-walking would rot silently
-    /// on a hyper-util upgrade otherwise.
+    /// on a hyper-util upgrade otherwise. Runs on every platform: Windows
+    /// resolver failures are matched by WSA error code (see
+    /// [`is_resolver_error`]), where wasmtime's own transport misclassifies
+    /// them as connection-refused.
     #[tokio::test]
     async fn connect_failures_classify_to_dns_and_refused() {
         use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
