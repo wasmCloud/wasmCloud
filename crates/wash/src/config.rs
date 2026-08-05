@@ -561,6 +561,33 @@ impl From<HttpClientTrustRoots> for wash_runtime::host::http_client::TrustRoots 
     }
 }
 
+/// Resolve the outbound [`ConnectionLimits`] from optional config/CLI
+/// overrides — the shared wiring for `wash host` and `wash dev`. `None`
+/// keeps the runtime's built-in default for that cap.
+///
+/// [`ConnectionLimits`]: wash_runtime::host::http_client::ConnectionLimits
+pub fn outbound_connection_limits(
+    max_connections: Option<usize>,
+    max_connections_per_workload: Option<usize>,
+) -> anyhow::Result<wash_runtime::host::http_client::ConnectionLimits> {
+    let mut limits = wash_runtime::host::http_client::ConnectionLimits::default();
+    if let Some(max_total) = max_connections {
+        anyhow::ensure!(
+            max_total > 0,
+            "http_client_max_connections must be at least 1"
+        );
+        limits.max_total = max_total;
+    }
+    if let Some(max_per_workload) = max_connections_per_workload {
+        anyhow::ensure!(
+            max_per_workload > 0,
+            "http_client_max_connections_per_workload must be at least 1"
+        );
+        limits.max_per_workload = max_per_workload;
+    }
+    Ok(limits)
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DevConfig {
     /// Command to run the component in dev mode
@@ -647,6 +674,19 @@ pub struct DevConfig {
     /// (which honours `SSL_CERT_FILE`/`SSL_CERT_DIR`).
     #[serde(default, skip_serializing_if = "HttpClientTrustRoots::is_default")]
     pub http_client_trust_roots: HttpClientTrustRoots,
+
+    /// Host-wide cap on live *outbound* HTTP connections across all
+    /// workloads combined (in-flight or idle in a keep-alive pool). Defaults
+    /// to the runtime's built-in limit; size it for the number of
+    /// concurrently busy workloads times their burst concurrency.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_client_max_connections: Option<usize>,
+
+    /// Cap on live *outbound* HTTP connections a single workload may hold,
+    /// across all authorities it talks to. Defaults to the runtime's
+    /// built-in limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_client_max_connections_per_workload: Option<usize>,
 
     /// Enable WASI WebGPU support in the dev environment. Only supported on non-Windows platforms.
     #[serde(default)]

@@ -116,6 +116,23 @@ pub struct HostCommand {
     )]
     pub http_client_trust_roots: HttpClientTrustRoots,
 
+    /// Host-wide cap on live outbound HTTP connections across all workloads
+    /// combined (in-flight or idle in a keep-alive pool). Size it for the
+    /// number of concurrently busy workloads times their burst concurrency.
+    #[arg(
+        long = "http-client-max-connections",
+        env = "WASH_HTTP_CLIENT_MAX_CONNECTIONS"
+    )]
+    pub http_client_max_connections: Option<usize>,
+
+    /// Cap on live outbound HTTP connections a single workload may hold,
+    /// across all authorities it talks to.
+    #[arg(
+        long = "http-client-max-connections-per-workload",
+        env = "WASH_HTTP_CLIENT_MAX_CONNECTIONS_PER_WORKLOAD"
+    )]
+    pub http_client_max_connections_per_workload: Option<usize>,
+
     /// Enable WASI WebGPU support
     #[cfg(all(
         not(target_os = "windows"),
@@ -349,7 +366,11 @@ impl CliCommand for HostCommand {
                         extra_ca_paths: self.http_client_ca_paths.clone(),
                     },
                 )
-                .context("failed to load --http-client-ca-path CA certificates")?;
+                .context("failed to load --http-client-ca-path CA certificates")?
+                .with_connection_limits(crate::config::outbound_connection_limits(
+                    self.http_client_max_connections,
+                    self.http_client_max_connections_per_workload,
+                )?);
 
             let mut ingress_builder = wash_runtime::host::http::Ingress::builder(http_router, addr)
                 .outgoing_handler(outgoing_handler);

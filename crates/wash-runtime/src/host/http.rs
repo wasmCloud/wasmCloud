@@ -458,6 +458,8 @@ pub struct DefaultOutgoingHandler {
     /// Set eagerly by [`Self::with_tls_config`]; populated lazily with the
     /// process-wide default roots otherwise.
     clients: OnceLock<crate::host::http_client::WorkloadClients>,
+    /// Applied when `clients` is built; see [`Self::with_connection_limits`].
+    limits: crate::host::http_client::ConnectionLimits,
 }
 
 impl DefaultOutgoingHandler {
@@ -465,9 +467,15 @@ impl DefaultOutgoingHandler {
     /// [`crate::host::http_client::ClientTlsOptions`] for building one with
     /// extra CA bundles).
     pub fn with_tls_config(tls: Arc<rustls::ClientConfig>) -> Self {
+        let limits = crate::host::http_client::ConnectionLimits::default();
         let cell = OnceLock::new();
-        let _ = cell.set(crate::host::http_client::WorkloadClients::new(tls));
-        Self { clients: cell }
+        let _ = cell.set(crate::host::http_client::WorkloadClients::with_limits(
+            tls, limits,
+        ));
+        Self {
+            clients: cell,
+            limits,
+        }
     }
 
     /// Build a handler from [`ClientTlsOptions`] — the shared wiring for CLI
@@ -486,10 +494,34 @@ impl DefaultOutgoingHandler {
         }
     }
 
+    /// Replace the outbound [`ConnectionLimits`] (defaults apply otherwise).
+    /// Call at construction time, before the handler serves requests: a
+    /// client cache that was already built eagerly is rebuilt, dropping any
+    /// pooled connections.
+    ///
+    /// [`ConnectionLimits`]: crate::host::http_client::ConnectionLimits
+    pub fn with_connection_limits(
+        self,
+        limits: crate::host::http_client::ConnectionLimits,
+    ) -> Self {
+        let cell = OnceLock::new();
+        if let Some(clients) = self.clients.into_inner() {
+            let _ = cell.set(crate::host::http_client::WorkloadClients::with_limits(
+                clients.tls_config(),
+                limits,
+            ));
+        }
+        Self {
+            clients: cell,
+            limits,
+        }
+    }
+
     fn clients(&self) -> &crate::host::http_client::WorkloadClients {
         self.clients.get_or_init(|| {
-            crate::host::http_client::WorkloadClients::new(
+            crate::host::http_client::WorkloadClients::with_limits(
                 crate::host::http_client::default_client_tls_config(),
+                self.limits,
             )
         })
     }
@@ -1229,6 +1261,14 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
             ));
         }
         if is_grpc_request(&request) {
+            // The gRPC fast path (selected by the guest via a
+            // `content-type: application/grpc` header) opens its own
+            // per-request HTTP/2 connection: it bypasses the pooled client,
+            // so `http_client::ConnectionLimits` does not bound it. Exposure
+            // is limited because these connections are request-scoped (no
+            // idle accumulation) — a workload holds at most one per in-flight
+            // request — but bringing this path under the pooled, permit-
+            // bounded client is part of the gRPC pooling follow-up.
             return Ok(send_grpc_request(request, config, self.grpc_tls()));
         }
         self.outgoing_handler
@@ -1256,6 +1296,9 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 ))
             })
         } else if is_grpc_request(&request) {
+            // Guest-selected per-request HTTP/2 path, not bounded by
+            // `ConnectionLimits` — see the matching comment in
+            // `outgoing_request`.
             send_grpc_request_p3(request, options, self.grpc_tls())
         } else {
             self.outgoing_handler
@@ -2031,12 +2074,10 @@ async fn send_grpc_request_handler(
     let tcp_stream = connect_tcp(&authority, connect_timeout).await?;
 
     let (mut sender, worker) = if use_tls {
-        // The cached gRPC TLS configuration shares its resumption store
-        // behind an `Arc`; give this connection its own so TLS session
-        // tickets never resume across workloads (see
-        // `http_client::PooledClient::bounded`).
-        let mut config = (*tls).clone();
-        config.resumption = rustls::client::Resumption::in_memory_sessions(256);
+        // The cached gRPC TLS configuration is shared across workloads; give
+        // this connection its own session store so TLS session tickets never
+        // resume across workloads.
+        let config = crate::host::http_client::isolated_resumption(&tls);
         let stream = connect_tls(Arc::new(config), &authority, tcp_stream).await?;
         let (sender, conn) = timeout(
             connect_timeout,
@@ -2191,12 +2232,10 @@ async fn send_grpc_request_p3_handler(
         .map_err(ErrorCode::from)?;
 
     let (mut sender, conn_worker) = if use_tls {
-        // The cached gRPC TLS configuration shares its resumption store
-        // behind an `Arc`; give this connection its own so TLS session
-        // tickets never resume across workloads (see
-        // `http_client::PooledClient::bounded`).
-        let mut config = (*tls).clone();
-        config.resumption = rustls::client::Resumption::in_memory_sessions(256);
+        // The cached gRPC TLS configuration is shared across workloads; give
+        // this connection its own session store so TLS session tickets never
+        // resume across workloads.
+        let config = crate::host::http_client::isolated_resumption(&tls);
         let stream = connect_tls(Arc::new(config), &authority, tcp_stream)
             .await
             .map_err(ErrorCode::from)?;
@@ -2247,6 +2286,29 @@ mod tests {
             .uri(uri)
             .body(HyperOutgoingBody::default())
             .unwrap()
+    }
+
+    /// `with_connection_limits` rebuilds an eagerly-configured client cache
+    /// and must carry the TLS configuration over — losing it would silently
+    /// revert a host to the default trust roots.
+    #[test]
+    fn connection_limits_builder_preserves_tls_config() {
+        let tls = crate::host::http_client::ClientTlsOptions::default()
+            .build()
+            .unwrap();
+        let handler = DefaultOutgoingHandler::with_tls_config(tls.clone()).with_connection_limits(
+            crate::host::http_client::ConnectionLimits {
+                max_per_workload: 1,
+                max_total: 2,
+            },
+        );
+        let got = handler
+            .client_tls_config()
+            .expect("handler should expose its TLS configuration");
+        assert!(
+            Arc::ptr_eq(&tls, &got),
+            "with_connection_limits must preserve the configured TLS roots"
+        );
     }
 
     fn build_request_p3(uri: &str) -> hyper::Request<crate::host::http_p3::P3Body> {

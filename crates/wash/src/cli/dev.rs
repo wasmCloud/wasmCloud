@@ -171,7 +171,11 @@ impl CliCommand for DevCommand {
                 extra_ca_paths: dev_config.http_client_ca_paths.clone(),
             },
         )
-        .context("failed to load dev.http_client_ca_paths CA certificates")?;
+        .context("failed to load dev.http_client_ca_paths CA certificates")?
+        .with_connection_limits(crate::config::outbound_connection_limits(
+            dev_config.http_client_max_connections,
+            dev_config.http_client_max_connections_per_workload,
+        )?);
 
         // TODO(#19): Only spawn the server if the component exports wasi:http
         // Configure HTTP server with optional TLS, enable HTTP Server
