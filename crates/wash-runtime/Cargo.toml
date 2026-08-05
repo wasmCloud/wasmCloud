@@ -95,6 +95,7 @@ io-lifetimes = { workspace = true }
 rustix = { workspace = true }
 rustls = { workspace = true, features = ["std", "tls12"] }
 rustls-native-certs = { workspace = true }
+tower-service = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio-rustls = { workspace = true }

@@ -10,9 +10,15 @@
 //!
 //! Pools are keyed per workload ([`WorkloadClients`]): components never reuse
 //! each other's TCP connections, so connection-scoped server state (auth,
-//! rate-limit attribution) cannot leak between them. Port exhaustion is still
-//! prevented because it is caused by a single busy workload, which keeps
-//! reusing its own pool.
+//! rate-limit attribution) cannot leak between them — and each client keeps
+//! its own TLS session-resumption store, so session tickets never resume
+//! across workloads either. Port exhaustion is still prevented because it is
+//! caused by a single busy workload, which keeps reusing its own pool.
+//!
+//! Live connections are bounded ([`ConnectionLimits`]): each workload may hold
+//! at most a fixed number of connections, and all workloads together share a
+//! host-wide cap, so no workload (or crowd of workloads) can exhaust the
+//! host's file descriptors by fanning out to many authorities.
 //!
 //! It also owns the outbound TLS trust roots. wasmtime's default transport
 //! trusts only the compiled-in webpki (Mozilla) roots, with no way to reach
@@ -35,10 +41,11 @@ use anyhow::Context as _;
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use http_body_util::combinators::UnsyncBoxBody;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::rt::{TokioExecutor, TokioTimer};
+use hyper_util::client::legacy::connect::{Connected, Connection, HttpConnector};
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use tokio::net::TcpStream;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
 use tracing::{debug, warn};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
@@ -55,8 +62,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 /// connection pool serves both.
 type ClientBody = UnsyncBoxBody<Bytes, BoxError>;
 
-type PoolClient =
-    hyper_util::client::legacy::Client<hyper_rustls::HttpsConnector<HttpConnector>, ClientBody>;
+type PoolClient = hyper_util::client::legacy::Client<BoundedConnector, ClientBody>;
 
 /// How long an idle pooled connection is kept before being closed. Kept at or
 /// below common server/LB keep-alive windows (nginx 75s, many LBs 60s) so we
@@ -83,6 +89,64 @@ const POOL_MAX_IDLE_PER_HOST: usize = 32;
 /// a client whose connections have all idled out anyway is just memory, so
 /// there is nothing worth keeping past that window.
 const WORKLOAD_CLIENT_IDLE: Duration = Duration::from_secs(60);
+
+/// Default for [`ConnectionLimits::max_per_workload`]. Sized well above
+/// [`POOL_MAX_IDLE_PER_HOST`] so a workload can still burst to several
+/// authorities at once, while keeping any single workload's file-descriptor
+/// footprint far from the host-wide cap.
+const MAX_CONNECTIONS_PER_WORKLOAD: usize = 128;
+
+/// Default for [`ConnectionLimits::max_total`]. Kept inside common default
+/// file-descriptor soft limits (1024 on many Linux distributions) with room
+/// left for ingress connections, OCI pulls, and the host's own control-plane
+/// traffic.
+const MAX_TOTAL_CONNECTIONS: usize = 512;
+
+/// Bounds on live outbound connections (in-flight or idle in a pool).
+///
+/// A permit is held for the whole life of an established connection and
+/// released when it closes (pool idle timeout, workload-client eviction, or
+/// error) — so reusing a pooled connection never consumes a new permit; the
+/// caps only gate opening *new* connections. When a cap is reached, a request
+/// waits for a permit or for an idle pooled connection, whichever frees first
+/// (hyper races the two and abandons the pending connect if reuse wins); if
+/// neither arrives within [`PERMIT_WAIT`], the request fails with a connect
+/// timeout.
+///
+/// Note that idle pooled connections pin permits until they age out
+/// ([`POOL_IDLE_TIMEOUT`]), so `max_total` should be sized for the number of
+/// concurrently busy workloads times their expected burst, not treated as a
+/// per-request budget.
+#[derive(Debug, Clone, Copy)]
+pub struct ConnectionLimits {
+    /// Maximum live connections a single workload may hold, across all
+    /// authorities it talks to.
+    pub max_per_workload: usize,
+    /// Host-wide maximum live connections across all workloads combined.
+    pub max_total: usize,
+}
+
+impl Default for ConnectionLimits {
+    fn default() -> Self {
+        Self {
+            max_per_workload: MAX_CONNECTIONS_PER_WORKLOAD,
+            max_total: MAX_TOTAL_CONNECTIONS,
+        }
+    }
+}
+
+/// How long a connect attempt waits for [`ConnectionLimits`] permits before
+/// failing with a timeout.
+///
+/// This deadline must exist: hyper's pool spawns an already-started connect
+/// to completion in the background when idle-connection reuse wins the
+/// checkout race, and such an abandoned attempt parked on the semaphore would
+/// otherwise camp there indefinitely — holding the pool alive (which pins the
+/// very idle-connection permits it is waiting for) and grabbing freed permits
+/// to open connections nobody asked for. Kept well below the request-timeout
+/// defaults (600s) so saturation surfaces as a prompt, classifiable connect
+/// timeout instead of a long hang.
+const PERMIT_WAIT: Duration = Duration::from_secs(5);
 
 /// Built-in roots to start from before layering on
 /// [`ClientTlsOptions::extra_ca_paths`].
@@ -405,16 +469,43 @@ pub struct PooledClient {
 }
 
 impl PooledClient {
-    /// Create a client using the given TLS configuration for HTTPS.
+    /// Create a standalone client using the given TLS configuration for HTTPS,
+    /// bounded by the default [`ConnectionLimits`] (both caps private to this
+    /// client). Clients created through [`WorkloadClients`] instead share the
+    /// host-wide cap.
     pub fn new(tls: Arc<rustls::ClientConfig>) -> Self {
+        let limits = ConnectionLimits::default();
+        Self::bounded(
+            tls,
+            Arc::new(Semaphore::new(limits.max_per_workload)),
+            Arc::new(Semaphore::new(limits.max_total)),
+        )
+    }
+
+    /// Create a client whose new connections each hold one permit from
+    /// `workload_permits` (this client's own budget) and one from
+    /// `global_permits` (shared host-wide) for the connection's lifetime.
+    fn bounded(
+        tls: Arc<rustls::ClientConfig>,
+        workload_permits: Arc<Semaphore>,
+        global_permits: Arc<Semaphore>,
+    ) -> Self {
         crate::init_crypto();
         let mut http = HttpConnector::new();
         // The inner connector sees https URIs too; scheme handling belongs to
         // the wrapping HttpsConnector.
         http.enforce_http(false);
         http.set_nodelay(true);
+        let mut tls_config = (*tls).clone();
+        // A fresh per-client session store: `ClientConfig::clone` shares the
+        // resumption store behind an `Arc`, and rustls resumes sessions across
+        // clones, so without this every workload would share one TLS
+        // session-ticket cache — letting an upstream server correlate two
+        // workloads via a resumed session, against this module's isolation
+        // promise.
+        tls_config.resumption = rustls::client::Resumption::in_memory_sessions(256);
         let https = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_tls_config((*tls).clone())
+            .with_tls_config(tls_config)
             .https_or_http()
             // HTTP/1.1 only, and deliberately so: an HTTP/1.1 pooled
             // connection is checked out exclusively for one request at a time,
@@ -426,11 +517,16 @@ impl PooledClient {
             // isolation story; do not flip this switch casually.
             .enable_http1()
             .wrap_connector(http);
+        let connector = BoundedConnector {
+            inner: https,
+            workload_permits,
+            global_permits,
+        };
         let client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
             .pool_timer(TokioTimer::new())
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
-            .build(https);
+            .build(connector);
         Self { client, tls }
     }
 
@@ -530,26 +626,40 @@ impl PooledClient {
     }
 }
 
-/// Per-workload pooled clients sharing one TLS configuration.
+/// Per-workload pooled clients sharing one TLS configuration and one
+/// host-wide connection budget.
 ///
 /// Each workload gets its own [`PooledClient`] (created lazily on first
 /// request, evicted after [`WORKLOAD_CLIENT_IDLE`] without use), so a
 /// workload reuses its own keep-alive connections but components never share
-/// a TCP connection with each other.
+/// a TCP connection with each other. Every client draws new connections from
+/// its own per-workload budget and from the shared host-wide budget (see
+/// [`ConnectionLimits`]).
 ///
 /// Cloning is cheap and shares the underlying client cache.
 #[derive(Clone)]
 pub struct WorkloadClients {
     tls: Arc<rustls::ClientConfig>,
+    limits: ConnectionLimits,
+    /// Host-wide budget shared by every workload's client; per-workload
+    /// budgets are created fresh per client in [`Self::client`].
+    global_permits: Arc<Semaphore>,
     clients: moka::sync::Cache<String, PooledClient>,
 }
 
 impl WorkloadClients {
     /// Create a per-workload client cache using the given TLS configuration
-    /// for HTTPS.
+    /// for HTTPS and the default [`ConnectionLimits`].
     pub fn new(tls: Arc<rustls::ClientConfig>) -> Self {
+        Self::with_limits(tls, ConnectionLimits::default())
+    }
+
+    /// Create a per-workload client cache with explicit connection bounds.
+    pub fn with_limits(tls: Arc<rustls::ClientConfig>, limits: ConnectionLimits) -> Self {
         Self {
             tls,
+            limits,
+            global_permits: Arc::new(Semaphore::new(limits.max_total)),
             clients: moka::sync::Cache::builder()
                 .time_to_idle(WORKLOAD_CLIENT_IDLE)
                 .build(),
@@ -558,13 +668,142 @@ impl WorkloadClients {
 
     /// The pooled client for `workload_id`, created on first use.
     pub fn client(&self, workload_id: &str) -> PooledClient {
-        self.clients
-            .get_with_by_ref(workload_id, || PooledClient::new(self.tls.clone()))
+        self.clients.get_with_by_ref(workload_id, || {
+            PooledClient::bounded(
+                self.tls.clone(),
+                Arc::new(Semaphore::new(self.limits.max_per_workload)),
+                self.global_permits.clone(),
+            )
+        })
     }
 
     /// The TLS configuration the per-workload clients verify servers against.
     pub fn tls_config(&self) -> Arc<rustls::ClientConfig> {
         self.tls.clone()
+    }
+}
+
+/// Connector that gates every *new* connection on a per-workload and a
+/// host-wide semaphore (see [`ConnectionLimits`]). Reusing an idle pooled
+/// connection bypasses the connector entirely, so it needs no permit; hyper's
+/// pool checkout races this connector against idle-connection reuse and drops
+/// the pending connect (cancelling the permit acquisition) if reuse wins, so
+/// waiting here never starves a request that a freed connection could serve.
+#[derive(Clone)]
+struct BoundedConnector {
+    inner: hyper_rustls::HttpsConnector<HttpConnector>,
+    workload_permits: Arc<Semaphore>,
+    global_permits: Arc<Semaphore>,
+}
+
+impl tower_service::Service<hyper::Uri> for BoundedConnector {
+    type Response = PermittedStream;
+    type Error = BoxError;
+    type Future = std::pin::Pin<Box<dyn Future<Output = Result<PermittedStream, BoxError>> + Send>>;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        tower_service::Service::poll_ready(&mut self.inner, cx)
+    }
+
+    fn call(&mut self, uri: hyper::Uri) -> Self::Future {
+        // Move out the connector we polled ready and leave a fresh clone
+        // behind (the usual tower clone-and-swap).
+        let mut inner = self.inner.clone();
+        std::mem::swap(&mut self.inner, &mut inner);
+        let workload_permits = self.workload_permits.clone();
+        let global_permits = self.global_permits.clone();
+        Box::pin(async move {
+            // Acquire order (workload, then global) is fixed everywhere, and
+            // waiters hold no resource another waiter needs, so waiting on
+            // both cannot deadlock. `acquire_owned` only errors when the
+            // semaphore is closed, which never happens.
+            let acquire = async {
+                let workload = workload_permits
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| std::io::Error::other("outbound connection limiter closed"))?;
+                let global = global_permits
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| std::io::Error::other("outbound connection limiter closed"))?;
+                Ok::<_, std::io::Error>((workload, global))
+            };
+            let permits = tokio::time::timeout(PERMIT_WAIT, acquire)
+                .await
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "outbound connection limit reached (per-workload or host-wide)",
+                    )
+                })??;
+            let stream = tower_service::Service::call(&mut inner, uri).await?;
+            Ok(PermittedStream {
+                inner: stream,
+                _permits: permits,
+            })
+        })
+    }
+}
+
+/// A connection stream carrying its [`ConnectionLimits`] permits; dropping
+/// the stream (connection close) releases them.
+struct PermittedStream {
+    inner: hyper_rustls::MaybeHttpsStream<TokioIo<TcpStream>>,
+    _permits: (OwnedSemaphorePermit, OwnedSemaphorePermit),
+}
+
+impl hyper::rt::Read for PermittedStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: hyper::rt::ReadBufCursor<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl hyper::rt::Write for PermittedStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
+    fn poll_write_vectored(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        std::pin::Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
+    }
+}
+
+impl Connection for PermittedStream {
+    fn connected(&self) -> Connected {
+        self.inner.connected()
     }
 }
 
@@ -846,9 +1085,10 @@ mod tests {
     }
 
     /// Plain-HTTP keep-alive server that counts accepted connections and
-    /// answers every request with `200 ok`.
-    async fn spawn_counting_server() -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicUsize>)
-    {
+    /// answers every request with `200 ok` after `delay`.
+    async fn spawn_counting_server_with_delay(
+        delay: Duration,
+    ) -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicUsize>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -873,6 +1113,9 @@ mod tests {
                         // One response per request head; GETs carry no body.
                         while let Some(pos) = pending.windows(4).position(|w| w == b"\r\n\r\n") {
                             pending.drain(..pos + 4);
+                            if !delay.is_zero() {
+                                tokio::time::sleep(delay).await;
+                            }
                             if stream
                                 .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
                                 .await
@@ -886,6 +1129,11 @@ mod tests {
             }
         });
         (addr, conns)
+    }
+
+    async fn spawn_counting_server() -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicUsize>)
+    {
+        spawn_counting_server_with_delay(Duration::ZERO).await
     }
 
     fn p2_config(use_tls: bool) -> OutgoingRequestConfig {
@@ -961,6 +1209,108 @@ mod tests {
             opened <= 4,
             "expected connection reuse within each workload's pool, but the server saw {opened} connections"
         );
+    }
+
+    /// The per-workload connection bound must hold under a concurrent burst:
+    /// with a cap of 2, eight concurrent requests to a slow server must be
+    /// funnelled through at most two connections (waiters pick up pooled
+    /// connections as they free instead of opening new ones).
+    #[tokio::test]
+    async fn per_workload_connection_bound_holds_under_burst() {
+        let (addr, conns) = spawn_counting_server_with_delay(Duration::from_millis(50)).await;
+        let clients = WorkloadClients::with_limits(
+            default_client_tls_config(),
+            ConnectionLimits {
+                max_per_workload: 2,
+                max_total: 100,
+            },
+        );
+        let uri = format!("http://{addr}/");
+
+        let requests = (0..8).map(|_| {
+            let client = clients.client("workload-a");
+            let uri = uri.clone();
+            async move {
+                let response = client
+                    .send_request_p2(p2_request(&uri), p2_config(false))
+                    .await
+                    .expect("request should succeed despite waiting for a connection");
+                assert_eq!(response.resp.status(), 200);
+                // Drain the body so the connection is returned to the pool.
+                let _ = response.resp.into_body().collect().await;
+            }
+        });
+        futures::future::join_all(requests).await;
+
+        let opened = conns.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            opened <= 2,
+            "per-workload cap of 2 must bound connections, but the server saw {opened}"
+        );
+    }
+
+    /// The host-wide bound must hold across workloads, and dropping a
+    /// workload's client must release its connections' permits so other
+    /// workloads can connect again.
+    #[tokio::test]
+    async fn global_connection_bound_holds_across_workloads() {
+        let (addr, conns) = spawn_counting_server_with_delay(Duration::from_millis(50)).await;
+        let clients = WorkloadClients::with_limits(
+            default_client_tls_config(),
+            ConnectionLimits {
+                max_per_workload: 4,
+                max_total: 2,
+            },
+        );
+        let uri = format!("http://{addr}/");
+
+        // Workload A bursts 4 concurrent requests; the global cap of 2 must
+        // funnel them through at most two connections.
+        let requests = (0..4).map(|_| {
+            let client = clients.client("workload-a");
+            let uri = uri.clone();
+            async move {
+                let response = client
+                    .send_request_p2(p2_request(&uri), p2_config(false))
+                    .await
+                    .expect("request should succeed despite waiting for a connection");
+                assert_eq!(response.resp.status(), 200);
+                let _ = response.resp.into_body().collect().await;
+            }
+        });
+        futures::future::join_all(requests).await;
+        let opened = conns.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            opened <= 2,
+            "global cap of 2 must bound connections, but the server saw {opened}"
+        );
+
+        // Drop workload A's client (cache eviction). Its pool stays alive
+        // until the burst's abandoned connect attempts — spawned to
+        // completion by hyper and parked on the exhausted global semaphore —
+        // give up at [`PERMIT_WAIT`]; the pool then drops, closing A's idle
+        // connections and releasing their permits.
+        clients.clients.invalidate("workload-a");
+        // moka may defer dropping the evicted value to a maintenance pass;
+        // force it so the cache holds no reference either.
+        clients.clients.run_pending_tasks();
+        let deadline = tokio::time::Instant::now() + PERMIT_WAIT + Duration::from_secs(3);
+        while clients.global_permits.available_permits() == 0 {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "global permits were never released after dropping workload A's client"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        // Workload B can now connect instead of starving on permits pinned by
+        // A's idle pool.
+        let client_b = clients.client("workload-b");
+        let response = client_b
+            .send_request_p2(p2_request(&uri), p2_config(false))
+            .await
+            .expect("workload B should connect once A's permits are released");
+        assert_eq!(response.resp.status(), 200);
     }
 
     /// Spawn an HTTP/1.1-over-TLS server whose certificate chains to a private

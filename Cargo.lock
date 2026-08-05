@@ -6172,6 +6172,7 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+ "tower-service",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
