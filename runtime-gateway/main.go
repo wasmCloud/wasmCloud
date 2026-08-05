@@ -105,13 +105,7 @@ func main() {
 		fallback = externalFallback
 	}
 
-	tracker := &HostTracker{
-		Fallback: fallback,
-	}
-	if err := tracker.SetupWithManager(ctx, manager); err != nil {
-		setupLog.Error(err, "could not add HostTracker to manager")
-		os.Exit(1)
-	}
+	tracker := newHostTracker(fallback)
 
 	httpGateway := &HTTPGateway{
 		BindAddr: bindAddr,
