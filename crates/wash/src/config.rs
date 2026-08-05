@@ -571,6 +571,16 @@ pub fn outbound_connection_limits(
         );
         limits.max_per_workload = max_per_workload;
     }
+    if limits.max_per_workload > limits.max_total {
+        // Harmless (the host-wide cap simply gates first), but almost
+        // certainly an operator mixing the two knobs up.
+        tracing::warn!(
+            max_per_workload = limits.max_per_workload,
+            max_total = limits.max_total,
+            "http_client_max_connections_per_workload exceeds http_client_max_connections; \
+             the host-wide cap will bind first"
+        );
+    }
     Ok(limits)
 }
 

@@ -88,6 +88,14 @@ const POOL_MAX_IDLE_PER_HOST: usize = 32;
 /// [`POOL_IDLE_TIMEOUT`]: workloads are typically fast-running functions, and
 /// a client whose connections have all idled out anyway is just memory, so
 /// there is nothing worth keeping past that window.
+///
+/// This TTI also backstops an isolation property: eviction plus lazy
+/// re-creation gives a *fresh* TLS session-resumption store, so a workload ID
+/// reused after the idle window cannot resume the previous holder's TLS
+/// sessions. Raising the TTI widens the window in which a reused ID inherits
+/// the prior client (workload stop already invalidates eagerly via
+/// [`WorkloadClients::invalidate`], so this only matters for callers that
+/// never signal unbind).
 const WORKLOAD_CLIENT_IDLE: Duration = Duration::from_secs(60);
 
 /// Default for [`ConnectionLimits::max_per_workload`]. Sized well above
@@ -146,7 +154,18 @@ impl Default for ConnectionLimits {
 /// to open connections nobody asked for. Kept well below the request-timeout
 /// defaults (600s) so saturation surfaces as a prompt, classifiable connect
 /// timeout instead of a long hang.
+///
+/// Note this also means a guest's `connect_timeout` longer than this wait is
+/// effectively capped at it while the budget is exhausted: the request fails
+/// after [`PERMIT_WAIT`], not after the guest's configured timeout.
+#[cfg(not(test))]
 const PERMIT_WAIT: Duration = Duration::from_secs(5);
+/// Test override: the connection-bound tests deliberately wait out abandoned
+/// connect attempts parked on the semaphore, and the property under test is
+/// value-independent — the production 5s would only slow CI and invite
+/// timing flake on loaded runners.
+#[cfg(test)]
+const PERMIT_WAIT: Duration = Duration::from_secs(1);
 
 /// Built-in roots to start from before layering on
 /// [`ClientTlsOptions::extra_ca_paths`].
@@ -676,6 +695,13 @@ impl WorkloadClients {
     }
 
     /// The pooled client for `workload_id`, created on first use.
+    ///
+    /// `workload_id` is a trust boundary: it must be the host-assigned,
+    /// unique identifier of the workload instance — never empty, never
+    /// derived from guest-controllable data. Two callers presenting the same
+    /// ID collapse into one pool and inherit each other's keep-alive
+    /// connections and TLS session tickets (see
+    /// [`crate::host::http::OutgoingHandler`]).
     pub fn client(&self, workload_id: &str) -> PooledClient {
         self.clients.get_with_by_ref(workload_id, || {
             PooledClient::bounded(
@@ -684,6 +710,22 @@ impl WorkloadClients {
                 self.global_permits.clone(),
             )
         })
+    }
+
+    /// Drop `workload_id`'s pooled client — call when the workload stops.
+    ///
+    /// Closes the client's idle connections and releases their
+    /// [`ConnectionLimits`] permits (in-flight requests hold their own clone
+    /// of the client and complete unaffected; their connections close, and
+    /// release their permits, when those requests finish). A subsequent
+    /// [`Self::client`] call for the same ID builds a fresh client with a
+    /// fresh TLS session-resumption store.
+    pub fn invalidate(&self, workload_id: &str) {
+        self.clients.invalidate(workload_id);
+        // moka may defer dropping the evicted value to a maintenance pass;
+        // force it so the pool (and the permits its idle connections pin) is
+        // released now, not on the next cache access.
+        self.clients.run_pending_tasks();
     }
 
     /// The TLS configuration the per-workload clients verify servers against.
@@ -897,7 +939,10 @@ impl hyper::body::Body for UploadProbe {
 /// Protocol-agnostic classification of a pooled-client send error, mapped to
 /// the P2/P3 `ErrorCode` variants below.
 enum SendError {
-    /// Name resolution failed.
+    /// Name resolution failed. Deliberately mapped to the same misleading
+    /// `rcode="address not available"` DNS payload wasmtime's default
+    /// transport emits, so guests that already match on that error shape see
+    /// no change.
     Dns,
     ConnectionTimeout,
     ConnectionRefused,
@@ -994,6 +1039,15 @@ fn find_in_chain<'a, T: std::error::Error + 'static>(
     None
 }
 
+/// Classify a pooled-client send error into the guest-visible categories.
+///
+/// This walks hyper-util/hyper/rustls error chains via downcasts and
+/// string-matches one resolver message — a mirror of wasmtime's
+/// `default_send_request` mappings that will not fail loudly if those crates
+/// restructure their errors. When upgrading hyper-util, hyper, or wasmtime,
+/// re-diff this against `wasmtime_wasi_http`'s mapping; the
+/// `connect_failures_classify_to_dns_and_refused` test pins the two
+/// classifications guests most commonly match on.
 fn classify_client_error(err: &hyper_util::client::legacy::Error) -> SendError {
     // A guest body error travels through hyper wrapped in our BoxError; give
     // it back to the guest unchanged.
@@ -1252,6 +1306,190 @@ mod tests {
         );
     }
 
+    fn p3_request(uri: &str) -> hyper::Request<P3Body> {
+        hyper::Request::builder()
+            .uri(uri)
+            .body(P3Body::new(
+                http_body_util::Empty::new().map_err(|_: std::convert::Infallible| unreachable!()),
+            ))
+            .unwrap()
+    }
+
+    /// Stopping a workload must drop its pooled client: the next client for
+    /// the same ID gets a fresh pool (and a fresh TLS session-resumption
+    /// store) instead of inheriting the previous holder's connections.
+    #[tokio::test]
+    async fn invalidate_drops_pooled_connections() {
+        let (addr, conns) = spawn_counting_server().await;
+        let clients = WorkloadClients::new(default_client_tls_config());
+        let uri = format!("http://{addr}/");
+
+        let client = clients.client("workload-a");
+        let response = client
+            .send_request_p2(p2_request(&uri), p2_config(false))
+            .await
+            .expect("request should succeed");
+        let _ = response.resp.into_body().collect().await;
+        drop(client);
+        assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        clients.invalidate("workload-a");
+
+        let client = clients.client("workload-a");
+        let response = client
+            .send_request_p2(p2_request(&uri), p2_config(false))
+            .await
+            .expect("request should succeed");
+        let _ = response.resp.into_body().collect().await;
+        assert_eq!(
+            conns.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "invalidate must drop the old pool so the rebuilt client cannot reuse its connections"
+        );
+    }
+
+    /// Resolver failures and refused connects must keep classifying to the
+    /// error codes wasmtime's default transport produces — guests match on
+    /// these, and `classify_client_error`'s chain-walking would rot silently
+    /// on a hyper-util upgrade otherwise.
+    #[tokio::test]
+    async fn connect_failures_classify_to_dns_and_refused() {
+        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
+
+        let client = PooledClient::new(default_client_tls_config());
+
+        // RFC 6761 reserves `.invalid`: resolution always fails.
+        let err = client
+            .send_request_p2(
+                p2_request("http://definitely-not-a-real-host.invalid/"),
+                p2_config(false),
+            )
+            .await
+            .expect_err("resolution must fail");
+        assert!(
+            matches!(err, ErrorCode::DnsError(_)),
+            "expected DnsError, got {err:?}"
+        );
+
+        // A loopback port nothing listens on: TCP connect is refused.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let err = client
+            .send_request_p2(
+                p2_request(&format!("http://127.0.0.1:{port}/")),
+                p2_config(false),
+            )
+            .await
+            .expect_err("connect must be refused");
+        assert!(
+            matches!(err, ErrorCode::ConnectionRefused),
+            "expected ConnectionRefused, got {err:?}"
+        );
+    }
+
+    /// Serve one HTTP/1.1 request on an ephemeral port, sending the head and
+    /// then the body `body_delay` later. Returns the port.
+    async fn delayed_body_server(body_delay: Duration) -> u16 {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let mut seen = Vec::new();
+            while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                match sock.read(&mut buf).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => seen.extend_from_slice(&buf[..n]),
+                }
+            }
+            let _ = sock
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\n")
+                .await;
+            let _ = sock.flush().await;
+            tokio::time::sleep(body_delay).await;
+            let _ = sock.write_all(b"hello").await;
+            let _ = sock.flush().await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+        port
+    }
+
+    /// The response body must keep streaming after the head on the pooled P3
+    /// path, including when the request-error future has already been driven
+    /// to completion — connection lifetime belongs to the pool, not to that
+    /// future.
+    #[tokio::test]
+    async fn p3_body_streams_after_head_on_pooled_connection() {
+        let port = delayed_body_server(Duration::from_millis(300)).await;
+        let client = PooledClient::new(default_client_tls_config());
+        let (response, io) = client
+            .send_request_p3(p3_request(&format!("http://127.0.0.1:{port}/")), None)
+            .await
+            .expect("request should succeed");
+
+        // Drive the request-error future the way wasmtime does.
+        let io = wasmtime_wasi::runtime::spawn(async move { Box::into_pin(io).await });
+        let body = tokio::time::timeout(
+            Duration::from_secs(3),
+            BodyExt::collect(response.into_body()),
+        )
+        .await
+        .expect("body read timed out")
+        .expect("body read failed");
+        assert_eq!(body.to_bytes().as_ref(), b"hello");
+        drop(io);
+    }
+
+    /// A server that hangs up mid-body must surface as an error on the
+    /// response body, not as a silently truncated success. On the pooled path
+    /// this guarantee is enforced by hyper's content-length check surfacing
+    /// through `TimedBody`'s error mapping — pin it here (ported from the
+    /// per-request transport's test suite).
+    #[tokio::test]
+    async fn p3_truncated_body_surfaces_as_body_error() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf).await;
+            // Promise five bytes, then hang up without sending them.
+            let _ = sock
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\n")
+                .await;
+            let _ = sock.flush().await;
+            drop(sock);
+        });
+
+        let client = PooledClient::new(default_client_tls_config());
+        let (response, io) = client
+            .send_request_p3(p3_request(&format!("http://127.0.0.1:{port}/")), None)
+            .await
+            .expect("response head should arrive");
+        let io = wasmtime_wasi::runtime::spawn(async move { Box::into_pin(io).await });
+
+        let err = tokio::time::timeout(
+            Duration::from_secs(3),
+            BodyExt::collect(response.into_body()),
+        )
+        .await
+        .expect("body read should not hang")
+        .expect_err("a truncated body must not read as success");
+        assert!(
+            matches!(
+                err,
+                wasmtime_wasi_http::p3::bindings::http::types::ErrorCode::HttpProtocolError
+            ),
+            "expected HttpProtocolError, got {err:?}"
+        );
+        drop(io);
+    }
+
     /// The per-workload connection bound must hold under a concurrent burst:
     /// with a cap of 2, eight concurrent requests to a slow server must be
     /// funnelled through at most two connections (waiters pick up pooled
@@ -1331,10 +1569,7 @@ mod tests {
         // completion by hyper and parked on the exhausted global semaphore —
         // give up at [`PERMIT_WAIT`]; the pool then drops, closing A's idle
         // connections and releasing their permits.
-        clients.clients.invalidate("workload-a");
-        // moka may defer dropping the evicted value to a maintenance pass;
-        // force it so the cache holds no reference either.
-        clients.clients.run_pending_tasks();
+        clients.invalidate("workload-a");
         let deadline = tokio::time::Instant::now() + PERMIT_WAIT + Duration::from_secs(3);
         while clients.global_permits.available_permits() == 0 {
             assert!(
