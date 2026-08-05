@@ -503,6 +503,13 @@ runtime:
       http:
         enabled: true
         port: 9191
+        # -- Enable same-host local routing: outgoing HTTP requests whose
+        # authority matches a hostname this host's ingress serves (a co-located
+        # workload's `host`/`host-aliases` config) are served in-memory by that
+        # workload instead of leaving the pod. Locally routed calls bypass
+        # anything on the network path (ingress auth, rate limits, mesh mTLS,
+        # NetworkPolicy), so enable deliberately.
+        localRouting: false
         tls:
           # -- Enable TLS for the HTTP server. Requires global.tls.enabled to be true.
           # When enabled, a certificate is generated (if global.certificates.generate is true)

@@ -216,6 +216,19 @@ pub struct HostCommand {
     )]
     pub http_connection_wait: Option<Duration>,
 
+    /// Enable same-host local routing: outgoing HTTP requests whose authority
+    /// matches a hostname this host's ingress serves (a co-located workload's
+    /// `host`/`host-aliases` interface config) are served in-memory by that
+    /// workload instead of egressing to the network. Locally routed calls
+    /// bypass ingress middleware (auth, rate limits, mesh mTLS, network
+    /// policy), so enable deliberately. allowed_hosts policy still applies.
+    #[arg(
+        long = "http-local-routing",
+        env = "WASH_HTTP_LOCAL_ROUTING",
+        default_value_t = false
+    )]
+    pub http_local_routing: bool,
+
     /// Enable WASI WebGPU support
     #[cfg(all(
         not(target_os = "windows"),
@@ -230,7 +243,10 @@ pub struct HostCommand {
     #[arg(long = "postgres-url", env = "WASH_POSTGRES_URL")]
     pub postgres_url: Option<String>,
 
-    /// Allow insecure OCI Registries
+    /// Allow insecure OCI registries: when a component pull fails over HTTPS,
+    /// retry it over plain HTTP (e.g. an in-cluster registry that serves no
+    /// TLS). Registries that do serve TLS are unaffected — HTTPS is always
+    /// attempted first.
     #[arg(long = "allow-insecure-registries", default_value_t = false)]
     pub allow_insecure_registries: bool,
 
@@ -556,7 +572,8 @@ impl CliCommand for HostCommand {
                 .with_quotas(Arc::clone(&quotas));
 
             let mut ingress_builder = wash_runtime::host::http::Ingress::builder(http_router, addr)
-                .outgoing_handler(outgoing_handler);
+                .outgoing_handler(outgoing_handler)
+                .local_routing(self.http_local_routing);
             if let (Some(cert_path), Some(key_path)) = (&self.tls_cert_path, &self.tls_key_path) {
                 let mut tls = wash_runtime::host::http::TlsConfig::new(cert_path, key_path);
                 if let Some(ca) = self.tls_ca_path.as_deref() {
