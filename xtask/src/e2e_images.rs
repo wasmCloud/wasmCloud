@@ -20,9 +20,9 @@
 //!
 //! Reachability: the specs pull the same content from the in-cluster Service DNS
 //! (`oci-registry.wasmcloud-system.svc`) — a different authority than the push
-//! side, which is fine (OCI stores by repo path + tag, not by hostname). See
-//! runtime-operator/test/e2e/testdata/oci-registry.yaml for why both authorities
-//! must be portless.
+//! side, which is fine (OCI stores by repo path + tag, not by hostname). Both
+//! authorities are registered on the registry workload; see
+//! runtime-operator/test/e2e/testdata/oci-registry.yaml.
 
 use std::env;
 use std::fs;
@@ -59,10 +59,15 @@ const FIXTURES: &[(&str, FixtureKind)] = &[
 /// e2e_suite_test.go) — the two have no shared source, so this isn't a knob.
 const TAG: &str = "e2e";
 
-/// Dedicated loopback so the port-forward doesn't clash with kind's :80 mapping
-/// (pinned to 127.0.0.1 in deploy/kind/kind-config.yaml). :80 keeps the Host
-/// header portless so the host's exact-match router accepts it.
-const PUSH_ADDR: &str = "127.0.0.2";
+/// Where the registry is port-forwarded for pushing.
+///
+/// Plain loopback, and [`free_local_port`] picks the port, so this needs no
+/// root: binding :80 does, and every address but 127.0.0.1 has to be aliased
+/// onto the loopback first on macOS. Both were once required because the
+/// host's router matched the Host header including its port, so the registry
+/// had to answer on the default port for clients to omit it; the router now
+/// matches the name alone.
+const PUSH_ADDR: &str = "127.0.0.1";
 
 #[derive(Copy, Clone, PartialEq)]
 enum Mode {
@@ -155,8 +160,6 @@ fn push_phase(
     fixtures_out: Option<&Path>,
 ) -> Result<()> {
     let manifest = workspace.join("runtime-operator/test/e2e/testdata/oci-registry.yaml");
-    // Resolve the kubeconfig up front so the sudo'd port-forward (root, different
-    // HOME) still targets this cluster.
     let kubeconfig = env::var("KUBECONFIG")
         .unwrap_or_else(|_| format!("{}/.kube/config", env::var("HOME").unwrap_or_default()));
 
@@ -174,24 +177,19 @@ fn push_phase(
         ],
     )?;
 
-    // macOS only creates 127.0.0.1 by default; alias the loopback we forward to.
-    #[cfg(target_os = "macos")]
-    {
-        let _ = Command::new("sudo")
-            .args(["ifconfig", "lo0", "alias", PUSH_ADDR, "up"])
-            .status();
-    }
-
-    eprintln!(">>> e2e-images: port-forwarding deployment/hostgroup-registry -> {PUSH_ADDR}:80");
-    let _pf = PortForward::start(&kubeconfig, namespace)?;
-    wait_for_registry()?;
+    let port = free_local_port()?;
+    eprintln!(
+        ">>> e2e-images: port-forwarding deployment/hostgroup-registry -> {PUSH_ADDR}:{port}"
+    );
+    let _pf = PortForward::start(&kubeconfig, namespace, port)?;
+    wait_for_registry(port)?;
 
     for &(fixture, kind) in FIXTURES {
         let component = match (mode, fixtures_out) {
             (Mode::Push, Some(out)) => out.join(component_name(fixture)),
             _ => built_component(fixtures_dir, fixture, kind)?,
         };
-        let reference = format!("{PUSH_ADDR}/fixtures/{fixture}:{TAG}");
+        let reference = format!("{PUSH_ADDR}:{port}/fixtures/{fixture}:{TAG}");
         eprintln!(">>> e2e-images: wash oci push {reference}");
         run_checked(
             Command::new(wash).args([
@@ -302,9 +300,27 @@ fn run_checked(cmd: &mut Command, what: &str) -> Result<()> {
     Ok(())
 }
 
+/// A free TCP port on the push address, for the port-forward to claim.
+///
+/// Asking the OS beats hardcoding one: a fixed port collides with whatever the
+/// developer happens to be running, and on macOS the obvious candidates are
+/// already taken — AirPlay Receiver listens on 5000 and 7000 by default and
+/// answers requests, so a registry that never came up looks like one serving
+/// 403s instead. Between the probe closing and kubectl binding, the port could
+/// in principle be taken; nothing else here is racing for it.
+fn free_local_port() -> Result<u16> {
+    let listener = std::net::TcpListener::bind((PUSH_ADDR, 0))
+        .with_context(|| format!("finding a free port on {PUSH_ADDR}"))?;
+    let port = listener
+        .local_addr()
+        .context("reading the probe socket's port")?
+        .port();
+    Ok(port)
+}
+
 /// Wait until the registry answers `/v2/` through the port-forward.
-fn wait_for_registry() -> Result<()> {
-    let url = format!("http://{PUSH_ADDR}/v2/");
+fn wait_for_registry(port: u16) -> Result<()> {
+    let url = format!("http://{PUSH_ADDR}:{port}/v2/");
     eprintln!(">>> e2e-images: waiting for the registry API on {url}");
     for attempt in 1..=30 {
         let ok = Command::new("curl")
@@ -325,29 +341,23 @@ fn wait_for_registry() -> Result<()> {
     Ok(())
 }
 
-/// A `sudo kubectl port-forward` running in the background, killed on drop.
+/// A `kubectl port-forward` running in the background, killed on drop.
 ///
 /// Forwards to the registry hostgroup pod (via its Deployment), not the Service:
 /// the oci-registry Service is selectorless (the operator manages its route
 /// EndpointSlice), so `kubectl port-forward svc/...` can't resolve a target pod.
-/// The pod's HTTP server demuxes by Host header, and PUSH_ADDR (:80, portless)
-/// is a registered alias, so this reaches the registry all the same. The Service
-/// remains the in-cluster pull path.
-///
-/// TODO(wash release): the :80 + dedicated-loopback + sudo dance exists only
-/// because the host's HTTP router matches the Host header exactly and rejects a
-/// host that carries a port. Once the host matches on host-without-port (or the
-/// registry gets ingress that isn't Host-demuxed), forward a normal Service port
-/// and drop the loopback + sudo.
+/// The pod's HTTP server demuxes by Host header, and PUSH_ADDR is a registered
+/// alias — the port the client tacks on does not affect that match — so this
+/// reaches the registry all the same. The Service remains the in-cluster pull
+/// path.
 struct PortForward {
     child: Child,
 }
 
 impl PortForward {
-    fn start(kubeconfig: &str, namespace: &str) -> Result<Self> {
-        let child = Command::new("sudo")
+    fn start(kubeconfig: &str, namespace: &str, port: u16) -> Result<Self> {
+        let child = Command::new("kubectl")
             .args([
-                "kubectl",
                 "--kubeconfig",
                 kubeconfig,
                 "port-forward",
@@ -356,26 +366,19 @@ impl PortForward {
                 "-n",
                 namespace,
                 "deployment/hostgroup-registry",
-                "80:80",
+                &format!("{port}:80"),
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .context("starting kubectl port-forward (needs sudo to bind :80)")?;
+            .context("starting kubectl port-forward")?;
         Ok(Self { child })
     }
 }
 
 impl Drop for PortForward {
     fn drop(&mut self) {
-        // $! is the sudo pid; sudo relays SIGTERM to kubectl. pkill is a backstop
-        // in case it doesn't.
-        let _ = Command::new("sudo")
-            .args(["kill", &self.child.id().to_string()])
-            .status();
-        let _ = Command::new("sudo")
-            .args(["pkill", "-f", "port-forward.*hostgroup-registry"])
-            .status();
+        let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
