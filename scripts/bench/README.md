@@ -570,7 +570,15 @@ GitHub → **Actions** → **bench** → **Run workflow**:
 | Input   | Description                                                                                | Default          |
 | ------- | ------------------------------------------------------------------------------------------ | ---------------- |
 | `bench` | which bench to run (`http_invoke`, `service_http`, `gungraun`, `wasmtime_baseline`, `wasmtime_serve`, `gungraun_plugin`) | `http_invoke`    |
-| `ref`   | git ref to bench (branch, tag, or sha)                                                     | the workflow ref |
+| `ref`   | git ref to bench (branch, tag, sha, or a pull request as `#123` / `pull/123` / `pr/123` — the same spellings bench-compare accepts) | the workflow ref |
+
+A pull-request ref produces a step summary and an uploaded artifact but is
+deliberately **not** pushed to S3, so it never lands on the trends timeline —
+that timeline tracks merged history, and the run's data row would otherwise
+describe code that may never land. Rows from a PR run are labelled `pull/123`;
+the exact commit is on the row's `sha` field either way. To compare a PR
+against its baseline rather than read its absolute numbers, use **bench-compare**
+(§9.4) — that is the workflow built for it.
 
 **Bench types:**
 
