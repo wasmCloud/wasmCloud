@@ -390,7 +390,7 @@ dependencies = [
 name = "http-sleeper"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]

@@ -127,6 +127,7 @@ fn egress_workload(workload_id: &str, allowed_host: &str) -> WorkloadStartReques
                 },
                 pool_size: 1,
                 max_invocations: 1000,
+                max_concurrency: 1,
             }],
             host_interfaces: vec![WitInterface {
                 namespace: "wasi".to_string(),
