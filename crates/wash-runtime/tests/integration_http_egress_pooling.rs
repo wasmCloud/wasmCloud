@@ -102,6 +102,15 @@ async fn start_host() -> Result<(std::net::SocketAddr, impl HostApi)> {
 }
 
 fn egress_workload(workload_id: &str, allowed_host: &str) -> WorkloadStartRequest {
+    egress_workload_with(workload_id, allowed_host, 1, 1)
+}
+
+fn egress_workload_with(
+    workload_id: &str,
+    allowed_host: &str,
+    pool_size: i32,
+    max_concurrency: i32,
+) -> WorkloadStartRequest {
     let allowed: wash_runtime::host::allowed_hosts::AllowedHost = allowed_host
         .parse()
         .expect("test gave an invalid allowed_hosts entry");
@@ -125,9 +134,9 @@ fn egress_workload(workload_id: &str, allowed_host: &str) -> WorkloadStartReques
                     allowed_hosts: vec![allowed].into(),
                     allowed_ip_name_lookups: Default::default(),
                 },
-                pool_size: 1,
+                pool_size,
                 max_invocations: 1000,
-                max_concurrency: 1,
+                max_concurrency,
             }],
             host_interfaces: vec![WitInterface {
                 namespace: "wasi".to_string(),
@@ -261,6 +270,101 @@ async fn stopping_a_workload_drops_its_pooled_connections() -> Result<()> {
         total <= 6,
         "each workload should still reuse within its own pool, but the upstream \
          saw {total} connections for 10 requests"
+    );
+    Ok(())
+}
+
+/// Drive `count` inbound requests concurrently and return how many succeeded,
+/// so a test can assert on connection counts without a slow request making
+/// the burst look smaller than it was.
+async fn drive_concurrent_requests(
+    ingress: std::net::SocketAddr,
+    upstream: std::net::SocketAddr,
+    count: usize,
+) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(count)
+        .build()?;
+    let requests = (0..count).map(|i| {
+        let client = client.clone();
+        async move {
+            let response = timeout(
+                Duration::from_secs(30),
+                client
+                    .get(format!("http://{ingress}/fetch?target={upstream}"))
+                    .header("HOST", "test")
+                    .send(),
+            )
+            .await
+            .with_context(|| format!("request {i} timed out"))?
+            .with_context(|| format!("request {i} failed"))?;
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::ensure!(
+                status == 200 && body.contains("upstream 200"),
+                "request {i}: guest returned {status} (body: {body})"
+            );
+            Ok::<_, anyhow::Error>(())
+        }
+    });
+    for result in futures::future::join_all(requests).await {
+        result?;
+    }
+    Ok(())
+}
+
+/// A component declaring instance concurrency bursts far more outbound
+/// requests at once than one running a call at a time, and the pool has to be
+/// sized for that burst: a cap below it closes every connection handed back to
+/// a full pool, which is the connection churn this pool exists to remove.
+///
+/// Two rounds against the same upstream: the second must ride on connections
+/// the first left in the pool, so the count barely moves. With an idle cap
+/// below the burst, round two reopens most of what it needs.
+///
+/// The fixture is a wasip2 component, and `invoke_component_handler` only
+/// serves wasip3 exports from warm instances, so the concurrency here comes
+/// from the burst of inbound requests rather than from instances sharing one
+/// store. What the component *declares* is what sizes the pool either way,
+/// which is the property under test; a wasip3 fixture would additionally
+/// exercise the instances themselves.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_instances_reuse_connections_across_bursts() -> Result<()> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+
+    let (upstream, conns) = spawn_counting_server().await?;
+    let (ingress, host) = start_host().await?;
+
+    // 4 warm instances × 12 concurrent calls each: a burst far past the
+    // 32-connection floor a component running one call at a time would get.
+    host.workload_start(egress_workload_with(
+        &uuid::Uuid::new_v4().to_string(),
+        &upstream.to_string(),
+        4,
+        12,
+    ))
+    .await
+    .context("failed to start workload")?;
+
+    const BURST: usize = 48;
+    drive_concurrent_requests(ingress, upstream, BURST).await?;
+    let after_first = conns.load(Ordering::SeqCst);
+
+    drive_concurrent_requests(ingress, upstream, BURST).await?;
+    let after_second = conns.load(Ordering::SeqCst);
+
+    // Measured: with the cap sized off the declared concurrency the second
+    // burst reopens nothing; pinned at the 32 floor it reopens exactly the 16
+    // connections the burst runs past that floor. The allowance sits between
+    // the two, leaving room for a connection the upstream happens to close.
+    let reopened = after_second - after_first;
+    assert!(
+        reopened <= BURST / 8,
+        "the second burst must ride on the first burst's pooled connections, \
+         but it opened {reopened} more on top of {after_first} — the idle cap \
+         is below the burst, so connections are being closed and reopened"
     );
     Ok(())
 }

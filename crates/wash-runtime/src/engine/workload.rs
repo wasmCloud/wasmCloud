@@ -1471,6 +1471,19 @@ impl ResolvedWorkload {
     /// The component's linked components are instantiated into the same store
     /// by [`Self::new_store`] and live exactly as long as it does, so they have
     /// to have opted in too — see [`instance_pool::poolable`].
+    /// Guest calls `component_id` may have in flight at once, as it declared
+    /// them. One for an unknown component, or one that keeps no instances.
+    ///
+    /// The outbound HTTP pool sizes itself off this: a component's concurrent
+    /// outbound requests scale with the calls it runs at once.
+    pub(crate) async fn call_concurrency(&self, component_id: &str) -> usize {
+        self.components
+            .read()
+            .await
+            .get(component_id)
+            .map_or(1, |component| component.instances.call_concurrency())
+    }
+
     pub(crate) async fn instance_pool_for_component(
         &self,
         component_id: &str,

@@ -181,6 +181,24 @@ impl InstancePolicy {
     pub fn keeps_instances_warm(&self) -> bool {
         matches!(self, Self::Warm { .. })
     }
+
+    /// Guest calls this component may have in flight at once: every warm
+    /// instance running its full `max_concurrency`. One for a component that
+    /// keeps no instances — a burst past that is served by stores of its own,
+    /// which this does not try to predict.
+    ///
+    /// Read by the outbound HTTP pool, whose connection burst scales with it
+    /// (see `crate::host::http_client`).
+    pub fn call_concurrency(&self) -> usize {
+        match self {
+            Self::Ephemeral => 1,
+            Self::Warm {
+                pool_size,
+                max_concurrency,
+                ..
+            } => pool_size.get().saturating_mul(max_concurrency.get()),
+        }
+    }
 }
 
 /// The warm instances of one component, shared by every clone of its
@@ -200,6 +218,12 @@ impl InstancePool {
             drivers: Mutex::new(Vec::new()),
             policy,
         }
+    }
+
+    /// Guest calls this component may have in flight at once. See
+    /// [`InstancePolicy::call_concurrency`].
+    pub(crate) fn call_concurrency(&self) -> usize {
+        self.policy.call_concurrency()
     }
 
     /// The instance limits, or `None` when this component keeps none.
