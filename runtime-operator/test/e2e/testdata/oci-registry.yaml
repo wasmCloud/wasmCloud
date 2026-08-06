@@ -8,19 +8,14 @@
 # plain HTTP. See runtime-operator/test/e2e/README or the `e2e-images` Make
 # target for the surrounding flow.
 #
-# Reachability: the host's HTTP server demuxes by an exact-match Host header and
-# rejects any hostname containing a port, so the registry must answer on port 80
-# (clients omit the default port) and every authority a client uses must be
-# registered as `host`/`host-aliases`:
+# Reachability: the host's HTTP server demuxes by Host header, so every
+# authority a client uses must be registered as `host`/`host-aliases`:
 #   - pull (in-cluster host): oci-registry.wasmcloud-system.svc
-#   - push (CI runner / dev):  127.0.0.2  (the Make target port-forwards here)
+#   - push (CI runner / dev):  127.0.0.1  (the Make target port-forwards here)
+# The router matches the name without the port, so the push side is free to use
+# an unprivileged one — which is what keeps `make e2e-images` from needing root.
 # The operator only injects Service-DNS aliases for p2 `incoming-handler`, so a
 # p3 `handler` interface keeps exactly the aliases set below.
-#
-# TODO(wash release): the port-80 requirement + the 127.0.0.2 push alias exist
-# only because the host router matches the Host header exactly and rejects a
-# host carrying a port. Once the router matches host-without-port, this can serve
-# on a normal port and drop the extra push alias.
 apiVersion: v1
 kind: Service
 metadata:
@@ -58,7 +53,7 @@ spec:
             - handler
           config:
             host: oci-registry
-            host-aliases: oci-registry.wasmcloud-system,oci-registry.wasmcloud-system.svc,127.0.0.2
+            host-aliases: oci-registry.wasmcloud-system,oci-registry.wasmcloud-system.svc,127.0.0.1
         - namespace: wasmcloud
           package: blobstore
           version: "0.1.0"
