@@ -32,6 +32,7 @@
 //! mappings and serve the gRPC egress fast path in `host::http`, which manages
 //! its own HTTP/2 connections rather than going through the pool.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -71,8 +72,8 @@ type PoolClient = hyper_util::client::legacy::Client<BoundedConnector, ClientBod
 /// rarely try to reuse a connection the server has already closed.
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Cap on idle connections kept per authority in each workload's pool,
-/// bounding the file-descriptor cost of per-workload pools on a busy host.
+/// Floor for the idle connections kept per authority in a workload's pool,
+/// and the whole cap for a workload whose concurrency the host does not know.
 ///
 /// The cap must sit above a workload's realistic burst concurrency: every
 /// connection returned to a full pool is closed, so a cap below the burst
@@ -83,7 +84,46 @@ const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// connections while a cap of 32 opened 31. Idle connections above actual
 /// demand still close after [`POOL_IDLE_TIMEOUT`], so the steady-state cost
 /// tracks real usage, not this cap.
-const POOL_MAX_IDLE_PER_HOST: usize = 32;
+const MIN_IDLE_PER_AUTHORITY: usize = 32;
+
+/// Outbound requests one guest call is assumed to have in flight at once,
+/// used to turn a workload's declared call concurrency into an idle cap.
+///
+/// The host cannot see a guest's fan-out — how many outbound requests one
+/// inbound call makes concurrently is entirely up to the guest — so this is
+/// an assumption, chosen a little above the fan-out of 3 the measurement in
+/// [`MIN_IDLE_PER_AUTHORITY`] used. Guessing high costs only idle sockets
+/// that [`POOL_IDLE_TIMEOUT`] reclaims and that
+/// [`ConnectionLimits::max_per_workload`] already bounds; guessing low costs
+/// connection churn under exactly the load this pool exists for.
+const ASSUMED_OUTBOUND_FANOUT: usize = 4;
+
+/// Idle connections to keep per authority for a workload that declared it
+/// may have `call_concurrency` guest calls in flight at once.
+///
+/// A workload's concurrent outbound requests scale with the calls it runs at
+/// once — `pool_size` × `max_concurrency` for a component keeping instances
+/// warm, one otherwise — times whatever each call fans out to. Sizing the
+/// idle cap off a fixed number instead would leave a component that opted
+/// into instance concurrency churning connections: its burst outgrows the
+/// cap, and every connection returned to a full pool is closed.
+///
+/// The floor applies first and [`ConnectionLimits::max_per_workload`] last,
+/// because the budget is the real bound on the workload's live connections —
+/// permits, not this cap, are what stop it exhausting file descriptors, and a
+/// workload can never hold more idle than its whole budget. This only decides
+/// how much of that budget one authority may hold *idle*. A budget under the
+/// floor is therefore honoured rather than raised to it.
+fn idle_per_authority(call_concurrency: usize, limits: &ConnectionLimits) -> usize {
+    call_concurrency
+        .saturating_mul(ASSUMED_OUTBOUND_FANOUT)
+        .max(MIN_IDLE_PER_AUTHORITY)
+        .min(limits.max_per_workload)
+        // hyper treats a cap of zero as "keep no idle connections", which
+        // would defeat the pool; a budget of zero is rejected at startup, but
+        // do not depend on that here.
+        .max(1)
+}
 
 /// How long a workload's pooled client survives without that workload making a
 /// request. Eviction drops the pool (closing its idle connections — in-flight
@@ -102,9 +142,14 @@ const POOL_MAX_IDLE_PER_HOST: usize = 32;
 const WORKLOAD_CLIENT_IDLE: Duration = Duration::from_secs(60);
 
 /// Default for [`ConnectionLimits::max_per_workload`]. Sized well above
-/// [`POOL_MAX_IDLE_PER_HOST`] so a workload can still burst to several
+/// [`MIN_IDLE_PER_AUTHORITY`] so a workload can still burst to several
 /// authorities at once, while keeping any single workload's file-descriptor
 /// footprint far from the host-wide cap.
+///
+/// This is the ceiling a component reaches by raising its call concurrency:
+/// concurrent outbound requests scale with `pool_size` × `max_concurrency`
+/// times each call's fan-out, so a component that opts into instance
+/// concurrency can need this raised alongside it.
 const MAX_CONNECTIONS_PER_WORKLOAD: usize = 128;
 
 /// Default for [`ConnectionLimits::max_total`]. Kept inside common default
@@ -135,7 +180,10 @@ const PERMIT_WARN_INTERVAL: Duration = Duration::from_secs(5);
 /// Note that idle pooled connections pin permits until they age out
 /// ([`POOL_IDLE_TIMEOUT`]), so `max_total` should be sized for the number of
 /// concurrently busy workloads times their expected burst, not treated as a
-/// per-request budget.
+/// per-request budget. A workload's burst is not fixed: it scales with the
+/// calls it runs at once — `pool_size` × `max_concurrency` — times each
+/// call's outbound fan-out, so raising a component's instance concurrency
+/// raises what it needs here.
 #[derive(Debug, Clone, Copy)]
 pub struct ConnectionLimits {
     /// Maximum live connections a single workload may hold, across all
@@ -607,6 +655,7 @@ impl PooledClient {
             Arc::new(Semaphore::new(limits.max_per_workload)),
             Arc::new(Semaphore::new(limits.max_total)),
             limits.permit_wait,
+            MIN_IDLE_PER_AUTHORITY,
         )
     }
 
@@ -620,6 +669,7 @@ impl PooledClient {
         workload_permits: Arc<Semaphore>,
         global_permits: Arc<Semaphore>,
         permit_wait: Duration,
+        idle_per_authority: usize,
     ) -> Self {
         crate::init_crypto();
         // One session store, and one exhaustion-warning throttle, shared by
@@ -653,7 +703,7 @@ impl PooledClient {
             builder
                 .pool_timer(TokioTimer::new())
                 .pool_idle_timeout(POOL_IDLE_TIMEOUT)
-                .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST);
+                .pool_max_idle_per_host(idle_per_authority);
             builder
         };
         // Ordinary egress is HTTP/1.1 only, and deliberately so: an HTTP/1.1
@@ -836,6 +886,15 @@ pub struct WorkloadClients {
     /// workload hold `max_per_workload` twice over while the old connections
     /// drain.
     workload_permits: moka::sync::Cache<String, Arc<Semaphore>>,
+    /// Guest calls each workload may run at once, as declared by its
+    /// component (see [`Self::set_call_concurrency`]), sizing its pools'
+    /// idle caps. A workload absent here has not declared any, and gets
+    /// [`MIN_IDLE_PER_AUTHORITY`].
+    ///
+    /// Kept outside the caches above because it is workload configuration
+    /// rather than per-client state: it arrives when the workload binds,
+    /// before any request builds a client, and is dropped when it unbinds.
+    call_concurrency: Arc<std::sync::RwLock<BTreeMap<String, usize>>>,
     clients: moka::sync::Cache<String, PooledClient>,
 }
 
@@ -855,10 +914,35 @@ impl WorkloadClients {
             workload_permits: moka::sync::Cache::builder()
                 .time_to_idle(WORKLOAD_CLIENT_IDLE)
                 .build(),
+            call_concurrency: Arc::new(std::sync::RwLock::new(BTreeMap::new())),
             clients: moka::sync::Cache::builder()
                 .time_to_idle(WORKLOAD_CLIENT_IDLE)
                 .build(),
         }
+    }
+
+    /// Record how many guest calls `workload_id` may run at once — call when
+    /// the workload binds, before it serves anything.
+    ///
+    /// This sizes the idle cap of the pools built for it (see
+    /// [`idle_per_authority`]): a component that keeps `pool_size` instances
+    /// warm, each taking `max_concurrency` calls, bursts that many concurrent
+    /// guest calls, and each of those may have several outbound requests in
+    /// flight. Sizing off a fixed number instead leaves such a component
+    /// churning connections once its burst outgrows it.
+    ///
+    /// Takes effect when the workload's client is next built; a client
+    /// already serving it keeps the cap it was built with, so this is worth
+    /// calling before the first request rather than after.
+    pub fn set_call_concurrency(&self, workload_id: &str, calls: usize) {
+        let mut declared = self
+            .call_concurrency
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        // A workload's components each declare their own concurrency and
+        // share one pool, so the busiest is what the pool has to size for.
+        let entry = declared.entry(workload_id.to_string()).or_insert(calls);
+        *entry = (*entry).max(calls);
     }
 
     /// The pooled client for `workload_id`, created on first use.
@@ -877,12 +961,20 @@ impl WorkloadClients {
             Arc::new(Semaphore::new(self.limits.max_per_workload))
         });
         self.clients.get_with_by_ref(workload_id, || {
+            let calls = self
+                .call_concurrency
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(workload_id)
+                .copied()
+                .unwrap_or(1);
             PooledClient::bounded(
                 self.tls.clone(),
                 Some(Arc::from(workload_id)),
                 permits,
                 self.global_permits.clone(),
                 self.limits.permit_wait,
+                idle_per_authority(calls, &self.limits),
             )
         })
     }
@@ -905,6 +997,10 @@ impl WorkloadClients {
         // force it so the pool (and the permits its idle connections pin) is
         // released now, not on the next cache access.
         self.clients.run_pending_tasks();
+        self.call_concurrency
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(workload_id);
     }
 
     /// The TLS configuration the per-workload clients verify servers against.
@@ -1343,6 +1439,44 @@ mod tests {
     /// `SSL_CERT_FILE`/`SSL_CERT_DIR` overrides) must remain an explicit
     /// opt-in — widening this default silently changes the egress trust
     /// boundary of every deployment.
+    /// The idle cap tracks declared concurrency, but never past the budget
+    /// that actually bounds the workload's connections — and a budget below
+    /// the floor must win rather than blow up the range.
+    #[test]
+    fn idle_cap_tracks_concurrency_within_the_budget() {
+        let limits = ConnectionLimits::default();
+        assert_eq!(
+            idle_per_authority(1, &limits),
+            MIN_IDLE_PER_AUTHORITY,
+            "a component running one call at a time keeps the floor"
+        );
+        assert_eq!(
+            idle_per_authority(8, &limits),
+            8 * ASSUMED_OUTBOUND_FANOUT,
+            "declared concurrency above the floor sizes the cap"
+        );
+        assert_eq!(
+            idle_per_authority(usize::MAX, &limits),
+            limits.max_per_workload,
+            "the workload's budget is the ceiling, and the fan-out must not overflow"
+        );
+
+        let tight = ConnectionLimits {
+            max_per_workload: 4,
+            ..Default::default()
+        };
+        assert_eq!(
+            idle_per_authority(1, &tight),
+            4,
+            "a budget under the floor is the cap, not a panic"
+        );
+        assert_eq!(
+            idle_per_authority(1, &test_limits(1, 1)),
+            1,
+            "the smallest usable budget still leaves room for one idle connection"
+        );
+    }
+
     #[test]
     fn default_trust_roots_is_webpki_only() {
         assert_eq!(TrustRoots::default(), TrustRoots::Webpki);

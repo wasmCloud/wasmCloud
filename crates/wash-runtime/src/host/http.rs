@@ -466,6 +466,15 @@ pub trait OutgoingHandler: Send + Sync + 'static {
         None
     }
 
+    /// Called when a workload binds, before it serves anything, with the
+    /// guest calls it may run at once (`pool_size` × `max_concurrency` for a
+    /// component keeping instances warm, one otherwise).
+    ///
+    /// A workload's concurrent outbound requests scale with that, so an
+    /// implementation that pools can size itself for the burst instead of
+    /// guessing. The default is a no-op.
+    fn on_workload_bind(&self, _workload_id: &str, _call_concurrency: usize) {}
+
     /// Called when a workload is stopped (unbound from the host).
     ///
     /// Implementations holding per-workload state — connection pools, TLS
@@ -605,6 +614,11 @@ impl OutgoingHandler for DefaultOutgoingHandler {
 
     fn grpc_transport(&self, workload_id: &str) -> Option<crate::host::http_client::PooledClient> {
         Some(self.clients().client(workload_id))
+    }
+
+    fn on_workload_bind(&self, workload_id: &str, call_concurrency: usize) {
+        self.clients()
+            .set_call_concurrency(workload_id, call_concurrency);
     }
 
     fn on_workload_unbind(&self, workload_id: &str) {
@@ -1178,6 +1192,15 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
             .on_workload_resolved(resolved_handle, component_id)
             .await?;
         let instance_pre = resolved_handle.instantiate_pre(component_id).await?;
+
+        // Tell the egress transport how much concurrency this component
+        // declared, before it serves anything: its outbound connection burst
+        // scales with the calls it runs at once, and a pool built without
+        // that sizes itself for a component running one call at a time.
+        self.outgoing_handler.on_workload_bind(
+            resolved_handle.id(),
+            resolved_handle.call_concurrency(component_id).await,
+        );
 
         // Only components that export wasi:http are routable HTTP entrypoints.
         // Anything else stays unregistered and routes to a 404.
