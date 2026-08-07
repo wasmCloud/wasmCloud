@@ -292,6 +292,15 @@ impl UdpSocket {
         }
         let ip = addr.ip().to_canonical();
         if !ip.is_loopback() {
+            if ip.is_unspecified() {
+                // Rewrite 0.0.0.0/[::] to loopback so the OS socket only listens
+                // on loopback, matching `TcpSocket::start_bind`. Without this the
+                // datagram socket is bound on every interface.
+                match &mut addr {
+                    SocketAddr::V4(addr) => addr.set_ip(Ipv4Addr::LOCALHOST),
+                    SocketAddr::V6(addr) => addr.set_ip(Ipv6Addr::LOCALHOST),
+                }
+            }
             socket.bind(addr)?;
             if !ip.is_unspecified() {
                 return Ok(());
@@ -530,6 +539,36 @@ mod tests {
         let socket = make_ipv4_socket();
         assert!(!socket.is_bound());
         assert!(!socket.is_connected());
+    }
+
+    /// Binding the unspecified address must not put a real datagram socket on
+    /// every interface. The virtual registration was always rewritten to
+    /// loopback; the OS socket was not, so a guest binding `0.0.0.0` was
+    /// reachable from off-host. The TCP path has always rewritten both.
+    #[tokio::test]
+    async fn unspecified_bind_never_reaches_a_real_interface() {
+        for (family, unspecified) in [
+            (AddressFamily::Ipv4, "0.0.0.0:0"),
+            (AddressFamily::Ipv6, "[::]:0"),
+        ] {
+            let ctx = WasiSocketsCtx::default();
+            let mut socket = UdpSocket::new(&ctx, family).unwrap();
+            let mut loopback = crate::sockets::loopback::Network::default();
+
+            socket
+                .bind(unspecified.parse().unwrap(), &mut loopback)
+                .unwrap();
+            socket.finish_bind().unwrap();
+
+            let UdpSocket::Unspecified { net, .. } = &socket else {
+                panic!("binding {unspecified} should produce an Unspecified socket");
+            };
+            let os_addr = net.socket.local_addr().unwrap();
+            assert!(
+                os_addr.ip().is_loopback(),
+                "OS datagram socket bound {os_addr}, which is reachable off-host"
+            );
+        }
     }
 
     #[tokio::test]
