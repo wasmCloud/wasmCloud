@@ -248,7 +248,6 @@ pub struct ComponentHostPlugin {
     /// that imports `wasi:http/outgoing-handler` with no handler configured.
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
     max_restarts: u32,
-    /// Ports this plugin declared, as the operator wrote them.
     /// The subset of `ports` this plugin binds for real itself, precomputed for
     /// the per-incarnation socket policy.
     direct_binds: Arc<[crate::sockets::policy::DirectBind]>,
@@ -260,6 +259,13 @@ pub struct ComponentHostPlugin {
     network: crate::host::ports::NetworkHandle,
     /// The host-level half of this plugin's socket policy.
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
+    /// Live published listeners. Dropped on `stop()`, which closes them and
+    /// releases their port-table reservations.
+    published: Mutex<Vec<crate::host::ports::PublishedPort>>,
+    /// Port-table claims for direct-bind ports. The plugin holds those sockets
+    /// itself, so there is no listener here — only the reservation that keeps
+    /// another plugin from claiming the same address.
+    direct_reservations: Mutex<Vec<crate::host::ports::PortReservation>>,
     state: Arc<ComponentHostPluginState>,
 }
 
@@ -382,6 +388,8 @@ impl ComponentHostPlugin {
             direct_binds: Arc::from(direct_binds),
             network: crate::host::ports::NetworkHandle::new(),
             socket_policy: socket_policy.unwrap_or_default(),
+            published: Mutex::new(Vec::new()),
+            direct_reservations: Mutex::new(Vec::new()),
             state,
         })
     }
@@ -468,7 +476,7 @@ pub async fn load_component_plugin(
     oci_config: OciConfig,
     native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
-    socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
+    publish: Option<crate::host::ports::PublishContext>,
 ) -> anyhow::Result<Arc<ComponentHostPlugin>> {
     let loaded = spec
         .source
@@ -486,7 +494,7 @@ pub async fn load_component_plugin(
         .allowed_hosts(Arc::clone(&spec.allowed_hosts))
         .allowed_ip_name_lookups(Arc::clone(&spec.allowed_ip_name_lookups))
         .maybe_http_handler(http_handler)
-        .maybe_socket_policy(socket_policy)
+        .maybe_socket_policy(publish.as_ref().and_then(|p| p.socket_policy.clone()))
         .build()
         .await
         .with_context(|| format!("failed to build host component plugin '{}'", spec.id))?;
@@ -739,6 +747,21 @@ impl HostPlugin for ComponentHostPlugin {
     }
 
     async fn stop(&self) -> anyhow::Result<()> {
+        // Close the real listeners first: past this point there is no
+        // incarnation to splice into, so accepting a connection would only hold
+        // it for a readiness window that can never be satisfied. Dropping each
+        // `PublishedPort` closes its listener and releases its port-table
+        // reservation, and dropping the direct-bind reservations releases the
+        // rest — so a stopped plugin holds no claim on any port.
+        self.published
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        self.direct_reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+
         // Clearing the sender closes the current incarnation's channel, ending
         // the TriggerService's serve loop and letting the supervisor exit cleanly; the
         // registry goes with it (the driver's tasks retire their jobs as they end).
@@ -1543,6 +1566,7 @@ fn build_plugin_store(
     // its sockets registered, so reusing one would fail the next incarnation's
     // bind with `AddressInUse`.
     let loopback = network.replace();
+    let policy_for_http = Arc::clone(&policy);
     let sockets_ctx = crate::sockets::WasiSocketsCtx {
         socket_addr_check: crate::sockets::SocketAddrCheck::new(move |addr, reason| {
             let policy = Arc::clone(&policy);
@@ -1561,6 +1585,7 @@ fn build_plugin_store(
                 .collect(),
         )
         .with_sockets(sockets_ctx)
+        .with_socket_policy(Arc::clone(&policy_for_http))
         .with_allowed_hosts(Arc::clone(allowed_hosts));
     if let Some(http_handler) = http_handler {
         ctx_builder = ctx_builder.with_http_handler(http_handler);

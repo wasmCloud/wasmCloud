@@ -51,6 +51,7 @@ async fn test_cron_service_integration() -> Result<()> {
                 bytes: bytes::Bytes::from_static(CRON_SERVICE_WASM),
                 local_resources: Default::default(),
                 max_restarts: 0,
+                ports: Vec::new(),
             }),
             components: vec![Component {
                 name: "cron-component".to_string(),

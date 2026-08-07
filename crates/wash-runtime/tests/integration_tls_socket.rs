@@ -47,6 +47,7 @@ fn echo_client_workload_request(
                     allowed_host_loopback: Default::default(),
                 },
                 max_restarts: 0,
+                ports: Vec::new(),
             }),
             components: vec![],
             host_interfaces: vec![],

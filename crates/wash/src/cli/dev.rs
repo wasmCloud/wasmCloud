@@ -62,6 +62,14 @@ impl CliCommand for DevCommand {
 
         let dev_config = config.dev();
 
+        // Validated up front rather than at publish time, so a bad declaration
+        // names the config entry the author wrote and fails before the host
+        // starts.
+        wash_runtime::host::declared_port::validate_workload_ports(
+            &dev_config.service_ports,
+            "dev.service_ports",
+        )?;
+
         // Shared by every image source a dev session can name: the dev
         // component's sidecars, its service, and the host component plugins.
         // Cached under the same directory `wash oci pull` uses, so a pull here
@@ -605,6 +613,7 @@ fn build_workload(
             digest: None,
             max_restarts: 0,
             local_resources: local_resources_for(resolved_workload),
+            ports: Vec::new(),
         })
     } else {
         components.push(Component {
@@ -623,6 +632,7 @@ fn build_workload(
                 digest: None,
                 max_restarts: 0,
                 local_resources: local_resources_for(resolved_workload),
+                ports: Vec::new(),
             });
         }
     }

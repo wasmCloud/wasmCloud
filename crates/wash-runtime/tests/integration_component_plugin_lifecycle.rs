@@ -105,6 +105,7 @@ fn service_workload(name: &str) -> wash_runtime::types::WorkloadStartRequest {
                 bytes: bytes::Bytes::from_static(KV_PLUGIN_SERVICE_WASM),
                 local_resources: LocalResources::default(),
                 max_restarts: 0,
+                ports: Vec::new(),
             }),
             components: vec![],
             host_interfaces: vec![acme_kv_interface()],

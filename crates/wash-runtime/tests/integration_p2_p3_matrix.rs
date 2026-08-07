@@ -245,6 +245,7 @@ async fn test_p3_service_runs() -> Result<()> {
                 bytes: bytes::Bytes::from_static(CLI_SERVICE_P3_WASM),
                 local_resources: LocalResources::default(),
                 max_restarts: 0,
+                ports: Vec::new(),
             }),
             components: vec![],
             host_interfaces: vec![],
@@ -533,6 +534,7 @@ async fn test_all_p3_workload() -> Result<()> {
                 bytes: bytes::Bytes::from_static(CLI_SERVICE_P3_WASM),
                 local_resources: LocalResources::default(),
                 max_restarts: 0,
+                ports: Vec::new(),
             }),
             components: vec![Component {
                 name: "http-blobstore-p3.wasm".to_string(),

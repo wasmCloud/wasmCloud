@@ -154,6 +154,16 @@ impl DeclaredPort {
                     "{owner}: port '{name}' has `publish: 0`; omit `publish` to declare a port \
                      without exposing it"
                 );
+                // A UDP port can still be *declared*: the guest binds it in its
+                // own virtual network, where its workload's components reach
+                // it. Only exposing it on a real address is unsupported.
+                ensure!(
+                    self.protocol == Protocol::Tcp,
+                    "{owner}: port '{name}' sets `publish` with `protocol: {}`, but only TCP \
+                     ports can be published. Drop `publish` to declare the port for use inside \
+                     the workload",
+                    self.protocol
+                );
             }
             PortMode::Direct { bind } => {
                 if bind.is_unspecified() {
@@ -352,20 +362,35 @@ mod tests {
         assert!(splice("grpc", 50051, Some(0)).validate("p").is_err());
     }
 
-    /// UDP publishes through the datagram relay, so all three shapes are
-    /// accepted: declared-only, published, and a direct bind.
+    /// A UDP port is declarable and directly bindable, but not *publishable*:
+    /// exposing one would need a datagram relay, which the host does not have.
+    /// Declaring it still means something — the guest binds it in its own
+    /// virtual network, where its workload's components reach it.
     #[test]
-    fn udp_is_accepted_in_every_shape() {
+    fn udp_may_be_declared_but_not_published() {
         let mut port = splice("dns", 5353, Some(31053));
         port.protocol = Protocol::Udp;
-        port.validate("p").unwrap();
-        assert_eq!(port.published_port(), Some(31053));
+        let err = port.validate("p").unwrap_err().to_string();
+        assert!(err.contains("only TCP ports can be published"), "got: {err}");
+        assert!(
+            err.contains("Drop `publish`"),
+            "the error should say what to do instead; got: {err}"
+        );
 
+        // Declared-only and direct-bind shapes stay available.
         port.publish = None;
         port.validate("p").unwrap();
-
         port.bind = Some("10.0.0.5".parse().unwrap());
         port.validate("p").unwrap();
+    }
+
+    /// The restriction is on publishing, not on the protocol: TCP is
+    /// unaffected in the same shape.
+    #[test]
+    fn tcp_is_still_publishable() {
+        let port = splice("grpc", 50051, Some(31051));
+        port.validate("p").unwrap();
+        assert_eq!(port.published_port(), Some(31051));
     }
 
     #[test]
