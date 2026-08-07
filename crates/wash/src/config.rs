@@ -759,8 +759,9 @@ pub struct DevConfig {
     pub wasi_otel: bool,
 
     /// Additional wasm proposals to enable on the engine, by name. Accepted
-    /// names match `wash_runtime`'s `WasmProposal`: component-model-async, gc,
-    /// exception-handling, wide-arithmetic, threads, tail-call.
+    /// names match `wash_runtime`'s `WasmProposal`: component-model-async,
+    /// component-model-map, gc, exception-handling, wide-arithmetic, threads,
+    /// tail-call.
     #[serde(default)]
     pub wasm_proposals: Vec<String>,
 }

@@ -177,8 +177,8 @@ pub struct HostCommand {
 
     /// Enable additional wasm proposals on the engine. Accepts a comma-separated
     /// list and/or repeated flags, e.g. `--wasm-proposal gc,threads`. Accepted
-    /// names: component-model-async, gc, exception-handling, wide-arithmetic,
-    /// threads, tail-call.
+    /// names: component-model-async, component-model-map, gc,
+    /// exception-handling, wide-arithmetic, threads, tail-call.
     #[arg(
         long = "wasm-proposal",
         env = "WASH_WASM_PROPOSALS",
