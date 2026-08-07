@@ -1,0 +1,14 @@
+package acme:eventscaller@0.1.0;
+
+/// Workload component on both sides of one package, the way a messaging
+/// workload is: it *imports* `acme:events/control` (the plugin's capability)
+/// and *exports* `acme:events/handler` (which the plugin calls back into).
+///
+/// A single manifest entry for `acme:events` covers both, since interface
+/// matching already looks at a workload's exports as well as its imports.
+world caller {
+    import wasi:http/types@0.3.0;
+    import acme:events/control@0.1.0;
+    export acme:events/handler@0.1.0;
+    export wasi:http/handler@0.3.0;
+}

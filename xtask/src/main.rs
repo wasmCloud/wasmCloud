@@ -137,6 +137,8 @@ const P3_FIXTURES: &[&str] = &[
     "secrets-consumer-plugin-caller",
     "http-egress-plugin",
     "http-egress-plugin-caller",
+    "events-plugin",
+    "events-caller",
 ];
 
 fn build_fixtures(workspace: &Path) -> Result<()> {
