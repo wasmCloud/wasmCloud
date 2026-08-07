@@ -1820,9 +1820,18 @@ fn host_header<B>(req: &hyper::Request<B>) -> &str {
         .unwrap_or("unknown")
 }
 
-/// Split a `Host` header value into the OTel `server.address` (host without
-/// port) and an optional `server.port`. Handles bracketed IPv6 literals such as
-/// `[::1]:8080`, returning the address without brackets.
+/// Split a `Host` header value into the host without its port and an optional
+/// port. Handles bracketed IPv6 literals such as `[::1]:8080`, returning the
+/// address without brackets.
+///
+/// Two callers, and the second is why the parse is lenient rather than strict:
+/// the OTel `server.address`/`server.port` attributes, and
+/// [`DynamicRouter`]'s routing key, which normalises both the hostnames it
+/// registers and the `Host` it looks them up by. A value whose suffix is not a
+/// number — `example.com:no-such-port` — yields the host with no port, so such
+/// a request routes as `example.com` rather than being rejected. A `Host` is
+/// client-supplied and a host serves one HTTP port, so there is nothing to
+/// decide from the port either way.
 fn split_host_port(host: &str) -> (&str, Option<u16>) {
     if let Some(rest) = host.strip_prefix('[') {
         // IPv6 literal: `[addr]` or `[addr]:port`.
