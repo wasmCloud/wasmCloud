@@ -653,11 +653,15 @@ pub enum WasmProposal {
     /// Component model `(implements ..)` named imports, letting a component
     /// import the same interface multiple times under distinct names so host
     /// plugins can route each independently. Enables
-    /// `wasm_component_model_implements`. Requires the backported wasmtime
-    /// support, so it is only available with the `wasm_component_model_implements`
-    /// crate feature.
+    /// `wasm_component_model_implements`. Available with the
+    /// `wasm_component_model_implements` crate feature, which is on by default
+    /// and carries the plugin-side routing this proposal is useful for.
     #[cfg(feature = "wasm_component_model_implements")]
     WasmComponentModelImplements,
+    /// Component model `map<k, v>` type. Enables `wasm_component_model_map`,
+    /// which is what lets a component whose WIT uses `map` types be validated
+    /// and instantiated. Enabled by default, like [`Self::ComponentModelAsync`].
+    ComponentModelMap,
     /// Garbage collection (with its `wasm_function_references` prerequisite).
     /// Enabled by default in wasmtime >= 47; accepted for compatibility.
     Gc,
@@ -683,6 +687,9 @@ impl WasmProposal {
             #[cfg(feature = "wasm_component_model_implements")]
             WasmProposal::WasmComponentModelImplements => {
                 cfg.wasm_component_model_implements(true);
+            }
+            WasmProposal::ComponentModelMap => {
+                cfg.wasm_component_model_map(true);
             }
             // GC (with its `wasm_function_references` prerequisite), exception
             // handling, and wide arithmetic are all enabled by default in
@@ -712,8 +719,9 @@ impl std::fmt::Display for ParseWasmProposalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "unknown wasm proposal {:?}; expected one of: component-model-async, gc, \
-             exception-handling, wide-arithmetic, threads, tail-call",
+            "unknown wasm proposal {:?}; expected one of: component-model-async, \
+             component-model-map, gc, exception-handling, wide-arithmetic, threads, \
+             tail-call",
             self.0
         )
     }
@@ -730,6 +738,7 @@ impl FromStr for WasmProposal {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim().to_ascii_lowercase().replace('_', "-").as_str() {
             "component-model-async" => Ok(Self::ComponentModelAsync),
+            "component-model-map" => Ok(Self::ComponentModelMap),
             "gc" => Ok(Self::Gc),
             "exception-handling" => Ok(Self::ExceptionHandling),
             "wide-arithmetic" => Ok(Self::WideArithmetic),
@@ -937,12 +946,15 @@ impl EngineBuilder {
         // WASIP3's async ABI requires the component-model async proposal.
         self.proposals.insert(WasmProposal::ComponentModelAsync);
 
+        // Accept components whose WIT uses `map<k, v>` types.
+        self.proposals.insert(WasmProposal::ComponentModelMap);
+
         // Accept components that import an interface multiple times via the
         // component-model `(implements ..)` annotation, so host plugins can
         // route each named import (e.g. two `wasi:keyvalue/store` imports
-        // backed by redis vs NATS) independently. Only available with the
-        // backported wasmtime support behind the
-        // `wasm_component_model_implements` feature.
+        // backed by redis vs NATS) independently. Gated on the
+        // `wasm_component_model_implements` feature, which is on by default and
+        // also brings in the plugin-side routing.
         #[cfg(feature = "wasm_component_model_implements")]
         self.proposals
             .insert(WasmProposal::WasmComponentModelImplements);
@@ -1168,7 +1180,30 @@ mod tests {
             "component-model-async".parse(),
             Ok(WasmProposal::ComponentModelAsync)
         );
+        assert_eq!(
+            "component-model-map".parse(),
+            Ok(WasmProposal::ComponentModelMap)
+        );
         assert!("nonsense".parse::<WasmProposal>().is_err());
+    }
+
+    // A component whose type section uses `map<k, v>` fails validation unless
+    // the component-model map proposal is on, so compiling one on a
+    // default-built engine is what proves the proposal is enabled by default.
+    #[test]
+    fn default_engine_accepts_component_model_map() {
+        let bytes = wat::parse_str(
+            r#"(component
+                 (type $m (map string string))
+                 (import "test:map/iface" (instance
+                   (export "take" (func (param "m" $m)))
+                 ))
+               )"#,
+        )
+        .expect("map component should assemble");
+
+        let engine = Engine::builder().build().expect("engine should build");
+        Component::new(&engine.inner, &bytes).expect("map component should compile");
     }
 
     // A compile failure that goes through the cache reports everything the
