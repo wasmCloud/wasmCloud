@@ -42,7 +42,7 @@ use crate::engine::value::{carries_cross_store_handle, lift_results, lower_param
 use crate::engine::volumes::{ResolvedVolumeMount, resolve_component_volume_mounts_in_map};
 use crate::engine::workload::{WorkloadComponent, WorkloadMetadata};
 use crate::plugin::HostPlugin;
-use crate::sockets::{self, SocketAddrUse, loopback};
+use crate::sockets::{self, loopback};
 
 /// A cheap, cloneable recipe for building a component's [`Ctx`].
 ///
@@ -70,6 +70,12 @@ pub(crate) struct ComponentCtxTemplate {
     volume_mounts: Vec<ResolvedVolumeMount>,
     plugins: Option<HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>>,
     loopback: Arc<std::sync::Mutex<loopback::Network>>,
+    /// The host-level half of this component's socket policy: enforcement mode,
+    /// address ranges, whether host-loopback access is enabled at all, and the
+    /// budget. The workload-level half (`allowedHosts`,
+    /// `allowedHostLoopbackPorts`) comes from `local_resources` and is layered over
+    /// this when the check is built.
+    socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
 }
@@ -83,6 +89,7 @@ impl ComponentCtxTemplate {
             volume_mounts: metadata.resolved_volume_mounts.clone(),
             plugins: metadata.plugins.clone(),
             loopback: metadata.loopback.clone(),
+            socket_policy: metadata.socket_policy.clone(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
         }
@@ -254,18 +261,24 @@ async fn build_ctx_from_template(
         .inherit_stdout()
         .inherit_stderr();
 
+    let kind = if is_service {
+        sockets::policy::GuestKind::Service
+    } else {
+        sockets::policy::GuestKind::Component
+    };
+    // Keyed on the workload, not the component: a workload's components share
+    // one allowance, the same way they share one virtual network.
+    let policy = Arc::new(sockets::policy::SocketPolicy {
+        allowed_hosts: Arc::clone(&template.local_resources.allowed_hosts),
+        host_loopback: Arc::clone(&template.local_resources.allowed_host_loopback_ports),
+        ..template
+            .socket_policy
+            .for_guest(kind, &template.workload_id)
+    });
     let sockets_ctx = sockets::WasiSocketsCtx {
         socket_addr_check: sockets::SocketAddrCheck::new(move |addr, reason| {
-            Box::pin(async move {
-                match reason {
-                    SocketAddrUse::TcpBind if is_service => addr.ip().is_loopback(),
-                    SocketAddrUse::TcpBind => false,
-                    SocketAddrUse::UdpBind => addr.ip().is_loopback() || addr.ip().is_unspecified(),
-                    SocketAddrUse::TcpConnect
-                    | SocketAddrUse::UdpConnect
-                    | SocketAddrUse::UdpOutgoingDatagram => true,
-                }
-            })
+            let policy = Arc::clone(&policy);
+            Box::pin(async move { policy.decide(reason, addr) })
         }),
         loopback: Arc::clone(&template.loopback),
         allowed_ip_name_lookups: Arc::clone(&template.local_resources.allowed_ip_name_lookups),

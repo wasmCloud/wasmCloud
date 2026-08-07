@@ -1048,7 +1048,7 @@ impl TcpSocket {
             };
         }
 
-        let ip = addr.ip().to_canonical();
+        let use_virtual = plane == super::Plane::Virtual;
         match (
             mem::replace(
                 self,
@@ -1136,6 +1136,17 @@ impl TcpSocket {
                     Err(err)
                 }
             },
+        }
+    }
+
+    /// Hold a connection-budget slot for this socket's lifetime.
+    ///
+    /// Called after the policy granted one. Only a `Plane::Host` connect
+    /// carries a permit, and only [`TcpSocket::Network`] can hold it — a
+    /// virtual connection consumes no budget.
+    pub(crate) fn hold_quota_slot(&mut self, permit: Option<crate::host::quota::ConnectionSlot>) {
+        if let (Self::Network(socket), Some(permit)) = (self, permit) {
+            socket.quota_slot = Some(permit);
         }
     }
 

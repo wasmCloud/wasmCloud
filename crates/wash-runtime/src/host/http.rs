@@ -2443,7 +2443,7 @@ mod tests {
         let handler = DefaultOutgoingHandler::with_tls_config(tls.clone()).with_quotas(
             crate::host::quota::QuotaRegistry::new(
                 crate::host::quota::QuotaLimits {
-                    http: 1,
+                    outbound_http: 1,
                     ..Default::default()
                 },
                 Some(2),

@@ -162,21 +162,9 @@ impl CliCommand for DevCommand {
 
         let http_handler = wash_runtime::host::http::DevRouter::default();
 
-        let http_connection_wait = dev_config
-            .http_connection_wait
-            .as_deref()
-            .map(humantime::parse_duration)
-            .transpose()
-            .context("dev.http_connection_wait is not a valid duration (e.g. `5s`)")?;
         // One registry for every surface: HTTP pool, raw sockets, inbound
         // published ports.
-        let quotas = crate::config::connection_quotas(
-            dev_config.max_connections,
-            dev_config.max_http_connections_per_workload,
-            dev_config.max_socket_connections_per_workload,
-            dev_config.max_inbound_connections_per_workload,
-            http_connection_wait,
-        )?;
+        let quotas = dev_config.connection_quotas()?;
 
         // Outbound (egress) trust roots for the component's outgoing HTTPS
         // calls. Distinct from `tls_*_path` below, which configure the ingress
@@ -337,6 +325,7 @@ impl CliCommand for DevCommand {
                     oci_config.clone(),
                     &native_plugins,
                     http_handler.clone(),
+                    None,
                 )
                 .await
                 .with_context(|| format!("failed to load host component plugin '{}'", spec.id))?;
@@ -592,6 +581,7 @@ fn build_workload(
         config: w.config.clone(),
         allowed_hosts: w.allowed_hosts.clone().into(),
         allowed_ip_name_lookups: w.allowed_ip_name_lookups.clone().into(),
+        allowed_host_loopback_ports: w.allowed_host_loopback_ports.clone().into(),
         ..Default::default()
     };
 
@@ -842,6 +832,7 @@ mod tests {
             config: HashMap::from([("flag".into(), "on".into())]),
             allowed_hosts: vec!["https://api.example.com".parse().unwrap()],
             allowed_ip_name_lookups: vec!["*".parse().unwrap()],
+            allowed_host_loopback_ports: vec![],
         };
         let dev_cfg = DevConfig {
             components: vec![dev_component_named("sidecar-a")],
@@ -955,6 +946,7 @@ mod tests {
             config: HashMap::from([("flag".into(), "on".into())]),
             allowed_hosts: vec!["https://api.example.com".parse().unwrap()],
             allowed_ip_name_lookups: vec![],
+            allowed_host_loopback_ports: vec![],
         };
         let dev_cfg = DevConfig {
             components: vec![dev_component_named("sidecar-a")],

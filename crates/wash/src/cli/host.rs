@@ -128,11 +128,11 @@ pub struct HostCommand {
     /// hold, across all authorities it talks to. Idle keep-alive connections
     /// count, so this is really how large a workload's pool may grow.
     #[arg(
-        long = "max-http-connections-per-workload",
-        env = "WASH_MAX_HTTP_CONNECTIONS_PER_WORKLOAD",
+        long = "max-outbound-http-connections-per-workload",
+        env = "WASH_MAX_OUTBOUND_HTTP_CONNECTIONS_PER_WORKLOAD",
         default_value_t = 128
     )]
-    pub max_http_connections_per_workload: usize,
+    pub max_outbound_http_connections_per_workload: usize,
 
     /// Cap on raw `wasi:sockets` connections a single workload may hold.
     ///
@@ -140,28 +140,28 @@ pub struct HostCommand {
     /// sockets across yield points, so making it wait for a slot only its own
     /// progress can free would deadlock it against itself.
     #[arg(
-        long = "max-socket-connections-per-workload",
-        env = "WASH_MAX_SOCKET_CONNECTIONS_PER_WORKLOAD",
+        long = "max-outbound-socket-connections-per-workload",
+        env = "WASH_MAX_OUTBOUND_SOCKET_CONNECTIONS_PER_WORKLOAD",
         default_value_t = 256
     )]
-    pub max_socket_connections_per_workload: usize,
+    pub max_outbound_socket_connections_per_workload: usize,
 
     /// Cap on inbound published-port connections a single workload may serve
     /// at once. A separate surface from the two above, because a workload
     /// whose inbound traffic consumed its outbound allowance would deadlock
     /// serving requests that need to make outbound calls.
     #[arg(
-        long = "max-inbound-connections-per-workload",
-        env = "WASH_MAX_INBOUND_CONNECTIONS_PER_WORKLOAD",
+        long = "max-inbound-socket-connections-per-workload",
+        env = "WASH_MAX_INBOUND_SOCKET_CONNECTIONS_PER_WORKLOAD",
         default_value_t = 256
     )]
-    pub max_inbound_connections_per_workload: usize,
+    pub max_inbound_socket_connections_per_workload: usize,
 
     /// How long a pooled HTTP connect waits for a slot before failing with a
     /// connect timeout (e.g. `5s`, `500ms`).
     ///
     /// Only the HTTP surface waits — see
-    /// `--max-socket-connections-per-workload`. A component's own
+    /// `--max-outbound-socket-connections-per-workload`. A component's own
     /// `connect-timeout` bounds its request independently, so this only
     /// decides how long an attempt nothing is waiting on may camp on a slot.
     #[arg(
@@ -216,6 +216,37 @@ pub struct HostCommand {
     /// Enable WASI OpenTelemetry plugin
     #[arg(long = "wasi-otel", default_value_t = false)]
     pub wasi_otel: bool,
+
+    /// Let workloads and plugins reach the machine's own loopback through
+    /// `host.wasmcloud.internal`.
+    ///
+    /// Off by default. A guest also needs its own `allowedHostLoopbackPorts` entry
+    /// naming the port, so neither the operator nor the workload author can
+    /// open this door alone. `127.0.0.1` keeps meaning the guest's own virtual
+    /// network either way.
+    #[arg(long = "allow-host-loopback", default_value_t = false)]
+    pub allow_host_loopback: bool,
+
+    /// How the raw-socket egress policy is applied.
+    ///
+    /// `count` (the default) evaluates the policy, records what it would refuse,
+    /// and allows the connection anyway. Raw socket connect was never gated, so
+    /// enforcing immediately would sever live traffic on upgrade; run in `count`
+    /// first, watch the `would_deny` counters, then switch to `enforce`.
+    #[arg(long = "socket-egress", value_enum, default_value = "count")]
+    pub socket_egress: SocketEgressMode,
+
+    /// Deny outbound connections to loopback, link-local (including the cloud
+    /// metadata address), multicast, and documentation ranges — including
+    /// whatever DNS returned for a permitted name.
+    #[arg(long = "deny-special-ranges", default_value_t = true)]
+    pub deny_special_ranges: bool,
+
+    /// Deny outbound connections to private ranges (RFC1918, ULA, CGNAT).
+    /// Off by default: reaching a sibling service on a private address is the
+    /// ordinary in-cluster case.
+    #[arg(long = "deny-private-ranges", default_value_t = false)]
+    pub deny_private_ranges: bool,
 
     /// Enable additional wasm proposals on the engine. Accepts a comma-separated
     /// list and/or repeated flags, e.g. `--wasm-proposal gc,threads`. Accepted
@@ -360,6 +391,31 @@ impl CliCommand for HostCommand {
         for proposal in &self.wasm_proposals {
             engine_builder = engine_builder.with_wasm_proposal(*proposal);
         }
+        // One registry for the whole host: a workload's HTTP pool, its raw
+        // sockets, and its inbound published ports all draw on the allowance
+        // it mints, so an operator configures one set of numbers and a
+        // per-workload ceiling really is per workload.
+        let quotas = crate::config::connection_quotas(
+            self.max_connections,
+            Some(self.max_outbound_http_connections_per_workload),
+            Some(self.max_outbound_socket_connections_per_workload),
+            Some(self.max_inbound_socket_connections_per_workload),
+            self.http_connection_wait,
+        )?;
+
+        let socket_policy = Arc::new(wash_runtime::sockets::policy::SocketPolicy {
+            host_loopback_enabled: self.allow_host_loopback,
+            egress_mode: self.socket_egress.into(),
+            egress_addrs: wash_runtime::host::egress_policy::EgressAddressPolicy {
+                deny_special: self.deny_special_ranges,
+                allow_private: !self.deny_private_ranges,
+            },
+            quotas: Some(Arc::clone(&quotas)),
+            meters: Some(Arc::new(wash_runtime::host::quota::PolicyMeters::default())),
+            ..Default::default()
+        });
+        engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
+
         let engine = engine_builder.build()?;
 
         let mut cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default()
@@ -414,6 +470,10 @@ impl CliCommand for HostCommand {
             cluster_host_builder = cluster_host_builder.with_environment(environment);
         }
 
+        // One publishing context for the whole host: workloads and plugins
+        // reserve from the same table, so a collision between them is a start
+        // failure naming both rather than two listeners that each think they
+        // own the address.
         if let Some(addr) = self.http_addr {
             let http_router = wash_runtime::host::http::DynamicRouter::default();
 
@@ -509,6 +569,7 @@ impl CliCommand for HostCommand {
                     plugin_oci_config.clone(),
                     &native_plugins,
                     http_handler.clone(),
+                    Some(Arc::clone(&socket_policy)),
                 )
                 .await
                 .with_context(|| format!("failed to load host component plugin '{}'", spec.id))?;
@@ -568,5 +629,24 @@ mod tests {
         // credentials — never a basic auth with an empty half.
         assert_eq!(host_plugin_registry_credentials(Some("user"), None), None);
         assert_eq!(host_plugin_registry_credentials(None, Some("pass")), None);
+    }
+}
+
+/// CLI spelling of [`wash_runtime::sockets::policy::EgressMode`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum SocketEgressMode {
+    /// Record what the policy would refuse; allow it anyway.
+    #[default]
+    Count,
+    /// Refuse what the policy refuses.
+    Enforce,
+}
+
+impl From<SocketEgressMode> for wash_runtime::sockets::policy::EgressMode {
+    fn from(mode: SocketEgressMode) -> Self {
+        match mode {
+            SocketEgressMode::Count => Self::Count,
+            SocketEgressMode::Enforce => Self::Enforce,
+        }
     }
 }

@@ -48,6 +48,14 @@ pub struct ComponentPluginSpec {
     /// Names this plugin's `wasi:sockets/ip-name-lookup` calls may resolve.
     /// Empty (the default) denies every DNS lookup.
     pub allowed_ip_name_lookups: Arc<[AllowedIpName]>,
+    /// Ports this plugin listens on. Empty (the default) means it binds nothing:
+    /// the deny that applied to every plugin before ports existed.
+    ///
+    /// A plugin may always bind its own private virtual loopback whether or not
+    /// it declares a port here — that reaches nothing until something publishes
+    /// it. What this list controls is exposure: which of those the host binds a
+    /// real port for, and which concrete addresses the plugin may bind itself.
+    pub ports: Arc<[crate::host::declared_port::DeclaredPort]>,
 }
 
 impl ComponentPluginSpec {
@@ -62,6 +70,7 @@ impl ComponentPluginSpec {
             config: HashMap::new(),
             allowed_hosts: Arc::from([]),
             allowed_ip_name_lookups: Arc::from([]),
+            ports: Arc::from([]),
         }
     }
 }
@@ -110,6 +119,14 @@ impl FromStr for ComponentPluginSpec {
                     })?)
                 }
                 "digest" => digest = Some(value),
+                // A port declaration is a list of records; this syntax is a
+                // comma-separated `key=value` list and the comma is already the
+                // field separator, so there is nowhere to put one. Say where it
+                // does go rather than reporting it as an unknown field.
+                "port" | "ports" => bail!(
+                    "host plugin ports cannot be declared on --host-plugin; put them under \
+                     `host.hostPlugins[].ports` in the `wash host` config file"
+                ),
                 other => bail!(
                     "unknown host plugin field {other:?}; expected id|image|file|pull|max-restarts|digest"
                 ),
@@ -128,6 +145,7 @@ impl FromStr for ComponentPluginSpec {
             config: HashMap::new(),
             allowed_hosts: Arc::from([]),
             allowed_ip_name_lookups: Arc::from([]),
+            ports: Arc::from([]),
         })
     }
 }
@@ -162,6 +180,15 @@ mod tests {
 
         let oci: ComponentPluginSpec = "id=kv,image=ghcr.io/acme/kv:1".parse().unwrap();
         assert_eq!(oci.source, ComponentSource::image("ghcr.io/acme/kv:1"));
+    }
+
+    #[test]
+    fn rejects_ports_on_the_flag_and_says_where_they_go() {
+        let err = "id=kv,file=./kv.wasm,port=8080"
+            .parse::<ComponentPluginSpec>()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("host.hostPlugins[].ports"), "got: {err}");
     }
 
     #[test]

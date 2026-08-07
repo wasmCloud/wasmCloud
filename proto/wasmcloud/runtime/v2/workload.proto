@@ -129,6 +129,16 @@ message LocalResources {
   // "*.wasmcloud.io", an exact name, or a literal IP address.
   // Empty or absent denies every lookup with permanent-resolver-failure.
   repeated string allowed_ip_name_lookups = 7;
+
+  // Ports on the machine's own loopback this component may reach through
+  // `host.wasmcloud.internal`. Each entry is a port with an optional
+  // protocol: "5432", "5432/tcp", "53/udp".
+  //
+  // An empty or absent list denies every host-loopback connection, and a
+  // non-empty one is inert unless the host was started with
+  // --allow-host-loopback: neither the workload author nor the operator can
+  // open this door alone.
+  repeated string allowed_host_loopback_ports = 8;
 }
 
 message Volume {

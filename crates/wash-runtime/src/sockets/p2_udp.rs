@@ -7,6 +7,13 @@ pub struct NetworkIncomingDatagramStream {
 
     /// If this has a value, the stream is "connected".
     pub(crate) remote_address: Option<SocketAddr>,
+
+    /// Peers this socket has sent to, when it is bound to the unspecified
+    /// address. Inbound datagrams from anyone else are dropped: the socket is
+    /// a UDP *client* that must see its replies, not an unsolicited server on
+    /// a real interface. `None` disables filtering — see
+    /// [`NetworkUdpSocket::egress_peers`](super::udp::NetworkUdpSocket).
+    pub(crate) egress_peers: Option<Arc<std::sync::Mutex<std::collections::BTreeSet<SocketAddr>>>>,
 }
 
 pub struct NetworkOutgoingDatagramStream {
@@ -23,6 +30,13 @@ pub struct NetworkOutgoingDatagramStream {
 
     /// Remaining number of datagrams permitted by most recent `check-send` call.
     pub(crate) check_send_permit_count: usize,
+
+    /// Peers this socket has sent to, when it is bound to the unspecified
+    /// address. Inbound datagrams from anyone else are dropped: the socket is
+    /// a UDP *client* that must see its replies, not an unsolicited server on
+    /// a real interface. `None` disables filtering — see
+    /// [`NetworkUdpSocket::egress_peers`](super::udp::NetworkUdpSocket).
+    pub(crate) egress_peers: Option<Arc<std::sync::Mutex<std::collections::BTreeSet<SocketAddr>>>>,
 }
 
 pub struct LoopbackIncomingDatagramStream {

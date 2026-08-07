@@ -183,7 +183,6 @@ pub async fn start_service_host() -> anyhow::Result<BenchHost> {
                 ..LocalResources::default()
             },
             max_restarts: 0,
-            ports: Vec::new(),
         }),
         components: vec![],
         host_interfaces: http_host_interfaces(host),
