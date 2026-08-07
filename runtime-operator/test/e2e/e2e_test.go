@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -992,11 +993,20 @@ func httpWorkloadImage() string {
 // rewriteWorkloadImages swaps the published http image in a sample manifest for
 // its in-cluster registry equivalent when the registry flow is active; a no-op
 // otherwise (the release/canary legs deploy the published component as-is).
+//
+// The in-cluster registry requires authentication, so the rewritten component
+// also gains the image pull secret that carries its credentials — without it
+// the host pulls anonymously and the workload never becomes Ready. The pull
+// secret is indented to match the `image:` line it follows, so this holds for
+// any sample regardless of how deeply the component sits.
 func rewriteWorkloadImages(manifest string) string {
 	if !inClusterRegistry {
 		return manifest
 	}
-	return strings.ReplaceAll(manifest, httpHelloWorldImage, registryRef("http-handler-p2"))
+	replacement := fmt.Sprintf("${1}image: %s\n${1}imagePullSecret:\n${1}  name: %s",
+		registryRef("http-handler-p2"), registryPullSecret)
+	return regexp.MustCompile(`(?m)^([ \t]*)image: `+regexp.QuoteMeta(httpHelloWorldImage)+`[ \t]*$`).
+		ReplaceAllString(manifest, replacement)
 }
 
 // expectNoTestWorkloads asserts that no Workload CRs remain in ns once the

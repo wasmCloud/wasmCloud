@@ -252,6 +252,23 @@ var _ = BeforeSuite(func() {
 // under. Kept in sync with TAG in xtask/src/e2e_images.rs.
 const registryImageTag = "e2e"
 
+// registryPullSecret names the dockerconfigjson Secret carrying the in-cluster
+// registry's credentials, applied alongside the registry itself (see
+// testdata/oci-registry.yaml). Every component pulling a fixture has to
+// reference it: the registry authenticates all requests, and a workload whose
+// image pull is refused never becomes Ready.
+const registryPullSecret = "oci-registry-pull"
+
+// registryUser / registryPassword are the registry's Basic credentials, matching
+// REGISTRY_USER/REGISTRY_PASSWORD in xtask/src/e2e_images.rs and the
+// `wasmcloud:secrets` config in testdata/oci-registry.yaml. Specs need them to
+// talk to the registry directly (and to prove an unauthenticated caller is
+// turned away).
+const (
+	registryUser     = "e2e"
+	registryPassword = "e2e-registry-password"
+)
+
 // registryRef returns the in-cluster pull ref for a fixture that
 // `make e2e-images` built and pushed. The insecure hostgroups resolve it over
 // plain HTTP via the oci-registry Service DNS, so specs never depend on an
