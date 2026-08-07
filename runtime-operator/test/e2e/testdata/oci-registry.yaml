@@ -16,11 +16,33 @@
 # an unprivileged one — which is what keeps `make e2e-images` from needing root.
 # The operator only injects Service-DNS aliases for p2 `incoming-handler`, so a
 # p3 `handler` interface keeps exactly the aliases set below.
+
+---
+# The credentials the registry checks incoming requests against. Delivered
+# through `secretFrom` rather than literal interface config: the operator
+# resolves the referenced Secret and merges its keys into the interface config
+# the host's secrets plugin serves, which is how a real deployment supplies
+# them — and it keeps the values out of the WorkloadDeployment spec. Key names
+# are the config keys the registry asks for by name.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: oci-registry-auth
+  namespace: wasmcloud-system
+type: Opaque
+stringData:
+  registry-username: e2e
+  registry-password: e2e-registry-password
+---
 # Credentials the hostgroups present when pulling fixtures back out of the
-# registry. `MaterializeImagePullSecret` resolves this by the image's registry
-# domain, so there is one entry per authority a fixture ref can carry. The
-# credentials match the registry's own `wasmcloud:secrets` config below and the
-# push side in xtask/src/e2e_images.rs.
+# registry — the same pair as `oci-registry-auth` above, in the form an image
+# pull takes. `MaterializeImagePullSecret` looks up the entry by the image
+# reference's registry domain; `registryRef` builds refs on the `.svc` name, and
+# the shorter Service-DNS forms are here so a ref written either way resolves.
+#
+# Spelled out under `stringData` rather than as base64 `data`, so the pair is
+# reviewable and greppable next to the Secret it has to match — an encoded blob
+# hides exactly the thing that has to stay in sync.
 #
 # Host component plugins do not use this: they are pulled at host startup,
 # before any workload exists, so their credentials arrive as
@@ -31,8 +53,15 @@ metadata:
   name: oci-registry-pull
   namespace: wasmcloud-system
 type: kubernetes.io/dockerconfigjson
-data:
-  .dockerconfigjson: eyJhdXRocyI6IHsib2NpLXJlZ2lzdHJ5Lndhc21jbG91ZC1zeXN0ZW0uc3ZjIjogeyJhdXRoIjogIlpUSmxPbVV5WlMxeVpXZHBjM1J5ZVMxd1lYTnpkMjl5WkE9PSJ9LCAib2NpLXJlZ2lzdHJ5Lndhc21jbG91ZC1zeXN0ZW0iOiB7ImF1dGgiOiAiWlRKbE9tVXlaUzF5WldkcGMzUnllUzF3WVhOemQyOXlaQT09In0sICJvY2ktcmVnaXN0cnkiOiB7ImF1dGgiOiAiWlRKbE9tVXlaUzF5WldkcGMzUnllUzF3WVhOemQyOXlaQT09In19fQ==
+stringData:
+  .dockerconfigjson: |
+    {
+      "auths": {
+        "oci-registry.wasmcloud-system.svc": {"auth": "ZTJlOmUyZS1yZWdpc3RyeS1wYXNzd29yZA=="},
+        "oci-registry.wasmcloud-system": {"auth": "ZTJlOmUyZS1yZWdpc3RyeS1wYXNzd29yZA=="},
+        "oci-registry": {"auth": "ZTJlOmUyZS1yZWdpc3RyeS1wYXNzd29yZA=="}
+      }
+    }
 ---
 apiVersion: v1
 kind: Service
@@ -81,22 +110,19 @@ spec:
             backend: in-memory
         # The registry requires HTTP Basic auth on every request, `GET /v2/`
         # included, and reads the expected credentials through
-        # `wasmcloud:secrets` — served here by the host's native secrets
-        # plugin straight from this interface config. A real deployment would
-        # source them from `secretFrom`; these are fixed test credentials, and
-        # the push side hardcodes the same pair (REGISTRY_USER/REGISTRY_PASSWORD
-        # in xtask/src/e2e_images.rs) because the two have no shared source.
-        # Supplying neither is not an option: the registry denies every request
-        # when the backend cannot produce both.
+        # `wasmcloud:secrets`, which the host's native secrets plugin serves
+        # from this interface's config. The operator materializes that config
+        # from the Secret below, so the values live in a Secret rather than in
+        # this spec. Supplying neither credential is not an option: the
+        # registry denies every request when the backend cannot produce both.
         - namespace: wasmcloud
           package: secrets
           version: "2.1.0"
           interfaces:
             - store
             - reveal
-          config:
-            registry-username: e2e
-            registry-password: e2e-registry-password
+          secretFrom:
+            - name: oci-registry-auth
       components:
         - name: oci-registry
           image: ghcr.io/wasmcloud/components/oci-registry:0.2.0
