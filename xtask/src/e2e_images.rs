@@ -59,15 +59,33 @@ const FIXTURES: &[(&str, FixtureKind)] = &[
 /// e2e_suite_test.go) — the two have no shared source, so this isn't a knob.
 const TAG: &str = "e2e";
 
-/// The registry's HTTP Basic credentials. It requires them on every request,
-/// `GET /v2/` included, and checks against what its `wasmcloud:secrets`
-/// interface serves — so these must match the `oci-registry-auth` Secret in
-/// runtime-operator/test/e2e/testdata/oci-registry.yaml, along with the pull
-/// side's `oci-registry-pull` beside it. Test credentials for a throwaway
-/// in-cluster registry, fixed rather than configurable for the same reason
-/// [`TAG`] is: the sides have no shared source to read them from.
-const REGISTRY_USER: &str = "e2e";
-const REGISTRY_PASSWORD: &str = "e2e-registry-password";
+/// Defaults for the registry's HTTP Basic credentials, overridable with
+/// `E2E_REGISTRY_USER` / `E2E_REGISTRY_PASSWORD`. The suite reads the same two
+/// variables (see e2e_suite_test.go), so setting them moves both sides at once
+/// — which is what a credential shared across processes needs. Both carry
+/// `test`: they are throwaway credentials for a registry that lives as long as
+/// one test run, and should read that way wherever they surface.
+///
+/// This is where they are defined. The Secrets holding them are created from
+/// here (see [`create_registry_secrets`]) rather than checked in beside the
+/// registry manifest, where they could not follow the environment.
+const DEFAULT_REGISTRY_USER: &str = "test-e2e-user";
+const DEFAULT_REGISTRY_PASSWORD: &str = "test-e2e-password";
+
+fn registry_user() -> String {
+    env_or("E2E_REGISTRY_USER", DEFAULT_REGISTRY_USER)
+}
+
+fn registry_password() -> String {
+    env_or("E2E_REGISTRY_PASSWORD", DEFAULT_REGISTRY_PASSWORD)
+}
+
+fn env_or(key: &str, default: &str) -> String {
+    env::var(key)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| default.to_string())
+}
 
 /// Where the registry is port-forwarded for pushing.
 ///
@@ -173,6 +191,9 @@ fn push_phase(
     let kubeconfig = env::var("KUBECONFIG")
         .unwrap_or_else(|_| format!("{}/.kube/config", env::var("HOME").unwrap_or_default()));
 
+    eprintln!(">>> e2e-images: creating registry credentials");
+    create_registry_secrets(&kubeconfig, namespace)?;
+
     eprintln!(">>> e2e-images: deploying oci-registry");
     kubectl(&kubeconfig, &["apply", "-f", &manifest.to_string_lossy()])?;
     kubectl(
@@ -194,6 +215,7 @@ fn push_phase(
     let _pf = PortForward::start(&kubeconfig, namespace, port)?;
     wait_for_registry(port)?;
 
+    let (user, password) = (registry_user(), registry_password());
     for &(fixture, kind) in FIXTURES {
         let component = match (mode, fixtures_out) {
             (Mode::Push, Some(out)) => out.join(component_name(fixture)),
@@ -207,9 +229,9 @@ fn push_phase(
                 "push",
                 "--insecure",
                 "--user",
-                REGISTRY_USER,
+                &user,
                 "--password",
-                REGISTRY_PASSWORD,
+                &password,
                 &reference,
                 &component.to_string_lossy(),
             ]),
@@ -294,6 +316,63 @@ fn built_component(fixtures_dir: &Path, fixture: &str, kind: FixtureKind) -> Res
     Ok(path)
 }
 
+/// Create the two Secrets the registry flow needs, replacing whatever an
+/// earlier run left so a changed credential actually takes effect.
+///
+/// `oci-registry-auth` is what the registry checks requests against: the
+/// operator materializes it into the `wasmcloud:secrets` config its component
+/// reads. `oci-registry-pull` is what a hostgroup presents when pulling a
+/// fixture back out, keyed by the registry domain `registryRef` builds refs on.
+///
+/// Built here rather than checked in beside the registry manifest for two
+/// reasons: a manifest cannot pick up `E2E_REGISTRY_USER`/`_PASSWORD`, and
+/// `kubectl create secret` owns the encoding — a docker config committed as
+/// base64 hides the very credential that has to match the one above it.
+fn create_registry_secrets(kubeconfig: &str, namespace: &str) -> Result<()> {
+    let (user, password) = (registry_user(), registry_password());
+    for name in ["oci-registry-auth", "oci-registry-pull"] {
+        kubectl(
+            kubeconfig,
+            &[
+                "delete",
+                "secret",
+                name,
+                "-n",
+                namespace,
+                "--ignore-not-found",
+            ],
+        )?;
+    }
+    // Key names are the config keys the registry asks its secrets backend for.
+    kubectl(
+        kubeconfig,
+        &[
+            "create",
+            "secret",
+            "generic",
+            "oci-registry-auth",
+            "-n",
+            namespace,
+            &format!("--from-literal=registry-username={user}"),
+            &format!("--from-literal=registry-password={password}"),
+        ],
+    )?;
+    kubectl(
+        kubeconfig,
+        &[
+            "create",
+            "secret",
+            "docker-registry",
+            "oci-registry-pull",
+            "-n",
+            namespace,
+            &format!("--docker-server=oci-registry.{namespace}.svc"),
+            &format!("--docker-username={user}"),
+            &format!("--docker-password={password}"),
+        ],
+    )
+}
+
 fn kubectl(kubeconfig: &str, args: &[&str]) -> Result<()> {
     run_checked(
         Command::new("kubectl")
@@ -344,7 +423,7 @@ fn wait_for_registry(port: u16) -> Result<()> {
             .args([
                 "-fsS",
                 "-u",
-                &format!("{REGISTRY_USER}:{REGISTRY_PASSWORD}"),
+                &format!("{}:{}", registry_user(), registry_password()),
                 &url,
             ])
             .stdout(Stdio::null())
