@@ -418,7 +418,7 @@ impl Router for DynamicRouter {
 /// never empty, never derived from guest-controllable data, and never shared
 /// between workloads. Implementations (the default one included) key
 /// per-workload state on it: connection pools, TLS session-resumption stores,
-/// and connection budgets. Two callers presenting the same `workload_id`
+/// and connection quotas. Two callers presenting the same `workload_id`
 /// collapse into one identity and inherit each other's keep-alive connections
 /// and TLS session tickets.
 pub trait OutgoingHandler: Send + Sync + 'static {
@@ -459,7 +459,7 @@ pub trait OutgoingHandler: Send + Sync + 'static {
     /// gRPC requests never reach `send_request`/`send_request_p3` — the
     /// runtime routes them itself, because the protocol requires HTTP/2 — but
     /// a handler that pools can serve them here instead, so they reuse
-    /// connections and draw on the same connection budget as the workload's
+    /// connections and draw on the same quota as the workload's
     /// ordinary egress. `None` (the default) leaves the runtime to open one
     /// HTTP/2 connection per request.
     fn grpc_transport(&self, _workload_id: &str) -> Option<crate::host::http_client::PooledClient> {
@@ -478,7 +478,7 @@ pub trait OutgoingHandler: Send + Sync + 'static {
     /// Called when a workload is stopped (unbound from the host).
     ///
     /// Implementations holding per-workload state — connection pools, TLS
-    /// session stores, connection-budget permits — should release it now
+    /// session stores, quota slots — should release it now
     /// rather than letting it linger until idle expiry: a stopped workload's
     /// pooled connections would otherwise stay open (pinning host-wide
     /// connection permits) for up to the pool idle timeout after the workload
@@ -495,13 +495,27 @@ pub trait OutgoingHandler: Send + Sync + 'static {
 ///
 /// Construction does no I/O: unless a configuration is supplied up front, the
 /// TLS configuration (and any trust-store read) is built lazily on first use.
-#[derive(Default)]
 pub struct DefaultOutgoingHandler {
     /// Set eagerly by [`Self::with_tls_config`]; populated lazily with the
     /// process-wide default roots otherwise.
     clients: OnceLock<crate::host::http_client::WorkloadClients>,
-    /// Applied when `clients` is built; see [`Self::with_connection_limits`].
-    limits: crate::host::http_client::ConnectionLimits,
+    /// Where each workload's HTTP allowance comes from; applied when `clients`
+    /// is built. See [`Self::with_quotas`].
+    quotas: Arc<crate::host::quota::QuotaRegistry>,
+}
+
+impl Default for DefaultOutgoingHandler {
+    /// A handler with a private quota registry of default size.
+    ///
+    /// A host that wants a workload's HTTP pool bounded by the *same*
+    /// allowance as its raw sockets passes its own registry to
+    /// [`DefaultOutgoingHandler::with_quotas`].
+    fn default() -> Self {
+        Self {
+            clients: OnceLock::new(),
+            quotas: crate::host::quota::QuotaRegistry::new(Default::default(), None),
+        }
+    }
 }
 
 impl DefaultOutgoingHandler {
@@ -509,14 +523,15 @@ impl DefaultOutgoingHandler {
     /// [`crate::host::http_client::ClientTlsOptions`] for building one with
     /// extra CA bundles).
     pub fn with_tls_config(tls: Arc<rustls::ClientConfig>) -> Self {
-        let limits = crate::host::http_client::ConnectionLimits::default();
+        let quotas = crate::host::quota::QuotaRegistry::new(Default::default(), None);
         let cell = OnceLock::new();
-        let _ = cell.set(crate::host::http_client::WorkloadClients::with_limits(
-            tls, limits,
+        let _ = cell.set(crate::host::http_client::WorkloadClients::with_quotas(
+            tls,
+            Arc::clone(&quotas),
         ));
         Self {
             clients: cell,
-            limits,
+            quotas,
         }
     }
 
@@ -536,34 +551,33 @@ impl DefaultOutgoingHandler {
         }
     }
 
-    /// Replace the outbound [`ConnectionLimits`] (defaults apply otherwise).
-    /// Call at construction time, before the handler serves requests: a
-    /// client cache that was already built eagerly is rebuilt, dropping any
-    /// pooled connections.
+    /// Draw connections from `quotas` rather than a private registry.
     ///
-    /// [`ConnectionLimits`]: crate::host::http_client::ConnectionLimits
-    pub fn with_connection_limits(
-        self,
-        limits: crate::host::http_client::ConnectionLimits,
-    ) -> Self {
+    /// Pass the host's one registry so a workload's HTTP pool, its raw
+    /// sockets, and its inbound published ports share the allowance an
+    /// operator configured. Call at construction time, before the handler
+    /// serves requests: a client cache that was already built eagerly is
+    /// rebuilt, dropping any pooled connections.
+    #[must_use]
+    pub fn with_quotas(self, quotas: Arc<crate::host::quota::QuotaRegistry>) -> Self {
         let cell = OnceLock::new();
         if let Some(clients) = self.clients.into_inner() {
-            let _ = cell.set(crate::host::http_client::WorkloadClients::with_limits(
+            let _ = cell.set(crate::host::http_client::WorkloadClients::with_quotas(
                 clients.tls_config(),
-                limits,
+                Arc::clone(&quotas),
             ));
         }
         Self {
             clients: cell,
-            limits,
+            quotas,
         }
     }
 
     fn clients(&self) -> &crate::host::http_client::WorkloadClients {
         self.clients.get_or_init(|| {
-            crate::host::http_client::WorkloadClients::with_limits(
+            crate::host::http_client::WorkloadClients::with_quotas(
                 crate::host::http_client::default_client_tls_config(),
-                self.limits,
+                Arc::clone(&self.quotas),
             )
         })
     }
@@ -1336,7 +1350,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         // `content-type: application/grpc` header, and needs HTTP/2 rather
         // than the HTTP/1.1 the ordinary egress pool speaks. A pooling
         // handler serves it from its own per-workload HTTP/2 pool, under the
-        // same connection budget; otherwise the runtime opens a connection
+        // same quota; otherwise the runtime opens a connection
         // per request.
         if is_grpc_request(&request) {
             return Ok(match self.outgoing_handler.grpc_transport(workload_id) {
@@ -2399,27 +2413,29 @@ mod tests {
             .unwrap()
     }
 
-    /// `with_connection_limits` rebuilds an eagerly-configured client cache
-    /// and must carry the TLS configuration over — losing it would silently
-    /// revert a host to the default trust roots.
+    /// `with_quotas` rebuilds an eagerly-configured client cache and must
+    /// carry the TLS configuration over — losing it would silently revert a
+    /// host to the default trust roots.
     #[test]
-    fn connection_limits_builder_preserves_tls_config() {
+    fn quota_builder_preserves_tls_config() {
         let tls = crate::host::http_client::ClientTlsOptions::default()
             .build()
             .unwrap();
-        let handler = DefaultOutgoingHandler::with_tls_config(tls.clone()).with_connection_limits(
-            crate::host::http_client::ConnectionLimits {
-                max_per_workload: 1,
-                max_total: 2,
-                ..Default::default()
-            },
+        let handler = DefaultOutgoingHandler::with_tls_config(tls.clone()).with_quotas(
+            crate::host::quota::QuotaRegistry::new(
+                crate::host::quota::QuotaLimits {
+                    http: 1,
+                    ..Default::default()
+                },
+                Some(2),
+            ),
         );
         let got = handler
             .client_tls_config()
             .expect("handler should expose its TLS configuration");
         assert!(
             Arc::ptr_eq(&tls, &got),
-            "with_connection_limits must preserve the configured TLS roots"
+            "with_quotas must preserve the configured TLS roots"
         );
     }
 

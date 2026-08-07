@@ -59,6 +59,7 @@ use crate::plugin::{HostPlugin, WorkloadFailure, WorkloadFailureSink};
 use crate::types::*;
 use crate::wit::{WitInterface, WitWorld};
 
+pub mod quota;
 mod sysinfo;
 use sysinfo::SystemMonitor;
 

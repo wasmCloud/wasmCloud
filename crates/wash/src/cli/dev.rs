@@ -162,12 +162,21 @@ impl CliCommand for DevCommand {
 
         let http_handler = wash_runtime::host::http::DevRouter::default();
 
-        let http_client_connection_wait = dev_config
-            .http_client_connection_wait
+        let http_connection_wait = dev_config
+            .http_connection_wait
             .as_deref()
             .map(humantime::parse_duration)
             .transpose()
-            .context("dev.http_client_connection_wait is not a valid duration (e.g. `5s`)")?;
+            .context("dev.http_connection_wait is not a valid duration (e.g. `5s`)")?;
+        // One registry for every surface: HTTP pool, raw sockets, inbound
+        // published ports.
+        let quotas = crate::config::connection_quotas(
+            dev_config.max_connections,
+            dev_config.max_http_connections_per_workload,
+            dev_config.max_socket_connections_per_workload,
+            dev_config.max_inbound_connections_per_workload,
+            http_connection_wait,
+        )?;
 
         // Outbound (egress) trust roots for the component's outgoing HTTPS
         // calls. Distinct from `tls_*_path` below, which configure the ingress
@@ -179,11 +188,9 @@ impl CliCommand for DevCommand {
             },
         )
         .context("failed to load dev.http_client_ca_paths CA certificates")?
-        .with_connection_limits(crate::config::outbound_connection_limits(
-            dev_config.http_client_max_connections,
-            dev_config.http_client_max_connections_per_workload,
-            http_client_connection_wait,
-        )?);
+        // The same registry the socket policy uses, so a component's HTTP
+        // pool and its raw sockets share one configured allowance.
+        .with_quotas(Arc::clone(&quotas));
 
         // TODO(#19): Only spawn the server if the component exports wasi:http
         // Configure HTTP server with optional TLS, enable HTTP Server
