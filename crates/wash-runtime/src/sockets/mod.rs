@@ -12,10 +12,12 @@ pub(crate) mod host_tcp;
 pub(crate) mod host_tcp_create_socket;
 pub(crate) mod host_udp;
 pub(crate) mod host_udp_create_socket;
+pub mod internal_names;
 pub mod loopback;
 pub(crate) mod network;
 pub(crate) mod p2_tcp;
 pub(crate) mod p2_udp;
+pub mod policy;
 pub(crate) mod tcp;
 pub(crate) mod udp;
 pub(crate) mod util;
@@ -100,17 +102,133 @@ impl AllowedNetworkUses {
     }
 }
 
-type SocketAddrCheckFn = dyn Fn(SocketAddr, SocketAddrUse) -> Pin<Box<dyn Future<Output = bool> + Send + Sync>>
+/// Which network a socket operation is dispatched onto.
+///
+/// This used to be implied by the address — anything in `127.0.0.0/8` went to
+/// the guest's virtual network and everything else went out a real socket. That
+/// coupling cannot express "the machine's own loopback", which is a real
+/// address inside the same range, so the plane is now chosen by policy and
+/// carried explicitly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Plane {
+    /// The guest's in-process virtual network.
+    Virtual,
+    /// A real socket on the machine running the host.
+    Host,
+}
+
+/// Why an address was refused. Distinct variants exist so a guest gets a
+/// truthful error rather than a blanket `access-denied`, and so each refusal
+/// can be metered separately — the counters are what tell an operator whether a
+/// policy rollout is about to break someone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DenyReason {
+    /// No policy grants this address.
+    NotPermitted,
+    /// Binding is not permitted here at all.
+    BindNotPermitted,
+    /// The machine's own loopback, without the policy that grants it.
+    HostLoopbackNotPermitted,
+    /// A port the host itself owns: its ingress, its control plane, or a port
+    /// it published for some workload.
+    HostOwnedPort,
+    /// The address resolved into a range the egress policy denies.
+    BlockedRange,
+    /// The owner's connection budget is spent.
+    NoCapacity,
+}
+
+impl DenyReason {
+    /// A short, stable label for metrics and logs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotPermitted => "not_permitted",
+            Self::BindNotPermitted => "bind_not_permitted",
+            Self::HostLoopbackNotPermitted => "host_loopback_not_permitted",
+            Self::HostOwnedPort => "host_owned_port",
+            Self::BlockedRange => "blocked_range",
+            Self::NoCapacity => "no_capacity",
+        }
+    }
+
+    pub(crate) fn error_code(self) -> util::ErrorCode {
+        match self {
+            // Exhaustion is not a permission problem, and reporting it as one
+            // sends an operator looking for a policy that does not exist.
+            // `out-of-memory` is wasi-sockets' "insufficient resources".
+            Self::NoCapacity => util::ErrorCode::OutOfMemory,
+            _ => util::ErrorCode::AccessDenied,
+        }
+    }
+}
+
+/// A permitted address, as the policy resolved it.
+pub struct Allowed {
+    /// Possibly rewritten: an internal-zone sentinel resolves to a real address
+    /// here, so callers must use this rather than what they passed in.
+    pub addr: SocketAddr,
+    pub plane: Plane,
+    /// Held for the connection's lifetime. Taken with `try_acquire` on the
+    /// sockets path, never awaited: a guest holds sockets across yield points,
+    /// so waiting for a slot it must make progress to free deadlocks it against
+    /// itself.
+    pub permit: Option<crate::host::quota::ConnectionSlot>,
+}
+
+/// The answer to "may this address be used for this, and how".
+pub enum AddrDecision {
+    Deny(DenyReason),
+    Allow(Allowed),
+}
+
+impl AddrDecision {
+    /// Allow `addr` on the plane its address implies — loopback virtual,
+    /// everything else real. The pre-policy behavior, and still the answer for
+    /// everything the internal zone does not touch.
+    pub fn allow_by_address(addr: SocketAddr) -> Self {
+        let plane = if addr.ip().to_canonical().is_loopback() {
+            Plane::Virtual
+        } else {
+            Plane::Host
+        };
+        Self::Allow(Allowed {
+            addr,
+            plane,
+            permit: None,
+        })
+    }
+
+    pub fn allow_on(addr: SocketAddr, plane: Plane) -> Self {
+        Self::Allow(Allowed {
+            addr,
+            plane,
+            permit: None,
+        })
+    }
+
+    pub(crate) fn into_allowed(self) -> Result<Allowed, util::ErrorCode> {
+        match self {
+            Self::Allow(allowed) => Ok(allowed),
+            Self::Deny(reason) => Err(reason.error_code()),
+        }
+    }
+}
+
+type SocketAddrCheckFn = dyn Fn(SocketAddr, SocketAddrUse) -> Pin<Box<dyn Future<Output = AddrDecision> + Send + Sync>>
     + Send
     + Sync;
 
-/// A check that will be called for each socket address that is used of whether the address is permitted.
+/// The single outbound choke point: called for every address a guest binds,
+/// connects, or sends a datagram to, and answers with an [`AddrDecision`].
 #[derive(Clone)]
 pub(crate) struct SocketAddrCheck(Arc<SocketAddrCheckFn>);
 
 impl SocketAddrCheck {
     pub(crate) fn new(
-        f: impl Fn(SocketAddr, SocketAddrUse) -> Pin<Box<dyn Future<Output = bool> + Send + Sync>>
+        f: impl Fn(
+            SocketAddr,
+            SocketAddrUse,
+        ) -> Pin<Box<dyn Future<Output = AddrDecision> + Send + Sync>>
         + Send
         + Sync
         + 'static,
@@ -122,15 +240,8 @@ impl SocketAddrCheck {
         &self,
         addr: SocketAddr,
         reason: SocketAddrUse,
-    ) -> std::io::Result<()> {
-        if (self.0)(addr, reason).await {
-            Ok(())
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "An address was not permitted by the socket address check.",
-            ))
-        }
+    ) -> Result<Allowed, util::ErrorCode> {
+        (self.0)(addr, reason).await.into_allowed()
     }
 }
 
@@ -144,7 +255,9 @@ impl Deref for SocketAddrCheck {
 
 impl Default for SocketAddrCheck {
     fn default() -> Self {
-        Self(Arc::new(|_, _| Box::pin(async { false })))
+        Self(Arc::new(|_, _| {
+            Box::pin(async { AddrDecision::Deny(DenyReason::NotPermitted) })
+        }))
     }
 }
 
@@ -155,8 +268,15 @@ pub enum SocketAddrUse {
     TcpBind,
     /// Connecting TCP socket
     TcpConnect,
-    /// Binding UDP socket
+    /// Binding UDP socket, as an explicit `bind` call from the guest
     UdpBind,
+    /// Binding UDP socket implicitly, to give an outgoing datagram a local
+    /// endpoint. Distinct from [`SocketAddrUse::UdpBind`] because it carries no
+    /// intent to receive: the address is always the unspecified one, the guest
+    /// never chose it, and the datagram's actual destination is checked
+    /// separately as [`SocketAddrUse::UdpOutgoingDatagram`]. A policy that
+    /// denies listening still has to permit this, or it denies UDP egress.
+    UdpImplicitBind,
     /// Connecting UDP socket
     UdpConnect,
     /// Sending datagram on non-connected UDP socket

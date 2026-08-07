@@ -44,6 +44,7 @@ fn echo_client_workload_request(
                     volume_mounts: vec![],
                     allowed_hosts: Default::default(),
                     allowed_ip_name_lookups: Default::default(),
+                    allowed_host_loopback: Default::default(),
                 },
                 max_restarts: 0,
             }),

@@ -837,7 +837,7 @@ impl WorkloadClients {
             tls,
             crate::host::quota::QuotaRegistry::new(
                 Default::default(),
-                Some(crate::host::quota::DEFAULT_MAX_CONNECTIONS),
+                Some(crate::host::quota::default_max_connections()),
             ),
         )
     }

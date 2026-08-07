@@ -670,6 +670,10 @@ impl TryFrom<types::v2::LocalResources> for crate::types::LocalResources {
                 &lr.allowed_ip_name_lookups,
                 "allowed_ip_name_lookups",
             )?,
+            allowed_host_loopback: parse_policy_entries(
+                &lr.allowed_host_loopback,
+                "allowed_host_loopback",
+            )?,
         })
     }
 }
@@ -867,6 +871,7 @@ mod tests {
                 "https://api.example.com".to_string(),
             ],
             allowed_ip_name_lookups: vec!["*.example.com".to_string(), "127.0.0.1".to_string()],
+            allowed_host_loopback: vec![],
         };
         let lr = crate::types::LocalResources::try_from(proto).expect("conversion should succeed");
         assert_eq!(lr.allowed_ip_name_lookups.len(), 2);
@@ -903,6 +908,7 @@ mod tests {
             volume_mounts: vec![],
             allowed_hosts: vec!["*com".to_string()],
             allowed_ip_name_lookups: vec![],
+            allowed_host_loopback: vec![],
         };
         let err = crate::types::LocalResources::try_from(proto)
             .expect_err("conversion should reject ambiguous wildcard");
@@ -931,6 +937,7 @@ mod tests {
                 "example.com:notaport".to_string(),       // bad port
             ],
             allowed_ip_name_lookups: vec![],
+            allowed_host_loopback: vec![],
         };
         let err = crate::types::LocalResources::try_from(proto)
             .expect_err("conversion should reject all bad entries");

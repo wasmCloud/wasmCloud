@@ -173,8 +173,8 @@ impl CliCommand for DevCommand {
         let quotas = crate::config::connection_quotas(
             dev_config.max_connections,
             dev_config.max_http_connections_per_workload,
-            dev_config.max_socket_connections_per_workload,
-            dev_config.max_inbound_connections_per_workload,
+            dev_config.max_outbound_socket_connections_per_workload,
+            dev_config.max_inbound_socket_connections_per_workload,
             http_connection_wait,
         )?;
 
@@ -337,6 +337,7 @@ impl CliCommand for DevCommand {
                     oci_config.clone(),
                     &native_plugins,
                     http_handler.clone(),
+                    None,
                 )
                 .await
                 .with_context(|| format!("failed to load host component plugin '{}'", spec.id))?;
@@ -592,6 +593,7 @@ fn build_workload(
         config: w.config.clone(),
         allowed_hosts: w.allowed_hosts.clone().into(),
         allowed_ip_name_lookups: w.allowed_ip_name_lookups.clone().into(),
+        allowed_host_loopback: w.allowed_host_loopback.clone().into(),
         ..Default::default()
     };
 
@@ -842,6 +844,7 @@ mod tests {
             config: HashMap::from([("flag".into(), "on".into())]),
             allowed_hosts: vec!["https://api.example.com".parse().unwrap()],
             allowed_ip_name_lookups: vec!["*".parse().unwrap()],
+            allowed_host_loopback: vec![],
         };
         let dev_cfg = DevConfig {
             components: vec![dev_component_named("sidecar-a")],
@@ -955,6 +958,7 @@ mod tests {
             config: HashMap::from([("flag".into(), "on".into())]),
             allowed_hosts: vec!["https://api.example.com".parse().unwrap()],
             allowed_ip_name_lookups: vec![],
+            allowed_host_loopback: vec![],
         };
         let dev_cfg = DevConfig {
             components: vec![dev_component_named("sidecar-a")],

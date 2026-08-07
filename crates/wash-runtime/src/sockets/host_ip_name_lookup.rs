@@ -34,6 +34,24 @@ impl Host for WasiSocketsCtxView<'_> {
         let network = Resource::<super::network::Network>::new_borrow(network.rep());
         let network = self.table.get(&network)?;
 
+        // The reserved zone answers before `allowedIpNameLookups` and before any
+        // resolver. That allowlist exists because resolution reaches the network
+        // ahead of any connection, so a guest can encode data in the labels it
+        // looks up; these names never leave the process. Reaching the host is
+        // still gated, at connect. See [`super::internal_names`].
+        if let Some(internal) = super::internal_names::resolve(&name) {
+            let addr = internal
+                .map_err(|_| SocketError::from(ErrorCode::NameUnresolvable))?
+                .address();
+            let resource =
+                self.table
+                    .push(ResolveAddressStream::Done(Ok(vec![ip_addr_to_ip_address(
+                        addr,
+                    )]
+                    .into_iter())))?;
+            return Ok(Resource::new_own(resource.rep()));
+        }
+
         let host = parse_host(&name).map_err(super::network::socket_error_from_util)?;
 
         if !crate::host::allowed_ip_name::check_allowed_ip_name(

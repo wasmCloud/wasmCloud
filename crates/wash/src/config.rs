@@ -632,22 +632,26 @@ pub fn connection_quotas(
             defaults.http,
             "max_http_connections_per_workload",
         )?,
-        sockets: resolve(
+        outbound_sockets: resolve(
             max_sockets_per_workload,
-            defaults.sockets,
-            "max_socket_connections_per_workload",
+            defaults.outbound_sockets,
+            "max_outbound_socket_connections_per_workload",
         )?,
-        inbound: resolve(
+        inbound_sockets: resolve(
             max_inbound_per_workload,
-            defaults.inbound,
-            "max_inbound_connections_per_workload",
+            defaults.inbound_sockets,
+            "max_inbound_socket_connections_per_workload",
         )?,
     };
     if max_connections == Some(0) {
         anyhow::bail!("max_connections must be at least 1");
     }
     if let Some(total) = max_connections
-        && limits.http.max(limits.sockets).max(limits.inbound) > total
+        && limits
+            .http
+            .max(limits.outbound_sockets)
+            .max(limits.inbound_sockets)
+            > total
     {
         // Harmless (the host-wide ceiling simply gates first), but almost
         // certainly an operator mixing the two knobs up.
@@ -662,7 +666,8 @@ pub fn connection_quotas(
     // crowd of workloads each holding its per-guest allowance exhausts the
     // host's file descriptors, and the failures land on ingress and OCI pulls
     // rather than on whoever caused them.
-    let host_wide = max_connections.or(Some(wash_runtime::host::quota::DEFAULT_MAX_CONNECTIONS));
+    let host_wide =
+        max_connections.or_else(|| Some(wash_runtime::host::quota::default_max_connections()));
     let registry = wash_runtime::host::quota::QuotaRegistry::new(limits, host_wide);
     match http_connection_wait {
         Some(wait) if wait.is_zero() => {
@@ -774,11 +779,11 @@ pub struct DevConfig {
 
     /// Raw `wasi:sockets` connections one workload may hold.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_socket_connections_per_workload: Option<usize>,
+    pub max_outbound_socket_connections_per_workload: Option<usize>,
 
     /// Inbound published-port connections one workload may serve at once.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_inbound_connections_per_workload: Option<usize>,
+    pub max_inbound_socket_connections_per_workload: Option<usize>,
 
     /// Host-wide cap on live *outbound* HTTP connections across all
     /// workloads combined (in-flight or idle in a keep-alive pool). Defaults
@@ -1285,8 +1290,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(quotas.limits().http, 8);
-        assert_eq!(quotas.limits().sockets, 16);
-        assert_eq!(quotas.limits().inbound, 32);
+        assert_eq!(quotas.limits().outbound_sockets, 16);
+        assert_eq!(quotas.limits().inbound_sockets, 32);
         assert_eq!(quotas.http_wait(), Duration::from_millis(250));
     }
 
@@ -1296,18 +1301,23 @@ mod tests {
     fn connection_quotas_are_per_surface_and_per_guest() {
         let quotas = connection_quotas(None, Some(4), Some(1), Some(1), None).unwrap();
         let guest = quotas.for_guest("w-1");
-        let _held = guest.try_acquire_socket().expect("its one socket slot");
+        let _held = guest
+            .try_acquire_outbound_socket()
+            .expect("its one socket slot");
         assert!(
-            guest.try_acquire_socket().is_none(),
+            guest.try_acquire_outbound_socket().is_none(),
             "sockets are at ceiling"
         );
         assert!(
-            guest.try_acquire_inbound().is_some(),
+            guest.try_acquire_inbound_socket().is_some(),
             "inbound must not be affected"
         );
         assert_eq!(guest.http_available(), 4, "http must not be affected");
         assert!(
-            quotas.for_guest("w-2").try_acquire_socket().is_some(),
+            quotas
+                .for_guest("w-2")
+                .try_acquire_outbound_socket()
+                .is_some(),
             "another guest has its own allowance"
         );
     }

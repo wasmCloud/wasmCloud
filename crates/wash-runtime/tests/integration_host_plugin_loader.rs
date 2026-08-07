@@ -30,8 +30,15 @@ async fn loads_component_plugin_from_file() -> Result<()> {
         ComponentSource::File(kv_plugin_path()),
     );
 
-    let plugin =
-        load_component_plugin(&spec, &engine, OciConfig::default(), &HashMap::new(), None).await?;
+    let plugin = load_component_plugin(
+        &spec,
+        &engine,
+        OciConfig::default(),
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .await?;
 
     assert_eq!(plugin.id(), "acme-kv-plugin");
     let world = plugin.world();
@@ -77,7 +84,8 @@ async fn loads_component_plugin_from_oci() -> Result<()> {
         ..OciConfig::default()
     };
 
-    let plugin = load_component_plugin(&spec, &engine, oci_config, &HashMap::new(), None).await?;
+    let plugin =
+        load_component_plugin(&spec, &engine, oci_config, &HashMap::new(), None, None).await?;
 
     assert_eq!(plugin.id(), "acme-kv-plugin");
     assert!(
@@ -100,10 +108,17 @@ async fn rejects_digest_pin_on_file_source() {
     );
     spec.expected_digest = Some("sha256:deadbeef".into());
 
-    let err = load_component_plugin(&spec, &engine, OciConfig::default(), &HashMap::new(), None)
-        .await
-        .err()
-        .expect("digest pin on a file source should fail to load");
+    let err = load_component_plugin(
+        &spec,
+        &engine,
+        OciConfig::default(),
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .await
+    .err()
+    .expect("digest pin on a file source should fail to load");
     assert!(
         format!("{err:#}").contains("digest pinning"),
         "expected a digest-pinning error, got: {err:#}"
@@ -118,10 +133,17 @@ async fn missing_file_errors_with_id_and_context() {
         ComponentSource::File("/nonexistent/does-not-exist.wasm".into()),
     );
 
-    let err = load_component_plugin(&spec, &engine, OciConfig::default(), &HashMap::new(), None)
-        .await
-        .err()
-        .expect("a missing file should fail to load");
+    let err = load_component_plugin(
+        &spec,
+        &engine,
+        OciConfig::default(),
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .await
+    .err()
+    .expect("a missing file should fail to load");
     let msg = format!("{err:#}");
     assert!(
         msg.contains("ghost") && msg.contains("failed to read"),
