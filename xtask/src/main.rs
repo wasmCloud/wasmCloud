@@ -131,6 +131,7 @@ const P3_FIXTURES: &[&str] = &[
     "bridge-service",
     "http-webgpu",
     "kv-plugin",
+    "socket-echo-plugin",
     "kv-plugin-caller",
     "kv-plugin-service",
     "badlifecycle",
