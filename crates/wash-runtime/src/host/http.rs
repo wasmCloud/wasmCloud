@@ -54,7 +54,7 @@ use wasmtime_wasi_http::{
     p2::{
         WasiHttpView,
         bindings::{ProxyPre, http::types::Scheme},
-        body::HyperOutgoingBody,
+        body::{HyperIncomingBody, HyperOutgoingBody},
         hyper_request_error,
         types::{HostFutureIncomingResponse, IncomingResponse, OutgoingRequestConfig},
     },
@@ -216,6 +216,16 @@ pub trait Router: Send + Sync + 'static {
         &self,
         req: &hyper::Request<hyper::body::Incoming>,
     ) -> Result<String, RouteError>;
+
+    /// Match an outgoing request's authority against hostnames this ingress
+    /// serves, returning the workload ID to dispatch to in-memory, or `None`
+    /// to egress over the network as usual.
+    ///
+    /// Only consulted when same-host local routing is enabled on the ingress
+    /// (see [`IngressBuilder::local_routing`]). Default: never route locally.
+    fn route_local_egress(&self, _uri: &hyper::Uri) -> Option<String> {
+        None
+    }
 }
 
 /// Router that routes requests by 'Host' header, configured via WitInterface config
@@ -405,6 +415,19 @@ impl Router for DynamicRouter {
         // lookup, so it runs inline on the async worker — no `block_in_place`
         // needed (and routing works on any runtime flavor).
         self.select_workload(workload_host)
+    }
+
+    /// Match an outgoing request's authority against the same hostname table
+    /// used for inbound routing (each workload's `host`/`host-aliases` config),
+    /// picking a replica at random exactly like [`Self::route_incoming_request`]
+    /// so locally routed calls spread across co-located replicas too.
+    fn route_local_egress(&self, uri: &hyper::Uri) -> Option<String> {
+        let host = uri.host()?;
+        // Registered hostnames are RFC 1123 names as configured; the URI
+        // authority a guest dials may differ only in case.
+        self.select_workload(host)
+            .or_else(|_| self.select_workload(&host.to_ascii_lowercase()))
+            .ok()
     }
 }
 
@@ -896,8 +919,13 @@ pub type WorkloadHandles =
 
 /// An inbound HTTP request routed to a long-lived service instance, paired with
 /// a oneshot for its response.
+///
+/// The request body is pre-boxed into [`HyperIncomingBody`] so both real
+/// network ingress (`hyper::body::Incoming`, boxed in [`handle_http_request`])
+/// and locally short-circuited outgoing requests (see
+/// [`IngressBuilder::local_routing`]) can be delivered on the same channel.
 pub type ServiceHttpJob = (
-    hyper::Request<hyper::body::Incoming>,
+    hyper::Request<HyperIncomingBody>,
     tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
 );
 
@@ -947,6 +975,11 @@ pub struct Ingress<T: Router, O: OutgoingHandler = DefaultOutgoingHandler> {
     /// h2 (ALPN) variant of the outgoing handler's client TLS configuration,
     /// derived once on the first gRPC request; see [`Ingress::grpc_tls`].
     grpc_tls: OnceLock<Arc<rustls::ClientConfig>>,
+    /// Same-host local routing: when enabled, outgoing requests whose
+    /// authority matches a hostname this ingress serves are dispatched
+    /// in-memory to the co-located workload instead of egressing to the
+    /// network. Off by default.
+    local_routing: bool,
 }
 
 impl<T: Router, O: OutgoingHandler> std::fmt::Debug for Ingress<T, O> {
@@ -989,6 +1022,8 @@ impl TlsConfig {
 /// # Optional
 /// - [`outgoing_handler`](Self::outgoing_handler) — defaults to [`DefaultOutgoingHandler`].
 /// - [`tls`](Self::tls) — enables HTTPS.
+/// - [`local_routing`](Self::local_routing) — serve outgoing requests to
+///   co-located workloads in-memory. Off by default.
 ///
 /// # Example
 /// ```rust,ignore
@@ -1009,6 +1044,7 @@ pub struct IngressBuilder<T: Router, O: OutgoingHandler = DefaultOutgoingHandler
     outgoing_handler: O,
     addr: SocketAddr,
     tls: Option<TlsConfig>,
+    local_routing: bool,
 }
 
 impl<T: Router> IngressBuilder<T, DefaultOutgoingHandler> {
@@ -1018,6 +1054,7 @@ impl<T: Router> IngressBuilder<T, DefaultOutgoingHandler> {
             outgoing_handler: DefaultOutgoingHandler::default(),
             addr,
             tls: None,
+            local_routing: false,
         }
     }
 }
@@ -1031,12 +1068,25 @@ impl<T: Router, O: OutgoingHandler> IngressBuilder<T, O> {
             outgoing_handler: handler,
             addr: self.addr,
             tls: self.tls,
+            local_routing: self.local_routing,
         }
     }
 
     /// Enable TLS using the given [`TlsConfig`].
     pub fn tls(mut self, tls: TlsConfig) -> Self {
         self.tls = Some(tls);
+        self
+    }
+
+    /// Enable same-host local routing: outgoing requests whose authority
+    /// matches a hostname this ingress serves (a co-located workload's
+    /// `host`/`host-aliases` interface config) are dispatched to that workload
+    /// in-memory instead of egressing to the network. Locally routed calls
+    /// bypass anything on the network path (ingress middleware, mesh mTLS,
+    /// NetworkPolicy); the caller's `allowed_hosts` policy still applies.
+    /// Off by default.
+    pub fn local_routing(mut self, enabled: bool) -> Self {
+        self.local_routing = enabled;
         self
     }
 
@@ -1067,6 +1117,7 @@ impl<T: Router, O: OutgoingHandler> IngressBuilder<T, O> {
             listener: Arc::new(tokio::sync::Mutex::new(Some(listener))),
             meters: Default::default(),
             grpc_tls: OnceLock::new(),
+            local_routing: self.local_routing,
         })
     }
 }
@@ -1110,6 +1161,119 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
             })
             .clone()
     }
+
+    /// The fuel meter for locally dispatched requests. Meters are injected once
+    /// at host startup, so `try_read` only contends during that injection; fall
+    /// back to the default (no-op) meter rather than blocking a sync caller.
+    fn local_fuel_meter(&self) -> FuelConsumptionMeter {
+        self.meters
+            .try_read()
+            .map(|m| m.fuel_consumption.clone())
+            .unwrap_or_default()
+    }
+
+    /// Serve a P2 outgoing request by dispatching it to co-located workload
+    /// `target`'s incoming HTTP path in-memory (see
+    /// [`IngressBuilder::local_routing`]).
+    fn send_local_request(
+        &self,
+        target: String,
+        request: hyper::Request<HyperOutgoingBody>,
+        config: OutgoingRequestConfig,
+    ) -> HostFutureIncomingResponse {
+        let span = outbound_client_span(request.method(), request.uri());
+        span.record("wasmcloud.http.route", "local");
+        let workload_handles = self.workload_handles.clone();
+        let service_handlers = self.service_handlers.clone();
+        let fuel_meter = self.local_fuel_meter();
+        let handle = wasmtime_wasi::runtime::spawn(
+            async move {
+                use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
+                let result = tokio::time::timeout(
+                    config.first_byte_timeout,
+                    dispatch_local(
+                        &target,
+                        request,
+                        workload_handles,
+                        service_handlers,
+                        fuel_meter,
+                    ),
+                )
+                .await
+                .map_err(|_| ErrorCode::ConnectionReadTimeout)
+                .and_then(|resp| {
+                    resp.map_err(|e| {
+                        error!(err = ?e, workload_id = %target, "local dispatch failed");
+                        ErrorCode::InternalError(Some(format!("local dispatch failed: {e}")))
+                    })
+                })
+                .map(|resp| IncomingResponse {
+                    resp,
+                    worker: None,
+                    between_bytes_timeout: config.between_bytes_timeout,
+                });
+                match &result {
+                    Ok(incoming) => record_outbound_status(incoming.resp.status()),
+                    Err(_) => record_outbound_error(),
+                }
+                Ok(result)
+            }
+            .instrument(span),
+        );
+        HostFutureIncomingResponse::pending(handle)
+    }
+
+    /// P3 sibling of [`Self::send_local_request`]: dispatch a P3 outgoing
+    /// request to co-located workload `target` in-memory, converting the body
+    /// error types at the P3/P2 boundary in both directions.
+    fn send_local_request_p3(
+        &self,
+        target: String,
+        request: hyper::Request<crate::host::http_p3::P3Body>,
+        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+    ) -> crate::host::http_p3::P3SendFuture {
+        let workload_handles = self.workload_handles.clone();
+        let service_handlers = self.service_handlers.clone();
+        let fuel_meter = self.local_fuel_meter();
+        Box::new(async move {
+            use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode as P2ErrorCode;
+            use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
+            let first_byte_timeout = options
+                .and_then(|o| o.first_byte_timeout)
+                .unwrap_or(Duration::from_secs(600));
+            // The local incoming path carries the p2 `ErrorCode`.
+            let request = request.map(|body| {
+                HyperIncomingBody::new(
+                    body.map_err(|e| P2ErrorCode::InternalError(Some(format!("{e:?}")))),
+                )
+            });
+            let response = tokio::time::timeout(
+                first_byte_timeout,
+                dispatch_local(
+                    &target,
+                    request,
+                    workload_handles,
+                    service_handlers,
+                    fuel_meter,
+                ),
+            )
+            .await
+            .map_err(|_| wasmtime_wasi::TrappableError::from(ErrorCode::ConnectionReadTimeout))?
+            .map_err(|e| {
+                error!(err = ?e, workload_id = %target, "local dispatch failed");
+                wasmtime_wasi::TrappableError::from(ErrorCode::InternalError(Some(format!(
+                    "local dispatch failed: {e}"
+                ))))
+            })?;
+            // ...and back to the p3 `ErrorCode` for the response body.
+            let response = response.map(|body| {
+                body.map_err(|e| ErrorCode::InternalError(Some(format!("{e:?}"))))
+                    .boxed_unsync()
+            });
+            let io: crate::host::http_p3::P3RequestErrorFuture = Box::new(async move { Ok(()) });
+            Ok((response, io))
+        })
+    }
 }
 
 /// Derive the h2 (ALPN) variant of a client TLS configuration for gRPC egress.
@@ -1117,6 +1281,53 @@ fn h2_client_config(base: &rustls::ClientConfig) -> Arc<rustls::ClientConfig> {
     let mut config = base.clone();
     config.alpn_protocols = vec![b"h2".to_vec()];
     Arc::new(config)
+}
+
+/// Dispatch a locally routed request to `workload_id`'s incoming HTTP path:
+/// the long-lived service instance when one is registered, else a fresh
+/// per-request component instance — the same priority order as
+/// [`handle_http_request`].
+async fn dispatch_local(
+    workload_id: &str,
+    mut request: hyper::Request<HyperIncomingBody>,
+    workload_handles: WorkloadHandles,
+    service_handlers: ServiceHandlers,
+    fuel_meter: FuelConsumptionMeter,
+) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
+    // Mirror the wire: a network send would carry the request authority as its
+    // `Host` header, and handlers routinely read it.
+    if !request.headers().contains_key(hyper::header::HOST)
+        && let Some(authority) = request.uri().authority()
+        && let Ok(value) = hyper::header::HeaderValue::from_str(authority.as_str())
+    {
+        request.headers_mut().insert(hyper::header::HOST, value);
+    }
+
+    let service_sender = service_handlers.read().await.get(workload_id).cloned();
+    if let Some(sender) = service_sender {
+        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+        sender.send((request, resp_tx)).await.map_err(|_| {
+            anyhow::anyhow!("service HTTP instance for workload {workload_id} is not running")
+        })?;
+        return resp_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("service HTTP instance dropped the response"))?;
+    }
+
+    let workload_handle = workload_handles.read().await.get(workload_id).cloned();
+    let Some((handle, instance_pre, component_id)) = workload_handle else {
+        anyhow::bail!("no workload handle registered for locally routed workload {workload_id}");
+    };
+    let req_span = tracing::span!(
+        tracing::Level::INFO,
+        "invoke_component_handler",
+        workload.name = handle.name(),
+        workload.namespace = handle.namespace(),
+        workload.id = handle.id(),
+    );
+    invoke_component_handler(handle, instance_pre, &component_id, request, fuel_meter)
+        .instrument(req_span)
+        .await
 }
 
 #[async_trait::async_trait]
@@ -1344,6 +1555,16 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 None => send_grpc_request(request, config, self.grpc_tls()),
             });
         }
+        // Same-host short-circuit: dispatch to a co-located workload's incoming
+        // path in-memory. Checked after the gRPC branch so gRPC always egresses
+        // over the network, and after `allowed_hosts` so the short-circuit
+        // never widens a workload's egress policy.
+        if self.local_routing
+            && let Some(target) = self.router.route_local_egress(request.uri())
+        {
+            debug!(workload_id, target, uri = %request.uri(), "routing outgoing request to co-located workload");
+            return Ok(self.send_local_request(target, request, config));
+        }
         self.outgoing_handler
             .send_request(workload_id, request, config)
     }
@@ -1378,6 +1599,14 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 }),
                 None => send_grpc_request_p3(request, options, self.grpc_tls()),
             }
+        } else if self.local_routing
+            && let Some(target) = self.router.route_local_egress(request.uri())
+        {
+            // Same-host short-circuit; see `outgoing_request` for ordering
+            // rationale (after allowed_hosts and the gRPC branch).
+            debug!(workload_id, target, uri = %request.uri(), "routing P3 outgoing request to co-located workload");
+            span.record("wasmcloud.http.route", "local");
+            self.send_local_request_p3(target, request, options)
         } else {
             self.outgoing_handler
                 .send_request_p3(workload_id, request, options, fut)
@@ -1578,6 +1807,11 @@ async fn handle_http_request<T: Router>(
         "HTTP request received"
     );
 
+    // Box the network body into the shared incoming-body type so the service
+    // channel and per-request invoke path accept both network ingress and
+    // locally routed requests (see `dispatch_local`).
+    let req = req.map(|body| HyperIncomingBody::new(body.map_err(hyper_request_error)));
+
     // If this workload's long-lived service serves HTTP, deliver the request to
     // it (preserving its in-memory state) instead of the per-request path.
     let service_sender = service_handlers.read().await.get(&workload_id).cloned();
@@ -1680,6 +1914,9 @@ fn outbound_client_span(method: &hyper::Method, uri: &hyper::Uri) -> tracing::Sp
         { HTTP_RESPONSE_STATUS_CODE } = tracing::field::Empty,
         { RPC_GRPC_STATUS_CODE } = tracing::field::Empty,
         { OTEL_STATUS_CODE } = tracing::field::Empty,
+        // Set to "local" when the request is served by a co-located workload
+        // in-memory instead of egressing (see IngressBuilder::local_routing).
+        wasmcloud.http.route = tracing::field::Empty,
     );
     if let Some(port) = uri.port_u16() {
         span.record(SERVER_PORT, port);
@@ -1829,7 +2066,7 @@ async fn invoke_component_handler(
     workload_handle: ResolvedWorkload,
     instance_pre: InstancePre<SharedCtx>,
     component_id: &str,
-    req: hyper::Request<hyper::body::Incoming>,
+    req: hyper::Request<HyperIncomingBody>,
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
     if crate::engine::targets_wasip3_http(instance_pre.component()) {
@@ -1907,7 +2144,7 @@ async fn invoke_component_handler(
 pub async fn handle_component_request(
     mut store: Store<SharedCtx>,
     pre: InstancePre<SharedCtx>,
-    req: hyper::Request<hyper::body::Incoming>,
+    req: hyper::Request<HyperIncomingBody>,
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -3125,6 +3362,53 @@ mod tests {
                 Err(RouteError::NoWorkloadForHost(_))
             ),
             "hostname must stop routing once the service unbinds"
+        );
+    }
+
+    // --- same-host local routing tests ---
+
+    #[tokio::test]
+    async fn route_local_egress_uses_the_ingress_hostname_table() {
+        let router = DynamicRouter::default();
+        router.register_hostnames("callee", &["callee.internal".to_string()]);
+
+        let route = |uri: &str| router.route_local_egress(&uri.parse::<hyper::Uri>().unwrap());
+
+        assert_eq!(
+            route("http://callee.internal/api/items"),
+            Some("callee".to_string()),
+            "any path on a served hostname routes locally"
+        );
+        assert_eq!(
+            route("http://callee.internal:8080/api"),
+            Some("callee".to_string()),
+            "ports on the request authority are ignored"
+        );
+        assert_eq!(
+            route("http://CALLEE.internal/api"),
+            Some("callee".to_string()),
+            "authority matching is case-insensitive"
+        );
+        assert_eq!(
+            route("http://elsewhere.example.com/api"),
+            None,
+            "hostnames this ingress does not serve egress normally"
+        );
+    }
+
+    #[tokio::test]
+    async fn route_local_egress_stops_on_unbind() {
+        let router = DynamicRouter::default();
+        let uri: hyper::Uri = "http://callee.internal/fn".parse().unwrap();
+
+        router.register_hostnames("callee", &["callee.internal".to_string()]);
+        assert_eq!(router.route_local_egress(&uri), Some("callee".to_string()));
+
+        router.on_workload_unbind("callee").await.unwrap();
+        assert_eq!(
+            router.route_local_egress(&uri),
+            None,
+            "unbind must drop the workload's hostnames from local routing too"
         );
     }
 }

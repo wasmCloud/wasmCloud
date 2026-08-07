@@ -1,0 +1,123 @@
+# Same-host local routing example: a caller and a callee workload.
+#
+# The callee is reachable at the hostnames its wasi:http/incoming-handler
+# interface declares (`host` plus `host-aliases`) — the same config every HTTP
+# workload already has. When the host runs with `--http-local-routing` (chart
+# value: `runtime.hostGroups[].http.localRouting`), any outgoing request from a
+# co-located workload to one of those hostnames is served by the callee
+# in-memory — it never leaves the host pod. The `functiona.internal` alias
+# deliberately resolves nowhere in DNS, so a 200 from the caller proves the
+# request took the local route.
+#
+# Both workloads target the same hostgroup; with more than one host replica in
+# the group, local routing only applies when the scheduler happens to co-locate
+# them. Pin `spec.replicas: 1` on the hostgroup (or use a dedicated hostgroup)
+# to make co-location deterministic.
+#
+# Replace the images with your own registry if you have not published these
+# components (see the README's "Building and pushing the components" section).
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: local-ingress-callee
+spec:
+  replicas: 1
+  template:
+    spec:
+      hostSelector:
+        hostgroup: default
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            # Regular ingress hostname (public dns alias for 127.0.0.1).
+            host: functiona.localhost.cosmonic.sh
+            # Every hostname the ingress serves — the primary `host` and any
+            # aliases here — also routes locally when the host has
+            # `--http-local-routing` enabled. This alias exists only in the
+            # host's routing table, not in DNS, so a co-located caller reaches
+            # it in-memory or not at all.
+            host-aliases: functiona.internal
+      components:
+        - name: callee
+          image: oci-registry.default.svc:80/local-ingress-callee:0.1.0
+          # Pushed to the in-cluster registry instead (README step 3d)? The
+          # explicit :80 makes the host's HTTPS-first pull attempt fail fast
+          # before it falls back to plain HTTP.
+          # image: oci-registry.default.svc:80/local-ingress-callee:0.1.0
+---
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: local-ingress-caller
+spec:
+  replicas: 1
+  kubernetes:
+    service:
+      # Ties the Service below to this workload: the operator maintains its
+      # EndpointSlice, pointing at the host pods running the caller, so the
+      # Traefik Ingress can route to it without a port-forward.
+      name: local-ingress-caller
+  template:
+    spec:
+      hostSelector:
+        hostgroup: default
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            host: hello.localhost.cosmonic.sh
+      components:
+        - name: caller
+          image: oci-registry.default.svc:80/local-ingress-caller:0.1.0
+          # Pushed to the in-cluster registry instead (README step 3d)? The
+          # explicit :80 makes the host's HTTPS-first pull attempt fail fast
+          # before it falls back to plain HTTP.
+          # image: oci-registry.default.svc:80/local-ingress-caller:0.1.0
+          localResources:
+            # allowed_hosts is enforced before local routing: the caller must
+            # still be permitted to reach the callee's authority.
+            allowedHosts:
+              - functiona.internal
+            environment:
+              config:
+                CALLEE_URL: http://functiona.internal/
+---
+# Laptop-facing entry point for the caller: Traefik routes
+# hello.localhost.cosmonic.sh (public wildcard DNS for 127.0.0.1; laptop :80 →
+# node :30950 → Traefik) to this Service, whose EndpointSlice the operator
+# points at the host pods running the caller.
+apiVersion: v1
+kind: Service
+metadata:
+  name: local-ingress-caller
+spec:
+  # No selector: the runtime-operator manages the EndpointSlice (see the
+  # caller WorkloadDeployment's spec.kubernetes.service.name).
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: local-ingress-caller
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: hello.localhost.cosmonic.sh
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: local-ingress-caller
+                port:
+                  number: 80

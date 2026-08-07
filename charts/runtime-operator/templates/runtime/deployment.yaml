@@ -179,6 +179,13 @@ spec:
             - "--tls-cert-path=/tls-cert/tls.crt"
             - "--tls-key-path=/tls-cert/tls.key"
             {{- end }}
+            {{- /* Same-host local routing: outgoing requests to a hostname
+                   this host's ingress serves are answered in-memory by the
+                   co-located workload, bypassing the cluster network (and any
+                   ingress middleware on it). Off unless explicitly enabled. */}}
+            {{- if .http.localRouting }}
+            - "--http-local-routing"
+            {{- end }}
             {{- end }}
             {{- if and (.webgpu) (.webgpu.enabled) }}
             - "--wasi-webgpu"

@@ -47,7 +47,7 @@ impl hyper::body::Body for ChannelBody {
 /// re-registers) a fresh instance. See `test_trigger_service_http_restarts_on_fault`.
 pub(crate) struct HttpTask {
     pub(crate) service: Arc<Service>,
-    pub(crate) req: hyper::Request<hyper::body::Incoming>,
+    pub(crate) req: hyper::Request<wasmtime_wasi_http::p2::body::HyperIncomingBody>,
     pub(crate) resp_tx:
         tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
     /// This call's tether to a pooled instance: holds its in-flight slot and
@@ -66,8 +66,9 @@ impl AccessorTask<SharedCtx> for HttpTask {
         } = self;
 
         let (parts, body) = req.into_parts();
+        // Frames arrive with the p2 `ErrorCode`; the p3 request wants the p3 one.
         let body = body
-            .map_err(|e| ErrorCode::InternalError(Some(e.to_string())))
+            .map_err(|e| ErrorCode::InternalError(Some(format!("{e:?}"))))
             .boxed_unsync();
         let req = hyper::Request::from_parts(parts, body);
         let (wasi_req, req_io) = wasmtime_wasi_http::p3::Request::from_http(req);

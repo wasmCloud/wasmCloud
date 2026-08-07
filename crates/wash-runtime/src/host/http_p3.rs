@@ -71,15 +71,16 @@ impl hyper::body::Body for ChannelBody {
 /// memory.
 pub(crate) async fn handle_component_request_p3(
     warm: ComponentInstance,
-    req: hyper::Request<hyper::body::Incoming>,
+    req: hyper::Request<wasmtime_wasi_http::p2::body::HyperIncomingBody>,
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<hyper::Response<P3Body>> {
     let _ = &fuel_meter; // fuel metering integration deferred to match P2's observe() pattern
 
-    // Convert the hyper request body — map error type since hyper::Error doesn't impl Into<ErrorCode>
+    // Convert the hyper request body — map error type since the P2 ErrorCode
+    // doesn't impl Into<the P3 ErrorCode>
     let (parts, body) = req.into_parts();
     let body = body
-        .map_err(|e| ErrorCode::InternalError(Some(e.to_string())))
+        .map_err(|e| ErrorCode::InternalError(Some(format!("{e:?}"))))
         .boxed_unsync();
     let req = hyper::Request::from_parts(parts, body);
     let (wasi_req, req_io) = wasmtime_wasi_http::p3::Request::from_http(req);

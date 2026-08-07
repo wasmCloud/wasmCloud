@@ -321,7 +321,7 @@ impl CredentialResolver {
 }
 
 /// OCI pull policy
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OciPullPolicy {
     /// ️ Always pull the component from the registry
     Always,
@@ -345,6 +345,10 @@ impl std::str::FromStr for OciPullPolicy {
         }
     }
 }
+
+/// How long the HTTPS attempt may spend connecting before an insecure-registry
+/// pull gives up on it and retries over plain HTTP.
+const INSECURE_HTTPS_PROBE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Pull a WebAssembly component from an OCI registry
 ///
@@ -388,18 +392,6 @@ pub async fn pull_component(
     let reference_parsed = Reference::try_from(reference)
         .with_context(|| format!("invalid OCI reference: {reference}"))?;
 
-    // Configure OCI client
-    let client_config = ClientConfig {
-        protocol: if config.insecure {
-            ClientProtocol::Http
-        } else {
-            ClientProtocol::Https
-        },
-        ..Default::default()
-    };
-
-    let client = Client::new(client_config);
-
     // Setup credential resolver
     let credential_resolver = CredentialResolver::new(config.credentials);
     let auth = credential_resolver
@@ -411,79 +403,173 @@ pub async fn pull_component(
         .cache_dir
         .as_ref()
         .map(|dir| CacheManager::new(dir.clone()));
-    if let Some(cache_manager) = &cache_manager {
-        // Check cache first
-        if pull_policy != OciPullPolicy::Always && cache_manager.is_cached(reference).await {
-            debug!("Found cached artifact");
-            let (component_data, digest) = cache_manager.read_cached(reference).await?;
 
-            let fetched_digest = client
-                .fetch_manifest_digest(&reference_parsed, &auth)
-                .await?;
-
-            if digest == fetched_digest {
-                return Ok((component_data, digest));
-            }
-
-            debug!("Cached artifact expired; pulling new component version");
-        }
-    }
-
-    if pull_policy == OciPullPolicy::Never {
-        bail!("component not found in cache and pull policy is 'Never'");
-    }
-
-    // Pull the component using oci-client
-    let pull_future = client.pull(
-        &reference_parsed,
-        &auth,
-        vec![
-            WASM_LAYER_MEDIA_TYPE,
-            #[allow(deprecated)]
-            WASMCLOUD_MEDIA_TYPE,
-        ],
-    );
-
-    // Apply timeout if configured, otherwise just await the pull
-    let image_data = if let Some(timeout) = config.timeout {
-        tokio::time::timeout(timeout, pull_future)
-            .await
-            .with_context(|| {
-                format!("timeout pulling component from {reference} after {timeout:?}")
-            })?
-            .with_context(|| format!("failed to pull component from {reference}"))?
-    } else {
-        pull_future
-            .await
-            .with_context(|| format!("failed to pull component from {reference}"))?
+    // Always attempt HTTPS first. `insecure` grants permission to *fall back*
+    // to plain HTTP when the HTTPS attempt fails (e.g. an in-cluster registry
+    // that serves no TLS) — it must not downgrade registries that do serve
+    // TLS, or a host with the flag set can no longer pull from ghcr.io and
+    // friends, which reject or redirect plain-HTTP API calls.
+    let attempt = PullAttempt {
+        protocol: ClientProtocol::Https,
+        connect_timeout: config
+            .insecure
+            .then_some(INSECURE_HTTPS_PROBE_CONNECT_TIMEOUT),
+        reference,
+        reference_parsed: &reference_parsed,
+        auth: &auth,
+        cache_manager: cache_manager.as_ref(),
+        pull_policy,
+        timeout: config.timeout,
     };
-
-    // Extract the component bytes from the first layer
-    let component_data = image_data
-        .layers
-        .first()
-        .ok_or_else(|| anyhow!("no layers found in pulled artifact"))?
-        .data
-        .clone();
-    let digest = image_data
-        .digest
-        .ok_or_else(|| anyhow!("no digest found in pulled artifact"))?;
-
-    // Validate that it's a valid WebAssembly component
-    validate_component(&component_data)
-        .await
-        .with_context(|| "pulled artifact is not a valid WebAssembly component")?;
-
-    // Cache the component with its digest
-    if let Some(cache_manager) = &cache_manager {
-        cache_manager
-            .write_to_cache(reference, &component_data, &digest)
+    match attempt.clone().run().await {
+        Ok(result) => Ok(result),
+        Err(https_err) if config.insecure => {
+            debug!(
+                registry = reference_parsed.registry(),
+                err = ?https_err,
+                "HTTPS pull failed; retrying over plain HTTP (insecure registries allowed)"
+            );
+            PullAttempt {
+                protocol: ClientProtocol::Http,
+                connect_timeout: None,
+                ..attempt
+            }
+            .run()
             .await
-            .with_context(|| "failed to cache component")?;
+            .with_context(|| format!("pull over HTTPS also failed with: {https_err:#}"))
+        }
+        Err(e) => Err(e),
     }
+}
 
-    // oci-client 0.17 hands back layer data as `Bytes`; callers expect `Vec<u8>`.
-    Ok((component_data.to_vec(), digest))
+/// One pull attempt over a fixed [`ClientProtocol`]. Split out of
+/// [`pull_component`] so the insecure path can retry the whole flow — cache
+/// freshness check included — over plain HTTP after an HTTPS failure, varying
+/// only the transport between the two.
+#[derive(Clone)]
+struct PullAttempt<'a> {
+    protocol: ClientProtocol,
+    /// Bound on the connect phase, set only when a fallback attempt follows
+    /// this one. See [`INSECURE_HTTPS_PROBE_CONNECT_TIMEOUT`].
+    connect_timeout: Option<Duration>,
+    reference: &'a str,
+    reference_parsed: &'a Reference,
+    auth: &'a RegistryAuth,
+    cache_manager: Option<&'a CacheManager>,
+    pull_policy: OciPullPolicy,
+    /// Budget for each network round trip this attempt makes.
+    timeout: Option<Duration>,
+}
+
+impl PullAttempt<'_> {
+    async fn run(self) -> Result<(Vec<u8>, String)> {
+        let PullAttempt {
+            protocol,
+            connect_timeout,
+            reference,
+            reference_parsed,
+            auth,
+            cache_manager,
+            pull_policy,
+            timeout,
+        } = self;
+
+        // Configure OCI client
+        let client_config = ClientConfig {
+            protocol,
+            connect_timeout,
+            ..Default::default()
+        };
+
+        let client = Client::new(client_config);
+
+        if let Some(cache_manager) = &cache_manager {
+            // Check cache first
+            if pull_policy != OciPullPolicy::Always && cache_manager.is_cached(reference).await {
+                debug!("Found cached artifact");
+                let (component_data, digest) = cache_manager.read_cached(reference).await?;
+
+                // Bounded by the same budget as the pull itself: a registry that
+                // accepts the connection and then goes quiet would otherwise hang
+                // the freshness check forever, and this path runs on *every*
+                // cached pull.
+                let digest_future = client.fetch_manifest_digest(reference_parsed, auth);
+                let fetched_digest = if let Some(timeout) = timeout {
+                    tokio::time::timeout(timeout, digest_future)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "timeout checking cached component freshness for {reference} after {timeout:?}"
+                            )
+                        })??
+                } else {
+                    digest_future.await?
+                };
+
+                if digest == fetched_digest {
+                    return Ok((component_data, digest));
+                }
+
+                debug!("Cached artifact expired; pulling new component version");
+            }
+        }
+
+        if pull_policy == OciPullPolicy::Never {
+            bail!("component not found in cache and pull policy is 'Never'");
+        }
+
+        // Pull the component using oci-client
+        let pull_future = client.pull(
+            reference_parsed,
+            auth,
+            vec![
+                WASM_LAYER_MEDIA_TYPE,
+                #[allow(deprecated)]
+                WASMCLOUD_MEDIA_TYPE,
+            ],
+        );
+
+        // Apply timeout if configured, otherwise just await the pull
+        let image_data = if let Some(timeout) = timeout {
+            tokio::time::timeout(timeout, pull_future)
+                .await
+                .with_context(|| {
+                    format!("timeout pulling component from {reference} after {timeout:?}")
+                })?
+                .with_context(|| format!("failed to pull component from {reference}"))?
+        } else {
+            pull_future
+                .await
+                .with_context(|| format!("failed to pull component from {reference}"))?
+        };
+
+        // Extract the component bytes from the first layer
+        let component_data = image_data
+            .layers
+            .first()
+            .ok_or_else(|| anyhow!("no layers found in pulled artifact"))?
+            .data
+            .clone();
+        let digest = image_data
+            .digest
+            .ok_or_else(|| anyhow!("no digest found in pulled artifact"))?;
+
+        // Validate that it's a valid WebAssembly component
+        validate_component(&component_data)
+            .await
+            .with_context(|| "pulled artifact is not a valid WebAssembly component")?;
+
+        // Cache the component with its digest
+        if let Some(cache_manager) = &cache_manager {
+            cache_manager
+                .write_to_cache(reference, &component_data, &digest)
+                .await
+                .with_context(|| "failed to cache component")?;
+        }
+
+        // oci-client 0.17 hands back layer data as `Bytes`; callers expect `Vec<u8>`.
+        Ok((component_data.to_vec(), digest))
+    }
 }
 
 /// Push a WebAssembly component to an OCI registry
@@ -805,5 +891,69 @@ mod tests {
         assert_eq!(config.cache_dir.unwrap(), temp_dir.path());
         assert!(config.credentials.is_none());
         assert!(!config.insecure);
+    }
+
+    /// A listener that completes the TCP handshake and then goes silent. A
+    /// TLS client stalls in the handshake against it — the shape of a
+    /// registry that serves plain HTTP but nothing on the HTTPS path.
+    async fn stalling_listener() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let mut accepted = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                // Hold the connection open and never speak.
+                accepted.push(stream);
+            }
+        });
+        (addr, handle)
+    }
+
+    /// The HTTPS-first probe must be bounded. A stalled TLS handshake used to
+    /// take the whole pull with it: on the cache-freshness path
+    /// `fetch_manifest_digest` is not covered by [`OciConfig::timeout`]
+    #[tokio::test]
+    async fn insecure_pull_bounds_a_stalled_https_probe() {
+        let (addr, _listener) = stalling_listener().await;
+        let reference = format!("{addr}/fixtures/component:test");
+
+        // Populate the cache so the pull takes the freshness-check path.
+        let cache = TempDir::new().unwrap();
+        let cache_manager = CacheManager::new(cache.path().to_path_buf());
+        let dir = cache_manager.get_cache_dir(&reference);
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(cache_manager.get_component_path(&reference), b"wasm")
+            .await
+            .unwrap();
+        tokio::fs::write(cache_manager.get_digest_path(&reference), "sha256:cafe")
+            .await
+            .unwrap();
+
+        // Mirrors how the host builds its config: a pull timeout is always set
+        // (`--registry-pull-timeout`, 30s by default), shortened here to keep
+        // the test quick.
+        let config = OciConfig {
+            insecure: true,
+            cache_dir: Some(cache.path().to_path_buf()),
+            timeout: Some(Duration::from_secs(5)),
+            ..Default::default()
+        };
+
+        // Both schemes reach the same stalled listener, so the pull must
+        // fail — the assertion is that it fails at all rather than hanging.
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            pull_component(&reference, config, OciPullPolicy::IfNotPresent),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "pull_component hung on a stalled registry instead of bounding each attempt"
+        );
+        assert!(
+            result.unwrap().is_err(),
+            "a stalled listener serves neither scheme, so the pull cannot succeed"
+        );
     }
 }

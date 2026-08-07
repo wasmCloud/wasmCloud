@@ -160,8 +160,7 @@ impl ComponentSource {
         match self {
             Self::Oci { image, pull_policy } => {
                 // `pull_component` already names the reference it failed on.
-                let (bytes, digest) =
-                    pull_component(image, oci_config, pull_policy.clone()).await?;
+                let (bytes, digest) = pull_component(image, oci_config, *pull_policy).await?;
                 Ok(LoadedComponent {
                     bytes: bytes.into(),
                     digest: Some(digest),
