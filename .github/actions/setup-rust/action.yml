@@ -110,7 +110,7 @@ runs:
 
     - name: Install cargo-zigbuild
       if: ${{ inputs.install-zigbuild == 'true' }}
-      uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+      uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
       env:
         # Authenticate the action's GitHub API calls so they aren't throttled
         # by the 60/hr anonymous per-IP limit shared across hosted runners.
