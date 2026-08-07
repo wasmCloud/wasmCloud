@@ -46,6 +46,17 @@
 //! delivery, post-restart replay, and quarantine — lives in the `lifecycle`
 //! submodule; this module drives it from `ComponentHostPlugin`'s `HostPlugin`
 //! impl.
+//!
+//! Calls also run the other way. A plugin may *import* an interface no host
+//! built-in provides, in which case a workload that exports it satisfies it —
+//! the arrangement `wasi:http` and `wasmcloud:messaging` already have, where the
+//! host both serves a workload's imports and calls the handler it exports.
+//! [`classify_workload_imports`] decides which imports those are, and the
+//! `workload_call` submodule holds the rest: the per-workload routes (claimed in
+//! `on_workload_resolved`, exactly as a native plugin claims them), the
+//! `wasmcloud:host/workload` `target` handle a plugin uses to name which
+//! workload a call goes to, and the fallback that sends an unaddressed call back
+//! to the workload whose capability call is being served.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -68,7 +79,9 @@ use crate::engine::ctx::{CallerIdentity, Ctx, SharedCtx};
 use crate::engine::instance_pool::InstancePolicy;
 use crate::engine::store::relocate::{self, Relocated};
 use crate::engine::store::resource_bridge::{self, ProxyResource};
-use crate::engine::workload::{UnresolvedWorkload, WorkloadComponent, WorkloadItem};
+use crate::engine::workload::{
+    ResolvedWorkload, UnresolvedWorkload, WorkloadComponent, WorkloadItem,
+};
 use crate::host::job_registry::JobRegistry;
 use crate::host::trigger_service::{
     CapabilityCall, CapabilityFunc, CapabilityJob, Ingress, LifecycleReplay, TriggerService,
@@ -82,12 +95,14 @@ use crate::types::LocalResources;
 use crate::wit::{WitInterface, WitWorld};
 
 mod lifecycle;
+mod workload_call;
 
 use lifecycle::{
     BindReply, HOST_LIFECYCLE_EXPORT, LifecycleFuncs, POISON_EVICT_STRIKES, attribute_replay_fault,
     await_bind_reply, evict_workload, lifecycle_funcs, remove_and_unbind, replay_snapshot,
     report_workload_failed, send_lifecycle_job, spawn_deferred_unbind, workload_info_val,
 };
+use workload_call::{WorkloadCalls, add_workload_calls_to_linker, install_host_workload};
 
 /// Capacity of a plugin incarnation's capability-call channel. Bounds queued
 /// (not-yet-served) calls; in-flight (being-served) calls are separately capped
@@ -110,7 +125,13 @@ struct ExportedFunc {
     result_tys: Arc<[Type]>,
 }
 
-/// One exported capability interface the plugin provides.
+/// One interface, with the functions and resource types it carries, as
+/// introspected from a plugin component's type. Used for all three kinds the
+/// plugin deals in — a capability it exports, an interface it both imports and
+/// exports (a self-import), and an interface it imports for a *workload* to
+/// export ([`workload_call`]) — because the shape the host needs is the same
+/// for each: the instance name to address it by, its functions' names and
+/// types, and any resources it defines.
 struct ExportedInterface {
     /// Full component instance name, e.g. `acme:kv/store@0.1.0` — the exact
     /// string used to address the interface on both the plugin's own instance
@@ -182,6 +203,11 @@ struct ComponentHostPluginState {
     /// [`crate::engine::ctx::Ctx::try_get_plugin`] — finds it there the same
     /// way it would in a workload's store.
     native_plugins: HashMap<&'static str, Arc<dyn HostPlugin>>,
+    /// The other direction: the interfaces this plugin imports for a *workload*
+    /// to export, which workloads currently serve them, and which workload each
+    /// in-flight guest task is addressing. Empty for a plugin that only
+    /// provides capabilities. See [`workload_call`].
+    workload_calls: WorkloadCalls,
 }
 
 impl ComponentHostPluginState {
@@ -297,6 +323,21 @@ impl ComponentHostPlugin {
         // so this is a no-op today, but it makes the cycle-safety invariant
         // hold by construction here too, not just at the caller.
         let native_plugins = native_only(&native_plugins);
+        let (component, base_linker) = engine.prepare_host_component(wasm)?;
+        let (exports, lifecycle) = introspect_capability_exports(id, &component)?;
+        let workload_imports =
+            classify_workload_imports(id, &component, &exports, &native_plugins)?;
+        // A plugin has to participate in one direction or the other: serve a
+        // capability a workload imports, or call an interface a workload
+        // exports. A plugin doing only the latter is a legitimate shape — a
+        // trigger that dispatches from its own `wasi:cli/run` and exports no
+        // capability at all.
+        anyhow::ensure!(
+            exports.iter().any(|e| !e.funcs.is_empty()) || !workload_imports.is_empty(),
+            "host component plugin '{id}' exports no capability functions to serve and imports \
+             no interface for a workload to export"
+        );
+
         let state = Arc::new(ComponentHostPluginState {
             id,
             tx: ArcSwapOption::empty(),
@@ -310,13 +351,32 @@ impl ComponentHostPlugin {
                 crate::timeouts::plugin_lifecycle_call().as_millis() as u64,
             ),
             native_plugins: native_plugins.clone(),
+            workload_calls: WorkloadCalls::new(id, workload_imports),
         });
 
-        let (exports, lifecycle, pre) =
-            build_plugin_linker(&engine, id, wasm, &state, &native_plugins, &config).await?;
+        let pre = build_plugin_linker(
+            &engine,
+            id,
+            &component,
+            base_linker,
+            &exports,
+            &state,
+            &native_plugins,
+            &config,
+        )
+        .await?;
 
+        // A capability the plugin exports and an interface it calls on a
+        // workload are both entries in the world the host matches a workload
+        // against: `includes_bidirectional` already covers a workload that
+        // satisfies one by *exporting* it, so the two directions need no
+        // distinction here.
         let world = WitWorld {
-            imports: exports.iter().map(|e| e.wit.clone()).collect(),
+            imports: exports
+                .iter()
+                .chain(state.workload_calls.imports())
+                .map(|e| e.wit.clone())
+                .collect(),
             exports: Default::default(),
         };
         let mut capability_funcs: Vec<CapabilityFunc> = exports
@@ -634,6 +694,32 @@ impl HostPlugin for ComponentHostPlugin {
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         let workload_id: Arc<str> = Arc::from(item.workload_id());
+
+        // An interface this plugin *calls* puts nothing on the item's linker —
+        // the item provides it rather than consuming it. But a match on such an
+        // interface only means the item's world mentions the package, so check
+        // here that it really exports it: an item that imports it instead has
+        // nobody to serve it, and would otherwise fail later as an unresolved
+        // wasmtime import with no mention of this plugin.
+        for called in self.state.workload_calls.imports() {
+            let iface_names: Vec<&str> = called.wit.interfaces.iter().map(String::as_str).collect();
+            if !interfaces.contains(&called.wit.namespace, &called.wit.package, &iface_names) {
+                continue;
+            }
+            anyhow::ensure!(
+                item.world()
+                    .exports
+                    .iter()
+                    .any(|exported| exported.contains(&called.wit)),
+                "host component plugin '{}' calls {} rather than serving it, so '{}' must export \
+                 it, but '{}' does not",
+                self.id,
+                called.name,
+                item.workload_id(),
+                item.id(),
+            );
+        }
+
         let linker = item.linker();
 
         for exported in self.exports.iter() {
@@ -668,11 +754,34 @@ impl HostPlugin for ComponentHostPlugin {
         Ok(())
     }
 
+    async fn on_workload_resolved(
+        &self,
+        workload: &ResolvedWorkload,
+        component_id: &str,
+    ) -> anyhow::Result<()> {
+        if self.state.workload_calls.is_empty() {
+            return Ok(());
+        }
+        // The workload is running now, so its components can be instantiated
+        // and called. Claiming them here — rather than at bind — is what a
+        // native plugin does too, and is why `callable` reports a workload only
+        // once it is up.
+        self.state
+            .workload_calls
+            .register(workload, component_id)
+            .await
+    }
+
     async fn on_workload_unbind(
         &self,
         workload_id: &str,
         _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Drop the routes into this workload first: its stores and warm
+        // instances go away with it, and an unbind hook below may run for a
+        // while.
+        self.state.workload_calls.unregister(workload_id);
+
         let Some(lifecycle) = &self.lifecycle else {
             return Ok(());
         };
@@ -849,37 +958,16 @@ async fn link_native_imports(
     ))
 }
 
-/// Build the plugin store's linker and pre-instantiate the component against it.
-/// This is the single place that declares the plugin's whole import surface:
-///
-/// - the WASI (and `wasi:http`) base, from [`Engine::prepare_host_component`];
-/// - the `wasmcloud:host/identity` import (unused unless the plugin imports it);
-/// - a route back to the plugin's own capability channel for any interface it
-///   both imports and exports (a self-import);
-/// - every other capability import, resolved against the host's native
-///   plugins ([`link_native_imports`]) — never against another component
-///   plugin.
-///
-/// The introspected exports are partitioned: the reserved `wasmcloud:host`
+/// Partition a plugin component's exports: the reserved `wasmcloud:host`
 /// lifecycle interface is a host-invoked contract, while everything else is a
-/// capability workloads may import. Returns the capability exports and the
-/// lifecycle export (if any) alongside the [`InstancePre`].
-async fn build_plugin_linker(
-    engine: &Engine,
+/// capability workloads may import.
+fn introspect_capability_exports(
     id: &str,
-    wasm: &[u8],
-    state: &Arc<ComponentHostPluginState>,
-    native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
-    config: &HashMap<String, String>,
-) -> anyhow::Result<(
-    Vec<ExportedInterface>,
-    Option<LifecycleFuncs>,
-    InstancePre<SharedCtx>,
-)> {
-    let (component, mut linker) = engine.prepare_host_component(wasm)?;
+    component: &Component,
+) -> anyhow::Result<(Vec<ExportedInterface>, Option<LifecycleFuncs>)> {
     let mut lifecycle = None;
     let mut exports = Vec::new();
-    for export in introspect_exports(&component)? {
+    for export in introspect_exports(component)? {
         if is_reserved(&export.wit) {
             // Matched by interface name, not the exact `export.name` string —
             // `wasmcloud:host` is versioned as one package, so a patch bump
@@ -896,18 +984,130 @@ async fn build_plugin_linker(
             exports.push(export);
         }
     }
-    anyhow::ensure!(
-        exports.iter().any(|e| !e.funcs.is_empty()),
-        "host component plugin '{id}' exports no capability functions to serve"
-    );
+    Ok((exports, lifecycle))
+}
 
+/// Whether an import is already accounted for by something other than a
+/// workload: an interface the plugin exports itself (a self-import), the WASI
+/// base, or the reserved `wasmcloud:host` package.
+fn is_self_satisfied(imported: &ExportedInterface, exports: &[ExportedInterface]) -> bool {
+    exports.iter().any(|e| e.name == imported.name)
+        || is_reserved(&imported.wit)
+        || is_base_wasi(&imported.wit)
+}
+
+/// The plugin's imports that a *workload* must export, in the order the
+/// component declares them.
+///
+/// An import lands here only when nothing else can satisfy it: it is not
+/// [`is_self_satisfied`], and no registered native plugin serves its package.
+/// Natives are checked first, and on the merged package view
+/// [`link_native_imports`] uses, so an interface a built-in provides never
+/// quietly turns into a call out to a workload.
+///
+/// This is where a plugin's import surface stops being closed. Before, an
+/// import no native served failed the load; now it is published in the plugin's
+/// [`WitWorld`] and a workload that both declares and exports it satisfies it.
+/// An import nothing ever exports therefore loads fine and traps on the call
+/// that needs it, with a message naming the interface.
+fn classify_workload_imports(
+    id: &str,
+    component: &Component,
+    exports: &[ExportedInterface],
+    native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
+) -> anyhow::Result<Vec<ExportedInterface>> {
+    let imports = introspect_imports(component)?;
+
+    // Merge by instance before asking the natives, exactly as
+    // `link_native_imports` does: `wasmcloud:secrets/store` and
+    // `wasmcloud:secrets/reveal` are two introspected imports but one binding,
+    // and a native declaring both together only matches the merged view.
+    let mut merged: HashMap<String, WitInterface> = HashMap::new();
+    for imported in &imports {
+        if is_self_satisfied(imported, exports) {
+            continue;
+        }
+        merged
+            .entry(imported.wit.instance())
+            .and_modify(|existing| {
+                existing.merge(&imported.wit);
+            })
+            .or_insert_with(|| imported.wit.clone());
+    }
+    let native_worlds: Vec<WitWorld> = native_plugins.values().map(|p| p.world()).collect();
+    let native_served: std::collections::HashSet<String> = merged
+        .into_iter()
+        .filter(|(_, wit)| {
+            native_worlds
+                .iter()
+                .any(|world| world.includes_bidirectional(wit))
+        })
+        .map(|(instance, _)| instance)
+        .collect();
+
+    let mut workload_imports = Vec::new();
+    for imported in imports {
+        if is_self_satisfied(&imported, exports) || native_served.contains(&imported.wit.instance())
+        {
+            continue;
+        }
+        anyhow::ensure!(
+            imported.wit.name.is_none(),
+            "host component plugin '{id}' imports {} under an `(implements ..)` label, but no \
+             host built-in serves it, so a workload export would have to — and a workload's \
+             export carries no label to route by. Import the interface directly instead.",
+            imported.name
+        );
+        anyhow::ensure!(
+            imported.resources.is_empty(),
+            "host component plugin '{id}' imports {} for a workload to export, but the interface \
+             defines resource types, which cannot cross the boundary between a plugin's store \
+             and a workload's",
+            imported.name
+        );
+        debug!(
+            id,
+            interface = %imported.name,
+            "host component plugin import will be served by a workload export"
+        );
+        workload_imports.push(imported);
+    }
+    Ok(workload_imports)
+}
+
+/// Wire the plugin store's linker and pre-instantiate the component against it.
+/// This is the single place that declares the plugin's whole import surface:
+///
+/// - the WASI (and `wasi:http`) base, from [`Engine::prepare_host_component`];
+/// - the `wasmcloud:host` identity/cancel/workload imports (unused unless the
+///   plugin imports them);
+/// - a route back to the plugin's own capability channel for any interface it
+///   both imports and exports (a self-import);
+/// - a route out to a workload's export for every import
+///   [`classify_workload_imports`] found no other provider for;
+/// - every other capability import, resolved against the host's native
+///   plugins ([`link_native_imports`]) — never against another component
+///   plugin.
+#[allow(clippy::too_many_arguments)]
+async fn build_plugin_linker(
+    engine: &Engine,
+    id: &str,
+    component: &Component,
+    mut linker: Linker<SharedCtx>,
+    exports: &[ExportedInterface],
+    state: &Arc<ComponentHostPluginState>,
+    native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
+    config: &HashMap<String, String>,
+) -> anyhow::Result<InstancePre<SharedCtx>> {
     install_host_identity(&mut linker, state)
         .with_context(|| format!("failed to install host identity on plugin '{id}'"))?;
     install_host_cancel(&mut linker, state)
         .with_context(|| format!("failed to install host cancel on plugin '{id}'"))?;
+    install_host_workload(&mut linker, state)
+        .with_context(|| format!("failed to install host workload targeting on plugin '{id}'"))?;
 
-    let mut self_linked = std::collections::HashSet::new();
-    for imported in introspect_imports(&component)? {
+    let mut linked = std::collections::HashSet::new();
+    for imported in introspect_imports(component)? {
         if exports.iter().any(|e| e.name == imported.name) {
             add_capabilities_to_linker(&mut linker, state, &imported).with_context(|| {
                 format!(
@@ -915,26 +1115,34 @@ async fn build_plugin_linker(
                     imported.name
                 )
             })?;
-            self_linked.insert(Arc::clone(&imported.name));
+            linked.insert(Arc::clone(&imported.name));
         }
+    }
+    for imported in state.workload_calls.imports() {
+        add_workload_calls_to_linker(&mut linker, state, imported).with_context(|| {
+            format!(
+                "failed to wire workload-served import {} on plugin '{id}'",
+                imported.name
+            )
+        })?;
+        linked.insert(Arc::clone(&imported.name));
     }
 
     let linker = link_native_imports(
         engine,
         id,
-        &component,
+        component,
         linker,
-        &self_linked,
+        &linked,
         native_plugins,
         config,
     )
     .await?;
 
     linker
-        .instantiate_pre(&component)
+        .instantiate_pre(component)
         .map_err(anyhow::Error::from)
         .context("failed to pre-instantiate host component plugin")
-        .map(|pre| (exports, lifecycle, pre))
 }
 
 /// Interface name of the host identity import a plugin may use to partition
@@ -1309,6 +1517,12 @@ async fn run_supervisor(
         // as the tasks drop).
         let registry = JobRegistry::new();
         state.registry.store(Some(Arc::clone(&registry)));
+        // Target handles are per-store, but the stacks recording them live on
+        // `state` and so outlive a faulted incarnation, whose guests never ran
+        // their destructors. Guest task ids are reused once their task ends, so
+        // a stranded entry would otherwise route some later task's unaddressed
+        // calls to a workload it never named.
+        state.workload_calls.clear_targets();
         // `replay` was snapshotted when this incarnation's channel was
         // published (in `start()` or the restart path below): the incarnation
         // rebuilds its per-workload state from it before serving any queued
@@ -1614,6 +1828,85 @@ mod tests {
             *self.seen_id.lock().unwrap() = Some(item.id().to_string());
             Ok(())
         }
+    }
+
+    /// Compile `wat` and classify its imports the way plugin construction
+    /// does, against a single native serving `test:probe/marker`.
+    fn workload_facing(wat: &str, exports: &[ExportedInterface]) -> anyhow::Result<Vec<String>> {
+        let wasm = wat::parse_str(wat).expect("failed to parse WAT");
+        let engine = Engine::builder().build().expect("failed to build engine");
+        let component = Component::new(engine.inner(), &wasm).expect("failed to compile");
+        let recorder = Arc::new(IdRecordingPlugin::default());
+        let native_plugins: HashMap<&'static str, Arc<dyn HostPlugin>> =
+            HashMap::from([(recorder.id(), recorder as Arc<dyn HostPlugin>)]);
+        Ok(
+            classify_workload_imports("test-plugin", &component, exports, &native_plugins)?
+                .into_iter()
+                .map(|imported| imported.name.to_string())
+                .collect(),
+        )
+    }
+
+    /// Only an import nothing else can satisfy becomes the workload's to
+    /// export. A native serving the interface wins — so introducing a built-in
+    /// never silently turns into a call out to a workload — and the WASI base
+    /// is already linked.
+    #[test]
+    fn only_unsatisfiable_imports_are_left_to_a_workload() {
+        let wat = r#"
+            (component
+                (import "acme:events/handler@0.1.0" (instance))
+                (import "test:probe/marker@0.1.0" (instance))
+                (import "wasi:clocks/monotonic-clock@0.3.0" (instance))
+            )
+        "#;
+        assert_eq!(
+            workload_facing(wat, &[]).expect("classification should succeed"),
+            vec!["acme:events/handler@0.1.0"],
+            "the native-served and base-WASI imports should not be left to a workload"
+        );
+    }
+
+    /// An interface the plugin exports itself stays a self-import, routed back
+    /// to its own capability channel rather than out to a workload.
+    #[test]
+    fn a_self_import_is_not_left_to_a_workload() {
+        let wat = r#"
+            (component
+                (import "acme:events/handler@0.1.0" (instance))
+            )
+        "#;
+        let exports = vec![ExportedInterface {
+            name: Arc::from("acme:events/handler@0.1.0"),
+            wit: WitInterface::from("acme:events/handler@0.1.0"),
+            funcs: Vec::new(),
+            resources: Vec::new(),
+        }];
+        assert!(
+            workload_facing(wat, &exports)
+                .expect("classification should succeed")
+                .is_empty(),
+            "an interface the plugin also exports is served by the plugin itself"
+        );
+    }
+
+    /// A resource handle has no representation on the far side of a
+    /// plugin/workload store boundary, so an interface defining one is refused
+    /// when the plugin loads rather than trapping on a call much later.
+    #[test]
+    fn a_resource_carrying_import_is_refused() {
+        let wat = r#"
+            (component
+                (import "acme:events/handler@0.1.0" (instance
+                    (export "session" (type (sub resource)))
+                ))
+            )
+        "#;
+        let err = workload_facing(wat, &[]).expect_err("a resource import should be refused");
+        assert!(
+            err.to_string().contains("resource types"),
+            "the error should name the reason, got: {err}"
+        );
     }
 
     /// Regression test for a synthetic bind component keyed by a fresh random
