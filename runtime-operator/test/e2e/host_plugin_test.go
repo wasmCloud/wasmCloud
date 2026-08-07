@@ -75,9 +75,18 @@ var _ = Describe("Host Component Plugin", Ordered, func() {
 		// pulls fixtures from the plain-HTTP in-cluster registry), so the same
 		// path fetches the plugin.
 		By("configuring the default hostGroup with a host component plugin")
+		// The plugin is pulled at host startup, before any workload exists, so
+		// it cannot use a workload's image pull secret. The host takes those
+		// credentials from the environment instead — which is also why they are
+		// set on the host container rather than passed in the `--host-plugin`
+		// argument, where they would show up in the pod spec.
 		sets := append(buildBaseHelmSets(),
 			"runtime.hostGroups[0].hostPlugins[0].id="+pluginID,
 			fmt.Sprintf("runtime.hostGroups[0].hostPlugins[0].image=%s", pluginImage),
+			"runtime.hostGroups[0].env[0].name=WASH_HOST_PLUGIN_REGISTRY_USER",
+			"runtime.hostGroups[0].env[0].value="+registryUser,
+			"runtime.hostGroups[0].env[1].name=WASH_HOST_PLUGIN_REGISTRY_PASSWORD",
+			"runtime.hostGroups[0].env[1].value="+registryPassword,
 		)
 		Expect(helmUpgradeWait(sets)).To(Succeed(),
 			"failed to load the host component plugin onto the default hostGroup")
@@ -179,7 +188,9 @@ spec:
       components:
         - name: %s
           image: %s
-`, workloadName, namespace, workloadHost, workloadName, callerImage)
+          imagePullSecret:
+            name: %s
+`, workloadName, namespace, workloadHost, workloadName, callerImage, registryPullSecret)
 
 		cmd := exec.Command("kubectl", "apply", "-f", "-")
 		cmd.Stdin = strings.NewReader(manifest)

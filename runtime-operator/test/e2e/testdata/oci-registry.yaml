@@ -16,6 +16,24 @@
 # an unprivileged one — which is what keeps `make e2e-images` from needing root.
 # The operator only injects Service-DNS aliases for p2 `incoming-handler`, so a
 # p3 `handler` interface keeps exactly the aliases set below.
+# Credentials the hostgroups present when pulling fixtures back out of the
+# registry. `MaterializeImagePullSecret` resolves this by the image's registry
+# domain, so there is one entry per authority a fixture ref can carry. The
+# credentials match the registry's own `wasmcloud:secrets` config below and the
+# push side in xtask/src/e2e_images.rs.
+#
+# Host component plugins do not use this: they are pulled at host startup,
+# before any workload exists, so their credentials arrive as
+# WASH_HOST_PLUGIN_REGISTRY_USER/PASSWORD on the host container instead.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: oci-registry-pull
+  namespace: wasmcloud-system
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: eyJhdXRocyI6IHsib2NpLXJlZ2lzdHJ5Lndhc21jbG91ZC1zeXN0ZW0uc3ZjIjogeyJhdXRoIjogIlpUSmxPbVV5WlMxeVpXZHBjM1J5ZVMxd1lYTnpkMjl5WkE9PSJ9LCAib2NpLXJlZ2lzdHJ5Lndhc21jbG91ZC1zeXN0ZW0iOiB7ImF1dGgiOiAiWlRKbE9tVXlaUzF5WldkcGMzUnllUzF3WVhOemQyOXlaQT09In0sICJvY2ktcmVnaXN0cnkiOiB7ImF1dGgiOiAiWlRKbE9tVXlaUzF5WldkcGMzUnllUzF3WVhOemQyOXlaQT09In19fQ==
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -61,6 +79,24 @@ spec:
             - blobstore
           config:
             backend: in-memory
+        # The registry requires HTTP Basic auth on every request, `GET /v2/`
+        # included, and reads the expected credentials through
+        # `wasmcloud:secrets` — served here by the host's native secrets
+        # plugin straight from this interface config. A real deployment would
+        # source them from `secretFrom`; these are fixed test credentials, and
+        # the push side hardcodes the same pair (REGISTRY_USER/REGISTRY_PASSWORD
+        # in xtask/src/e2e_images.rs) because the two have no shared source.
+        # Supplying neither is not an option: the registry denies every request
+        # when the backend cannot produce both.
+        - namespace: wasmcloud
+          package: secrets
+          version: "2.1.0"
+          interfaces:
+            - store
+            - reveal
+          config:
+            registry-username: e2e
+            registry-password: e2e-registry-password
       components:
         - name: oci-registry
-          image: ghcr.io/wasmcloud/components/oci-registry:0.1.0
+          image: ghcr.io/wasmcloud/components/oci-registry:0.2.0

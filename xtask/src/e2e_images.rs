@@ -59,6 +59,16 @@ const FIXTURES: &[(&str, FixtureKind)] = &[
 /// e2e_suite_test.go) — the two have no shared source, so this isn't a knob.
 const TAG: &str = "e2e";
 
+/// The registry's HTTP Basic credentials. It requires them on every request,
+/// `GET /v2/` included, and takes the expected pair from its `wasmcloud:secrets`
+/// interface config — so these must match `registry-username`/`registry-password`
+/// in runtime-operator/test/e2e/testdata/oci-registry.yaml, and the pull side's
+/// image pull secret in the same directory. Test credentials for a throwaway
+/// in-cluster registry, fixed rather than configurable for the same reason
+/// [`TAG`] is: the sides have no shared source to read them from.
+const REGISTRY_USER: &str = "e2e";
+const REGISTRY_PASSWORD: &str = "e2e-registry-password";
+
 /// Where the registry is port-forwarded for pushing.
 ///
 /// Plain loopback, and [`free_local_port`] picks the port, so this needs no
@@ -196,6 +206,10 @@ fn push_phase(
                 "oci",
                 "push",
                 "--insecure",
+                "--user",
+                REGISTRY_USER,
+                "--password",
+                REGISTRY_PASSWORD,
                 &reference,
                 &component.to_string_lossy(),
             ]),
@@ -324,7 +338,15 @@ fn wait_for_registry(port: u16) -> Result<()> {
     eprintln!(">>> e2e-images: waiting for the registry API on {url}");
     for attempt in 1..=30 {
         let ok = Command::new("curl")
-            .args(["-fsS", &url])
+            // `/v2/` is authenticated like everything else, so an unauthenticated
+            // probe would wait out all 30 attempts on a registry that is up and
+            // answering 401.
+            .args([
+                "-fsS",
+                "-u",
+                &format!("{REGISTRY_USER}:{REGISTRY_PASSWORD}"),
+                &url,
+            ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
