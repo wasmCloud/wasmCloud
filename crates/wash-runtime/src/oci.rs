@@ -64,8 +64,8 @@ static EXTRA_CA_CERTIFICATES: OnceLock<Vec<Certificate>> = OnceLock::new();
 /// private CA — an in-cluster one, or a corporate mirror — is unreachable
 /// without this short of disabling verification altogether.
 ///
-/// Fails when a bundle cannot be read, rather than starting a host that will
-/// reject every pull from the registry it was pointed at.
+/// Fails when a bundle cannot be read or does not parse, rather than starting
+/// a host that will reject every pull from the registry it was pointed at.
 pub fn set_extra_ca_certificates(paths: &[PathBuf]) -> Result<()> {
     let certs = load_ca_certificates(paths)?;
     debug!(count = certs.len(), "trusting extra OCI CA certificates");
@@ -75,21 +75,55 @@ pub fn set_extra_ca_certificates(paths: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
-/// Read PEM CA bundles from disk. Split from [`set_extra_ca_certificates`] so
-/// the reading is testable on its own — the store it writes to can only be set
-/// once per process.
+/// Read and parse PEM CA bundles from disk. Split from
+/// [`set_extra_ca_certificates`] so the loading is testable on its own — the
+/// store it writes to can only be set once per process.
+///
+/// The certificates are parsed here and the bytes then handed on as read.
+/// Parsing is what makes a bad bundle a startup failure: `oci-client` builds
+/// its client through `Client::new`, which logs and falls back to a wholly
+/// default configuration when a certificate fails to parse — discarding the
+/// registry protocol, the timeouts and the proxy along with the trust roots,
+/// and leaving only a warning to say so.
 fn load_ca_certificates(paths: &[PathBuf]) -> Result<Vec<Certificate>> {
     paths
         .iter()
         .map(|path| {
             let data = std::fs::read(path)
                 .with_context(|| format!("failed to read OCI CA bundle {}", path.display()))?;
+            validate_ca_bundle(&data)
+                .with_context(|| format!("invalid OCI CA bundle {}", path.display()))?;
             Ok(Certificate {
                 encoding: CertificateEncoding::Pem,
                 data,
             })
         })
         .collect()
+}
+
+/// Check that `data` is a PEM bundle holding at least one usable certificate.
+///
+/// Adding to a [`rustls::RootCertStore`] is the same work the TLS stack does
+/// when the client is built, so a bundle that passes here cannot fail there:
+/// PEM framing, and an X.509 body webpki accepts. A file that parses but holds
+/// no certificate is rejected too — it would otherwise be accepted and trust
+/// nothing, which reads identically to a CA that does not cover the registry.
+fn validate_ca_bundle(data: &[u8]) -> Result<()> {
+    use rustls::pki_types::pem::PemObject as _;
+
+    let certs = rustls::pki_types::CertificateDer::pem_slice_iter(data)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|err| anyhow!("not PEM-encoded certificates: {err}"))?;
+    if certs.is_empty() {
+        bail!("no certificates found");
+    }
+    let mut store = rustls::RootCertStore::empty();
+    for cert in certs {
+        store
+            .add(cert)
+            .map_err(|err| anyhow!("certificate is not usable as a trust root: {err}"))?;
+    }
+    Ok(())
 }
 
 /// The extra CA certificates configured for this process, for a `ClientConfig`.
@@ -757,20 +791,76 @@ mod tests {
         );
     }
 
+    /// A self-signed certificate, PEM encoded, for the bundles below.
+    fn test_certificate_pem(name: &str) -> String {
+        rcgen::generate_simple_self_signed(vec![name.to_string()])
+            .expect("generating a test certificate")
+            .cert
+            .pem()
+    }
+
     #[test]
     fn ca_bundles_are_read_as_pem() {
         let dir = TempDir::new().unwrap();
         let (first, second) = (dir.path().join("a.pem"), dir.path().join("b.pem"));
-        std::fs::write(&first, b"-----BEGIN CERTIFICATE-----\nfirst\n").unwrap();
-        std::fs::write(&second, b"-----BEGIN CERTIFICATE-----\nsecond\n").unwrap();
+        let (first_pem, second_pem) = (
+            test_certificate_pem("a.test"),
+            test_certificate_pem("b.test"),
+        );
+        std::fs::write(&first, &first_pem).unwrap();
+        std::fs::write(&second, &second_pem).unwrap();
 
         let certs = load_ca_certificates(&[first, second]).expect("both bundles should load");
         assert_eq!(certs.len(), 2, "every bundle is kept, not just the last");
         // PEM, not DER: the bytes are handed to oci-client as read, so the
         // encoding has to match what is on disk or verification fails at use.
         assert!(matches!(certs[0].encoding, CertificateEncoding::Pem));
-        assert_eq!(certs[0].data, b"-----BEGIN CERTIFICATE-----\nfirst\n");
-        assert_eq!(certs[1].data, b"-----BEGIN CERTIFICATE-----\nsecond\n");
+        assert_eq!(certs[0].data, first_pem.as_bytes());
+        assert_eq!(certs[1].data, second_pem.as_bytes());
+    }
+
+    /// A bundle holding several certificates is kept whole: `oci-client` reads
+    /// every certificate out of one PEM blob, so splitting or truncating it
+    /// would drop trust roots the operator asked for.
+    #[test]
+    fn a_bundle_may_hold_several_certificates() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("bundle.pem");
+        let bundle = test_certificate_pem("one.test") + &test_certificate_pem("two.test");
+        std::fs::write(&path, &bundle).unwrap();
+
+        let certs = load_ca_certificates(&[path]).expect("a multi-certificate bundle should load");
+        assert_eq!(certs.len(), 1, "one file is one entry, however many certs");
+        assert_eq!(certs[0].data, bundle.as_bytes());
+    }
+
+    /// Content is parsed at load, not at first pull. `oci-client`'s
+    /// `Client::new` reacts to an unparseable certificate by logging and
+    /// building a client from defaults — losing the registry protocol and
+    /// timeouts along with the trust roots — so a bundle that would fail there
+    /// has to fail here instead.
+    #[test]
+    fn unparseable_ca_bundles_are_rejected() {
+        let dir = TempDir::new().unwrap();
+        for (name, contents) in [
+            ("garbage.pem", "not a certificate at all\n".as_bytes()),
+            ("empty.pem", b""),
+            // Correct framing, contents that are not a certificate: the shape
+            // a truncated or wrongly-typed file takes.
+            (
+                "framed.pem",
+                b"-----BEGIN CERTIFICATE-----\nZm9v\n-----END CERTIFICATE-----\n",
+            ),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, contents).unwrap();
+            let err = load_ca_certificates(&[path])
+                .expect_err("{name} must not be accepted as a CA bundle");
+            assert!(
+                err.to_string().contains("invalid OCI CA bundle"),
+                "the error should name the bundle it rejected, got: {err}"
+            );
+        }
     }
 
     #[test]
