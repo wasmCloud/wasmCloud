@@ -167,6 +167,15 @@ fn type_is_ephemeral_safe(ty: &Type) -> bool {
     !carries_cross_store_handle(ty)
 }
 
+/// Whether every one of `tys` is a plain value, so a call carrying them copies
+/// cleanly into an ephemeral store. The type-list form of
+/// [`func_is_ephemeral_safe`], for a caller holding params and results
+/// separately rather than as one [`ComponentFunc`].
+#[cfg(feature = "host-component-plugins")]
+pub(crate) fn types_are_ephemeral_safe(tys: &[Type]) -> bool {
+    tys.iter().all(type_is_ephemeral_safe)
+}
+
 pub(crate) fn func_is_ephemeral_safe(func_ty: &ComponentFunc) -> bool {
     func_ty.params().all(|(_, ty)| type_is_ephemeral_safe(&ty))
         && func_ty.results().all(|ty| type_is_ephemeral_safe(&ty))
@@ -206,6 +215,14 @@ fn type_is_bridge_safe(ty: &Type) -> bool {
         // resource (own/borrow) / error-context: not relocatable here.
         _ => false,
     }
+}
+
+/// Whether every one of `tys` is [`type_is_bridge_safe`]. The type-list form of
+/// [`func_is_bridge_safe`], for a caller holding params and results separately
+/// rather than as one [`ComponentFunc`].
+#[cfg(feature = "host-component-plugins")]
+pub(crate) fn types_are_bridge_safe(tys: &[Type]) -> bool {
+    tys.iter().all(type_is_bridge_safe)
 }
 
 /// Whether every param/result of `func_ty` is [`type_is_bridge_safe`], so a call

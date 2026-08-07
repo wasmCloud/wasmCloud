@@ -1,0 +1,33 @@
+package acme:events@0.1.0;
+
+/// A bespoke event package whose two interfaces run in opposite directions, the
+/// same shape `wasmcloud:messaging` has: the host component plugin *exports*
+/// `control` for workloads to call, and *imports* `handler` for workloads to
+/// serve. Everything is an `async func` over primitives, so both directions use
+/// the handle-free relocation fast path.
+interface handler {
+    /// Handle one event. Exported by a workload; called by the plugin across
+    /// the store boundary. The reply carries the handling workload's own tag,
+    /// so a caller can tell which workload actually ran it.
+    notify: async func(message: string) -> string;
+}
+
+interface control {
+    /// Call `handler.notify` back on the CALLING workload, naming no target —
+    /// the host routes it to whichever workload's capability call this is.
+    echo: async func(message: string) -> string;
+
+    /// Call `handler.notify` on the workload `id`, named with a
+    /// `wasmcloud:host/workload` target handle rather than inherited from the
+    /// caller.
+    dispatch: async func(id: string, message: string) -> string;
+
+    /// Call `handler.notify` on `id` from inside a nested target handle, and
+    /// again once that handle is dropped, returning both replies joined by
+    /// `"|"`. Proves a target's scope is its handle's lifetime: the second call
+    /// goes back to the caller.
+    nested: async func(id: string, message: string) -> string;
+
+    /// Every workload the plugin can currently call.
+    callable: async func() -> list<string>;
+}

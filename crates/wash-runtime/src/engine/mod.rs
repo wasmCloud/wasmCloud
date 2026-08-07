@@ -221,7 +221,7 @@ pub mod ctx;
 pub(crate) mod instance_driver;
 pub(crate) mod instance_pool;
 pub use instance_pool::InstancePolicy;
-mod linked_call;
+pub(crate) mod linked_call;
 pub(crate) mod store;
 mod value;
 mod volumes;

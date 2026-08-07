@@ -1,0 +1,49 @@
+package wasmcloud:host@0.1.2;
+
+/// Provided by the host to a component plugin that *imports* an interface a
+/// workload exports, so the plugin can call into that workload — the reverse of
+/// the capability direction, where a workload imports what the plugin exports.
+///
+/// A host-native (Rust) plugin does this by holding a handle: it captures the
+/// workload when the workload deploys and invokes the export whenever it likes,
+/// off any event of its own. This interface is that handle, for a plugin that
+/// is itself a component and so cannot hold a Rust value.
+///
+/// Only interfaces the plugin imports that no host built-in provides are routed
+/// this way. They are matched to a workload exactly as a capability is: the
+/// workload must both declare the interface among the ones it needs from the
+/// host and export it.
+interface workload {
+    /// Identifier of a workload. The same id `identity.get-workload-id`
+    /// reports, and the one `workload-lifecycle` binds and unbinds.
+    type workload-id = string;
+
+    /// Directs this task's calls on workload-exported imports to one workload,
+    /// for as long as the handle is alive.
+    ///
+    /// Handles nest: the innermost live handle on the task wins, and dropping
+    /// it restores the one it shadowed. With no handle held, calls go to the
+    /// workload whose capability call this task is serving — so a plugin
+    /// calling back into its own caller needs no handle at all.
+    ///
+    /// Construction never fails. A workload that never bound, or that stops
+    /// while a handle names it, is reported on the *call*, so a plugin sees one
+    /// error for "gone" and "never there" rather than having to race the
+    /// difference.
+    resource target {
+        /// Direct this task's calls to `id`.
+        constructor(id: workload-id);
+
+        /// The workload this handle names.
+        id: func() -> workload-id;
+    }
+
+    /// Every workload currently bound to this plugin that exports at least one
+    /// interface the plugin imports, sorted by id. What a plugin's own
+    /// background work — its `wasi:cli/run` — iterates to dispatch.
+    ///
+    /// A workload appears only once it is running: a workload is still
+    /// deploying when `workload-lifecycle.on-workload-bind` is delivered for
+    /// it, so it is not callable from inside that hook.
+    callable: func() -> list<workload-id>;
+}

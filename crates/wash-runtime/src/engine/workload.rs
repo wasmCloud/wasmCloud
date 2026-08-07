@@ -19,6 +19,8 @@ use wasmtime_wasi::p2::bindings::CommandPre;
 
 #[cfg(feature = "wasi-tls")]
 use crate::engine::ctx::SharedTlsProvider;
+#[cfg(feature = "host-component-plugins")]
+use crate::engine::linked_call::{types_are_bridge_safe, types_are_ephemeral_safe};
 use crate::{
     engine::{
         ctx::SharedCtx,
@@ -34,6 +36,17 @@ use crate::{
     types::{LocalResources, VolumeMount},
     wit::{WitInterface, WitWorld},
 };
+
+/// One function of an interface a host component plugin imports, named and
+/// typed as the plugin's own component type declares it. The types are what
+/// [`ResolvedWorkload::external_export_invocations`] classifies to decide how a
+/// call's arguments and results cross the store boundary.
+#[cfg(feature = "host-component-plugins")]
+pub(crate) struct ExternalCallFunc<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) param_tys: &'a [wasmtime::component::types::Type],
+    pub(crate) result_tys: &'a [wasmtime::component::types::Type],
+}
 
 /// Type alias for tracking bound plugins with their matched interfaces during binding.
 /// Tuple: (plugin, matched_interfaces, component_ids)
@@ -1576,6 +1589,123 @@ impl ResolvedWorkload {
         let pre = linker.instantiate_pre(&wasmtime_component)?;
 
         Ok(pre)
+    }
+
+    /// Whether `component_id` exports `interface`, and its manifest name — what
+    /// a host component plugin checks before claiming the component as the one
+    /// serving an interface the plugin imports, and the tie-break when two
+    /// components of the workload export the same one.
+    #[cfg(feature = "host-component-plugins")]
+    pub(crate) async fn component_exporting(
+        &self,
+        component_id: &str,
+        interface: &WitInterface,
+    ) -> Option<Arc<str>> {
+        let components = self.components.read().await;
+        let component = components.get(component_id)?;
+        component
+            .world()
+            .exports
+            .iter()
+            .any(|exported| exported.contains(interface))
+            .then(|| Arc::from(component.name()))
+    }
+
+    /// Build the invocations a host component plugin uses to call `interface`
+    /// on `component_id`'s export — the reverse of the capability direction,
+    /// where the plugin serves what a workload imports.
+    ///
+    /// A plugin runs in a store of its own, so such a call can never share one
+    /// with the callee: every invocation returned takes the ephemeral path,
+    /// which builds a store for the callee per call (or reuses one of its warm
+    /// instances) and moves arguments and results across the boundary. A
+    /// signature carrying a `resource` or `error-context` handle cannot cross
+    /// that boundary and is rejected here, when the workload deploys, rather
+    /// than on the call.
+    #[cfg(feature = "host-component-plugins")]
+    pub(crate) async fn external_export_invocations(
+        &self,
+        component_id: &str,
+        interface: &str,
+        funcs: &[ExternalCallFunc<'_>],
+    ) -> anyhow::Result<BTreeMap<Arc<str>, LinkedExportInvocation>> {
+        let (component, engine, linked_component_ids) = {
+            let components = self.components.read().await;
+            let component = components
+                .get(component_id)
+                .context("component ID not found in workload")?;
+            (
+                component.metadata.component.clone(),
+                component.metadata.engine().clone(),
+                component
+                    .metadata
+                    .linked_components
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let Some((ComponentItem::ComponentInstance(_), instance_idx)) =
+            component.get_export(None, interface)
+        else {
+            bail!("component '{component_id}' does not export {interface}");
+        };
+        // Taken after the read guard above is dropped: this needs the write lock.
+        let pre = self.instantiate_pre(component_id).await?;
+        let component_id: Arc<str> = Arc::from(component_id);
+
+        let mut invocations = BTreeMap::new();
+        for func in funcs {
+            let Some((ComponentItem::ComponentFunc(_), func_idx)) =
+                component.get_export(Some(&instance_idx), func.name)
+            else {
+                bail!(
+                    "{interface} of component '{component_id}' does not export {}",
+                    func.name
+                );
+            };
+            let mode = if types_are_ephemeral_safe(func.param_tys)
+                && types_are_ephemeral_safe(func.result_tys)
+            {
+                EphemeralCallMode::PlainValue
+            } else if types_are_bridge_safe(func.param_tys)
+                && types_are_bridge_safe(func.result_tys)
+            {
+                EphemeralCallMode::Relocated {
+                    param_tys: func.param_tys.into(),
+                    result_tys: func.result_tys.into(),
+                }
+            } else {
+                bail!(
+                    "{interface}#{} carries a handle that cannot cross a store boundary; a host \
+                     component plugin can call a workload export only when its parameters and \
+                     results are plain values, `stream<T>`, or `future<T>`",
+                    func.name
+                );
+            };
+            invocations.insert(
+                Arc::from(func.name),
+                LinkedExportInvocation {
+                    import_name: Arc::from(interface),
+                    export_name: Arc::from(func.name),
+                    pre: pre.clone(),
+                    plugin_component_id: Arc::clone(&component_id),
+                    func_idx,
+                    param_tys: Arc::default(),
+                    ephemeral_call: Some(Arc::new(EphemeralLinkedCall {
+                        engine: engine.clone(),
+                        http_handler: self.http_handler.clone(),
+                        components: self.components.clone(),
+                        active_component_id: Arc::clone(&component_id),
+                        linked_component_ids: linked_component_ids.clone(),
+                        #[cfg(feature = "wasi-tls")]
+                        tls_provider: self.tls_provider.clone(),
+                        mode,
+                    })),
+                },
+            );
+        }
+        Ok(invocations)
     }
 
     /// Unbind all plugins from all components in this workload.
