@@ -31,7 +31,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use docker_credential::{CredentialRetrievalError, DockerCredential, get_credential};
 use oci_client::{
     Reference,
-    client::{Client, ClientConfig, ClientProtocol},
+    client::{Certificate, CertificateEncoding, Client, ClientConfig, ClientProtocol},
     manifest::{OciDescriptor, OciImageManifest},
     secrets::RegistryAuth,
 };
@@ -40,9 +40,62 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
+    sync::OnceLock,
     time::Duration,
 };
 use tracing::{debug, instrument, warn};
+
+/// Extra CA certificates every OCI client in this process trusts, on top of
+/// the compiled-in Mozilla roots.
+///
+/// Trust roots are a property of the host, not of any one pull, so they live
+/// here rather than on [`OciConfig`] — which is built per workload (from an
+/// image pull secret) and per plugin, and would otherwise have to carry the
+/// same value to every construction site.
+///
+/// Empty unless [`set_extra_ca_certificates`] is called, which keeps the
+/// default behavior exactly as it was: the roots `oci-client` compiles in.
+static EXTRA_CA_CERTIFICATES: OnceLock<Vec<Certificate>> = OnceLock::new();
+
+/// Trust the PEM CA bundles at `paths` for every subsequent OCI pull or push.
+///
+/// Call once, before serving. `oci-client` builds its TLS from the webpki
+/// (Mozilla) roots and honors no environment override, so a registry behind a
+/// private CA — an in-cluster one, or a corporate mirror — is unreachable
+/// without this short of disabling verification altogether.
+///
+/// Fails when a bundle cannot be read, rather than starting a host that will
+/// reject every pull from the registry it was pointed at.
+pub fn set_extra_ca_certificates(paths: &[PathBuf]) -> Result<()> {
+    let certs = load_ca_certificates(paths)?;
+    debug!(count = certs.len(), "trusting extra OCI CA certificates");
+    if EXTRA_CA_CERTIFICATES.set(certs).is_err() {
+        warn!("extra OCI CA certificates were already set; keeping the first set");
+    }
+    Ok(())
+}
+
+/// Read PEM CA bundles from disk. Split from [`set_extra_ca_certificates`] so
+/// the reading is testable on its own — the store it writes to can only be set
+/// once per process.
+fn load_ca_certificates(paths: &[PathBuf]) -> Result<Vec<Certificate>> {
+    paths
+        .iter()
+        .map(|path| {
+            let data = std::fs::read(path)
+                .with_context(|| format!("failed to read OCI CA bundle {}", path.display()))?;
+            Ok(Certificate {
+                encoding: CertificateEncoding::Pem,
+                data,
+            })
+        })
+        .collect()
+}
+
+/// The extra CA certificates configured for this process, for a `ClientConfig`.
+fn extra_ca_certificates() -> Vec<Certificate> {
+    EXTRA_CA_CERTIFICATES.get().cloned().unwrap_or_default()
+}
 
 #[allow(deprecated)]
 #[deprecated = "old media type used before Wasm WG standardization"]
@@ -395,6 +448,7 @@ pub async fn pull_component(
         } else {
             ClientProtocol::Https
         },
+        extra_root_certificates: extra_ca_certificates(),
         ..Default::default()
     };
 
@@ -556,6 +610,7 @@ pub async fn push_component(
         } else {
             ClientProtocol::Https
         },
+        extra_root_certificates: extra_ca_certificates(),
         ..Default::default()
     };
 
@@ -687,6 +742,44 @@ pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// A bundle that cannot be read has to fail loudly at startup. Trust is
+    /// configured once and used much later, so a silently skipped bundle would
+    /// surface as every pull from that registry failing to verify, far from
+    /// the typo that caused it.
+    #[test]
+    fn missing_ca_bundle_is_an_error() {
+        let err = load_ca_certificates(&[PathBuf::from("/definitely/not/a/ca.pem")])
+            .expect_err("a missing CA bundle must not be skipped");
+        assert!(
+            err.to_string().contains("CA bundle"),
+            "the error should name what it failed to read, got: {err}"
+        );
+    }
+
+    #[test]
+    fn ca_bundles_are_read_as_pem() {
+        let dir = TempDir::new().unwrap();
+        let (first, second) = (dir.path().join("a.pem"), dir.path().join("b.pem"));
+        std::fs::write(&first, b"-----BEGIN CERTIFICATE-----\nfirst\n").unwrap();
+        std::fs::write(&second, b"-----BEGIN CERTIFICATE-----\nsecond\n").unwrap();
+
+        let certs = load_ca_certificates(&[first, second]).expect("both bundles should load");
+        assert_eq!(certs.len(), 2, "every bundle is kept, not just the last");
+        // PEM, not DER: the bytes are handed to oci-client as read, so the
+        // encoding has to match what is on disk or verification fails at use.
+        assert!(matches!(certs[0].encoding, CertificateEncoding::Pem));
+        assert_eq!(certs[0].data, b"-----BEGIN CERTIFICATE-----\nfirst\n");
+        assert_eq!(certs[1].data, b"-----BEGIN CERTIFICATE-----\nsecond\n");
+    }
+
+    #[test]
+    fn no_ca_bundles_means_the_compiled_in_roots() {
+        assert!(
+            load_ca_certificates(&[]).unwrap().is_empty(),
+            "an empty list must not invent a root; the default trust is oci-client's own"
+        );
+    }
 
     #[test]
     fn test_oci_config_default() {
