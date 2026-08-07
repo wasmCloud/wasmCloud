@@ -541,6 +541,13 @@ pub struct ResolvedWorkload {
     service: Option<WorkloadService>,
     /// The requested host [`WitInterface`]s to resolve this workload
     host_interfaces: Vec<WitInterface>,
+    /// Real ports the host published on this workload's behalf.
+    ///
+    /// `Arc` because a `ResolvedWorkload` is cloned: the listeners are shared by
+    /// every clone and close when the last one drops, which is what makes
+    /// stopping a workload release its ports rather than leaking them to
+    /// whichever clone happened to outlive the others.
+    published_ports: Arc<Vec<crate::host::ports::PublishedPort>>,
     /// TLS provider override for `wasi:tls` client connections in this workload.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -625,6 +632,30 @@ fn build_trigger_ingresses(
 }
 
 impl ResolvedWorkload {
+    /// The workload's virtual network, if it has a service to own one.
+    ///
+    /// Shared by the service and every component — that sharing is what lets a
+    /// component dial its service on `127.0.0.1`.
+    pub(crate) fn loopback(&self) -> Option<Arc<std::sync::Mutex<loopback::Network>>> {
+        self.service
+            .as_ref()
+            .map(|svc| Arc::clone(&svc.metadata.loopback))
+    }
+
+    /// Take ownership of the real listeners the host published for this
+    /// workload, so they close when it stops.
+    pub(crate) fn set_published_ports(&mut self, ports: Vec<crate::host::ports::PublishedPort>) {
+        self.published_ports = Arc::new(ports);
+    }
+
+    /// The real addresses this workload is published on, for status reporting.
+    pub fn published_addresses(&self) -> Vec<(String, std::net::SocketAddr)> {
+        self.published_ports
+            .iter()
+            .map(|p| (p.name().to_string(), p.local_addr()))
+            .collect()
+    }
+
     /// Executes the service, if present, and returns whether it was run.
     #[instrument(name="execute_service", skip_all, fields(workload.id = self.id.as_ref(), workload.name = self.name.as_ref(), workload.namespace = self.namespace.as_ref()))]
     pub(crate) async fn execute_service(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
@@ -2239,6 +2270,7 @@ impl UnresolvedWorkload {
             service: self.service,
             host_interfaces: self.host_interfaces,
             http_handler: http_handler.clone(),
+            published_ports: Arc::default(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
         };
