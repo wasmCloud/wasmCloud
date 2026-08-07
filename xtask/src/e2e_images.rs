@@ -60,10 +60,10 @@ const FIXTURES: &[(&str, FixtureKind)] = &[
 const TAG: &str = "e2e";
 
 /// The registry's HTTP Basic credentials. It requires them on every request,
-/// `GET /v2/` included, and takes the expected pair from its `wasmcloud:secrets`
-/// interface config — so these must match `registry-username`/`registry-password`
-/// in runtime-operator/test/e2e/testdata/oci-registry.yaml, and the pull side's
-/// image pull secret in the same directory. Test credentials for a throwaway
+/// `GET /v2/` included, and checks against what its `wasmcloud:secrets`
+/// interface serves — so these must match the `oci-registry-auth` Secret in
+/// runtime-operator/test/e2e/testdata/oci-registry.yaml, along with the pull
+/// side's `oci-registry-pull` beside it. Test credentials for a throwaway
 /// in-cluster registry, fixed rather than configurable for the same reason
 /// [`TAG`] is: the sides have no shared source to read them from.
 const REGISTRY_USER: &str = "e2e";
