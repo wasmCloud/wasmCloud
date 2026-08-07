@@ -256,6 +256,21 @@ gateway:
     annotations: {}
 
 runtime:
+  # -- Extra CA certificate bundles (paths inside the host container) trusted
+  # when pulling images, for a registry behind a private or in-cluster CA that
+  # the public roots do not cover. Applies to every host group; add
+  # `hostGroups[].ociCaPaths` for one group alone.
+  #
+  # A registry served from a host group in this cluster (`hostGroups[].http.tls`)
+  # presents a certificate from the chart's own CA, which is already mounted at
+  # /runtime-cert/ca.crt whenever `global.tls.enabled` — so trusting it needs
+  # only that path, with no bundle to distribute:
+  #   ociCaPaths: ["/runtime-cert/ca.crt"]
+  #
+  # Prefer this to `extraArgs: [--allow-insecure-registries]`, which does not
+  # relax verification but replaces it: every registry drops to plain HTTP, so
+  # nothing is verified and credentials travel in the clear.
+  ociCaPaths: []
   # -- Labels to add to runtime host pod templates
   podLabels: {}
   # -- Annotations to add to runtime host pod templates
@@ -449,6 +464,12 @@ runtime:
               # -- List of DNS Subject Alternative Names (SANs) for the generated TLS certificate.
               # Example: ["myapp.example.com", "myapp.default.svc.cluster.local"]
               domains: []
+              # -- List of IP Subject Alternative Names (SANs) for the generated TLS certificate.
+              # An address belongs here rather than under `domains`: a client
+              # connecting to a URL written as an IP matches it against the IP
+              # SANs only, so an address listed as a domain is never matched.
+              # Example: ["127.0.0.1"]
+              ipAddresses: []
       # -- Per-host-group compute resources. Omitted so this group inherits the
       # chart-wide `runtime.resources` above; uncomment to size one host group
       # differently (e.g. a webgpu group that needs more memory):
@@ -458,3 +479,7 @@ runtime:
       #     memory: "128Mi"
       #   limits:
       #     memory: "2Gi"
+      # -- Extra CA bundles trusted when this group pulls images, added to the
+      # chart-wide `runtime.ociCaPaths` rather than replacing it:
+      # ociCaPaths:
+      #   - "/runtime-cert/ca.crt"
