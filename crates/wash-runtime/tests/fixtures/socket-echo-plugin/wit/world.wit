@@ -1,0 +1,22 @@
+package acme:socketecho@0.1.0;
+
+/// Host component plugin that LISTENS. It binds a TCP port inside its own
+/// private virtual loopback from `wasi:cli/run` and echoes every byte back,
+/// which is what the host's published-port splice connects external clients to.
+///
+/// Two details this fixture exists to pin:
+///
+/// - The accept loop is awaited from `cli/run`, not spawned. A guest-spawned
+///   accept loop never delivers, and getting that wrong is the first mistake a
+///   plugin author makes.
+/// - It exports a capability (`acme:echo/control`) as well, because a host
+///   component plugin must export at least one capability interface to load at
+///   all. `listening-port` also lets a test tell "the plugin never bound" apart
+///   from "the splice did not reach it".
+world socket-echo-plugin {
+    import wasi:sockets/types@0.3.0;
+    import wasi:clocks/monotonic-clock@0.3.0;
+
+    export acme:echo/control@0.1.0;
+    export wasi:cli/run@0.3.0;
+}
