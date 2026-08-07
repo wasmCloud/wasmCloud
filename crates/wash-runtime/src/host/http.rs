@@ -2103,6 +2103,26 @@ pub fn check_allowed_hosts<B>(
         );
     }
 
+    // A name in the reserved zone must be granted by name. `*` means the
+    // internet, not the machine this host runs on — without this carve-out,
+    // the commonplace `allowedHosts: ["*"]` would silently open the host's own
+    // loopback, and the whole point of the sentinel is that reaching it is
+    // something a workload has to ask for.
+    if crate::sockets::internal_names::resolve(request_host).is_some() {
+        let named = allowed_hosts.iter().any(|entry| match entry {
+            AllowedHost::Any => false,
+            other => other.matches(uri),
+        });
+        if named {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "outgoing request to '{request_host}' is not allowed: a reserved \
+             *.wasmcloud.internal name must be listed in allowed_hosts explicitly, because '*' \
+             grants the internet rather than the machine this host runs on"
+        );
+    }
+
     if allowed_hosts.iter().any(|entry| entry.matches(uri)) {
         return Ok(());
     }
@@ -2634,6 +2654,39 @@ mod tests {
     #[test]
     fn explicit_any_permits_anything() {
         let req = build_request("http://anything.example.com/path");
+        assert!(check_allowed_hosts(&req, &hosts(&["*"])).is_ok());
+    }
+
+    /// `*` grants the internet, not the machine the host runs on. Reaching a
+    /// reserved name has to be asked for by name, or the commonplace
+    /// `allowedHosts: ["*"]` would open the host's own loopback.
+    #[test]
+    fn any_does_not_grant_the_reserved_zone() {
+        for name in ["host.wasmcloud.internal", "service.wasmcloud.internal"] {
+            let req = build_request(&format!("http://{name}/path"));
+            let err = check_allowed_hosts(&req, &hosts(&["*"])).unwrap_err();
+            assert!(
+                err.to_string().contains("must be listed in allowed_hosts"),
+                "{name}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_reserved_zone_is_granted_by_naming_it() {
+        let req = build_request("http://host.wasmcloud.internal/path");
+        assert!(check_allowed_hosts(&req, &hosts(&["host.wasmcloud.internal"])).is_ok());
+        // A port pin still applies.
+        let pinned = build_request("http://host.wasmcloud.internal:5432/path");
+        assert!(check_allowed_hosts(&pinned, &hosts(&["host.wasmcloud.internal:5432"])).is_ok());
+        assert!(check_allowed_hosts(&req, &hosts(&["host.wasmcloud.internal:5432"])).is_err());
+    }
+
+    /// A name merely resembling the zone is an ordinary name and must not be
+    /// dragged into the carve-out.
+    #[test]
+    fn a_lookalike_name_is_not_treated_as_reserved() {
+        let req = build_request("http://wasmcloud.internal.example.com/path");
         assert!(check_allowed_hosts(&req, &hosts(&["*"])).is_ok());
     }
 

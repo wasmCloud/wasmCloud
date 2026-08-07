@@ -62,6 +62,7 @@ use crate::wit::{WitInterface, WitWorld};
 pub mod allowed_loopback;
 pub mod declared_port;
 pub mod egress_policy;
+pub mod loopback_http;
 pub mod ports;
 pub mod quota;
 mod sysinfo;

@@ -258,6 +258,10 @@ async fn build_ctx_from_template(
             .network_policy
             .for_guest(kind, &template.workload_id)
     });
+    // The same policy object backs both the sockets check and the `wasi:http`
+    // reserved-zone routing, so `host.wasmcloud.internal` is gated identically
+    // whichever API a component reaches for.
+    let policy_for_http = Arc::clone(&policy);
     let sockets_ctx = sockets::WasiSocketsCtx {
         socket_addr_check: sockets::SocketAddrCheck::new(move |addr, reason| {
             let policy = Arc::clone(&policy);
@@ -281,6 +285,7 @@ async fn build_ctx_from_template(
         .with_http_handler(http_handler)
         .with_wasi_ctx(wasi_ctx_builder.build())
         .with_sockets(sockets_ctx)
+        .with_socket_policy(Arc::clone(&policy_for_http))
         .with_allowed_hosts(template.local_resources.allowed_hosts.clone());
 
     if let Some(plugins) = &template.plugins {

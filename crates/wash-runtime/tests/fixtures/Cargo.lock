@@ -365,6 +365,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-internal-fetch"
+version = "0.1.0"
+dependencies = [
+ "wstd",
+]
+
+[[package]]
+name = "http-internal-zone"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "http-ip-name-lookup"
 version = "0.1.0"
 dependencies = [
