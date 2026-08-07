@@ -259,6 +259,12 @@ pub struct ComponentHostPlugin {
     network: crate::host::ports::NetworkHandle,
     /// The host-level half of this plugin's socket policy.
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
+    /// Ports this plugin declared, and how each is exposed.
+    ports: Arc<[crate::host::declared_port::DeclaredPort]>,
+    /// The host's one port table, so a collision names both holders.
+    port_table: Arc<crate::host::ports::PortTable>,
+    /// Host-wide publishing settings.
+    publish_config: Arc<crate::host::ports::PublishConfig>,
     /// Live published listeners. Dropped on `stop()`, which closes them and
     /// releases their port-table reservations.
     published: Mutex<Vec<crate::host::ports::PublishedPort>>,
@@ -311,6 +317,8 @@ impl ComponentHostPlugin {
         http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
         #[builder(default)] ports: Arc<[crate::host::declared_port::DeclaredPort]>,
         socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
+        port_table: Option<Arc<crate::host::ports::PortTable>>,
+        publish_config: Option<Arc<crate::host::ports::PublishConfig>>,
     ) -> anyhow::Result<Self> {
         crate::host::declared_port::validate_ports(&ports, &format!("host plugin '{id}'"))?;
         let direct_binds = ports
@@ -388,6 +396,9 @@ impl ComponentHostPlugin {
             direct_binds: Arc::from(direct_binds),
             network: crate::host::ports::NetworkHandle::new(),
             socket_policy: socket_policy.unwrap_or_default(),
+            ports,
+            port_table: port_table.unwrap_or_default(),
+            publish_config: publish_config.unwrap_or_default(),
             published: Mutex::new(Vec::new()),
             direct_reservations: Mutex::new(Vec::new()),
             state,

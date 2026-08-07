@@ -327,6 +327,24 @@ impl CliCommand for DevCommand {
             debug!("WASI WebGPU plugin registered");
         }
 
+        // One table across every plugin *and* the workload's own service, so
+        // two declarations claiming the same real port is a start failure
+        // naming both rather than a race decided by start order.
+        //
+        // Publishing is on by default in the dev path, unlike `wash host`: a
+        // developer running `wash dev` is already trusting this code, and
+        // needing a flag to reach a port on your own machine is friction with
+        // nothing behind it. The default bind address is loopback, so this
+        // stays off the network regardless.
+        let publish = wash_runtime::host::ports::PublishContext::new(
+            wash_runtime::host::ports::PortTable::new(),
+            wash_runtime::host::ports::PublishConfig {
+                enabled: true,
+                ..Default::default()
+            },
+        );
+        host_builder = host_builder.with_publish_context(publish.clone());
+
         // Host component plugins: WebAssembly components that provide host
         // capabilities, each in its own supervised store. Fetched (local file or
         // OCI) and registered before the host starts — last, so every native
@@ -345,7 +363,7 @@ impl CliCommand for DevCommand {
                     oci_config.clone(),
                     &native_plugins,
                     http_handler.clone(),
-                    None,
+                    Some(publish.clone()),
                 )
                 .await
                 .with_context(|| format!("failed to load host component plugin '{}'", spec.id))?;
@@ -605,6 +623,7 @@ fn build_workload(
         ..Default::default()
     };
 
+    let service_ports = &dev_config.service_ports;
     let mut service: Option<Service> = None;
     let mut components = Vec::new();
     if dev_config.service {
@@ -613,7 +632,7 @@ fn build_workload(
             digest: None,
             max_restarts: 0,
             local_resources: local_resources_for(resolved_workload),
-            ports: Vec::new(),
+            ports: service_ports.to_vec(),
         })
     } else {
         components.push(Component {
@@ -632,7 +651,7 @@ fn build_workload(
                 digest: None,
                 max_restarts: 0,
                 local_resources: local_resources_for(resolved_workload),
-                ports: Vec::new(),
+                ports: service_ports.to_vec(),
             });
         }
     }
