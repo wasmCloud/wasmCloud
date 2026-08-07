@@ -59,22 +59,22 @@ use crate::plugin::{HostPlugin, WorkloadFailure, WorkloadFailureSink};
 use crate::types::*;
 use crate::wit::{WitInterface, WitWorld};
 
-pub mod allowed_loopback;
-pub mod declared_port;
-pub mod egress_policy;
-pub mod loopback_http;
-pub mod ports;
-pub mod quota;
 mod sysinfo;
 use sysinfo::SystemMonitor;
 
 pub mod allowed_hosts;
 pub mod allowed_ip_name;
+pub mod allowed_loopback;
+pub mod declared_port;
+pub mod egress_policy;
 pub mod http;
 pub mod http_client;
 pub mod http_p3;
 #[cfg(feature = "host-component-plugins")]
 pub(crate) mod job_registry;
+pub mod loopback_http;
+pub mod ports;
+pub mod quota;
 pub mod trigger_service;
 
 /// The API for interacting with a wasmcloud host.
@@ -645,7 +645,17 @@ impl Host {
             .resolve(Some(&self.plugins), self.http_handler.clone())
             .await?;
 
+        // Bind real ports before the service is running, so a conflict fails the
+        // start with both holders named rather than surfacing later. The
+        // service's virtual listener does not exist yet; connections arriving
+        // before it does wait out the readiness window.
+        let published = self
+            .publish_workload_ports(&workload_id, &declared_ports, &resolved_workload)
+            .await?;
+        resolved_workload.set_published_ports(published);
+
         // If the service didn't run and we had one, warn
+        #[allow(clippy::items_after_statements)]
         if service_present && resolved_workload.execute_service().await?.is_none() {
             warn!(
                 workload_id = request.workload_id,
@@ -654,6 +664,69 @@ impl Host {
         }
 
         Ok(resolved_workload)
+    }
+
+    /// Bind a real listener for every declared port that asks to be published.
+    ///
+    /// A port declared without `publish` reserves nothing and binds nothing: the
+    /// service still binds it inside the workload's virtual network, where only
+    /// that workload's own components can reach it — exactly today's behavior.
+    ///
+    /// # Errors
+    ///
+    /// Fails if a port conflicts with one this host already published, falls
+    /// outside the configured range, or cannot be bound. Ports bound so far drop
+    /// on the error path, so a workload that fails to start leaves no port
+    /// claimed.
+    async fn publish_workload_ports(
+        &self,
+        workload_id: &Arc<str>,
+        ports: &[crate::host::declared_port::DeclaredPort],
+        workload: &ResolvedWorkload,
+    ) -> anyhow::Result<Vec<crate::host::ports::PublishedPort>> {
+        let wants_publish = ports.iter().any(|p| p.published_port().is_some());
+        if !wants_publish {
+            return Ok(Vec::new());
+        }
+        let Some(loopback) = workload.loopback() else {
+            bail!(
+                "workload declares published ports but has no service to bind them; ports are \
+                 listened on by the workload's service"
+            );
+        };
+        // Pinned rather than replaced per incarnation: a workload's virtual
+        // network is shared with its components, which is what lets a component
+        // dial its service.
+        let network = crate::host::ports::NetworkHandle::pinned(loopback);
+        let owner = crate::host::ports::PortOwner::Workload(Arc::clone(workload_id));
+
+        let mut published = Vec::new();
+        for port in ports {
+            let Some(host_port) = port.published_port() else {
+                continue;
+            };
+            let target = std::net::SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                port.port,
+            );
+            let request = crate::host::ports::PublishRequest::new(
+                port.protocol,
+                owner.clone(),
+                port.name.as_str(),
+                host_port,
+                target,
+                network.clone(),
+            )
+            // The same allowance the workload's components draw on, so its
+            // exposed ports cannot outrun what the workload as a whole may hold.
+            .with_quota(self.engine.socket_policy.quota_for(workload_id));
+            let handle =
+                crate::host::ports::publish(&self.publish_config, &self.port_table, request)
+                    .await
+                    .with_context(|| format!("failed to publish port '{}'", port.name))?;
+            published.push(handle);
+        }
+        Ok(published)
     }
 }
 

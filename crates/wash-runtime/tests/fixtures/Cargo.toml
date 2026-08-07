@@ -54,6 +54,7 @@ members = [
     "bridge-backend",
     "bridge-service",
     "kv-plugin",
+    "socket-echo-plugin",
     "kv-plugin-caller",
     "kv-plugin-service",
     "badlifecycle",
