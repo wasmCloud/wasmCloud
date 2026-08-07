@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -427,14 +428,18 @@ var _ = Describe("Manager", Ordered, func() {
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(),
 				"failed to create tenant namespace %q", tenantNamespace)
+
+			createRegistryPullSecret(tenantNamespace)
 		})
 
 		It("performs a helm upgrade adding a hostGroup in the tenant namespace", func() {
 			// Append a hostGroup pinned to the tenant namespace, at the index
 			// after buildBaseHelmSets's groups (extraHostGroupIndex: [2] when the
 			// registry occupies [1], else [1]). When the registry flow is active
-			// this host runs the http fixture pulled from the in-cluster registry,
-			// so it's made insecure to match. We deliberately do NOT set
+			// this host pulls the http fixture from the in-cluster registry over
+			// HTTPS; it needs no extra configuration for that, because
+			// buildBaseHelmSets sets runtime.ociCaPaths chart-wide and this host
+			// mounts the same CA every host does. We deliberately do NOT set
 			// `operator.hostNamespaces` here — the chart's
 			// `runtime-operator.hostNamespaces` helper should auto-derive it from
 			// the hostGroup's namespace override, and we assert that below.
@@ -453,10 +458,6 @@ var _ = Describe("Manager", Ordered, func() {
 				fmt.Sprintf("%s.resources.limits.cpu=500m", hg),
 				fmt.Sprintf("%s.logLevel=%s", hg, runtimeLogLevel),
 			)
-			if inClusterRegistry {
-				sets = append(sets, fmt.Sprintf("%s.extraArgs[0]=--allow-insecure-registries", hg))
-			}
-
 			helmArgs := make([]string, 0, 5+2*len(sets)+4)
 			helmArgs = append(helmArgs, "upgrade", "--install", "-n", namespace)
 			for _, s := range sets {
@@ -568,8 +569,9 @@ spec:
             host: hello.localhost.direct
       components:
         - name: hello-world
-          image: %s
-`, tenantWorkloadName, tenantNamespace, tenantNamespace, tenantHostGroup, httpWorkloadImage())
+          image: %s%s
+`, tenantWorkloadName, tenantNamespace, tenantNamespace, tenantHostGroup,
+				httpWorkloadImage(), componentPullSecretYAML())
 
 			f, err := os.CreateTemp("", "tenant-workload-*.yaml")
 			Expect(err).NotTo(HaveOccurred())
@@ -675,8 +677,8 @@ spec:
             host: hello.localhost.direct
       components:
         - name: hello-world
-          image: %s
-`, name, ns, ns, hostgroup, httpWorkloadImage())
+          image: %s%s
+`, name, ns, ns, hostgroup, httpWorkloadImage(), componentPullSecretYAML())
 
 			f, err := os.CreateTemp("", "scoped-workload-*.yaml")
 			Expect(err).NotTo(HaveOccurred())
@@ -756,6 +758,7 @@ spec:
 				_, err := utils.Run(cmd)
 				Expect(err).NotTo(HaveOccurred(),
 					"failed to create namespace %q", ns)
+				createRegistryPullSecret(ns)
 			}
 		})
 
@@ -763,8 +766,9 @@ spec:
 			// Run a host inside the watched namespace so a workload applied there
 			// has something to schedule onto, at the index after buildBaseHelmSets's
 			// groups (extraHostGroupIndex: [2] when the registry occupies [1], else
-			// [1]). When the registry flow is active it runs the http fixture from
-			// the in-cluster registry, so it's made insecure to match. The chart's
+			// [1]). When the registry flow is active it pulls the http fixture from
+			// the in-cluster registry over HTTPS, trusting it through the
+			// chart-wide runtime.ociCaPaths buildBaseHelmSets sets. The chart's
 			// `runtime-operator.hostNamespaces` helper auto-derives -host-namespaces
 			// from runtime.hostGroups[].namespace, so we don't set
 			// operator.hostNamespaces directly.
@@ -783,9 +787,6 @@ spec:
 				fmt.Sprintf("%s.resources.limits.memory=512Mi", hg),
 				fmt.Sprintf("%s.resources.limits.cpu=500m", hg),
 				fmt.Sprintf("%s.logLevel=%s", hg, runtimeLogLevel),
-			}
-			if inClusterRegistry {
-				scopedSets = append(scopedSets, fmt.Sprintf("%s.extraArgs[0]=--allow-insecure-registries", hg))
 			}
 			helmUpgrade(scopedSets, "helm upgrade into scoped mode failed")
 		})
@@ -989,14 +990,52 @@ func httpWorkloadImage() string {
 	return httpHelloWorldImage
 }
 
+// componentPullSecretYAML is the imagePullSecret block that goes with
+// httpWorkloadImage, indented for a component in the manifests built inline
+// here. Empty off the registry flow, where the image is published and needs no
+// credentials.
+func componentPullSecretYAML() string {
+	if !inClusterRegistry {
+		return ""
+	}
+	return fmt.Sprintf("\n          imagePullSecret:\n            name: %s", registryPullSecret)
+}
+
+// createRegistryPullSecret puts the in-cluster registry's credentials in ns.
+// A pull secret is resolved in the workload's own namespace, so a workload
+// deployed outside wasmcloud-system cannot use the copy `cargo xtask
+// e2e-images` made there. No-op off the registry flow.
+func createRegistryPullSecret(ns string) {
+	if !inClusterRegistry {
+		return
+	}
+	By("copying the registry pull secret into " + ns)
+	cmd := exec.Command("kubectl", "create", "secret", "docker-registry",
+		registryPullSecret, "-n", ns,
+		fmt.Sprintf("--docker-server=oci-registry.%s.svc", namespace),
+		"--docker-username="+registryUser,
+		"--docker-password="+registryPassword)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+}
+
 // rewriteWorkloadImages swaps the published http image in a sample manifest for
 // its in-cluster registry equivalent when the registry flow is active; a no-op
 // otherwise (the release/canary legs deploy the published component as-is).
+//
+// The in-cluster registry requires authentication, so the rewritten component
+// also gains the image pull secret that carries its credentials — without it
+// the host pulls anonymously and the workload never becomes Ready. The pull
+// secret is indented to match the `image:` line it follows, so this holds for
+// any sample regardless of how deeply the component sits.
 func rewriteWorkloadImages(manifest string) string {
 	if !inClusterRegistry {
 		return manifest
 	}
-	return strings.ReplaceAll(manifest, httpHelloWorldImage, registryRef("http-handler-p2"))
+	replacement := fmt.Sprintf("${1}image: %s\n${1}imagePullSecret:\n${1}  name: %s",
+		registryRef("http-handler-p2"), registryPullSecret)
+	return regexp.MustCompile(`(?m)^([ \t]*)image: `+regexp.QuoteMeta(httpHelloWorldImage)+`[ \t]*$`).
+		ReplaceAllString(manifest, replacement)
 }
 
 // expectNoTestWorkloads asserts that no Workload CRs remain in ns once the

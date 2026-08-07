@@ -34,7 +34,7 @@ impl CliCommand for InspectCommand {
         );
 
         let loaded = ComponentSource::from_reference(component_reference)
-            .load(self.registry.oci_config(ctx))
+            .load(self.registry.oci_config(ctx)?)
             .await?;
 
         let component = decode_component(loaded.bytes.as_ref())

@@ -252,6 +252,24 @@ var _ = BeforeSuite(func() {
 // under. Kept in sync with TAG in xtask/src/e2e_images.rs.
 const registryImageTag = "e2e"
 
+// registryPullSecret names the dockerconfigjson Secret carrying the in-cluster
+// registry's credentials, applied alongside the registry itself (see
+// testdata/oci-registry.yaml). Every component pulling a fixture has to
+// reference it: the registry authenticates all requests, and a workload whose
+// image pull is refused never becomes Ready.
+const registryPullSecret = "oci-registry-pull"
+
+// registryUser / registryPassword are the registry's Basic credentials. The
+// xtask defines them and creates the Secrets holding them; both sides read the
+// same two environment variables so overriding one moves the other, and the
+// defaults here must match DEFAULT_REGISTRY_USER/DEFAULT_REGISTRY_PASSWORD in
+// xtask/src/e2e_images.rs. Specs need them to talk to the registry directly,
+// and to prove an unauthenticated caller is turned away.
+var (
+	registryUser     = envOrDefault("E2E_REGISTRY_USER", "test-e2e-user")
+	registryPassword = envOrDefault("E2E_REGISTRY_PASSWORD", "test-e2e-password")
+)
+
 // registryRef returns the in-cluster pull ref for a fixture that
 // `make e2e-images` built and pushed. The insecure hostgroups resolve it over
 // plain HTTP via the oci-registry Service DNS, so specs never depend on an
@@ -321,34 +339,42 @@ func buildBaseHelmSets() []string {
 		fmt.Sprintf("runtime.hostGroups[0].logLevel=%s", runtimeLogLevel),
 	}
 	if inClusterRegistry {
-		// The default hostgroup pulls the test fixtures from the in-cluster
-		// oci-registry over plain HTTP. The host's insecure flag is global (it
-		// forces HTTP for every registry), which is why the registry component
-		// itself lives on a separate, secure hostgroup below. Added on both
-		// wash.yml legs (each runs a registry); off for the canary
-		// runtime-operator.yml job and plain local runs, which keep the default
-		// hostgroup on HTTPS and pull published ghcr images.
+		// The registry serves HTTPS from a certificate the chart mints off its
+		// own CA, and every host already carries that CA at /runtime-cert/ca.crt
+		// for NATS — so trusting it is a path, not a distribution problem. That
+		// replaces --allow-insecure-registries, which switched every registry to
+		// plain HTTP: nothing verified, and the registry's credentials in the
+		// clear on every pull.
 		//
-		// TODO(wash release): once wash supports per-registry insecure config
-		// (allow HTTP for the in-cluster registry only, not globally), the
-		// registry can share the default hostgroup — dropping this second
-		// hostgroup and the extraHostGroupIndex() shuffle in the tenant/scoped
-		// specs.
+		// The second hostgroup remains, for the other reason it exists: the
+		// registry component needs an all-features host (the async
+		// wasmcloud:blobstore plugin), which the release leg's default host is
+		// not.
 		sets = append(sets,
-			"runtime.hostGroups[0].extraArgs[0]=--allow-insecure-registries",
-			// hostGroups[1]: the `registry` hostgroup. Stays on HTTPS so it can
-			// pull the oci-registry component from ghcr. It runs only the
-			// oci-registry workload (testdata/oci-registry.yaml, hostSelector:
-			// hostgroup=registry). The oci-registry exports a p3 async
+			"runtime.ociCaPaths[0]=/runtime-cert/ca.crt",
+			// hostGroups[1]: the `registry` hostgroup, serving the oci-registry
+			// workload (testdata/oci-registry.yaml, hostSelector:
+			// hostgroup=registry) over TLS. The oci-registry exports a p3 async
 			// wasi:http/handler and imports the async wasmcloud:blobstore plugin;
 			// the all-features engine enables the component-model-async proposal
-			// by default (crates/wash-runtime/src/engine/mod.rs build()), so no
-			// extra host flag is required.
+			// by default, so no extra host flag is required.
 			"runtime.hostGroups[1].name=registry",
 			"runtime.hostGroups[1].replicas=1",
 			"runtime.hostGroups[1].service.type=ClusterIP",
 			"runtime.hostGroups[1].http.enabled=true",
 			"runtime.hostGroups[1].http.port=80",
+			"runtime.hostGroups[1].http.tls.enabled=true",
+			"runtime.hostGroups[1].http.tls.certificate.generate.enabled=true",
+			// Every authority a client reaches the registry by has to be in the
+			// certificate, or verification fails on the name rather than the
+			// chain: the Service DNS forms for in-cluster pulls, and 127.0.0.1
+			// for the port-forward `make e2e-images` pushes through. The address
+			// goes under ipAddresses, not domains — a client dialling a URL
+			// written as an IP matches it against the IP SANs alone.
+			fmt.Sprintf("runtime.hostGroups[1].http.tls.certificate.generate.domains[0]=oci-registry.%s.svc", namespace),
+			fmt.Sprintf("runtime.hostGroups[1].http.tls.certificate.generate.domains[1]=oci-registry.%s", namespace),
+			"runtime.hostGroups[1].http.tls.certificate.generate.domains[2]=oci-registry",
+			"runtime.hostGroups[1].http.tls.certificate.generate.ipAddresses[0]=127.0.0.1",
 			"runtime.hostGroups[1].webgpu.enabled=false",
 			"runtime.hostGroups[1].resources.requests.memory=64Mi",
 			"runtime.hostGroups[1].resources.requests.cpu=250m",

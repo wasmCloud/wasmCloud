@@ -186,7 +186,9 @@ spec:
       components:
         - name: messaging-echo
           image: %s
-`, workloadName, namespace, subscriptionSubject, componentImage)
+          imagePullSecret:
+            name: %s
+`, workloadName, namespace, subscriptionSubject, componentImage, registryPullSecret)
 
 		cmd := exec.Command("kubectl", "apply", "-f", "-")
 		cmd.Stdin = strings.NewReader(manifest)

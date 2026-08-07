@@ -180,6 +180,15 @@ spec:
             - "--tls-key-path=/tls-cert/tls.key"
             {{- end }}
             {{- end }}
+            {{- /* Extra CA bundles this host trusts when pulling images. The
+                   chart's own CA is mounted at /runtime-cert/ca.crt whenever
+                   global.tls is on, so a registry running in this cluster
+                   behind a hostGroup's http.tls needs only that path here —
+                   no bundle has to be distributed. Chart-wide entries first,
+                   then per-host-group ones. */}}
+            {{- range concat ($top.Values.runtime.ociCaPaths | default list) (.ociCaPaths | default list) }}
+            - "--oci-ca-path={{ . }}"
+            {{- end }}
             {{- if and (.webgpu) (.webgpu.enabled) }}
             - "--wasi-webgpu"
             {{- end }}
