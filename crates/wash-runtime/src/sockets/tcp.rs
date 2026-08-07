@@ -133,6 +133,15 @@ pub struct NetworkTcpSocket {
 
     /// Tracks whether the receive stream has been taken (P3 only).
     receive_taken: bool,
+
+    /// The guest's connection-budget slot, held for as long as this socket
+    /// exists.
+    ///
+    /// Only a real outbound connection takes one — a virtual one costs no file
+    /// descriptor and no remote resource — and it is released when the guest
+    /// drops the socket, which is what makes the budget bound *concurrent*
+    /// connections rather than merely counting attempts.
+    quota_slot: Option<crate::host::quota::ConnectionSlot>,
 }
 
 impl NetworkTcpSocket {
@@ -205,6 +214,7 @@ impl NetworkTcpSocket {
             options: Default::default(),
             send_taken: false,
             receive_taken: false,
+            quota_slot: None,
         })
     }
 
@@ -225,6 +235,7 @@ impl NetworkTcpSocket {
             options: Default::default(),
             send_taken: false,
             receive_taken: false,
+            quota_slot: None,
         }
     }
 
@@ -972,6 +983,7 @@ impl TcpSocket {
                     options: socket.options.clone(),
                     send_taken: false,
                     receive_taken: false,
+                    quota_slot: None,
                 },
                 lo,
             }
@@ -992,9 +1004,15 @@ impl TcpSocket {
         }
     }
 
+    /// Begin connecting to `addr` on `plane`.
+    ///
+    /// `plane` comes from the socket policy rather than from the address: the
+    /// host's own loopback is a real address inside `127.0.0.0/8`, so "is it
+    /// loopback" cannot answer which network to dispatch on.
     pub(crate) fn start_connect(
         &mut self,
         addr: &SocketAddr,
+        plane: super::Plane,
         loopback: &mut super::loopback::Network,
     ) -> Result<ConnectingTcpSocket, ErrorCode> {
         if let Self::Network(socket) | Self::Unspecified { net: socket, .. } = self {
@@ -1047,7 +1065,7 @@ impl TcpSocket {
                     family: SocketAddressFamily::Ipv4,
                 }),
             ),
-            ip.is_loopback(),
+            use_virtual,
         ) {
             (
                 Self::Network(mut socket)
@@ -1731,6 +1749,7 @@ mod tests {
                 options: Default::default(),
                 send_taken: false,
                 receive_taken: false,
+                quota_slot: None,
             };
 
             let result = connected.take_send_stream();
@@ -1762,6 +1781,7 @@ mod tests {
                 options: Default::default(),
                 send_taken: false,
                 receive_taken: false,
+                quota_slot: None,
             };
 
             let result = connected.take_receive_stream();

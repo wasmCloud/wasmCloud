@@ -15,10 +15,13 @@
 //! across workloads either. Port exhaustion is still prevented because it is
 //! caused by a single busy workload, which keeps reusing its own pool.
 //!
-//! Live connections are bounded ([`ConnectionLimits`]): each workload may hold
-//! at most a fixed number of connections, and all workloads together share a
-//! host-wide cap, so no workload (or crowd of workloads) can exhaust the
-//! host's file descriptors by fanning out to many authorities.
+//! Live connections are bounded by the workload's
+//! [`GuestConnectionQuota`](crate::host::quota::GuestConnectionQuota): its
+//! `http` surface caps how large this pool may grow, and every surface rolls
+//! up into a host-wide ceiling, so no workload (or crowd of workloads) can
+//! exhaust the host's file descriptors by fanning out to many authorities.
+//! The same quota bounds the workload's raw sockets and its inbound published
+//! ports, so one set of numbers governs everything it holds.
 //!
 //! It also owns the outbound TLS trust roots. wasmtime's default transport
 //! trusts only the compiled-in webpki (Mozilla) roots, with no way to reach
@@ -114,11 +117,13 @@ const ASSUMED_OUTBOUND_FANOUT: usize = 4;
 /// workload can never hold more idle than its whole budget. This only decides
 /// how much of that budget one authority may hold *idle*. A budget under the
 /// floor is therefore honoured rather than raised to it.
-fn idle_per_authority(call_concurrency: usize, limits: &ConnectionLimits) -> usize {
+fn idle_per_authority(call_concurrency: usize, max_http: usize) -> usize {
     call_concurrency
         .saturating_mul(ASSUMED_OUTBOUND_FANOUT)
         .max(MIN_IDLE_PER_AUTHORITY)
-        .min(limits.max_per_workload)
+        // The workload's own allowance is the ceiling: keeping more idle than
+        // it may ever hold open would reserve capacity it cannot use.
+        .min(max_http)
         // hyper treats a cap of zero as "keep no idle connections", which
         // would defeat the pool; a budget of zero is rejected at startup, but
         // do not depend on that here.
@@ -141,82 +146,8 @@ fn idle_per_authority(call_concurrency: usize, limits: &ConnectionLimits) -> usi
 /// never signal unbind).
 const WORKLOAD_CLIENT_IDLE: Duration = Duration::from_secs(60);
 
-/// Default for [`ConnectionLimits::max_per_workload`]. Sized well above
-/// [`MIN_IDLE_PER_AUTHORITY`] so a workload can still burst to several
-/// authorities at once, while keeping any single workload's file-descriptor
-/// footprint far from the host-wide cap.
-///
-/// This is the ceiling a component reaches by raising its call concurrency:
-/// concurrent outbound requests scale with `pool_size` × `max_concurrency`
-/// times each call's fan-out, so a component that opts into instance
-/// concurrency can need this raised alongside it.
-const MAX_CONNECTIONS_PER_WORKLOAD: usize = 128;
-
-/// Default for [`ConnectionLimits::max_total`]. Kept inside common default
-/// file-descriptor soft limits (1024 on many Linux distributions) with room
-/// left for ingress connections, OCI pulls, and the host's own control-plane
-/// traffic.
-const MAX_TOTAL_CONNECTIONS: usize = 512;
-
-/// Default for [`ConnectionLimits::permit_wait`]. Kept well below the
-/// request-timeout defaults (600s) so saturation surfaces as a prompt,
-/// classifiable connect timeout instead of a long hang.
-const PERMIT_WAIT: Duration = Duration::from_secs(5);
-
 /// Shortest gap between two [`warn_permits_exhausted`] lines for one workload.
 const PERMIT_WARN_INTERVAL: Duration = Duration::from_secs(5);
-
-/// Bounds on live outbound connections (in-flight or idle in a pool).
-///
-/// A permit is held for the whole life of an established connection and
-/// released when it closes (pool idle timeout, workload-client eviction, or
-/// error) — so reusing a pooled connection never consumes a new permit; the
-/// caps only gate opening *new* connections. When a cap is reached, a request
-/// waits for a permit or for an idle pooled connection, whichever frees first
-/// (hyper races the two and abandons the pending connect if reuse wins); if
-/// neither arrives within [`permit_wait`](Self::permit_wait), the request
-/// fails with a connect timeout.
-///
-/// Note that idle pooled connections pin permits until they age out
-/// ([`POOL_IDLE_TIMEOUT`]), so `max_total` should be sized for the number of
-/// concurrently busy workloads times their expected burst, not treated as a
-/// per-request budget. A workload's burst is not fixed: it scales with the
-/// calls it runs at once — `pool_size` × `max_concurrency` — times each
-/// call's outbound fan-out, so raising a component's instance concurrency
-/// raises what it needs here.
-#[derive(Debug, Clone, Copy)]
-pub struct ConnectionLimits {
-    /// Maximum live connections a single workload may hold, across all
-    /// authorities it talks to.
-    pub max_per_workload: usize,
-    /// Host-wide maximum live connections across all workloads combined.
-    pub max_total: usize,
-    /// How long a connect attempt waits for permits before failing with a
-    /// timeout.
-    ///
-    /// This deadline must exist: hyper's pool spawns an already-started
-    /// connect to completion in the background when idle-connection reuse
-    /// wins the checkout race, and such an abandoned attempt parked on the
-    /// semaphore would otherwise camp there indefinitely — holding the pool
-    /// alive (which pins the very idle-connection permits it is waiting for)
-    /// and grabbing freed permits to open connections nobody asked for.
-    ///
-    /// A guest's own `connect_timeout` bounds its request independently (see
-    /// [`send_head`]), so this wait caps only how long an abandoned attempt —
-    /// one no request is still waiting on — may camp on the semaphore. Tests
-    /// that deliberately wait one out shorten it.
-    pub permit_wait: Duration,
-}
-
-impl Default for ConnectionLimits {
-    fn default() -> Self {
-        Self {
-            max_per_workload: MAX_CONNECTIONS_PER_WORKLOAD,
-            max_total: MAX_TOTAL_CONNECTIONS,
-            permit_wait: PERMIT_WAIT,
-        }
-    }
-}
 
 /// Built-in roots to start from before layering on
 /// [`ClientTlsOptions::extra_ca_paths`].
@@ -583,7 +514,7 @@ async fn wait_connected(captured: &mut CaptureConnection) {
 ///
 /// `connect_timeout` bounds only the wait for a usable connection — reusing an
 /// idle pooled connection satisfies it immediately, while a fresh connect (and
-/// any wait for a [`ConnectionLimits`] permit) must finish inside it — and
+/// any wait for a quota slot) must finish inside it — and
 /// `first_byte_timeout` then bounds the head itself. Keeping the two phases
 /// distinct preserves the guest-visible timings and error codes of wasmtime's
 /// per-request transport; a single combined deadline would let a short
@@ -631,7 +562,7 @@ enum Alpn {
 /// A pooled outbound HTTP client with configurable TLS trust roots.
 ///
 /// Holds two pools — HTTP/1.1 for ordinary egress and HTTP/2 for the gRPC
-/// fast path — drawing on one shared connection budget, so a workload's total
+/// fast path — drawing on one shared quota, so a workload's total
 /// footprint is bounded across both protocols.
 ///
 /// Cloning is cheap and shares the underlying connection pools.
@@ -644,25 +575,28 @@ pub struct PooledClient {
 
 impl PooledClient {
     /// Create a standalone client using the given TLS configuration for HTTPS,
-    /// bounded by the default [`ConnectionLimits`] (both caps private to this
-    /// client). Clients created through [`WorkloadClients`] instead share the
-    /// host-wide cap.
+    /// bounded by a private quota of default size. Clients created through
+    /// [`WorkloadClients`] instead draw on their workload's own quota and the
+    /// host-wide ceiling.
     pub fn new(tls: Arc<rustls::ClientConfig>) -> Self {
-        let limits = ConnectionLimits::default();
+        let quota = crate::host::quota::GuestConnectionQuota::new(
+            crate::host::quota::QuotaLimits::default(),
+            None,
+        );
         Self::bounded(
             tls,
             None,
-            Arc::new(Semaphore::new(limits.max_per_workload)),
-            Arc::new(Semaphore::new(limits.max_total)),
-            limits.permit_wait,
+            quota.http_permits(),
+            unbounded_permits(),
+            crate::host::quota::QuotaRegistry::new(Default::default(), None).http_wait(),
             MIN_IDLE_PER_AUTHORITY,
         )
     }
 
     /// Create a client whose new connections each hold one permit from
-    /// `workload_permits` (the budget of the workload named by `workload`, if
-    /// any) and one from `global_permits` (shared host-wide) for the
-    /// connection's lifetime.
+    /// `workload_permits` (the HTTP surface of the quota belonging to the
+    /// workload named by `workload`, if any) and one from `global_permits`
+    /// (shared host-wide) for the connection's lifetime.
     fn bounded(
         tls: Arc<rustls::ClientConfig>,
         workload: Option<Arc<str>>,
@@ -862,30 +796,27 @@ impl PooledClient {
 }
 
 /// Per-workload pooled clients sharing one TLS configuration and one
-/// host-wide connection budget.
+/// host-wide ceiling.
 ///
 /// Each workload gets its own [`PooledClient`] (created lazily on first
 /// request, evicted after [`WORKLOAD_CLIENT_IDLE`] without use), so a
 /// workload reuses its own keep-alive connections but components never share
 /// a TCP connection with each other. Every client draws new connections from
-/// its own per-workload budget and from the shared host-wide budget (see
-/// [`ConnectionLimits`]).
+/// its own per-workload quota and from the shared host-wide ceiling (see
+/// its workload's quota).
 ///
 /// Cloning is cheap and shares the underlying client cache.
 #[derive(Clone)]
 pub struct WorkloadClients {
     tls: Arc<rustls::ClientConfig>,
-    limits: ConnectionLimits,
-    /// Host-wide budget shared by every workload's client.
-    global_permits: Arc<Semaphore>,
-    /// Per-workload budgets, held apart from [`Self::clients`] so that a
-    /// client rebuilt for a workload draws on the same budget its predecessor
-    /// did. A replaced client's connections keep their permits until they
-    /// close, and those permits have to keep counting against the workload
-    /// that opened them — a budget minted alongside each client would let one
-    /// workload hold `max_per_workload` twice over while the old connections
-    /// drain.
-    workload_permits: moka::sync::Cache<String, Arc<Semaphore>>,
+    /// Where each workload's allowance comes from. Held apart from
+    /// [`Self::clients`] so that a client rebuilt for a workload draws on the
+    /// same quota its predecessor did: a replaced client's connections keep
+    /// their slots until they close, and those slots have to keep counting
+    /// against the workload that opened them — a quota minted alongside each
+    /// client would let one workload hold its `http` ceiling twice over while
+    /// the old connections drain.
+    quotas: Arc<crate::host::quota::QuotaRegistry>,
     /// Guest calls each workload may run at once, as declared by its
     /// component (see [`Self::set_call_concurrency`]), sizing its pools'
     /// idle caps. A workload absent here has not declared any, and gets
@@ -900,20 +831,31 @@ pub struct WorkloadClients {
 
 impl WorkloadClients {
     /// Create a per-workload client cache using the given TLS configuration
-    /// for HTTPS and the default [`ConnectionLimits`].
+    /// for HTTPS and a private quota registry of default size.
     pub fn new(tls: Arc<rustls::ClientConfig>) -> Self {
-        Self::with_limits(tls, ConnectionLimits::default())
+        Self::with_quotas(
+            tls,
+            crate::host::quota::QuotaRegistry::new(Default::default(), None),
+        )
     }
 
-    /// Create a per-workload client cache with explicit connection bounds.
-    pub fn with_limits(tls: Arc<rustls::ClientConfig>, limits: ConnectionLimits) -> Self {
+    /// The registry these clients draw on.
+    pub fn quotas(&self) -> &Arc<crate::host::quota::QuotaRegistry> {
+        &self.quotas
+    }
+
+    /// Create a per-workload client cache drawing on `quotas`.
+    ///
+    /// Pass the host's one registry, the same one the socket policy and the
+    /// published-port publisher use, so a workload's HTTP pool and its raw
+    /// sockets are bounded by one configured allowance rather than two.
+    pub fn with_quotas(
+        tls: Arc<rustls::ClientConfig>,
+        quotas: Arc<crate::host::quota::QuotaRegistry>,
+    ) -> Self {
         Self {
             tls,
-            limits,
-            global_permits: Arc::new(Semaphore::new(limits.max_total)),
-            workload_permits: moka::sync::Cache::builder()
-                .time_to_idle(WORKLOAD_CLIENT_IDLE)
-                .build(),
+            quotas,
             call_concurrency: Arc::new(std::sync::RwLock::new(BTreeMap::new())),
             clients: moka::sync::Cache::builder()
                 .time_to_idle(WORKLOAD_CLIENT_IDLE)
@@ -954,12 +896,12 @@ impl WorkloadClients {
     /// connections and TLS session tickets (see
     /// [`crate::host::http::OutgoingHandler`]).
     pub fn client(&self, workload_id: &str) -> PooledClient {
-        // Looked up on every call, not just on a client-cache miss, so both
-        // caches see the same idle window and a workload's budget cannot
-        // expire out from under a client that is still serving it.
-        let permits = self.workload_permits.get_with_by_ref(workload_id, || {
-            Arc::new(Semaphore::new(self.limits.max_per_workload))
-        });
+        // Looked up on every call, not just on a client-cache miss, so the
+        // quota's idle window is refreshed alongside the client's and a
+        // workload's allowance cannot expire out from under a client that is
+        // still serving it. The quota's window is the longer of the two, so it
+        // outlives the client either way.
+        let quota = self.quotas.for_guest(workload_id);
         self.clients.get_with_by_ref(workload_id, || {
             let calls = self
                 .call_concurrency
@@ -971,10 +913,13 @@ impl WorkloadClients {
             PooledClient::bounded(
                 self.tls.clone(),
                 Some(Arc::from(workload_id)),
-                permits,
-                self.global_permits.clone(),
-                self.limits.permit_wait,
-                idle_per_authority(calls, &self.limits),
+                quota.http_permits(),
+                // An unset host-wide ceiling is spelled as an effectively
+                // unbounded semaphore rather than an `Option`, so the connector
+                // has one acquire path instead of two.
+                quota.global_permits().unwrap_or_else(unbounded_permits),
+                self.quotas.http_wait(),
+                idle_per_authority(calls, self.quotas.limits().http),
             )
         })
     }
@@ -982,13 +927,13 @@ impl WorkloadClients {
     /// Drop `workload_id`'s pooled client — call when the workload stops.
     ///
     /// Closes the client's idle connections and releases their
-    /// [`ConnectionLimits`] permits (in-flight requests hold their own clone
+    /// quota slots (in-flight requests hold their own clone
     /// of the client and complete unaffected; their connections close, and
     /// release their permits, when those requests finish). A subsequent
     /// [`Self::client`] call for the same ID builds a fresh client with a
     /// fresh TLS session-resumption store.
     ///
-    /// The workload's connection budget deliberately survives, so that the
+    /// The workload's quota deliberately survives, so that the
     /// draining connections stay charged to it; it ages out on its own idle
     /// window ([`WORKLOAD_CLIENT_IDLE`]) once nothing refers to the workload.
     pub fn invalidate(&self, workload_id: &str) {
@@ -1010,7 +955,7 @@ impl WorkloadClients {
 }
 
 /// Connector that gates every *new* connection on a per-workload and a
-/// host-wide semaphore (see [`ConnectionLimits`]). Reusing an idle pooled
+/// host-wide semaphore (see [`crate::host::quota`]). Reusing an idle pooled
 /// connection bypasses the connector entirely, so it needs no permit; hyper's
 /// pool checkout races this connector against idle-connection reuse and drops
 /// the pending connect (cancelling the permit acquisition) if reuse wins, so
@@ -1093,17 +1038,17 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
     }
 }
 
-/// Log that a connect attempt gave up waiting for [`ConnectionLimits`]
+/// Log that a connect attempt gave up waiting for quota
 /// permits. The guest only sees a generic connect timeout, so this is the
-/// operator's signal that the connection budget — not the upstream server —
+/// operator's signal that the connection quota — not the upstream server —
 /// is what failed the request; whichever reported count is 0 is the
-/// exhausted budget.
+/// exhausted quota.
 ///
 /// Rate-limited to one line per [`PERMIT_WARN_INTERVAL`] *per workload*: a
-/// saturated budget times out every parked connect attempt in the same
+/// saturated quota times out every parked connect attempt in the same
 /// instant (including attempts hyper abandoned after idle-connection reuse
 /// won the checkout race), so an unthrottled log would flood. Throttling per
-/// workload rather than host-wide keeps one workload that pins its own budget
+/// workload rather than host-wide keeps one workload that pins its own quota
 /// from masking another workload's report of the host-wide cap.
 fn warn_permits_exhausted(
     last_warning: &std::sync::Mutex<Option<std::time::Instant>>,
@@ -1120,13 +1065,19 @@ fn warn_permits_exhausted(
             workload_permits_available = workload_permits.available_permits(),
             global_permits_available = global_permits.available_permits(),
             "outbound connect timed out waiting for a connection permit; \
-             a ConnectionLimits budget is exhausted (logged at most once per \
+             a connection quota is exhausted (logged at most once per \
              {PERMIT_WARN_INTERVAL:?} per workload)"
         );
     }
 }
 
-/// A connection stream carrying its [`ConnectionLimits`] permits; dropping
+/// An effectively unbounded semaphore, for a host that configured no
+/// host-wide ceiling.
+fn unbounded_permits() -> Arc<Semaphore> {
+    Arc::new(Semaphore::new(Semaphore::MAX_PERMITS))
+}
+
+/// A connection stream carrying its quota slots; dropping
 /// the stream (connection close) releases them.
 struct PermittedStream {
     inner: hyper_rustls::MaybeHttpsStream<TokioIo<TcpStream>>,
@@ -1417,14 +1368,21 @@ mod tests {
     /// runners.
     const TEST_PERMIT_WAIT: Duration = Duration::from_secs(1);
 
-    /// [`ConnectionLimits`] with the given caps and the shortened
-    /// [`TEST_PERMIT_WAIT`].
-    fn test_limits(max_per_workload: usize, max_total: usize) -> ConnectionLimits {
-        ConnectionLimits {
-            max_per_workload,
-            max_total,
-            permit_wait: TEST_PERMIT_WAIT,
-        }
+    /// A quota registry with the given HTTP ceiling and host-wide cap, and the
+    /// shortened [`TEST_PERMIT_WAIT`].
+    fn test_quotas(http: usize, max_total: usize) -> Arc<crate::host::quota::QuotaRegistry> {
+        Arc::new(
+            crate::host::quota::QuotaRegistry::new(
+                crate::host::quota::QuotaLimits {
+                    http,
+                    ..Default::default()
+                },
+                Some(max_total),
+            )
+            .as_ref()
+            .clone()
+            .with_http_wait(TEST_PERMIT_WAIT),
+        )
     }
 
     #[test]
@@ -1439,41 +1397,36 @@ mod tests {
     /// `SSL_CERT_FILE`/`SSL_CERT_DIR` overrides) must remain an explicit
     /// opt-in — widening this default silently changes the egress trust
     /// boundary of every deployment.
-    /// The idle cap tracks declared concurrency, but never past the budget
-    /// that actually bounds the workload's connections — and a budget below
-    /// the floor must win rather than blow up the range.
+    /// The idle cap tracks declared concurrency, but never past the allowance
+    /// that actually bounds the workload's connections — and an allowance
+    /// below the floor must win rather than blow up the range.
     #[test]
-    fn idle_cap_tracks_concurrency_within_the_budget() {
-        let limits = ConnectionLimits::default();
+    fn idle_cap_tracks_concurrency_within_the_quota() {
+        let http = crate::host::quota::QuotaLimits::default().http;
         assert_eq!(
-            idle_per_authority(1, &limits),
+            idle_per_authority(1, http),
             MIN_IDLE_PER_AUTHORITY,
             "a component running one call at a time keeps the floor"
         );
         assert_eq!(
-            idle_per_authority(8, &limits),
+            idle_per_authority(8, http),
             8 * ASSUMED_OUTBOUND_FANOUT,
             "declared concurrency above the floor sizes the cap"
         );
         assert_eq!(
-            idle_per_authority(usize::MAX, &limits),
-            limits.max_per_workload,
-            "the workload's budget is the ceiling, and the fan-out must not overflow"
+            idle_per_authority(usize::MAX, http),
+            http,
+            "the workload's quota is the ceiling, and the fan-out must not overflow"
         );
-
-        let tight = ConnectionLimits {
-            max_per_workload: 4,
-            ..Default::default()
-        };
         assert_eq!(
-            idle_per_authority(1, &tight),
+            idle_per_authority(1, 4),
             4,
-            "a budget under the floor is the cap, not a panic"
+            "an allowance under the floor is the cap, not a panic"
         );
         assert_eq!(
-            idle_per_authority(1, &test_limits(1, 1)),
+            idle_per_authority(1, 1),
             1,
-            "the smallest usable budget still leaves room for one idle connection"
+            "the smallest usable allowance still leaves room for one idle connection"
         );
     }
 
@@ -1769,7 +1722,7 @@ mod tests {
                 },
             )
             .await
-            .expect("a slow head must not be charged against the connect budget");
+            .expect("a slow head must not be charged against the connect deadline");
         assert_eq!(response.resp.status(), 200);
     }
 
@@ -1780,16 +1733,16 @@ mod tests {
     /// slow in-flight request.
     ///
     /// The elapsed-time bound is what makes this test meaningful: a request
-    /// blocked on a permit also ends at [`ConnectionLimits::permit_wait`], so
+    /// blocked on a permit also ends at the quota's http wait, so
     /// only a failure that lands well inside that window shows the guest's
-    /// budget was the one being honoured.
+    /// deadline was the one being honoured.
     #[tokio::test]
-    async fn connect_timeout_fires_before_the_first_byte_budget() {
+    async fn connect_timeout_fires_before_the_first_byte_deadline() {
         use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
 
         let connect_timeout = TEST_PERMIT_WAIT / 5;
         let (addr, _conns) = spawn_counting_server_with_delay(TEST_PERMIT_WAIT * 2).await;
-        let clients = WorkloadClients::with_limits(default_client_tls_config(), test_limits(1, 1));
+        let clients = WorkloadClients::with_quotas(default_client_tls_config(), test_quotas(1, 1));
         let uri = format!("http://{addr}/");
 
         // Occupy the only permit for the duration of the slow request.
@@ -1817,7 +1770,7 @@ mod tests {
                 },
             )
             .await
-            .expect_err("no permit is available, so the connect budget must expire");
+            .expect_err("no slot is available, so the connect deadline must expire");
         let elapsed = started.elapsed();
 
         assert!(
@@ -1826,9 +1779,9 @@ mod tests {
         );
         assert!(
             elapsed < TEST_PERMIT_WAIT,
-            "the guest's {connect_timeout:?} connect budget must end the request, \
+            "the guest's {connect_timeout:?} connect deadline must end the request, \
              but it took {elapsed:?} — at or past the {TEST_PERMIT_WAIT:?} permit deadline, \
-             so the guest's budget was not what bounded it"
+             so the guest's deadline was not what bounded it"
         );
         let _ = busy.await;
     }
@@ -1892,16 +1845,16 @@ mod tests {
         );
     }
 
-    /// gRPC and ordinary egress draw on one connection budget, so a workload
+    /// gRPC and ordinary egress draw on one quota surface, so a workload
     /// cannot evade its cap by switching protocols.
     #[tokio::test]
-    async fn grpc_and_http_egress_share_the_workload_budget() {
+    async fn grpc_and_http_egress_share_the_workload_quota() {
         use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
 
         let (grpc_addr, _grpc_conns) = spawn_counting_h2c_server().await;
         let (http_addr, http_conns) = spawn_counting_server().await;
         let clients =
-            WorkloadClients::with_limits(default_client_tls_config(), test_limits(1, 100));
+            WorkloadClients::with_quotas(default_client_tls_config(), test_quotas(1, 100));
         let client = clients.client("workload-a");
 
         // One gRPC connection, left idle in the h2 pool still holding the
@@ -1934,19 +1887,19 @@ mod tests {
         assert_eq!(
             http_conns.load(std::sync::atomic::Ordering::SeqCst),
             0,
-            "no HTTP/1.1 connection should have been opened over the budget"
+            "no HTTP/1.1 connection should have been opened over the ceiling"
         );
     }
 
     /// Replacing a workload's client must not hand it a second connection
-    /// budget: the outgoing client's connections keep their permits until they
-    /// close, so a fresh budget would let one workload hold
+    /// quota: the outgoing client's connections keep their slots until they
+    /// close, so a fresh quota would let one workload hold
     /// `max_per_workload` twice over while the old connections drain.
     #[tokio::test]
-    async fn rebuilt_client_shares_the_workload_connection_budget() {
+    async fn rebuilt_client_shares_the_workload_quota() {
         let (addr, _conns) = spawn_counting_server_with_delay(TEST_PERMIT_WAIT * 2).await;
         let clients =
-            WorkloadClients::with_limits(default_client_tls_config(), test_limits(1, 100));
+            WorkloadClients::with_quotas(default_client_tls_config(), test_quotas(1, 100));
         let uri = format!("http://{addr}/");
 
         // A request slow enough to still hold the workload's only connection
@@ -1963,28 +1916,18 @@ mod tests {
         });
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        let budget = clients
-            .workload_permits
-            .get("workload-a")
-            .expect("the workload has a budget once it has a client");
+        let quota = clients.quotas().for_guest("workload-a");
         assert_eq!(
-            budget.available_permits(),
+            quota.http_available(),
             0,
-            "the in-flight connection should hold the workload's only permit"
+            "the in-flight connection should hold the workload's only slot"
         );
 
         clients.invalidate("workload-a");
         let _rebuilt = clients.client("workload-a");
-        let rebuilt_budget = clients
-            .workload_permits
-            .get("workload-a")
-            .expect("the budget must outlive the client it was created with");
-        assert!(
-            Arc::ptr_eq(&budget, &rebuilt_budget),
-            "the rebuilt client must draw on the workload's existing budget"
-        );
+        let rebuilt_quota = clients.quotas().for_guest("workload-a");
         assert_eq!(
-            rebuilt_budget.available_permits(),
+            rebuilt_quota.http_available(),
             0,
             "the draining connection must still be charged to the workload"
         );
@@ -2146,7 +2089,7 @@ mod tests {
     async fn per_workload_connection_bound_holds_under_burst() {
         let (addr, conns) = spawn_counting_server_with_delay(Duration::from_millis(50)).await;
         let clients =
-            WorkloadClients::with_limits(default_client_tls_config(), test_limits(2, 100));
+            WorkloadClients::with_quotas(default_client_tls_config(), test_quotas(2, 100));
         let uri = format!("http://{addr}/");
 
         let requests = (0..8).map(|_| {
@@ -2177,7 +2120,7 @@ mod tests {
     #[tokio::test]
     async fn global_connection_bound_holds_across_workloads() {
         let (addr, conns) = spawn_counting_server_with_delay(Duration::from_millis(50)).await;
-        let clients = WorkloadClients::with_limits(default_client_tls_config(), test_limits(4, 2));
+        let clients = WorkloadClients::with_quotas(default_client_tls_config(), test_quotas(4, 2));
         let uri = format!("http://{addr}/");
 
         // Workload A bursts 4 concurrent requests; the global cap of 2 must
@@ -2208,7 +2151,12 @@ mod tests {
         // idle connections and releasing their permits.
         clients.invalidate("workload-a");
         let deadline = tokio::time::Instant::now() + TEST_PERMIT_WAIT + Duration::from_secs(3);
-        while clients.global_permits.available_permits() == 0 {
+        let host_wide = clients
+            .quotas()
+            .for_guest("probe")
+            .global_permits()
+            .expect("the test registry configures a host-wide ceiling");
+        while host_wide.available_permits() == 0 {
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "global permits were never released after dropping workload A's client"
