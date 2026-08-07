@@ -206,6 +206,31 @@ func (r *WorkloadReconciler) lookupHostByID(ctx context.Context, hostID string) 
 	return &hosts.Items[0], nil
 }
 
+// translateServicePorts converts spec-level service ports onto the wire.
+//
+// Protocol defaults to TCP when unset, matching the runtime, and an absent
+// Publish stays 0 — proto3 has no optional scalar, and the runtime reads 0 as
+// "declared but not published", which is what absent means.
+func translateServicePorts(ports []runtimev1alpha1.ServicePort) []*runtimev2.Port {
+	if len(ports) == 0 {
+		return nil
+	}
+	out := make([]*runtimev2.Port, 0, len(ports))
+	for _, p := range ports {
+		protocol := p.Protocol
+		if protocol == "" {
+			protocol = "TCP"
+		}
+		out = append(out, &runtimev2.Port{
+			Name:     p.Name,
+			Port:     uint32(p.Port),
+			Protocol: protocol,
+			Publish:  uint32(p.Publish),
+		})
+	}
+	return out
+}
+
 // materializeLocalResources converts a spec-level LocalResources into the
 // runtimev2 equivalent, materializing config layers and volume mounts.
 func materializeLocalResources(ctx context.Context, c client.Client, namespace string, spec *runtimev1alpha1.LocalResources, label string) (*runtimev2.LocalResources, error) {
@@ -365,6 +390,7 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 			ImagePullPolicy: translatePullPolicy(s.ImagePullPolicy),
 			LocalResources:  localResources,
 			MaxRestarts:     uint64(s.MaxRestarts),
+			Ports:           translateServicePorts(s.Ports),
 		}
 	}
 

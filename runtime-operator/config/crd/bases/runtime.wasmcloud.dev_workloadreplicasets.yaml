@@ -623,6 +623,64 @@ spec:
                           maxRestarts:
                             format: int32
                             type: integer
+                          ports:
+                            description: Ports this service listens on, and which
+                              of them the host publishes.
+                            items:
+                              description: |-
+                                WorkloadService represents a long-running service that is part of the workload.
+                                It is also sometimes referred to as a "sidecar" and is optional.
+                                A Service differs from a Component in that it is long-running and represents the Workload's "localhost".
+                                Services can bind to TCP & UDP ports, which are accessible by Components within the same workload via "localhost" or "127.0.0.1".
+                                Services export a single WIT interface, shaped as wasi:cli/run.
+                                Services can import interfaces from any Component within the same workload, or from the Host.
+                                ServicePort is a port a workload's service listens on inside the workload's
+                                virtual loopback, and whether the host exposes it on a real address.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name identifies this port within the workload. Appears in logs, metrics,
+                                    and the conflict error when two declarations collide.
+                                  maxLength: 63
+                                  pattern: ^[a-z0-9][a-z0-9-]*$
+                                  type: string
+                                port:
+                                  description: Port is what the service's own code
+                                    binds on 127.0.0.1.
+                                  format: int32
+                                  maximum: 65535
+                                  minimum: 1
+                                  type: integer
+                                protocol:
+                                  description: |-
+                                    Protocol is TCP (the default) or UDP. A published UDP port is relayed
+                                    per external peer: each peer is given its own virtual endpoint, so the
+                                    service sees datagrams arriving from an address it can reply to.
+                                  enum:
+                                  - TCP
+                                  - UDP
+                                  type: string
+                                publish:
+                                  description: |-
+                                    Publish is the real port the host binds, splicing accepted connections
+                                    into the workload's virtual loopback. The service's own code does not
+                                    change: it keeps binding 127.0.0.1:Port.
+
+                                    Absent declares the port without exposing it, which is exactly today's
+                                    behavior. Requires the host to run with --publish-ports.
+
+                                    Publishing makes the service reachable by every co-tenant on the same
+                                    machine unless raw socket egress is enforced, so treat it as an
+                                    external-facing decision rather than a convenience.
+                                  format: int32
+                                  maximum: 65535
+                                  minimum: 1
+                                  type: integer
+                              required:
+                              - name
+                              - port
+                              type: object
+                            type: array
                         required:
                         - image
                         type: object

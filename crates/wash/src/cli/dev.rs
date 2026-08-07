@@ -62,6 +62,14 @@ impl CliCommand for DevCommand {
 
         let dev_config = config.dev();
 
+        // Validated up front rather than at publish time, so a bad declaration
+        // names the config entry the author wrote and fails before the host
+        // starts.
+        wash_runtime::host::declared_port::validate_workload_ports(
+            &dev_config.service_ports,
+            "dev.service_ports",
+        )?;
+
         // Shared by every image source a dev session can name: the dev
         // component's sidecars, its service, and the host component plugins.
         // Cached under the same directory `wash oci pull` uses, so a pull here
@@ -329,6 +337,21 @@ impl CliCommand for DevCommand {
         {
             let native_plugins = host_builder.native_plugins();
             let http_handler = host_builder.http_handler();
+            // One table across every plugin, so two plugins claiming the same
+            // real port is a start failure naming both.
+            //
+            // Publishing is on by default in the dev path, unlike `wash host`:
+            // a developer running `wash dev` is already trusting this code, and
+            // needing a flag to reach a plugin's own port on your own machine
+            // is friction with nothing behind it. The default bind address is
+            // loopback, so this stays off the network regardless.
+            let publish = wash_runtime::host::ports::PublishContext::new(
+                wash_runtime::host::ports::PortTable::new(),
+                wash_runtime::host::ports::PublishConfig {
+                    enabled: true,
+                    ..Default::default()
+                },
+            );
             for hp in &dev_config.host_plugins {
                 let spec = hp.to_spec(&config, project_dir, Some(project_dir))?;
                 let plugin = wash_runtime::plugin::component_host::load_component_plugin(

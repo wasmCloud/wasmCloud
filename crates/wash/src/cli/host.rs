@@ -201,6 +201,69 @@ pub struct HostCommand {
     #[arg(long = "wasi-otel", default_value_t = false)]
     pub wasi_otel: bool,
 
+    /// Let workloads and plugins reach the machine's own loopback through
+    /// `host.wasmcloud.internal`.
+    ///
+    /// Off by default. A guest also needs its own `allowedHostLoopback` entry
+    /// naming the port, so neither the operator nor the workload author can
+    /// open this door alone. `127.0.0.1` keeps meaning the guest's own virtual
+    /// network either way.
+    #[arg(long = "allow-host-loopback", default_value_t = false)]
+    pub allow_host_loopback: bool,
+
+    /// How the raw-socket egress policy is applied.
+    ///
+    /// `count` (the default) evaluates the policy, records what it would refuse,
+    /// and allows the connection anyway. Raw socket connect was never gated, so
+    /// enforcing immediately would sever live traffic on upgrade; run in `count`
+    /// first, watch the `would_deny` counters, then switch to `enforce`.
+    #[arg(long = "socket-egress", value_enum, default_value = "count")]
+    pub socket_egress: SocketEgressMode,
+
+    /// Deny outbound connections to loopback, link-local (including the cloud
+    /// metadata address), multicast, and documentation ranges — including
+    /// whatever DNS returned for a permitted name.
+    #[arg(long = "deny-special-ranges", default_value_t = true)]
+    pub deny_special_ranges: bool,
+
+    /// Deny outbound connections to private ranges (RFC1918, ULA, CGNAT).
+    /// Off by default: reaching a sibling service on a private address is the
+    /// ordinary in-cluster case.
+    #[arg(long = "deny-private-ranges", default_value_t = false)]
+    pub deny_private_ranges: bool,
+
+    /// Allow host component plugins to expose declared ports on a real address.
+    ///
+    /// Off by default: without it a plugin's `ports` declaration is refused at
+    /// start rather than silently ignored, so a manifest expecting exposure
+    /// never runs unexposed. A plugin can still bind its own private virtual
+    /// loopback, which reaches nothing, whether or not this is set.
+    #[arg(long = "publish-ports", default_value_t = false)]
+    pub publish_ports: bool,
+
+    /// Address published ports bind. Deliberately not `0.0.0.0`: opting into
+    /// publishing still means saying which interface is exposed.
+    #[arg(long = "publish-bind-address", default_value = "127.0.0.1")]
+    pub publish_bind_address: std::net::IpAddr,
+
+    /// Restrict published ports to a range, e.g. `31000-32767`. Unset allows
+    /// any port the OS will grant.
+    #[arg(long = "publish-port-range", value_parser = parse_port_range)]
+    pub publish_port_range: Option<(u16, u16)>,
+
+    /// How long an accepted connection waits for the plugin's listener to
+    /// appear before being reset. Covers cold start and supervised restarts.
+    #[arg(
+        long = "publish-readiness-timeout",
+        value_parser = humantime::parse_duration,
+        default_value = "5s"
+    )]
+    pub publish_readiness_timeout: Duration,
+
+    /// How many connections one published port serves at once.
+    #[arg(long = "publish-max-connections", default_value_t = 256)]
+    pub publish_max_connections: usize,
+
     /// Enable additional wasm proposals on the engine. Accepts a comma-separated
     /// list and/or repeated flags, e.g. `--wasm-proposal gc,threads`. Accepted
     /// names: component-model-async, gc, exception-handling, wide-arithmetic,
@@ -262,6 +325,47 @@ pub struct HostCommand {
 /// `anyhow` error chain into the `String` clap wants.
 fn parse_host_plugin_spec(s: &str) -> Result<wash_runtime::plugin::ComponentPluginSpec, String> {
     s.parse().map_err(|e: anyhow::Error| format!("{e:#}"))
+}
+
+/// CLI spelling of [`wash_runtime::sockets::policy::EgressMode`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum SocketEgressMode {
+    /// Record what the policy would refuse; allow it anyway.
+    #[default]
+    Count,
+    /// Refuse what the policy refuses.
+    Enforce,
+}
+
+impl From<SocketEgressMode> for wash_runtime::sockets::policy::EgressMode {
+    fn from(mode: SocketEgressMode) -> Self {
+        match mode {
+            SocketEgressMode::Count => Self::Count,
+            SocketEgressMode::Enforce => Self::Enforce,
+        }
+    }
+}
+
+/// Parse a `--publish-port-range` value of the form `<low>-<high>`.
+fn parse_port_range(s: &str) -> Result<(u16, u16), String> {
+    let (low, high) = s
+        .split_once('-')
+        .ok_or_else(|| format!("expected a range like 31000-32767, got {s:?}"))?;
+    let low: u16 = low
+        .trim()
+        .parse()
+        .map_err(|e| format!("invalid low port in {s:?}: {e}"))?;
+    let high: u16 = high
+        .trim()
+        .parse()
+        .map_err(|e| format!("invalid high port in {s:?}: {e}"))?;
+    if low == 0 {
+        return Err(format!("port range {s:?} must not start at 0"));
+    }
+    if low > high {
+        return Err(format!("port range {s:?} is inverted"));
+    }
+    Ok((low, high))
 }
 
 /// Resolve explicit registry credentials for host-component-plugin pulls from
@@ -337,9 +441,57 @@ impl CliCommand for HostCommand {
         for proposal in &self.wasm_proposals {
             engine_builder = engine_builder.with_wasm_proposal(*proposal);
         }
+        // One port table for the whole host: it is what makes two owners
+        // claiming the same real port a start failure naming both, and what the
+        // socket policy consults to keep a guest from dialing a port this host
+        // published for someone else.
+        let port_table = wash_runtime::host::ports::PortTable::new();
+        // One registry for the whole host: a workload's HTTP pool, its raw
+        // sockets, and its inbound published ports all draw on the allowance
+        // it mints, so an operator configures one set of numbers and a
+        // per-workload ceiling really is per workload.
+        let quotas = crate::config::connection_quotas(
+            self.max_connections,
+            Some(self.max_http_connections_per_workload),
+            Some(self.max_socket_connections_per_workload),
+            Some(self.max_inbound_connections_per_workload),
+            self.http_connection_wait,
+        )?;
+
+        let socket_policy = Arc::new(wash_runtime::sockets::policy::SocketPolicy {
+            host_loopback_enabled: self.allow_host_loopback,
+            egress_mode: self.socket_egress.into(),
+            egress_addrs: wash_runtime::host::egress_policy::EgressAddressPolicy {
+                deny_special: self.deny_special_ranges,
+                allow_private: !self.deny_private_ranges,
+            },
+            host_owned_ports: Some(Arc::clone(&port_table)),
+            quotas: Some(Arc::clone(&quotas)),
+            meters: Some(Arc::new(wash_runtime::host::quota::PolicyMeters::default())),
+            ..Default::default()
+        });
+        engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         let engine = engine_builder.build()?;
 
+        // One publishing context for the whole host: workloads and plugins
+        // reserve from the same table, so a collision between them is a start
+        // failure naming both rather than two listeners that each think they
+        // own the address.
+        let publish = wash_runtime::host::ports::PublishContext::new(
+            Arc::clone(&port_table),
+            wash_runtime::host::ports::PublishConfig {
+                enabled: self.publish_ports,
+                bind_address: self.publish_bind_address,
+                port_range: self.publish_port_range,
+                max_connections_per_port: self.publish_max_connections,
+                readiness_timeout: self.publish_readiness_timeout,
+            },
+        )
+        // Plugins inherit the same host-level socket policy workloads do.
+        .with_socket_policy(Arc::clone(&socket_policy));
+
         let mut cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default()
+            .with_publish_context(publish.clone())
             .with_engine(engine.clone())
             .with_host_config(host_config)
             .with_nats_client(Arc::new(scheduler_nats_client))
@@ -479,6 +631,10 @@ impl CliCommand for HostCommand {
             }
             specs.extend(self.host_plugins.iter().cloned());
 
+            // One table across every plugin: it is what makes two plugins
+            // claiming the same real port a start failure naming both, rather
+            // than two listeners that each think they own it.
+
             for spec in &specs {
                 let plugin = wash_runtime::plugin::component_host::load_component_plugin(
                     spec,
@@ -486,6 +642,7 @@ impl CliCommand for HostCommand {
                     plugin_oci_config.clone(),
                     &native_plugins,
                     http_handler.clone(),
+                    Some(publish.clone()),
                 )
                 .await
                 .with_context(|| format!("failed to load host component plugin '{}'", spec.id))?;
