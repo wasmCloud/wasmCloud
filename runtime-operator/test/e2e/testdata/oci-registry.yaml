@@ -17,51 +17,13 @@
 # The operator only injects Service-DNS aliases for p2 `incoming-handler`, so a
 # p3 `handler` interface keeps exactly the aliases set below.
 
----
-# The credentials the registry checks incoming requests against. Delivered
-# through `secretFrom` rather than literal interface config: the operator
-# resolves the referenced Secret and merges its keys into the interface config
-# the host's secrets plugin serves, which is how a real deployment supplies
-# them — and it keeps the values out of the WorkloadDeployment spec. Key names
-# are the config keys the registry asks for by name.
-apiVersion: v1
-kind: Secret
-metadata:
-  name: oci-registry-auth
-  namespace: wasmcloud-system
-type: Opaque
-stringData:
-  registry-username: e2e
-  registry-password: e2e-registry-password
----
-# Credentials the hostgroups present when pulling fixtures back out of the
-# registry — the same pair as `oci-registry-auth` above, in the form an image
-# pull takes. `MaterializeImagePullSecret` looks up the entry by the image
-# reference's registry domain; `registryRef` builds refs on the `.svc` name, and
-# the shorter Service-DNS forms are here so a ref written either way resolves.
-#
-# Spelled out under `stringData` rather than as base64 `data`, so the pair is
-# reviewable and greppable next to the Secret it has to match — an encoded blob
-# hides exactly the thing that has to stay in sync.
-#
-# Host component plugins do not use this: they are pulled at host startup,
-# before any workload exists, so their credentials arrive as
-# WASH_HOST_PLUGIN_REGISTRY_USER/PASSWORD on the host container instead.
-apiVersion: v1
-kind: Secret
-metadata:
-  name: oci-registry-pull
-  namespace: wasmcloud-system
-type: kubernetes.io/dockerconfigjson
-stringData:
-  .dockerconfigjson: |
-    {
-      "auths": {
-        "oci-registry.wasmcloud-system.svc": {"auth": "ZTJlOmUyZS1yZWdpc3RyeS1wYXNzd29yZA=="},
-        "oci-registry.wasmcloud-system": {"auth": "ZTJlOmUyZS1yZWdpc3RyeS1wYXNzd29yZA=="},
-        "oci-registry": {"auth": "ZTJlOmUyZS1yZWdpc3RyeS1wYXNzd29yZA=="}
-      }
-    }
+# Two Secrets this file references are created by `cargo xtask e2e-images`
+# rather than checked in here: `oci-registry-auth`, whose keys the operator
+# materializes into the `wasmcloud:secrets` config below, and
+# `oci-registry-pull`, which hostgroups present when pulling fixtures back out.
+# They hold credentials that must match the push side exactly, and only the
+# xtask can pick up E2E_REGISTRY_USER/E2E_REGISTRY_PASSWORD.
+
 ---
 apiVersion: v1
 kind: Service
