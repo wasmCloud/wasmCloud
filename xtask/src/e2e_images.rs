@@ -208,12 +208,13 @@ fn push_phase(
         ],
     )?;
 
+    let ca_bundle = fetch_ca_bundle(&kubeconfig, namespace, workspace)?;
     let port = free_local_port()?;
     eprintln!(
         ">>> e2e-images: port-forwarding deployment/hostgroup-registry -> {PUSH_ADDR}:{port}"
     );
     let _pf = PortForward::start(&kubeconfig, namespace, port)?;
-    wait_for_registry(port)?;
+    wait_for_registry(port, &ca_bundle)?;
 
     let (user, password) = (registry_user(), registry_password());
     for &(fixture, kind) in FIXTURES {
@@ -227,7 +228,8 @@ fn push_phase(
             Command::new(wash).args([
                 "oci",
                 "push",
-                "--insecure",
+                "--ca-path",
+                &ca_bundle.to_string_lossy(),
                 "--user",
                 &user,
                 "--password",
@@ -279,7 +281,9 @@ fn push_wash(fixtures_out: Option<&Path>) -> Result<PathBuf> {
             return Ok(staged);
         }
     }
-    // Fall back to a wash on PATH (a released wash can push).
+    // Fall back to a wash on PATH. It has to be recent enough to carry
+    // `oci push --ca-path`: the registry serves TLS from the chart's own CA,
+    // and a wash without the flag cannot be told to trust it.
     Ok(PathBuf::from("wash"))
 }
 
@@ -373,6 +377,62 @@ fn create_registry_secrets(kubeconfig: &str, namespace: &str) -> Result<()> {
     )
 }
 
+/// The chart's CA secret, whose certificate signs the registry's serving cert.
+/// Matches `global.certificates.caSecretName` in the chart's values.
+const CA_SECRET: &str = "wasmcloud-ca";
+
+/// Write the chart's CA certificate to a file the push side can point
+/// `wash oci push --ca-path` at.
+///
+/// The hosts get this CA from a mounted Secret; the pushing process runs
+/// outside the cluster, so it has to read it out. Without it the push cannot
+/// verify the registry — the CA is generated per install and signs nothing the
+/// public roots know about.
+fn fetch_ca_bundle(kubeconfig: &str, namespace: &str, workspace: &Path) -> Result<PathBuf> {
+    // A go-template decodes the Secret's base64 in kubectl, which a jsonpath
+    // cannot do.
+    let pem = kubectl_output(
+        kubeconfig,
+        &[
+            "get",
+            "secret",
+            CA_SECRET,
+            "-n",
+            namespace,
+            "-o",
+            r#"go-template={{index .data "tls.crt" | base64decode}}"#,
+        ],
+    )
+    .with_context(|| format!("reading the {CA_SECRET} secret"))?;
+    if !pem.contains("BEGIN CERTIFICATE") {
+        bail!("{CA_SECRET} did not contain a PEM certificate");
+    }
+    // Under the workspace's target dir rather than the shared temp dir, so
+    // concurrent runs on one machine cannot overwrite each other's CA.
+    let path = workspace.join("target/e2e-registry-ca.pem");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    fs::write(&path, pem).with_context(|| format!("writing {}", path.display()))?;
+    Ok(path)
+}
+
+fn kubectl_output(kubeconfig: &str, args: &[&str]) -> Result<String> {
+    let output = Command::new("kubectl")
+        .arg("--kubeconfig")
+        .arg(kubeconfig)
+        .args(args)
+        .output()
+        .context("failed to run kubectl")?;
+    if !output.status.success() {
+        bail!(
+            "kubectl failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    String::from_utf8(output.stdout).context("kubectl produced non-utf8 output")
+}
+
 fn kubectl(kubeconfig: &str, args: &[&str]) -> Result<()> {
     run_checked(
         Command::new("kubectl")
@@ -412,8 +472,8 @@ fn free_local_port() -> Result<u16> {
 }
 
 /// Wait until the registry answers `/v2/` through the port-forward.
-fn wait_for_registry(port: u16) -> Result<()> {
-    let url = format!("http://{PUSH_ADDR}:{port}/v2/");
+fn wait_for_registry(port: u16, ca_bundle: &Path) -> Result<()> {
+    let url = format!("https://{PUSH_ADDR}:{port}/v2/");
     eprintln!(">>> e2e-images: waiting for the registry API on {url}");
     for attempt in 1..=30 {
         let ok = Command::new("curl")
@@ -422,6 +482,8 @@ fn wait_for_registry(port: u16) -> Result<()> {
             // answering 401.
             .args([
                 "-fsS",
+                "--cacert",
+                &ca_bundle.to_string_lossy(),
                 "-u",
                 &format!("{}:{}", registry_user(), registry_password()),
                 &url,

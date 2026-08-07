@@ -2,14 +2,19 @@
 #
 # The `oci-registry` example component (a spec-compliant OCI v2 registry that
 # stores through wasmcloud:blobstore) runs as a WorkloadDeployment on the
-# `registry` hostgroup — the one hostgroup left on HTTPS so it can pull this
-# component from ghcr. Every other e2e fixture is then built locally and pushed
-# into this registry, and the insecure `default` hostgroup pulls them back over
-# plain HTTP. See runtime-operator/test/e2e/README or the `e2e-images` Make
-# target for the surrounding flow.
+# `registry` hostgroup, which the e2e puts on an all-features host image for the
+# async wasmcloud:blobstore plugin this component imports. Every other e2e
+# fixture is then built locally, pushed into this registry, and pulled back by
+# the `default` hostgroup. See runtime-operator/test/e2e/README or the
+# `e2e-images` Make target for the surrounding flow.
+#
+# It serves HTTPS, from a certificate the chart mints off its own CA. Every host
+# already mounts that CA for NATS, and the e2e points --oci-ca-path at it, so
+# both sides trust the registry without distributing anything.
 #
 # Reachability: the host's HTTP server demuxes by Host header, so every
-# authority a client uses must be registered as `host`/`host-aliases`:
+# authority a client uses must be registered as `host`/`host-aliases`, and the
+# certificate has to carry each one as a SAN:
 #   - pull (in-cluster host): oci-registry.wasmcloud-system.svc
 #   - push (CI runner / dev):  127.0.0.1  (the Make target port-forwards here)
 # The router matches the name without the port, so the push side is free to use
@@ -32,12 +37,18 @@ metadata:
   namespace: wasmcloud-system
 spec:
   # No selector: the operator maintains the route EndpointSlice pointing at the
-  # registry hostgroup pod (keyed on this Service name). port 80 -> the host's
-  # HTTP port (the registry hostgroup runs http.port=80).
+  # registry hostgroup pod (keyed on this Service name).
+  #
+  # 443 because an image reference carries no port and the hosts pull over
+  # HTTPS, so they dial the scheme's default; the registry hostgroup serves on
+  # 80, which the host container can bind unprivileged. The name has to stay
+  # `http` — that is the port name the operator writes into the EndpointSlice,
+  # and the mapping is by name — so it describes the pod's port, not the
+  # scheme this Service is reached over.
   type: ClusterIP
   ports:
     - name: http
-      port: 80
+      port: 443
       protocol: TCP
 ---
 apiVersion: runtime.wasmcloud.dev/v1alpha1
