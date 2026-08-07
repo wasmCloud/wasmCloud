@@ -57,6 +57,16 @@ pub struct Service {
     pub digest: Option<String>,
     pub local_resources: LocalResources,
     pub max_restarts: u64,
+    /// Ports this service listens on inside the workload's virtual loopback,
+    /// and which of them the host exposes on a real address.
+    ///
+    /// Empty (the default) is exactly today's behavior: the service's loopback
+    /// listeners are reachable only by components in the same workload. An
+    /// entry with `publish` set asks the host to bind a real port and splice
+    /// accepted connections into it — which requires the host to run with
+    /// `--publish-ports`, and which makes the service reachable by every
+    /// co-tenant on the machine unless socket egress is enforced.
+    pub ports: Vec<crate::host::declared_port::DeclaredPort>,
 }
 
 /// A WebAssembly component that can be executed as part of a workload.

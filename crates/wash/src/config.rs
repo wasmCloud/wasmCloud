@@ -473,6 +473,22 @@ pub struct HostPluginConfig {
     /// resolve. An omitted or empty list denies every lookup.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_ip_name_lookups: Vec<AllowedIpName>,
+    /// Ports this plugin listens on. An omitted or empty list means it binds
+    /// nothing reachable, which is what every plugin got before ports existed.
+    ///
+    /// Each entry needs a `name` and the `port` the plugin's own code binds.
+    /// Optional: `protocol` (TCP or UDP, default TCP) and exactly one of
+    ///
+    ///   publish   real port the host binds, splicing accepted connections
+    ///             into the plugin's private virtual loopback. The plugin
+    ///             binds `127.0.0.1:<port>` and needs no change.
+    ///   bind      concrete address the plugin binds itself, skipping the
+    ///             splice. Rejected if unspecified (`0.0.0.0`) or loopback.
+    ///
+    /// Neither declares the port without exposing it. Requires the host to be
+    /// started with `--publish-ports`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<wash_runtime::host::declared_port::DeclaredPort>,
 }
 
 impl HostPluginConfig {
@@ -488,6 +504,9 @@ impl HostPluginConfig {
             bail!("host_plugins entry is missing a non-empty `id`");
         }
         let what = format!("host_plugins '{}'", self.id);
+        // Catch a bad port declaration here, where the error can name the
+        // config entry, rather than at plugin start.
+        wash_runtime::host::declared_port::validate_ports(&self.ports, &what)?;
         Ok(wash_runtime::plugin::ComponentPluginSpec {
             id: self.id.clone(),
             source: self.source.to_source(&what)?,
@@ -682,6 +701,16 @@ pub struct DevConfig {
     /// Pull policy for `service_image`: `always`, `ifNotPresent`, or `never`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_pull_policy: Option<String>,
+    /// Ports the service listens on inside the workload's virtual loopback,
+    /// and which of them the host exposes on a real address.
+    ///
+    /// Each entry needs a `name` and the `port` the service binds on
+    /// `127.0.0.1`; add `publish: <hostPort>` to expose it. Omitting `publish`
+    /// declares the port without exposing it, which is exactly today's
+    /// behavior. `bind` is not accepted here — handing a guest a real listening
+    /// socket is an operator's call, and a workload's ports are not.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_ports: Vec<wash_runtime::host::declared_port::DeclaredPort>,
 
     /// Reach registries over HTTP instead of HTTPS. Applies to every image a
     /// dev session pulls components, the service, and host plugins.

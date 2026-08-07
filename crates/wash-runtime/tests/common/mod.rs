@@ -263,6 +263,39 @@ fn with_standard_plugins(
         .with_plugin(Arc::new(WasmcloudSecrets::new()))
 }
 
+/// Start a host running one host component plugin that declares `ports`, with
+/// no HTTP ingress at all — the plugin's own listener is the only way in, which
+/// is the point.
+///
+/// Takes the [`PortTable`] rather than making one, so a caller can start two
+/// hosts against the *same* table and observe the conflict a real host would.
+#[cfg(feature = "host-component-plugins")]
+#[allow(dead_code)]
+pub async fn start_bare_host_with_plugin_ports(
+    plugin_id: &'static str,
+    plugin_wasm: &'static [u8],
+    ports: Vec<wash_runtime::host::declared_port::DeclaredPort>,
+    publish_config: wash_runtime::host::ports::PublishConfig,
+    port_table: Arc<wash_runtime::host::ports::PortTable>,
+) -> Result<impl HostApi> {
+    let engine = Engine::builder().build()?;
+    let builder = with_standard_plugins(HostBuilder::new().with_engine(engine.clone()))?;
+    let native_plugins = builder.native_plugins();
+    let plugin = ComponentHostPlugin::builder()
+        .id(plugin_id)
+        .wasm(plugin_wasm)
+        .engine(engine)
+        .native_plugins(native_plugins)
+        .ports(Arc::from(ports))
+        .port_table(port_table)
+        .publish_config(Arc::new(publish_config))
+        .build()
+        .await
+        .with_context(|| format!("failed to build host component plugin '{plugin_id}'"))?;
+    let host = builder.with_plugin(Arc::new(plugin))?.build()?;
+    host.start().await.context("failed to start host")
+}
+
 /// Start a host with a "DevRouter" backed HTTP server and the standard plugin
 /// set. Returns the bound address and a started `HostApi` ref.
 pub async fn start_host_with_dev_router(

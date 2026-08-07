@@ -190,9 +190,48 @@ type WorkloadComponent struct {
 // Services can bind to TCP & UDP ports, which are accessible by Components within the same workload via "localhost" or "127.0.0.1".
 // Services export a single WIT interface, shaped as wasi:cli/run.
 // Services can import interfaces from any Component within the same workload, or from the Host.
+// ServicePort is a port a workload's service listens on inside the workload's
+// virtual loopback, and whether the host exposes it on a real address.
+type ServicePort struct {
+	// Name identifies this port within the workload. Appears in logs, metrics,
+	// and the conflict error when two declarations collide.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]*$`
+	// +kubebuilder:validation:MaxLength=63
+	Name string `json:"name"`
+	// Port is what the service's own code binds on 127.0.0.1.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port"`
+	// Protocol is TCP (the default) or UDP. A published UDP port is relayed
+	// per external peer: each peer is given its own virtual endpoint, so the
+	// service sees datagrams arriving from an address it can reply to.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=TCP;UDP
+	Protocol string `json:"protocol,omitempty"`
+	// Publish is the real port the host binds, splicing accepted connections
+	// into the workload's virtual loopback. The service's own code does not
+	// change: it keeps binding 127.0.0.1:Port.
+	//
+	// Absent declares the port without exposing it, which is exactly today's
+	// behavior. Requires the host to run with --publish-ports.
+	//
+	// Publishing makes the service reachable by every co-tenant on the same
+	// machine unless raw socket egress is enforced, so treat it as an
+	// external-facing decision rather than a convenience.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Publish int32 `json:"publish,omitempty"`
+}
+
 type WorkloadService struct {
 	// +kubebuilder:validation:Required
 	Image string `json:"image"`
+	// Ports this service listens on, and which of them the host publishes.
+	// +kubebuilder:validation:Optional
+	Ports []ServicePort `json:"ports,omitempty"`
 	// +kubebuilder:validation:Optional
 	ImagePullSecret *corev1.LocalObjectReference `json:"imagePullSecret,omitempty"`
 	// +kubebuilder:validation:Optional

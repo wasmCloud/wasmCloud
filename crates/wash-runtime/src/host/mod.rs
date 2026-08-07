@@ -220,6 +220,11 @@ pub struct Host {
     system_monitor: Arc<RwLock<SystemMonitor>>,
     // endpoints: HashMap<String, EndpointConfiguration>
     pub(crate) http_handler: std::sync::Arc<dyn crate::host::http::HostHandler>,
+    /// The host's one record of which real ports are spoken for. Shared with
+    /// every host component plugin and consulted by the socket policy, so one
+    /// lookup answers "is this port taken, and by whom".
+    port_table: Arc<crate::host::ports::PortTable>,
+    publish_config: Arc<crate::host::ports::PublishConfig>,
     config: HostConfig,
     meters: Meters,
 }
@@ -623,6 +628,13 @@ impl Host {
         request: WorkloadStartRequest,
     ) -> anyhow::Result<ResolvedWorkload> {
         let service_present = request.workload.service.is_some();
+        let declared_ports = request
+            .workload
+            .service
+            .as_ref()
+            .map(|svc| svc.ports.clone())
+            .unwrap_or_default();
+        let workload_id: Arc<str> = Arc::from(request.workload_id.as_str());
 
         // Initialize the workload using the engine, receiving the unresolved workload
         let unresolved_workload = self
@@ -739,7 +751,11 @@ impl HostApi for Host {
         let resolved_workload = self.workload_start_inner(request).await;
 
         let (workload_state, message) = if let Err(ref err) = resolved_workload {
-            (WorkloadState::Error, err.to_string())
+            // `{:#}` rather than `{}`: the outermost message is usually the
+            // least informative link in the chain ("failed to publish port
+            // 'echo'"), and the reason a caller needs — which host flag is
+            // missing, which other owner holds the port — is underneath it.
+            (WorkloadState::Error, format!("{err:#}"))
         } else {
             (
                 WorkloadState::Running,
@@ -939,6 +955,8 @@ pub struct HostBuilder {
     environment: Option<String>,
     labels: HashMap<String, String>,
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+    port_table: Option<Arc<crate::host::ports::PortTable>>,
+    publish_config: Option<Arc<crate::host::ports::PublishConfig>>,
     config: Option<HostConfig>,
     meters: Meters,
 }
@@ -954,6 +972,8 @@ impl Default for HostBuilder {
             environment: Default::default(),
             labels: Default::default(),
             http_handler: Default::default(),
+            port_table: Default::default(),
+            publish_config: Default::default(),
             config: Default::default(),
             meters: Default::default(),
         }
@@ -1099,6 +1119,19 @@ impl HostBuilder {
         self
     }
 
+    /// Share the host's port table and publishing settings.
+    ///
+    /// Pass the *same* [`PublishContext`](crate::host::ports::PublishContext)
+    /// every host component plugin gets: it is the one place that knows which
+    /// real ports are taken, so separate tables would let a workload and a
+    /// plugin each believe they own the same address.
+    #[must_use]
+    pub fn with_publish_context(mut self, publish: crate::host::ports::PublishContext) -> Self {
+        self.port_table = Some(publish.table);
+        self.publish_config = Some(publish.config);
+        self
+    }
+
     pub fn with_config(mut self, config: HostConfig) -> Self {
         self.config.replace(config);
         self
@@ -1158,6 +1191,8 @@ impl HostBuilder {
             started_at: chrono::Utc::now(),
             system_monitor: Arc::new(RwLock::new(SystemMonitor::new())),
             http_handler,
+            port_table: self.port_table.unwrap_or_default(),
+            publish_config: self.publish_config.unwrap_or_default(),
             config: self.config.unwrap_or_default(),
             meters: self.meters,
         })
@@ -1359,6 +1394,7 @@ mod tests {
                         digest: None,
                         local_resources: Default::default(),
                         max_restarts: 0,
+                        ports: Vec::new(),
                     }),
                     components: vec![],
                     host_interfaces: vec![],

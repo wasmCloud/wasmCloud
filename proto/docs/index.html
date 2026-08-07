@@ -264,6 +264,10 @@
                 </li>
               
                 <li>
+                  <a href="#wasmcloud.runtime.v2.Port"><span class="badge">M</span>Port</a>
+                </li>
+              
+                <li>
                   <a href="#wasmcloud.runtime.v2.Service"><span class="badge">M</span>Service</a>
                 </li>
               
@@ -1008,6 +1012,54 @@ open this door alone. </p></td>
 
         
       
+        <h3 id="wasmcloud.runtime.v2.Port">Port</h3>
+        <p>A port a workload's service listens on inside its virtual loopback, and</p><p>whether the host exposes it on a real address.</p>
+
+        
+          <table class="field-table">
+            <thead>
+              <tr><td>Field</td><td>Type</td><td>Label</td><td>Description</td></tr>
+            </thead>
+            <tbody>
+              
+                <tr>
+                  <td>name</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p>Names this port within the workload. Appears in logs, metrics, and the
+conflict error when two declarations collide. </p></td>
+                </tr>
+              
+                <tr>
+                  <td>port</td>
+                  <td><a href="#uint32">uint32</a></td>
+                  <td></td>
+                  <td><p>The port the service&#39;s own code binds on 127.0.0.1. </p></td>
+                </tr>
+              
+                <tr>
+                  <td>protocol</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p>&#34;TCP&#34; (the default) or &#34;UDP&#34;. </p></td>
+                </tr>
+              
+                <tr>
+                  <td>publish</td>
+                  <td><a href="#uint32">uint32</a></td>
+                  <td></td>
+                  <td><p>Real port the host binds, splicing accepted connections into the
+workload&#39;s virtual loopback. 0 or absent declares the port without
+exposing it, which is exactly today&#39;s behavior. </p></td>
+                </tr>
+              
+            </tbody>
+          </table>
+
+          
+
+        
+      
         <h3 id="wasmcloud.runtime.v2.Service">Service</h3>
         <p></p>
 
@@ -1051,6 +1103,15 @@ open this door alone. </p></td>
                   <td><a href="#wasmcloud.runtime.v2.ImagePullPolicy">ImagePullPolicy</a></td>
                   <td></td>
                   <td><p> </p></td>
+                </tr>
+              
+                <tr>
+                  <td>ports</td>
+                  <td><a href="#wasmcloud.runtime.v2.Port">Port</a></td>
+                  <td>repeated</td>
+                  <td><p>Ports this service listens on inside the workload&#39;s virtual loopback, and
+which of them the host exposes on a real address. Empty is exactly
+today&#39;s behavior. </p></td>
                 </tr>
               
             </tbody>
