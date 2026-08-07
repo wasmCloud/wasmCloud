@@ -1,0 +1,12 @@
+package acme:echo@0.1.0;
+
+/// A trivial capability, exported by the socket-echo plugin so it has something
+/// to be a plugin *for*. A host component plugin must export at least one
+/// capability interface to load, and this test is about the plugin's socket, not
+/// about the capability — so this stays as small as an interface can be.
+interface control {
+    /// Report the virtual port the plugin's echo listener is bound to. Lets a
+    /// test confirm the plugin really did bind, independently of whether the
+    /// published port works.
+    listening-port: async func() -> u16;
+}
