@@ -60,6 +60,8 @@ members = [
     "secrets-consumer-plugin-caller",
     "http-egress-plugin",
     "http-egress-plugin-caller",
+    "events-plugin",
+    "events-caller",
 ]
 
 [workspace.dependencies]

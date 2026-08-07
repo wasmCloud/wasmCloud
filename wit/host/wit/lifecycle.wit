@@ -1,4 +1,4 @@
-package wasmcloud:host@0.1.1;
+package wasmcloud:host@0.1.2;
 
 /// Optionally exported by a host component plugin. The host calls these as
 /// workloads that import the plugin's capabilities are bound and unbound,

@@ -1,4 +1,4 @@
-package wasmcloud:host@0.1.1;
+package wasmcloud:host@0.1.2;
 
 /// Host-provided so a component plugin can cooperatively cancel one of its own
 /// in-flight invocations. Job ids are host-minted and opaque. `request-cancel`
