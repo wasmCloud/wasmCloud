@@ -145,6 +145,9 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
             socket
                 .connect(connect_addr, &mut loopback)
                 .map_err(super::network::socket_error_from_util)?;
+            // Held for the socket's life: one descriptor, however many
+            // datagrams it goes on to send.
+            socket.hold_quota_slot(allowed.permit);
         } else if socket.is_connected() {
             let mut loopback = self
                 .ctx

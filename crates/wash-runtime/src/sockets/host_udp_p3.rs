@@ -83,6 +83,7 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
                     let sock = get_socket_mut(view.table, &socket)?;
                     sock.bind(implicit_addr, &mut loopback).map_err(se)?;
                     sock.finish_bind().map_err(se)?;
+                    sock.hold_quota_slot(bind_slot);
                     SocketResult::Ok(())
                 })?;
             }

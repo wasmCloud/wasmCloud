@@ -116,34 +116,60 @@ pub struct HostCommand {
     )]
     pub http_client_trust_roots: HttpClientTrustRoots,
 
-    /// Host-wide cap on live outbound HTTP connections across all workloads
-    /// combined (in-flight or idle in a keep-alive pool). Size it for the
-    /// number of concurrently busy workloads times their burst concurrency.
-    #[arg(
-        long = "http-client-max-connections",
-        env = "WASH_HTTP_CLIENT_MAX_CONNECTIONS"
-    )]
-    pub http_client_max_connections: Option<usize>,
+    /// Host-wide cap on live connections across every workload and surface
+    /// combined — pooled HTTP, raw sockets, and inbound published ports.
+    ///
+    /// Size it for the number of concurrently busy workloads times their burst
+    /// concurrency, kept inside the process's file-descriptor limit.
+    #[arg(long = "max-connections", env = "WASH_MAX_CONNECTIONS")]
+    pub max_connections: Option<usize>,
 
-    /// Cap on live outbound HTTP connections a single workload may hold,
-    /// across all authorities it talks to.
+    /// Cap on live pooled HTTP and gRPC connections a single workload may
+    /// hold, across all authorities it talks to. Idle keep-alive connections
+    /// count, so this is really how large a workload's pool may grow.
     #[arg(
-        long = "http-client-max-connections-per-workload",
-        env = "WASH_HTTP_CLIENT_MAX_CONNECTIONS_PER_WORKLOAD"
+        long = "max-http-connections-per-workload",
+        env = "WASH_MAX_HTTP_CONNECTIONS_PER_WORKLOAD",
+        default_value_t = 128
     )]
-    pub http_client_max_connections_per_workload: Option<usize>,
+    pub max_http_connections_per_workload: usize,
 
-    /// How long an outbound request waits for a connection slot once one of
-    /// the caps above is reached, before failing with a connect timeout
-    /// (e.g. `5s`, `500ms`). A component's own `connect-timeout` bounds its
-    /// request independently, so this only decides how long an attempt
-    /// nothing is waiting on may hold a slot reservation.
+    /// Cap on raw `wasi:sockets` connections a single workload may hold.
+    ///
+    /// Refused immediately when reached rather than queued: a guest holds
+    /// sockets across yield points, so making it wait for a slot only its own
+    /// progress can free would deadlock it against itself.
     #[arg(
-        long = "http-client-connection-wait",
-        env = "WASH_HTTP_CLIENT_CONNECTION_WAIT",
+        long = "max-socket-connections-per-workload",
+        env = "WASH_MAX_SOCKET_CONNECTIONS_PER_WORKLOAD",
+        default_value_t = 256
+    )]
+    pub max_socket_connections_per_workload: usize,
+
+    /// Cap on inbound published-port connections a single workload may serve
+    /// at once. A separate surface from the two above, because a workload
+    /// whose inbound traffic consumed its outbound allowance would deadlock
+    /// serving requests that need to make outbound calls.
+    #[arg(
+        long = "max-inbound-connections-per-workload",
+        env = "WASH_MAX_INBOUND_CONNECTIONS_PER_WORKLOAD",
+        default_value_t = 256
+    )]
+    pub max_inbound_connections_per_workload: usize,
+
+    /// How long a pooled HTTP connect waits for a slot before failing with a
+    /// connect timeout (e.g. `5s`, `500ms`).
+    ///
+    /// Only the HTTP surface waits — see
+    /// `--max-socket-connections-per-workload`. A component's own
+    /// `connect-timeout` bounds its request independently, so this only
+    /// decides how long an attempt nothing is waiting on may camp on a slot.
+    #[arg(
+        long = "http-connection-wait",
+        env = "WASH_HTTP_CONNECTION_WAIT",
         value_parser = humantime::parse_duration
     )]
-    pub http_client_connection_wait: Option<Duration>,
+    pub http_connection_wait: Option<Duration>,
 
     /// Enable WASI WebGPU support
     #[cfg(all(
@@ -402,11 +428,10 @@ impl CliCommand for HostCommand {
                     },
                 )
                 .context("failed to load --http-client-ca-path CA certificates")?
-                .with_connection_limits(crate::config::outbound_connection_limits(
-                    self.http_client_max_connections,
-                    self.http_client_max_connections_per_workload,
-                    self.http_client_connection_wait,
-                )?);
+                // The same registry the socket policy uses, so a workload's
+                // HTTP pool and its raw sockets share one configured
+                // allowance rather than two.
+                .with_quotas(Arc::clone(&quotas));
 
             let mut ingress_builder = wash_runtime::host::http::Ingress::builder(http_router, addr)
                 .outgoing_handler(outgoing_handler);
