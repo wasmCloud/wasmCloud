@@ -3,11 +3,11 @@
 //! A [`GuestConnectionQuota`] is a per-guest allowance, split by surface so an
 //! operator can size each independently:
 //!
-//! | Surface    | Counts                                                    |
-//! | ---------- | --------------------------------------------------------- |
-//! | `http`     | pooled `wasi:http` + gRPC connections, idle ones included  |
-//! | `sockets`  | raw `wasi:sockets` connections the guest holds             |
-//! | `inbound`  | published-port splices arriving at the guest               |
+//! | Surface            | Counts                                            |
+//! | ------------------ | ------------------------------------------------- |
+//! | `outbound_http`    | pooled `wasi:http` + gRPC, idle ones included       |
+//! | `outbound_sockets` | raw `wasi:sockets` connections the guest opens      |
+//! | `inbound_sockets`  | published-port splices arriving at the guest        |
 //!
 //! Every surface rolls up into an optional host-wide ceiling, so one guest
 //! cannot exhaust the machine's file descriptors and a crowd of guests cannot
@@ -17,17 +17,17 @@
 //!
 //! They behave differently in ways a single counter cannot express:
 //!
-//! - **`http` may wait.** The pooled client owns its connections and can
+//! - **`outbound_http` may wait.** The pooled client owns its connections and can
 //!   abandon an attempt, so it races a permit against an idle pooled
 //!   connection freeing and times out if neither arrives. A permit is held for
 //!   a *connection's* life, including while it sits idle in the keep-alive
 //!   pool — so reuse costs nothing, and the number is really "how large may
 //!   this guest's pool grow".
-//! - **`sockets` must never wait.** A guest holds sockets across yield points,
+//! - **`outbound_sockets` must never wait.** A guest holds sockets across yield points,
 //!   so blocking connect N+1 on a slot that only the guest's own progress can
-//!   free is a self-deadlock. [`GuestConnectionQuota::try_acquire_socket`]
+//!   free is a self-deadlock. [`GuestConnectionQuota::try_acquire_outbound_socket`]
 //!   refuses immediately instead.
-//! - **`inbound` must be its own counter.** A guest whose inbound splices drew
+//! - **`inbound_sockets` must be its own counter.** A guest whose inbound splices drew
 //!   from the same allowance as its outbound calls would deadlock against
 //!   itself: serving a request needs an outbound call, the call needs a slot,
 //!   and the slot is held by the request that is waiting.
@@ -59,32 +59,79 @@ const QUOTA_IDLE: Duration = Duration::from_secs(300);
 /// classifiable connect timeout instead of a long hang.
 const DEFAULT_HTTP_WAIT: Duration = Duration::from_secs(5);
 
+/// What the host-wide ceiling falls back to when the real descriptor limit
+/// cannot be read. Half of the 1024 soft limit common on Linux.
+const ASSUMED_MAX_CONNECTIONS: usize = 512;
+
+/// Share of the process's file-descriptor budget guest connections may hold.
+///
+/// The rest is for everything a connection is not: listening sockets, OCI
+/// pulls, the control-plane connection, open files, and the descriptors a
+/// connection needs *around* it while being established.
+const FD_BUDGET_NUMERATOR: usize = 1;
+const FD_BUDGET_DENOMINATOR: usize = 2;
+
+/// Bounds on the derived ceiling. The floor keeps a host with a tiny limit
+/// usable; the cap stops a host with an enormous one from setting a number so
+/// large it stops being a bound at all.
+const MIN_DERIVED_MAX_CONNECTIONS: usize = 64;
+const MAX_DERIVED_MAX_CONNECTIONS: usize = 32_768;
+
 /// Host-wide ceiling on live connections when the operator names none.
 ///
-/// Kept inside common default file-descriptor soft limits (1024 on many Linux
-/// distributions) with room left for ingress connections, OCI pulls, and the
-/// host's own control-plane traffic. Every guest's three surfaces draw on this,
-/// so it — not the per-guest ceilings, which are each larger — is what stops a
-/// crowd of workloads exhausting the host's descriptors.
-pub const DEFAULT_MAX_CONNECTIONS: usize = 512;
+/// Derived from `RLIMIT_NOFILE` rather than assumed, because the number that
+/// matters is the process's actual descriptor budget: a container started with
+/// 1024 and one started with 1M want very different ceilings, and a fixed
+/// default is wrong for both. Every guest's surfaces draw on this, so it — not
+/// the per-guest ceilings, which are each larger — is what stops a crowd of
+/// workloads exhausting the host's descriptors.
+///
+/// This is a *bound*, not a reservation: nothing is preallocated, so a generous
+/// limit costs nothing until connections are actually opened.
+pub fn default_max_connections() -> usize {
+    let Some(soft) = descriptor_soft_limit() else {
+        return ASSUMED_MAX_CONNECTIONS;
+    };
+    soft.saturating_mul(FD_BUDGET_NUMERATOR)
+        .saturating_div(FD_BUDGET_DENOMINATOR)
+        .clamp(MIN_DERIVED_MAX_CONNECTIONS, MAX_DERIVED_MAX_CONNECTIONS)
+}
+
+/// The process's soft `RLIMIT_NOFILE`, or `None` if it cannot be read or is
+/// unlimited — in which case there is no budget to take a share of.
+#[cfg(unix)]
+fn descriptor_soft_limit() -> Option<usize> {
+    let limits = rustix::process::getrlimit(rustix::process::Resource::Nofile);
+    usize::try_from(limits.current?).ok()
+}
+
+/// Windows has no `RLIMIT_NOFILE` to derive from: sockets are handles bounded
+/// by memory and the per-process handle limit rather than by a descriptor
+/// budget, so there is no share to take and the ceiling falls back to
+/// [`ASSUMED_MAX_CONNECTIONS`].
+#[cfg(not(unix))]
+fn descriptor_soft_limit() -> Option<usize> {
+    None
+}
 
 /// Per-guest ceilings, one per surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuotaLimits {
-    /// Pooled `wasi:http` and gRPC connections, counting idle keep-alive ones.
-    pub http: usize,
-    /// Raw `wasi:sockets` connections the guest holds open.
-    pub sockets: usize,
-    /// Published-port splices arriving at this guest.
-    pub inbound: usize,
+    /// Outbound pooled `wasi:http` and gRPC connections, counting idle
+    /// keep-alive ones.
+    pub outbound_http: usize,
+    /// Outbound raw `wasi:sockets` connections the guest holds open.
+    pub outbound_sockets: usize,
+    /// Inbound published-port splices arriving at this guest.
+    pub inbound_sockets: usize,
 }
 
 impl Default for QuotaLimits {
     fn default() -> Self {
         Self {
-            http: 128,
-            sockets: 256,
-            inbound: 256,
+            outbound_http: 128,
+            outbound_sockets: 256,
+            inbound_sockets: 256,
         }
     }
 }
@@ -96,9 +143,9 @@ impl Default for QuotaLimits {
 /// out an idle timeout.
 #[derive(Debug, Clone)]
 pub struct GuestConnectionQuota {
-    http: Arc<Semaphore>,
-    sockets: Arc<Semaphore>,
-    inbound: Arc<Semaphore>,
+    outbound_http: Arc<Semaphore>,
+    outbound_sockets: Arc<Semaphore>,
+    inbound_sockets: Arc<Semaphore>,
     /// Host-wide ceiling every surface rolls up into, when one is configured.
     global: Option<Arc<Semaphore>>,
     stats: Arc<QuotaStats>,
@@ -106,10 +153,10 @@ pub struct GuestConnectionQuota {
 
 #[derive(Debug, Default)]
 struct QuotaStats {
-    sockets_granted: AtomicU64,
-    sockets_refused: AtomicU64,
-    inbound_granted: AtomicU64,
-    inbound_refused: AtomicU64,
+    outbound_sockets_granted: AtomicU64,
+    outbound_sockets_refused: AtomicU64,
+    inbound_sockets_granted: AtomicU64,
+    inbound_sockets_refused: AtomicU64,
 }
 
 /// A held connection slot. Returns its capacity on drop.
@@ -125,9 +172,9 @@ pub struct ConnectionSlot {
 impl GuestConnectionQuota {
     pub fn new(limits: QuotaLimits, global: Option<Arc<Semaphore>>) -> Self {
         Self {
-            http: Arc::new(Semaphore::new(limits.http.max(1))),
-            sockets: Arc::new(Semaphore::new(limits.sockets.max(1))),
-            inbound: Arc::new(Semaphore::new(limits.inbound.max(1))),
+            outbound_http: Arc::new(Semaphore::new(limits.outbound_http.max(1))),
+            outbound_sockets: Arc::new(Semaphore::new(limits.outbound_sockets.max(1))),
+            inbound_sockets: Arc::new(Semaphore::new(limits.inbound_sockets.max(1))),
             global,
             stats: Arc::default(),
         }
@@ -137,20 +184,20 @@ impl GuestConnectionQuota {
     /// its ceiling.
     ///
     /// Never waits — see the module docs.
-    pub fn try_acquire_socket(&self) -> Option<ConnectionSlot> {
+    pub fn try_acquire_outbound_socket(&self) -> Option<ConnectionSlot> {
         self.try_acquire(
-            &self.sockets,
-            &self.stats.sockets_granted,
-            &self.stats.sockets_refused,
+            &self.outbound_sockets,
+            &self.stats.outbound_sockets_granted,
+            &self.stats.outbound_sockets_refused,
         )
     }
 
     /// Take a slot for a published-port splice.
-    pub fn try_acquire_inbound(&self) -> Option<ConnectionSlot> {
+    pub fn try_acquire_inbound_socket(&self) -> Option<ConnectionSlot> {
         self.try_acquire(
-            &self.inbound,
-            &self.stats.inbound_granted,
-            &self.stats.inbound_refused,
+            &self.inbound_sockets,
+            &self.stats.inbound_sockets_granted,
+            &self.stats.inbound_sockets_refused,
         )
     }
 
@@ -188,8 +235,8 @@ impl GuestConnectionQuota {
     /// Handed out as a raw semaphore rather than through `try_acquire` because
     /// the pool needs to *wait* on it, racing the wait against an idle
     /// connection freeing — behavior `try_acquire` deliberately does not have.
-    pub fn http_permits(&self) -> Arc<Semaphore> {
-        Arc::clone(&self.http)
+    pub fn outbound_http_permits(&self) -> Arc<Semaphore> {
+        Arc::clone(&self.outbound_http)
     }
 
     /// The host-wide ceiling, for the same reason.
@@ -197,25 +244,25 @@ impl GuestConnectionQuota {
         self.global.clone()
     }
 
-    pub fn sockets_available(&self) -> usize {
-        self.sockets.available_permits()
+    pub fn outbound_sockets_available(&self) -> usize {
+        self.outbound_sockets.available_permits()
     }
 
-    pub fn inbound_available(&self) -> usize {
-        self.inbound.available_permits()
+    pub fn inbound_sockets_available(&self) -> usize {
+        self.inbound_sockets.available_permits()
     }
 
-    pub fn http_available(&self) -> usize {
-        self.http.available_permits()
+    pub fn outbound_http_available(&self) -> usize {
+        self.outbound_http.available_permits()
     }
 
     /// Grants and refusals per surface, for reporting.
     pub fn counts(&self) -> QuotaCounts {
         QuotaCounts {
-            sockets_granted: self.stats.sockets_granted.load(Ordering::Relaxed),
-            sockets_refused: self.stats.sockets_refused.load(Ordering::Relaxed),
-            inbound_granted: self.stats.inbound_granted.load(Ordering::Relaxed),
-            inbound_refused: self.stats.inbound_refused.load(Ordering::Relaxed),
+            outbound_sockets_granted: self.stats.outbound_sockets_granted.load(Ordering::Relaxed),
+            outbound_sockets_refused: self.stats.outbound_sockets_refused.load(Ordering::Relaxed),
+            inbound_sockets_granted: self.stats.inbound_sockets_granted.load(Ordering::Relaxed),
+            inbound_sockets_refused: self.stats.inbound_sockets_refused.load(Ordering::Relaxed),
         }
     }
 }
@@ -223,10 +270,10 @@ impl GuestConnectionQuota {
 /// Snapshot of one quota's activity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuotaCounts {
-    pub sockets_granted: u64,
-    pub sockets_refused: u64,
-    pub inbound_granted: u64,
-    pub inbound_refused: u64,
+    pub outbound_sockets_granted: u64,
+    pub outbound_sockets_refused: u64,
+    pub inbound_sockets_granted: u64,
+    pub inbound_sockets_refused: u64,
 }
 
 /// Mints and remembers one [`GuestConnectionQuota`] per guest.
@@ -364,14 +411,43 @@ impl PolicyMeters {
 
 #[cfg(test)]
 mod tests {
+    /// The ceiling tracks the descriptor budget the process actually has: a
+    /// container started with 1024 and one started with a million want very
+    /// different numbers, and the point of deriving it is that neither has to
+    /// say so.
+    #[test]
+    fn the_default_ceiling_follows_the_descriptor_limit() {
+        let derived = super::default_max_connections();
+        assert!(
+            derived >= super::MIN_DERIVED_MAX_CONNECTIONS,
+            "a host with a small limit must still be usable"
+        );
+        assert!(
+            derived <= super::MAX_DERIVED_MAX_CONNECTIONS,
+            "a number this large would stop being a bound"
+        );
+
+        // Whatever this machine's limit is, the ceiling leaves at least as many
+        // descriptors for everything a connection is not.
+        if let Some(soft) = super::descriptor_soft_limit()
+            && soft >= super::MIN_DERIVED_MAX_CONNECTIONS * 2
+            && soft / 2 <= super::MAX_DERIVED_MAX_CONNECTIONS
+        {
+            assert_eq!(derived, soft / 2);
+            assert!(
+                derived <= soft - derived,
+                "half the budget is left for listeners, pulls, and open files"
+            );
+        }
+    }
     use super::*;
 
-    fn quota(sockets: usize, inbound: usize) -> GuestConnectionQuota {
+    fn quota(outbound_sockets: usize, inbound_sockets: usize) -> GuestConnectionQuota {
         GuestConnectionQuota::new(
             QuotaLimits {
-                http: 4,
-                sockets,
-                inbound,
+                outbound_http: 4,
+                outbound_sockets,
+                inbound_sockets,
             },
             None,
         )
@@ -380,23 +456,23 @@ mod tests {
     #[test]
     fn a_quota_hands_out_its_ceiling_and_then_refuses() {
         let quota = quota(2, 1);
-        let a = quota.try_acquire_socket().expect("first slot");
-        let b = quota.try_acquire_socket().expect("second slot");
+        let a = quota.try_acquire_outbound_socket().expect("first slot");
+        let b = quota.try_acquire_outbound_socket().expect("second slot");
         assert!(
-            quota.try_acquire_socket().is_none(),
+            quota.try_acquire_outbound_socket().is_none(),
             "third should be refused"
         );
 
         drop(a);
         assert!(
-            quota.try_acquire_socket().is_some(),
+            quota.try_acquire_outbound_socket().is_some(),
             "a freed slot is reusable"
         );
         drop(b);
 
         let counts = quota.counts();
-        assert_eq!(counts.sockets_granted, 3);
-        assert_eq!(counts.sockets_refused, 1);
+        assert_eq!(counts.outbound_sockets_granted, 3);
+        assert_eq!(counts.outbound_sockets_refused, 1);
     }
 
     /// The surfaces must not share: a guest that filled one still has to be
@@ -404,14 +480,14 @@ mod tests {
     #[test]
     fn the_surfaces_do_not_starve_each_other() {
         let quota = quota(1, 1);
-        let _inbound = quota.try_acquire_inbound().expect("inbound slot");
-        assert!(quota.try_acquire_inbound().is_none());
+        let _inbound = quota.try_acquire_inbound_socket().expect("inbound slot");
+        assert!(quota.try_acquire_inbound_socket().is_none());
         assert!(
-            quota.try_acquire_socket().is_some(),
+            quota.try_acquire_outbound_socket().is_some(),
             "sockets must survive inbound exhaustion"
         );
         // And HTTP is untouched by either.
-        assert_eq!(quota.http_available(), 4);
+        assert_eq!(quota.outbound_http_available(), 4);
     }
 
     #[test]
@@ -421,10 +497,10 @@ mod tests {
         let two = registry.for_guest("b");
 
         let _held = one
-            .try_acquire_socket()
+            .try_acquire_outbound_socket()
             .expect("first guest takes the slot");
         assert!(
-            two.try_acquire_socket().is_none(),
+            two.try_acquire_outbound_socket().is_none(),
             "the second guest is bounded by the host-wide ceiling"
         );
     }
@@ -435,15 +511,15 @@ mod tests {
     fn a_guest_at_its_ceiling_does_not_touch_the_host_wide_one() {
         let registry = QuotaRegistry::new(
             QuotaLimits {
-                http: 1,
-                sockets: 1,
-                inbound: 1,
+                outbound_http: 1,
+                outbound_sockets: 1,
+                inbound_sockets: 1,
             },
             Some(4),
         );
         let quota = registry.for_guest("a");
-        let _held = quota.try_acquire_socket().expect("its one slot");
-        assert!(quota.try_acquire_socket().is_none());
+        let _held = quota.try_acquire_outbound_socket().expect("its one slot");
+        assert!(quota.try_acquire_outbound_socket().is_none());
         assert_eq!(
             quota.global_permits().unwrap().available_permits(),
             3,
@@ -457,18 +533,21 @@ mod tests {
     fn each_guest_gets_its_own_allowance() {
         let registry = QuotaRegistry::new(
             QuotaLimits {
-                http: 4,
-                sockets: 1,
-                inbound: 1,
+                outbound_http: 4,
+                outbound_sockets: 1,
+                inbound_sockets: 1,
             },
             None,
         );
         let _a = registry
             .for_guest("a")
-            .try_acquire_socket()
+            .try_acquire_outbound_socket()
             .expect("guest a's slot");
         assert!(
-            registry.for_guest("b").try_acquire_socket().is_some(),
+            registry
+                .for_guest("b")
+                .try_acquire_outbound_socket()
+                .is_some(),
             "one guest at its ceiling must not exhaust another's"
         );
     }
@@ -480,18 +559,21 @@ mod tests {
     fn a_guest_lookup_is_stable() {
         let registry = QuotaRegistry::new(
             QuotaLimits {
-                http: 4,
-                sockets: 1,
-                inbound: 1,
+                outbound_http: 4,
+                outbound_sockets: 1,
+                inbound_sockets: 1,
             },
             None,
         );
         let _held = registry
             .for_guest("a")
-            .try_acquire_socket()
+            .try_acquire_outbound_socket()
             .expect("first slot");
         assert!(
-            registry.for_guest("a").try_acquire_socket().is_none(),
+            registry
+                .for_guest("a")
+                .try_acquire_outbound_socket()
+                .is_none(),
             "the same guest must see the same allowance"
         );
     }

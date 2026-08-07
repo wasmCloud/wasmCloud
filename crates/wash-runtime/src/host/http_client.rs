@@ -586,7 +586,7 @@ impl PooledClient {
         Self::bounded(
             tls,
             None,
-            quota.http_permits(),
+            quota.outbound_http_permits(),
             unbounded_permits(),
             crate::host::quota::QuotaRegistry::new(Default::default(), None).http_wait(),
             MIN_IDLE_PER_AUTHORITY,
@@ -837,7 +837,7 @@ impl WorkloadClients {
             tls,
             crate::host::quota::QuotaRegistry::new(
                 Default::default(),
-                Some(crate::host::quota::DEFAULT_MAX_CONNECTIONS),
+                Some(crate::host::quota::default_max_connections()),
             ),
         )
     }
@@ -916,13 +916,13 @@ impl WorkloadClients {
             PooledClient::bounded(
                 self.tls.clone(),
                 Some(Arc::from(workload_id)),
-                quota.http_permits(),
+                quota.outbound_http_permits(),
                 // An unset host-wide ceiling is spelled as an effectively
                 // unbounded semaphore rather than an `Option`, so the connector
                 // has one acquire path instead of two.
                 quota.global_permits().unwrap_or_else(unbounded_permits),
                 self.quotas.http_wait(),
-                idle_per_authority(calls, self.quotas.limits().http),
+                idle_per_authority(calls, self.quotas.limits().outbound_http),
             )
         })
     }
@@ -1377,7 +1377,7 @@ mod tests {
         Arc::new(
             crate::host::quota::QuotaRegistry::new(
                 crate::host::quota::QuotaLimits {
-                    http,
+                    outbound_http: http,
                     ..Default::default()
                 },
                 Some(max_total),
@@ -1405,7 +1405,7 @@ mod tests {
     /// below the floor must win rather than blow up the range.
     #[test]
     fn idle_cap_tracks_concurrency_within_the_quota() {
-        let http = crate::host::quota::QuotaLimits::default().http;
+        let http = crate::host::quota::QuotaLimits::default().outbound_http;
         assert_eq!(
             idle_per_authority(1, http),
             MIN_IDLE_PER_AUTHORITY,
@@ -1921,7 +1921,7 @@ mod tests {
 
         let quota = clients.quotas().for_guest("workload-a");
         assert_eq!(
-            quota.http_available(),
+            quota.outbound_http_available(),
             0,
             "the in-flight connection should hold the workload's only slot"
         );
@@ -1930,7 +1930,7 @@ mod tests {
         let _rebuilt = clients.client("workload-a");
         let rebuilt_quota = clients.quotas().for_guest("workload-a");
         assert_eq!(
-            rebuilt_quota.http_available(),
+            rebuilt_quota.outbound_http_available(),
             0,
             "the draining connection must still be charged to the workload"
         );

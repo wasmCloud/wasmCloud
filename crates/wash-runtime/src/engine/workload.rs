@@ -68,6 +68,12 @@ pub struct WorkloadMetadata {
     pub(crate) plugins: Option<HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>>,
     /// Workload loopback
     pub(crate) loopback: Arc<std::sync::Mutex<loopback::Network>>,
+    /// The host-level half of this component's socket policy: enforcement mode,
+    /// address ranges, whether the host-loopback door is open at all, the
+    /// host's port table, and the connection budget. Installed by the engine
+    /// from [`crate::engine::Engine`]'s configuration; the workload-level half
+    /// (`allowedHosts`, `allowedHostLoopbackPorts`) comes from `local_resources`.
+    pub(crate) socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
     /// Linked component ids
     linked_components: HashSet<Arc<str>>,
 }
@@ -256,7 +262,7 @@ impl WorkloadMetadata {
 #[derive(Clone)]
 pub struct WorkloadService {
     /// The [`WorkloadMetadata`] for this service
-    metadata: WorkloadMetadata,
+    pub(crate) metadata: WorkloadMetadata,
     /// The maximum number of restarts for this service
     max_restarts: u64,
     /// The [`JoinHandle`] for the running service
@@ -291,6 +297,7 @@ impl WorkloadService {
                 local_resources,
                 plugins: None,
                 loopback,
+                socket_policy: Arc::default(),
                 linked_components: Default::default(),
             },
             handle: None,
@@ -385,6 +392,7 @@ impl WorkloadComponent {
                 local_resources,
                 plugins: None,
                 loopback,
+                socket_policy: Arc::default(),
                 linked_components: Default::default(),
             },
             name: component_name.into(),

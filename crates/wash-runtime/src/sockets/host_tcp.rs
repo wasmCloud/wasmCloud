@@ -53,10 +53,11 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
             local_address = rewritten;
         }
 
-        network
+        let allowed = network
             .check_socket_addr(local_address, SocketAddrUse::TcpBind)
             .await
-            .map_err(super::network::socket_error_from_io)?;
+            .map_err(super::network::socket_error_from_util)?;
+        let local_address = allowed.addr;
 
         let this = Resource::<super::tcp::TcpSocket>::new_borrow(this.rep());
         let mut loopback = self
@@ -89,10 +90,11 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
         let network = self.table.get(&network)?;
         let remote_address = ip_socket_address_to_socket_addr(remote_address);
 
-        network
+        let allowed = network
             .check_socket_addr(remote_address, SocketAddrUse::TcpConnect)
             .await
-            .map_err(super::network::socket_error_from_io)?;
+            .map_err(super::network::socket_error_from_util)?;
+        let remote_address = allowed.addr;
 
         let this = Resource::<super::tcp::TcpSocket>::new_borrow(this.rep());
         let socket = self.table.get_mut(&this)?;
@@ -102,10 +104,13 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
             .lock()
             .map_err(|e| super::network::SocketError::trap(wasmtime::format_err!("{e}")))?;
         let future = socket
-            .start_connect(&remote_address, &mut loopback)
+            .start_connect(&remote_address, allowed.plane, &mut loopback)
             .map_err(se)?
             .connect(remote_address);
         socket.set_pending_connect(future).map_err(se)?;
+        // Held until the guest drops the socket, so the budget bounds
+        // concurrent connections rather than counting attempts.
+        socket.hold_quota_slot(allowed.permit);
 
         Ok(())
     }

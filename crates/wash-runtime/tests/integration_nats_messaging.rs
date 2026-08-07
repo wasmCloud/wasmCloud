@@ -143,6 +143,7 @@ fn messaging_handler_workload(
                     volume_mounts: vec![],
                     allowed_hosts: Default::default(),
                     allowed_ip_name_lookups: Default::default(),
+                    allowed_host_loopback_ports: Default::default(),
                 },
                 pool_size: pool_size.unwrap_or(1),
                 max_invocations: 100,

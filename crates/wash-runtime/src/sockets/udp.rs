@@ -11,8 +11,9 @@ use cap_net_ext::AddressFamily;
 use io_lifetimes::AsSocketlike as _;
 use io_lifetimes::raw::{FromRawSocketlike as _, IntoRawSocketlike as _};
 use rustix::io::Errno;
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tracing::debug;
 
 /// Inline replacement for `with_ambient_tokio_runtime` -- we always run inside tokio.
@@ -68,6 +69,27 @@ pub struct NetworkUdpSocket {
     /// one socket with two halves: they share the slot and release it when
     /// both are gone.
     quota_slot: Option<Arc<crate::host::quota::ConnectionSlot>>,
+
+    /// Which plane this socket's connected peer was resolved onto.
+    ///
+    /// Recorded at connect because it cannot be recovered afterwards: the
+    /// address stored on the socket is the *rewritten* one, so a peer reached
+    /// through the host-loopback sentinel is indistinguishable from the
+    /// guest's own virtual loopback by address alone.
+    connected_plane: Option<super::Plane>,
+
+    /// Peers this socket has sent to, when it is bound to the unspecified
+    /// address and therefore reachable on every interface.
+    ///
+    /// Such a socket must still receive the *replies* to what it sent — that is
+    /// what makes it a UDP client — while not becoming an unsolicited inbound
+    /// server on a real interface. Recording the destinations lets the receive
+    /// path tell those apart, the way a NAT keeps a mapping per peer.
+    ///
+    /// `None` when no filtering applies: a loopback bind reaches nothing real,
+    /// and a concrete address is an operator-declared listener that is
+    /// *supposed* to accept unsolicited traffic.
+    egress_peers: Option<Arc<Mutex<BTreeSet<SocketAddr>>>>,
 }
 
 impl NetworkUdpSocket {
@@ -102,6 +124,8 @@ impl NetworkUdpSocket {
             family: socket_address_family,
             socket_addr_check: None,
             quota_slot: None,
+            connected_plane: None,
+            egress_peers: None,
         })
     }
 
@@ -109,6 +133,11 @@ impl NetworkUdpSocket {
         udp_bind(&self.socket, addr)?;
         self.udp_state = UdpState::BindStarted;
         Ok(())
+    }
+
+    /// The peer set this socket filters inbound datagrams against, if any.
+    pub(crate) fn egress_peers(&self) -> Option<Arc<Mutex<BTreeSet<SocketAddr>>>> {
+        self.egress_peers.clone()
     }
 
     fn finish_bind(&mut self) -> Result<(), ErrorCode> {
@@ -302,19 +331,21 @@ impl UdpSocket {
         }
         let ip = addr.ip().to_canonical();
         if !ip.is_loopback() {
-            if ip.is_unspecified() {
-                // Rewrite 0.0.0.0/[::] to loopback so the OS socket only listens
-                // on loopback, matching `TcpSocket::start_bind`. Without this the
-                // datagram socket is bound on every interface.
-                match &mut addr {
-                    SocketAddr::V4(addr) => addr.set_ip(Ipv4Addr::LOCALHOST),
-                    SocketAddr::V6(addr) => addr.set_ip(Ipv6Addr::LOCALHOST),
-                }
-            }
+            // An unspecified bind stays unspecified at the OS. Pinning it to
+            // loopback would confine the socket to loopback for *sending* too —
+            // the kernel refuses `send_to` an off-box address from a
+            // loopback-bound socket with `EADDRNOTAVAIL` — which takes away
+            // outbound UDP entirely. What must not happen is the guest
+            // *receiving* unsolicited datagrams from off-host, and that is
+            // enforced on the receive path instead: see `egress_peers`.
             socket.bind(addr)?;
             if !ip.is_unspecified() {
                 return Ok(());
             }
+            // Only this half is confined: the virtual endpoint the guest also
+            // gets is registered on loopback, where its guest-to-guest traffic
+            // belongs.
+            socket.egress_peers = Some(Arc::new(Mutex::new(BTreeSet::new())));
             addr = socket.socket.local_addr()?;
             match &mut addr {
                 SocketAddr::V4(addr) => addr.set_ip(Ipv4Addr::LOCALHOST),
@@ -398,18 +429,36 @@ impl UdpSocket {
     pub(crate) fn connect(
         &mut self,
         addr: SocketAddr,
+        plane: super::Plane,
         loopback: &mut super::loopback::Network,
     ) -> Result<(), ErrorCode> {
         match self {
-            Self::Network(socket) => socket.connect(addr),
+            Self::Network(socket) => {
+                socket.connected_plane = Some(plane);
+                socket.connect(addr)
+            }
             Self::Loopback(socket) => socket.connect(addr, loopback),
             // An unspecified-bound socket is simultaneously a real socket and a
-            // virtual endpoint, so both sides record the peer. Which one carries
-            // traffic is decided per datagram by the plane, not here.
+            // virtual endpoint, so both sides record the peer, and the plane
+            // recorded here is what later decides which half carries a datagram
+            // sent with no explicit destination.
             Self::Unspecified { net, lo } => {
+                net.connected_plane = Some(plane);
                 net.connect(addr)?;
                 lo.connect(addr, loopback)
             }
+        }
+    }
+
+    /// Which plane a datagram with no explicit destination travels on.
+    ///
+    /// `None` when the socket is not connected, in which case the destination
+    /// is checked per datagram and that decision is used instead.
+    pub(crate) fn connected_plane(&self) -> Option<super::Plane> {
+        match self {
+            Self::Network(net) | Self::Unspecified { net, .. } => net.connected_plane,
+            // A purely virtual endpoint has no other half to choose.
+            Self::Loopback(_) => Some(super::Plane::Virtual),
         }
     }
 
@@ -578,7 +627,7 @@ mod tests {
     /// loopback; the OS socket was not, so a guest binding `0.0.0.0` was
     /// reachable from off-host. The TCP path has always rewritten both.
     #[tokio::test]
-    async fn unspecified_bind_never_reaches_a_real_interface() {
+    async fn unspecified_bind_never_serves_unsolicited_traffic() {
         for (family, unspecified) in [
             (AddressFamily::Ipv4, "0.0.0.0:0"),
             (AddressFamily::Ipv6, "[::]:0"),
@@ -595,12 +644,103 @@ mod tests {
             let UdpSocket::Unspecified { net, .. } = &socket else {
                 panic!("binding {unspecified} should produce an Unspecified socket");
             };
+
+            // The socket stays bound where the guest asked, because a
+            // loopback-bound socket cannot *send* off-box: the kernel refuses
+            // with `EADDRNOTAVAIL`, which would take away outbound UDP.
             let os_addr = net.socket.local_addr().unwrap();
             assert!(
-                os_addr.ip().is_loopback(),
-                "OS datagram socket bound {os_addr}, which is reachable off-host"
+                os_addr.ip().is_unspecified(),
+                "an unspecified bind must stay unspecified to route; got {os_addr}"
+            );
+
+            // What keeps it from being an unsolicited server is the peer
+            // filter, which starts empty: nothing is admitted until the guest
+            // sends somewhere.
+            let peers = net
+                .egress_peers()
+                .expect("an unspecified bind filters its inbound datagrams");
+            assert!(
+                peers.lock().unwrap().is_empty(),
+                "a socket that has sent nothing admits nothing"
             );
         }
+    }
+
+    /// The property the peer filter exists for, end to end against real
+    /// sockets: a guest that sends somewhere gets that peer's reply, and a
+    /// stranger who was never addressed does not reach it.
+    #[tokio::test]
+    async fn a_reply_is_admitted_and_a_stranger_is_not() {
+        let ctx = WasiSocketsCtx::default();
+        let mut socket = UdpSocket::new(&ctx, AddressFamily::Ipv4).unwrap();
+        let mut loopback = crate::sockets::loopback::Network::default();
+        socket
+            .bind("0.0.0.0:0".parse().unwrap(), &mut loopback)
+            .unwrap();
+        socket.finish_bind().unwrap();
+        let UdpSocket::Unspecified { net, .. } = &socket else {
+            panic!("expected an Unspecified socket");
+        };
+        let guest = net.socket.clone();
+        let guest_port = guest.local_addr().unwrap().port();
+        let peers = net.egress_peers().unwrap();
+
+        // The peer the guest talks to, and one it never addresses.
+        let server = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = server.local_addr().unwrap();
+        let stranger = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+
+        // Sending records the peer, which is what admits its reply.
+        peers.lock().unwrap().insert(server_addr);
+        guest.send_to(b"question", server_addr).await.unwrap();
+
+        let mut buf = [0u8; 64];
+        let (n, from) = server.recv_from(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"question");
+        server.send_to(b"answer", from).await.unwrap();
+        stranger
+            .send_to(b"unsolicited", format!("127.0.0.1:{guest_port}"))
+            .await
+            .unwrap();
+
+        // Read whatever arrives and apply the filter the receive paths apply.
+        let mut admitted = Vec::new();
+        for _ in 0..2 {
+            let mut buf = [0u8; 64];
+            let Ok(Ok((n, from))) =
+                tokio::time::timeout(std::time::Duration::from_secs(2), guest.recv_from(&mut buf))
+                    .await
+            else {
+                break;
+            };
+            if peers.lock().unwrap().contains(&from) {
+                admitted.push(buf[..n].to_vec());
+            }
+        }
+        assert_eq!(
+            admitted,
+            vec![b"answer".to_vec()],
+            "only the peer the guest addressed should be delivered"
+        );
+    }
+
+    /// A loopback bind reaches nothing real, and a concrete bind is an
+    /// operator-declared listener that is supposed to hear from strangers —
+    /// neither filters.
+    #[tokio::test]
+    async fn only_an_unspecified_bind_filters_its_peers() {
+        let ctx = WasiSocketsCtx::default();
+        let mut socket = UdpSocket::new(&ctx, AddressFamily::Ipv4).unwrap();
+        let mut loopback = crate::sockets::loopback::Network::default();
+        socket
+            .bind("127.0.0.1:0".parse().unwrap(), &mut loopback)
+            .unwrap();
+        socket.finish_bind().unwrap();
+        assert!(
+            matches!(socket, UdpSocket::Loopback(_)),
+            "a loopback bind is virtual only"
+        );
     }
 
     #[tokio::test]

@@ -216,6 +216,7 @@ func materializeLocalResources(ctx context.Context, c client.Client, namespace s
 
 	lr.AllowedHosts = spec.AllowedHosts
 	lr.AllowedIpNameLookups = spec.AllowedIPNameLookups
+	lr.AllowedHostLoopbackPorts = spec.AllowedHostLoopbackPorts
 	lr.Config = spec.Config
 
 	if spec.Environment != nil {

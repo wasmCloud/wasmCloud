@@ -925,6 +925,20 @@ Upon a successful lookup, the host will allow outbound connections to the specif
 Empty or absent denies every lookup with permanent-resolver-failure. </p></td>
                 </tr>
               
+                <tr>
+                  <td>allowed_host_loopback_ports</td>
+                  <td><a href="#string">string</a></td>
+                  <td>repeated</td>
+                  <td><p>Ports on the machine&#39;s own loopback this component may reach through
+`host.wasmcloud.internal`. Each entry is a port with an optional
+protocol: &#34;5432&#34;, &#34;5432/tcp&#34;, &#34;53/udp&#34;.
+
+An empty or absent list denies every host-loopback connection, and a
+non-empty one is inert unless the host was started with
+--allow-host-loopback: neither the workload author nor the operator can
+open this door alone. </p></td>
+                </tr>
+              
             </tbody>
           </table>
 

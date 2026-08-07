@@ -248,6 +248,18 @@ pub struct ComponentHostPlugin {
     /// that imports `wasi:http/outgoing-handler` with no handler configured.
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
     max_restarts: u32,
+    /// Ports this plugin declared, as the operator wrote them.
+    /// The subset of `ports` this plugin binds for real itself, precomputed for
+    /// the per-incarnation socket policy.
+    direct_binds: Arc<[crate::sockets::policy::DirectBind]>,
+    /// The host's one port table, so a collision with another plugin (or, later,
+    /// a workload) is caught at `start()` with both holders named.
+    /// Handle to the current incarnation's virtual network. Published listeners
+    /// hold this rather than a network, which is what lets them stay bound
+    /// across a supervised restart.
+    network: crate::host::ports::NetworkHandle,
+    /// The host-level half of this plugin's socket policy.
+    socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
     state: Arc<ComponentHostPluginState>,
 }
 
@@ -291,7 +303,22 @@ impl ComponentHostPlugin {
             [crate::host::allowed_ip_name::AllowedIpName],
         >,
         http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+        #[builder(default)] ports: Arc<[crate::host::declared_port::DeclaredPort]>,
+        socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     ) -> anyhow::Result<Self> {
+        crate::host::declared_port::validate_ports(&ports, &format!("host plugin '{id}'"))?;
+        let direct_binds = ports
+            .iter()
+            .filter_map(|port| match port.mode() {
+                crate::host::declared_port::PortMode::Direct { bind } => {
+                    Some(crate::sockets::policy::DirectBind {
+                        addr: core::net::SocketAddr::new(bind, port.port),
+                        udp: port.protocol.is_udp(),
+                    })
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         // Defense-in-depth: re-filter to natives only. Both real call sites
         // already pass a pre-filtered map (`HostBuilder::native_plugins()`),
         // so this is a no-op today, but it makes the cycle-safety invariant
@@ -352,6 +379,9 @@ impl ComponentHostPlugin {
             allowed_ip_name_lookups,
             http_handler,
             max_restarts: DEFAULT_MAX_RESTARTS,
+            direct_binds: Arc::from(direct_binds),
+            network: crate::host::ports::NetworkHandle::new(),
+            socket_policy: socket_policy.unwrap_or_default(),
             state,
         })
     }
@@ -425,12 +455,20 @@ pub(crate) fn native_only(
 /// `native_plugins` should be every native (non-component) plugin already
 /// registered on the host — typically `HostBuilder::native_plugins()` — so
 /// this plugin's own capability imports can resolve against them.
+///
+/// `publish` governs this plugin's declared `ports`. Pass a context carrying the
+/// *same* table for every plugin on a host — it is the one place that knows
+/// which real ports are taken, so separate tables would let two plugins each
+/// believe they own the same address. `None` gives a private table and
+/// publishing disabled, which is what a test or an embedder that exposes no
+/// ports wants.
 pub async fn load_component_plugin(
     spec: &ComponentPluginSpec,
     engine: &Engine,
     oci_config: OciConfig,
     native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+    socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
 ) -> anyhow::Result<Arc<ComponentHostPlugin>> {
     let loaded = spec
         .source
@@ -448,6 +486,7 @@ pub async fn load_component_plugin(
         .allowed_hosts(Arc::clone(&spec.allowed_hosts))
         .allowed_ip_name_lookups(Arc::clone(&spec.allowed_ip_name_lookups))
         .maybe_http_handler(http_handler)
+        .maybe_socket_policy(socket_policy)
         .build()
         .await
         .with_context(|| format!("failed to build host component plugin '{}'", spec.id))?;
@@ -508,6 +547,9 @@ impl HostPlugin for ComponentHostPlugin {
             Arc::clone(&self.allowed_hosts),
             Arc::clone(&self.allowed_ip_name_lookups),
             self.http_handler.clone(),
+            self.network.clone(),
+            Arc::clone(&self.direct_binds),
+            Arc::clone(&self.socket_policy),
         ));
         *self
             .state
@@ -1292,9 +1334,14 @@ async fn run_supervisor(
     allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
     allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+    network: crate::host::ports::NetworkHandle,
+    direct_binds: Arc<[crate::sockets::policy::DirectBind]>,
+    socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
 ) {
     let mut restarts = 0u32;
     loop {
+        // Installs this incarnation's virtual network on the handle, which is
+        // how a listener published before this incarnation existed finds it.
         let store = build_plugin_store(
             &engine,
             state.id,
@@ -1302,6 +1349,9 @@ async fn run_supervisor(
             &allowed_hosts,
             &allowed_ip_name_lookups,
             http_handler.clone(),
+            &network,
+            &direct_binds,
+            &socket_policy,
         );
         // A fresh job registry per incarnation, published on `state` so the
         // baked-in identity/cancel imports reach this store's live jobs. Stale
@@ -1332,6 +1382,7 @@ async fn run_supervisor(
         if state.sender().is_none() {
             debug!(id = state.id, "host component plugin driver stopped");
             state.registry.store(None);
+            network.clear();
             return;
         }
 
@@ -1392,6 +1443,10 @@ async fn run_supervisor(
                 );
                 state.tx.store(None);
                 state.registry.store(None);
+                // No further incarnation will register a listener. Any still-open
+                // published listener now fails its readiness window rather than
+                // polling a network nothing will ever bind in.
+                network.clear();
                 return;
             }
             restarts += 1;
@@ -1463,22 +1518,37 @@ fn build_plugin_store(
     allowed_hosts: &Arc<[crate::host::allowed_hosts::AllowedHost]>,
     allowed_ip_name_lookups: &Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+    network: &crate::host::ports::NetworkHandle,
+    direct_binds: &Arc<[crate::sockets::policy::DirectBind]>,
+    socket_policy: &Arc<crate::sockets::policy::SocketPolicy>,
 ) -> Store<SharedCtx> {
-    // Same policy a non-service workload component gets: DNS lookup gated by
-    // `allowed_ip_name_lookups`, `wasi:http` gated by `allowed_hosts` (via
-    // `Ctx::with_allowed_hosts` + the existing `check_allowed_hosts`), raw
-    // socket connect otherwise unrestricted — a plugin never binds a listen
-    // socket, so `TcpBind`/`UdpBind` are always denied.
+    // DNS lookup gated by `allowed_ip_name_lookups`, `wasi:http` gated by
+    // `allowed_hosts` (via `Ctx::with_allowed_hosts` + the existing
+    // `check_allowed_hosts`), raw socket connect otherwise unrestricted. Binds
+    // land in the plugin's own private virtual network unless the operator
+    // declared a concrete address for this plugin to hold directly — see
+    // `crate::sockets::policy::SocketPolicy`.
+    let policy = Arc::new(crate::sockets::policy::SocketPolicy {
+        allowed_hosts: Arc::clone(allowed_hosts),
+        ..socket_policy.for_guest(
+            crate::sockets::policy::GuestKind::Plugin {
+                direct_binds: Arc::clone(direct_binds),
+            },
+            id,
+        )
+    });
+    // A fresh network per incarnation, published on the handle so a
+    // `PublishedPort` bound before this incarnation existed splices into it.
+    // It must be fresh: tearing down a store does not release the virtual ports
+    // its sockets registered, so reusing one would fail the next incarnation's
+    // bind with `AddressInUse`.
+    let loopback = network.replace();
     let sockets_ctx = crate::sockets::WasiSocketsCtx {
-        socket_addr_check: crate::sockets::SocketAddrCheck::new(move |_addr, reason| {
-            Box::pin(async move {
-                use crate::sockets::SocketAddrUse;
-                !matches!(reason, SocketAddrUse::TcpBind | SocketAddrUse::UdpBind)
-            })
+        socket_addr_check: crate::sockets::SocketAddrCheck::new(move |addr, reason| {
+            let policy = Arc::clone(&policy);
+            Box::pin(async move { policy.decide(reason, addr) })
         }),
-        loopback: Arc::new(std::sync::Mutex::new(
-            crate::sockets::loopback::Network::default(),
-        )),
+        loopback,
         allowed_ip_name_lookups: Arc::clone(allowed_ip_name_lookups),
         ..Default::default()
     };
