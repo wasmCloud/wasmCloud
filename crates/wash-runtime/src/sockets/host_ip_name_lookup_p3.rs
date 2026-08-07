@@ -14,6 +14,17 @@ impl<U> HostWithStore<U> for WasiSockets {
         store: &Accessor<U, Self>,
         name: String,
     ) -> wasmtime::Result<Result<Vec<types::IpAddress>, ErrorCode>> {
+        // The reserved zone answers before `allowedIpNameLookups` and before any
+        // resolver — see [`crate::sockets::internal_names`]. Ahead of the parse,
+        // too: these are host-internal names, not names a resolver would ever
+        // see, so `parse_host`'s opinion of them is irrelevant.
+        if let Some(internal) = crate::sockets::internal_names::resolve(&name) {
+            return Ok(match internal {
+                Ok(internal) => Ok(vec![internal.address().into()]),
+                Err(_) => Err(ErrorCode::NameUnresolvable),
+            });
+        }
+
         // Mirror the ordering of the upstream wasmtime implementation: parse the
         // name before consulting the capability so a malformed name reports
         // `InvalidArgument` regardless of whether lookups are permitted.

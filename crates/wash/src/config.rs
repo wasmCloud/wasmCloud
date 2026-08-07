@@ -17,6 +17,7 @@ use tracing::info;
 use wash_runtime::component_source::ComponentSource;
 use wash_runtime::host::allowed_hosts::AllowedHost;
 use wash_runtime::host::allowed_ip_name::AllowedIpName;
+use wash_runtime::host::allowed_loopback::AllowedLoopbackPort;
 use wash_runtime::oci::OciPullPolicy;
 use wash_runtime::wit::WitInterface;
 
@@ -261,6 +262,17 @@ pub struct WorkloadConfig {
     #[serde(default)]
     #[builder(default)]
     pub allowed_ip_name_lookups: Vec<AllowedIpName>,
+    /// Ports on the machine's own loopback components may reach through
+    /// `host.wasmcloud.internal`. Each entry is a port with an optional
+    /// protocol: `5432`, `5432/tcp`, `53/udp`.
+    ///
+    /// An omitted or empty list denies every host-loopback connection, and a
+    /// non-empty one is inert unless the host runs with
+    /// `--allow-host-loopback`. `127.0.0.1` keeps meaning the workload's own
+    /// virtual network either way.
+    #[serde(default)]
+    #[builder(default)]
+    pub allowed_host_loopback: Vec<AllowedLoopbackPort>,
 }
 
 // The `configs:`/`secrets:` source model moved to wash-runtime so every
@@ -364,6 +376,11 @@ pub struct DevComponent {
     /// denies every lookup); when omitted the workload list applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_ip_name_lookups: Option<Vec<AllowedIpName>>,
+    /// Host-loopback ports this component may reach. When set it replaces
+    /// `workload.allowedHostLoopback` for this component; when omitted the
+    /// workload list applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_host_loopback: Option<Vec<AllowedLoopbackPort>>,
     /// How many instances of this component to keep warm between calls.
     ///
     /// Unset (or `0`) keeps the default: every call runs in a fresh instance
@@ -410,6 +427,7 @@ impl DevComponent {
             config: HashMap::new(),
             allowed_hosts: None,
             allowed_ip_name_lookups: None,
+            allowed_host_loopback: None,
             pool_size: None,
             max_invocations: None,
             max_concurrency: None,

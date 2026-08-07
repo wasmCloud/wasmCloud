@@ -41,6 +41,7 @@ fn echo_workload(host: &str) -> WorkloadStartRequest {
                 bytes: bytes::Bytes::from_static(SVC_TCP_ECHO_WASM),
                 local_resources: LocalResources::default(),
                 max_restarts: 0,
+                ports: Vec::new(),
             }),
             components: vec![Component {
                 name: "http-loopback-gateway".to_string(),

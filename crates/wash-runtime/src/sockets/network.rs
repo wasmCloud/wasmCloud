@@ -59,11 +59,15 @@ pub struct Network {
 }
 
 impl Network {
+    /// Run the socket policy, yielding the address and plane to actually use.
+    ///
+    /// The returned address may differ from `addr`: an internal-zone sentinel
+    /// resolves to a real address here.
     pub async fn check_socket_addr(
         &self,
         addr: SocketAddr,
         reason: SocketAddrUse,
-    ) -> std::io::Result<()> {
+    ) -> Result<super::Allowed, super::util::ErrorCode> {
         self.socket_addr_check.check(addr, reason).await
     }
 }

@@ -120,6 +120,29 @@ type LocalResources struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:items:Pattern=`^\*$|^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$|^[0-9A-Fa-f:.]+$`
 	AllowedIPNameLookups []string `json:"allowedIpNameLookups,omitempty"`
+	// AllowedHostLoopback lists ports on the machine's own loopback this
+	// component may reach through the reserved name
+	// `host.wasmcloud.internal`.
+	//
+	// Each entry is a port with an optional protocol:
+	//   - "5432"      TCP port 5432 (the default)
+	//   - "5432/tcp"  TCP port 5432
+	//   - "53/udp"    UDP port 53
+	//
+	// Deliberately narrow: no ranges, no wildcards, no names. Reaching the
+	// host's own loopback is the most privileged grant here, and the set of
+	// local ports a component legitimately needs is small and knowable.
+	//
+	// An empty or absent list denies every host-loopback connection. A
+	// non-empty list is still inert unless the host itself runs with
+	// --allow-host-loopback, so neither the workload author nor the operator
+	// can open this door alone. Note that "127.0.0.1" keeps meaning the
+	// workload's own virtual loopback; only the reserved name reaches the
+	// machine. Final validation runs in the runtime. This regex is an
+	// admission-time guard, not the source of truth.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:items:Pattern=`^[0-9]{1,5}(/(tcp|udp|TCP|UDP))?$`
+	AllowedHostLoopback []string `json:"allowedHostLoopback,omitempty"`
 }
 
 // WorkloadComponent represents a component of a workload.

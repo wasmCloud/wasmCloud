@@ -337,6 +337,7 @@ impl CliCommand for DevCommand {
                     oci_config.clone(),
                     &native_plugins,
                     http_handler.clone(),
+                    Some(publish.clone()),
                 )
                 .await
                 .with_context(|| format!("failed to load host component plugin '{}'", spec.id))?;
@@ -592,9 +593,11 @@ fn build_workload(
         config: w.config.clone(),
         allowed_hosts: w.allowed_hosts.clone().into(),
         allowed_ip_name_lookups: w.allowed_ip_name_lookups.clone().into(),
+        allowed_host_loopback: w.allowed_host_loopback.clone().into(),
         ..Default::default()
     };
 
+    let service_ports = &dev_config.service_ports;
     let mut service: Option<Service> = None;
     let mut components = Vec::new();
     if dev_config.service {
@@ -603,6 +606,7 @@ fn build_workload(
             digest: None,
             max_restarts: 0,
             local_resources: local_resources_for(resolved_workload),
+            ports: service_ports.to_vec(),
         })
     } else {
         components.push(Component {
@@ -621,6 +625,7 @@ fn build_workload(
                 digest: None,
                 max_restarts: 0,
                 local_resources: local_resources_for(resolved_workload),
+                ports: service_ports.to_vec(),
             });
         }
     }
@@ -842,6 +847,7 @@ mod tests {
             config: HashMap::from([("flag".into(), "on".into())]),
             allowed_hosts: vec!["https://api.example.com".parse().unwrap()],
             allowed_ip_name_lookups: vec!["*".parse().unwrap()],
+            allowed_host_loopback: vec![],
         };
         let dev_cfg = DevConfig {
             components: vec![dev_component_named("sidecar-a")],
@@ -955,6 +961,7 @@ mod tests {
             config: HashMap::from([("flag".into(), "on".into())]),
             allowed_hosts: vec!["https://api.example.com".parse().unwrap()],
             allowed_ip_name_lookups: vec![],
+            allowed_host_loopback: vec![],
         };
         let dev_cfg = DevConfig {
             components: vec![dev_component_named("sidecar-a")],

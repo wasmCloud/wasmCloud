@@ -448,6 +448,10 @@ pub async fn load_component_plugin(
         .allowed_hosts(Arc::clone(&spec.allowed_hosts))
         .allowed_ip_name_lookups(Arc::clone(&spec.allowed_ip_name_lookups))
         .maybe_http_handler(http_handler)
+        .ports(Arc::clone(&spec.ports))
+        .maybe_port_table(publish.as_ref().map(|p| Arc::clone(&p.table)))
+        .maybe_publish_config(publish.as_ref().map(|p| Arc::clone(&p.config)))
+        .maybe_socket_policy(publish.as_ref().and_then(|p| p.socket_policy.clone()))
         .build()
         .await
         .with_context(|| format!("failed to build host component plugin '{}'", spec.id))?;
@@ -508,6 +512,9 @@ impl HostPlugin for ComponentHostPlugin {
             Arc::clone(&self.allowed_hosts),
             Arc::clone(&self.allowed_ip_name_lookups),
             self.http_handler.clone(),
+            self.network.clone(),
+            Arc::clone(&self.direct_binds),
+            Arc::clone(&self.socket_policy),
         ));
         *self
             .state
@@ -1302,6 +1309,9 @@ async fn run_supervisor(
             &allowed_hosts,
             &allowed_ip_name_lookups,
             http_handler.clone(),
+            &network,
+            &direct_binds,
+            &socket_policy,
         );
         // A fresh job registry per incarnation, published on `state` so the
         // baked-in identity/cancel imports reach this store's live jobs. Stale
@@ -1491,6 +1501,7 @@ fn build_plugin_store(
                 .collect(),
         )
         .with_sockets(sockets_ctx)
+        .with_socket_policy(Arc::clone(&policy_for_http))
         .with_allowed_hosts(Arc::clone(allowed_hosts));
     if let Some(http_handler) = http_handler {
         ctx_builder = ctx_builder.with_http_handler(http_handler);

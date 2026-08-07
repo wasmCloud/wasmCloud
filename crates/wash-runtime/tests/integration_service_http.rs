@@ -50,6 +50,7 @@ fn svc_counter_request(host: &str, max_restarts: u64) -> WorkloadStartRequest {
                 bytes: bytes::Bytes::from_static(SVC_COUNTER_WASM),
                 local_resources: LocalResources::default(),
                 max_restarts,
+                ports: Vec::new(),
             }),
             components: vec![],
             host_interfaces: http_only_host_interfaces(host),

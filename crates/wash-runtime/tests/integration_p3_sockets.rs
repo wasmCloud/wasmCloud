@@ -51,6 +51,7 @@ async fn test_p3_tcp_loopback() -> Result<()> {
                 bytes: bytes::Bytes::from_static(SOCKET_TEST_P3_WASM),
                 local_resources: Default::default(),
                 max_restarts: 0,
+                ports: Vec::new(),
             }),
             components: vec![],
             host_interfaces: vec![],

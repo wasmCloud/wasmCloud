@@ -183,6 +183,7 @@ fn egress_workload_with(
                     volume_mounts: vec![],
                     allowed_hosts: vec![allowed].into(),
                     allowed_ip_name_lookups: Default::default(),
+                    allowed_host_loopback: Default::default(),
                 },
                 pool_size,
                 max_invocations: 1000,

@@ -53,6 +53,7 @@ fn http_handler_p2_request(host_header: &str) -> WorkloadStartRequest {
             volume_mounts: vec![],
             allowed_hosts: Default::default(),
             allowed_ip_name_lookups: Default::default(),
+            allowed_host_loopback: Default::default(),
         },
         http_only_host_interfaces(host_header),
     )

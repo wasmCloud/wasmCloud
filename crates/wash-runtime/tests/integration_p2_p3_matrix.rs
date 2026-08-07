@@ -245,6 +245,7 @@ async fn test_p3_service_runs() -> Result<()> {
                 bytes: bytes::Bytes::from_static(CLI_SERVICE_P3_WASM),
                 local_resources: LocalResources::default(),
                 max_restarts: 0,
+                ports: Vec::new(),
             }),
             components: vec![],
             host_interfaces: vec![],
@@ -533,6 +534,7 @@ async fn test_all_p3_workload() -> Result<()> {
                 bytes: bytes::Bytes::from_static(CLI_SERVICE_P3_WASM),
                 local_resources: LocalResources::default(),
                 max_restarts: 0,
+                ports: Vec::new(),
             }),
             components: vec![Component {
                 name: "http-blobstore-p3.wasm".to_string(),
@@ -603,6 +605,7 @@ async fn test_p2_regression_with_p3_enabled() -> Result<()> {
                     // http-counter calls example.com
                     allowed_hosts: vec!["example.com".parse().unwrap()].into(),
                     allowed_ip_name_lookups: Default::default(),
+                    allowed_host_loopback: Default::default(),
                 },
                 pool_size: 1,
                 max_invocations: 100,

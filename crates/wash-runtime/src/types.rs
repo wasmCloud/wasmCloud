@@ -19,6 +19,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::host::allowed_hosts::AllowedHost;
 use crate::host::allowed_ip_name::AllowedIpName;
+use crate::host::allowed_loopback::AllowedLoopbackPort;
 use crate::wit::WitInterface;
 
 /// Represents a deployable workload containing one or more WebAssembly components.
@@ -121,6 +122,16 @@ pub struct LocalResources {
     /// the wire (proto / wash YAML) are parsed at conversion time, so the
     /// resolve path matches against the typed enum directly.
     pub allowed_ip_name_lookups: Arc<[AllowedIpName]>,
+    /// Ports on the machine's own loopback this component may reach through
+    /// `host.wasmcloud.internal`.
+    ///
+    /// **Empty = deny every host-loopback connection**, and a non-empty list is
+    /// still inert unless the host itself was started with
+    /// `--allow-host-loopback`: neither a workload author nor an operator can
+    /// open this door alone. See [`crate::host::allowed_loopback`] for the
+    /// accepted entry forms. Strings from the wire (proto / wash YAML) are
+    /// parsed at conversion time.
+    pub allowed_host_loopback: Arc<[AllowedLoopbackPort]>,
 }
 
 impl Default for LocalResources {
@@ -133,6 +144,7 @@ impl Default for LocalResources {
             volume_mounts: Vec::new(),
             allowed_hosts: Default::default(),
             allowed_ip_name_lookups: Default::default(),
+            allowed_host_loopback: Default::default(),
         }
     }
 }

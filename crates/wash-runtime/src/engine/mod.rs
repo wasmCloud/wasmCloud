@@ -237,6 +237,11 @@ pub struct Engine {
     // wasmtime engine
     pub(crate) inner: wasmtime::Engine,
     pub(crate) cache: Cache<CacheKey, CacheValue>,
+    /// Host-level socket policy every workload on this engine inherits:
+    /// enforcement mode, address ranges, whether the host-loopback door is open,
+    /// the host's port table, and the connection budget. The workload-level half
+    /// (`allowedHosts`, `allowedHostLoopback`) is layered over it per component.
+    pub(crate) socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
@@ -472,7 +477,7 @@ impl Engine {
             }
         }
 
-        let service = WorkloadService::new(
+        let mut service = WorkloadService::new(
             workload_id.as_ref(),
             workload_name.as_ref(),
             workload_namespace.as_ref(),
@@ -483,6 +488,7 @@ impl Engine {
             service.max_restarts,
             loopback,
         );
+        service.metadata.network_policy = Arc::clone(&self.socket_policy);
 
         let world = service.world();
 
@@ -581,7 +587,7 @@ impl Engine {
         }
 
         // Create the WorkloadComponent with volume mounts
-        Ok(WorkloadComponent::new(
+        let mut workload_component = WorkloadComponent::new(
             workload_id.as_ref(),
             workload_name.as_ref(),
             workload_namespace.as_ref(),
@@ -592,7 +598,9 @@ impl Engine {
             component.local_resources,
             loopback,
             instances,
-        ))
+        );
+        workload_component.metadata.network_policy = Arc::clone(&self.socket_policy);
+        Ok(workload_component)
     }
 
     /// Compile a host component plugin and build a linker with WASI (and
@@ -765,12 +773,25 @@ pub struct EngineBuilder {
     compilation_cache_size: Option<u64>,
     compilation_cache_ttl: Option<Duration>,
     fuel_consumption: Option<bool>,
+    socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
 }
 
 impl EngineBuilder {
+    /// Install the host-level socket policy every workload on this engine
+    /// inherits.
+    ///
+    /// The workload-level half (`allowedHosts`, `allowedHostLoopback`) comes
+    /// from each component's `LocalResources` and is layered over this, so a
+    /// workload can only ever narrow what the host permits.
+    #[must_use]
+    pub fn with_socket_policy(mut self, policy: Arc<crate::sockets::policy::SocketPolicy>) -> Self {
+        self.socket_policy = Some(policy);
+        self
+    }
+
     /// Creates a new `EngineBuilder` with default configuration.
     ///
     /// # Returns
@@ -962,6 +983,7 @@ impl EngineBuilder {
         Ok(Engine {
             inner,
             cache,
+            socket_policy: self.socket_policy.unwrap_or_default(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
         })

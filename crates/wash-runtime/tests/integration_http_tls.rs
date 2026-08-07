@@ -65,6 +65,7 @@ fn http_counter_request(host_header: &str) -> WorkloadStartRequest {
             // http-counter calls example.com
             allowed_hosts: vec!["example.com".parse().unwrap()].into(),
             allowed_ip_name_lookups: Default::default(),
+            allowed_host_loopback: Default::default(),
         },
         http_counter_host_interfaces(host_header),
     )

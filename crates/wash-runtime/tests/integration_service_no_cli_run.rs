@@ -41,6 +41,7 @@ fn svc_no_run_request(host: &str) -> WorkloadStartRequest {
                 bytes: bytes::Bytes::from_static(SVC_NO_RUN_WASM),
                 local_resources: LocalResources::default(),
                 max_restarts: 0,
+                ports: Vec::new(),
             }),
             components: vec![],
             host_interfaces: http_only_host_interfaces(host),

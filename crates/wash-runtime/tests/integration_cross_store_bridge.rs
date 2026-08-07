@@ -39,6 +39,7 @@ fn bridge_workload(host: &str) -> WorkloadStartRequest {
                 bytes: bytes::Bytes::from_static(BRIDGE_SERVICE_WASM),
                 local_resources: LocalResources::default(),
                 max_restarts: 0,
+                ports: Vec::new(),
             }),
             // The backend is a stateless component linked to the service by its
             // `wasmcloud:bridge/ops` export; the host instantiates it fresh per

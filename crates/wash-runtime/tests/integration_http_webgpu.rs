@@ -81,6 +81,7 @@ async fn test_http_webgpu_integration() -> Result<()> {
                     volume_mounts: vec![],
                     allowed_hosts: Default::default(),
                     allowed_ip_name_lookups: Default::default(),
+                    allowed_host_loopback: Default::default(),
                 },
                 pool_size: 1,
                 max_invocations: 100,
