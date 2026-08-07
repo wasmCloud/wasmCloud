@@ -246,6 +246,7 @@ pub fn default_counter_resources() -> LocalResources {
         volume_mounts: vec![],
         allowed_hosts: vec!["example.com".parse().unwrap()].into(),
         allowed_ip_name_lookups: Default::default(),
+        allowed_host_loopback: Default::default(),
     }
 }
 

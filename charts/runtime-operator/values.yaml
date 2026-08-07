@@ -427,7 +427,71 @@ runtime:
       #         - etcd-connection-settings
       #       secretFrom:
       #         - etcd-client-cert
+      #     - id: grpc-gateway
+      #       image: ghcr.io/example/grpc-gateway:1.0.0
+      #       ports:
+      #         - name: grpc
+      #           port: 50051        # the plugin binds 127.0.0.1:50051
+      #           protocol: TCP
+      #           publish: 31051     # the host binds :31051 and splices in
+      #         - name: bulk
+      #           port: 9000
+      #           bind: 10.0.0.5     # the plugin binds 10.0.0.5:9000 itself
       hostPlugins: []
+      # -- Networking policy for guests on this host group. Every value here is
+      # the *host's* half of a two-sided grant: a workload or plugin must also
+      # declare what it wants, so neither side can open a door alone.
+      networking:
+        # -- Let guests reach the machine's own loopback through the reserved
+        # name `host.wasmcloud.internal`. A guest also needs its own
+        # `allowedHostLoopback` entry naming the port. `127.0.0.1` keeps
+        # meaning the guest's own virtual network either way.
+        allowHostLoopback: false
+        # -- How the raw-socket egress policy is applied: `count` or `enforce`.
+        #
+        # Raw socket connect was never gated, so enforcing on upgrade would
+        # sever live traffic. `count` evaluates the policy, records what it
+        # would refuse, and allows the connection anyway. Watch the
+        # would-deny counters, then switch to `enforce`.
+        socketEgress: count
+        # -- Deny outbound connections to loopback, link-local (including the
+        # cloud metadata address), multicast, and documentation ranges —
+        # including whatever DNS returned for a permitted name.
+        denySpecialRanges: true
+        # -- Deny outbound connections to private ranges (RFC1918, ULA, CGNAT).
+        # Off by default: reaching a sibling service on a private address is
+        # the ordinary in-cluster case.
+        denyPrivateRanges: false
+        # -- Host-wide cap on live connections across every workload and
+        # surface combined. Empty leaves it uncapped; size it inside the
+        # process's file-descriptor limit.
+        maxConnections: ""
+        # -- Pooled HTTP and gRPC connections one workload may hold. Idle
+        # keep-alive connections count, so this is how large its pool may grow.
+        maxHttpConnectionsPerWorkload: 128
+        # -- Raw `wasi:sockets` connections one workload may hold. Refused
+        # immediately when reached rather than queued: a guest holds sockets
+        # across yield points, so waiting for a slot only its own progress can
+        # free would deadlock it against itself.
+        maxSocketConnectionsPerWorkload: 256
+        # -- Inbound published-port connections one workload serves at once.
+        # A separate surface, because a workload whose inbound traffic
+        # consumed its outbound allowance would deadlock serving requests that
+        # need to make outbound calls.
+        maxInboundConnectionsPerWorkload: 256
+        # -- Let guests expose declared ports on a real address.
+        #
+        # Off by default. With it off, a workload or plugin declaring a
+        # published port fails to start rather than coming up silently
+        # unreachable. Publishing makes a service reachable by every co-tenant
+        # on the machine unless socketEgress is `enforce`.
+        publishPorts: false
+        # -- Address published ports bind. Deliberately not 0.0.0.0: opting
+        # into publishing still means saying which interface is exposed.
+        publishBindAddress: 127.0.0.1
+        # -- Restrict published ports to a range, e.g. "31000-32767". Empty
+        # allows any port the OS will grant.
+        publishPortRange: ""
       http:
         enabled: true
         port: 9191

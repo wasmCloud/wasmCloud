@@ -146,6 +146,7 @@ fn allowed_hosts_workload(allowed_hosts: Vec<String>) -> WorkloadStartRequest {
                     volume_mounts: vec![],
                     allowed_hosts: parsed.into(),
                     allowed_ip_name_lookups: Default::default(),
+                    allowed_host_loopback: Default::default(),
                 },
                 pool_size: 1,
                 max_invocations: 100,

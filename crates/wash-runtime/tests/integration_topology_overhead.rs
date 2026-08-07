@@ -97,6 +97,7 @@ fn service_only(host: &str) -> WorkloadStartRequest {
                 bytes: bytes::Bytes::from_static(SVC_NO_RUN_WASM),
                 local_resources: resources(),
                 max_restarts: 0,
+                ports: Vec::new(),
             }),
             components: vec![],
             host_interfaces: http_only_host_interfaces(host),
@@ -119,6 +120,7 @@ fn service_plus_component(host: &str, warm: i32) -> WorkloadStartRequest {
                 bytes: bytes::Bytes::from_static(EPHEMERAL_CALLER_P3_WASM),
                 local_resources: resources(),
                 max_restarts: 0,
+                ports: Vec::new(),
             }),
             components: vec![Component {
                 name: "callee".to_string(),

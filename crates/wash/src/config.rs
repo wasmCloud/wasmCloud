@@ -17,6 +17,7 @@ use tracing::info;
 use wash_runtime::component_source::ComponentSource;
 use wash_runtime::host::allowed_hosts::AllowedHost;
 use wash_runtime::host::allowed_ip_name::AllowedIpName;
+use wash_runtime::host::allowed_loopback::AllowedLoopbackPort;
 use wash_runtime::oci::OciPullPolicy;
 use wash_runtime::wit::WitInterface;
 
@@ -261,6 +262,17 @@ pub struct WorkloadConfig {
     #[serde(default)]
     #[builder(default)]
     pub allowed_ip_name_lookups: Vec<AllowedIpName>,
+    /// Ports on the machine's own loopback components may reach through
+    /// `host.wasmcloud.internal`. Each entry is a port with an optional
+    /// protocol: `5432`, `5432/tcp`, `53/udp`.
+    ///
+    /// An omitted or empty list denies every host-loopback connection, and a
+    /// non-empty one is inert unless the host runs with
+    /// `--allow-host-loopback`. `127.0.0.1` keeps meaning the workload's own
+    /// virtual network either way.
+    #[serde(default)]
+    #[builder(default)]
+    pub allowed_host_loopback: Vec<AllowedLoopbackPort>,
 }
 
 // The `configs:`/`secrets:` source model moved to wash-runtime so every
@@ -364,6 +376,11 @@ pub struct DevComponent {
     /// denies every lookup); when omitted the workload list applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_ip_name_lookups: Option<Vec<AllowedIpName>>,
+    /// Host-loopback ports this component may reach. When set it replaces
+    /// `workload.allowedHostLoopback` for this component; when omitted the
+    /// workload list applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_host_loopback: Option<Vec<AllowedLoopbackPort>>,
     /// How many instances of this component to keep warm between calls.
     ///
     /// Unset (or `0`) keeps the default: every call runs in a fresh instance
@@ -410,6 +427,7 @@ impl DevComponent {
             config: HashMap::new(),
             allowed_hosts: None,
             allowed_ip_name_lookups: None,
+            allowed_host_loopback: None,
             pool_size: None,
             max_invocations: None,
             max_concurrency: None,
@@ -478,6 +496,7 @@ impl HostPluginConfig {
             config: self.environment.config.clone(),
             allowed_hosts: self.allowed_hosts.clone().into(),
             allowed_ip_name_lookups: self.allowed_ip_name_lookups.clone().into(),
+            ports: self.ports.clone().into(),
         })
     }
 
@@ -561,49 +580,75 @@ impl From<HttpClientTrustRoots> for wash_runtime::host::http_client::TrustRoots 
     }
 }
 
-/// Resolve the outbound [`ConnectionLimits`] from optional config/CLI
-/// overrides — the shared wiring for `wash host` and `wash dev`. `None`
-/// keeps the runtime's built-in default for that setting.
+/// Build the host's [`QuotaRegistry`] from optional config/CLI overrides.
 ///
-/// [`ConnectionLimits`]: wash_runtime::host::http_client::ConnectionLimits
-pub fn outbound_connection_limits(
+/// One registry governs every surface a guest can hold a connection on, so
+/// these are the numbers an operator tunes. `None` keeps the built-in default
+/// for that setting.
+///
+/// # Errors
+///
+/// Rejects a zero for any ceiling or for the wait, which would silently mean
+/// "no connections" or "never wait" rather than what the operator meant.
+///
+/// [`QuotaRegistry`]: wash_runtime::host::quota::QuotaRegistry
+pub fn connection_quotas(
     max_connections: Option<usize>,
-    max_connections_per_workload: Option<usize>,
-    connection_wait: Option<std::time::Duration>,
-) -> anyhow::Result<wash_runtime::host::http_client::ConnectionLimits> {
-    let mut limits = wash_runtime::host::http_client::ConnectionLimits::default();
-    if let Some(permit_wait) = connection_wait {
-        anyhow::ensure!(
-            !permit_wait.is_zero(),
-            "http_client_connection_wait must be greater than zero"
-        );
-        limits.permit_wait = permit_wait;
+    max_http_per_workload: Option<usize>,
+    max_sockets_per_workload: Option<usize>,
+    max_inbound_per_workload: Option<usize>,
+    http_connection_wait: Option<std::time::Duration>,
+) -> anyhow::Result<std::sync::Arc<wash_runtime::host::quota::QuotaRegistry>> {
+    let defaults = wash_runtime::host::quota::QuotaLimits::default();
+    let resolve = |value: Option<usize>, default: usize, name: &str| -> anyhow::Result<usize> {
+        match value {
+            Some(0) => anyhow::bail!("{name} must be at least 1"),
+            Some(v) => Ok(v),
+            None => Ok(default),
+        }
+    };
+    let limits = wash_runtime::host::quota::QuotaLimits {
+        http: resolve(
+            max_http_per_workload,
+            defaults.http,
+            "max_http_connections_per_workload",
+        )?,
+        sockets: resolve(
+            max_sockets_per_workload,
+            defaults.sockets,
+            "max_socket_connections_per_workload",
+        )?,
+        inbound: resolve(
+            max_inbound_per_workload,
+            defaults.inbound,
+            "max_inbound_connections_per_workload",
+        )?,
+    };
+    if max_connections == Some(0) {
+        anyhow::bail!("max_connections must be at least 1");
     }
-    if let Some(max_total) = max_connections {
-        anyhow::ensure!(
-            max_total > 0,
-            "http_client_max_connections must be at least 1"
-        );
-        limits.max_total = max_total;
-    }
-    if let Some(max_per_workload) = max_connections_per_workload {
-        anyhow::ensure!(
-            max_per_workload > 0,
-            "http_client_max_connections_per_workload must be at least 1"
-        );
-        limits.max_per_workload = max_per_workload;
-    }
-    if limits.max_per_workload > limits.max_total {
-        // Harmless (the host-wide cap simply gates first), but almost
+    if let Some(total) = max_connections
+        && limits.http.max(limits.sockets).max(limits.inbound) > total
+    {
+        // Harmless (the host-wide ceiling simply gates first), but almost
         // certainly an operator mixing the two knobs up.
         tracing::warn!(
-            max_per_workload = limits.max_per_workload,
-            max_total = limits.max_total,
-            "http_client_max_connections_per_workload exceeds http_client_max_connections; \
-             the host-wide cap will bind first"
+            ?limits,
+            max_connections = total,
+            "a per-workload ceiling exceeds max_connections; the host-wide cap will gate first"
         );
     }
-    Ok(limits)
+
+    let registry = wash_runtime::host::quota::QuotaRegistry::new(limits, max_connections);
+    match http_connection_wait {
+        Some(wait) if wait.is_zero() => {
+            anyhow::bail!("http_connection_wait must be greater than zero")
+        }
+        Some(wait) => Ok(std::sync::Arc::new(
+            registry.as_ref().clone().with_http_wait(wait),
+        )),
+        None => Ok(registry),
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -693,18 +738,26 @@ pub struct DevConfig {
     #[serde(default, skip_serializing_if = "HttpClientTrustRoots::is_default")]
     pub http_client_trust_roots: HttpClientTrustRoots,
 
+    /// Raw `wasi:sockets` connections one workload may hold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_socket_connections_per_workload: Option<usize>,
+
+    /// Inbound published-port connections one workload may serve at once.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_inbound_connections_per_workload: Option<usize>,
+
     /// Host-wide cap on live *outbound* HTTP connections across all
     /// workloads combined (in-flight or idle in a keep-alive pool). Defaults
     /// to the runtime's built-in limit; size it for the number of
     /// concurrently busy workloads times their burst concurrency.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub http_client_max_connections: Option<usize>,
+    pub max_connections: Option<usize>,
 
     /// Cap on live *outbound* HTTP connections a single workload may hold,
     /// across all authorities it talks to. Defaults to the runtime's
     /// built-in limit.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub http_client_max_connections_per_workload: Option<usize>,
+    pub max_http_connections_per_workload: Option<usize>,
 
     /// How long an outbound request waits for a connection slot once one of
     /// the caps above is reached, before failing with a connect timeout.
@@ -713,7 +766,7 @@ pub struct DevConfig {
     /// its request independently, so this only decides how long an attempt
     /// nothing is waiting on may hold a slot reservation.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub http_client_connection_wait: Option<String>,
+    pub http_connection_wait: Option<String>,
 
     /// Enable WASI WebGPU support in the dev environment. Only supported on non-Windows platforms.
     #[serde(default)]
@@ -1180,31 +1233,59 @@ mod tests {
     }
 
     #[test]
-    fn outbound_connection_limits_defaults_when_unset() {
-        let limits = outbound_connection_limits(None, None, None).unwrap();
-        let defaults = wash_runtime::host::http_client::ConnectionLimits::default();
-        assert_eq!(limits.max_total, defaults.max_total);
-        assert_eq!(limits.max_per_workload, defaults.max_per_workload);
-        assert_eq!(limits.permit_wait, defaults.permit_wait);
+    fn connection_quotas_default_when_unset() {
+        let quotas = connection_quotas(None, None, None, None, None).unwrap();
+        let defaults = wash_runtime::host::quota::QuotaLimits::default();
+        assert_eq!(quotas.limits(), defaults);
     }
 
     #[test]
-    fn outbound_connection_limits_applies_overrides() {
-        let limits =
-            outbound_connection_limits(Some(64), Some(8), Some(Duration::from_millis(250)))
-                .unwrap();
-        assert_eq!(limits.max_total, 64);
-        assert_eq!(limits.max_per_workload, 8);
-        assert_eq!(limits.permit_wait, Duration::from_millis(250));
+    fn connection_quotas_apply_overrides() {
+        let quotas = connection_quotas(
+            Some(64),
+            Some(8),
+            Some(16),
+            Some(32),
+            Some(Duration::from_millis(250)),
+        )
+        .unwrap();
+        assert_eq!(quotas.limits().http, 8);
+        assert_eq!(quotas.limits().sockets, 16);
+        assert_eq!(quotas.limits().inbound, 32);
+        assert_eq!(quotas.http_wait(), Duration::from_millis(250));
     }
 
-    /// Every knob is a hard bound, so a zero would wedge outbound HTTP
+    /// Each surface is its own ceiling, so filling one must leave the others
+    /// alone — the property the unified quota exists to provide.
+    #[test]
+    fn connection_quotas_are_per_surface_and_per_guest() {
+        let quotas = connection_quotas(None, Some(4), Some(1), Some(1), None).unwrap();
+        let guest = quotas.for_guest("w-1");
+        let _held = guest.try_acquire_socket().expect("its one socket slot");
+        assert!(
+            guest.try_acquire_socket().is_none(),
+            "sockets are at ceiling"
+        );
+        assert!(
+            guest.try_acquire_inbound().is_some(),
+            "inbound must not be affected"
+        );
+        assert_eq!(guest.http_available(), 4, "http must not be affected");
+        assert!(
+            quotas.for_guest("w-2").try_acquire_socket().is_some(),
+            "another guest has its own allowance"
+        );
+    }
+
+    /// Every knob is a hard bound, so a zero would wedge that surface
     /// entirely — reject it at startup rather than at the first request.
     #[test]
-    fn outbound_connection_limits_reject_zero() {
-        assert!(outbound_connection_limits(Some(0), None, None).is_err());
-        assert!(outbound_connection_limits(None, Some(0), None).is_err());
-        assert!(outbound_connection_limits(None, None, Some(Duration::ZERO)).is_err());
+    fn connection_quotas_reject_zero() {
+        assert!(connection_quotas(Some(0), None, None, None, None).is_err());
+        assert!(connection_quotas(None, Some(0), None, None, None).is_err());
+        assert!(connection_quotas(None, None, Some(0), None, None).is_err());
+        assert!(connection_quotas(None, None, None, Some(0), None).is_err());
+        assert!(connection_quotas(None, None, None, None, Some(Duration::ZERO)).is_err());
     }
 
     #[test]

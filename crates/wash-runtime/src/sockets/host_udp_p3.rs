@@ -50,13 +50,17 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
         if data.len() > MAX_UDP_DATAGRAM_SIZE {
             return Err(ErrorCode::DatagramTooLarge.into());
         }
-        let remote_address = remote_address.map(SocketAddr::from);
+        // Reassigned if the policy rewrote it, so the datagram goes where the
+        // policy resolved rather than to the name's sentinel.
+        let mut remote_address = remote_address.map(SocketAddr::from);
 
         if let Some(addr) = remote_address {
             let check = store.with(|mut view| view.get().ctx.socket_addr_check.clone());
-            if !check(addr, SocketAddrUse::UdpOutgoingDatagram).await {
-                return Err(ErrorCode::AccessDenied.into());
-            }
+            let allowed = check(addr, SocketAddrUse::UdpOutgoingDatagram)
+                .await
+                .into_allowed()
+                .map_err(se)?;
+            remote_address = Some(allowed.addr);
 
             // An unbound socket implicitly binds to an ephemeral local port on
             // its first `send-to`. Mirror wasmtime's p3 UDP send: check that
@@ -70,9 +74,11 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
             })?;
             if let Some(family) = implicit_family {
                 let implicit_addr = crate::sockets::util::implicit_bind_addr(family);
-                if !check(implicit_addr, SocketAddrUse::UdpBind).await {
-                    return Err(ErrorCode::AccessDenied.into());
-                }
+                let bind_slot = check(implicit_addr, SocketAddrUse::UdpImplicitBind)
+                    .await
+                    .into_allowed()
+                    .map_err(se)?
+                    .permit;
                 store.with(|mut store| {
                     let view = store.get();
                     let mut loopback = view
@@ -83,6 +89,7 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
                     let sock = get_socket_mut(view.table, &socket)?;
                     sock.bind(implicit_addr, &mut loopback).map_err(se)?;
                     sock.finish_bind().map_err(se)?;
+                    sock.hold_quota_slot(bind_slot);
                     SocketResult::Ok(())
                 })?;
             }
@@ -268,9 +275,11 @@ impl HostUdpSocket for WasiSocketsCtxView<'_> {
         local_address: IpSocketAddress,
     ) -> SocketResult<()> {
         let local_address = SocketAddr::from(local_address);
-        if !(self.ctx.socket_addr_check)(local_address, SocketAddrUse::UdpBind).await {
-            return Err(ErrorCode::AccessDenied.into());
-        }
+        let local_address = (self.ctx.socket_addr_check)(local_address, SocketAddrUse::UdpBind)
+            .await
+            .into_allowed()
+            .map_err(se)?
+            .addr;
         let socket_ref = get_socket_mut(self.table, &socket)?;
         let mut loopback = self
             .ctx
@@ -288,15 +297,18 @@ impl HostUdpSocket for WasiSocketsCtxView<'_> {
         remote_address: IpSocketAddress,
     ) -> SocketResult<()> {
         let remote_address = SocketAddr::from(remote_address);
-        if !(self.ctx.socket_addr_check)(remote_address, SocketAddrUse::UdpConnect).await {
-            return Err(ErrorCode::AccessDenied.into());
-        }
+        let allowed = (self.ctx.socket_addr_check)(remote_address, SocketAddrUse::UdpConnect)
+            .await
+            .into_allowed()
+            .map_err(se)?;
+        let remote_address = allowed.addr;
         let mut loopback = self
             .ctx
             .loopback
             .lock()
             .map_err(|e| SocketError::trap(wasmtime::format_err!("{e}")))?;
         let socket_ref = get_socket_mut(self.table, &socket)?;
+        socket_ref.hold_quota_slot(allowed.permit);
         socket_ref
             .connect(remote_address, &mut loopback)
             .map_err(se)?;

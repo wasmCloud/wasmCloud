@@ -59,6 +59,15 @@ pub struct NetworkUdpSocket {
     /// If set, use this custom check for addrs, otherwise use what's in
     /// `WasiSocketsCtx`.
     socket_addr_check: Option<SocketAddrCheck>,
+
+    /// The guest's quota slot, held for as long as this socket exists.
+    ///
+    /// A datagram socket is one descriptor however many peers it addresses, so
+    /// the slot is taken once — when the socket binds for egress or connects —
+    /// rather than per datagram. `Arc` because an unspecified-bound socket is
+    /// one socket with two halves: they share the slot and release it when
+    /// both are gone.
+    quota_slot: Option<Arc<crate::host::quota::ConnectionSlot>>,
 }
 
 impl NetworkUdpSocket {
@@ -92,6 +101,7 @@ impl NetworkUdpSocket {
             udp_state: UdpState::Default,
             family: socket_address_family,
             socket_addr_check: None,
+            quota_slot: None,
         })
     }
 
@@ -381,6 +391,10 @@ impl UdpSocket {
         }
     }
 
+    /// Connect to `addr` on `plane`.
+    ///
+    /// `plane` comes from the socket policy rather than from the address; see
+    /// [`TcpSocket::start_connect`](super::tcp::TcpSocket::start_connect).
     pub(crate) fn connect(
         &mut self,
         addr: SocketAddr,
@@ -389,6 +403,9 @@ impl UdpSocket {
         match self {
             Self::Network(socket) => socket.connect(addr),
             Self::Loopback(socket) => socket.connect(addr, loopback),
+            // An unspecified-bound socket is simultaneously a real socket and a
+            // virtual endpoint, so both sides record the peer. Which one carries
+            // traffic is decided per datagram by the plane, not here.
             Self::Unspecified { net, lo } => {
                 net.connect(addr)?;
                 lo.connect(addr, loopback)
@@ -487,6 +504,21 @@ impl UdpSocket {
                 socket.socket_addr_check()
             }
             Self::Loopback(socket) => socket.socket_addr_check(),
+        }
+    }
+
+    /// Hold a quota slot for this socket's lifetime.
+    ///
+    /// Only a socket that reaches a real interface takes one; a purely virtual
+    /// endpoint costs no descriptor.
+    pub(crate) fn hold_quota_slot(&mut self, slot: Option<crate::host::quota::ConnectionSlot>) {
+        let Some(slot) = slot else { return };
+        let slot = Arc::new(slot);
+        match self {
+            Self::Network(socket) => socket.quota_slot = Some(slot),
+            Self::Unspecified { net, lo: _ } => net.quota_slot = Some(slot),
+            // Virtual only: nothing real to bound.
+            Self::Loopback(_) => {}
         }
     }
 

@@ -72,10 +72,11 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
         let network = rebind_network_borrow(&network);
         let local_address = ip_socket_address_to_socket_addr(local_address);
         let check = self.table.get(&network)?.socket_addr_check.clone();
-        check
+        let allowed = check
             .check(local_address, SocketAddrUse::UdpBind)
             .await
-            .map_err(super::network::socket_error_from_io)?;
+            .map_err(super::network::socket_error_from_util)?;
+        let local_address = allowed.addr;
 
         let socket = self.table.get_mut(&this)?;
 
@@ -123,20 +124,26 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
         }
 
         let socket = self.table.get_mut(&this)?;
-        let remote_address = remote_address.map(ip_socket_address_to_socket_addr);
+        // Reassigned below if the policy rewrote it, so the streams built at the
+        // end address what was actually connected rather than what was asked for.
+        let mut remote_address = remote_address.map(ip_socket_address_to_socket_addr);
 
         if !socket.is_bound() {
             return Err(ErrorCode::InvalidState.into());
         }
 
+        let mut connect_plane = None;
         if let Some(connect_addr) = remote_address {
             let Some(check) = socket.socket_addr_check() else {
                 return Err(ErrorCode::InvalidState.into());
             };
-            check
+            let allowed = check
                 .check(connect_addr, SocketAddrUse::UdpConnect)
                 .await
-                .map_err(super::network::socket_error_from_io)?;
+                .map_err(super::network::socket_error_from_util)?;
+            connect_plane = Some(allowed.plane);
+            let connect_addr = allowed.addr;
+            remote_address = Some(connect_addr);
             let mut loopback = self
                 .ctx
                 .loopback
@@ -145,6 +152,9 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
             socket
                 .connect(connect_addr, &mut loopback)
                 .map_err(super::network::socket_error_from_util)?;
+            // Held for the socket's life: one descriptor, however many
+            // datagrams it goes on to send.
+            socket.hold_quota_slot(allowed.permit);
         } else if socket.is_connected() {
             let mut loopback = self
                 .ctx
@@ -155,7 +165,12 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
                 .disconnect(&mut loopback)
                 .map_err(super::network::socket_error_from_util)?;
         }
-        let is_loopback = remote_address.map(|addr| addr.ip().to_canonical().is_loopback());
+        // Which network carries this socket's datagrams: the policy's answer for
+        // the peer it connected to, or — for an unconnected socket — the address
+        // it was bound on.
+        let is_loopback = connect_plane
+            .map(|plane| plane == crate::sockets::Plane::Virtual)
+            .or_else(|| remote_address.map(|addr| addr.ip().to_canonical().is_loopback()));
 
         let (incoming_stream, outgoing_stream) = match (socket, is_loopback) {
             (UdpSocket::Network(socket), ..)
@@ -533,7 +548,7 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
                     check
                         .check(addr, SocketAddrUse::UdpOutgoingDatagram)
                         .await
-                        .map_err(super::network::socket_error_from_io)?;
+                        .map_err(super::network::socket_error_from_util)?;
                     addr
                 }
                 (Some(addr), None) => addr,

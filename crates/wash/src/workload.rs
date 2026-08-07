@@ -28,6 +28,7 @@ use std::path::Path;
 use anyhow::Result;
 use wash_runtime::host::allowed_hosts::AllowedHost;
 use wash_runtime::host::allowed_ip_name::AllowedIpName;
+use wash_runtime::host::allowed_loopback::AllowedLoopbackPort;
 
 use wash_runtime::config_source::resolve_environment_layer;
 
@@ -51,6 +52,9 @@ pub struct ResolvedWorkload {
     /// `wasi:sockets/ip-name-lookup`. Empty denies every lookup, which is
     /// what an omitted `allowedIpNameLookups` resolves to.
     pub allowed_ip_name_lookups: Vec<AllowedIpName>,
+    /// Host-loopback ports this workload may reach through
+    /// `host.wasmcloud.internal`. Empty denies every one.
+    pub allowed_host_loopback: Vec<AllowedLoopbackPort>,
 }
 
 /// Resolves the workload section of a [`Config`], pulling in named entries
@@ -95,6 +99,7 @@ pub fn resolve_workload(
         config: workload.config.clone(),
         allowed_hosts: workload.allowed_hosts.clone(),
         allowed_ip_name_lookups: workload.allowed_ip_name_lookups.clone(),
+        allowed_host_loopback: workload.allowed_host_loopback.clone(),
     })
 }
 
@@ -143,12 +148,17 @@ pub fn resolve_component_workload(
         .allowed_ip_name_lookups
         .clone()
         .unwrap_or_else(|| base.allowed_ip_name_lookups.clone());
+    let allowed_host_loopback = component
+        .allowed_host_loopback
+        .clone()
+        .unwrap_or_else(|| base.allowed_host_loopback.clone());
 
     Ok(ResolvedWorkload {
         environment,
         config: merged_config,
         allowed_hosts,
         allowed_ip_name_lookups,
+        allowed_host_loopback,
     })
 }
 
@@ -193,6 +203,7 @@ mod tests {
             config: HashMap::from([("WORKLOAD_CFG".into(), "cfg_value".into())]),
             allowed_hosts: vec!["https://api.example.com".parse().unwrap()],
             allowed_ip_name_lookups: vec![],
+            allowed_host_loopback: vec![],
         };
 
         let configs = BTreeMap::from([(
@@ -257,6 +268,7 @@ mod tests {
             ]),
             allowed_hosts: vec![AllowedHost::Any],
             allowed_ip_name_lookups: vec![],
+            allowed_host_loopback: vec![],
         };
         let component = DevComponent {
             environment: Some(

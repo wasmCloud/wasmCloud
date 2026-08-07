@@ -58,6 +58,7 @@
 //! assert!(!policy.matches(&denied));
 //! ```
 
+use core::net::{IpAddr, SocketAddr};
 use std::fmt;
 use std::str::FromStr;
 
@@ -214,6 +215,68 @@ impl AllowedHost {
             }
         }
     }
+}
+
+impl AllowedHost {
+    /// Returns `true` if a raw socket connection to `addr` satisfies this entry.
+    ///
+    /// This is the same allowlist `wasi:http` matches against, evaluated for a
+    /// destination that is an address rather than a URI — a guest opening a
+    /// socket named no host, so only entries that can speak about an address
+    /// can match it:
+    ///
+    /// - [`AllowedHost::Any`] matches, subject to the range policy applied
+    ///   separately. `*` grants the internet, not the machine the host runs on.
+    /// - [`AllowedHost::Authority`] and [`AllowedHost::Url`] match when the
+    ///   entry's host is a literal IP equal to `addr`, and the port agrees.
+    /// - [`AllowedHost::SuffixWildcard`] never matches: a suffix describes
+    ///   names, and an address has none. A guest that wants to reach a name has
+    ///   to resolve it, and the resolved address is then checked here — so the
+    ///   entry that permits it must name the address or be `*`.
+    ///
+    /// The scheme, where an entry carries one, is not consulted: a raw socket
+    /// has no scheme, and requiring one would make every `https://` entry
+    /// useless for sockets rather than merely inapplicable.
+    #[must_use]
+    pub fn permits_addr(&self, addr: SocketAddr) -> bool {
+        let port_matches = |policy_port: Option<u16>| match policy_port {
+            Some(p) => p == addr.port(),
+            None => true,
+        };
+        match self {
+            AllowedHost::Any => true,
+            AllowedHost::Authority(authority) => {
+                host_is_addr(authority.host(), addr.ip()) && port_matches(authority.port_u16())
+            }
+            AllowedHost::Url(url) => {
+                url.host_str()
+                    .is_some_and(|host| host_is_addr(host, addr.ip()))
+                    && port_matches(url.port())
+            }
+            AllowedHost::SuffixWildcard { .. } => false,
+        }
+    }
+}
+
+/// Whether a policy entry's host text is a literal IP equal to `addr`.
+///
+/// Compares parsed addresses, so `::ffff:10.0.0.1` and `10.0.0.1` are the same
+/// destination, and bracketed IPv6 authority text (`[::1]`) is unwrapped first.
+fn host_is_addr(host: &str, addr: IpAddr) -> bool {
+    let host = host.strip_prefix('[').unwrap_or(host);
+    let host = host.strip_suffix(']').unwrap_or(host);
+    host.parse::<IpAddr>()
+        .is_ok_and(|policy| policy.to_canonical() == addr.to_canonical())
+}
+
+/// Returns `true` if a raw socket connection to `addr` satisfies any entry.
+///
+/// An empty `policy` denies every connection, mirroring
+/// [`check_allowed_hosts`](crate::host::http::check_allowed_hosts) for
+/// `wasi:http`.
+#[must_use]
+pub fn check_allowed_addr(policy: &[AllowedHost], addr: SocketAddr) -> bool {
+    policy.iter().any(|entry| entry.permits_addr(addr))
 }
 
 impl FromStr for AllowedHost {
