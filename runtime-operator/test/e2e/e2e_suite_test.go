@@ -259,14 +259,15 @@ const registryImageTag = "e2e"
 // image pull is refused never becomes Ready.
 const registryPullSecret = "oci-registry-pull"
 
-// registryUser / registryPassword are the registry's Basic credentials, matching
-// REGISTRY_USER/REGISTRY_PASSWORD in xtask/src/e2e_images.rs and the
-// `wasmcloud:secrets` config in testdata/oci-registry.yaml. Specs need them to
-// talk to the registry directly (and to prove an unauthenticated caller is
-// turned away).
-const (
-	registryUser     = "e2e"
-	registryPassword = "e2e-registry-password"
+// registryUser / registryPassword are the registry's Basic credentials. The
+// xtask defines them and creates the Secrets holding them; both sides read the
+// same two environment variables so overriding one moves the other, and the
+// defaults here must match DEFAULT_REGISTRY_USER/DEFAULT_REGISTRY_PASSWORD in
+// xtask/src/e2e_images.rs. Specs need them to talk to the registry directly,
+// and to prove an unauthenticated caller is turned away.
+var (
+	registryUser     = envOrDefault("E2E_REGISTRY_USER", "test-e2e-user")
+	registryPassword = envOrDefault("E2E_REGISTRY_PASSWORD", "test-e2e-password")
 )
 
 // registryRef returns the in-cluster pull ref for a fixture that
