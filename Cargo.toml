@@ -156,11 +156,11 @@ rustix = "1.0.3"
 
 [workspace.metadata.cargo-machete]
 ignored = [
-    # Used in build.rs
+    # Used by the committed proto bindings (see `cargo xtask generate-protos`)
     "pbjson",
     "pbjson-types",
     "serde",
     # Used for protos
     "tonic",
-   "tonic-prost",
+    "tonic-prost",
 ]
