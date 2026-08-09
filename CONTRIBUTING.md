@@ -14,6 +14,7 @@ Pull requests are welcome! The [good first issue][1] label is a great way to fin
 - **Rust** (latest stable version)
 - **Git**
 - **WebAssembly targets**: `wasm32-wasip2` and `wasm32-wasip1` (installed via `rustup target add wasm32-wasip2 wasm32-wasip1`) are both needed to build the `wash-runtime` wasm test fixtures.
+- **wasm-component-ld** (0.5.23 or newer): needed to link the wasm test fixtures — see [Running Tests](#running-tests).
 
 ### Building from Source
 
@@ -34,6 +35,21 @@ a fixture under `crates/wash-runtime/tests/fixtures/`):
 # Build the wasm test fixtures (writes crates/wash-runtime/tests/wasm/*.wasm)
 cargo xtask build-fixtures
 ```
+
+Linking the fixtures needs `wasm-component-ld` 0.5.23 or newer. Rust
+toolchains currently bundle an older version that cannot link components
+using `implements` imports; `cargo xtask build-fixtures` then fails with
+`decoding custom section ... invalid leading byte`. Install the standalone
+release and copy it over the bundled one — CI does the same, see
+`.github/actions/setup-rust/action.yml`:
+
+```bash
+cargo install wasm-component-ld --locked
+bindir="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin"
+cp -f ~/.cargo/bin/wasm-component-ld "${bindir}/"
+```
+
+Re-run the copy after rustup reinstalls or updates the toolchain.
 
 ```bash
 # Run all tests
