@@ -6147,7 +6147,6 @@ dependencies = [
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
  "pbjson",
- "pbjson-build",
  "pbjson-types",
  "pg_bigdecimal",
  "postgres-types",
@@ -6172,7 +6171,6 @@ dependencies = [
  "tokio-util",
  "tonic",
  "tonic-prost",
- "tonic-prost-build",
  "tower-service",
  "tracing",
  "tracing-opentelemetry",
@@ -7726,6 +7724,9 @@ version = "2.7.0"
 dependencies = [
  "anyhow",
  "clap",
+ "pbjson-build",
+ "tempfile",
+ "tonic-prost-build",
 ]
 
 [[package]]
