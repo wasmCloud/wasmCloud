@@ -25,6 +25,11 @@ pub struct RegistryArgs {
     /// Password for basic authentication
     #[arg(short, long)]
     pub password: Option<String>,
+    /// Extra CA certificate bundle files (PEM) to trust for this registry:
+    /// one behind a private or in-cluster CA, which the compiled-in public
+    /// roots do not cover.
+    #[arg(long = "ca-path", env = "WASH_OCI_CA_PATHS", value_delimiter = ',')]
+    pub ca_paths: Vec<PathBuf>,
 }
 
 impl RegistryArgs {
@@ -33,7 +38,17 @@ impl RegistryArgs {
     ///
     /// Supplying only one half of a credential pair is a no-op rather than an
     /// error: the ambient docker credential helper may well have the answer.
-    pub fn oci_config(&self, ctx: &CliContext) -> OciConfig {
+    pub fn oci_config(&self, ctx: &CliContext) -> anyhow::Result<OciConfig> {
+        // Trust is process-wide (see `wash_runtime::oci`); a CLI invocation
+        // performs one operation, so setting it here is the same as setting it
+        // at startup. Fails rather than falling back to the public roots, which
+        // would surface as a verification error against the registry the
+        // bundle was meant to cover.
+        if !self.ca_paths.is_empty() {
+            wash_runtime::oci::set_extra_ca_certificates(&self.ca_paths)
+                .context("failed to load --ca-path CA certificates")?;
+        }
+
         let mut oci_config = OciConfig::new_with_cache(ctx.cache_dir().join(OCI_CACHE_DIR));
         oci_config.insecure = self.insecure;
 
@@ -43,7 +58,7 @@ impl RegistryArgs {
             tracing::warn!("username or password provided without the other");
         }
 
-        oci_config
+        Ok(oci_config)
     }
 }
 
@@ -96,7 +111,7 @@ impl PullCommand {
     /// Handle the OCI command
     #[instrument(level = "debug", skip_all, name = "oci")]
     pub async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
-        let oci_config = self.registry.oci_config(ctx);
+        let oci_config = self.registry.oci_config(ctx)?;
 
         // `pull` means pull: go to the registry even when the cache already has
         // this reference.
@@ -206,7 +221,7 @@ impl PushCommand {
             Utc::now().to_rfc3339(),
         );
 
-        let oci_config = self.registry.oci_config(ctx);
+        let oci_config = self.registry.oci_config(ctx)?;
 
         let digest = push_component(
             &self.reference,

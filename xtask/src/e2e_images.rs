@@ -20,9 +20,9 @@
 //!
 //! Reachability: the specs pull the same content from the in-cluster Service DNS
 //! (`oci-registry.wasmcloud-system.svc`) — a different authority than the push
-//! side, which is fine (OCI stores by repo path + tag, not by hostname). See
-//! runtime-operator/test/e2e/testdata/oci-registry.yaml for why both authorities
-//! must be portless.
+//! side, which is fine (OCI stores by repo path + tag, not by hostname). Both
+//! authorities are registered on the registry workload; see
+//! runtime-operator/test/e2e/testdata/oci-registry.yaml.
 
 use std::env;
 use std::fs;
@@ -59,10 +59,43 @@ const FIXTURES: &[(&str, FixtureKind)] = &[
 /// e2e_suite_test.go) — the two have no shared source, so this isn't a knob.
 const TAG: &str = "e2e";
 
-/// Dedicated loopback so the port-forward doesn't clash with kind's :80 mapping
-/// (pinned to 127.0.0.1 in deploy/kind/kind-config.yaml). :80 keeps the Host
-/// header portless so the host's exact-match router accepts it.
-const PUSH_ADDR: &str = "127.0.0.2";
+/// Defaults for the registry's HTTP Basic credentials, overridable with
+/// `E2E_REGISTRY_USER` / `E2E_REGISTRY_PASSWORD`. The suite reads the same two
+/// variables (see e2e_suite_test.go), so setting them moves both sides at once,
+/// which is what a credential shared across processes needs. Both carry
+/// `test`: they are throwaway credentials for a registry that lives as long as
+/// one test run, and should read that way wherever they surface.
+///
+/// This is where they are defined. The Secrets holding them are created from
+/// here (see [`create_registry_secrets`]) rather than checked in beside the
+/// registry manifest, where they could not follow the environment.
+const DEFAULT_REGISTRY_USER: &str = "test-e2e-user";
+const DEFAULT_REGISTRY_PASSWORD: &str = "test-e2e-password";
+
+fn registry_user() -> String {
+    env_or("E2E_REGISTRY_USER", DEFAULT_REGISTRY_USER)
+}
+
+fn registry_password() -> String {
+    env_or("E2E_REGISTRY_PASSWORD", DEFAULT_REGISTRY_PASSWORD)
+}
+
+fn env_or(key: &str, default: &str) -> String {
+    env::var(key)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| default.to_string())
+}
+
+/// Where the registry is port-forwarded for pushing.
+///
+/// Plain loopback, and [`free_local_port`] picks the port, so this needs no
+/// root: binding :80 does, and every address but 127.0.0.1 has to be aliased
+/// onto the loopback first on macOS. Both were once required because the
+/// host's router matched the Host header including its port, so the registry
+/// had to answer on the default port for clients to omit it; the router now
+/// matches the name alone.
+const PUSH_ADDR: &str = "127.0.0.1";
 
 #[derive(Copy, Clone, PartialEq)]
 enum Mode {
@@ -155,10 +188,11 @@ fn push_phase(
     fixtures_out: Option<&Path>,
 ) -> Result<()> {
     let manifest = workspace.join("runtime-operator/test/e2e/testdata/oci-registry.yaml");
-    // Resolve the kubeconfig up front so the sudo'd port-forward (root, different
-    // HOME) still targets this cluster.
     let kubeconfig = env::var("KUBECONFIG")
         .unwrap_or_else(|_| format!("{}/.kube/config", env::var("HOME").unwrap_or_default()));
+
+    eprintln!(">>> e2e-images: creating registry credentials");
+    create_registry_secrets(&kubeconfig, namespace)?;
 
     eprintln!(">>> e2e-images: deploying oci-registry");
     kubectl(&kubeconfig, &["apply", "-f", &manifest.to_string_lossy()])?;
@@ -174,30 +208,32 @@ fn push_phase(
         ],
     )?;
 
-    // macOS only creates 127.0.0.1 by default; alias the loopback we forward to.
-    #[cfg(target_os = "macos")]
-    {
-        let _ = Command::new("sudo")
-            .args(["ifconfig", "lo0", "alias", PUSH_ADDR, "up"])
-            .status();
-    }
+    let ca_bundle = fetch_ca_bundle(&kubeconfig, namespace, workspace)?;
+    let port = free_local_port()?;
+    eprintln!(
+        ">>> e2e-images: port-forwarding deployment/hostgroup-registry -> {PUSH_ADDR}:{port}"
+    );
+    let _pf = PortForward::start(&kubeconfig, namespace, port)?;
+    wait_for_registry(port, &ca_bundle)?;
 
-    eprintln!(">>> e2e-images: port-forwarding deployment/hostgroup-registry -> {PUSH_ADDR}:80");
-    let _pf = PortForward::start(&kubeconfig, namespace)?;
-    wait_for_registry()?;
-
+    let (user, password) = (registry_user(), registry_password());
     for &(fixture, kind) in FIXTURES {
         let component = match (mode, fixtures_out) {
             (Mode::Push, Some(out)) => out.join(component_name(fixture)),
             _ => built_component(fixtures_dir, fixture, kind)?,
         };
-        let reference = format!("{PUSH_ADDR}/fixtures/{fixture}:{TAG}");
+        let reference = format!("{PUSH_ADDR}:{port}/fixtures/{fixture}:{TAG}");
         eprintln!(">>> e2e-images: wash oci push {reference}");
         run_checked(
             Command::new(wash).args([
                 "oci",
                 "push",
-                "--insecure",
+                "--ca-path",
+                &ca_bundle.to_string_lossy(),
+                "--user",
+                &user,
+                "--password",
+                &password,
                 &reference,
                 &component.to_string_lossy(),
             ]),
@@ -245,7 +281,9 @@ fn push_wash(fixtures_out: Option<&Path>) -> Result<PathBuf> {
             return Ok(staged);
         }
     }
-    // Fall back to a wash on PATH (a released wash can push).
+    // Fall back to a wash on PATH. It has to be recent enough to carry
+    // `oci push --ca-path`: the registry serves TLS from the chart's own CA,
+    // and a wash without the flag cannot be told to trust it.
     Ok(PathBuf::from("wash"))
 }
 
@@ -282,6 +320,119 @@ fn built_component(fixtures_dir: &Path, fixture: &str, kind: FixtureKind) -> Res
     Ok(path)
 }
 
+/// Create the two Secrets the registry flow needs, replacing whatever an
+/// earlier run left so a changed credential actually takes effect.
+///
+/// `oci-registry-auth` is what the registry checks requests against: the
+/// operator materializes it into the `wasmcloud:secrets` config its component
+/// reads. `oci-registry-pull` is what a hostgroup presents when pulling a
+/// fixture back out, keyed by the registry domain `registryRef` builds refs on.
+///
+/// Built here rather than checked in beside the registry manifest for two
+/// reasons: a manifest cannot pick up `E2E_REGISTRY_USER`/`_PASSWORD`, and
+/// `kubectl create secret` owns the encoding. A docker config committed as
+/// base64 hides the very credential that has to match the one above it.
+fn create_registry_secrets(kubeconfig: &str, namespace: &str) -> Result<()> {
+    let (user, password) = (registry_user(), registry_password());
+    for name in ["oci-registry-auth", "oci-registry-pull"] {
+        kubectl(
+            kubeconfig,
+            &[
+                "delete",
+                "secret",
+                name,
+                "-n",
+                namespace,
+                "--ignore-not-found",
+            ],
+        )?;
+    }
+    // Key names are the config keys the registry asks its secrets backend for.
+    kubectl(
+        kubeconfig,
+        &[
+            "create",
+            "secret",
+            "generic",
+            "oci-registry-auth",
+            "-n",
+            namespace,
+            &format!("--from-literal=registry-username={user}"),
+            &format!("--from-literal=registry-password={password}"),
+        ],
+    )?;
+    kubectl(
+        kubeconfig,
+        &[
+            "create",
+            "secret",
+            "docker-registry",
+            "oci-registry-pull",
+            "-n",
+            namespace,
+            &format!("--docker-server=oci-registry.{namespace}.svc"),
+            &format!("--docker-username={user}"),
+            &format!("--docker-password={password}"),
+        ],
+    )
+}
+
+/// The chart's CA secret, whose certificate signs the registry's serving cert.
+/// Matches `global.certificates.caSecretName` in the chart's values.
+const CA_SECRET: &str = "wasmcloud-ca";
+
+/// Write the chart's CA certificate to a file the push side can point
+/// `wash oci push --ca-path` at.
+///
+/// The hosts get this CA from a mounted Secret; the pushing process runs
+/// outside the cluster, so it has to read it out. Without it the push cannot
+/// verify the registry: the CA is generated per install and signs nothing the
+/// public roots know about.
+fn fetch_ca_bundle(kubeconfig: &str, namespace: &str, workspace: &Path) -> Result<PathBuf> {
+    // A go-template decodes the Secret's base64 in kubectl, which a jsonpath
+    // cannot do.
+    let pem = kubectl_output(
+        kubeconfig,
+        &[
+            "get",
+            "secret",
+            CA_SECRET,
+            "-n",
+            namespace,
+            "-o",
+            r#"go-template={{index .data "tls.crt" | base64decode}}"#,
+        ],
+    )
+    .with_context(|| format!("reading the {CA_SECRET} secret"))?;
+    if !pem.contains("BEGIN CERTIFICATE") {
+        bail!("{CA_SECRET} did not contain a PEM certificate");
+    }
+    // Under the workspace's target dir rather than the shared temp dir, so
+    // concurrent runs on one machine cannot overwrite each other's CA.
+    let path = workspace.join("target/e2e-registry-ca.pem");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    fs::write(&path, pem).with_context(|| format!("writing {}", path.display()))?;
+    Ok(path)
+}
+
+fn kubectl_output(kubeconfig: &str, args: &[&str]) -> Result<String> {
+    let output = Command::new("kubectl")
+        .arg("--kubeconfig")
+        .arg(kubeconfig)
+        .args(args)
+        .output()
+        .context("failed to run kubectl")?;
+    if !output.status.success() {
+        bail!(
+            "kubectl failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    String::from_utf8(output.stdout).context("kubectl produced non-utf8 output")
+}
+
 fn kubectl(kubeconfig: &str, args: &[&str]) -> Result<()> {
     run_checked(
         Command::new("kubectl")
@@ -302,13 +453,41 @@ fn run_checked(cmd: &mut Command, what: &str) -> Result<()> {
     Ok(())
 }
 
+/// A free TCP port on the push address, for the port-forward to claim.
+///
+/// Asking the OS beats hardcoding one: a fixed port collides with whatever the
+/// developer happens to be running, and on macOS the obvious candidates are
+/// already taken. AirPlay Receiver listens on 5000 and 7000 by default and
+/// answers requests, so a registry that never came up looks like one serving
+/// 403s instead. Between the probe closing and kubectl binding, the port could
+/// in principle be taken; nothing else here is racing for it.
+fn free_local_port() -> Result<u16> {
+    let listener = std::net::TcpListener::bind((PUSH_ADDR, 0))
+        .with_context(|| format!("finding a free port on {PUSH_ADDR}"))?;
+    let port = listener
+        .local_addr()
+        .context("reading the probe socket's port")?
+        .port();
+    Ok(port)
+}
+
 /// Wait until the registry answers `/v2/` through the port-forward.
-fn wait_for_registry() -> Result<()> {
-    let url = format!("http://{PUSH_ADDR}/v2/");
+fn wait_for_registry(port: u16, ca_bundle: &Path) -> Result<()> {
+    let url = format!("https://{PUSH_ADDR}:{port}/v2/");
     eprintln!(">>> e2e-images: waiting for the registry API on {url}");
     for attempt in 1..=30 {
         let ok = Command::new("curl")
-            .args(["-fsS", &url])
+            // `/v2/` is authenticated like everything else, so an unauthenticated
+            // probe would wait out all 30 attempts on a registry that is up and
+            // answering 401.
+            .args([
+                "-fsS",
+                "--cacert",
+                &ca_bundle.to_string_lossy(),
+                "-u",
+                &format!("{}:{}", registry_user(), registry_password()),
+                &url,
+            ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -325,29 +504,23 @@ fn wait_for_registry() -> Result<()> {
     Ok(())
 }
 
-/// A `sudo kubectl port-forward` running in the background, killed on drop.
+/// A `kubectl port-forward` running in the background, killed on drop.
 ///
 /// Forwards to the registry hostgroup pod (via its Deployment), not the Service:
 /// the oci-registry Service is selectorless (the operator manages its route
 /// EndpointSlice), so `kubectl port-forward svc/...` can't resolve a target pod.
-/// The pod's HTTP server demuxes by Host header, and PUSH_ADDR (:80, portless)
-/// is a registered alias, so this reaches the registry all the same. The Service
-/// remains the in-cluster pull path.
-///
-/// TODO(wash release): the :80 + dedicated-loopback + sudo dance exists only
-/// because the host's HTTP router matches the Host header exactly and rejects a
-/// host that carries a port. Once the host matches on host-without-port (or the
-/// registry gets ingress that isn't Host-demuxed), forward a normal Service port
-/// and drop the loopback + sudo.
+/// The pod's HTTP server demuxes by Host header, and PUSH_ADDR is a registered
+/// alias (the port the client tacks on does not affect that match), so this
+/// reaches the registry all the same. The Service remains the in-cluster pull
+/// path.
 struct PortForward {
     child: Child,
 }
 
 impl PortForward {
-    fn start(kubeconfig: &str, namespace: &str) -> Result<Self> {
-        let child = Command::new("sudo")
+    fn start(kubeconfig: &str, namespace: &str, port: u16) -> Result<Self> {
+        let child = Command::new("kubectl")
             .args([
-                "kubectl",
                 "--kubeconfig",
                 kubeconfig,
                 "port-forward",
@@ -356,26 +529,19 @@ impl PortForward {
                 "-n",
                 namespace,
                 "deployment/hostgroup-registry",
-                "80:80",
+                &format!("{port}:80"),
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .context("starting kubectl port-forward (needs sudo to bind :80)")?;
+            .context("starting kubectl port-forward")?;
         Ok(Self { child })
     }
 }
 
 impl Drop for PortForward {
     fn drop(&mut self) {
-        // $! is the sudo pid; sudo relays SIGTERM to kubectl. pkill is a backstop
-        // in case it doesn't.
-        let _ = Command::new("sudo")
-            .args(["kill", &self.child.id().to_string()])
-            .status();
-        let _ = Command::new("sudo")
-            .args(["pkill", "-f", "port-forward.*hostgroup-registry"])
-            .status();
+        let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }

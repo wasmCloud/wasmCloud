@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -132,13 +133,13 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	// The in-cluster registry runs on an all-features host image; without
-	// BUILD_RUNTIME_IMAGE the run falls back to the default-features canary,
-	// which can't run the registry (the async wasmcloud:blobstore plugin is
-	// feature-gated). Fail fast with a clear message rather than a 5m wait.
+	// The registry flow points every host at --oci-ca-path so it trusts the
+	// chart's CA, and only a host built from this tree carries that flag: a
+	// released image exits at startup on the unknown argument. Fail fast with
+	// a clear message rather than a 5m wait on a host that never comes up.
 	if inClusterRegistry && !buildRuntimeImage {
 		Fail("E2E_IN_CLUSTER_REGISTRY=true requires BUILD_RUNTIME_IMAGE=true " +
-			"(the oci-registry needs an all-features host image)")
+			"(the hosts need the --oci-ca-path this tree provides)")
 	}
 
 	if !skipImageBuild {
@@ -155,16 +156,16 @@ var _ = BeforeSuite(func() {
 	if buildRuntimeImage {
 		if !skipRuntimeBuild {
 			By("building the wash-runtime image from the local tree")
-			// Repo root sits one level above runtime-operator/. Build the
-			// all-features host — `(implements ..)` multiplexing and host
-			// component plugins — so the implements and host-plugin specs can run
-			// locally (both features are off in release builds). Matches the
-			// all-features wash-image build in wash.yml. A local run builds a
-			// single feature image tagged defaultHostImageTag, which both the
-			// default and registry hostgroups use.
+			// Repo root sits one level above runtime-operator/. Adds host
+			// component plugins, the one feature the host-plugin spec needs that
+			// a release build leaves off; the Dockerfile appends to the default
+			// features rather than replacing them, so `(implements ..)`
+			// multiplexing comes along by default. Matches the all-features
+			// wash-image build in wash.yml. A local run builds a single image
+			// tagged defaultHostImageTag, which both hostgroups use.
 			ref := fmt.Sprintf("%s:%s", runtimeImageRepo, defaultHostImageTag)
 			cmd := exec.Command("docker", "build",
-				"--build-arg", "CARGO_FEATURES=wasm_component_model_implements,host-component-plugins",
+				"--build-arg", "CARGO_FEATURES=host-component-plugins",
 				"-t", ref, "..")
 			_, err := utils.Run(cmd)
 			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the wash-runtime image")
@@ -195,6 +196,23 @@ var _ = BeforeSuite(func() {
 		By("loading the runtime-gateway image into Kind")
 		err = utils.LoadImageToKindClusterWithName(gatewayRef)
 		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the runtime-gateway image into Kind")
+	}
+
+	// The host groups mount the registry credentials, so the Secret has to
+	// exist before the install brings a pod up: a missing one leaves it stuck
+	// mounting and `helm --wait` times out. `cargo xtask e2e-images` creates
+	// this too, for a standalone run against an installed cluster, but that
+	// happens after this install.
+	if inClusterRegistry {
+		By("creating the namespace ahead of the release, to hold the registry credentials")
+		nsManifest, err := utils.Run(exec.Command("kubectl", "create", "namespace", namespace,
+			"--dry-run=client", "-o", "yaml"))
+		ExpectWithOffset(1, err).NotTo(HaveOccurred())
+		applyNs := exec.Command("kubectl", "apply", "-f", "-")
+		applyNs.Stdin = strings.NewReader(nsManifest)
+		_, err = utils.Run(applyNs)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred())
+		createRegistryPullSecret(namespace)
 	}
 
 	By("installing the runtime-operator via Helm")
@@ -251,6 +269,56 @@ var _ = BeforeSuite(func() {
 // registryImageTag is the tag the `e2e-images` xtask pushes every fixture
 // under. Kept in sync with TAG in xtask/src/e2e_images.rs.
 const registryImageTag = "e2e"
+
+// registryPullSecret names the dockerconfigjson Secret carrying the in-cluster
+// registry's credentials, created by `cargo xtask e2e-images`. Every host group
+// mounts it rather than each component naming it, so a fixture pull carries no
+// credentials of its own; the registry authenticates every request, and a
+// workload whose image pull is refused never becomes Ready.
+const registryPullSecret = "oci-registry-pull"
+
+// registryDockerConfigDir is where the hosts mount that Secret. DOCKER_CONFIG
+// points here, and the host reads `config.json` beneath it when a pull carries
+// no credentials of its own.
+const registryDockerConfigDir = "/etc/wasmcloud/docker"
+
+// registryCredentialSets mounts the registry's credentials on one host group,
+// so that no component has to name an imagePullSecret: a pull without explicit
+// credentials falls back to the docker config DOCKER_CONFIG points at, and the
+// auths entry is keyed by registry, so pulls from ghcr stay anonymous.
+//
+// Per host group, because that is the only place the chart takes volumes, and
+// a test fixture is no reason to grow its surface. Every host group that runs
+// a workload pulling from the registry needs these, which is why the tenant and
+// scoped specs call this for the group they add.
+//
+// `.dockerconfigjson` is remapped because a docker config directory is read by
+// the name `config.json`. Empty off the registry flow.
+func registryCredentialSets(hostGroup string) []string {
+	if !inClusterRegistry {
+		return nil
+	}
+	return []string{
+		fmt.Sprintf("%s.volumes[0].name=%s", hostGroup, registryPullSecret),
+		fmt.Sprintf("%s.volumes[0].secret.secretName=%s", hostGroup, registryPullSecret),
+		fmt.Sprintf("%s.volumes[0].secret.items[0].key=.dockerconfigjson", hostGroup),
+		fmt.Sprintf("%s.volumes[0].secret.items[0].path=config.json", hostGroup),
+		fmt.Sprintf("%s.volumeMounts[0].name=%s", hostGroup, registryPullSecret),
+		fmt.Sprintf("%s.volumeMounts[0].mountPath=%s", hostGroup, registryDockerConfigDir),
+		fmt.Sprintf("%s.volumeMounts[0].readOnly=true", hostGroup),
+	}
+}
+
+// registryUser / registryPassword are the registry's Basic credentials. The
+// xtask defines them and creates the Secrets holding them; both sides read the
+// same two environment variables so overriding one moves the other, and the
+// defaults here must match DEFAULT_REGISTRY_USER/DEFAULT_REGISTRY_PASSWORD in
+// xtask/src/e2e_images.rs. Specs need them to talk to the registry directly,
+// and to prove an unauthenticated caller is turned away.
+var (
+	registryUser     = envOrDefault("E2E_REGISTRY_USER", "test-e2e-user")
+	registryPassword = envOrDefault("E2E_REGISTRY_PASSWORD", "test-e2e-password")
+)
 
 // registryRef returns the in-cluster pull ref for a fixture that
 // `make e2e-images` built and pushed. The insecure hostgroups resolve it over
@@ -321,34 +389,49 @@ func buildBaseHelmSets() []string {
 		fmt.Sprintf("runtime.hostGroups[0].logLevel=%s", runtimeLogLevel),
 	}
 	if inClusterRegistry {
-		// The default hostgroup pulls the test fixtures from the in-cluster
-		// oci-registry over plain HTTP. The host's insecure flag is global (it
-		// forces HTTP for every registry), which is why the registry component
-		// itself lives on a separate, secure hostgroup below. Added on both
-		// wash.yml legs (each runs a registry); off for the canary
-		// runtime-operator.yml job and plain local runs, which keep the default
-		// hostgroup on HTTPS and pull published ghcr images.
+		// The registry serves HTTPS from a certificate the chart mints off its
+		// own CA, and every host already carries that CA at /runtime-cert/ca.crt
+		// for NATS, so trusting it is a path, not a distribution problem. That
+		// replaces --allow-insecure-registries, which switched every registry to
+		// plain HTTP: nothing verified, and the registry's credentials in the
+		// clear on every pull.
 		//
-		// TODO(wash release): once wash supports per-registry insecure config
-		// (allow HTTP for the in-cluster registry only, not globally), the
-		// registry can share the default hostgroup — dropping this second
-		// hostgroup and the extraHostGroupIndex() shuffle in the tenant/scoped
-		// specs.
+		// The registry keeps a hostgroup to itself because it is the only
+		// workload behind TLS. The gateway proxies to its upstreams in
+		// plaintext, so serving TLS on the default hostgroup would put every
+		// other workload out of its reach.
 		sets = append(sets,
-			"runtime.hostGroups[0].extraArgs[0]=--allow-insecure-registries",
-			// hostGroups[1]: the `registry` hostgroup. Stays on HTTPS so it can
-			// pull the oci-registry component from ghcr. It runs only the
-			// oci-registry workload (testdata/oci-registry.yaml, hostSelector:
-			// hostgroup=registry). The oci-registry exports a p3 async
-			// wasi:http/handler and imports the async wasmcloud:blobstore plugin;
-			// the all-features engine enables the component-model-async proposal
-			// by default (crates/wash-runtime/src/engine/mod.rs build()), so no
-			// extra host flag is required.
+			"runtime.ociCaPaths[0]=/runtime-cert/ca.crt",
+			// Where the mounted credentials are found. Chart-wide `runtime.env`
+			// already applies to every host group, so this needs saying once;
+			// the volumes themselves are per host group (see
+			// registryCredentialSets).
+			"runtime.env[0].name=DOCKER_CONFIG",
+			fmt.Sprintf("runtime.env[0].value=%s", registryDockerConfigDir),
+			// hostGroups[1]: the `registry` hostgroup, serving the oci-registry
+			// workload (testdata/oci-registry.yaml, hostSelector:
+			// hostgroup=registry) over TLS. The oci-registry exports a p3 async
+			// wasi:http/handler and imports the async wasmcloud:blobstore; both
+			// component-model-async and the implements routing that async
+			// blobstore is built on are on by default, so it needs no feature
+			// build and no extra host flag.
 			"runtime.hostGroups[1].name=registry",
 			"runtime.hostGroups[1].replicas=1",
 			"runtime.hostGroups[1].service.type=ClusterIP",
 			"runtime.hostGroups[1].http.enabled=true",
 			"runtime.hostGroups[1].http.port=80",
+			"runtime.hostGroups[1].http.tls.enabled=true",
+			"runtime.hostGroups[1].http.tls.certificate.generate.enabled=true",
+			// Every authority a client reaches the registry by has to be in the
+			// certificate, or verification fails on the name rather than the
+			// chain: the Service DNS forms for in-cluster pulls, and 127.0.0.1
+			// for the port-forward `make e2e-images` pushes through. The address
+			// goes under ipAddresses, not domains: a client dialing a URL
+			// written as an IP matches it against the IP SANs alone.
+			fmt.Sprintf("runtime.hostGroups[1].http.tls.certificate.generate.domains[0]=oci-registry.%s.svc", namespace),
+			fmt.Sprintf("runtime.hostGroups[1].http.tls.certificate.generate.domains[1]=oci-registry.%s", namespace),
+			"runtime.hostGroups[1].http.tls.certificate.generate.domains[2]=oci-registry",
+			"runtime.hostGroups[1].http.tls.certificate.generate.ipAddresses[0]=127.0.0.1",
 			"runtime.hostGroups[1].webgpu.enabled=false",
 			"runtime.hostGroups[1].resources.requests.memory=64Mi",
 			"runtime.hostGroups[1].resources.requests.cpu=250m",
@@ -356,6 +439,8 @@ func buildBaseHelmSets() []string {
 			"runtime.hostGroups[1].resources.limits.cpu=500m",
 			fmt.Sprintf("runtime.hostGroups[1].logLevel=%s", runtimeLogLevel),
 		)
+		sets = append(sets, registryCredentialSets("runtime.hostGroups[0]")...)
+		sets = append(sets, registryCredentialSets("runtime.hostGroups[1]")...)
 		// The registry host must be an all-features build (for the async
 		// blobstore plugin). When the default host isn't one — the release leg,
 		// where it's the shipped image — override just this hostgroup's image tag

@@ -21,7 +21,7 @@ uploads, tag listing, and the referrers API.
 
 - `cargo` (Rust 2024 edition)
 - A `wash` built from the [`async-backends`][async-backends] line — it provides
-  the async `wasmcloud:blobstore` host plugin (enabled with the
+  the async `wasmcloud:blobstore` host plugin (on by default via the
   `wasm_component_model_implements` feature) and a `wash` CLI that can build and
   run wasip3 components. A released `wash` (≤ 2.x) does not yet support this.
 - Optional, for the walkthrough: [`oras`](https://oras.land/docs/installation)

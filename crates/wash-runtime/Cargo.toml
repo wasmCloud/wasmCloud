@@ -33,7 +33,7 @@ path = "src/lib.rs"
 workspace = true
 
 [features]
-default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel", "wasi-webgpu"]
+default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel", "wasi-webgpu", "wasm_component_model_implements"]
 oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:sha2", "dep:wit-component"]
 wasi-otel = []
 washlet = ["oci"]
@@ -41,7 +41,9 @@ wasi-config = []
 wasi-logging = []
 wasi-blobstore = []
 wasi-keyvalue = []
-# Component-model `(implements ..)` / `named_imports` multiplexing
+# Component-model `(implements ..)` / `named_imports` multiplexing. On by
+# default; disable with `--no-default-features` for a build that neither
+# accepts nor routes named imports.
 wasm_component_model_implements = []
 # Host component plugins: a component providing a host capability from its own
 # long-lived, supervised store, serving cross-store capability calls.

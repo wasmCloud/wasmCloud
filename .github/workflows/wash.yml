@@ -124,11 +124,11 @@ jobs:
           RUST_BACKTRACE: "1"
         run: |
           cargo test --workspace
-      - name: Test with wasi-tls + wasm_component_model_implements
+      - name: Test with wasi-tls + host-component-plugins
         env:
           RUST_BACKTRACE: "1"
         run: |
-          cargo test -p wash-runtime --features wasi-tls,wasm_component_model_implements,host-component-plugins
+          cargo test -p wash-runtime --features wasi-tls,host-component-plugins
           cargo test -p wash --lib --features host-component-plugins
       # Docker/registry-backed `#[ignore]` integration tests, Linux only: the
       # macOS/Windows hosted runners have no Docker daemon (and macOS can't get
@@ -141,7 +141,7 @@ jobs:
         env:
           RUST_BACKTRACE: "1"
         run: |
-          cargo test -p wash-runtime --features wasm_component_model_implements,wasi-tls,host-component-plugins -- --ignored
+          cargo test -p wash-runtime --features wasi-tls,host-component-plugins -- --ignored
           cargo test -p wash --test integration_oci -- --ignored
       # Bitrot guard: the benches must still compile. Built via `cargo test
       # --benches` rather than `cargo bench --no-run` because the `bench`
@@ -179,7 +179,7 @@ jobs:
           rust-toolchain: nightly
           rust-components: rustfmt
       - name: Install cargo-machete
-        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
         env:
           # Authenticate the action's GitHub API calls so they aren't throttled
           # by the 60/hr anonymous per-IP limit shared across hosted runners.
@@ -191,7 +191,7 @@ jobs:
           cargo +nightly fmt -- --check
       - name: Lint
         run: |
-          cargo clippy --workspace --features wasm_component_model_implements,wasi-tls,host-component-plugins
+          cargo clippy --workspace --features wasi-tls,host-component-plugins
       - name: Lint anyhow context message casing
         run: |
           # anyhow `.context()` / `.with_context()` strings are error messages,
@@ -235,7 +235,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Login to ghcr.io
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -309,13 +309,12 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # ALL-FEATURES coverage image on arm64 — every optional host feature on
-  # (`(implements ..)` multiplexing AND host component plugins). NOT shipped:
-  # the operator-e2e `all-features` leg loads this tarball to exercise those
-  # features on a host built with them (a released host can't run them). Runs
-  # in parallel with `wash-image` (a separate job, not a second step) so the
-  # e2e gate waits on max(release, all-features), not their sum. Never pushed,
-  # so no digest.
+  # ALL-FEATURES coverage image on arm64 — every optional host feature on (host
+  # component plugins). NOT shipped: the operator-e2e `all-features` leg loads
+  # this tarball to exercise those features on a host built with them (a
+  # released host can't run them). Runs in parallel with `wash-image` (a
+  # separate job, not a second step) so the e2e gate waits on max(release,
+  # all-features), not their sum. Never pushed, so no digest.
   wash-image-all-features:
     needs:
       - changes
@@ -337,7 +336,7 @@ jobs:
           context: .
           outputs: type=docker,dest=/tmp/wash-image-all-features.tar,name=localhost/wasmcloud-wash:e2e
           build-args: |
-            CARGO_FEATURES=wasm_component_model_implements,host-component-plugins
+            CARGO_FEATURES=host-component-plugins
           cache-from: |
             type=gha,scope=wash-all-features-arm64-${{ github.head_ref || github.ref_name }}
             type=gha,scope=wash-all-features-arm64-main
@@ -371,7 +370,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Login to ghcr.io
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -486,10 +485,12 @@ jobs:
     # the legs differ only in the image the DEFAULT (fixture) hostgroup runs:
     #   release      — the shipped DEFAULT-features build. Validates that the
     #                  shipped host pulls the fixtures from the registry (insecure
-    #                  HTTP) and runs them. `implements` self-skips (it needs a
-    #                  feature host); http + messaging run.
+    #                  HTTP) and runs them. `implements` is a default feature, so
+    #                  it runs here too, alongside http + messaging; the host
+    #                  component plugin specs self-skip (they need a feature host).
     #   all-features — every optional host feature on; runs the full set incl.
-    #                  `implements`. Not shipped — a coverage build.
+    #                  the host component plugin specs. Not shipped — a coverage
+    #                  build.
     # default_tag/registry_tag select the per-hostgroup images (loaded below); the
     # registry host is always all-features (it needs the async wasmcloud:blobstore
     # plugin).
@@ -665,7 +666,7 @@ jobs:
           pattern: wash-image-digest-*
           merge-multiple: true
       - name: Login to ghcr.io
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}

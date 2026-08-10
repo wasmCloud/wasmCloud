@@ -528,7 +528,7 @@ pub struct HostConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum HttpClientTrustRoots {
-    /// Compiled-in webpki (Mozilla) roots plus the platform's native store.
+    /// Compiled-in webpki roots plus the platform's native store.
     /// The native store honours `SSL_CERT_FILE`/`SSL_CERT_DIR`.
     WebpkiAndNative,
     /// Compiled-in webpki roots only — reproducible, ignores the host
@@ -759,8 +759,9 @@ pub struct DevConfig {
     pub wasi_otel: bool,
 
     /// Additional wasm proposals to enable on the engine, by name. Accepted
-    /// names match `wash_runtime`'s `WasmProposal`: component-model-async, gc,
-    /// exception-handling, wide-arithmetic, threads, tail-call.
+    /// names match `wash_runtime`'s `WasmProposal`: component-model-async,
+    /// component-model-map, gc, exception-handling, wide-arithmetic, threads,
+    /// tail-call.
     #[serde(default)]
     pub wasm_proposals: Vec<String>,
 }

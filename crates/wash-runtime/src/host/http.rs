@@ -249,12 +249,18 @@ impl DynamicRouter {
     /// Idempotent: re-registering the same workload (e.g. a service restart)
     /// leaves the tables unchanged.
     fn register_hostnames(&self, workload_id: &str, hosts: &[String]) {
+        // Keyed without the port, matching how a request's Host header is
+        // looked up (see [`Self::select_workload`]).
+        let hosts: Vec<String> = hosts
+            .iter()
+            .map(|host| split_host_port(host).0.to_string())
+            .collect();
         self.routes.rcu(|cur| {
             let mut routes = (**cur).clone();
             routes
                 .workload_to_host
-                .insert(workload_id.to_string(), hosts.to_vec());
-            for host in hosts {
+                .insert(workload_id.to_string(), hosts.clone());
+            for host in &hosts {
                 routes
                     .host_to_workload
                     .entry(host.clone())
@@ -273,6 +279,14 @@ impl DynamicRouter {
     /// the selection logic is unit-testable without constructing a
     /// [`hyper::body::Incoming`].
     fn select_workload(&self, host: &str) -> Result<String, RouteError> {
+        // A Host header may carry the port the client connected on
+        // (`example.com:8080`), and whether it does is up to the client: a
+        // browser omits it for the scheme's default port, an OCI client
+        // pushing to `127.0.0.1:5000` does not. The host serves one HTTP port,
+        // so the port carries no routing information; match on the name alone
+        // rather than making callers register every port they might be reached
+        // on. Registration is normalized the same way.
+        let host = split_host_port(host).0;
         // Lock-free read of a routing-table snapshot.
         let routes = self.routes.load();
         let Some(workload_set) = routes.host_to_workload.get(host) else {
@@ -1806,9 +1820,14 @@ fn host_header<B>(req: &hyper::Request<B>) -> &str {
         .unwrap_or("unknown")
 }
 
-/// Split a `Host` header value into the OTel `server.address` (host without
-/// port) and an optional `server.port`. Handles bracketed IPv6 literals such as
-/// `[::1]:8080`, returning the address without brackets.
+/// Split a `Host` header value into the host without its port and an optional
+/// port. Handles bracketed IPv6 literals such as `[::1]:8080`, returning the
+/// address without brackets.
+///
+/// Feeds the OTel `server.address`/`server.port` attributes and
+/// [`DynamicRouter`]'s routing key. A suffix that is not a number is dropped
+/// rather than rejected, so `example.com:no-such-port` routes as
+/// `example.com`.
 fn split_host_port(host: &str) -> (&str, Option<u16>) {
     if let Some(rest) = host.strip_prefix('[') {
         // IPv6 literal: `[addr]` or `[addr]:port`.
@@ -2992,6 +3011,42 @@ mod tests {
             name: None,
         };
         assert!(http_ingress_hostnames(&[kv]).is_empty());
+    }
+
+    /// A client decides whether to put the port in the Host header, and the
+    /// host serves one HTTP port, so routing must not depend on that choice.
+    /// Without this an OCI client pushing to `127.0.0.1:5000` 404s against a
+    /// workload registered as `127.0.0.1`, which is what forced the e2e
+    /// registry onto port 80 (and onto sudo, to bind it).
+    #[tokio::test]
+    async fn dynamic_router_ignores_the_port_in_the_host_header() {
+        let router = DynamicRouter::default();
+        router
+            .on_service_http_resolved("w0", &["registry.local".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(router.select_workload("registry.local").unwrap(), "w0");
+        assert_eq!(router.select_workload("registry.local:5000").unwrap(), "w0");
+        assert!(
+            router.select_workload("other.local:5000").is_err(),
+            "stripping the port must not make unrelated hostnames match"
+        );
+    }
+
+    /// The two sides have to agree: a hostname registered *with* a port is
+    /// still reachable, rather than being keyed under a name no request can
+    /// produce.
+    #[tokio::test]
+    async fn dynamic_router_normalizes_a_registered_host_with_a_port() {
+        let router = DynamicRouter::default();
+        router
+            .on_service_http_resolved("w0", &["registry.local:5000".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(router.select_workload("registry.local").unwrap(), "w0");
+        assert_eq!(router.select_workload("registry.local:5000").unwrap(), "w0");
     }
 
     /// Regression guard for the "N replicas serve like one" defect: with several

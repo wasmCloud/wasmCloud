@@ -21,7 +21,7 @@
 //! host's file descriptors by fanning out to many authorities.
 //!
 //! It also owns the outbound TLS trust roots. wasmtime's default transport
-//! trusts only the compiled-in webpki (Mozilla) roots, with no way to reach
+//! trusts only the compiled-in webpki roots, with no way to reach
 //! hosts behind a corporate or private CA. [`ClientTlsOptions`] builds a root
 //! store from a [`TrustRoots`] base (webpki and/or the platform's native
 //! store, which honours `SSL_CERT_FILE`/`SSL_CERT_DIR`) with any explicitly
@@ -228,7 +228,7 @@ impl Default for ConnectionLimits {
 /// widens the egress trust boundary to host-environment control.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TrustRoots {
-    /// Compiled-in webpki (Mozilla) roots plus the platform's native store.
+    /// Compiled-in webpki roots plus the platform's native store.
     /// The native store honours `SSL_CERT_FILE`/`SSL_CERT_DIR`.
     WebpkiAndNative,
     /// Compiled-in webpki roots only — reproducible, ignores the host

@@ -163,6 +163,22 @@ pub struct HostCommand {
     #[arg(long = "allow-insecure-registries", default_value_t = false)]
     pub allow_insecure_registries: bool,
 
+    /// Extra CA certificate bundle files (PEM) trusted when pulling from OCI
+    /// registries: for a registry behind a private or in-cluster CA, which the
+    /// compiled-in public roots do not cover. Applies to every pull this host
+    /// makes: workload components, host component plugins, and washlet
+    /// artifacts alike.
+    ///
+    /// Prefer this to `--allow-insecure-registries`, which does not relax
+    /// verification but replaces it: that flag switches every registry to
+    /// plain HTTP, so credentials travel in the clear and no certificate is
+    /// checked at all.
+    ///
+    /// Accepts a comma-separated list and/or repeated flags. Paths must not
+    /// contain commas.
+    #[arg(long = "oci-ca-path", env = "WASH_OCI_CA_PATHS", value_delimiter = ',')]
+    pub oci_ca_paths: Vec<PathBuf>,
+
     /// Timeout for pulling artifacts from OCI registries
     #[arg(long = "registry-pull-timeout", value_parser = humantime::parse_duration, default_value = "30s")]
     pub registry_pull_timeout: Duration,
@@ -177,8 +193,8 @@ pub struct HostCommand {
 
     /// Enable additional wasm proposals on the engine. Accepts a comma-separated
     /// list and/or repeated flags, e.g. `--wasm-proposal gc,threads`. Accepted
-    /// names: component-model-async, gc, exception-handling, wide-arithmetic,
-    /// threads, tail-call.
+    /// names: component-model-async, component-model-map, gc,
+    /// exception-handling, wide-arithmetic, threads, tail-call.
     #[arg(
         long = "wasm-proposal",
         env = "WASH_WASM_PROPOSALS",
@@ -298,6 +314,13 @@ impl CliCommand for HostCommand {
         .await
         .context("failed to connect to NATS")?;
         let data_nats_client = Arc::new(data_nats_client);
+
+        // Parse the CA bundles before anything pulls, and fail if any is
+        // invalid.
+        if !self.oci_ca_paths.is_empty() {
+            wash_runtime::oci::set_extra_ca_certificates(&self.oci_ca_paths)
+                .context("failed to load --oci-ca-path CA certificates")?;
+        }
 
         let host_config = wash_runtime::host::HostConfig {
             allow_oci_insecure: self.allow_insecure_registries,
