@@ -1,0 +1,21 @@
+package wasmcloud:dual-handler;
+
+// A service that exports BOTH revisions of `wasmcloud:messaging/handler` at
+// once — which the component model permits, since the versioned interface
+// names are distinct exports. The trigger service is p3-only, so `@0.3.0` is
+// the one invoked and the host warns that `@0.2.0` is dead weight; this
+// fixture exists to pin that selection (each handler echoes a distinguishable
+// marker, so a test can prove which one ran).
+//
+// Unlike every other fixture, its `wit/deps` is COMMITTED and `wash build`
+// runs with `--skip-fetch` (see xtask): a wkg path override maps the package
+// NAME to a single directory, so no override can serve two versions of
+// `wasmcloud:messaging` — but the classic deps layout can, as sibling dirs.
+// `wasi:cli/run` is required — a service exporting only messaging handlers
+// never gets its trigger ingress registered — so the wasi:* deps ride along
+// for cli/run's sake.
+world dual-handler {
+    export wasi:cli/run@0.3.0;
+    export wasmcloud:messaging/handler@0.2.0;
+    export wasmcloud:messaging/handler@0.3.0;
+}

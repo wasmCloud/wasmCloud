@@ -1,13 +1,18 @@
-//! Spike: the TriggerService co-drives a p2 `wasmcloud:messaging/handler` alongside a
-//! p3 `wasi:cli/run` on one long-lived instance.
+//! Spike: the TriggerService co-drives the async `wasmcloud:messaging/handler`
+//! alongside a p3 `wasi:cli/run` on one long-lived instance.
 //!
-//! The `msg-counter` fixture exports BOTH `wasi:cli/run@0.3` and the p2
-//! `wasmcloud:messaging/handler@0.2.0`. Its `handle-message` increments a
-//! process-global counter and echoes `"{count}:{subject}"`. Delivering two
-//! messages and observing the count climb (1, then 2) proves the p2 handler runs
-//! on the SAME long-lived instance the trigger service co-drives — invoked via the
-//! dynamic `call_concurrent` path under `run_concurrent` — rather than a fresh
-//! instance per message.
+//! The `msg-counter` fixture exports BOTH `wasi:cli/run@0.3` and the async
+//! `wasmcloud:messaging/handler@0.3.0`. Its `handle-message` increments a
+//! process-global counter and echoes `"{count}:{subject}"` through
+//! `error::other`, which the host renders as `other: {count}:{subject}`.
+//! Delivering two messages and observing the count climb (1, then 2) proves the
+//! handler runs on the SAME long-lived instance the trigger service co-drives —
+//! invoked via the dynamic `call_concurrent` path under `run_concurrent` —
+//! rather than a fresh instance per message.
+//!
+//! Trigger services are p3-only, so `@0.3.0` is the only handler revision this
+//! path resolves; a sync `@0.2.0` handler runs as a per-message component and is
+//! covered by `integration_nats_messaging`.
 //!
 //! The end-to-end tests at the bottom drive the same path through a real
 //! messaging backend rather than the host-side delivery API, once against the
@@ -45,17 +50,27 @@ mod common;
 use common::{http_only_host_interfaces, start_host_with_p3_handler};
 
 const MSG_COUNTER_WASM: &[u8] = include_bytes!("wasm/msg_counter.wasm");
+const DUAL_HANDLER_WASM: &[u8] = include_bytes!("wasm/messaging_dual_handler.wasm");
 
 fn msg_counter_request(workload_id: &str, max_restarts: u64) -> WorkloadStartRequest {
+    service_request(workload_id, "msg-counter", MSG_COUNTER_WASM, max_restarts)
+}
+
+fn service_request(
+    workload_id: &str,
+    name: &str,
+    wasm: &'static [u8],
+    max_restarts: u64,
+) -> WorkloadStartRequest {
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
             namespace: "test".to_string(),
-            name: "msg-counter".to_string(),
+            name: name.to_string(),
             annotations: HashMap::new(),
             service: Some(Service {
                 digest: None,
-                bytes: bytes::Bytes::from_static(MSG_COUNTER_WASM),
+                bytes: bytes::Bytes::from_static(wasm),
                 local_resources: LocalResources::default(),
                 max_restarts,
             }),
@@ -96,17 +111,20 @@ async fn test_trigger_service_co_drives_messaging_handler() -> Result<()> {
     // Two messages land on the SAME long-lived instance, so the handler's
     // process-global count climbs 1 -> 2 (a fresh instance per message would
     // return 1 both times).
+    //
+    // The `other: ` prefix is the host rendering `@0.3.0`'s `error` variant:
+    // the fixture echoes through `error::other`, the one case with a payload.
     let r1 = deliver(&ingress, &workload_id, "first").await?;
     assert_eq!(
         r1,
-        Err("1:first".to_string()),
+        Err("other: 1:first".to_string()),
         "first message handled on the co-driven instance"
     );
 
     let r2 = deliver(&ingress, &workload_id, "second").await?;
     assert_eq!(
         r2,
-        Err("2:second".to_string()),
+        Err("other: 2:second".to_string()),
         "second message hits the same long-lived instance (count persists)"
     );
 
@@ -137,6 +155,39 @@ async fn test_trigger_service_co_drives_messaging_handler() -> Result<()> {
     Ok(())
 }
 
+/// A component may legally export BOTH `wasmcloud:messaging/handler` revisions
+/// at once — the versioned interface names are distinct exports. The trigger
+/// service is p3-only, so the `@0.3.0` handler must be the one invoked and the
+/// `@0.2.0` export must stay dead (the host warns that it is ignored). The
+/// dual-handler fixture's two handlers echo distinguishable markers, so the
+/// delivery outcome itself proves which revision ran: `other: v3:{subject}`
+/// is the `@0.3.0` disposition; a bare `v2:{subject}` would mean the sync
+/// export was chosen and this selection regressed.
+#[tokio::test]
+async fn test_trigger_service_serves_only_v03_when_both_handlers_exported() -> Result<()> {
+    let workload_id = uuid::Uuid::new_v4().to_string();
+    let (_addr, host, ingress) = start_host_with_p3_handler("127.0.0.1:0").await?;
+
+    host.workload_start(service_request(
+        &workload_id,
+        "dual-handler",
+        DUAL_HANDLER_WASM,
+        0,
+    ))
+    .await
+    .context("failed to start the dual-handler trigger service workload")?;
+
+    let outcome = deliver(&ingress, &workload_id, "which").await?;
+    assert_eq!(
+        outcome,
+        Err("other: v3:which".to_string()),
+        "the @0.3.0 handler must be the one invoked on a dual-export service; \
+         `v2:which` here means the sync @0.2.0 export was chosen"
+    );
+
+    Ok(())
+}
+
 /// Teardown: a stopped trigger service drops its messaging subscription, so a
 /// message published afterward is not delivered. Guards the unbind wiring — a
 /// stopped service must deregister its handler, not keep receiving deliveries on
@@ -154,7 +205,7 @@ async fn test_trigger_service_stop_drops_messaging_subscription() -> Result<()> 
     let live = deliver(&ingress, &workload_id, "live").await?;
     assert_eq!(
         live,
-        Err("1:live".to_string()),
+        Err("other: 1:live".to_string()),
         "message handled while running"
     );
 
@@ -204,7 +255,7 @@ async fn test_trigger_service_restarts_and_resubscribes_on_fault() -> Result<()>
     let r1 = deliver(&ingress, &workload_id, "first").await?;
     assert_eq!(
         r1,
-        Err("1:first".to_string()),
+        Err("other: 1:first".to_string()),
         "handled on the initial instance"
     );
 
@@ -229,7 +280,7 @@ async fn test_trigger_service_restarts_and_resubscribes_on_fault() -> Result<()>
     }
     assert_eq!(
         got,
-        Some("1:after".to_string()),
+        Some("other: 1:after".to_string()),
         "after a fault the supervisor re-subscribes on a fresh instance (count reset)"
     );
 
@@ -249,7 +300,7 @@ fn messaging_handler_interface(subscriptions: Option<&str>) -> WitInterface {
         namespace: "wasmcloud".to_string(),
         package: "messaging".to_string(),
         interfaces: ["handler".to_string()].into_iter().collect(),
-        version: Some(semver::Version::new(0, 2, 0)),
+        version: Some(semver::Version::new(0, 3, 0)),
         config,
         name: None,
     }

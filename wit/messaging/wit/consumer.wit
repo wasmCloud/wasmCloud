@@ -9,12 +9,18 @@ interface consumer {
   /// Because this is an `async func`, a component may have many requests
   /// outstanding concurrently; awaiting one does not block the instance.
   ///
+  /// The request `body` is a `stream<u8>` the callee consumes; the reply's body
+  /// streams back inside the returned `broker-message`. `timeout-ms` bounds the
+  /// wait for the reply, measured once the request body has been fully consumed
+  /// and sent — the caller controls how fast its own body is produced, so that
+  /// time is not counted against the broker.
+  ///
   /// Returns `error::timeout` if no reply arrives within `timeout-ms`.
-  request: async func(subject: string, body: list<u8>, timeout-ms: u32) -> result<broker-message, error>;
+  request: async func(subject: string, body: stream<u8>, timeout-ms: u32) -> result<broker-message, error>;
 
   /// Publish a message to a subject without awaiting a response.
   ///
-  /// Resolving indicates the broker accepted the message, not that any subscriber
-  /// received it.
+  /// Resolving indicates the callee has fully consumed `msg.body` and the broker
+  /// accepted the message — not that any subscriber received it.
   publish: async func(msg: broker-message) -> result<_, error>;
 }

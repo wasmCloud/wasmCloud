@@ -54,8 +54,59 @@ const MULTIPLEXED_ASYNC_MESSAGING_ID: &str = "wasmcloud-messaging-async-multiple
 
 super::async_messaging_conversions! {
     error: AsyncMsgError,
-    sync_message: BrokerMessage,
-    async_message: AsyncBrokerMessage,
+}
+
+/// The shared `request` body, used by both the label-routed and plain impls:
+/// drain the guest's stream (see [`super::collect_body`]), run the backend
+/// request, and mint the reply's body back as a fresh `stream<u8>`.
+async fn request_via<T: 'static + Send>(
+    accessor: &Accessor<T, SharedCtx>,
+    id: MsgId,
+    subject: String,
+    body: wasmtime::component::StreamReader<u8>,
+    timeout_ms: u32,
+) -> wasmtime::Result<Result<AsyncBrokerMessage, AsyncMsgError>> {
+    let bytes = match super::collect_body(accessor, body).await? {
+        Ok(bytes) => bytes,
+        Err(e) => return Ok(Err(e.into())),
+    };
+    match id.request(subject, bytes, timeout_ms).await {
+        Ok(reply) => {
+            let body = super::mint_body(accessor, reply.body)?;
+            Ok(Ok(AsyncBrokerMessage {
+                subject: reply.subject,
+                body,
+                reply_to: reply.reply_to,
+            }))
+        }
+        Err(e) => Ok(Err(e.into())),
+    }
+}
+
+/// The shared `publish` body: drain the guest's stream and hand the bytes to
+/// the backend.
+async fn publish_via<T: 'static + Send>(
+    accessor: &Accessor<T, SharedCtx>,
+    id: MsgId,
+    msg: AsyncBrokerMessage,
+) -> wasmtime::Result<Result<(), AsyncMsgError>> {
+    let AsyncBrokerMessage {
+        subject,
+        body,
+        reply_to,
+    } = msg;
+    let bytes = match super::collect_body(accessor, body).await? {
+        Ok(bytes) => bytes,
+        Err(e) => return Ok(Err(e.into())),
+    };
+    Ok(id
+        .publish(BrokerMessage {
+            subject,
+            body: bytes,
+            reply_to,
+        })
+        .await
+        .map_err(Into::into))
 }
 
 // `consumer` routed per `(implements ..)` label: the `MsgId` comes from the label.
@@ -63,28 +114,21 @@ impl<T: 'static + Send>
     bindings::named_imports::wasmcloud::messaging0_3_0::consumer::HostWithStore<T> for SharedCtx
 {
     async fn request(
-        _accessor: &Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         id: MsgId,
         subject: String,
-        body: Vec<u8>,
+        body: wasmtime::component::StreamReader<u8>,
         timeout_ms: u32,
     ) -> wasmtime::Result<Result<AsyncBrokerMessage, AsyncMsgError>> {
-        Ok(id
-            .request(subject, body, timeout_ms)
-            .await
-            .map(to_async_message)
-            .map_err(Into::into))
+        request_via(accessor, id, subject, body, timeout_ms).await
     }
 
     async fn publish(
-        _accessor: &Accessor<T, Self>,
+        accessor: &Accessor<T, Self>,
         id: MsgId,
         msg: AsyncBrokerMessage,
     ) -> wasmtime::Result<Result<(), AsyncMsgError>> {
-        Ok(id
-            .publish(from_async_message(msg))
-            .await
-            .map_err(Into::into))
+        publish_via(accessor, id, msg).await
     }
 }
 
@@ -101,17 +145,13 @@ impl<T: 'static + Send> bindings::wasmcloud::messaging0_3_0::consumer::HostWithS
     async fn request(
         accessor: &Accessor<T, Self>,
         subject: String,
-        body: Vec<u8>,
+        body: wasmtime::component::StreamReader<u8>,
         timeout_ms: u32,
     ) -> wasmtime::Result<Result<AsyncBrokerMessage, AsyncMsgError>> {
         let Some(id) = default_backend(accessor).await? else {
             return no_default_backend();
         };
-        Ok(id
-            .request(subject, body, timeout_ms)
-            .await
-            .map(to_async_message)
-            .map_err(Into::into))
+        request_via(accessor, id, subject, body, timeout_ms).await
     }
 
     async fn publish(
@@ -121,10 +161,7 @@ impl<T: 'static + Send> bindings::wasmcloud::messaging0_3_0::consumer::HostWithS
         let Some(id) = default_backend(accessor).await? else {
             return no_default_backend();
         };
-        Ok(id
-            .publish(from_async_message(msg))
-            .await
-            .map_err(Into::into))
+        publish_via(accessor, id, msg).await
     }
 }
 

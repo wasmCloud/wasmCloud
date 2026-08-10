@@ -33,7 +33,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use wasmtime::Store;
-use wasmtime::component::{Accessor, AccessorTask, ComponentExportIndex, Instance, InstancePre};
+#[cfg(feature = "host-component-plugins")]
+use wasmtime::component::ComponentExportIndex;
+use wasmtime::component::{Accessor, AccessorTask, Instance, InstancePre};
 use wasmtime::error::Context as _;
 use wasmtime_wasi::p3::bindings::Command;
 use wasmtime_wasi_http::p3::bindings::Service;
@@ -58,7 +60,7 @@ pub(crate) use capability::decode_bind_reply;
 #[cfg(feature = "host-component-plugins")]
 use capability::{admit_and_spawn_call, drain_plugin_resources, flush_pending_resource_drops};
 pub(crate) use http::HttpTask;
-use messaging::{HANDLE_MESSAGE, MESSAGING_HANDLERS, MessagingTask};
+use messaging::MessagingTask;
 
 /// A host-invoked handler export the TriggerService serves, carrying the receiver end
 /// of its delivery channel. The paired sender is handed to the host-side ingress
@@ -68,8 +70,8 @@ use messaging::{HANDLE_MESSAGE, MESSAGING_HANDLERS, MessagingTask};
 pub enum Ingress {
     /// `wasi:http/handler@0.3` — the HTTP server delivers requests here.
     Http(tokio::sync::mpsc::Receiver<ServiceHttpJob>),
-    /// `wasmcloud:messaging/handler` (`@0.3.0` or `@0.2.0`) — the messaging
-    /// subscriber delivers received messages here.
+    /// `wasmcloud:messaging/handler@0.3.0` — the messaging subscriber delivers
+    /// received messages here. Trigger services are p3-only.
     Messaging(tokio::sync::mpsc::Receiver<MessagingJob>),
     /// Cross-store capability calls for a host component plugin. `funcs` lists
     /// every exported function to resolve up front; `rx` delivers the calls;
@@ -103,27 +105,12 @@ impl Ingress {
                 })
             }
             Ingress::Messaging(rx) => {
-                // Look up the `handle-message` export up front; it's invoked
-                // dynamically, which serves either handler revision. Prefer the
-                // async `@0.3.0` interface and fall back to `@0.2.0`, so a
-                // service built before the async revision still resolves.
-                let (handler, iface) = MESSAGING_HANDLERS
-                    .iter()
-                    .find_map(|name| {
-                        instance
-                            .get_export(&mut *store, None, name)
-                            .map(|(_, iface)| (*name, iface))
-                    })
-                    .with_context(|| {
-                        format!("service exports none of: {}", MESSAGING_HANDLERS.join(", "))
-                    })?;
-                let func_idx = instance
-                    .get_export(&mut *store, Some(&iface), HANDLE_MESSAGE)
-                    .with_context(|| format!("{handler} is missing {HANDLE_MESSAGE}"))?
-                    .1;
+                // Bind the typed `@0.3.0` handler view up front; trigger
+                // services are p3-only (see `messaging::MESSAGING_HANDLER` for
+                // the selection rationale and the dual-export behavior).
+                let handler = messaging::bind_handler(store, instance)?;
                 Ok(PreparedIngress::Messaging {
-                    instance: *instance,
-                    func_idx,
+                    handler: Arc::new(handler),
                     rx,
                 })
             }
@@ -176,8 +163,7 @@ enum PreparedIngress {
         rx: tokio::sync::mpsc::Receiver<ServiceHttpJob>,
     },
     Messaging {
-        instance: Instance,
-        func_idx: ComponentExportIndex,
+        handler: Arc<messaging::AsyncMessaging>,
         rx: tokio::sync::mpsc::Receiver<MessagingJob>,
     },
     #[cfg(feature = "host-component-plugins")]
@@ -226,15 +212,10 @@ impl PreparedIngress {
                 }
                 ServeOutcome::Shutdown
             }
-            PreparedIngress::Messaging {
-                instance,
-                func_idx,
-                rx,
-            } => {
+            PreparedIngress::Messaging { handler, rx } => {
                 while let Some((msg, result_tx)) = rx.recv().await {
                     if let Err(e) = accessor.spawn(MessagingTask {
-                        instance: *instance,
-                        func_idx: *func_idx,
+                        handler: Arc::clone(handler),
                         msg,
                         result_tx,
                     }) {

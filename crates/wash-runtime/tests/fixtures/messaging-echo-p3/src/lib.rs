@@ -1,10 +1,12 @@
 //! Real-guest fixture for the async `wasmcloud:messaging@0.3.0` surface.
 //!
 //! The async counterpart of the `messaging-echo` fixture. `handle-message` is an
-//! `async fn` that awaits an imported `consumer::publish` to reply on the
-//! message's `reply-to` subject — so one message exercises both directions of
-//! the async ABI: the host invoking an exported `async func`, and the guest
-//! awaiting an imported one from inside it.
+//! `async fn` that drains its `stream<u8>` body, then awaits an imported
+//! `consumer::publish` carrying a freshly built stream to reply on the message's
+//! `reply-to` subject — so one message exercises the async ABI in both
+//! directions AND both stream directions: the host invoking an exported `async
+//! func` whose body the guest reads, and the guest awaiting an imported one
+//! whose body the host reads.
 //!
 //! Each handled message also bumps a process-global `MSG_COUNT`, which the
 //! `wasi:http/handler` export reports as `{"count":N}`. That makes delivery
@@ -26,7 +28,7 @@ use crate::bindings::exports::wasmcloud::messaging::handler::Guest as MsgGuest;
 use crate::bindings::wasi::http::types::{ErrorCode, Fields, Request, Response};
 use crate::bindings::wasmcloud::messaging::{
     consumer,
-    types::{BrokerMessage, Error},
+    types::{BrokerMessage, HandleMessageError},
 };
 
 mod bindings {
@@ -61,17 +63,32 @@ impl RunGuest for Component {
 const SINK_SUBJECT: &str = "echo.sink";
 
 impl MsgGuest for Component {
-    async fn handle_message(msg: BrokerMessage) -> Result<(), Error> {
+    async fn handle_message(msg: BrokerMessage) -> Result<(), HandleMessageError> {
+        // The body arrives as a native `stream<u8>`; drain it fully. (A handler
+        // that does not care about the payload could simply drop the reader.)
+        let bytes = msg.body.collect().await;
+
+        // Reply with a freshly built stream: the writer half is fed from a
+        // spawned task while `publish` — which resolves only once the host has
+        // fully consumed the reader half — is awaited. Writing inline before the
+        // publish would deadlock: nothing would be draining the stream yet.
+        let (mut tx, body) = bindings::wit_stream::new();
+        wit_bindgen::spawn_local(async move {
+            let _ = tx.write_all(bytes).await;
+            drop(tx);
+        });
+
         // Awaiting an imported `async func` from inside an exported one is the
         // point of this fixture: under `@0.2.0` this reply was a blocking call.
-        // The async ABI passes records by value, unlike the sync bindings which
-        // take `&BrokerMessage`.
+        // A `publish` failure maps onto the handler's own error vocabulary — the
+        // disposition `other` — rather than the broker `error` it was raised as.
         consumer::publish(BrokerMessage {
             subject: msg.reply_to.unwrap_or_else(|| SINK_SUBJECT.to_string()),
-            body: msg.body,
+            body,
             reply_to: None,
         })
-        .await?;
+        .await
+        .map_err(|e| HandleMessageError::Other(format!("reply publish failed: {e:?}")))?;
 
         // Counted only AFTER the awaited publish resolves, so an observed count
         // is evidence the async import completed — not merely that the exported

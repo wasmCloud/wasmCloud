@@ -60,8 +60,6 @@ use crate::plugin::WorkloadTracker;
 
 super::async_messaging_conversions! {
     error: AsyncMsgError,
-    sync_message: types_p2::BrokerMessage,
-    async_message: AsyncBrokerMessage,
 }
 
 super::messaging_handler_dispatch! {
@@ -175,7 +173,7 @@ async fn do_request(
     };
 
     // Generate a unique reply-to subject
-    let reply_to = format!("_INBOX.{}", uuid::Uuid::new_v4());
+    let reply_to = format!("_INBOX.{}", uuid::Uuid::now_v7());
 
     // Create a oneshot channel for the response
     let (tx, rx) = oneshot::channel();
@@ -347,14 +345,27 @@ impl<T: 'static + Send> HostWithStoreP3<T> for SharedCtx {
     async fn request(
         accessor: &Accessor<T, Self>,
         subject: String,
-        body: Vec<u8>,
+        body: wasmtime::component::StreamReader<u8>,
         timeout_ms: u32,
     ) -> wasmtime::Result<Result<AsyncBrokerMessage, AsyncMsgError>> {
         let (plugin, workload_id) = plugin_and_workload(accessor)?;
-        Ok(do_request(&plugin, &workload_id, subject, body, timeout_ms)
-            .await?
-            .map(to_async_message)
-            .map_err(Into::into))
+        // Drain the body (see `collect_body`), then mint the reply's body back
+        // as a fresh stream.
+        let body = match super::collect_body(accessor, body).await? {
+            Ok(bytes) => bytes,
+            Err(e) => return Ok(Err(e.into())),
+        };
+        match do_request(&plugin, &workload_id, subject, body, timeout_ms).await? {
+            Ok(reply) => {
+                let body = super::mint_body(accessor, reply.body)?;
+                Ok(Ok(AsyncBrokerMessage {
+                    subject: reply.subject,
+                    body,
+                    reply_to: reply.reply_to,
+                }))
+            }
+            Err(e) => Ok(Err(e.into())),
+        }
     }
 
     async fn publish(
@@ -362,9 +373,26 @@ impl<T: 'static + Send> HostWithStoreP3<T> for SharedCtx {
         msg: AsyncBrokerMessage,
     ) -> wasmtime::Result<Result<(), AsyncMsgError>> {
         let (plugin, workload_id) = plugin_and_workload(accessor)?;
-        Ok(do_publish(&plugin, &workload_id, from_async_message(msg))
-            .await?
-            .map_err(Into::into))
+        let AsyncBrokerMessage {
+            subject,
+            body,
+            reply_to,
+        } = msg;
+        let body = match super::collect_body(accessor, body).await? {
+            Ok(bytes) => bytes,
+            Err(e) => return Ok(Err(e.into())),
+        };
+        Ok(do_publish(
+            &plugin,
+            &workload_id,
+            types_p2::BrokerMessage {
+                subject,
+                body,
+                reply_to,
+            },
+        )
+        .await?
+        .map_err(Into::into))
     }
 }
 

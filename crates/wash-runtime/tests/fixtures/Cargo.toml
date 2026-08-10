@@ -12,6 +12,7 @@ members = [
     "messaging-handler",
     "messaging-echo",
     "messaging-echo-p3",
+    "messaging-dual-handler",
     "inter-component-call-caller",
     "inter-component-call-callee",
     "inter-component-call-middleware",
