@@ -69,6 +69,28 @@ impl WitWorld {
         })
     }
 
+    /// Whether this world *provides* `interface` — covers every one of its
+    /// interfaces from this world's own imports.
+    ///
+    /// A plugin's world states what it provides in `imports`, by the convention
+    /// [`crate::plugin::HostPlugin::world`] follows: a plugin declaring
+    /// `wasi:keyvalue/store` there is offering to serve it. Its `exports` mean
+    /// the opposite direction — an interface the plugin *calls* on a workload,
+    /// as `wasmcloud:messaging` does with `handler`.
+    ///
+    /// [`WitWorld::includes_bidirectional`] deliberately ignores that
+    /// distinction, because a workload satisfies an interface by importing or
+    /// exporting it. Asking whether a *provider* exists is the opposite
+    /// question, and answering it with the bidirectional check would count a
+    /// plugin's own outbound calls as though it served them.
+    pub fn provides(&self, interface: &WitInterface) -> bool {
+        interface.interfaces.iter().all(|i| {
+            self.imports
+                .iter()
+                .any(|im| interface.same_package(im) && im.interfaces.contains(i))
+        })
+    }
+
     /// Checks if a guest world (imports) can be satisfied by a host world (exports).
     ///
     /// A host world satisfies a guest world if all interfaces required by the guest

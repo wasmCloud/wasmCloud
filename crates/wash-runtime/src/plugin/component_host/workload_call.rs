@@ -33,6 +33,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use anyhow::Context as _;
@@ -42,7 +43,7 @@ use wasmtime::component::{Accessor, GuestTaskId, Linker, Resource, ResourceType,
 
 use crate::engine::ctx::SharedCtx;
 use crate::engine::linked_call::{LinkedExportInvocation, invoke_linked_async_export};
-use crate::engine::workload::{ExternalCallFunc, ResolvedWorkload};
+use crate::engine::workload::{ExternalCallFunc, ItemExport, ResolvedWorkload};
 
 use super::{ComponentHostPluginState, ExportedInterface, caller_root_task};
 
@@ -53,10 +54,13 @@ use super::{ComponentHostPluginState, ExportedInterface, caller_root_task};
 /// the package version does.
 pub(super) const HOST_WORKLOAD_INTERFACE: &str = "wasmcloud:host/workload@0.1.2";
 
-/// A live `target` handle: the workload it names and the guest task it was
-/// constructed on. The task is recorded here rather than read from the call
-/// stack at destruction, because a handle may be dropped from a context that no
-/// longer has the constructing task on its stack (store teardown, most of all).
+/// A live `target` handle, as the guest holds it: the workload it names and the
+/// task it was opened on. The routes it directs calls to live on that task's
+/// [`TargetFrame`], which is where routing reads them.
+///
+/// The task is recorded here rather than read from the call stack at
+/// destruction, because a handle may be dropped from a context that no longer
+/// has the opening task on its stack (store teardown, most of all).
 struct TargetHandle {
     workload_id: Arc<str>,
     task: Option<GuestTaskId>,
@@ -64,6 +68,7 @@ struct TargetHandle {
 
 /// The one component of a workload serving an interface this plugin imports,
 /// with a resolved invocation per function of that interface.
+#[derive(Clone)]
 struct InterfaceRoute {
     /// Manifest name of the serving component. The tie-break when several
     /// components of one workload export the same interface — the host
@@ -74,13 +79,53 @@ struct InterfaceRoute {
 }
 
 /// Every interface of one workload this plugin can call, keyed by the plugin's
-/// own import instance name.
+/// own import instance name. Behind an `Arc` so an open `target` handle can
+/// hold the set it resolved against.
 type WorkloadRoutes = BTreeMap<Arc<str>, InterfaceRoute>;
 
-/// The `target` handles live on one guest task, innermost last. Each is paired
-/// with the resource-table rep that identifies it, so a handle dropped out of
-/// order removes its own entry rather than whichever is on top.
-type TargetStack = Vec<(u32, Arc<str>)>;
+/// Distinguishes one deployment of a workload id from the next to claim it.
+/// Minted when a workload's first route is claimed and never reused.
+type Generation = u64;
+
+/// One deployment of a workload, as this plugin can call it.
+struct CallableWorkload {
+    /// Which deployment these routes belong to. A `target` handle records the
+    /// generation it resolved against, so a handle held across a stop and a
+    /// redeploy under the same id is refused rather than dispatched into the
+    /// deployment it captured — the routes it holds name components of a
+    /// workload that is gone.
+    generation: Generation,
+    routes: Arc<WorkloadRoutes>,
+}
+
+/// One live `target` handle on a task's stack: the resource-table rep that
+/// identifies it (so a handle dropped out of order removes its own entry rather
+/// than whichever is on top), and what it routes to.
+///
+/// Holding the routes pins *which* component serves each interface for this
+/// handle's lifetime, so a second exporter appearing cannot move a call
+/// mid-dispatch. It deliberately does not pin liveness: the `generation` beside
+/// it is rechecked on every call, so a handle that outlived the deployment it
+/// resolved against is refused rather than sent into components that are gone.
+struct TargetFrame {
+    rep: u32,
+    workload_id: Arc<str>,
+    generation: Generation,
+    routes: Arc<WorkloadRoutes>,
+    /// The registry job the opening call was running under, or `None` outside
+    /// one (the plugin's own `cli/run`, or a task it spawned).
+    ///
+    /// A guest task id is reused once its task ends, and a handle the guest
+    /// never drops — one it stashed to reuse — leaves its frame behind under
+    /// that id. Without this, an unrelated later call assigned the same id
+    /// would inherit the stale target and be delivered to a workload it never
+    /// named. Job ids are unique within an incarnation and never reused, so
+    /// comparing them tells a leaked frame from a live one.
+    job: Option<crate::host::job_registry::JobId>,
+}
+
+/// The `target` handles live on one guest task, innermost last.
+type TargetStack = Vec<TargetFrame>;
 
 /// The workload-facing half of a host component plugin: which interfaces it
 /// imports that a workload is expected to export, which workloads currently
@@ -94,10 +139,20 @@ pub(super) struct WorkloadCalls {
     /// Workload id → the interfaces of it this plugin can call. Written when a
     /// workload resolves and when it unbinds; read on every call, so the lock
     /// is only ever held long enough to clone one `Arc` out.
-    routes: RwLock<BTreeMap<Arc<str>, WorkloadRoutes>>,
+    routes: RwLock<BTreeMap<Arc<str>, CallableWorkload>>,
+    /// Source of the [`Generation`] stamped on each deployment. Monotonic for
+    /// the plugin's lifetime, so a generation names one deployment of a workload
+    /// id and never a later one.
+    generations: AtomicU64,
     /// Guest task → its stack of live `target` handles, innermost last. A stack
     /// rather than a single slot so handles nest: dropping one restores the
     /// workload the handle it shadowed names.
+    ///
+    /// The key is an `Option` only so the tests below can name a task: a
+    /// `GuestTaskId` is minted by wasmtime and cannot be constructed here.
+    /// Nothing ever stores a `None` key in production — `open` refuses to hand
+    /// out a handle whose task it could not resolve — so a `None` lookup is a
+    /// miss, which is the answer a caller with no resolvable task should get.
     targets: Mutex<BTreeMap<Option<GuestTaskId>, TargetStack>>,
 }
 
@@ -107,6 +162,7 @@ impl WorkloadCalls {
             plugin_id,
             imports,
             routes: RwLock::new(BTreeMap::new()),
+            generations: AtomicU64::new(0),
             targets: Mutex::new(BTreeMap::new()),
         }
     }
@@ -122,24 +178,40 @@ impl WorkloadCalls {
         &self.imports
     }
 
-    /// Claim `component_id` as the component serving whichever of this plugin's
+    /// Claim `item_id` as the component serving whichever of this plugin's
     /// workload-facing imports it exports, resolving an invocation per function
     /// up front so a call is a map lookup rather than an export search.
     ///
-    /// A component that exports none of them is simply not claimed — it bound
-    /// to this plugin for a capability it imports instead.
+    /// An item that exports none of them is simply not claimed — it bound to
+    /// this plugin for a capability it imports instead.
     pub(super) async fn register(
         &self,
         workload: &ResolvedWorkload,
-        component_id: &str,
+        item_id: &str,
     ) -> anyhow::Result<()> {
         for import in &self.imports {
-            let Some(component_name) = workload
-                .component_exporting(component_id, &import.wit)
-                .await
-            else {
-                continue;
-            };
+            let (component_name, export_name) =
+                match workload.item_exporting(item_id, &import.wit).await {
+                    ItemExport::Component { name, export } => (name, export),
+                    ItemExport::Service => {
+                        // Loudly, not silently: the workload deploys and reports
+                        // healthy either way, so without this the only symptom
+                        // is the plugin never seeing it in `callable` and every
+                        // call naming it failing, with nothing to connect that
+                        // to the service.
+                        warn!(
+                            id = self.plugin_id,
+                            workload_id = workload.id(),
+                            service = item_id,
+                            interface = %import.name,
+                            "a workload's long-lived service exports an interface this plugin \
+                             calls, but a service is not callable from a plugin yet; move the \
+                             export to a component to make it reachable"
+                        );
+                        continue;
+                    }
+                    ItemExport::None => continue,
+                };
             let funcs: Vec<ExternalCallFunc<'_>> = import
                 .funcs
                 .iter()
@@ -149,12 +221,14 @@ impl WorkloadCalls {
                     result_tys: &func.result_tys,
                 })
                 .collect();
+            // Addressed by the component's own export name, which matching may
+            // have accepted despite differing from the plugin's import name.
             let invocations = workload
-                .external_export_invocations(component_id, &import.name, &funcs)
+                .external_export_invocations(item_id, &export_name, &funcs)
                 .await
                 .with_context(|| {
                     format!(
-                        "component '{component_id}' cannot serve {} for host component plugin '{}'",
+                        "component '{item_id}' cannot serve {} for host component plugin '{}'",
                         import.name, self.plugin_id
                     )
                 })?;
@@ -174,7 +248,16 @@ impl WorkloadCalls {
     /// the earlier-named component when one is already claimed.
     fn insert_route(&self, workload_id: &str, interface: Arc<str>, route: InterfaceRoute) {
         let mut routes = self.routes.write().unwrap_or_else(PoisonError::into_inner);
-        let workload_routes = routes.entry(Arc::from(workload_id)).or_default();
+        let entry = routes
+            .entry(Arc::from(workload_id))
+            .or_insert_with(|| CallableWorkload {
+                generation: self.generations.fetch_add(1, Ordering::Relaxed),
+                routes: Arc::default(),
+            });
+        // Copy-on-write: an already-open `target` handle keeps the snapshot it
+        // resolved against rather than seeing this workload's routes change
+        // under it mid-dispatch.
+        let workload_routes = Arc::make_mut(&mut entry.routes);
         match workload_routes.entry(interface) {
             Entry::Vacant(slot) => {
                 debug!(
@@ -224,42 +307,63 @@ impl WorkloadCalls {
             .remove(workload_id);
     }
 
-    /// Every workload this plugin can currently call, sorted by id.
-    fn callable(&self) -> Vec<String> {
+    /// Every workload this plugin can currently call, each with the interfaces
+    /// of it that are callable. Sorted by id, and each entry's interfaces sorted
+    /// by name, both by `BTreeMap` iteration.
+    ///
+    /// The interfaces are per workload rather than per plugin because a plugin
+    /// may import several and a workload need only export some: calling one it
+    /// does not export has no error result to return, so the plugin has to be
+    /// told which are safe rather than left to find out by trapping.
+    fn callable(&self) -> Vec<(String, Vec<String>)> {
         self.routes
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .keys()
-            .map(|id| id.to_string())
+            .iter()
+            .map(|(id, callable)| {
+                let interfaces = callable
+                    .routes
+                    .keys()
+                    .map(|interface| interface.to_string())
+                    .collect();
+                (id.to_string(), interfaces)
+            })
             .collect()
     }
 
-    /// The invocation for `interface`'s `func` on `workload_id`, if that
-    /// workload is running and exports it.
-    fn route(
-        &self,
-        workload_id: &str,
-        interface: &str,
-        func: &str,
-    ) -> Option<Arc<LinkedExportInvocation>> {
+    /// Whether the deployment of `workload_id` stamped `generation` is still the
+    /// one this plugin may call. A held `target` handle keeps its route
+    /// snapshot, so this is the only thing that notices the workload stopping
+    /// underneath it — and comparing the generation rather than the id alone is
+    /// what makes a redeploy under that id count as stopping too, since the
+    /// snapshot names components of the deployment that has gone.
+    fn is_current(&self, workload_id: &str, generation: Generation) -> bool {
         self.routes
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(workload_id)?
-            .get(interface)?
-            .funcs
-            .get(func)
-            .map(Arc::clone)
+            .get(workload_id)
+            .is_some_and(|callable| callable.generation == generation)
     }
 
-    /// Push a newly constructed `target` handle onto its task's stack.
-    fn push_target(&self, task: Option<GuestTaskId>, rep: u32, workload_id: Arc<str>) {
+    /// The routes into `workload_id`, with the generation they belong to, if it
+    /// is currently callable. What `open` checks, and what the handle it returns
+    /// then holds.
+    fn routes_for(&self, workload_id: &str) -> Option<(Generation, Arc<WorkloadRoutes>)> {
+        self.routes
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(workload_id)
+            .map(|callable| (callable.generation, Arc::clone(&callable.routes)))
+    }
+
+    /// Push a newly opened `target` handle onto its task's stack.
+    fn push_target(&self, task: Option<GuestTaskId>, frame: TargetFrame) {
         self.targets
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .entry(task)
             .or_default()
-            .push((rep, workload_id));
+            .push(frame);
     }
 
     /// Remove a dropped handle from its task's stack. Removes by `rep` rather
@@ -270,7 +374,7 @@ impl WorkloadCalls {
         let Entry::Occupied(mut stack) = targets.entry(task) else {
             return;
         };
-        stack.get_mut().retain(|(held, _)| *held != rep);
+        stack.get_mut().retain(|frame| frame.rep != rep);
         if stack.get().is_empty() {
             stack.remove();
         }
@@ -288,23 +392,56 @@ impl WorkloadCalls {
             .clear();
     }
 
-    /// The workload the innermost live handle on `task` names. A `task` of
-    /// `None` (the caller's async call stack was unavailable) never holds one:
-    /// the constructor refuses to mint a handle it could not scope.
-    fn current_target(&self, task: Option<GuestTaskId>) -> Option<Arc<str>> {
+    /// The workload the innermost live handle on `task` names, with the routes
+    /// that handle holds. A `task` of `None` (the caller's async call stack was
+    /// unavailable) never holds one: `open` refuses to hand out a handle it
+    /// could not scope.
+    ///
+    /// `job` is the registry job the *reading* call runs under. A frame whose
+    /// job differs was opened by an earlier call that happened to be assigned
+    /// the same guest task id and never dropped its handle; it is not this
+    /// call's target and is ignored.
+    fn current_target(
+        &self,
+        task: Option<GuestTaskId>,
+        job: Option<crate::host::job_registry::JobId>,
+    ) -> Option<(Arc<str>, Generation, Arc<WorkloadRoutes>)> {
         self.targets
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&task)?
-            .last()
-            .map(|(_, workload_id)| Arc::clone(workload_id))
+            .iter()
+            .rev()
+            .find(|frame| frame.job == job)
+            .map(|frame| {
+                (
+                    Arc::clone(&frame.workload_id),
+                    frame.generation,
+                    Arc::clone(&frame.routes),
+                )
+            })
     }
+}
+
+/// The invocation for `interface`'s `func` within one workload's routes.
+fn invocation_in(
+    routes: &WorkloadRoutes,
+    interface: &str,
+    func: &str,
+) -> Option<Arc<LinkedExportInvocation>> {
+    routes.get(interface)?.funcs.get(func).map(Arc::clone)
 }
 
 /// Install this plugin's shims for `iface` — an interface it imports that a
 /// workload exports — on the plugin's own linker. Where
 /// [`super::add_capabilities_to_linker`] routes a *workload's* call into the
 /// plugin store, these route the plugin's call out to a workload's store.
+///
+/// Every function has to be `async func`, because every shim the host installs
+/// is concurrent and async-ness is part of a function's type identity: a plain
+/// `func` would fail to link with "type mismatch with async". Refused here, with
+/// a message that names the fix, rather than surfacing as that error much later
+/// at the plugin's own instantiation.
 pub(super) fn add_workload_calls_to_linker(
     linker: &mut Linker<SharedCtx>,
     state: &Arc<ComponentHostPluginState>,
@@ -315,6 +452,14 @@ pub(super) fn add_workload_calls_to_linker(
         .map_err(|e| e.context(format!("failed to open linker instance {}", iface.name)))?;
 
     for func in &iface.funcs {
+        anyhow::ensure!(
+            func.is_async,
+            "host component plugin imports {}/{} for a workload to export, but it is declared \
+             without `async`. The host serves it with a concurrent shim, which a sync-typed \
+             import cannot bind to. Declare the interface's functions `async func`.",
+            iface.name,
+            func.name,
+        );
         let state = Arc::clone(state);
         let interface = Arc::clone(&iface.name);
         let func_name = Arc::clone(&func.name);
@@ -326,7 +471,7 @@ pub(super) fn add_workload_calls_to_linker(
                     let interface = Arc::clone(&interface);
                     let func = Arc::clone(&func_name);
                     Box::pin(async move {
-                        route_workload_call(accessor, &state, &interface, &func, params, results)
+                        route_workload_call(accessor, &state, interface, func, params, results)
                             .await
                     })
                 },
@@ -349,11 +494,25 @@ pub(super) fn add_workload_calls_to_linker(
 /// task is serving. Both are resolved from the caller's root guest task, so
 /// they stay exact while calls from other workloads interleave on the same
 /// store.
+///
+/// A handle carries the routes it resolved when it opened, so *which* component
+/// serves the interface cannot change under the call. Whether that deployment is
+/// still running is a separate question, rechecked here rather than taken from
+/// the snapshot: a handle held across a stop would otherwise keep instantiating
+/// the stopped workload's components, running its guest code after the host
+/// reported it gone. The recheck is by generation, not by workload id, so a
+/// redeploy under the same id does not make a handle from the previous
+/// deployment look live again — its routes still name the components that went
+/// away with it.
+///
+/// Every failure here surfaces as a trap, because a workload-exported import
+/// has no error result the host could return instead — which is why a plugin
+/// checks with `target.open` rather than calling blind.
 async fn route_workload_call(
     accessor: &Accessor<SharedCtx>,
     state: &ComponentHostPluginState,
-    interface: &str,
-    func: &str,
+    interface: Arc<str>,
+    func: Arc<str>,
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
@@ -361,10 +520,14 @@ async fn route_workload_call(
         let mut store = access.as_context_mut();
         caller_root_task(&mut store)
     });
+    let job = task.and_then(|task| state.registry()?.job_for_task(task));
 
-    let target = match state.workload_calls.current_target(task) {
-        Some(target) => target,
+    let (target, generation, routes) = match state.workload_calls.current_target(task, job) {
+        Some(held) => held,
         None => {
+            // No handle: this call belongs to whichever workload's capability
+            // call the task is serving. That workload is by definition running
+            // (it is mid-call), so its routes are looked up live.
             let caller = task
                 .and_then(|task| state.registry()?.caller_for_task(task))
                 .ok_or_else(|| {
@@ -375,20 +538,57 @@ async fn route_workload_call(
                         state.id
                     )
                 })?;
-            caller.workload_id
+            let (generation, routes) = state
+                .workload_calls
+                .routes_for(&caller.workload_id)
+                .ok_or_else(|| {
+                    // A lifecycle hook carries no component id: the host is
+                    // telling the plugin *about* a workload rather than running
+                    // one of that workload's calls. Worth saying so, because
+                    // the hook is the one context where the caller is a
+                    // workload that is deliberately not callable, and the
+                    // generic message would read as a misconfiguration.
+                    if caller.component_id.is_none() {
+                        wasmtime::format_err!(
+                            "host component plugin '{}' cannot call {interface}#{func} on workload \
+                             '{}' from a workload-lifecycle hook: a workload is callable only \
+                             while it is running, and a hook is delivered either side of that — \
+                             still deploying at on-workload-bind, already torn down at \
+                             on-workload-unbind. Reclaim per-workload state by id instead.",
+                            state.id,
+                            caller.workload_id
+                        )
+                    } else {
+                        wasmtime::format_err!(
+                            "host component plugin '{}' cannot call {interface}#{func} back on its \
+                             caller '{}': it is not running, or nothing in it exports {interface}",
+                            state.id,
+                            caller.workload_id
+                        )
+                    }
+                })?;
+            (caller.workload_id, generation, routes)
         }
     };
 
-    let invocation = state
-        .workload_calls
-        .route(&target, interface, func)
-        .ok_or_else(|| {
-            wasmtime::format_err!(
-                "host component plugin '{}' cannot call {interface}#{func} on workload \
-                 '{target}': it is not running, or no component of it exports {interface}",
-                state.id
-            )
-        })?;
+    // Liveness is a separate question from routing, and only routing is
+    // snapshotted: a deployment that stopped since the handle opened must not be
+    // instantiated again just because the handle still remembers how.
+    if !state.workload_calls.is_current(&target, generation) {
+        return Err(wasmtime::format_err!(
+            "host component plugin '{}' cannot call {interface}#{func} on workload '{target}': the \
+             deployment this call names is no longer running",
+            state.id
+        ));
+    }
+
+    let invocation = invocation_in(&routes, &interface, &func).ok_or_else(|| {
+        wasmtime::format_err!(
+            "host component plugin '{}' cannot call {interface}#{func} on workload '{target}': no \
+             component of it exports {interface}#{func}",
+            state.id
+        )
+    })?;
 
     invoke_linked_async_export(accessor, params, results, &invocation).await
 }
@@ -430,14 +630,14 @@ pub(super) fn install_host_workload(
         )
         .map_err(|e| e.context("failed to register wasmcloud:host/workload target"))?;
 
-    let new_state = Arc::clone(state);
+    let open_state = Arc::clone(state);
     instance
         .func_new(
-            "[constructor]target",
+            "[static]target.open",
             move |mut store, _ty, params, results| {
                 let workload_id = match params.first() {
                     Some(Val::String(id)) => Arc::<str>::from(id.as_str()),
-                    _ => wasmtime::bail!("target constructor expects a single string workload id"),
+                    _ => wasmtime::bail!("target.open expects a single string workload id"),
                 };
                 // A handle scopes routing to one guest task, so a caller whose
                 // task cannot be resolved gets no handle at all: minting one
@@ -449,6 +649,18 @@ pub(super) fn install_host_workload(
                          the handle would have no call to scope"
                     );
                 };
+                // Resolving here rather than on the call is the whole point:
+                // the handle holds this snapshot, so `none` is the plugin's one
+                // chance to notice a workload it can no longer reach, and
+                // *which* component serves the interface cannot move under a
+                // call the handle scopes.
+                let Some((generation, routes)) = open_state.workload_calls.routes_for(&workload_id)
+                else {
+                    if let Some(slot) = results.first_mut() {
+                        *slot = Val::Option(None);
+                    }
+                    return Ok(());
+                };
                 let handle = store.data_mut().table.push(TargetHandle {
                     workload_id: Arc::clone(&workload_id),
                     task: Some(task),
@@ -458,23 +670,33 @@ pub(super) fn install_host_workload(
                 // Recorded only once the handle exists in the table, so a
                 // failure above cannot leave a target routing calls with
                 // nothing left to ever drop it.
-                new_state
-                    .workload_calls
-                    .push_target(Some(task), rep, workload_id);
+                let job = open_state
+                    .registry()
+                    .and_then(|registry| registry.job_for_task(task));
+                open_state.workload_calls.push_target(
+                    Some(task),
+                    TargetFrame {
+                        rep,
+                        workload_id,
+                        generation,
+                        routes,
+                        job,
+                    },
+                );
                 if let Some(slot) = results.first_mut() {
-                    *slot = Val::Resource(any);
+                    *slot = Val::Option(Some(Box::new(Val::Resource(any))));
                 }
                 Ok(())
             },
         )
-        .map_err(|e| e.context("failed to define wasmcloud:host/workload#[constructor]target"))?;
+        .map_err(|e| e.context("failed to define wasmcloud:host/workload#[static]target.open"))?;
 
     instance
         .func_new(
-            "[method]target.id",
+            "[method]target.get-workload-id",
             move |mut store, _ty, params, results| {
                 let Some(Val::Resource(any)) = params.first() else {
-                    wasmtime::bail!("target.id expects a target handle");
+                    wasmtime::bail!("target.get-workload-id expects a target handle");
                 };
                 let handle = any.try_into_resource::<TargetHandle>(store.as_context_mut())?;
                 let workload_id = store.data().table.get(&handle)?.workload_id.to_string();
@@ -484,14 +706,25 @@ pub(super) fn install_host_workload(
                 Ok(())
             },
         )
-        .map_err(|e| e.context("failed to define wasmcloud:host/workload#[method]target.id"))?;
+        .map_err(|e| {
+            e.context("failed to define wasmcloud:host/workload#[method]target.get-workload-id")
+        })?;
 
     let callable_state = Arc::clone(state);
     instance
         .func_new("callable", move |_store, _ty, _params, results| {
             let callable = callable_state.workload_calls.callable();
             if let Some(slot) = results.first_mut() {
-                *slot = Val::List(callable.into_iter().map(Val::String).collect());
+                *slot = Val::Map(
+                    callable
+                        .into_iter()
+                        .map(|(workload_id, interfaces)| {
+                            let interfaces =
+                                interfaces.into_iter().map(Val::String).collect::<Vec<_>>();
+                            (Val::String(workload_id), Val::List(interfaces))
+                        })
+                        .collect(),
+                );
             }
             Ok(())
         })
@@ -511,31 +744,43 @@ mod tests {
     #[test]
     fn target_handles_nest_and_unwind() {
         let calls = WorkloadCalls::new("test-plugin", Vec::new());
+        let frame = |rep: u32, id: &str, job: Option<u64>| TargetFrame {
+            rep,
+            workload_id: Arc::from(id),
+            generation: 0,
+            routes: Arc::new(WorkloadRoutes::new()),
+            job,
+        };
+        let held = |calls: &WorkloadCalls, job: Option<u64>| {
+            calls
+                .current_target(None, job)
+                .map(|(workload_id, ..)| workload_id.to_string())
+        };
         assert!(
-            calls.current_target(None).is_none(),
+            held(&calls, Some(1)).is_none(),
             "no handle held means no target"
         );
 
-        calls.push_target(None, 1, Arc::from("wl-outer"));
-        calls.push_target(None, 2, Arc::from("wl-inner"));
+        calls.push_target(None, frame(1, "wl-outer", Some(1)));
+        calls.push_target(None, frame(2, "wl-inner", Some(1)));
         assert_eq!(
-            calls.current_target(None).as_deref(),
+            held(&calls, Some(1)).as_deref(),
             Some("wl-inner"),
             "the innermost handle wins"
         );
 
         calls.pop_target(None, 2);
         assert_eq!(
-            calls.current_target(None).as_deref(),
+            held(&calls, Some(1)).as_deref(),
             Some("wl-outer"),
             "dropping the inner handle restores the one it shadowed"
         );
 
-        calls.push_target(None, 3, Arc::from("wl-middle"));
-        calls.push_target(None, 4, Arc::from("wl-last"));
+        calls.push_target(None, frame(3, "wl-middle", Some(1)));
+        calls.push_target(None, frame(4, "wl-last", Some(1)));
         calls.pop_target(None, 3);
         assert_eq!(
-            calls.current_target(None).as_deref(),
+            held(&calls, Some(1)).as_deref(),
             Some("wl-last"),
             "dropping a shadowed handle should not disturb the innermost one"
         );
@@ -543,9 +788,122 @@ mod tests {
         calls.pop_target(None, 4);
         calls.pop_target(None, 1);
         assert!(
-            calls.current_target(None).is_none(),
+            held(&calls, Some(1)).is_none(),
             "dropping every handle leaves no target"
         );
+    }
+
+    /// A handle the guest never drops outlives its task, and wasmtime reuses a
+    /// guest task id once its task ends. The stale frame must not become the
+    /// target of whatever call is assigned that id next — it belongs to a job
+    /// that is over, and job ids are never reused.
+    #[test]
+    fn a_leaked_handle_is_not_inherited_by_a_later_call() {
+        let calls = WorkloadCalls::new("test-plugin", Vec::new());
+        // Job 1 opens a handle and never drops it; its task ends.
+        calls.push_target(
+            None,
+            TargetFrame {
+                rep: 1,
+                workload_id: Arc::from("wl-other"),
+                generation: 0,
+                routes: Arc::new(WorkloadRoutes::new()),
+                job: Some(1),
+            },
+        );
+
+        // Job 2 is assigned the same task id and holds no handle of its own.
+        assert!(
+            calls.current_target(None, Some(2)).is_none(),
+            "a later call must not inherit a leaked frame from an earlier job"
+        );
+        // The frame is still the target of its own job, which may still be
+        // running — only the task id was reused.
+        assert_eq!(
+            calls
+                .current_target(None, Some(1))
+                .map(|(workload_id, ..)| workload_id.to_string())
+                .as_deref(),
+            Some("wl-other")
+        );
+    }
+
+    /// A `target` handle names one *deployment*, not a workload id. Held across
+    /// a stop and a redeploy under the same id, its routes still name components
+    /// of the workload that went away, so the generation it captured has to read
+    /// as gone even though the id is callable again.
+    #[test]
+    fn a_redeploy_under_the_same_id_does_not_revive_a_held_target() {
+        let calls = WorkloadCalls::new("test-plugin", Vec::new());
+        let claim = || {
+            calls.insert_route(
+                "wl-a",
+                Arc::from("acme:events/handler@0.1.0"),
+                InterfaceRoute {
+                    component_name: Arc::from("events-caller"),
+                    funcs: BTreeMap::new(),
+                },
+            );
+        };
+
+        claim();
+        let (held, _routes) = calls.routes_for("wl-a").expect("the workload is callable");
+        assert!(calls.is_current("wl-a", held));
+
+        calls.unregister("wl-a");
+        assert!(
+            !calls.is_current("wl-a", held),
+            "a stopped workload is not callable"
+        );
+
+        claim();
+        assert!(
+            calls.routes_for("wl-a").is_some(),
+            "the new deployment is callable"
+        );
+        assert!(
+            !calls.is_current("wl-a", held),
+            "a handle opened against the previous deployment must not reach the new one"
+        );
+    }
+
+    /// A workload-facing import has to be `async func`: the host serves it with
+    /// a concurrent shim, which a sync-typed import cannot bind to. Refused at
+    /// load, where the message can name the fix, rather than surfacing as a
+    /// "type mismatch with async" at the plugin's own instantiation.
+    #[test]
+    fn a_sync_workload_facing_import_is_refused() {
+        use super::super::tests::{idle_state, one_func_interface};
+        use crate::engine::Engine;
+
+        let engine = Engine::builder().build().expect("failed to build engine");
+        let mut linker = Linker::new(engine.inner());
+        let state = idle_state("sync-workload-call-plugin");
+        let iface = one_func_interface("acme:events/handler@0.1.0", "notify", false);
+
+        let err = add_workload_calls_to_linker(&mut linker, &state, &iface)
+            .expect_err("a sync workload-facing import should be refused");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("concurrent shim") && msg.contains("async func"),
+            "the error should name the hazard and the fix, got: {msg}"
+        );
+    }
+
+    /// The same interface declared `async func` installs, which is what the
+    /// `events-plugin` fixture and every real workload-facing import look like.
+    #[test]
+    fn an_async_workload_facing_import_installs() {
+        use super::super::tests::{idle_state, one_func_interface};
+        use crate::engine::Engine;
+
+        let engine = Engine::builder().build().expect("failed to build engine");
+        let mut linker = Linker::new(engine.inner());
+        let state = idle_state("async-workload-call-plugin");
+        let iface = one_func_interface("acme:events/handler@0.1.0", "notify", true);
+
+        add_workload_calls_to_linker(&mut linker, &state, &iface)
+            .expect("an async workload-facing import should install");
     }
 
     /// A plugin with no workload-facing imports never routes a call this way,
@@ -556,9 +914,8 @@ mod tests {
         assert!(calls.is_empty());
         assert!(calls.callable().is_empty());
         assert!(
-            calls
-                .route("wl-a", "acme:events/handler@0.1.0", "notify")
-                .is_none()
+            calls.routes_for("wl-a").is_none(),
+            "an unknown workload is not callable, so `open` hands out no handle"
         );
     }
 }

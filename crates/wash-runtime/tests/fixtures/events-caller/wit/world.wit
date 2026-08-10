@@ -4,8 +4,14 @@ package acme:eventscaller@0.1.0;
 /// workload is: it *imports* `acme:events/control` (the plugin's capability)
 /// and *exports* `acme:events/handler` (which the plugin calls back into).
 ///
-/// A single manifest entry for `acme:events` covers both, since interface
-/// matching already looks at a workload's exports as well as its imports.
+/// One manifest entry naming both interfaces covers this component, because
+/// interface matching looks at a component's exports as well as its imports —
+/// but it is matched against ONE component at a time, and every interface in
+/// the entry has to be in that component's world. A workload that splits the
+/// two across components needs an entry per component, each naming only the
+/// interfaces that component itself imports or exports; a combined entry
+/// matches neither of them, and the deploy fails at instantiation on an
+/// unresolved import instead.
 world caller {
     import wasi:http/types@0.3.0;
     import acme:events/control@0.1.0;

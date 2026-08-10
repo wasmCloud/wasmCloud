@@ -8,9 +8,10 @@
 //! one did:
 //!
 //! - `GET /echo?msg=M`           -> `control.echo(M)`          -> handling tag
-//! - `GET /dispatch?id=W&msg=M`  -> `control.dispatch(W, M)`   -> W's tag
+//! - `GET /dispatch?id=W&msg=M`  -> `control.dispatch(W, M)`   -> W's tag + W
 //! - `GET /nested?id=W&msg=M`    -> `control.nested(W, M)`     -> `W|self`
-//! - `GET /callable`             -> `control.callable()`       -> ids, one per line
+//! - `GET /callable`             -> `control.callable()`       -> `id=iface,…` a line
+//! - `GET /probe?id=W`           -> `control.lifecycle-probe(W)` -> what W's hooks saw
 //! - `GET /tag`                  -> this workload's own tag
 
 mod bindings {
@@ -69,6 +70,11 @@ impl HttpGuest for Component {
         if route.starts_with("/callable") {
             let ids = control::callable().await;
             return Ok(make_response(200, ids.join("\n").into_bytes()));
+        }
+        if route.starts_with("/probe") {
+            let id = query_get(query, "id").unwrap_or_default();
+            let seen = control::lifecycle_probe(id).await;
+            return Ok(make_response(200, seen.into_bytes()));
         }
         if route.starts_with("/tag") {
             return Ok(make_response(200, tag().into_bytes()));

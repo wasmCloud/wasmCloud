@@ -5,8 +5,10 @@ package wasmcloud:host@0.1.2;
 /// capability call, resolved from the caller's own guest task, so it is exact
 /// under concurrency no matter when in the call the plugin reads it.
 interface identity {
+    use types.{workload-id, component-id};
+
     /// The workload id of the caller currently invoking this plugin.
-    get-workload-id: func() -> string;
+    get-workload-id: func() -> workload-id;
     /// The component id of the caller currently invoking this plugin.
-    get-component-id: func() -> string;
+    get-component-id: func() -> component-id;
 }
