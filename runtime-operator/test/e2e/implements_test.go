@@ -167,9 +167,7 @@ spec:
       components:
         - name: keyvalue-implements
           image: %s
-          imagePullSecret:
-            name: %s
-`, workloadName, namespace, componentImage, registryPullSecret)
+`, workloadName, namespace, componentImage)
 
 		cmd := exec.Command("kubectl", "apply", "-f", "-")
 		cmd.Stdin = strings.NewReader(manifest)

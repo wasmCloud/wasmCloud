@@ -429,6 +429,7 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred(),
 				"failed to create tenant namespace %q", tenantNamespace)
 
+			// The tenant host group runs here, and mounts these credentials.
 			createRegistryPullSecret(tenantNamespace)
 		})
 
@@ -458,6 +459,10 @@ var _ = Describe("Manager", Ordered, func() {
 				fmt.Sprintf("%s.resources.limits.cpu=500m", hg),
 				fmt.Sprintf("%s.logLevel=%s", hg, runtimeLogLevel),
 			)
+			// This group pulls the http fixture from the in-cluster registry,
+			// so it mounts the credentials like the groups in buildBaseHelmSets.
+			sets = append(sets, registryCredentialSets(hg)...)
+
 			helmArgs := make([]string, 0, 5+2*len(sets)+4)
 			helmArgs = append(helmArgs, "upgrade", "--install", "-n", namespace)
 			for _, s := range sets {
@@ -569,9 +574,9 @@ spec:
             host: hello.localhost.direct
       components:
         - name: hello-world
-          image: %s%s
+          image: %s
 `, tenantWorkloadName, tenantNamespace, tenantNamespace, tenantHostGroup,
-				httpWorkloadImage(), componentPullSecretYAML())
+				httpWorkloadImage())
 
 			f, err := os.CreateTemp("", "tenant-workload-*.yaml")
 			Expect(err).NotTo(HaveOccurred())
@@ -677,8 +682,8 @@ spec:
             host: hello.localhost.direct
       components:
         - name: hello-world
-          image: %s%s
-`, name, ns, ns, hostgroup, httpWorkloadImage(), componentPullSecretYAML())
+          image: %s
+`, name, ns, ns, hostgroup, httpWorkloadImage())
 
 			f, err := os.CreateTemp("", "scoped-workload-*.yaml")
 			Expect(err).NotTo(HaveOccurred())
@@ -758,6 +763,8 @@ spec:
 				_, err := utils.Run(cmd)
 				Expect(err).NotTo(HaveOccurred(),
 					"failed to create namespace %q", ns)
+				// The scoped host group runs in the watched namespace and
+				// mounts these; the unwatched one gets them for symmetry.
 				createRegistryPullSecret(ns)
 			}
 		})
@@ -773,7 +780,9 @@ spec:
 			// from runtime.hostGroups[].namespace, so we don't set
 			// operator.hostNamespaces directly.
 			hg := fmt.Sprintf("runtime.hostGroups[%d]", extraHostGroupIndex())
-			scopedSets := []string{
+			// Built in one expression, credentials included, so the slice is
+			// sized once rather than declared and grown.
+			scopedSets := append([]string{
 				fmt.Sprintf("operator.watchNamespaces[0]=%s", watchedNamespace),
 				fmt.Sprintf("%s.name=%s", hg, scopedHostGroup),
 				fmt.Sprintf("%s.namespace=%s", hg, watchedNamespace),
@@ -787,7 +796,9 @@ spec:
 				fmt.Sprintf("%s.resources.limits.memory=512Mi", hg),
 				fmt.Sprintf("%s.resources.limits.cpu=500m", hg),
 				fmt.Sprintf("%s.logLevel=%s", hg, runtimeLogLevel),
-			}
+				// Same as the tenant group: it pulls fixtures, so it mounts the
+				// registry credentials.
+			}, registryCredentialSets(hg)...)
 			helmUpgrade(scopedSets, "helm upgrade into scoped mode failed")
 		})
 
@@ -983,6 +994,33 @@ const httpHelloWorldImage = "ghcr.io/wasmcloud/components/http-hello-world-rust:
 // httpWorkloadImage is the image the http-serving specs deploy: the in-cluster
 // http-handler-p2 fixture on the all-features leg, else the published
 // http-hello-world component.
+// createRegistryPullSecret puts the registry's docker config in ns, for a host
+// group that runs there to mount. A Secret is namespace-scoped and a pod can
+// only mount from its own namespace, so a host group outside wasmcloud-system
+// cannot reach the copy `cargo xtask e2e-images` makes there. No-op off the
+// registry flow.
+func createRegistryPullSecret(ns string) {
+	if !inClusterRegistry {
+		return
+	}
+	By("copying the registry credentials into " + ns)
+	// Upsert rather than create: a host group mounts this, so it has to exist
+	// before the install that starts one, and a rerun against a live cluster
+	// would otherwise fail on a Secret that is already there.
+	create := exec.Command("kubectl", "create", "secret", "docker-registry",
+		registryPullSecret, "-n", ns,
+		fmt.Sprintf("--docker-server=oci-registry.%s.svc", namespace),
+		"--docker-username="+registryUser,
+		"--docker-password="+registryPassword,
+		"--dry-run=client", "-o", "yaml")
+	manifest, err := utils.Run(create)
+	Expect(err).NotTo(HaveOccurred())
+	apply := exec.Command("kubectl", "apply", "-n", ns, "-f", "-")
+	apply.Stdin = strings.NewReader(manifest)
+	_, err = utils.Run(apply)
+	Expect(err).NotTo(HaveOccurred())
+}
+
 func httpWorkloadImage() string {
 	if inClusterRegistry {
 		return registryRef("http-handler-p2")
@@ -990,50 +1028,18 @@ func httpWorkloadImage() string {
 	return httpHelloWorldImage
 }
 
-// componentPullSecretYAML is the imagePullSecret block that goes with
-// httpWorkloadImage, indented for a component in the manifests built inline
-// here. Empty off the registry flow, where the image is published and needs no
-// credentials.
-func componentPullSecretYAML() string {
-	if !inClusterRegistry {
-		return ""
-	}
-	return fmt.Sprintf("\n          imagePullSecret:\n            name: %s", registryPullSecret)
-}
-
-// createRegistryPullSecret puts the in-cluster registry's credentials in ns.
-// A pull secret is resolved in the workload's own namespace, so a workload
-// deployed outside wasmcloud-system cannot use the copy `cargo xtask
-// e2e-images` made there. No-op off the registry flow.
-func createRegistryPullSecret(ns string) {
-	if !inClusterRegistry {
-		return
-	}
-	By("copying the registry pull secret into " + ns)
-	cmd := exec.Command("kubectl", "create", "secret", "docker-registry",
-		registryPullSecret, "-n", ns,
-		fmt.Sprintf("--docker-server=oci-registry.%s.svc", namespace),
-		"--docker-username="+registryUser,
-		"--docker-password="+registryPassword)
-	_, err := utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred())
-}
-
 // rewriteWorkloadImages swaps the published http image in a sample manifest for
 // its in-cluster registry equivalent when the registry flow is active; a no-op
 // otherwise (the release/canary legs deploy the published component as-is).
 //
-// The in-cluster registry requires authentication, so the rewritten component
-// also gains the image pull secret that carries its credentials. Without it
-// the host pulls anonymously and the workload never becomes Ready. The pull
-// secret is indented to match the `image:` line it follows, so this holds for
-// any sample regardless of how deeply the component sits.
+// No credentials travel with the image: the host groups mount the registry's
+// docker config (see buildBaseHelmSets), so a pull that names no secret of its
+// own authenticates from there.
 func rewriteWorkloadImages(manifest string) string {
 	if !inClusterRegistry {
 		return manifest
 	}
-	replacement := fmt.Sprintf("${1}image: %s\n${1}imagePullSecret:\n${1}  name: %s",
-		registryRef("http-handler-p2"), registryPullSecret)
+	replacement := "${1}image: " + registryRef("http-handler-p2")
 	return regexp.MustCompile(`(?m)^([ \t]*)image: `+regexp.QuoteMeta(httpHelloWorldImage)+`[ \t]*$`).
 		ReplaceAllString(manifest, replacement)
 }

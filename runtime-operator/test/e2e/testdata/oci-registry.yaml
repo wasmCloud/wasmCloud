@@ -28,7 +28,8 @@
 # Two Secrets this file references are created by `cargo xtask e2e-images`
 # rather than checked in here: `oci-registry-auth`, whose keys the operator
 # materializes into the `wasmcloud:secrets` config below, and
-# `oci-registry-pull`, which hostgroups present when pulling fixtures back out.
+# `oci-registry-pull`, the docker config every hostgroup mounts so it can pull
+# fixtures back out without each component naming a secret.
 # They hold credentials that must match the push side exactly, and only the
 # xtask can pick up E2E_REGISTRY_USER/E2E_REGISTRY_PASSWORD.
 

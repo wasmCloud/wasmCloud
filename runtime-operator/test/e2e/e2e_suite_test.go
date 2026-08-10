@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -197,6 +198,23 @@ var _ = BeforeSuite(func() {
 		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the runtime-gateway image into Kind")
 	}
 
+	// The host groups mount the registry credentials, so the Secret has to
+	// exist before the install brings a pod up: a missing one leaves it stuck
+	// mounting and `helm --wait` times out. `cargo xtask e2e-images` creates
+	// this too, for a standalone run against an installed cluster, but that
+	// happens after this install.
+	if inClusterRegistry {
+		By("creating the namespace ahead of the release, to hold the registry credentials")
+		nsManifest, err := utils.Run(exec.Command("kubectl", "create", "namespace", namespace,
+			"--dry-run=client", "-o", "yaml"))
+		ExpectWithOffset(1, err).NotTo(HaveOccurred())
+		applyNs := exec.Command("kubectl", "apply", "-f", "-")
+		applyNs.Stdin = strings.NewReader(nsManifest)
+		_, err = utils.Run(applyNs)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred())
+		createRegistryPullSecret(namespace)
+	}
+
 	By("installing the runtime-operator via Helm")
 	sets := buildBaseHelmSets()
 
@@ -253,11 +271,43 @@ var _ = BeforeSuite(func() {
 const registryImageTag = "e2e"
 
 // registryPullSecret names the dockerconfigjson Secret carrying the in-cluster
-// registry's credentials, applied alongside the registry itself (see
-// testdata/oci-registry.yaml). Every component pulling a fixture has to
-// reference it: the registry authenticates all requests, and a workload whose
-// image pull is refused never becomes Ready.
+// registry's credentials, created by `cargo xtask e2e-images`. Every host group
+// mounts it rather than each component naming it, so a fixture pull carries no
+// credentials of its own; the registry authenticates every request, and a
+// workload whose image pull is refused never becomes Ready.
 const registryPullSecret = "oci-registry-pull"
+
+// registryDockerConfigDir is where the hosts mount that Secret. DOCKER_CONFIG
+// points here, and the host reads `config.json` beneath it when a pull carries
+// no credentials of its own.
+const registryDockerConfigDir = "/etc/wasmcloud/docker"
+
+// registryCredentialSets mounts the registry's credentials on one host group,
+// so that no component has to name an imagePullSecret: a pull without explicit
+// credentials falls back to the docker config DOCKER_CONFIG points at, and the
+// auths entry is keyed by registry, so pulls from ghcr stay anonymous.
+//
+// Per host group, because that is the only place the chart takes volumes, and
+// a test fixture is no reason to grow its surface. Every host group that runs
+// a workload pulling from the registry needs these, which is why the tenant and
+// scoped specs call this for the group they add.
+//
+// `.dockerconfigjson` is remapped because a docker config directory is read by
+// the name `config.json`. Empty off the registry flow.
+func registryCredentialSets(hostGroup string) []string {
+	if !inClusterRegistry {
+		return nil
+	}
+	return []string{
+		fmt.Sprintf("%s.volumes[0].name=%s", hostGroup, registryPullSecret),
+		fmt.Sprintf("%s.volumes[0].secret.secretName=%s", hostGroup, registryPullSecret),
+		fmt.Sprintf("%s.volumes[0].secret.items[0].key=.dockerconfigjson", hostGroup),
+		fmt.Sprintf("%s.volumes[0].secret.items[0].path=config.json", hostGroup),
+		fmt.Sprintf("%s.volumeMounts[0].name=%s", hostGroup, registryPullSecret),
+		fmt.Sprintf("%s.volumeMounts[0].mountPath=%s", hostGroup, registryDockerConfigDir),
+		fmt.Sprintf("%s.volumeMounts[0].readOnly=true", hostGroup),
+	}
+}
 
 // registryUser / registryPassword are the registry's Basic credentials. The
 // xtask defines them and creates the Secrets holding them; both sides read the
@@ -352,6 +402,12 @@ func buildBaseHelmSets() []string {
 		// other workload out of its reach.
 		sets = append(sets,
 			"runtime.ociCaPaths[0]=/runtime-cert/ca.crt",
+			// Where the mounted credentials are found. Chart-wide `runtime.env`
+			// already applies to every host group, so this needs saying once;
+			// the volumes themselves are per host group (see
+			// registryCredentialSets).
+			"runtime.env[0].name=DOCKER_CONFIG",
+			fmt.Sprintf("runtime.env[0].value=%s", registryDockerConfigDir),
 			// hostGroups[1]: the `registry` hostgroup, serving the oci-registry
 			// workload (testdata/oci-registry.yaml, hostSelector:
 			// hostgroup=registry) over TLS. The oci-registry exports a p3 async
@@ -383,6 +439,8 @@ func buildBaseHelmSets() []string {
 			"runtime.hostGroups[1].resources.limits.cpu=500m",
 			fmt.Sprintf("runtime.hostGroups[1].logLevel=%s", runtimeLogLevel),
 		)
+		sets = append(sets, registryCredentialSets("runtime.hostGroups[0]")...)
+		sets = append(sets, registryCredentialSets("runtime.hostGroups[1]")...)
 		// The registry host must be an all-features build (for the async
 		// blobstore plugin). When the default host isn't one — the release leg,
 		// where it's the shipped image — override just this hostgroup's image tag
