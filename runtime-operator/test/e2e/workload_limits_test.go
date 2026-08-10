@@ -127,13 +127,11 @@ spec:
       components:
         - name: %s
           image: %s
-          imagePullSecret:
-            name: %s
           poolSize: %d
           maxConcurrency: %d
           maxInvocations: %d
 `, workloadName, namespace, replicas, workloadHost, workloadName, fixtureImage,
-			registryPullSecret, poolSize, maxConcurrency, maxInvocations)
+			poolSize, maxConcurrency, maxInvocations)
 
 		cmd := exec.Command("kubectl", "apply", "-f", "-")
 		cmd.Stdin = strings.NewReader(manifest)
