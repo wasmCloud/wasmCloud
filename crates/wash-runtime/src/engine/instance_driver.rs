@@ -63,6 +63,9 @@ pub(crate) struct LinkedJob {
     pub(crate) import_name: Arc<str>,
     pub(crate) export_name: Arc<str>,
     pub(crate) reply: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<Val>>>,
+    /// The abandonment flag of the dispatched call enforcing this job's
+    /// deadline (see [`crate::engine::abandon`]).
+    pub(crate) abandoned: Arc<crate::engine::abandon::AbandonFlag>,
 }
 
 /// Work an instance can be given. Both shapes run as concurrent tasks on the
@@ -116,6 +119,11 @@ impl PoolSlot {
     /// Stop this instance admitting: it drains what it took, ends its run loop,
     /// and its store's teardown ends any guest work still running on it.
     ///
+    /// Only as far as the last call returning, though: every path to `drained`
+    /// runs through a call's task ending, so a guest that never yields holds the
+    /// store open regardless. That one is ended by its abandoned call instead
+    /// (see [`crate::engine::abandon`]).
+    ///
     /// TODO: retirement is a stand-in for cancelling the one bad call. The
     /// host cannot cancel a guest `call_concurrent` subtask
     /// (bytecodealliance/wasmtime#11833), so ending a wedged call's work means
@@ -144,8 +152,16 @@ impl AccessorTask<SharedCtx> for LinkedTask {
             import_name,
             export_name,
             reply,
+            abandoned,
         } = *self.job;
         let instance = self.instance;
+
+        // Watch this call for the rest of its life. The guard deregisters on
+        // drop, however the call ends.
+        let _abandoned = accessor.with(|mut access| {
+            let calls = Arc::clone(&access.get().abandoned);
+            calls.watch(abandoned)
+        });
 
         let func = accessor.with(|mut access| {
             instance
@@ -287,7 +303,11 @@ impl InstanceDriver {
                         };
                         let spawned = match job {
                             InstanceJob::Http(job) => {
-                                let (req, resp_tx) = *job;
+                                let ServiceHttpJob {
+                                    req,
+                                    resp_tx,
+                                    abandoned,
+                                } = *job;
                                 let Some(service) = service.as_ref().map(Arc::clone) else {
                                     // Admission declines HTTP for an instance
                                     // without the export, so this is not
@@ -302,6 +322,7 @@ impl InstanceDriver {
                                     service,
                                     req,
                                     resp_tx,
+                                    abandoned,
                                     pool_slot: Some(PoolSlot {
                                         state: Arc::clone(&task_state),
                                         _in_flight: guard,

@@ -11,8 +11,11 @@
 //!
 //! [`Ingress::Messaging`]: super::Ingress::Messaging
 
+use std::sync::Arc;
+
 use wasmtime::component::{Accessor, AccessorTask, Instance, StreamReader};
 
+use crate::engine::abandon::AbandonFlag;
 use crate::engine::ctx::SharedCtx;
 
 mod bindings {
@@ -44,13 +47,15 @@ pub struct BrokerMessage {
     pub reply_to: Option<String>,
 }
 
-/// A messaging invocation: the message plus a oneshot carrying the handler's
-/// outcome back to the host-side ingress (to ack/log), its disposition rendered
-/// to a string.
-pub type MessagingJob = (
-    BrokerMessage,
-    tokio::sync::oneshot::Sender<Result<(), String>>,
-);
+/// A messaging invocation: the message, a oneshot carrying the handler's
+/// outcome back to the host-side ingress (to ack/log, its disposition rendered
+/// to a string), and the abandonment flag of the dispatched call enforcing its
+/// deadline (see [`crate::engine::abandon`]).
+pub struct MessagingJob {
+    pub msg: BrokerMessage,
+    pub result_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
+    pub abandoned: Arc<AbandonFlag>,
+}
 
 /// The messaging handler export a trigger service must provide.
 ///
@@ -117,6 +122,7 @@ pub(super) struct MessagingTask {
     pub(super) handler: std::sync::Arc<AsyncMessaging>,
     pub(super) msg: BrokerMessage,
     pub(super) result_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
+    pub(super) abandoned: Arc<AbandonFlag>,
 }
 
 impl AccessorTask<SharedCtx> for MessagingTask {
@@ -125,7 +131,15 @@ impl AccessorTask<SharedCtx> for MessagingTask {
             handler,
             msg,
             result_tx,
+            abandoned,
         } = self;
+
+        // Watch this call for the rest of its life. The guard deregisters on
+        // drop, however the call ends.
+        let _abandoned = accessor.with(|mut access| {
+            let calls = Arc::clone(&access.get().abandoned);
+            calls.watch(abandoned)
+        });
 
         let outcome = async {
             // The `@0.3.0` body is a native `stream<u8>`; mint one carrying the

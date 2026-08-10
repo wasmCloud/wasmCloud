@@ -86,6 +86,18 @@ impl Guest for Component {
     }
 
     async fn get(key: String) -> Option<Vec<u8>> {
+        // The `__spin__` key wedges this call in a loop that never yields,
+        // unreachable by any host-side timeout — and, because a non-yielding
+        // activation holds the store's guest execution, it wedges every other
+        // caller's calls with it. The plugin store's policy is WarnThenTrap,
+        // so a test can prove the wedge is escalated into a supervised restart
+        // that restores service.
+        if key == "__spin__" {
+            let mut x: u64 = 0;
+            loop {
+                x = std::hint::black_box(x.wrapping_add(1));
+            }
+        }
         STORE.lock().unwrap().get(&key).cloned()
     }
 

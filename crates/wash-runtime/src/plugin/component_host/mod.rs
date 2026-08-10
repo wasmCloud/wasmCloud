@@ -722,7 +722,7 @@ impl HostPlugin for ComponentHostPlugin {
         // reached the guest (tokio's bounded send does not enqueue a dropped
         // send), so no hook is running — forget the workload and fail, no
         // unbind needed.
-        let reply_rx = match send_lifecycle_job(
+        let (reply_rx, call) = match send_lifecycle_job(
             &sender_arc,
             &self.state,
             lifecycle,
@@ -732,7 +732,7 @@ impl HostPlugin for ComponentHostPlugin {
         )
         .await
         {
-            Ok(reply_rx) => reply_rx,
+            Ok(sent) => sent,
             Err(e) => {
                 self.state.forget_workload(&workload_id);
                 return Err(e.context(format!(
@@ -748,7 +748,7 @@ impl HostPlugin for ComponentHostPlugin {
         // hook actually returns — guaranteeing bind-then-unbind ordering so
         // whatever it provisions late is still reclaimed (see
         // [`spawn_deferred_unbind`]).
-        let failure = match await_bind_reply(reply_rx, &self.state).await {
+        let failure = match await_bind_reply(reply_rx, call, &self.state).await {
             BindReply::Completed(Ok(results)) => match decode_bind_reply(&results) {
                 Ok(Ok(())) => {
                     debug!(id = self.id, %workload_id, "workload bound to host component plugin");
@@ -1550,6 +1550,14 @@ async fn route_capability_call(
     })?;
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    // Deadline enforced here, in the calling workload's task, outside the
+    // plugin's store (see `crate::engine::abandon`). The plugin store is
+    // `WarnThenTrap`: an abandoned call is logged at the grace and only traps
+    // the shared store at the escalation.
+    let call = crate::engine::abandon::DispatchedCall::new(
+        "capability (plugin)",
+        crate::timeouts::plugin_capability_call(),
+    );
     sender
         .send(CapabilityJob::Call(CapabilityCall {
             interface,
@@ -1558,15 +1566,25 @@ async fn route_capability_call(
             args,
             result_tys,
             reply: reply_tx,
+            abandoned: call.flag(),
         }))
         .await
         .map_err(|_| {
             wasmtime::format_err!("host component plugin '{}' channel closed", state.id)
         })?;
 
-    let produced = reply_rx.await.map_err(|_| {
-        wasmtime::format_err!("host component plugin '{}' dropped the reply", state.id)
-    })??;
+    let produced = call
+        .await_reply(reply_rx)
+        .await
+        .ok_or_else(|| {
+            wasmtime::format_err!(
+                "host component plugin '{}' produced no reply in time",
+                state.id
+            )
+        })?
+        .map_err(|_| {
+            wasmtime::format_err!("host component plugin '{}' dropped the reply", state.id)
+        })??;
 
     // Inject the relocated results into the caller store.
     accessor.with(|mut access| -> wasmtime::Result<()> {
@@ -1834,7 +1852,17 @@ fn build_plugin_store(
     let ctx = ctx_builder.build();
     // The registry marks this as the plugin (real) side of the resource bridge
     // and keeps the resources it hands out across the boundary alive.
-    Store::new(engine.inner(), SharedCtx::new(ctx).with_resource_registry())
+    let mut store = Store::new(engine.inner(), SharedCtx::new(ctx).with_resource_registry());
+    // Required, not optional: the engine enables `epoch_interruption`, and a
+    // store that never sets a deadline traps the moment it runs any guest code.
+    // `WarnThenTrap` because this one store serves every workload that imports
+    // the plugin's capability: an abandoned call gets a long runway to finish
+    // on its own before ending it costs every tenant a supervised restart.
+    crate::engine::abandon::arm_epoch_deadline(
+        &mut store,
+        crate::engine::abandon::AbandonedCallPolicy::WarnThenTrap,
+    );
+    store
 }
 
 /// Introspect a plugin component's exported interfaces and their functions from
