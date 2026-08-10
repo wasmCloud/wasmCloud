@@ -39,10 +39,10 @@ pub type P3SendFuture = Box<dyn std::future::Future<Output = P3SendResult> + Sen
 struct ChannelBody {
     rx: tokio::sync::mpsc::Receiver<Result<hyper::body::Frame<bytes::Bytes>, ErrorCode>>,
     /// Aborts the component task when this body is dropped before the stream
-    /// completes (e.g. the client disconnects). Without this, a guest that is
-    /// busy computing — rather than parked on a frame send — would keep running
-    /// until its next send; there is no epoch/wall-clock backstop. Held only
-    /// for its `Drop`.
+    /// completes (e.g. the client disconnects). The abort lands at the guest's
+    /// next await, reclaiming a yielding guest at once; a guest that never
+    /// yields is unreachable by it and is ended by its abandoned call instead
+    /// (see [`crate::engine::abandon`]). Held only for its `Drop`.
     _task: tokio_util::task::AbortOnDropHandle<()>,
 }
 
@@ -72,6 +72,7 @@ impl hyper::body::Body for ChannelBody {
 pub(crate) async fn handle_component_request_p3(
     warm: ComponentInstance,
     req: hyper::Request<hyper::body::Incoming>,
+    abandoned: std::sync::Arc<crate::engine::abandon::AbandonFlag>,
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<hyper::Response<P3Body>> {
     let _ = &fuel_meter; // fuel metering integration deferred to match P2's observe() pattern
@@ -106,6 +107,9 @@ pub(crate) async fn handle_component_request_p3(
                 mut store,
                 instance,
             } = warm;
+            // Watched for the life of the store's run: the dispatcher enforces
+            // the deadline out where a non-yielding guest cannot block it.
+            let _abandoned = store.data().abandoned.watch(abandoned);
             // A binding view over the instance, rebuilt per request. Cheap
             // (export lookups); the expensive part -- the store and the
             // instantiation -- is what a warm instance carries over.

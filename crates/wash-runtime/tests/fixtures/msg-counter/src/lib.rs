@@ -49,6 +49,15 @@ impl MsgGuest for Component {
         if msg.subject == "boom" {
             panic!("msg-counter boom: deliberate handler trap for the restart test");
         }
+        // A `spin` subject wedges the handler in a loop that never yields,
+        // unreachable by any host-side timeout; only the epoch deadline
+        // compiled into the loop's back-edge can end it.
+        if msg.subject == "spin" {
+            let mut x: u64 = 0;
+            loop {
+                x = std::hint::black_box(x.wrapping_add(1));
+            }
+        }
         let n = MSG_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
         // Echo the running count + subject so the trigger service spike can
         // observe delivery and that the instance is long-lived. The disposition

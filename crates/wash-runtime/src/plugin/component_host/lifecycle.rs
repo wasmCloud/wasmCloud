@@ -38,6 +38,7 @@ use tracing::{debug, error, warn};
 use wasmtime::component::Val;
 use wasmtime::component::types::Type;
 
+use crate::engine::abandon::DispatchedCall;
 use crate::engine::ctx::CallerIdentity;
 use crate::engine::store::relocate::Relocated;
 use crate::engine::workload::UnresolvedWorkload;
@@ -279,12 +280,14 @@ pub(super) enum BindReply {
 }
 
 /// Enqueue one lifecycle call on `sender` and return its pending reply
-/// receiver. Bounded by [`crate::timeouts::plugin_lifecycle_call`] so a full
-/// channel cannot park a deploy or a stop; a send that times out (or hits a
-/// closed channel) leaves the job un-enqueued — tokio's bounded send only
-/// enqueues on completion — so the caller knows no hook is running. The call
-/// runs under the workload's identity (empty component id) so
-/// `wasmcloud:host/identity` answers consistently inside the hook.
+/// receiver, paired with the [`DispatchedCall`] whose deadline the caller must
+/// enforce when awaiting it. Bounded by
+/// [`crate::timeouts::plugin_lifecycle_call`] so a full channel cannot park a
+/// deploy or a stop; a send that times out (or hits a closed channel) leaves
+/// the job un-enqueued — tokio's bounded send only enqueues on completion — so
+/// the caller knows no hook is running. The call runs under the workload's
+/// identity (empty component id) so `wasmcloud:host/identity` answers
+/// consistently inside the hook.
 pub(super) async fn send_lifecycle_job(
     sender: &CapabilitySender,
     state: &ComponentHostPluginState,
@@ -292,8 +295,9 @@ pub(super) async fn send_lifecycle_job(
     func: &ExportedFunc,
     arg: Val,
     workload_id: &Arc<str>,
-) -> anyhow::Result<LifecycleReplyRx> {
+) -> anyhow::Result<(LifecycleReplyRx, DispatchedCall)> {
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    let call = DispatchedCall::new("workload-lifecycle (plugin)", state.lifecycle_timeout());
     let job = CapabilityJob::Call(CapabilityCall {
         interface: Arc::clone(&lifecycle.interface),
         func: Arc::clone(&func.name),
@@ -304,6 +308,7 @@ pub(super) async fn send_lifecycle_job(
         args: vec![Relocated::Val(arg)],
         result_tys: Arc::clone(&func.result_tys),
         reply: reply_tx,
+        abandoned: call.flag(),
     });
     tokio::time::timeout(state.lifecycle_timeout(), sender.send(job))
         .await
@@ -314,7 +319,7 @@ pub(super) async fn send_lifecycle_job(
             )
         })?
         .map_err(|_| anyhow::anyhow!("host component plugin '{}' channel closed", state.id))?;
-    Ok(reply_rx)
+    Ok((reply_rx, call))
 }
 
 /// Interpret a resolved lifecycle reply receiver value into relocated results
@@ -334,16 +339,20 @@ fn interpret_reply(
 }
 
 /// Await a bind reply, keeping the receiver if the budget elapses first so the
-/// caller can defer cleanup until the still-running hook returns.
+/// caller can defer cleanup until the still-running hook returns. A timeout
+/// also abandons the call (the [`DispatchedCall`] arms its flag), so a hook
+/// wedged in non-yielding guest code is at least detected and logged.
 pub(super) async fn await_bind_reply(
     mut reply_rx: LifecycleReplyRx,
+    call: DispatchedCall,
     state: &ComponentHostPluginState,
 ) -> BindReply {
-    let deadline = tokio::time::sleep(state.lifecycle_timeout());
-    tokio::pin!(deadline);
-    tokio::select! {
-        reply = &mut reply_rx => BindReply::Completed(interpret_reply(reply, state)),
-        () = &mut deadline => BindReply::TimedOut(reply_rx),
+    match call.await_head(&mut reply_rx).await {
+        Some((reply, watch)) => {
+            watch.disarm();
+            BindReply::Completed(interpret_reply(reply, state))
+        }
+        None => BindReply::TimedOut(reply_rx),
     }
 }
 
@@ -359,10 +368,11 @@ async fn call_lifecycle(
     arg: Val,
     workload_id: &Arc<str>,
 ) -> anyhow::Result<Vec<Relocated>> {
-    let reply_rx = send_lifecycle_job(sender, state, lifecycle, func, arg, workload_id).await?;
-    match tokio::time::timeout(state.lifecycle_timeout(), reply_rx).await {
-        Ok(reply) => interpret_reply(reply, state),
-        Err(_) => Err(anyhow::anyhow!(
+    let (reply_rx, call) =
+        send_lifecycle_job(sender, state, lifecycle, func, arg, workload_id).await?;
+    match call.await_reply(reply_rx).await {
+        Some(reply) => interpret_reply(reply, state),
+        None => Err(anyhow::anyhow!(
             "lifecycle call to host component plugin '{}' timed out",
             state.id
         )),

@@ -50,6 +50,10 @@ pub(crate) struct HttpTask {
     pub(crate) req: hyper::Request<hyper::body::Incoming>,
     pub(crate) resp_tx:
         tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
+    /// Armed by the dispatcher once it has stopped waiting for this response.
+    /// It is registered on the store for the life of the call so the epoch
+    /// callback can see it — the only way to end a guest that never yields.
+    pub(crate) abandoned: std::sync::Arc<crate::engine::abandon::AbandonFlag>,
     /// This call's tether to a pooled instance: holds its in-flight slot and
     /// can retire the instance. `None` for a service, whose singleton instance
     /// is not the pool's to retire.
@@ -62,8 +66,16 @@ impl AccessorTask<SharedCtx> for HttpTask {
             service,
             req,
             resp_tx,
+            abandoned,
             pool_slot,
         } = self;
+
+        // Watch this call for the rest of its life. The guard deregisters on
+        // drop, however the call ends.
+        let _abandoned = accessor.with(|mut access| {
+            let calls = std::sync::Arc::clone(&access.get().abandoned);
+            calls.watch(abandoned)
+        });
 
         let (parts, body) = req.into_parts();
         let body = body

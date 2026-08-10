@@ -26,11 +26,14 @@ impl Handler for Component {
     async fn handle(request: Request) -> Result<Response, ErrorCode> {
         // Plain-value async cross-component call -> ephemeral-store path.
         // `/calls` reports how many calls the callee instance has served, so a
-        // caller can tell a reused instance from a fresh one; anything else is
-        // run(21) = 21 * 2 + 1 = 43.
+        // caller can tell a reused instance from a fresh one; `/spin` drives
+        // the callee into a non-yielding loop (`run(0)` wedges by contract);
+        // anything else is run(21) = 21 * 2 + 1 = 43.
         let path = request.get_path_with_query().unwrap_or_default();
         let result = if path.starts_with("/calls") {
             compute::calls().await
+        } else if path.starts_with("/spin") {
+            compute::run(0).await
         } else {
             compute::run(21).await
         };

@@ -77,6 +77,9 @@ pub struct SharedCtx {
     /// a caller store leaves it `None` and holds opaque proxies instead. See
     /// [`crate::engine::store::resource_bridge`].
     pub resource_registry: Option<crate::engine::store::resource_bridge::ResourceRegistry>,
+    /// The in-flight calls on this store whose dispatchers may abandon them;
+    /// read by the store's epoch callback. See [`crate::engine::abandon`].
+    pub abandoned: Arc<crate::engine::abandon::AbandonedCalls>,
 }
 
 /// The identity of whoever is invoking a host component plugin, used to
@@ -101,6 +104,7 @@ impl SharedCtx {
             contexts: Default::default(),
             exporter_instances: Default::default(),
             resource_registry: None,
+            abandoned: Arc::default(),
         }
     }
 

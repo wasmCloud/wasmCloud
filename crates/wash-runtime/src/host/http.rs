@@ -28,6 +28,7 @@ use std::{
 
 use arc_swap::ArcSwap;
 
+use crate::engine::abandon::{AbandonFlag, AbandonOnDrop, DispatchedCall};
 use crate::host::allowed_hosts::AllowedHost;
 use crate::host::trigger_service::{BrokerMessage, MessagingJob};
 use crate::{engine::ctx::SharedCtx, observability::Meters};
@@ -918,16 +919,71 @@ impl HostHandler for NullServer {
     }
 }
 
+/// An HTTP response body that keeps its dispatched call condemned-on-drop while
+/// it streams: dropped mid-stream (the client disconnected), the wrapped
+/// [`AbandonOnDrop`] abandons the call; ended cleanly, it disarms. Extends the
+/// deadline enforcement of [`DispatchedCall::await_head`] across the body phase,
+/// so a guest that produces a response head and then wedges mid-body is still
+/// reachable.
+struct WatchedBody<B> {
+    inner: B,
+    /// `None` once end-of-stream disarmed it.
+    watch: Option<AbandonOnDrop>,
+}
+
+impl<B: hyper::body::Body + Unpin> hyper::body::Body for WatchedBody<B> {
+    type Data = B::Data;
+    type Error = B::Error;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+        let this = self.get_mut();
+        let poll = std::pin::Pin::new(&mut this.inner).poll_frame(cx);
+        // Clean end of stream: the response was delivered whole, so nothing is
+        // abandoned. An *error* frame deliberately does not disarm — the
+        // exchange broke off, and if the guest is wedged behind it, the armed
+        // flag is what ends it (a completed call deregisters, so arming a
+        // healthy one is harmless).
+        if let std::task::Poll::Ready(None) = poll
+            && let Some(watch) = this.watch.take()
+        {
+            watch.disarm();
+        }
+        poll
+    }
+}
+
+/// Wrap `resp`'s body so the dispatched call behind it stays condemned-on-drop
+/// until the body finishes streaming.
+fn watch_body(
+    resp: hyper::Response<HyperOutgoingBody>,
+    watch: AbandonOnDrop,
+) -> hyper::Response<HyperOutgoingBody> {
+    resp.map(|inner| {
+        HyperOutgoingBody::new(
+            WatchedBody {
+                inner,
+                watch: Some(watch),
+            }
+            .boxed_unsync(),
+        )
+    })
+}
+
 /// A map from host header to resolved workload handles and their associated component id
 pub type WorkloadHandles =
     Arc<RwLock<HashMap<String, (ResolvedWorkload, InstancePre<SharedCtx>, String)>>>;
 
 /// An inbound HTTP request routed to a long-lived service instance, paired with
-/// a oneshot for its response.
-pub type ServiceHttpJob = (
-    hyper::Request<hyper::body::Incoming>,
-    tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
-);
+/// a oneshot for its response and the abandonment flag of the [`DispatchedCall`]
+/// enforcing its deadline (see [`crate::engine::abandon`]).
+pub struct ServiceHttpJob {
+    pub req: hyper::Request<hyper::body::Incoming>,
+    pub resp_tx: tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
+    pub abandoned: Arc<AbandonFlag>,
+}
 
 /// A map from workload id to the channel of its HTTP-serving service instance.
 /// Empty unless a workload's service opts into HTTP ingress (a p3 feature).
@@ -1328,11 +1384,20 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 )
             })?;
         let (tx, rx) = tokio::sync::oneshot::channel();
+        // Deadline enforced here, outside the service's store, where a
+        // non-yielding guest cannot block it (see `crate::engine::abandon`).
+        let call = DispatchedCall::new("messaging (service)", crate::timeouts::messaging_deliver());
         sender
-            .send((msg, tx))
+            .send(MessagingJob {
+                msg,
+                result_tx: tx,
+                abandoned: call.flag(),
+            })
             .await
             .map_err(|_| anyhow::anyhow!("trigger service messaging instance is not running"))?;
-        rx.await
+        call.await_reply(rx)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("trigger service produced no message response in time"))?
             .map_err(|_| anyhow::anyhow!("trigger service dropped the message response"))
     }
 
@@ -1611,18 +1676,31 @@ async fn handle_http_request<T: Router>(
     let service_sender = service_handlers.read().await.get(&workload_id).cloned();
     if let Some(sender) = service_sender {
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-        let response = if sender.send((req, resp_tx)).await.is_err() {
+        // The deadline is enforced here, outside the service's store: a guest
+        // that never yields blocks every host future on its own store, so only
+        // a waiter out here can abandon the call (see `crate::engine::abandon`).
+        let call = DispatchedCall::new("HTTP (service)", crate::timeouts::http_response());
+        let job = ServiceHttpJob {
+            req,
+            resp_tx,
+            abandoned: call.flag(),
+        };
+        let response = if sender.send(job).await.is_err() {
             error!(host = %workload_id, "service HTTP instance is not running");
             error_response(503)
         } else {
-            match resp_rx.await {
-                Ok(Ok(resp)) => resp,
-                Ok(Err(e)) => {
+            match call.await_head(resp_rx).await {
+                Some((Ok(Ok(resp)), watch)) => watch_body(resp, watch),
+                Some((Ok(Err(e)), _)) => {
                     error!(err = ?e, "service HTTP handler failed");
                     error_response(500)
                 }
-                Err(_) => {
+                Some((Err(_), _)) => {
                     error!("service HTTP instance dropped the response");
+                    error_response(500)
+                }
+                None => {
+                    error!("service HTTP instance produced no response");
                     error_response(500)
                 }
             }
@@ -1878,7 +1956,12 @@ async fn invoke_component_handler(
             use crate::engine::instance_driver::InstanceJob;
             use crate::engine::instance_pool::Dispatch;
             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-            let outcome = match pool.offer(InstanceJob::Http(Box::new((req, resp_tx)))) {
+            let call = DispatchedCall::new("HTTP (pooled)", crate::timeouts::http_response());
+            let outcome = match pool.offer(InstanceJob::Http(Box::new(ServiceHttpJob {
+                req,
+                resp_tx,
+                abandoned: call.flag(),
+            }))) {
                 Dispatch::Sent => Ok(()),
                 // The pool has room. Build and instantiate the store out here,
                 // where awaiting is allowed and where a component that fails
@@ -1896,12 +1979,16 @@ async fn invoke_component_handler(
             };
             match outcome {
                 Ok(()) => {
-                    return resp_rx
+                    let (resp, watch) = call
+                        .await_head(resp_rx)
                         .await
-                        .map_err(|_| anyhow::anyhow!("pooled instance dropped the request"))?;
+                        .ok_or_else(|| anyhow::anyhow!("pooled instance produced no response"))?;
+                    let resp =
+                        resp.map_err(|_| anyhow::anyhow!("pooled instance dropped the request"))??;
+                    return Ok(watch_body(resp, watch));
                 }
                 // Every warm instance was busy; serve it cold below.
-                Err(InstanceJob::Http(job)) => job.0,
+                Err(InstanceJob::Http(job)) => job.req,
                 // A job comes back as the variant it went in as, so this is
                 // unreachable — but not worth a panic on a request path.
                 Err(InstanceJob::Linked(_)) => {
@@ -1916,8 +2003,15 @@ async fn invoke_component_handler(
         let mut store = workload_handle.new_store(component_id).await?;
         let instance = instance_pre.instantiate_async(&mut store).await?;
         let cold = crate::engine::instance_pool::ComponentInstance { store, instance };
-        let resp = crate::host::http_p3::handle_component_request_p3(cold, req, fuel_meter).await?;
-        let (parts, body) = resp.into_parts();
+        let call = DispatchedCall::new("HTTP (cold store)", crate::timeouts::http_response());
+        let flag = call.flag();
+        let (resp, watch) = call
+            .await_head(crate::host::http_p3::handle_component_request_p3(
+                cold, req, flag, fuel_meter,
+            ))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("cold instance produced no response"))?;
+        let (parts, body) = resp?.into_parts();
         let body = HyperOutgoingBody::new(
             body.map_err(|e| {
                 wasmtime_wasi_http::p2::bindings::http::types::ErrorCode::InternalError(Some(
@@ -1926,7 +2020,7 @@ async fn invoke_component_handler(
             })
             .boxed_unsync(),
         );
-        return Ok(hyper::Response::from_parts(parts, body));
+        return Ok(watch_body(hyper::Response::from_parts(parts, body), watch));
     }
 
     // The p2 path still builds and instantiates per request: its store is
@@ -1967,11 +2061,18 @@ pub async fn handle_component_request(
         .map_err(anyhow::Error::from)
         .context("failed to instantiate proxy pre")?;
 
+    // The deadline is enforced below, outside the store, where a non-yielding
+    // guest cannot block it (see `crate::engine::abandon`).
+    let call = DispatchedCall::new("HTTP (p2 cold store)", crate::timeouts::http_response());
+    let watch_guard = store.data().abandoned.watch(call.flag());
+
     // Run the http request itself in a separate task so the task can
     // optionally continue to execute beyond after the initial
     // headers/response code are sent.
     let task: JoinHandle<anyhow::Result<()>> = tokio::task::spawn(
         async move {
+            // Watched for as long as the store runs guest code.
+            let _abandoned = watch_guard;
             // Run the http request itself by instantiating and calling the component
             let proxy = pre.instantiate_async(&mut store).await?;
 
@@ -2000,15 +2101,15 @@ pub async fn handle_component_request(
         .in_current_span(),
     );
 
-    match receiver.await {
+    match call.await_head(receiver).await {
         // If the client calls `response-outparam::set` then one of these
         // methods will be called.
-        Ok(Ok(resp)) => Ok(resp),
-        Ok(Err(e)) => Err(e.into()),
+        Some((Ok(Ok(resp)), watch)) => Ok(watch_body(resp, watch)),
+        Some((Ok(Err(e)), _)) => Err(e.into()),
 
         // Otherwise the `sender` will get dropped along with the `Store`
         // meaning that the oneshot will get disconnected
-        Err(e) => {
+        Some((Err(e), _)) => {
             if let Err(task_error) = task.await {
                 error!(err = ?task_error, "error receiving http response");
                 Err(anyhow::anyhow!(
@@ -2021,6 +2122,10 @@ pub async fn handle_component_request(
                 ))
             }
         }
+
+        // No response within the deadline; the call is abandoned, and the
+        // store's epoch callback ends the guest work behind it.
+        None => Err(anyhow::anyhow!("component produced no response in time")),
     }
 }
 

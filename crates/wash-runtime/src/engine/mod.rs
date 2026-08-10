@@ -217,6 +217,7 @@ pub fn targets_wasip3_http(component: &Component) -> bool {
             .any(|(name, _)| name.starts_with("wasi:http") && name.contains("@0.3"))
 }
 
+pub mod abandon;
 pub mod ctx;
 pub(crate) mod instance_driver;
 pub(crate) mod instance_pool;
@@ -226,6 +227,39 @@ pub(crate) mod store;
 mod value;
 mod volumes;
 pub mod workload;
+
+/// How often the engine's epoch advances.
+///
+/// This is the resolution of the deadline checks compiled into every guest, not
+/// how often any store is interrupted: what a store does when its deadline
+/// passes is [`crate::engine::abandon::arm_epoch_deadline`]'s decision. It
+/// bounds how promptly an abandoned call can be noticed.
+pub(crate) const EPOCH_TICK: Duration = Duration::from_millis(10);
+
+/// Start the thread that advances `engine`'s epoch every [`EPOCH_TICK`].
+///
+/// Holds a [`wasmtime::Engine::weak`] handle rather than the engine itself, so
+/// the ticker does not keep a dropped engine alive: the next tick after the last
+/// strong reference goes away fails to upgrade and the thread ends. One ticker
+/// per engine, started at construction — an engine built with
+/// `epoch_interruption` whose epoch never advances would hang any store that
+/// armed a deadline.
+fn spawn_epoch_ticker(engine: &wasmtime::Engine) -> anyhow::Result<()> {
+    let weak = engine.weak();
+    std::thread::Builder::new()
+        .name("wasmtime-epoch-ticker".to_string())
+        .spawn(move || {
+            while let Some(engine) = weak.upgrade() {
+                engine.increment_epoch();
+                // Drop the strong reference before sleeping, so a dropped
+                // engine is not kept alive for a whole tick.
+                drop(engine);
+                std::thread::sleep(EPOCH_TICK);
+            }
+        })
+        .context("failed to spawn the epoch ticker thread")?;
+    Ok(())
+}
 
 /// The core WebAssembly engine for executing components and workloads.
 ///
@@ -1011,11 +1045,18 @@ impl EngineBuilder {
         self.proposals
             .insert(WasmProposal::WasmComponentModelImplements);
 
+        // Compile a deadline check into every guest's loop back-edges, so guest
+        // work that never yields can still be ended. Every store must then set a
+        // deadline of its own — see [`crate::engine::abandon::arm_epoch_deadline`],
+        // which is what decides when one is acted on.
+        config.epoch_interruption(true);
+
         for proposal in &self.proposals {
             proposal.apply(&mut config);
         }
 
         let inner = wasmtime::Engine::new(&config)?;
+        spawn_epoch_ticker(&inner)?;
         let cache = Cache::builder()
             .max_capacity(self.compilation_cache_size.unwrap_or(100))
             .time_to_idle(

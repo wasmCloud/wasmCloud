@@ -62,6 +62,19 @@ declare_timeouts! {
     shared_store_call = ("WASH_SHARED_STORE_CALL_TIMEOUT_SECS", 30);
     /// Max wall-clock for a trigger service to produce an HTTP response.
     http_response = ("WASH_HTTP_RESPONSE_TIMEOUT_SECS", 600);
+    /// Max wall-clock for a trigger service to acknowledge a delivered message.
+    messaging_deliver = ("WASH_MESSAGING_DELIVER_TIMEOUT_SECS", 600);
+    /// How long an abandoned call may keep running before its store acts on the
+    /// abandonment (see [`crate::engine::abandon`]). This is what makes
+    /// abandonment safe to signal on every disconnect: a healthy guest finishes
+    /// the call well inside the grace, while a wedged one is still running —
+    /// and still registered — when it runs out.
+    abandoned_call_grace = ("WASH_ABANDONED_CALL_GRACE_SECS", 10);
+    /// How long a `WarnThenTrap` store carries an abandoned call before
+    /// trapping anyway. The long runway lets a yielding call finish harmlessly;
+    /// a call still running at the end of it has the store wedged for every
+    /// tenant, and the supervised restart is what restores service.
+    abandoned_call_escalation = ("WASH_ABANDONED_CALL_ESCALATION_SECS", 60);
     /// The per-plugin stop budget. A host component plugin's `stop()` waits
     /// this long for its supervisor to exit before aborting it; `Host::stop`
     /// caps every plugin's `stop()` at this budget plus a one-second grace so
@@ -80,4 +93,7 @@ declare_timeouts! {
     /// Upper bound on a host component plugin's pre-restart backoff.
     #[cfg(feature = "host-component-plugins")]
     plugin_restart_backoff_max = ("WASH_PLUGIN_RESTART_BACKOFF_MAX_SECS", 5);
+    /// Max wall-clock for one capability call into a host component plugin.
+    #[cfg(feature = "host-component-plugins")]
+    plugin_capability_call = ("WASH_PLUGIN_CAPABILITY_CALL_TIMEOUT_SECS", 600);
 }
