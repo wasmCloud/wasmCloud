@@ -46,7 +46,7 @@ use std::{
 use tracing::{debug, instrument, warn};
 
 /// Extra CA certificates every OCI client in this process trusts, on top of
-/// the compiled-in Mozilla roots.
+/// the compiled-in webpki roots.
 ///
 /// Trust roots are a property of the host, not of any one pull, so they live
 /// here rather than on [`OciConfig`] — which is built per workload (from an
@@ -59,10 +59,10 @@ static EXTRA_CA_CERTIFICATES: OnceLock<Vec<Certificate>> = OnceLock::new();
 
 /// Trust the PEM CA bundles at `paths` for every subsequent OCI pull or push.
 ///
-/// Call once, before serving. `oci-client` builds its TLS from the webpki
-/// (Mozilla) roots and honors no environment override, so a registry behind a
-/// private CA — an in-cluster one, or a corporate mirror — is unreachable
-/// without this short of disabling verification altogether.
+/// Call once, before serving. `oci-client` builds its TLS from the webpki roots
+/// and honors no environment override, so a registry behind a private CA — an
+/// in-cluster one, or a corporate mirror — is unreachable without this short of
+/// disabling verification altogether.
 ///
 /// Fails when a bundle cannot be read or does not parse, rather than starting
 /// a host that will reject every pull from the registry it was pointed at.

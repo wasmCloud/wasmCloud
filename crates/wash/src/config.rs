@@ -528,7 +528,7 @@ pub struct HostConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum HttpClientTrustRoots {
-    /// Compiled-in webpki (Mozilla) roots plus the platform's native store.
+    /// Compiled-in webpki roots plus the platform's native store.
     /// The native store honours `SSL_CERT_FILE`/`SSL_CERT_DIR`.
     WebpkiAndNative,
     /// Compiled-in webpki roots only — reproducible, ignores the host
