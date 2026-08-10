@@ -70,15 +70,14 @@ impl From<MsgError> for String {
     }
 }
 
-/// Expands the conversions between this crate's messaging vocabulary and one
-/// `bindgen!`-generated `@0.3.0` surface.
+/// Expands the [`MsgError`] lowering into one `bindgen!`-generated `@0.3.0`
+/// `error` type.
 ///
 /// Each messaging plugin has its own `bindgen!` invocation — they implement the
 /// generated host traits for different backends, so they cannot share one — and
-/// each therefore gets its own `error` and `broker-message` Rust types even
-/// though the WIT is a single package. The conversions are identical in every
-/// case, so they are written once here and expanded per module rather than
-/// copied three times and left to drift.
+/// each therefore gets its own `error` Rust type even though the WIT is a single
+/// package. The lowering is identical in every case, so it is written once here
+/// and expanded per module rather than copied three times and left to drift.
 ///
 /// Note this is the only capability that needs such a thing, which is why no
 /// sibling has one: `wasmcloud:keyvalue` and `wasmcloud:blobstore` asyncified
@@ -89,13 +88,10 @@ impl From<MsgError> for String {
 /// in-memory plugins that `wash dev` and `wash host` register — is the half of
 /// the capability that receives messages.
 ///
-/// Generates, in the invoking module:
-/// * `impl From<MsgError> for <async error>` — the named WIT cases carry no
-///   payload, so their host-side detail is dropped; it survives only on `other`.
-/// * `to_async_message` / `from_async_message` — `@0.2.0` and `@0.3.0` declare
-///   the same `broker-message` fields but generate distinct Rust types.
+/// The named WIT cases carry no payload, so their host-side detail is dropped by
+/// the lowering; it survives only on `other`.
 macro_rules! async_messaging_conversions {
-    (error: $async_error:ty, sync_message: $sync_msg:ty, async_message: $async_msg:ty $(,)?) => {
+    (error: $async_error:ty $(,)?) => {
         impl From<$crate::plugin::wasmcloud_messaging::MsgError> for $async_error {
             fn from(e: $crate::plugin::wasmcloud_messaging::MsgError) -> Self {
                 use $crate::plugin::wasmcloud_messaging::MsgError as E;
@@ -110,35 +106,110 @@ macro_rules! async_messaging_conversions {
                 }
             }
         }
-
-        // Aliased so the record can be built by name: a `ty` macro fragment
-        // cannot itself head a struct literal, but an alias to one can.
-        type SyncBrokerMessage = $sync_msg;
-        type AsyncBrokerMessageAlias = $async_msg;
-
-        /// Convert this module's `@0.2.0` `broker-message` into its `@0.3.0` one.
-        #[allow(dead_code)]
-        fn to_async_message(msg: SyncBrokerMessage) -> AsyncBrokerMessageAlias {
-            AsyncBrokerMessageAlias {
-                subject: msg.subject,
-                body: msg.body,
-                reply_to: msg.reply_to,
-            }
-        }
-
-        /// Convert this module's `@0.3.0` `broker-message` into its `@0.2.0` one.
-        #[allow(dead_code)]
-        fn from_async_message(msg: AsyncBrokerMessageAlias) -> SyncBrokerMessage {
-            SyncBrokerMessage {
-                subject: msg.subject,
-                body: msg.body,
-                reply_to: msg.reply_to,
-            }
-        }
     };
 }
 
 pub(crate) use async_messaging_conversions;
+
+/// Drain a `@0.3.0` message body (`stream<u8>`) into memory.
+///
+/// The `@0.3.0` WIT carries bodies as native streams, but every current backend
+/// sends a message as one bounded payload (core NATS caps it at `max_payload`),
+/// so the host consumes the guest's stream fully before handing bytes to the
+/// backend — the buffered fallback the WIT documents. A backend that can
+/// forward a stream incrementally can bypass this helper.
+///
+/// One helper serves every plugin because [`StreamReader`] is a wasmtime type,
+/// not a `bindgen!`-generated one. An `Err` from the oneshot means the consumer
+/// was torn down without observing end-of-stream, which is surfaced as a
+/// [`MsgError`] rather than silently treating the body as empty.
+pub(crate) async fn collect_body<T, D>(
+    accessor: &wasmtime::component::Accessor<T, D>,
+    body: wasmtime::component::StreamReader<u8>,
+) -> wasmtime::Result<Result<Vec<u8>, MsgError>>
+where
+    T: 'static,
+    D: wasmtime::component::HasData,
+{
+    let (tx, rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
+    accessor.with(|mut a| {
+        body.pipe(
+            &mut a,
+            CollectConsumer {
+                buf: Vec::new(),
+                done: Some(tx),
+            },
+        )
+    })?;
+    Ok(match rx.await {
+        Ok(bytes) => Ok(bytes),
+        Err(_) => Err(MsgError::Other(
+            "message body stream ended without delivering data".to_string(),
+        )),
+    })
+}
+
+/// A [`StreamConsumer`] that accumulates every byte the guest writes and hands
+/// the buffer back once the stream ends. The runtime drops the consumer at
+/// end-of-stream, which fires [`Drop`] and delivers the bytes over `done`.
+/// Mirrors the blobstore `write-data` consumer.
+///
+/// [`StreamConsumer`]: wasmtime::component::StreamConsumer
+struct CollectConsumer {
+    buf: Vec<u8>,
+    done: Option<tokio::sync::oneshot::Sender<Vec<u8>>>,
+}
+
+impl Drop for CollectConsumer {
+    fn drop(&mut self) {
+        if let Some(tx) = self.done.take() {
+            let _ = tx.send(std::mem::take(&mut self.buf));
+        }
+    }
+}
+
+impl<D> wasmtime::component::StreamConsumer<D> for CollectConsumer {
+    type Item = u8;
+
+    fn poll_consume(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        store: wasmtime::StoreContextMut<D>,
+        src: wasmtime::component::Source<Self::Item>,
+        finish: bool,
+    ) -> std::task::Poll<wasmtime::Result<wasmtime::component::StreamResult>> {
+        use wasmtime::component::StreamResult;
+        let this = self.get_mut();
+        let mut src = src.as_direct(store);
+        let bytes = src.remaining();
+        if bytes.is_empty() {
+            // No items offered (count == 0). This is an unbounded in-memory
+            // sink, so it is always ready to accept; the actual end-of-stream
+            // is observed via `Drop`.
+            return std::task::Poll::Ready(Ok(if finish {
+                StreamResult::Cancelled
+            } else {
+                StreamResult::Completed
+            }));
+        }
+        let n = bytes.len();
+        this.buf.extend_from_slice(bytes);
+        src.mark_read(n);
+        std::task::Poll::Ready(Ok(StreamResult::Completed))
+    }
+}
+
+/// Mint a `stream<u8>` carrying `bytes`, for handing a message body to a guest.
+pub(crate) fn mint_body<T, D>(
+    accessor: &wasmtime::component::Accessor<T, D>,
+    bytes: Vec<u8>,
+) -> wasmtime::Result<wasmtime::component::StreamReader<u8>>
+where
+    T: 'static,
+    D: wasmtime::component::HasData,
+{
+    accessor.with(|mut a| wasmtime::component::StreamReader::new(&mut a, bytes))
+}
 
 /// Expands the per-message handler dispatch shared by the standalone plugins.
 ///
@@ -175,7 +246,20 @@ macro_rules! messaging_handler_dispatch {
                 instance_pre: wasmtime::component::InstancePre<$crate::engine::ctx::SharedCtx>,
             ) -> wasmtime::Result<Self> {
                 match $async::AsyncMessagingPre::new(instance_pre.clone()) {
-                    Ok(p) => Ok(HandlerPre::V0_3(p)),
+                    Ok(p) => {
+                        // Dual export: `@0.3.0` wins; warn so the dead `@0.2.0`
+                        // export is visible rather than silently ignored.
+                        if $sync::MessagingPre::new(instance_pre).is_ok() {
+                            tracing::warn!(
+                                served = "wasmcloud:messaging/handler@0.3.0",
+                                ignored = "wasmcloud:messaging/handler@0.2.0",
+                                "component exports both messaging handler revisions; only \
+                                 the @0.3.0 handler will be invoked — export exactly one \
+                                 messaging handler revision"
+                            );
+                        }
+                        Ok(HandlerPre::V0_3(p))
+                    }
                     Err(async_err) => match $sync::MessagingPre::new(instance_pre) {
                         Ok(p) => Ok(HandlerPre::V0_2(p)),
                         // Report the `@0.3.0` failure too: a guest that meant to
@@ -203,8 +287,8 @@ macro_rules! messaging_handler_dispatch {
         impl HandlerProxy {
             /// Deliver one message, normalizing the handler's `result` to a
             /// `Result<(), String>` for the ack/log path — `@0.2.0` already
-            /// returns a string, `@0.3.0` an `error` variant rendered via its
-            /// `Debug`.
+            /// returns a string, `@0.3.0` a `handle-message-error` disposition
+            /// rendered by [`render_handle_error`].
             async fn call_handle_message(
                 &self,
                 store: &mut wasmtime::Store<$crate::engine::ctx::SharedCtx>,
@@ -221,20 +305,44 @@ macro_rules! messaging_handler_dispatch {
                     // so it takes an `Accessor` and must be driven inside
                     // `run_concurrent` — which also lets the guest await its own
                     // imports (e.g. replying via `consumer.publish`) while the
-                    // host keeps the store pumping.
+                    // host keeps the store pumping. The `@0.3.0` body is a
+                    // native `stream<u8>`, so the delivered bytes are minted
+                    // into a stream the guest drains.
                     HandlerProxy::V0_3(proxy) => {
-                        let async_msg = to_async_message(msg.clone());
-                        store
+                        let (subject, body, reply_to) =
+                            (msg.subject.clone(), msg.body.clone(), msg.reply_to.clone());
+                        let outcome = store
                             .run_concurrent(async move |accessor| {
+                                let body =
+                                    $crate::plugin::wasmcloud_messaging::mint_body(accessor, body)?;
+                                let wit_msg =
+                                    $async::wasmcloud::messaging0_3_0::types::BrokerMessage {
+                                        subject,
+                                        body,
+                                        reply_to,
+                                    };
                                 proxy
                                     .wasmcloud_messaging0_3_0_handler()
-                                    .call_handle_message(accessor, async_msg)
+                                    .call_handle_message(accessor, wit_msg)
                                     .await
                             })
-                            .await?
-                            .map(|r| r.map_err(|e| format!("{e:?}")))
+                            .await??;
+                        Ok(outcome.map_err(render_handle_error))
                     }
                 }
+            }
+        }
+
+        /// Render the `@0.3.0` handler disposition for the ack/log path:
+        /// payload-less cases as the case name, `other` keeping its detail.
+        fn render_handle_error(
+            e: $async::wasmcloud::messaging0_3_0::types::HandleMessageError,
+        ) -> String {
+            use $async::wasmcloud::messaging0_3_0::types::HandleMessageError as E;
+            match e {
+                E::Reject => "reject".to_string(),
+                E::Retry => "retry".to_string(),
+                E::Other(d) => format!("other: {d}"),
             }
         }
     };

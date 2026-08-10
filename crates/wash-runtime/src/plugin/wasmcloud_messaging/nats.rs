@@ -49,8 +49,6 @@ use super::MsgError;
 
 super::async_messaging_conversions! {
     error: AsyncMsgError,
-    sync_message: types_p2::BrokerMessage,
-    async_message: AsyncBrokerMessage,
 }
 
 super::messaging_handler_dispatch! {
@@ -202,11 +200,19 @@ impl<T: 'static + Send> HostWithStoreP3<T> for SharedCtx {
     async fn request(
         accessor: &Accessor<T, Self>,
         subject: String,
-        body: Vec<u8>,
+        body: wasmtime::component::StreamReader<u8>,
         timeout_ms: u32,
     ) -> wasmtime::Result<Result<AsyncBrokerMessage, AsyncMsgError>> {
         let plugin =
             accessor.with(|mut a| a.get().try_get_plugin::<NatsMessaging>(PLUGIN_MESSAGING_ID))?;
+
+        // Drain the body first (see `collect_body`); `timeout-ms` starts only
+        // once the body is fully consumed — the caller controls how fast it
+        // arrives, so that wait is not counted against the broker.
+        let body = match super::collect_body(accessor, body).await? {
+            Ok(bytes) => bytes,
+            Err(e) => return Ok(Err(e.into())),
+        };
 
         let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
         let request_future = plugin.client.request(subject, body.into());
@@ -219,10 +225,11 @@ impl<T: 'static + Send> HostWithStoreP3<T> for SharedCtx {
                 return Ok(Err(AsyncMsgError::Timeout));
             }
         };
+        let body = super::mint_body(accessor, resp.payload.into())?;
         Ok(Ok(AsyncBrokerMessage {
             subject: resp.subject.to_string(),
             reply_to: resp.reply.as_ref().map(|r| r.to_string()),
-            body: resp.payload.into(),
+            body,
         }))
     }
 
@@ -233,13 +240,23 @@ impl<T: 'static + Send> HostWithStoreP3<T> for SharedCtx {
         let plugin =
             accessor.with(|mut a| a.get().try_get_plugin::<NatsMessaging>(PLUGIN_MESSAGING_ID))?;
 
-        let result = if let Some(reply_to) = msg.reply_to {
+        let AsyncBrokerMessage {
+            subject,
+            body,
+            reply_to,
+        } = msg;
+        let body = match super::collect_body(accessor, body).await? {
+            Ok(bytes) => bytes,
+            Err(e) => return Ok(Err(e.into())),
+        };
+
+        let result = if let Some(reply_to) = reply_to {
             plugin
                 .client
-                .publish_with_reply(msg.subject, reply_to, msg.body.into())
+                .publish_with_reply(subject, reply_to, body.into())
                 .await
         } else {
-            plugin.client.publish(msg.subject, msg.body.into()).await
+            plugin.client.publish(subject, body.into()).await
         };
         Ok(result.map_err(|e| classify_publish(&e).into()))
     }
