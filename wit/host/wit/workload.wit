@@ -9,14 +9,20 @@ package wasmcloud:host@0.1.2;
 /// off any event of its own. This interface is that handle, for a plugin that
 /// is itself a component and so cannot hold a Rust value.
 ///
+/// Importing this interface is also what declares the intent: a plugin that
+/// does not is held to a closed import surface, where an import no host
+/// built-in provides fails the plugin's load rather than waiting for a workload
+/// that may never appear.
+///
 /// Only interfaces the plugin imports that no host built-in provides are routed
 /// this way. They are matched to a workload exactly as a capability is: the
 /// workload must both declare the interface among the ones it needs from the
-/// host and export it.
+/// host and export it. Every function on such an interface must be an
+/// `async func`: the host serves it concurrently, so that a call out to a
+/// workload never holds the plugin's store — shared by every workload it serves
+/// — for the round trip. A plain `func` is refused when the plugin loads.
 interface workload {
-    /// Identifier of a workload. The same id `identity.get-workload-id`
-    /// reports, and the one `workload-lifecycle` binds and unbinds.
-    type workload-id = string;
+    use types.{workload-id};
 
     /// Directs this task's calls on workload-exported imports to one workload,
     /// for as long as the handle is alive.
@@ -26,24 +32,45 @@ interface workload {
     /// workload whose capability call this task is serving — so a plugin
     /// calling back into its own caller needs no handle at all.
     ///
-    /// Construction never fails. A workload that never bound, or that stops
-    /// while a handle names it, is reported on the *call*, so a plugin sees one
-    /// error for "gone" and "never there" rather than having to race the
-    /// difference.
+    /// A handle pins *which* component of that workload serves each interface,
+    /// so a call it scopes cannot be moved to another one mid-dispatch. It does
+    /// not pin the workload itself: a handle held past the workload's stop — or
+    /// past a redeploy under the same id, which is a different workload as far
+    /// as this interface is concerned — traps on the next call through it. Open
+    /// a handle for the work at hand rather than stashing one.
     resource target {
-        /// Direct this task's calls to `id`.
-        constructor(id: workload-id);
+        /// Direct this task's calls to `id`, or `none` when no workload of that
+        /// id is callable.
+        ///
+        /// Check this rather than assuming: the list `callable` returns is a
+        /// snapshot, and a workload can stop between reading it and acting on
+        /// it. A plugin's own `wasi:cli/run` dispatch loop races exactly that
+        /// way every time a workload is undeployed.
+        open: static func(id: workload-id) -> option<target>;
 
         /// The workload this handle names.
-        id: func() -> workload-id;
+        get-workload-id: func() -> workload-id;
     }
 
-    /// Every workload currently bound to this plugin that exports at least one
-    /// interface the plugin imports, sorted by id. What a plugin's own
-    /// background work — its `wasi:cli/run` — iterates to dispatch.
+    /// Every running workload this plugin can call, mapped to the interfaces of
+    /// it that are callable — what a plugin's own background work (its
+    /// `wasi:cli/run`) iterates to dispatch. Keys are `workload-id`s; the type
+    /// is spelled `string` only because a map key cannot be a named alias.
     ///
-    /// A workload appears only once it is running: a workload is still
-    /// deploying when `workload-lifecycle.on-workload-bind` is delivered for
-    /// it, so it is not callable from inside that hook.
-    callable: func() -> list<workload-id>;
+    /// The interfaces matter for a plugin that imports more than one, because
+    /// calling one a workload does not export is not a recoverable error: a
+    /// workload-exported import has no error result, so the host can only trap,
+    /// taking down the store every workload shares. Check this list rather than
+    /// assume a workload serves everything the plugin imports.
+    ///
+    /// Running is the whole rule: a workload appears when it starts and goes
+    /// when it stops. Both `workload-lifecycle` hooks land outside that window
+    /// — still deploying at `on-workload-bind`, already torn down at
+    /// `on-workload-unbind` — so neither can call the workload it is about;
+    /// reclaim per-workload state from the id the hook is handed instead.
+    ///
+    /// A workload's long-lived service is left out even when it exports such an
+    /// interface, and the host says so at deploy: a call built like a
+    /// component's would start a second copy rather than reach the running one.
+    callable: func() -> map<string, list<string>>;
 }

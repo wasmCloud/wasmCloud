@@ -11,8 +11,15 @@ world events-plugin {
     // The reverse direction: a workload exports this and the host routes the
     // plugin's calls on it to whichever workload the call is for.
     import acme:events/handler@0.1.0;
+    // A second interface in the same direction that no workload exports, so
+    // `callable` has to report per workload which of the two is reachable.
+    import acme:events/metrics@0.1.0;
     // Names which workload a call goes to, and lists the ones that can be
     // called at all. Unused for `echo`, which inherits its caller.
     import wasmcloud:host/workload@0.1.2;
     export acme:events/control@0.1.0;
+    // Lifecycle hooks, used here only to probe what a hook can reach: a
+    // workload is callable exactly while it is running, and both hooks land
+    // outside that window.
+    export wasmcloud:host/workload-lifecycle@0.1.2;
 }

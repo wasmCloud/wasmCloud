@@ -48,6 +48,35 @@ pub(crate) struct ExternalCallFunc<'a> {
     pub(crate) result_tys: &'a [wasmtime::component::types::Type],
 }
 
+/// What [`ResolvedWorkload::item_exporting`] found about the one item it was
+/// asked about: whether that item exports an interface a host component plugin
+/// imports, and — for a component, the only kind a plugin can call — how to
+/// address the export.
+#[cfg(feature = "host-component-plugins")]
+pub(crate) enum ItemExport {
+    /// A component exports it.
+    Component {
+        /// The component's manifest name, for the tie-break when two of them
+        /// export the same interface.
+        name: Arc<str>,
+        /// The component's own name for the export, which is what addresses it
+        /// on the instance. Not necessarily the plugin's name for the import:
+        /// matching tolerates one side omitting the version, so a plugin whose
+        /// package is unversioned can be satisfied by a versioned export. The
+        /// matched name has to travel with the answer, or looking the export up
+        /// by the plugin's name misses it.
+        export: Arc<str>,
+    },
+    /// The workload's long-lived service exports it. A plugin cannot call it:
+    /// reaching the *running* service means routing into its live instance, the
+    /// way inbound messaging does, and a call built like a component's would
+    /// instead instantiate a second copy whose state is not the one the service
+    /// has been accumulating.
+    Service,
+    /// Neither — this item bound to the plugin for a capability it imports.
+    None,
+}
+
 /// Type alias for tracking bound plugins with their matched interfaces during binding.
 /// Tuple: (plugin, matched_interfaces, component_ids)
 type BoundPluginWithInterfaces = (
@@ -1591,24 +1620,52 @@ impl ResolvedWorkload {
         Ok(pre)
     }
 
-    /// Whether `component_id` exports `interface`, and its manifest name — what
-    /// a host component plugin checks before claiming the component as the one
-    /// serving an interface the plugin imports, and the tie-break when two
-    /// components of the workload export the same one.
+    /// Which item of the workload exports `interface` — what a host component
+    /// plugin checks before claiming one as the item serving an interface it
+    /// imports.
     #[cfg(feature = "host-component-plugins")]
-    pub(crate) async fn component_exporting(
+    pub(crate) async fn item_exporting(
         &self,
-        component_id: &str,
+        item_id: &str,
         interface: &WitInterface,
-    ) -> Option<Arc<str>> {
+    ) -> ItemExport {
+        let exports = |world: &WitWorld| world.exports.iter().any(|e| e.contains(interface));
+        // A workload's long-lived service is bound as an item like any
+        // component, and `bind_plugins` hands its id here the same way, but it
+        // lives outside the component map — so check it explicitly rather than
+        // letting the lookup below miss and read as "exports nothing".
+        if let Some(service) = &self.service
+            && service.id() == item_id
+        {
+            return if exports(&service.world()) {
+                ItemExport::Service
+            } else {
+                ItemExport::None
+            };
+        }
         let components = self.components.read().await;
-        let component = components.get(component_id)?;
-        component
-            .world()
-            .exports
-            .iter()
-            .any(|exported| exported.contains(interface))
-            .then(|| Arc::from(component.name()))
+        let Some(component) = components.get(item_id) else {
+            return ItemExport::None;
+        };
+        // The export's own name, not the plugin's name for the import: the two
+        // agree except where matching tolerated a version on one side only, and
+        // addressing the instance needs the name the component actually used.
+        let Some(export) = component
+            .component_exports()
+            .ok()
+            .and_then(|exports| {
+                exports
+                    .into_iter()
+                    .find(|(name, _)| WitInterface::from(name.as_str()).contains(interface))
+            })
+            .map(|(name, _)| Arc::from(name))
+        else {
+            return ItemExport::None;
+        };
+        ItemExport::Component {
+            name: Arc::from(component.name()),
+            export,
+        }
     }
 
     /// Build the invocations a host component plugin uses to call `interface`
@@ -1618,10 +1675,17 @@ impl ResolvedWorkload {
     /// A plugin runs in a store of its own, so such a call can never share one
     /// with the callee: every invocation returned takes the ephemeral path,
     /// which builds a store for the callee per call (or reuses one of its warm
-    /// instances) and moves arguments and results across the boundary. A
-    /// signature carrying a `resource` or `error-context` handle cannot cross
-    /// that boundary and is rejected here, when the workload deploys, rather
-    /// than on the call.
+    /// instances) and moves arguments and results across the boundary.
+    ///
+    /// A function the callee does not export, or whose signature carries a
+    /// `resource` or `error-context` handle that cannot cross, fails the
+    /// workload's deploy. The alternative — installing a partial route and
+    /// letting the omitted function error when called — moves the failure onto
+    /// the plugin's call path, where an error has nowhere to go: a
+    /// workload-exported import has no error result, so the host returning one
+    /// traps the plugin guest and restarts the store every tenant shares. One
+    /// workload failing to deploy over a WIT its plugin disagrees with is the
+    /// contained outcome.
     #[cfg(feature = "host-component-plugins")]
     pub(crate) async fn external_export_invocations(
         &self,
@@ -1660,7 +1724,9 @@ impl ResolvedWorkload {
                 component.get_export(Some(&instance_idx), func.name)
             else {
                 bail!(
-                    "{interface} of component '{component_id}' does not export {}",
+                    "component '{component_id}' exports {interface} but not {}, which a host \
+                     component plugin imports; the workload's copy of the interface disagrees \
+                     with the plugin's",
                     func.name
                 );
             };
@@ -1677,9 +1743,9 @@ impl ResolvedWorkload {
                 }
             } else {
                 bail!(
-                    "{interface}#{} carries a handle that cannot cross a store boundary; a host \
-                     component plugin can call a workload export only when its parameters and \
-                     results are plain values, `stream<T>`, or `future<T>`",
+                    "{interface}#{} carries a handle that cannot cross the boundary between a \
+                     plugin's store and a workload's; only plain values, `stream<T>`, and \
+                     `future<T>` can",
                     func.name
                 );
             };
@@ -2034,8 +2100,17 @@ impl UnresolvedWorkload {
 
         trace!(?unmatched_interfaces, "resolving unmatched interfaces");
 
-        // Iterate through each plugin first, then check every component for matching worlds
-        for (plugin_id, p) in plugins.iter() {
+        // Iterate through each plugin first, then check every component for matching worlds.
+        //
+        // In plugin-id order, not `HashMap` order: where two plugins both match
+        // an interface the first one reached claims it, because a matched
+        // interface leaves `unmatched_interfaces` once its item bind succeeds.
+        // Leaving that to hash iteration makes the same manifest bind
+        // differently across process restarts — and with a plugin that *calls*
+        // an interface rather than serving it, one of those outcomes fails the
+        // deploy. A deterministic order at least makes the result reproducible.
+        let plugins_in_order: BTreeMap<_, _> = plugins.iter().collect();
+        for (plugin_id, p) in plugins_in_order {
             let plugin_interfaces = p.world();
             trace!(plugin_id = plugin_id, plugin_interfaces = ?plugin_interfaces, "checking plugin interfaces");
 

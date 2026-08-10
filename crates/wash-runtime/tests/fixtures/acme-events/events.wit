@@ -12,6 +12,16 @@ interface handler {
     notify: async func(message: string) -> string;
 }
 
+/// A second interface in the plugin's *calling* direction that the workload
+/// fixture deliberately does not export. A plugin importing two of these is
+/// what makes `callable`'s per-workload interface list load-bearing: it has to
+/// say that `handler` is reachable on a workload and `metrics` is not, because
+/// calling one a workload does not export can only trap.
+interface metrics {
+    /// Report a measurement. Nothing exports this, so nothing may call it.
+    report: async func(measurement: string) -> string;
+}
+
 interface control {
     /// Call `handler.notify` back on the CALLING workload, naming no target —
     /// the host routes it to whichever workload's capability call this is.
@@ -19,7 +29,10 @@ interface control {
 
     /// Call `handler.notify` on the workload `id`, named with a
     /// `wasmcloud:host/workload` target handle rather than inherited from the
-    /// caller.
+    /// caller. The message carries the id read back off the handle, so the
+    /// reply proves which workload the host scoped the call to. Answers
+    /// `"unroutable:{id}"` when no such workload is callable, which is what a
+    /// plugin does with a `target.open` that returns `none`.
     dispatch: async func(id: string, message: string) -> string;
 
     /// Call `handler.notify` on `id` from inside a nested target handle, and
@@ -28,6 +41,24 @@ interface control {
     /// goes back to the caller.
     nested: async func(id: string, message: string) -> string;
 
-    /// Every workload the plugin can currently call.
+    /// Every workload the plugin can currently call, one entry per workload as
+    /// `"{id}={interface},{interface}"` — flattened so an HTTP test can read
+    /// the map the host hands the plugin.
     callable: async func() -> list<string>;
+
+    /// Call `metrics.report` on the workload named by a target handle. Nothing
+    /// exports `metrics`, so this exists only to make the plugin genuinely
+    /// import a second workload-facing interface; calling it would trap.
+    report: async func(id: string, measurement: string) -> string;
+
+    /// What the plugin saw when it tried to open a target for `id` from inside
+    /// each `wasmcloud:host/workload-lifecycle` hook, as
+    /// `"bind:{seen}|unbind:{seen}"` where each `seen` is `some` or `none`.
+    /// Empty for a workload no hook has run for.
+    ///
+    /// Both should read `none`: a workload is callable only while it is
+    /// running, and a hook is delivered either side of that. The record lives
+    /// in the plugin instance's own memory, so a non-empty answer here is also
+    /// evidence the plugin never restarted.
+    lifecycle-probe: async func(id: string) -> string;
 }
