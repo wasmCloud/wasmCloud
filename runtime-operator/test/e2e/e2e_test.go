@@ -1024,7 +1024,7 @@ func createRegistryPullSecret(ns string) {
 // otherwise (the release/canary legs deploy the published component as-is).
 //
 // The in-cluster registry requires authentication, so the rewritten component
-// also gains the image pull secret that carries its credentials — without it
+// also gains the image pull secret that carries its credentials. Without it
 // the host pulls anonymously and the workload never becomes Ready. The pull
 // secret is indented to match the `image:` line it follows, so this holds for
 // any sample regardless of how deeply the component sits.

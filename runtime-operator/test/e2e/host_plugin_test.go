@@ -77,7 +77,7 @@ var _ = Describe("Host Component Plugin", Ordered, func() {
 		By("configuring the default hostGroup with a host component plugin")
 		// The plugin is pulled at host startup, before any workload exists, so
 		// it cannot use a workload's image pull secret. The host takes those
-		// credentials from the environment instead — which is also why they are
+		// credentials from the environment instead, which is also why they are
 		// set on the host container rather than passed in the `--host-plugin`
 		// argument, where they would show up in the pod spec.
 		sets := append(buildBaseHelmSets(),

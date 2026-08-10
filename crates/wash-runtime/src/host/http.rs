@@ -280,7 +280,7 @@ impl DynamicRouter {
     /// [`hyper::body::Incoming`].
     fn select_workload(&self, host: &str) -> Result<String, RouteError> {
         // A Host header may carry the port the client connected on
-        // (`example.com:8080`), and whether it does is up to the client — a
+        // (`example.com:8080`), and whether it does is up to the client: a
         // browser omits it for the scheme's default port, an OCI client
         // pushing to `127.0.0.1:5000` does not. The host serves one HTTP port,
         // so the port carries no routing information; match on the name alone

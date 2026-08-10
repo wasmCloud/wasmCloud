@@ -15,13 +15,13 @@ import (
 )
 
 // The in-cluster registry authenticates every request, and the credentials it
-// checks against reach it through `wasmcloud:secrets` — declared as interface
+// checks against reach it through `wasmcloud:secrets`: declared as interface
 // config on its WorkloadDeployment, captured by the host's native secrets
 // plugin at bind time, and read by the component with `store.get` + `reveal`.
 //
 // The rest of the suite exercises that path implicitly: fixtures are pushed and
 // pulled with credentials, so nothing works if the secrets never arrive. What
-// that cannot show is the other half — that a caller *without* credentials is
+// that cannot show is the other half: that a caller *without* credentials is
 // actually turned away. A registry serving anonymously would pass every other
 // spec just as well, which is exactly the failure worth guarding against: the
 // component denies all requests when its secrets backend comes up empty, so
@@ -76,7 +76,7 @@ var _ = Describe("Registry Auth", func() {
 	})
 
 	// `/v2/` is where an OCI client starts, and the registry authenticates it
-	// like everything else — so it is both the cheapest probe and the one that
+	// like everything else, so it is both the cheapest probe and the one that
 	// decides whether a client believes it must authenticate at all.
 	probe := func(args ...string) (string, error) {
 		full := append([]string{
@@ -92,7 +92,7 @@ var _ = Describe("Registry Auth", func() {
 		code, err := probe()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(code).To(Equal("401"),
-			"an unauthenticated caller must be refused — a registry that "+
+			"an unauthenticated caller must be refused: a registry that "+
 				"answers here is serving anonymously, which means its "+
 				"wasmcloud:secrets credentials never arrived")
 
@@ -101,7 +101,7 @@ var _ = Describe("Registry Auth", func() {
 		Expect(err).NotTo(HaveOccurred())
 		// Matched case-insensitively because header names are: the component
 		// sends `WWW-Authenticate` and it arrives here as `Www-Authenticate`.
-		// The scheme matters as much as the header — a challenge naming
+		// The scheme matters as much as the header: a challenge naming
 		// anything other than Basic sends a client down a path this registry
 		// does not implement.
 		Expect(out).To(MatchRegexp(`(?i)www-authenticate:\s*Basic`),
@@ -114,15 +114,15 @@ var _ = Describe("Registry Auth", func() {
 
 		By("accepting the credentials the registry was given")
 		// The same pair the push side uses, delivered to the component through
-		// the secrets plugin — so this passing is what proves the delivery.
+		// the secrets plugin, so this passing is what proves the delivery.
 		code, err = probe("-u", fmt.Sprintf("%s:%s", registryUser, registryPassword))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(code).To(Equal("200"))
 	})
 })
 
-// fetchRegistryCA writes the chart's CA certificate — the one that signed the
-// registry's serving certificate — somewhere curl can be pointed at it. A
+// fetchRegistryCA writes the chart's CA certificate, the one that signed the
+// registry's serving certificate, somewhere curl can be pointed at it. A
 // go-template decodes the Secret's base64 in kubectl, which a jsonpath cannot.
 func fetchRegistryCA() (string, error) {
 	pem, err := utils.Run(exec.Command("kubectl", "get", "secret", "wasmcloud-ca",
@@ -138,7 +138,7 @@ func fetchRegistryCA() (string, error) {
 }
 
 // freeLocalPort asks the OS for an unused port. The obvious constants are a
-// poor bet on a developer machine — on macOS, AirPlay Receiver holds 5000 and
+// poor bet on a developer machine: on macOS, AirPlay Receiver holds 5000 and
 // 7000 and answers on them, so a registry that never came up would present as
 // one serving errors.
 func freeLocalPort() (int, error) {

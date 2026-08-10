@@ -49,7 +49,7 @@ use tracing::{debug, instrument, warn};
 /// the compiled-in webpki roots.
 ///
 /// Trust roots are a property of the host, not of any one pull, so they live
-/// here rather than on [`OciConfig`] — which is built per workload (from an
+/// here rather than on [`OciConfig`]. That is built per workload (from an
 /// image pull secret) and per plugin, and would otherwise have to carry the
 /// same value to every construction site.
 ///
@@ -60,8 +60,8 @@ static EXTRA_CA_CERTIFICATES: OnceLock<Vec<Certificate>> = OnceLock::new();
 /// Trust the PEM CA bundles at `paths` for every subsequent OCI pull or push.
 ///
 /// Call once, before serving. `oci-client` builds its TLS from the webpki roots
-/// and honors no environment override, so a registry behind a private CA — an
-/// in-cluster one, or a corporate mirror — is unreachable without this short of
+/// and honors no environment override, so a registry behind a private CA (an
+/// in-cluster one, or a corporate mirror) is unreachable without this short of
 /// disabling verification altogether.
 ///
 /// Fails when a bundle cannot be read or does not parse, rather than starting
@@ -76,15 +76,15 @@ pub fn set_extra_ca_certificates(paths: &[PathBuf]) -> Result<()> {
 }
 
 /// Read and parse PEM CA bundles from disk. Split from
-/// [`set_extra_ca_certificates`] so the loading is testable on its own — the
+/// [`set_extra_ca_certificates`] so the loading is testable on its own: the
 /// store it writes to can only be set once per process.
 ///
 /// The certificates are parsed here and the bytes then handed on as read.
 /// Parsing is what makes a bad bundle a startup failure: `oci-client` builds
 /// its client through `Client::new`, which logs and falls back to a wholly
-/// default configuration when a certificate fails to parse — discarding the
+/// default configuration when a certificate fails to parse. That discards the
 /// registry protocol, the timeouts and the proxy along with the trust roots,
-/// and leaving only a warning to say so.
+/// and leaves only a warning to say so.
 fn load_ca_certificates(paths: &[PathBuf]) -> Result<Vec<Certificate>> {
     paths
         .iter()
@@ -106,7 +106,7 @@ fn load_ca_certificates(paths: &[PathBuf]) -> Result<Vec<Certificate>> {
 /// Adding to a [`rustls::RootCertStore`] is the same work the TLS stack does
 /// when the client is built, so a bundle that passes here cannot fail there:
 /// PEM framing, and an X.509 body webpki accepts. A file that parses but holds
-/// no certificate is rejected too — it would otherwise be accepted and trust
+/// no certificate is rejected too. It would otherwise be accepted and trust
 /// nothing, which reads identically to a CA that does not cover the registry.
 fn validate_ca_bundle(data: &[u8]) -> Result<()> {
     use rustls::pki_types::pem::PemObject as _;
@@ -836,9 +836,9 @@ mod tests {
 
     /// Content is parsed at load, not at first pull. `oci-client`'s
     /// `Client::new` reacts to an unparseable certificate by logging and
-    /// building a client from defaults — losing the registry protocol and
-    /// timeouts along with the trust roots — so a bundle that would fail there
-    /// has to fail here instead.
+    /// building a client from defaults, losing the registry protocol and
+    /// timeouts along with the trust roots. A bundle that would fail there has
+    /// to fail here instead.
     #[test]
     fn unparseable_ca_bundles_are_rejected() {
         let dir = TempDir::new().unwrap();
