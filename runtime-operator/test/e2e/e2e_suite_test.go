@@ -132,13 +132,13 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	// The in-cluster registry runs on an all-features host image; without
-	// BUILD_RUNTIME_IMAGE the run falls back to the default-features canary,
-	// which can't run the registry (the async wasmcloud:blobstore plugin is
-	// feature-gated). Fail fast with a clear message rather than a 5m wait.
+	// The registry flow points every host at --oci-ca-path so it trusts the
+	// chart's CA, and only a host built from this tree carries that flag: a
+	// released image exits at startup on the unknown argument. Fail fast with
+	// a clear message rather than a 5m wait on a host that never comes up.
 	if inClusterRegistry && !buildRuntimeImage {
 		Fail("E2E_IN_CLUSTER_REGISTRY=true requires BUILD_RUNTIME_IMAGE=true " +
-			"(the oci-registry needs an all-features host image)")
+			"(the hosts need the --oci-ca-path this tree provides)")
 	}
 
 	if !skipImageBuild {
@@ -155,16 +155,16 @@ var _ = BeforeSuite(func() {
 	if buildRuntimeImage {
 		if !skipRuntimeBuild {
 			By("building the wash-runtime image from the local tree")
-			// Repo root sits one level above runtime-operator/. Build the
-			// all-features host — `(implements ..)` multiplexing and host
-			// component plugins — so the implements and host-plugin specs can run
-			// locally (both features are off in release builds). Matches the
-			// all-features wash-image build in wash.yml. A local run builds a
-			// single feature image tagged defaultHostImageTag, which both the
-			// default and registry hostgroups use.
+			// Repo root sits one level above runtime-operator/. Adds host
+			// component plugins, the one feature the host-plugin spec needs that
+			// a release build leaves off; the Dockerfile appends to the default
+			// features rather than replacing them, so `(implements ..)`
+			// multiplexing comes along by default. Matches the all-features
+			// wash-image build in wash.yml. A local run builds a single image
+			// tagged defaultHostImageTag, which both hostgroups use.
 			ref := fmt.Sprintf("%s:%s", runtimeImageRepo, defaultHostImageTag)
 			cmd := exec.Command("docker", "build",
-				"--build-arg", "CARGO_FEATURES=wasm_component_model_implements,host-component-plugins",
+				"--build-arg", "CARGO_FEATURES=host-component-plugins",
 				"-t", ref, "..")
 			_, err := utils.Run(cmd)
 			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the wash-runtime image")
@@ -346,18 +346,19 @@ func buildBaseHelmSets() []string {
 		// plain HTTP: nothing verified, and the registry's credentials in the
 		// clear on every pull.
 		//
-		// The second hostgroup remains, for the other reason it exists: the
-		// registry component needs an all-features host (the async
-		// wasmcloud:blobstore plugin), which the release leg's default host is
-		// not.
+		// The registry keeps a hostgroup to itself because it is the only
+		// workload behind TLS. The gateway proxies to its upstreams in
+		// plaintext, so serving TLS on the default hostgroup would put every
+		// other workload out of its reach.
 		sets = append(sets,
 			"runtime.ociCaPaths[0]=/runtime-cert/ca.crt",
 			// hostGroups[1]: the `registry` hostgroup, serving the oci-registry
 			// workload (testdata/oci-registry.yaml, hostSelector:
 			// hostgroup=registry) over TLS. The oci-registry exports a p3 async
-			// wasi:http/handler and imports the async wasmcloud:blobstore plugin;
-			// the all-features engine enables the component-model-async proposal
-			// by default, so no extra host flag is required.
+			// wasi:http/handler and imports the async wasmcloud:blobstore; both
+			// component-model-async and the implements routing that async
+			// blobstore is built on are on by default, so it needs no feature
+			// build and no extra host flag.
 			"runtime.hostGroups[1].name=registry",
 			"runtime.hostGroups[1].replicas=1",
 			"runtime.hostGroups[1].service.type=ClusterIP",

@@ -2,10 +2,13 @@
 #
 # The `oci-registry` example component (a spec-compliant OCI v2 registry that
 # stores through wasmcloud:blobstore) runs as a WorkloadDeployment on the
-# `registry` hostgroup, which the e2e puts on an all-features host image for the
-# async wasmcloud:blobstore plugin this component imports. Every other e2e
-# fixture is then built locally, pushed into this registry, and pulled back by
-# the `default` hostgroup. See runtime-operator/test/e2e/README or the
+# `registry` hostgroup, which it has to itself because it is the only workload
+# behind TLS: the gateway proxies to its upstreams in plaintext, so serving TLS
+# on the default hostgroup would put every other workload out of its reach. It
+# needs no feature build of its own, component-model-async and the implements
+# routing behind async wasmcloud:blobstore both being on by default. Every other
+# e2e fixture is then built locally, pushed into this registry, and pulled back
+# by the `default` hostgroup. See runtime-operator/test/e2e/README or the
 # `e2e-images` Make target for the surrounding flow.
 #
 # It serves HTTPS, from a certificate the chart mints off its own CA. Every host
