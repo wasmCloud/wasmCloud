@@ -61,8 +61,8 @@ const TAG: &str = "e2e";
 
 /// Defaults for the registry's HTTP Basic credentials, overridable with
 /// `E2E_REGISTRY_USER` / `E2E_REGISTRY_PASSWORD`. The suite reads the same two
-/// variables (see e2e_suite_test.go), so setting them moves both sides at once
-/// — which is what a credential shared across processes needs. Both carry
+/// variables (see e2e_suite_test.go), so setting them moves both sides at once,
+/// which is what a credential shared across processes needs. Both carry
 /// `test`: they are throwaway credentials for a registry that lives as long as
 /// one test run, and should read that way wherever they surface.
 ///
@@ -330,7 +330,7 @@ fn built_component(fixtures_dir: &Path, fixture: &str, kind: FixtureKind) -> Res
 ///
 /// Built here rather than checked in beside the registry manifest for two
 /// reasons: a manifest cannot pick up `E2E_REGISTRY_USER`/`_PASSWORD`, and
-/// `kubectl create secret` owns the encoding — a docker config committed as
+/// `kubectl create secret` owns the encoding. A docker config committed as
 /// base64 hides the very credential that has to match the one above it.
 fn create_registry_secrets(kubeconfig: &str, namespace: &str) -> Result<()> {
     let (user, password) = (registry_user(), registry_password());
@@ -386,7 +386,7 @@ const CA_SECRET: &str = "wasmcloud-ca";
 ///
 /// The hosts get this CA from a mounted Secret; the pushing process runs
 /// outside the cluster, so it has to read it out. Without it the push cannot
-/// verify the registry — the CA is generated per install and signs nothing the
+/// verify the registry: the CA is generated per install and signs nothing the
 /// public roots know about.
 fn fetch_ca_bundle(kubeconfig: &str, namespace: &str, workspace: &Path) -> Result<PathBuf> {
     // A go-template decodes the Secret's base64 in kubectl, which a jsonpath
@@ -457,7 +457,7 @@ fn run_checked(cmd: &mut Command, what: &str) -> Result<()> {
 ///
 /// Asking the OS beats hardcoding one: a fixed port collides with whatever the
 /// developer happens to be running, and on macOS the obvious candidates are
-/// already taken — AirPlay Receiver listens on 5000 and 7000 by default and
+/// already taken. AirPlay Receiver listens on 5000 and 7000 by default and
 /// answers requests, so a registry that never came up looks like one serving
 /// 403s instead. Between the probe closing and kubectl binding, the port could
 /// in principle be taken; nothing else here is racing for it.
@@ -510,7 +510,7 @@ fn wait_for_registry(port: u16, ca_bundle: &Path) -> Result<()> {
 /// the oci-registry Service is selectorless (the operator manages its route
 /// EndpointSlice), so `kubectl port-forward svc/...` can't resolve a target pod.
 /// The pod's HTTP server demuxes by Host header, and PUSH_ADDR is a registered
-/// alias — the port the client tacks on does not affect that match — so this
+/// alias (the port the client tacks on does not affect that match), so this
 /// reaches the registry all the same. The Service remains the in-cluster pull
 /// path.
 struct PortForward {

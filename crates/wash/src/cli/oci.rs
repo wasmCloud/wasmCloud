@@ -25,13 +25,9 @@ pub struct RegistryArgs {
     /// Password for basic authentication
     #[arg(short, long)]
     pub password: Option<String>,
-    /// Extra CA certificate bundle files (PEM) to trust for this registry —
+    /// Extra CA certificate bundle files (PEM) to trust for this registry:
     /// one behind a private or in-cluster CA, which the compiled-in public
     /// roots do not cover.
-    ///
-    /// Prefer this to `--insecure`, which does not relax verification but
-    /// replaces it: the connection drops to plain HTTP, so no certificate is
-    /// checked and any credentials travel in the clear.
     #[arg(long = "ca-path", env = "WASH_OCI_CA_PATHS", value_delimiter = ',')]
     pub ca_paths: Vec<PathBuf>,
 }

@@ -179,7 +179,7 @@ data:
        only valid for an IP that appears there: an address listed under
        `domains` becomes a DNS name, which no client will match against a URL
        written as an IP. Needed when something reaches the host by address
-       rather than name — a port-forward, for instance. */}}
+       rather than name, a port-forward for instance. */}}
 {{- $ipAddresses := $genCert.ipAddresses | default list }}
 {{- $httpSecretName := printf "hostgroup-%s-http-tls" .name }}
 {{- $httpSec := lookup "v1" "Secret" $ns $httpSecretName }}

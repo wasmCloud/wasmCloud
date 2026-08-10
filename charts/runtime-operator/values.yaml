@@ -263,7 +263,7 @@ runtime:
   #
   # A registry served from a host group in this cluster (`hostGroups[].http.tls`)
   # presents a certificate from the chart's own CA, which is already mounted at
-  # /runtime-cert/ca.crt whenever `global.tls.enabled` — so trusting it needs
+  # /runtime-cert/ca.crt whenever `global.tls.enabled`, so trusting it needs
   # only that path, with no bundle to distribute:
   #   ociCaPaths: ["/runtime-cert/ca.crt"]
   #

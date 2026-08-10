@@ -341,7 +341,7 @@ func buildBaseHelmSets() []string {
 	if inClusterRegistry {
 		// The registry serves HTTPS from a certificate the chart mints off its
 		// own CA, and every host already carries that CA at /runtime-cert/ca.crt
-		// for NATS — so trusting it is a path, not a distribution problem. That
+		// for NATS, so trusting it is a path, not a distribution problem. That
 		// replaces --allow-insecure-registries, which switched every registry to
 		// plain HTTP: nothing verified, and the registry's credentials in the
 		// clear on every pull.
@@ -369,7 +369,7 @@ func buildBaseHelmSets() []string {
 			// certificate, or verification fails on the name rather than the
 			// chain: the Service DNS forms for in-cluster pulls, and 127.0.0.1
 			// for the port-forward `make e2e-images` pushes through. The address
-			// goes under ipAddresses, not domains — a client dialing a URL
+			// goes under ipAddresses, not domains: a client dialing a URL
 			// written as an IP matches it against the IP SANs alone.
 			fmt.Sprintf("runtime.hostGroups[1].http.tls.certificate.generate.domains[0]=oci-registry.%s.svc", namespace),
 			fmt.Sprintf("runtime.hostGroups[1].http.tls.certificate.generate.domains[1]=oci-registry.%s", namespace),

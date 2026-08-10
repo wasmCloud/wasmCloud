@@ -164,7 +164,7 @@ pub struct HostCommand {
     pub allow_insecure_registries: bool,
 
     /// Extra CA certificate bundle files (PEM) trusted when pulling from OCI
-    /// registries — a registry behind a private or in-cluster CA, which the
+    /// registries: for a registry behind a private or in-cluster CA, which the
     /// compiled-in public roots do not cover. Applies to every pull this host
     /// makes: workload components, host component plugins, and washlet
     /// artifacts alike.
@@ -315,9 +315,8 @@ impl CliCommand for HostCommand {
         .context("failed to connect to NATS")?;
         let data_nats_client = Arc::new(data_nats_client);
 
-        // Before anything pulls: trust roots are process-wide, and a host that
-        // starts without them would fail every pull from the registry it was
-        // pointed at rather than say why.
+        // Parse the CA bundles before anything pulls, and fail if any is
+        // invalid.
         if !self.oci_ca_paths.is_empty() {
             wash_runtime::oci::set_extra_ca_certificates(&self.oci_ca_paths)
                 .context("failed to load --oci-ca-path CA certificates")?;
