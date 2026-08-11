@@ -28,8 +28,8 @@ interface control {
     echo: async func(message: string) -> string;
 
     /// Call `handler.notify` on the workload `id`, named with a
-    /// `wasmcloud:host/workload` target handle rather than inherited from the
-    /// caller. The message carries the id read back off the handle, so the
+    /// `wasmcloud:host/workload-call` target handle rather than inherited from
+    /// the caller. The message carries the id read back off the handle, so the
     /// reply proves which workload the host scoped the call to. Answers
     /// `"unroutable:{id}"` when no such workload is callable, which is what a
     /// plugin does with a `target.open` that returns `none`.

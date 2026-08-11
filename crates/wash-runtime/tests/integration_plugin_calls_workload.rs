@@ -5,7 +5,7 @@
 //! The `events-plugin` component also exports `acme:events/control`, so both
 //! ways of choosing a target are drivable from an ordinary request:
 //!   - a call with no target handle held goes back to the calling workload;
-//!   - a call under a `wasmcloud:host/workload` target handle goes to the
+//!   - a call under a `wasmcloud:host/workload-call` target handle goes to the
 //!     workload that handle names, for as long as it is alive;
 //!   - `callable` reports the workloads that are up, each with the interfaces
 //!     of it the plugin may actually call.

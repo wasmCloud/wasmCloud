@@ -3,7 +3,7 @@ package wasmcloud:host@0.1.2;
 /// The identifiers every other `wasmcloud:host` interface names a workload and
 /// its components by, defined once so they mean the same thing in all of them:
 /// the id `identity` reports for the caller of a capability call is the id
-/// `workload-lifecycle` binds and unbinds, and the id `workload` routes a
+/// `workload-lifecycle` binds and unbinds, and the id `workload-call` routes a
 /// plugin's outbound call to.
 interface types {
     /// Identifier of a workload. Host-minted, opaque, and stable for as long as
