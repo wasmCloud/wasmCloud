@@ -1,0 +1,10 @@
+[package]
+name = "http-internal-fetch"
+edition = "2024"
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wstd = { workspace = true }

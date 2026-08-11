@@ -384,6 +384,19 @@ struct CtxHttpHooks {
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
     workload_id: Arc<str>,
     allowed_hosts: Arc<[AllowedHost]>,
+    /// The reserved-zone routing this component gets. Requests to
+    /// `*.wasmcloud.internal` are answered here rather than by the outgoing
+    /// handler, which is what lets each name carry its own policy.
+    internal: InternalZone,
+}
+
+/// The state a Ctx needs to answer `*.wasmcloud.internal` requests: the
+/// workload's virtual network to dial its service through, and the policy that
+/// decides whether it may reach the machine's own loopback.
+#[derive(Clone)]
+struct InternalZone {
+    network: Arc<std::sync::Mutex<crate::sockets::loopback::Network>>,
+    policy: Arc<crate::sockets::policy::SocketPolicy>,
 }
 
 impl WasiHttpHooks for CtxHttpHooks {
@@ -393,6 +406,37 @@ impl WasiHttpHooks for CtxHttpHooks {
         config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
     ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
     {
+        // The reserved zone is answered here, never by the outgoing handler:
+        // `service.wasmcloud.internal` has no real address to send to, and
+        // `host.wasmcloud.internal` carries a policy the handler cannot see.
+        // `allowedHosts` still applies — `check_allowed_hosts` requires a
+        // reserved name to be listed literally.
+        if let Some(routed) =
+            crate::host::loopback_http::route(request.uri(), &self.internal.policy)
+        {
+            if let Err(e) = crate::host::http::check_allowed_hosts(&request, &self.allowed_hosts) {
+                return Err(internal_zone_error_p2(&e.to_string()));
+            }
+            let network = Arc::clone(&self.internal.network);
+            let handle = wasmtime_wasi::runtime::spawn(async move {
+                // The outer `Ok` is "the send completed"; the inner result is
+                // what the guest sees, so a refusal or a dead service is an
+                // `error-code` rather than a trap.
+                let sent = match routed {
+                    Ok(route) => {
+                        crate::host::loopback_http::send_p2(route, &network, request, config).await
+                    }
+                    Err(e) => Err(e),
+                };
+                Ok(sent.map_err(|e| {
+                    wasmtime_wasi_http::p2::bindings::http::types::ErrorCode::InternalError(Some(
+                        format!("{e:#}"),
+                    ))
+                }))
+            });
+            return Ok(wasmtime_wasi_http::p2::types::HostFutureIncomingResponse::pending(handle));
+        }
+
         match &self.http_handler {
             Some(handler) => {
                 handler.outgoing_request(&self.workload_id, request, config, &self.allowed_hosts)
@@ -404,6 +448,15 @@ impl WasiHttpHooks for CtxHttpHooks {
     }
 }
 
+/// Report a reserved-zone refusal as a P2 error the guest can act on.
+fn internal_zone_error_p2(message: &str) -> wasmtime_wasi_http::p2::HttpError {
+    wasmtime_wasi_http::p2::HttpError::from(
+        wasmtime_wasi_http::p2::bindings::http::types::ErrorCode::InternalError(Some(
+            message.to_string(),
+        )),
+    )
+}
+
 /// P3 HTTP hooks implementation that delegates outgoing requests to the
 /// configured [`HostHandler`](crate::host::http::HostHandler), so custom egress
 /// (allowed-hosts policy, alternate transports, etc.) applies uniformly to
@@ -412,6 +465,7 @@ struct CtxHttpHooksP3 {
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
     workload_id: Arc<str>,
     allowed_hosts: Arc<[AllowedHost]>,
+    internal: InternalZone,
 }
 
 impl wasmtime_wasi_http::p3::WasiHttpHooks for CtxHttpHooksP3 {
@@ -456,6 +510,30 @@ impl wasmtime_wasi_http::p3::WasiHttpHooks for CtxHttpHooksP3 {
     > {
         use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode as P3ErrorCode;
 
+        // Same interception as P2: the reserved zone never reaches the
+        // outgoing handler, so both protocol versions gate it identically.
+        if let Some(routed) =
+            crate::host::loopback_http::route(request.uri(), &self.internal.policy)
+        {
+            let denied = crate::host::http::check_allowed_hosts(&request, &self.allowed_hosts)
+                .err()
+                .map(|e| e.to_string());
+            let network = Arc::clone(&self.internal.network);
+            return Box::new(async move {
+                if let Some(message) = denied {
+                    return Err(P3ErrorCode::InternalError(Some(message)).into());
+                }
+                let route =
+                    routed.map_err(|e| P3ErrorCode::InternalError(Some(format!("{e:#}"))))?;
+                let response = crate::host::loopback_http::send_p3(route, &network, request)
+                    .await
+                    .map_err(|e| P3ErrorCode::InternalError(Some(format!("{e:#}"))))?;
+                let io: Box<dyn std::future::Future<Output = Result<(), P3ErrorCode>> + Send> =
+                    Box::new(async { Ok(()) });
+                Ok((response, io))
+            });
+        }
+
         match &self.http_handler {
             Some(handler) => handler.outgoing_request_p3(
                 &self.workload_id,
@@ -481,6 +559,7 @@ pub struct CtxBuilder {
     component_id: Arc<str>,
     ctx: Option<WasiCtx>,
     sockets: Option<crate::sockets::WasiSocketsCtx>,
+    socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     plugins: HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>,
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
     allowed_hosts: Arc<[AllowedHost]>,
@@ -498,6 +577,7 @@ impl CtxBuilder {
             workload_id: workload_id.into(),
             ctx: None,
             sockets: None,
+            socket_policy: None,
             http_handler: None,
             plugins: HashMap::new(),
             allowed_hosts: Default::default(),
@@ -549,6 +629,13 @@ impl CtxBuilder {
         self
     }
 
+    /// The socket policy this component's `wasi:http` shares with its sockets,
+    /// so `host.wasmcloud.internal` is gated identically on both.
+    pub fn with_socket_policy(mut self, policy: Arc<crate::sockets::policy::SocketPolicy>) -> Self {
+        self.socket_policy = Some(policy);
+        self
+    }
+
     pub fn build(self) -> Ctx {
         let plugins = self
             .plugins
@@ -556,16 +643,24 @@ impl CtxBuilder {
             .map(|(k, v)| (k, v as Arc<dyn Any + Send + Sync>))
             .collect();
 
+        let sockets = self.sockets.unwrap_or_default();
+        let internal = InternalZone {
+            network: Arc::clone(&sockets.loopback),
+            policy: self.socket_policy.clone().unwrap_or_default(),
+        };
+
         let http_hooks_p3 = CtxHttpHooksP3 {
             http_handler: self.http_handler.clone(),
             workload_id: self.workload_id.clone(),
             allowed_hosts: self.allowed_hosts.clone(),
+            internal: internal.clone(),
         };
 
         let http_hooks = CtxHttpHooks {
             http_handler: self.http_handler,
             workload_id: self.workload_id.clone(),
             allowed_hosts: self.allowed_hosts,
+            internal,
         };
 
         Ctx {
@@ -580,7 +675,7 @@ impl CtxBuilder {
             workload_id: self.workload_id,
             component_id: self.component_id,
             http: WasiHttpCtx::new(),
-            sockets: self.sockets.unwrap_or_default(),
+            sockets,
             #[cfg(feature = "wasi-tls")]
             tls: {
                 // EngineBuilder::build already warns once if no provider was

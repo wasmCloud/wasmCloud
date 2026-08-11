@@ -186,6 +186,46 @@ spec:
             {{- range .wasmProposals }}
             - "--wasm-proposal={{ . }}"
             {{- end }}
+            {{- /* Networking policy. Every flag here is the host's half of a
+                   two-sided grant; the guest still has to declare what it
+                   wants. Rendered only when set away from the runtime's own
+                   default, so an unconfigured host group produces the same
+                   arg list it did before. */}}
+            {{- with .networking }}
+            {{- if .allowHostLoopback }}
+            - "--allow-host-loopback"
+            {{- end }}
+            {{- if and .socketEgress (ne .socketEgress "count") }}
+            - "--socket-egress={{ .socketEgress }}"
+            {{- end }}
+            {{- if hasKey . "denySpecialRanges" }}
+            - "--deny-special-ranges={{ .denySpecialRanges }}"
+            {{- end }}
+            {{- if .denyPrivateRanges }}
+            - "--deny-private-ranges"
+            {{- end }}
+            {{- if .maxConnections }}
+            - "--max-connections={{ .maxConnections }}"
+            {{- end }}
+            {{- if .maxHttpConnectionsPerWorkload }}
+            - "--max-http-connections-per-workload={{ .maxHttpConnectionsPerWorkload }}"
+            {{- end }}
+            {{- if .maxSocketConnectionsPerWorkload }}
+            - "--max-socket-connections-per-workload={{ .maxSocketConnectionsPerWorkload }}"
+            {{- end }}
+            {{- if .maxInboundConnectionsPerWorkload }}
+            - "--max-inbound-connections-per-workload={{ .maxInboundConnectionsPerWorkload }}"
+            {{- end }}
+            {{- if .publishPorts }}
+            - "--publish-ports"
+            {{- end }}
+            {{- if .publishBindAddress }}
+            - "--publish-bind-address={{ .publishBindAddress }}"
+            {{- end }}
+            {{- if .publishPortRange }}
+            - "--publish-port-range={{ .publishPortRange }}"
+            {{- end }}
+            {{- end }}
             {{- /* Host component plugins with no config/secretFrom/allowedHosts:
                    one --host-plugin flag per entry, rendered into the CLI's
                    `key=value` grammar (unchanged). Entries that DO set any of

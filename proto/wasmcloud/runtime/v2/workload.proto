@@ -63,6 +63,24 @@ enum WorkloadState {
 // - Batch Processing
 // - Local Healthcheck
 
+// A port a workload's service listens on inside its virtual loopback, and
+// whether the host exposes it on a real address.
+message Port {
+  // Names this port within the workload. Appears in logs, metrics, and the
+  // conflict error when two declarations collide.
+  string name = 1;
+  // The port the service's own code binds on 127.0.0.1.
+  uint32 port = 2;
+  // "TCP" (the default) or "UDP". A UDP port may be declared, so the
+  // workload's own components can reach it, but not published: only TCP
+  // ports can be exposed on a real address.
+  string protocol = 3;
+  // Real port the host binds, splicing accepted connections into the
+  // workload's virtual loopback. 0 or absent declares the port without
+  // exposing it, which is exactly today's behavior. TCP only.
+  uint32 publish = 4;
+}
+
 message Service {
   string image = 1;
   LocalResources local_resources = 2;
@@ -70,6 +88,10 @@ message Service {
   // Optional credentials for pulling the image from a private registry
   ImagePullSecret image_pull_secret = 4;
   ImagePullPolicy image_pull_policy = 5;
+  // Ports this service listens on inside the workload's virtual loopback, and
+  // which of them the host exposes on a real address. Empty is exactly
+  // today's behavior.
+  repeated Port ports = 6;
 }
 
 // Represents the WIT World (WebAssembly Interface Types)

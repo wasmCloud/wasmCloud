@@ -89,6 +89,7 @@ const P2_FIXTURES: &[&str] = &[
     "inter-component-call-callee",
     "inter-component-call-middleware",
     "http-allowed-hosts",
+    "http-internal-fetch",
     "http-egress-pool",
     "http-ip-name-lookup",
     "keyvalue-counter",
@@ -99,6 +100,7 @@ const P2_FIXTURES: &[&str] = &[
 const P3_FIXTURES: &[&str] = &[
     "http-handler-p3",
     "http-ip-name-lookup-p3",
+    "http-internal-zone",
     "http-blobstore-p3",
     "cli-service-p3",
     "socket-test-p3",

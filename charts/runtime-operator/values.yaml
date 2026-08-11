@@ -408,6 +408,36 @@ runtime:
       #                   `wasi:sockets/ip-name-lookup` calls may resolve.
       #                   Omitted/empty denies every lookup.
       #
+      #   ports           ports this plugin listens on. Omitted/empty means it
+      #                   binds nothing reachable. A plugin may always bind its
+      #                   own private virtual loopback, which reaches nothing
+      #                   until a port here exposes it. Each entry needs `name`
+      #                   and `port` (what the plugin's own code binds), plus
+      #                   optional `protocol` (TCP|UDP, default TCP) and at most
+      #                   one of:
+      #                     publish  real port the host binds. TCP splices
+      #                              accepted connections into the plugin's
+      #                              virtual loopback; UDP relays datagrams,
+      #                              giving each external peer its own virtual
+      #                              endpoint so the plugin can reply. Either
+      #                              way the plugin binds `127.0.0.1:<port>`
+      #                              and needs no change.
+      #                     bind     concrete address the plugin binds itself,
+      #                              skipping the splice's extra copy. Rejected
+      #                              if unspecified (0.0.0.0) or loopback.
+      #                   Setting neither declares the port without exposing it.
+      #                   The host must also run with `--publish-ports`
+      #                   (`hostGroup.publishPorts` below), or a plugin
+      #                   declaring an exposed port refuses to start rather than
+      #                   coming up silently unreachable.
+      #
+      #                   A published port is an unauthenticated surface: unlike
+      #                   a capability call it carries no host-asserted
+      #                   workload identity, so a plugin serving both must
+      #                   authenticate the port from the protocol (mTLS,
+      #                   tokens). It is also externally drivable compute, which
+      #                   per-port connection caps bound only partially.
+      #
       # Examples:
       #
       #   hostPlugins:

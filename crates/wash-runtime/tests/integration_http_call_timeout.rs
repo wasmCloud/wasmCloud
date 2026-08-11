@@ -166,6 +166,7 @@ async fn a_wedged_service_keeps_serving_with_a_bounded_wait() -> Result<()> {
                 bytes: bytes::Bytes::from_static(HTTP_SLEEPER_WASM),
                 local_resources: LocalResources::default(),
                 max_restarts: 0,
+                ports: Vec::new(),
             }),
             components: vec![],
             host_interfaces: http_only_host_interfaces("wedge-svc"),

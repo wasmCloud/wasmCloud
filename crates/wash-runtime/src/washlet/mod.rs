@@ -57,6 +57,14 @@ impl ClusterHostBuilder {
         self
     }
 
+    /// Share the host's port table and publishing settings — see
+    /// [`crate::host::HostBuilder::with_publish_context`].
+    #[must_use]
+    pub fn with_publish_context(mut self, publish: crate::host::ports::PublishContext) -> Self {
+        self.host_builder = self.host_builder.with_publish_context(publish);
+        self
+    }
+
     pub fn with_host_config(mut self, host_config: HostConfig) -> Self {
         self.host_config = Some(host_config);
         self
@@ -544,11 +552,32 @@ async fn workload_start(
             },
             None => crate::types::LocalResources::default(),
         };
+        let ports = match service
+            .ports
+            .iter()
+            .map(declared_port_from_wire)
+            .collect::<anyhow::Result<Vec<_>>>()
+            .and_then(|ports| {
+                crate::host::declared_port::validate_workload_ports(&ports, "service.ports")
+                    .map(|()| ports)
+            }) {
+            Ok(ports) => ports,
+            Err(e) => {
+                return Ok(types::v2::WorkloadStartResponse {
+                    workload_status: Some(types::v2::WorkloadStatus {
+                        workload_id: workload_id.clone(),
+                        workload_state: types::v2::WorkloadState::Error.into(),
+                        message: format!("invalid ports for service: {e:#}"),
+                    }),
+                });
+            }
+        };
         Some(crate::types::Service {
             bytes: loaded.bytes,
             digest: loaded.digest,
             local_resources,
             max_restarts: service.max_restarts,
+            ports,
         })
     } else {
         None
@@ -676,6 +705,44 @@ impl TryFrom<types::v2::LocalResources> for crate::types::LocalResources {
             )?,
         })
     }
+}
+
+/// Convert a wire `Port` into a [`DeclaredPort`](crate::host::declared_port::DeclaredPort).
+///
+/// The wire carries `publish` as a plain integer because proto3 has no
+/// optional scalar without a wrapper; `0` means "declared but not published",
+/// which is the same thing an absent field means.
+fn declared_port_from_wire(
+    port: &types::v2::Port,
+) -> anyhow::Result<crate::host::declared_port::DeclaredPort> {
+    use crate::host::declared_port::{DeclaredPort, Protocol};
+    let protocol = match port.protocol.trim() {
+        "" => Protocol::Tcp,
+        other => match other.to_ascii_lowercase().as_str() {
+            "tcp" => Protocol::Tcp,
+            "udp" => Protocol::Udp,
+            _ => anyhow::bail!(
+                "port '{}' has unknown protocol {other:?}; expected TCP or UDP",
+                port.name
+            ),
+        },
+    };
+    let bind_port = u16::try_from(port.port)
+        .map_err(|_| anyhow::anyhow!("port '{}' is out of range: {}", port.name, port.port))?;
+    let publish =
+        match port.publish {
+            0 => None,
+            p => Some(u16::try_from(p).map_err(|_| {
+                anyhow::anyhow!("port '{}' publish is out of range: {p}", port.name)
+            })?),
+        };
+    Ok(DeclaredPort {
+        name: port.name.clone(),
+        port: bind_port,
+        protocol,
+        publish,
+        bind: None,
+    })
 }
 
 /// Parses each entry of a policy list arriving from the wire, reporting

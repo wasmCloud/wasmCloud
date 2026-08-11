@@ -682,6 +682,60 @@ spec:
                           maxRestarts:
                             format: int32
                             type: integer
+                          ports:
+                            description: Ports this service listens on, and which
+                              of them the host publishes.
+                            items:
+                              description: |-
+                                ServicePort is a port a workload's service listens on inside the workload's
+                                virtual loopback, and whether the host exposes it on a real address.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name identifies this port within the workload. Appears in logs, metrics,
+                                    and the conflict error when two declarations collide.
+                                  maxLength: 63
+                                  pattern: ^[a-z0-9][a-z0-9-]*$
+                                  type: string
+                                port:
+                                  description: Port is what the service's own code
+                                    binds on 127.0.0.1.
+                                  format: int32
+                                  maximum: 65535
+                                  minimum: 1
+                                  type: integer
+                                protocol:
+                                  description: |-
+                                    Protocol is TCP (the default) or UDP. A UDP port may be declared — the
+                                    service binds it in the workload's virtual loopback, where the
+                                    workload's own components reach it — but it cannot be published:
+                                    setting Publish with UDP is rejected at start.
+                                  enum:
+                                  - TCP
+                                  - UDP
+                                  type: string
+                                publish:
+                                  description: |-
+                                    Publish is the real port the host binds, splicing accepted connections
+                                    into the workload's virtual loopback. The service's own code does not
+                                    change: it keeps binding 127.0.0.1:Port.
+
+                                    Absent declares the port without exposing it, which is exactly today's
+                                    behavior. Requires the host to run with --publish-ports, and requires
+                                    Protocol to be TCP.
+
+                                    Publishing makes the service reachable by every co-tenant on the same
+                                    machine unless raw socket egress is enforced, so treat it as an
+                                    external-facing decision rather than a convenience.
+                                  format: int32
+                                  maximum: 65535
+                                  minimum: 1
+                                  type: integer
+                              required:
+                              - name
+                              - port
+                              type: object
+                            type: array
                         required:
                         - image
                         type: object

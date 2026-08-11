@@ -15,6 +15,7 @@ members = [
     "inter-component-call-callee",
     "inter-component-call-middleware",
     "http-allowed-hosts",
+    "http-internal-fetch",
     "http-egress-pool",
     "http-ip-name-lookup",
     "keyvalue-counter",
@@ -23,6 +24,7 @@ members = [
     # P3 fixtures (wasm32-wasip1 + reactor adapter)
     "http-handler-p3",
     "http-ip-name-lookup-p3",
+    "http-internal-zone",
     "http-blobstore-p3",
     "cli-service-p3",
     "socket-test-p3",
