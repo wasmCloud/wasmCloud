@@ -206,9 +206,9 @@ impl<T: 'static + Send> HostWithStoreP3<T> for SharedCtx {
         let plugin =
             accessor.with(|mut a| a.get().try_get_plugin::<NatsMessaging>(PLUGIN_MESSAGING_ID))?;
 
-        // Drain the body first (see `collect_body`); `timeout-ms` starts only
-        // once the body is fully consumed — the caller controls how fast it
-        // arrives, so that wait is not counted against the broker.
+        // The client takes a complete payload, so the body is drained before the
+        // request goes out (see `collect_body`). `timeout-ms` therefore covers
+        // only the broker round-trip, not how fast the guest wrote the body.
         let body = match super::collect_body(accessor, body).await? {
             Ok(bytes) => bytes,
             Err(e) => return Ok(Err(e.into())),
