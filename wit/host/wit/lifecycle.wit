@@ -1,4 +1,4 @@
-package wasmcloud:host@0.1.2;
+package wasmcloud:host@0.1.3;
 
 /// Optionally exported by a host component plugin. The host calls these as
 /// workloads that import the plugin's capabilities are bound and unbound,
@@ -46,7 +46,7 @@ package wasmcloud:host@0.1.2;
 /// interrupted, the same way an in-flight request finishes rather than failing
 /// halfway. A `wasmcloud:host/workload-call` target handle opened before the
 /// stop does not extend that to *new* calls: the workload it names is gone, so
-/// the next call through the handle traps.
+/// the next call through the handle comes back `not-running`.
 interface workload-lifecycle {
     use types.{workload-id, component-id};
 

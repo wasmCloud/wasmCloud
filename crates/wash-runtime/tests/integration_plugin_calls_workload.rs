@@ -215,6 +215,117 @@ async fn test_target_scope_ends_with_the_handle() -> Result<()> {
     Ok(())
 }
 
+/// A workload whose export traps is reported to the plugin as a `call-error`,
+/// and the plugin keeps serving.
+///
+/// This is what the error arm on every workload-facing import buys. Without it
+/// the callee's trap propagates out of the host shim and faults the plugin's
+/// store — shared by every workload it serves — and a workload that traps every
+/// time exhausts the plugin's restart budget in three dispatches, taking every
+/// tenant with it. Nothing the plugin could do would help: its own strike
+/// counter lives in instance memory, which the fault it would be counting wipes.
+#[tokio::test]
+async fn test_a_trapping_workload_is_reported_not_fatal() -> Result<()> {
+    let (addr, h) =
+        start_host_with_component_plugin_by_host("127.0.0.1:0", PLUGIN_ID, EVENTS_PLUGIN_WASM)
+            .await?;
+    h.workload_start(events_workload("wl-alpha", "alpha", "alpha"))
+        .await?;
+    // Tagged `poison`, so its `handler.notify` traps instead of answering.
+    h.workload_start(events_workload("wl-poison", "poison", "poison"))
+        .await?;
+    let client = reqwest::Client::new();
+
+    for attempt in 0..4 {
+        let (status, body) = req(&client, &addr, "alpha", "/dispatch?id=wl-poison&msg=hi").await?;
+        assert_eq!(status.as_u16(), 200, "dispatch {attempt} should succeed");
+        assert_eq!(
+            body, "error:failed",
+            "the callee's trap should reach the plugin as the `failed` case, not take it down"
+        );
+    }
+
+    // Four dispatches is past the plugin's restart budget, so a propagating
+    // trap would have given up by now. The plugin is still the same live
+    // instance, still serving every other workload.
+    let (status, body) = req(&client, &addr, "alpha", "/echo?msg=alive").await?;
+    assert_eq!(status.as_u16(), 200, "the plugin should still be serving");
+    assert_eq!(body, "alpha:echo:alive");
+
+    // ...and the poison workload is still deployed and still callable: a failed
+    // call is the workload's problem to fix, not grounds for the host to evict.
+    let (_status, body) = req(&client, &addr, "alpha", "/callable").await?;
+    assert!(
+        body.contains("wl-poison="),
+        "a workload that fails a call stays callable; got: {body}"
+    );
+
+    Ok(())
+}
+
+/// A `target` binds a workload *and* an interface, so one cannot be opened for
+/// an interface that workload does not export.
+///
+/// `events-plugin` imports two workload-facing interfaces and `events-caller`
+/// exports only `handler`, so opening a `metrics` target for it answers `none`
+/// — the plugin learns before the call rather than from its failure. That is
+/// what makes a held handle proof the call routes: the pairing was checked when
+/// it was made.
+#[tokio::test]
+async fn test_a_target_for_an_unexported_interface_is_refused() -> Result<()> {
+    let (addr, h) =
+        start_host_with_component_plugin_by_host("127.0.0.1:0", PLUGIN_ID, EVENTS_PLUGIN_WASM)
+            .await?;
+    h.workload_start(events_workload("wl-alpha", "alpha", "alpha"))
+        .await?;
+    let client = reqwest::Client::new();
+
+    let (status, body) = req(&client, &addr, "alpha", "/report?id=wl-alpha&m=x").await?;
+    assert_eq!(status.as_u16(), 200, "/report should succeed");
+    assert_eq!(
+        body, "unroutable:wl-alpha",
+        "a workload that does not export the interface yields no target for it"
+    );
+
+    let (status, body) = req(&client, &addr, "alpha", "/echo?msg=alive").await?;
+    assert_eq!(status.as_u16(), 200, "the plugin should still be serving");
+    assert_eq!(body, "alpha:echo:alive");
+
+    Ok(())
+}
+
+/// An interface that brings its own error type is answerable too: the host
+/// borrows a case of it.
+///
+/// `acme:events/metrics` declares `metrics-error`, owing nothing to wasmCloud —
+/// the shape a `wasi:sockets` or `wasi:http` `error-code` has. Calling it with
+/// no target inherits the caller, which does not export `metrics`, so the host
+/// has to report `not-exported` through a type that has no such case. It picks
+/// `internal-error`: the case whose name means "something we did not
+/// enumerate", preferred over `rejected` which appears first.
+#[tokio::test]
+async fn test_a_failure_is_reported_through_an_interfaces_own_error_type() -> Result<()> {
+    let (addr, h) =
+        start_host_with_component_plugin_by_host("127.0.0.1:0", PLUGIN_ID, EVENTS_PLUGIN_WASM)
+            .await?;
+    h.workload_start(events_workload("wl-alpha", "alpha", "alpha"))
+        .await?;
+    let client = reqwest::Client::new();
+
+    let (status, body) = req(&client, &addr, "alpha", "/report-inherited?m=x").await?;
+    assert_eq!(status.as_u16(), 200, "/report-inherited should succeed");
+    assert_eq!(
+        body, "metrics-error:internal-error",
+        "the host should borrow the case closest to an unenumerated failure"
+    );
+
+    let (status, body) = req(&client, &addr, "alpha", "/echo?msg=alive").await?;
+    assert_eq!(status.as_u16(), 200, "the plugin should still be serving");
+    assert_eq!(body, "alpha:echo:alive");
+
+    Ok(())
+}
+
 /// A target for a workload that is not callable is reported to the plugin as
 /// `none` rather than trapping it. The plugin stays up and keeps serving, which
 /// is what makes a `callable`-then-dispatch loop safe against a workload
