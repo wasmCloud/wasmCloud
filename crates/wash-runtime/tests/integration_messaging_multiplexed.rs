@@ -171,7 +171,7 @@ async fn multiplexed_messaging_routes_each_import_to_its_cluster() -> Result<()>
     });
 
     let reply = team_a
-        .request("team-a.rpc".to_string(), b"ping".to_vec(), 5000)
+        .request("team-a.rpc".to_string(), b"ping".to_vec(), Some(5000))
         .await
         .map_err(err)?;
     assert_eq!(reply.body, b"pong".to_vec());
