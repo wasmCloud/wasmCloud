@@ -259,6 +259,12 @@ pub struct ComponentHostPlugin {
     network: crate::host::ports::NetworkHandle,
     /// The host-level half of this plugin's socket policy.
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
+    /// Ports this plugin declared, and how each is exposed.
+    ports: Arc<[crate::host::declared_port::DeclaredPort]>,
+    /// The host's one port table, so a collision names both holders.
+    port_table: Arc<crate::host::ports::PortTable>,
+    /// Host-wide publishing settings.
+    publish_config: Arc<crate::host::ports::PublishConfig>,
     /// Live published listeners. Dropped on `stop()`, which closes them and
     /// releases their port-table reservations.
     published: Mutex<Vec<crate::host::ports::PublishedPort>>,
@@ -311,6 +317,8 @@ impl ComponentHostPlugin {
         http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
         #[builder(default)] ports: Arc<[crate::host::declared_port::DeclaredPort]>,
         socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
+        port_table: Option<Arc<crate::host::ports::PortTable>>,
+        publish_config: Option<Arc<crate::host::ports::PublishConfig>>,
     ) -> anyhow::Result<Self> {
         crate::host::declared_port::validate_ports(&ports, &format!("host plugin '{id}'"))?;
         let direct_binds = ports
@@ -388,6 +396,9 @@ impl ComponentHostPlugin {
             direct_binds: Arc::from(direct_binds),
             network: crate::host::ports::NetworkHandle::new(),
             socket_policy: socket_policy.unwrap_or_default(),
+            ports,
+            port_table: port_table.unwrap_or_default(),
+            publish_config: publish_config.unwrap_or_default(),
             published: Mutex::new(Vec::new()),
             direct_reservations: Mutex::new(Vec::new()),
             state,
@@ -399,6 +410,108 @@ impl ComponentHostPlugin {
     pub fn with_max_restarts(mut self, max_restarts: u32) -> Self {
         self.max_restarts = max_restarts;
         self
+    }
+
+    /// Bind a real listener for every declared port that asks to be published.
+    ///
+    /// A port declared without `publish` reserves nothing and binds nothing: the
+    /// plugin still binds it inside its own virtual network, where it is
+    /// unreachable. A port with `bind` is held by the plugin itself, so all this
+    /// does is reserve it in the host's table — the collision check still has to
+    /// see it, or two plugins could each bind the same real address and only one
+    /// would notice.
+    ///
+    /// # Errors
+    ///
+    /// Fails if any port conflicts, is out of range, or cannot be bound. On
+    /// failure nothing stays published: the ports bound so far drop here, which
+    /// closes their listeners and releases their reservations, so a partially
+    /// started plugin does not leave a port claimed.
+    async fn publish_declared_ports(&self) -> anyhow::Result<()> {
+        if self.ports.is_empty() {
+            return Ok(());
+        }
+        let owner = crate::host::ports::PortOwner::Plugin(Arc::from(self.id));
+        let mut published = Vec::new();
+
+        for port in self.ports.iter() {
+            match port.mode() {
+                crate::host::declared_port::PortMode::Declared => {
+                    debug!(
+                        id = self.id,
+                        port = %port.name,
+                        "port declared without `publish`; reachable only inside the plugin"
+                    );
+                }
+                crate::host::declared_port::PortMode::Splice { publish } => {
+                    let target = core::net::SocketAddr::new(
+                        core::net::IpAddr::V4(core::net::Ipv4Addr::LOCALHOST),
+                        port.port,
+                    );
+                    let request = crate::host::ports::PublishRequest::new(
+                        port.protocol,
+                        owner.clone(),
+                        port.name.as_str(),
+                        publish,
+                        target,
+                        self.network.clone(),
+                    )
+                    // The same allowance this plugin's own outbound sockets
+                    // draw on, so its exposed ports cannot outrun it.
+                    .with_quota(self.socket_policy.quota_for(self.id));
+                    let handle = crate::host::ports::publish(
+                        &self.publish_config,
+                        &self.port_table,
+                        request,
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to publish port '{}' for plugin '{}'",
+                            port.name, self.id
+                        )
+                    })?;
+                    published.push(handle);
+                }
+                crate::host::declared_port::PortMode::Direct { bind } => {
+                    // The plugin holds this socket, so there is nothing to bind
+                    // here — only to record, so the port table stays the one
+                    // place that knows what this host has taken.
+                    let addr = core::net::SocketAddr::new(bind, port.port);
+                    let reservation = self
+                        .port_table
+                        .reserve(port.protocol, addr, owner.clone())
+                        .with_context(|| {
+                            format!(
+                                "failed to reserve direct-bind port '{}' for plugin '{}'",
+                                port.name, self.id
+                            )
+                        })?;
+                    self.direct_reservations()?.push(reservation);
+                    debug!(
+                        id = self.id,
+                        port = %port.name,
+                        %addr,
+                        "reserved direct-bind port; the plugin binds it itself"
+                    );
+                }
+            }
+        }
+
+        self.published
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(published);
+        Ok(())
+    }
+
+    fn direct_reservations(
+        &self,
+    ) -> anyhow::Result<std::sync::MutexGuard<'_, Vec<crate::host::ports::PortReservation>>> {
+        Ok(self
+            .direct_reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
     }
 
     /// Override the per-call budget for a lifecycle (bind/unbind) delivery
@@ -529,6 +642,12 @@ impl HostPlugin for ComponentHostPlugin {
     }
 
     async fn start(&self) -> anyhow::Result<()> {
+        // Bind real ports before the first incarnation exists, so a conflict is
+        // a start failure naming both holders rather than a surprise later. The
+        // guest's virtual listener does not exist yet either; connections
+        // arriving before it does wait out the readiness window.
+        self.publish_declared_ports().await?;
+
         let (tx, rx) = tokio::sync::mpsc::channel(CAPABILITY_CHANNEL_CAPACITY);
         // Publish the sender and snapshot the bound workloads atomically (see
         // [`replay_snapshot`]); leftover binds (a stop()/start() cycle) replay,

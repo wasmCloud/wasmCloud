@@ -802,6 +802,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
+name = "socket-echo-plugin"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "socket-test-p3"
 version = "0.0.0"
 dependencies = [

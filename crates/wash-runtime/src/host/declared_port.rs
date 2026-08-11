@@ -371,7 +371,10 @@ mod tests {
         let mut port = splice("dns", 5353, Some(31053));
         port.protocol = Protocol::Udp;
         let err = port.validate("p").unwrap_err().to_string();
-        assert!(err.contains("only TCP ports can be published"), "got: {err}");
+        assert!(
+            err.contains("only TCP ports can be published"),
+            "got: {err}"
+        );
         assert!(
             err.contains("Drop `publish`"),
             "the error should say what to do instead; got: {err}"
