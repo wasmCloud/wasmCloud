@@ -73,10 +73,11 @@ interface consumer {
   /// streams back inside the returned `broker-message`. `timeout-ms` bounds the
   /// wait for the reply, measured once the request body has been fully consumed
   /// and sent — the caller controls how fast its own body is produced, so that
-  /// time is not counted against the broker.
+  /// time is not counted against the broker. Pass `none` to use the backend's
+  /// default request timeout (e.g. the NATS client's configured timeout).
   ///
-  /// Returns `error::timeout` if no reply arrives within `timeout-ms`.
-  request: async func(subject: string, body: stream<u8>, timeout-ms: u32) -> result<broker-message, error>;
+  /// Returns `error::timeout` if no reply arrives in time.
+  request: async func(subject: string, body: stream<u8>, timeout-ms: option<u32>) -> result<broker-message, error>;
 
   /// Publish a message to a subject without awaiting a response.
   ///

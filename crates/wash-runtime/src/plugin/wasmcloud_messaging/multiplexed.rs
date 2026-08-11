@@ -54,11 +54,12 @@ pub use super::MsgError;
 /// unified surface both the sync and async consumer host impls dispatch onto.
 #[async_trait::async_trait]
 pub trait MsgBackend: Send + Sync {
+    /// `timeout_ms: None` applies the backend's default request timeout.
     async fn request(
         &self,
         subject: String,
         body: Vec<u8>,
-        timeout_ms: u32,
+        timeout_ms: Option<u32>,
     ) -> Result<BrokerMessage, MsgError>;
     async fn publish(&self, msg: BrokerMessage) -> Result<(), MsgError>;
 }
@@ -75,7 +76,7 @@ impl<'a> bindings::named_imports::wasmcloud::messaging0_2_0::consumer::Host for 
         // `@0.2.0`'s WIT error is a bare `string`, so the classified backend
         // error is lowered via its `Display`.
         Ok(id
-            .request(subject, body, timeout_ms)
+            .request(subject, body, Some(timeout_ms))
             .await
             .map_err(Into::into))
     }

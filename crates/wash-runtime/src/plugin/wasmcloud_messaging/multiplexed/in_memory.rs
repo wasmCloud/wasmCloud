@@ -38,7 +38,7 @@ impl MsgBackend for InMemoryMsgBackend {
         &self,
         subject: String,
         body: Vec<u8>,
-        _timeout_ms: u32,
+        _timeout_ms: Option<u32>,
     ) -> Result<BrokerMessage, MsgError> {
         // Loopback: echo the request back as its own reply.
         self.published.write().await.push(BrokerMessage {

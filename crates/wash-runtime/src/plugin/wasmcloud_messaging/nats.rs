@@ -201,7 +201,7 @@ impl<T: 'static + Send> HostWithStoreP3<T> for SharedCtx {
         accessor: &Accessor<T, Self>,
         subject: String,
         body: wasmtime::component::StreamReader<u8>,
-        timeout_ms: u32,
+        timeout_ms: Option<u32>,
     ) -> wasmtime::Result<Result<AsyncBrokerMessage, AsyncMsgError>> {
         let plugin =
             accessor.with(|mut a| a.get().try_get_plugin::<NatsMessaging>(PLUGIN_MESSAGING_ID))?;
@@ -214,16 +214,25 @@ impl<T: 'static + Send> HostWithStoreP3<T> for SharedCtx {
             Err(e) => return Ok(Err(e.into())),
         };
 
-        let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
+        // `None` falls through to the NATS client's own request timeout
+        // (10s unless configured otherwise); `TimedOut` classifies below.
         let request_future = plugin.client.request(subject, body.into());
-
-        let resp = match tokio::time::timeout(timeout_duration, request_future).await {
-            Ok(Ok(msg)) => msg,
-            Ok(Err(e)) => return Ok(Err(classify_request(&e).into())),
-            Err(_) => {
-                warn!("request timed out after {timeout_ms}ms");
-                return Ok(Err(AsyncMsgError::Timeout));
+        let resp = match timeout_ms {
+            Some(ms) => {
+                let duration = std::time::Duration::from_millis(ms as u64);
+                match tokio::time::timeout(duration, request_future).await {
+                    Ok(Ok(msg)) => msg,
+                    Ok(Err(e)) => return Ok(Err(classify_request(&e).into())),
+                    Err(_) => {
+                        warn!("request timed out after {ms}ms");
+                        return Ok(Err(AsyncMsgError::Timeout));
+                    }
+                }
             }
+            None => match request_future.await {
+                Ok(msg) => msg,
+                Err(e) => return Ok(Err(classify_request(&e).into())),
+            },
         };
         let body = super::mint_body(accessor, resp.payload.into())?;
         Ok(Ok(AsyncBrokerMessage {

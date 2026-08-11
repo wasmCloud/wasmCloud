@@ -13,6 +13,9 @@ use tracing::{Instrument, debug, instrument, trace, warn};
 
 const PLUGIN_MESSAGING_MEMORY_ID: &str = "wasmcloud-messaging-memory";
 const MAX_QUEUE_SIZE: usize = 10000;
+/// Default `request` timeout when the caller passes `none`, matching the NATS
+/// client's default of 10 seconds.
+const DEFAULT_REQUEST_TIMEOUT_MS: u32 = 10_000;
 
 /// A component's message inbox, shared between the publisher side
 /// (`route_to_subscribers`) and the component's processing task.
@@ -162,8 +165,11 @@ async fn do_request(
     workload_id: &str,
     subject: String,
     body: Vec<u8>,
-    timeout_ms: u32,
+    timeout_ms: Option<u32>,
 ) -> wasmtime::Result<Result<types_p2::BrokerMessage, MsgError>> {
+    // Mirror the NATS client's default request timeout when the caller passes
+    // none, so the two backends agree on what "backend default" means.
+    let timeout_ms = timeout_ms.unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS);
     let pending_requests = {
         let lock = plugin.tracker.read().await;
         match lock.get_workload_data(workload_id) {
@@ -315,9 +321,11 @@ impl<'a> HostP2 for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<types_p2::BrokerMessage, String>> {
         let plugin = self.try_get_plugin::<InMemoryMessaging>(PLUGIN_MESSAGING_MEMORY_ID)?;
         let workload_id = self.ctx.workload_id.to_string();
-        Ok(do_request(&plugin, &workload_id, subject, body, timeout_ms)
-            .await?
-            .map_err(Into::into))
+        Ok(
+            do_request(&plugin, &workload_id, subject, body, Some(timeout_ms))
+                .await?
+                .map_err(Into::into),
+        )
     }
 
     #[instrument(name = "wasmcloud.messaging.publish", skip_all, fields(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>")))]
@@ -346,7 +354,7 @@ impl<T: 'static + Send> HostWithStoreP3<T> for SharedCtx {
         accessor: &Accessor<T, Self>,
         subject: String,
         body: wasmtime::component::StreamReader<u8>,
-        timeout_ms: u32,
+        timeout_ms: Option<u32>,
     ) -> wasmtime::Result<Result<AsyncBrokerMessage, AsyncMsgError>> {
         let (plugin, workload_id) = plugin_and_workload(accessor)?;
         // Drain the body (see `collect_body`), then mint the reply's body back

@@ -27,19 +27,28 @@ impl MsgBackend for NatsMsgBackend {
         &self,
         subject: String,
         body: Vec<u8>,
-        timeout_ms: u32,
+        timeout_ms: Option<u32>,
     ) -> Result<BrokerMessage, MsgError> {
-        let timeout = std::time::Duration::from_millis(timeout_ms as u64);
-        let resp =
-            match tokio::time::timeout(timeout, self.client.request(subject, body.into())).await {
-                Ok(Ok(msg)) => msg,
-                Ok(Err(e)) => return Err(classify_request(&e)),
-                Err(_) => {
-                    return Err(MsgError::Timeout(format!(
-                        "request timed out after {timeout_ms}ms"
-                    )));
+        // `None` falls through to the NATS client's own request timeout
+        // (10s unless configured otherwise), reported as `TimedOut` and
+        // classified below.
+        let request = self.client.request(subject, body.into());
+        let resp = match timeout_ms {
+            Some(ms) => {
+                let timeout = std::time::Duration::from_millis(ms as u64);
+                match tokio::time::timeout(timeout, request).await {
+                    Ok(Ok(msg)) => msg,
+                    Ok(Err(e)) => return Err(classify_request(&e)),
+                    Err(_) => {
+                        return Err(MsgError::Timeout(format!("request timed out after {ms}ms")));
+                    }
                 }
-            };
+            }
+            None => match request.await {
+                Ok(msg) => msg,
+                Err(e) => return Err(classify_request(&e)),
+            },
+        };
         Ok(BrokerMessage {
             subject: resp.subject.to_string(),
             reply_to: resp.reply.as_ref().map(|r| r.to_string()),

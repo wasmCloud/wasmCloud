@@ -64,7 +64,7 @@ async fn request_via<T: 'static + Send>(
     id: MsgId,
     subject: String,
     body: wasmtime::component::StreamReader<u8>,
-    timeout_ms: u32,
+    timeout_ms: Option<u32>,
 ) -> wasmtime::Result<Result<AsyncBrokerMessage, AsyncMsgError>> {
     let bytes = match super::collect_body(accessor, body).await? {
         Ok(bytes) => bytes,
@@ -118,7 +118,7 @@ impl<T: 'static + Send>
         id: MsgId,
         subject: String,
         body: wasmtime::component::StreamReader<u8>,
-        timeout_ms: u32,
+        timeout_ms: Option<u32>,
     ) -> wasmtime::Result<Result<AsyncBrokerMessage, AsyncMsgError>> {
         request_via(accessor, id, subject, body, timeout_ms).await
     }
@@ -146,7 +146,7 @@ impl<T: 'static + Send> bindings::wasmcloud::messaging0_3_0::consumer::HostWithS
         accessor: &Accessor<T, Self>,
         subject: String,
         body: wasmtime::component::StreamReader<u8>,
-        timeout_ms: u32,
+        timeout_ms: Option<u32>,
     ) -> wasmtime::Result<Result<AsyncBrokerMessage, AsyncMsgError>> {
         let Some(id) = default_backend(accessor).await? else {
             return no_default_backend();
