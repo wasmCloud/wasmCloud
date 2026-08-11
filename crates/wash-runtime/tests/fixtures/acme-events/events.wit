@@ -6,20 +6,35 @@ package acme:events@0.1.0;
 /// serve. Everything is an `async func` over primitives, so both directions use
 /// the handle-free relocation fast path.
 interface handler {
+    /// The host's failure type, so a call it could not complete comes back as a
+    /// value rather than trapping the plugin that made it.
+    use wasmcloud:host/types@0.1.3.{call-error};
+
     /// Handle one event. Exported by a workload; called by the plugin across
     /// the store boundary. The reply carries the handling workload's own tag,
     /// so a caller can tell which workload actually ran it.
-    notify: async func(message: string) -> string;
+    notify: async func(message: string) -> result<string, call-error>;
 }
 
 /// A second interface in the plugin's *calling* direction that the workload
 /// fixture deliberately does not export. A plugin importing two of these is
 /// what makes `callable`'s per-workload interface list load-bearing: it has to
-/// say that `handler` is reachable on a workload and `metrics` is not, because
-/// calling one a workload does not export can only trap.
+/// say that `handler` is reachable on a workload and `metrics` is not. Reports
+/// failure as a plain `string`, the other shape the host accepts.
 interface metrics {
+    /// This interface's own failure type, owing nothing to wasmCloud — the
+    /// shape a `wasi:sockets` or `wasi:http` error-code has. The host cannot
+    /// name a case that means what `call-error` would, so it borrows the one
+    /// closest to "something went wrong we did not enumerate".
+    variant metrics-error {
+        /// The measurement was refused.
+        rejected(option<string>),
+        /// Anything else.
+        internal-error(option<string>),
+    }
+
     /// Report a measurement. Nothing exports this, so nothing may call it.
-    report: async func(measurement: string) -> string;
+    report: async func(measurement: string) -> result<string, metrics-error>;
 }
 
 interface control {
@@ -47,9 +62,14 @@ interface control {
     callable: async func() -> list<string>;
 
     /// Call `metrics.report` on the workload named by a target handle. Nothing
-    /// exports `metrics`, so this exists only to make the plugin genuinely
-    /// import a second workload-facing interface; calling it would trap.
+    /// exports `metrics`, so opening one answers `none` and no call is made.
     report: async func(id: string, measurement: string) -> string;
+
+    /// Call `metrics.report` with no target held, so it falls back to the
+    /// calling workload — which does not export `metrics` either. The one path
+    /// where the host still has to report `not-exported`, and it has to say so
+    /// through this interface's own error type.
+    report-inherited: async func(measurement: string) -> string;
 
     /// What the plugin saw when it tried to open a target for `id` from inside
     /// each `wasmcloud:host/workload-lifecycle` hook, as

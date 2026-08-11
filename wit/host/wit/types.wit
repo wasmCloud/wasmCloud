@@ -1,4 +1,4 @@
-package wasmcloud:host@0.1.2;
+package wasmcloud:host@0.1.3;
 
 /// The identifiers every other `wasmcloud:host` interface names a workload and
 /// its components by, defined once so they mean the same thing in all of them:
@@ -14,4 +14,58 @@ interface types {
     /// Identifier of one component within a workload. Fresh per deploy, so it
     /// identifies a running component rather than a manifest entry.
     type component-id = string;
+
+    /// Why the host could not complete a plugin's call into a workload.
+    ///
+    /// The recommended error arm for an interface a plugin imports for a
+    /// workload to export, and the only one that says a failure came from the
+    /// *host* rather than from the workload.
+    ///
+    /// Every function of such an interface must return a `result` the host can
+    /// build an error into, or the plugin does not load. Three ways that holds:
+    /// this variant; a plain `string`; or the interface's own error type, if any
+    /// of its cases carries nothing, a `string`, or an `option<string>` — which
+    /// is what lets an interface nobody here owns, a `wasi:sockets`-style
+    /// `error-code` say, still be answerable. The last two cannot distinguish a
+    /// host failure from one the workload meant, so where there is room for text
+    /// the host prefixes its detail with `wasmcloud:host: `. Use this variant
+    /// when the interface is yours.
+    ///
+    /// There is no fourth outcome: a call either returns the callee's own answer
+    /// or an error, and the plugin is never trapped for it.
+    ///
+    /// Treat the set as open. WIT gives no way to add a case without breaking
+    /// guests built against the old set, so `other` is where the host puts any
+    /// failure it has no dedicated case for — which is what keeps a new failure
+    /// mode from forcing a package version bump. Match `other` and the cases you
+    /// act on differently; do not assume the list is closed.
+    ///
+    /// Each case carries optional detail meant for a log, not for matching on.
+    variant call-error {
+        /// Nothing to call: the plugin is not serving a workload's capability
+        /// call and holds no `workload.target` handle naming one.
+        no-target(option<string>),
+        /// The workload named is not callable. It never bound, it has stopped,
+        /// or a redeploy under the same id replaced the deployment this call
+        /// names.
+        not-running(option<string>),
+        /// The workload is running but does not export this interface.
+        ///
+        /// Only reachable on an unaddressed call — a plugin calling back into
+        /// whichever workload's capability call it happens to be serving, which
+        /// need not export everything the plugin imports. A call through a
+        /// `workload.target` cannot land here: a handle is opened for one
+        /// interface and exists only if that workload serves it. Not a
+        /// disagreement over the interface's *functions* either: a workload
+        /// exporting an interface without every function the plugin imports
+        /// fails to deploy at all.
+        not-exported(option<string>),
+        /// The workload was reached and the call did not finish: its guest
+        /// trapped, it could not be instantiated, or it ran past the host's
+        /// ceiling for one call.
+        failed(option<string>),
+        /// A failure with no dedicated case, including any the host grows into
+        /// later. Carries whatever detail there is.
+        other(option<string>),
+    }
 }

@@ -52,9 +52,12 @@
 //! provides, in which case a workload that exports it satisfies it — the
 //! arrangement `wasi:http` and `wasmcloud:messaging` already have, where the
 //! host both serves a workload's imports and calls the handler it exports.
-//! Such an interface must be `async func` throughout, because the shim the
-//! host installs for it is concurrent and a sync-typed import cannot bind to
-//! one.
+//! Such an interface must be `async func` throughout, because the shim the host
+//! installs for it is concurrent and a sync-typed import cannot bind to one,
+//! and every function of it must return a `result` the host can build an error
+//! into — a call out to another workload's guest can trap or stop mid-call, and
+//! the plugin's store is shared by every workload it serves, so the host
+//! answers with a value instead of faulting it.
 //! [`classify_workload_imports`] decides which imports those are, and the
 //! `workload_call` submodule holds the rest: the per-workload routes (claimed in
 //! `on_workload_resolved`, exactly as a native plugin claims them), the
@@ -1089,8 +1092,8 @@ fn declares_workload_calls(imports: &[ExportedInterface]) -> bool {
 /// and `handler` from a workload — the split the native messaging plugin itself
 /// has.
 ///
-/// An import no workload ever exports traps on the call that needs it, naming
-/// the interface.
+/// An import no workload ever exports is reported to the plugin as
+/// `not-exported` on the call that needs it, naming the interface.
 fn classify_workload_imports(
     id: &str,
     component: &Component,
@@ -1139,6 +1142,19 @@ fn classify_workload_imports(
                 "host component plugin '{id}' imports {}#{} for a workload to export, but its \
                  signature carries a handle that cannot cross the boundary between a plugin's \
                  store and a workload's; only plain values, `stream<T>`, and `future<T>` can",
+                imported.name,
+                func.name
+            );
+            anyhow::ensure!(
+                workload_call::error_shape(&func.result_tys).is_some(),
+                "host component plugin '{id}' imports {}#{} for a workload to export, but it \
+                 returns nothing the host can report a failure through. Such a call reaches \
+                 another workload's guest, which can trap or stop mid-call, and the host will \
+                 not take the plugin down for it — so the signature has to be able to say so. \
+                 Return a `result` whose error arm the host can build: \
+                 `wasmcloud:host/types.{{call-error}}` for the structured form (recommended), a \
+                 plain `string`, or the interface's own error type so long as one of its cases \
+                 carries nothing, a `string`, or an `option<string>`.",
                 imported.name,
                 func.name
             );
@@ -1957,7 +1973,7 @@ mod tests {
     /// The `wasmcloud:host/workload-call` import every opted-in plugin
     /// declares, as a WAT line to paste into a test component.
     const DECLARES_WORKLOAD_CALLS: &str =
-        r#"(import "wasmcloud:host/workload-call@0.1.2" (instance))"#;
+        r#"(import "wasmcloud:host/workload-call@0.1.3" (instance))"#;
 
     /// Only an import nothing else can satisfy becomes the workload's to
     /// export. A native serving the interface wins — so introducing a built-in
@@ -2100,6 +2116,51 @@ mod tests {
         );
     }
 
+    /// A workload-facing import must be able to say a call failed, because the
+    /// host answers a failed call with a value rather than trapping the plugin.
+    /// A function with no such result is refused when the plugin loads.
+    #[test]
+    fn a_workload_facing_import_that_cannot_report_failure_is_refused() {
+        let wat = format!(
+            r#"
+            (component
+                {DECLARES_WORKLOAD_CALLS}
+                (import "acme:events/handler@0.1.0" (instance
+                    (export "notify" (func async (param "m" string) (result string)))
+                ))
+            )
+        "#
+        );
+        let err =
+            workload_facing(&wat, &[]).expect_err("an import with no error arm should be refused");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("error arm") && msg.contains("call-error"),
+            "the error should name the fix, got: {msg}"
+        );
+    }
+
+    /// `result<_, string>` is accepted, which is what an off-the-shelf interface
+    /// like `wasmcloud:messaging/handler` already declares.
+    #[test]
+    fn a_workload_facing_import_returning_a_string_error_is_accepted() {
+        let wat = format!(
+            r#"
+            (component
+                {DECLARES_WORKLOAD_CALLS}
+                (import "acme:events/handler@0.1.0" (instance
+                    (export "notify" (func async (param "m" string)
+                        (result (result string (error string)))))
+                ))
+            )
+        "#
+        );
+        assert_eq!(
+            workload_facing(&wat, &[]).expect("classification should succeed"),
+            vec!["acme:events/handler@0.1.0"],
+        );
+    }
+
     /// A plugin's own state, with nothing running — enough to install linker
     /// shims, which is all the workload-facing import tests need.
     pub(super) fn idle_state(id: &'static str) -> Arc<ComponentHostPluginState> {
@@ -2116,6 +2177,20 @@ mod tests {
             native_plugins: HashMap::new(),
             workload_calls: WorkloadCalls::new(id, Vec::new()),
         })
+    }
+
+    /// The one interface `wat` declares, introspected. Written as an import
+    /// because WAT can state an import's type without implementing it, and
+    /// introspection produces the same [`ExportedInterface`] either way. The way
+    /// to get a real [`Type`] into a test: wasmtime mints them, nothing else can.
+    pub(super) fn introspected_interface(wat: &str) -> ExportedInterface {
+        let wasm = wat::parse_str(wat).expect("failed to parse WAT");
+        let engine = Engine::builder().build().expect("failed to build engine");
+        let component = Component::new(engine.inner(), &wasm).expect("failed to compile");
+        introspect_imports(&component)
+            .expect("introspection should succeed")
+            .pop()
+            .expect("the WAT should declare one interface")
     }
 
     pub(super) fn one_func_interface(name: &str, func: &str, is_async: bool) -> ExportedInterface {

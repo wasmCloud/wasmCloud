@@ -11,6 +11,8 @@
 //! - `GET /dispatch?id=W&msg=M`  -> `control.dispatch(W, M)`   -> W's tag + W
 //! - `GET /nested?id=W&msg=M`    -> `control.nested(W, M)`     -> `W|self`
 //! - `GET /callable`             -> `control.callable()`       -> `id=iface,…` a line
+//! - `GET /report?id=W&m=M`      -> `control.report(W, M)`     -> no target for it
+//! - `GET /report-inherited?m=M` -> `control.report-inherited(M)` -> borrowed error case
 //! - `GET /probe?id=W`           -> `control.lifecycle-probe(W)` -> what W's hooks saw
 //! - `GET /tag`                  -> this workload's own tag
 
@@ -20,7 +22,7 @@ mod bindings {
 }
 
 use bindings::acme::events::control;
-use bindings::exports::acme::events::handler::Guest as HandlerGuest;
+use bindings::exports::acme::events::handler::{CallError, Guest as HandlerGuest};
 use bindings::exports::wasi::http::handler::Guest as HttpGuest;
 use bindings::wasi::http::types::{ErrorCode, Fields, Request, Response};
 
@@ -35,8 +37,12 @@ fn tag() -> String {
 impl HandlerGuest for Component {
     /// Called by the plugin across the store boundary. Reports which workload
     /// handled it, and what it was handed.
-    async fn notify(message: String) -> String {
-        format!("{}:{message}", tag())
+    async fn notify(message: String) -> Result<String, CallError> {
+        // A workload tagged `poison` traps instead of answering, so a test can
+        // prove the host reports that to the plugin rather than faulting the
+        // store the plugin shares with every other workload.
+        assert!(tag() != "poison", "deliberate trap for the no-trap test");
+        Ok(format!("{}:{message}", tag()))
     }
 }
 
@@ -70,6 +76,17 @@ impl HttpGuest for Component {
         if route.starts_with("/callable") {
             let ids = control::callable().await;
             return Ok(make_response(200, ids.join("\n").into_bytes()));
+        }
+        if route.starts_with("/report-inherited") {
+            let m = query_get(query, "m").unwrap_or_default();
+            let reply = control::report_inherited(m).await;
+            return Ok(make_response(200, reply.into_bytes()));
+        }
+        if route.starts_with("/report") {
+            let id = query_get(query, "id").unwrap_or_default();
+            let m = query_get(query, "m").unwrap_or_default();
+            let reply = control::report(id, m).await;
+            return Ok(make_response(200, reply.into_bytes()));
         }
         if route.starts_with("/probe") {
             let id = query_get(query, "id").unwrap_or_default();

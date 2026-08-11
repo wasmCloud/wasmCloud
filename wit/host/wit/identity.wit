@@ -1,4 +1,4 @@
-package wasmcloud:host@0.1.2;
+package wasmcloud:host@0.1.3;
 
 /// Provided by the host to a component plugin so it can partition state by the
 /// workload currently calling it. The host answers based on the in-flight

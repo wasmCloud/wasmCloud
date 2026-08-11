@@ -29,6 +29,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use bindings::acme::events::{handler, metrics};
+use bindings::wasmcloud::host::types::CallError;
 use bindings::exports::acme::events::control::Guest;
 use bindings::exports::wasmcloud::host::workload_lifecycle::{
     Guest as LifecycleGuest, WorkloadInfo,
@@ -39,9 +40,15 @@ use bindings::wasmcloud::host::workload_call::{self, Target};
 /// for that workload. Instance memory, so it is empty again after a restart.
 static PROBE: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
 
+/// The interfaces this plugin imports for a workload to export, spelled as
+/// `callable` reports them. A `target` is opened for one of these, not for a
+/// workload alone — the pairing is what makes a handle proof the call routes.
+const HANDLER: &str = "acme:events/handler@0.1.0";
+const METRICS: &str = "acme:events/metrics@0.1.0";
+
 /// Try to open a target for `id` from inside a hook and append what happened.
 fn probe(id: &str, phase: &str) {
-    let seen = match Target::open(id) {
+    let seen = match Target::open(id, HANDLER) {
         Some(_) => "some",
         None => "none",
     };
@@ -68,36 +75,70 @@ impl LifecycleGuest for EventsPlugin {
     }
 }
 
+/// Render a failed call the way a plugin would log it, so a test can read which
+/// case the host chose. Every one of these is a value the plugin *received* —
+/// none of them trapped it.
+fn failed(err: CallError) -> String {
+    let (case, detail) = match err {
+        CallError::NoTarget(detail) => ("no-target", detail),
+        CallError::NotRunning(detail) => ("not-running", detail),
+        CallError::NotExported(detail) => ("not-exported", detail),
+        CallError::Failed(detail) => ("failed", detail),
+        // Matched because the host may grow into it; the set is not closed.
+        CallError::Other(detail) => ("other", detail),
+    };
+    let _ = detail;
+    format!("error:{case}")
+}
+
+/// Render a `metrics` failure. The case is this interface's own, so the host
+/// picked the nearest thing it had — which is why the detail, where a case has
+/// room for one, is prefixed to say the host produced it.
+fn metrics_failure(err: metrics::MetricsError) -> String {
+    match err {
+        metrics::MetricsError::Rejected(_) => "metrics-error:rejected".to_string(),
+        metrics::MetricsError::InternalError(_) => "metrics-error:internal-error".to_string(),
+    }
+}
+
+/// Call `handler.notify` and flatten either outcome into one string.
+async fn notify(message: String) -> String {
+    match handler::notify(message).await {
+        Ok(reply) => reply,
+        Err(err) => failed(err),
+    }
+}
+
 impl Guest for EventsPlugin {
     /// No target handle is held, so the host sends this to the workload whose
     /// `control` call is running — the plugin calling back into its own caller.
     async fn echo(message: String) -> String {
-        handler::notify(format!("echo:{message}")).await
+        notify(format!("echo:{message}")).await
     }
 
     /// The handle names the workload for as long as it is alive, so this
     /// reaches `id` even though the calling workload is someone else. `open`
     /// answering `none` is the ordinary way a dispatch loop learns a workload
-    /// went away — the plugin reports it and carries on rather than calling
-    /// into nothing and trapping.
+    /// went away, and a call it did make coming back `Err` is the other — both
+    /// are values, neither takes the plugin down.
     async fn dispatch(id: String, message: String) -> String {
-        let Some(target) = Target::open(&id) else {
+        let Some(target) = Target::open(&id, HANDLER) else {
             return format!("unroutable:{id}");
         };
         // Read the handle back rather than reuse `id`, so the reply carries the
         // workload the *host* thinks this call is scoped to.
         let named = target.get_workload_id();
-        handler::notify(format!("dispatch:{named}:{message}")).await
+        notify(format!("dispatch:{named}:{message}")).await
     }
 
     /// Held only for the inner block, so the second call falls back to the
     /// caller — the difference a scoped handle is supposed to make.
     async fn nested(id: String, message: String) -> String {
-        let targeted = match Target::open(&id) {
-            Some(_target) => handler::notify(format!("inner:{message}")).await,
+        let targeted = match Target::open(&id, HANDLER) {
+            Some(_target) => notify(format!("inner:{message}")).await,
             None => format!("unroutable:{id}"),
         };
-        let untargeted = handler::notify(format!("outer:{message}")).await;
+        let untargeted = notify(format!("outer:{message}")).await;
         format!("{targeted}|{untargeted}")
     }
 
@@ -111,14 +152,29 @@ impl Guest for EventsPlugin {
             .collect()
     }
 
-    /// Never called by a test — calling `metrics` on a workload that does not
-    /// export it traps. It exists so the plugin genuinely imports a second
-    /// workload-facing interface.
+    /// Calls `metrics` on a workload that does not export it, which the host
+    /// answers with `not-exported` rather than a trap. Also what makes the
+    /// plugin genuinely import a second workload-facing interface.
     async fn report(id: String, measurement: String) -> String {
-        let Some(_target) = Target::open(&id) else {
+        let Some(_target) = Target::open(&id, METRICS) else {
+            // No workload exports `metrics`, so this is where a plugin finds
+            // out — before the call, not from its failure.
             return format!("unroutable:{id}");
         };
-        metrics::report(measurement).await
+        match metrics::report(measurement).await {
+            Ok(reply) => reply,
+            Err(err) => metrics_failure(err),
+        }
+    }
+
+    /// No handle, so this inherits the caller — which does not export `metrics`.
+    /// The host reports that through `metrics`'s own error type, having no case
+    /// of its own to use.
+    async fn report_inherited(measurement: String) -> String {
+        match metrics::report(measurement).await {
+            Ok(reply) => reply,
+            Err(err) => metrics_failure(err),
+        }
     }
 
     async fn lifecycle_probe(id: String) -> String {
