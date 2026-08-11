@@ -123,6 +123,12 @@ pub(crate) use async_messaging_conversions;
 /// not a `bindgen!`-generated one. An `Err` from the oneshot means the consumer
 /// was torn down without observing end-of-stream, which is surfaced as a
 /// [`MsgError`] rather than silently treating the body as empty.
+///
+/// Collection is bounded by [`MAX_COLLECTED_BODY_BYTES`]: past the cap it fails
+/// with `message-too-large` without buffering the excess, so a guest streaming
+/// unboundedly cannot balloon host memory — the send-side broker limit (NATS
+/// `max_payload`) only rejects a message AFTER it is fully in memory, which is
+/// too late to be the bound.
 pub(crate) async fn collect_body<T, D>(
     accessor: &wasmtime::component::Accessor<T, D>,
     body: wasmtime::component::StreamReader<u8>,
@@ -131,23 +137,31 @@ where
     T: 'static,
     D: wasmtime::component::HasData,
 {
-    let (tx, rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<Vec<u8>, MsgError>>();
     accessor.with(|mut a| {
         body.pipe(
             &mut a,
             CollectConsumer {
                 buf: Vec::new(),
+                limit: MAX_COLLECTED_BODY_BYTES,
                 done: Some(tx),
             },
         )
     })?;
     Ok(match rx.await {
-        Ok(bytes) => Ok(bytes),
+        Ok(outcome) => outcome,
         Err(_) => Err(MsgError::Other(
             "message body stream ended without delivering data".to_string(),
         )),
     })
 }
+
+/// Upper bound on a collected message body, bounding host memory against a
+/// guest that streams unboundedly. Deliberately above any sane broker payload
+/// limit (NATS `max_payload` defaults to 1 MiB and tops out well below this),
+/// so the broker's own limit stays the effective one for sendable messages and
+/// this cap only stops runaway streams.
+const MAX_COLLECTED_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 /// A [`StreamConsumer`] that accumulates every byte the guest writes and hands
 /// the buffer back once the stream ends. The runtime drops the consumer at
@@ -157,13 +171,14 @@ where
 /// [`StreamConsumer`]: wasmtime::component::StreamConsumer
 struct CollectConsumer {
     buf: Vec<u8>,
-    done: Option<tokio::sync::oneshot::Sender<Vec<u8>>>,
+    limit: usize,
+    done: Option<tokio::sync::oneshot::Sender<Result<Vec<u8>, MsgError>>>,
 }
 
 impl Drop for CollectConsumer {
     fn drop(&mut self) {
         if let Some(tx) = self.done.take() {
-            let _ = tx.send(std::mem::take(&mut self.buf));
+            let _ = tx.send(Ok(std::mem::take(&mut self.buf)));
         }
     }
 }
@@ -193,6 +208,18 @@ impl<D> wasmtime::component::StreamConsumer<D> for CollectConsumer {
             }));
         }
         let n = bytes.len();
+        if this.buf.len().saturating_add(n) > this.limit {
+            // Refuse the excess instead of buffering it; delivering the error
+            // here (rather than via `Drop`) is what lets the caller see
+            // `message-too-large` instead of a truncated body.
+            if let Some(tx) = this.done.take() {
+                let _ = tx.send(Err(MsgError::MessageTooLarge(format!(
+                    "message body exceeded the host collection limit of {} bytes",
+                    this.limit
+                ))));
+            }
+            return std::task::Poll::Ready(Ok(StreamResult::Cancelled));
+        }
         this.buf.extend_from_slice(bytes);
         src.mark_read(n);
         std::task::Poll::Ready(Ok(StreamResult::Completed))
