@@ -44,9 +44,9 @@ package wasmcloud:host@0.1.2;
 ///
 /// Calls the plugin already had in flight when the unbind arrived are not
 /// interrupted, the same way an in-flight request finishes rather than failing
-/// halfway. A `wasmcloud:host/workload` target handle opened before the stop
-/// does not extend that to *new* calls: the workload it names is gone, so the
-/// next call through the handle traps.
+/// halfway. A `wasmcloud:host/workload-call` target handle opened before the
+/// stop does not extend that to *new* calls: the workload it names is gone, so
+/// the next call through the handle traps.
 interface workload-lifecycle {
     use types.{workload-id, component-id};
 

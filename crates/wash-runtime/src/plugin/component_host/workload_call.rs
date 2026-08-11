@@ -17,8 +17,8 @@
 //!   workload is already known from the caller's root guest task (the same
 //!   resolution [`wasmcloud:host/identity`] uses), so a plugin calling back
 //!   into its own caller addresses nothing; and
-//! - **explicitly**, through a `wasmcloud:host/workload` `target` handle whose
-//!   *lifetime* is the routing scope, which is what lets a plugin's own
+//! - **explicitly**, through a `wasmcloud:host/workload-call` `target` handle
+//!   whose *lifetime* is the routing scope, which is what lets a plugin's own
 //!   `wasi:cli/run` dispatch to a workload with no inbound call to inherit.
 //!
 //! The call itself reuses the workload↔workload machinery unchanged: each
@@ -47,12 +47,12 @@ use crate::engine::workload::{ExternalCallFunc, ItemExport, ResolvedWorkload};
 
 use super::{ComponentHostPluginState, ExportedInterface, caller_root_task};
 
-/// Interface name of the host workload import a plugin uses to name the
+/// Interface name of the host workload-call import a plugin uses to name the
 /// workload its calls go to. Versioned at the release that introduced the
 /// interface: wasmtime resolves a plugin's import of a later, semver-compatible
 /// `wasmcloud:host` against this definition, so the constant does not move when
 /// the package version does.
-pub(super) const HOST_WORKLOAD_INTERFACE: &str = "wasmcloud:host/workload@0.1.2";
+pub(super) const HOST_WORKLOAD_CALL_INTERFACE: &str = "wasmcloud:host/workload-call@0.1.2";
 
 /// A live `target` handle, as the guest holds it: the workload it names and the
 /// task it was opened on. The routes it directs calls to live on that task's
@@ -534,7 +534,7 @@ async fn route_workload_call(
                     wasmtime::format_err!(
                         "host component plugin '{}' called {interface}#{func} with no workload to \
                          call: it is not serving a workload's capability call, and holds no \
-                         wasmcloud:host/workload target handle naming one",
+                         wasmcloud:host/workload-call target handle naming one",
                         state.id
                     )
                 })?;
@@ -593,17 +593,17 @@ async fn route_workload_call(
     invoke_linked_async_export(accessor, params, results, &invocation).await
 }
 
-/// Install the `wasmcloud:host/workload` import on the plugin's own linker: the
-/// `target` handle that names which workload this task's calls go to, and
-/// `callable` for a plugin's own background work to discover what it may
-/// dispatch to. A plugin that does not import the interface leaves these
+/// Install the `wasmcloud:host/workload-call` import on the plugin's own
+/// linker: the `target` handle that names which workload this task's calls go
+/// to, and `callable` for a plugin's own background work to discover what it
+/// may dispatch to. A plugin that does not import the interface leaves these
 /// definitions unused.
 pub(super) fn install_host_workload(
     linker: &mut Linker<SharedCtx>,
     state: &Arc<ComponentHostPluginState>,
 ) -> anyhow::Result<()> {
     let mut instance = linker
-        .instance(HOST_WORKLOAD_INTERFACE)
+        .instance(HOST_WORKLOAD_CALL_INTERFACE)
         .map_err(|e| e.context("failed to open the host workload linker instance"))?;
 
     let drop_state = Arc::clone(state);
@@ -628,7 +628,7 @@ pub(super) fn install_host_workload(
                 Ok(())
             },
         )
-        .map_err(|e| e.context("failed to register wasmcloud:host/workload target"))?;
+        .map_err(|e| e.context("failed to register wasmcloud:host/workload-call target"))?;
 
     let open_state = Arc::clone(state);
     instance
@@ -689,7 +689,9 @@ pub(super) fn install_host_workload(
                 Ok(())
             },
         )
-        .map_err(|e| e.context("failed to define wasmcloud:host/workload#[static]target.open"))?;
+        .map_err(|e| {
+            e.context("failed to define wasmcloud:host/workload-call#[static]target.open")
+        })?;
 
     instance
         .func_new(
@@ -707,7 +709,9 @@ pub(super) fn install_host_workload(
             },
         )
         .map_err(|e| {
-            e.context("failed to define wasmcloud:host/workload#[method]target.get-workload-id")
+            e.context(
+                "failed to define wasmcloud:host/workload-call#[method]target.get-workload-id",
+            )
         })?;
 
     let callable_state = Arc::clone(state);
@@ -728,7 +732,7 @@ pub(super) fn install_host_workload(
             }
             Ok(())
         })
-        .map_err(|e| e.context("failed to define wasmcloud:host/workload#callable"))?;
+        .map_err(|e| e.context("failed to define wasmcloud:host/workload-call#callable"))?;
 
     Ok(())
 }

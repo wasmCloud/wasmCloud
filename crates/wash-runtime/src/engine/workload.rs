@@ -2066,6 +2066,16 @@ impl UnresolvedWorkload {
 
         trace!(host_interfaces = ?host_interfaces, "determining missing guest interfaces");
 
+        // A workload serves itself before the host does. Every component's world
+        // up front, so an interface one component imports and another exports can
+        // be recognised as already answered from inside the workload — see
+        // [`served_within_workload`].
+        let component_worlds: Vec<(Arc<str>, WitWorld)> = self
+            .components
+            .iter()
+            .map(|(id, component)| (id.clone(), component.world()))
+            .collect();
+
         if let Some(service) = self.service.as_ref() {
             let world = service.world();
 
@@ -2073,6 +2083,9 @@ impl UnresolvedWorkload {
             let required_interfaces: HashSet<WitInterface> = host_interfaces
                 .iter()
                 .filter(|wit_interface| world.includes_bidirectional(wit_interface))
+                .filter(|wit_interface| {
+                    !served_within_workload(wit_interface, service.id(), &world, &component_worlds)
+                })
                 .cloned()
                 .collect();
 
@@ -2084,12 +2097,14 @@ impl UnresolvedWorkload {
             }
         }
 
-        for (id, workload_component) in &self.components {
-            let world = workload_component.world();
+        for (id, world) in &component_worlds {
             trace!(?world, "comparing component world to host interfaces");
             let required_interfaces: HashSet<WitInterface> = host_interfaces
                 .iter()
                 .filter(|wit_interface| world.includes_bidirectional(wit_interface))
+                .filter(|wit_interface| {
+                    !served_within_workload(wit_interface, id, world, &component_worlds)
+                })
                 .cloned()
                 .collect();
 
@@ -2580,6 +2595,61 @@ fn build_export_map(
     (interface_map, ambiguous)
 }
 
+/// Whether the workload answers `entry` for `item_id` out of its own
+/// components, so the host is never asked for it: `item_id` imports every one of
+/// the entry's interfaces, and each is exported by exactly one *other* component
+/// of the same workload.
+///
+/// Such an import is wired component-to-component by
+/// [`ResolvedWorkload::link_components`]. Keeping it away from plugin matching
+/// is what makes the workload's own component win, because whoever matches first
+/// installs the shim: plugins bind before components are linked, and a plugin
+/// that claimed the interface leaves the intra-workload link with nowhere to go
+/// — the linker instance is already defined, the link is skipped, and calls
+/// silently leave the workload for the plugin.
+///
+/// Only the *importing* side is filtered. A component that exports the interface
+/// keeps the entry, because an export is also how the host reaches into a
+/// workload — a `wasi:http` handler, a messaging handler, an interface a host
+/// component plugin calls — and where an import points is a separate question
+/// from whether the host may call an export.
+///
+/// Exactly one other exporter, not at least one: two exporters are the ambiguity
+/// [`build_export_map`] declines to resolve, and leaving those to a plugin keeps
+/// a workload that deploys today deploying.
+fn served_within_workload(
+    entry: &WitInterface,
+    item_id: &str,
+    item_world: &WitWorld,
+    component_worlds: &[(Arc<str>, WitWorld)],
+) -> bool {
+    // An entry naming no interface matches every interface of its package, so
+    // there is nothing specific to have found a provider for.
+    if entry.interfaces.is_empty() {
+        return false;
+    }
+    entry.interfaces.iter().all(|interface| {
+        let imported = item_world
+            .imports
+            .iter()
+            .any(|im| entry.same_package(im) && im.interfaces.contains(interface));
+        if !imported {
+            return false;
+        }
+        let exporters = component_worlds
+            .iter()
+            .filter(|(id, world)| {
+                id.as_ref() != item_id
+                    && world
+                        .exports
+                        .iter()
+                        .any(|ex| entry.same_package(ex) && ex.interfaces.contains(interface))
+            })
+            .count();
+        exporters == 1
+    })
+}
+
 /// Returns whether some *other* registered plugin (not `self_id`) with
 /// `supports_named_instances() == want_named` can serve `iface`.
 /// Used to determine whether a plugin can defer an `(implements ..)`
@@ -2877,6 +2947,141 @@ mod tests {
             Arc::default(),
             InstancePolicy::Ephemeral,
         )
+    }
+
+    /// A component built from WAT, so a test can state an exact import/export
+    /// shape rather than take whatever a fixture happens to have.
+    fn component_from_wat(id: &str, wat: &str) -> WorkloadComponent {
+        let engine = wasmtime::Engine::default();
+        let linker = Linker::new(&engine);
+        let wasm = wat::parse_str(wat).expect("failed to parse WAT");
+        let component = Component::new(&engine, &wasm).expect("failed to compile");
+
+        WorkloadComponent::new(
+            "workload-local-first".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            id.to_string(),
+            component,
+            linker,
+            Vec::new(),
+            LocalResources::default(),
+            Arc::default(),
+            InstancePolicy::Ephemeral,
+        )
+    }
+
+    const MARKER: &str = "test:probe/marker@0.1.0";
+
+    fn marker_importer(id: &str) -> WorkloadComponent {
+        component_from_wat(
+            id,
+            &format!(r#"(component (import "{MARKER}" (instance)))"#),
+        )
+    }
+
+    fn marker_exporter(id: &str) -> WorkloadComponent {
+        component_from_wat(
+            id,
+            &format!(r#"(component (instance $marker) (export "{MARKER}" (instance $marker)))"#),
+        )
+    }
+
+    fn marker_workload(components: Vec<WorkloadComponent>) -> UnresolvedWorkload {
+        UnresolvedWorkload::new(
+            "local-first".to_string(),
+            "local-first".to_string(),
+            "test-namespace".to_string(),
+            None,
+            components,
+            vec![WitInterface::from(MARKER)],
+        )
+    }
+
+    fn marker_plugin() -> HashMap<&'static str, Arc<dyn HostPlugin>> {
+        let plugin = Arc::new(MockPlugin::new(
+            "marker-plugin",
+            vec![],
+            vec![WitInterface::from(MARKER)],
+        ));
+        HashMap::from([(plugin.id(), plugin as Arc<dyn HostPlugin>)])
+    }
+
+    /// Every component id `bind_plugins` reported as bound. Ids are fresh
+    /// UUIDs, so a test compares against the ones it captured, not the names it
+    /// gave.
+    fn bound_component_ids(
+        bound: &[(Arc<dyn HostPlugin + 'static>, Vec<String>)],
+    ) -> HashSet<String> {
+        bound
+            .iter()
+            .flat_map(|(_, ids)| ids.iter().cloned())
+            .collect()
+    }
+
+    /// A workload serves itself first: an interface one component imports and
+    /// another exports is linked component-to-component, so the importer is not
+    /// bound to the plugin that also offers it. Whoever matches installs the
+    /// shim, and plugins match before components are linked — so without this
+    /// the plugin would take the import and the sibling's export would go
+    /// unused, silently.
+    #[tokio::test]
+    async fn a_sibling_export_wins_over_a_plugin() {
+        let importer = marker_importer("importer");
+        let exporter = marker_exporter("exporter");
+        let importer_id = importer.id().to_string();
+        let exporter_id = exporter.id().to_string();
+
+        let mut workload = marker_workload(vec![importer, exporter]);
+        let bound = workload.bind_plugins(&marker_plugin()).await.unwrap();
+        let bound_ids = bound_component_ids(&bound);
+
+        assert!(
+            !bound_ids.contains(&importer_id),
+            "the importer should link to its sibling, not bind the plugin"
+        );
+        assert!(
+            bound_ids.contains(&exporter_id),
+            "the exporter still binds, because an export is how a host reaches into a workload"
+        );
+    }
+
+    /// The control: with no sibling exporting it, the same import binds the
+    /// plugin as before. Without this the test above would pass for a workload
+    /// that simply never matched anything.
+    #[tokio::test]
+    async fn a_lone_importer_still_binds_the_plugin() {
+        let importer = marker_importer("importer");
+        let importer_id = importer.id().to_string();
+
+        let mut workload = marker_workload(vec![importer]);
+        let bound = workload.bind_plugins(&marker_plugin()).await.unwrap();
+
+        assert!(
+            bound_component_ids(&bound).contains(&importer_id),
+            "with nothing in the workload exporting it, the plugin serves the import"
+        );
+    }
+
+    /// Two components exporting the same interface is the ambiguity
+    /// `build_export_map` declines to resolve, so the import is left to the
+    /// plugin rather than failing a workload that deploys today.
+    #[tokio::test]
+    async fn two_sibling_exporters_leave_the_import_to_the_plugin() {
+        let importer = marker_importer("importer");
+        let importer_id = importer.id().to_string();
+
+        let mut workload = marker_workload(vec![
+            importer,
+            marker_exporter("exporter-a"),
+            marker_exporter("exporter-b"),
+        ]);
+        let bound = workload.bind_plugins(&marker_plugin()).await.unwrap();
+
+        assert!(
+            bound_component_ids(&bound).contains(&importer_id),
+            "an ambiguous sibling export is not a provider, so the plugin keeps the import"
+        );
     }
 
     /// A host-dispatched export (like the `wasi:http` entrypoint) must go to

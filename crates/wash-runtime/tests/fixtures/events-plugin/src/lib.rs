@@ -4,8 +4,8 @@
 //!
 //! The exported ops cover the two ways a call finds its workload: `echo` names
 //! none and inherits the caller, `dispatch` names one with a
-//! `wasmcloud:host/workload` target handle, and `nested` shows the handle's
-//! lifetime is the scope by calling once inside it and once after.
+//! `wasmcloud:host/workload-call` target handle, and `nested` shows the
+//! handle's lifetime is the scope by calling once inside it and once after.
 //!
 //! It imports a *second* workload-facing interface, `acme:events/metrics`, that
 //! no workload exports, so `callable` has to report per workload which of the
@@ -33,7 +33,7 @@ use bindings::exports::acme::events::control::Guest;
 use bindings::exports::wasmcloud::host::workload_lifecycle::{
     Guest as LifecycleGuest, WorkloadInfo,
 };
-use bindings::wasmcloud::host::workload::{self, Target};
+use bindings::wasmcloud::host::workload_call::{self, Target};
 
 /// Workload id -> what each lifecycle hook saw when it tried to open a target
 /// for that workload. Instance memory, so it is empty again after a restart.
@@ -105,7 +105,7 @@ impl Guest for EventsPlugin {
     /// interfaces are what make it worth a map: this plugin imports two, and a
     /// workload exporting only one must be reported that way.
     async fn callable() -> Vec<String> {
-        workload::callable()
+        workload_call::callable()
             .into_iter()
             .map(|(id, interfaces)| format!("{id}={}", interfaces.join(",")))
             .collect()

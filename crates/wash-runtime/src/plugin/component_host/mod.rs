@@ -47,17 +47,18 @@
 //! submodule; this module drives it from `ComponentHostPlugin`'s `HostPlugin`
 //! impl.
 //!
-//! Calls also run the other way. A plugin that imports `wasmcloud:host/workload`
-//! may *import* an interface no host built-in provides, in which case a workload
-//! that exports it satisfies it — the arrangement `wasi:http` and
-//! `wasmcloud:messaging` already have, where the host both serves a workload's
-//! imports and calls the handler it exports. Such an interface must be
-//! `async func` throughout, because the shim the host installs for it is
-//! concurrent and a sync-typed import cannot bind to one.
+//! Calls also run the other way. A plugin that imports
+//! `wasmcloud:host/workload-call` may *import* an interface no host built-in
+//! provides, in which case a workload that exports it satisfies it — the
+//! arrangement `wasi:http` and `wasmcloud:messaging` already have, where the
+//! host both serves a workload's imports and calls the handler it exports.
+//! Such an interface must be `async func` throughout, because the shim the
+//! host installs for it is concurrent and a sync-typed import cannot bind to
+//! one.
 //! [`classify_workload_imports`] decides which imports those are, and the
 //! `workload_call` submodule holds the rest: the per-workload routes (claimed in
 //! `on_workload_resolved`, exactly as a native plugin claims them), the
-//! `wasmcloud:host/workload` `target` handle a plugin uses to name which
+//! `wasmcloud:host/workload-call` `target` handle a plugin uses to name which
 //! workload a call goes to, and the fallback that sends an unaddressed call back
 //! to the workload whose capability call is being served.
 
@@ -1015,7 +1016,7 @@ fn is_self_satisfied(imported: &ExportedInterface, exports: &[ExportedInterface]
 }
 
 /// Whether the plugin declares that it calls workloads, by importing
-/// `wasmcloud:host/workload`.
+/// `wasmcloud:host/workload-call`.
 ///
 /// This is what opens its import surface: only a plugin that says it calls
 /// workloads may have an otherwise-unsatisfiable import answered by a workload
@@ -1027,9 +1028,9 @@ fn is_self_satisfied(imported: &ExportedInterface, exports: &[ExportedInterface]
 /// exact import string, so a `wasmcloud:host` patch bump does not change what a
 /// plugin built against the previous one declares.
 fn declares_workload_calls(imports: &[ExportedInterface]) -> bool {
-    imports
-        .iter()
-        .any(|imported| is_reserved(&imported.wit) && imported.wit.interfaces.contains("workload"))
+    imports.iter().any(|imported| {
+        is_reserved(&imported.wit) && imported.wit.interfaces.contains("workload-call")
+    })
 }
 
 /// The plugin's imports that a *workload* must export, in the order the
@@ -1883,9 +1884,10 @@ mod tests {
         )
     }
 
-    /// The `wasmcloud:host/workload` import every opted-in plugin declares, as
-    /// a WAT line to paste into a test component.
-    const DECLARES_WORKLOAD_CALLS: &str = r#"(import "wasmcloud:host/workload@0.1.2" (instance))"#;
+    /// The `wasmcloud:host/workload-call` import every opted-in plugin
+    /// declares, as a WAT line to paste into a test component.
+    const DECLARES_WORKLOAD_CALLS: &str =
+        r#"(import "wasmcloud:host/workload-call@0.1.2" (instance))"#;
 
     /// Only an import nothing else can satisfy becomes the workload's to
     /// export. A native serving the interface wins — so introducing a built-in
@@ -1926,7 +1928,7 @@ mod tests {
             workload_facing(wat, &[])
                 .expect("classification should succeed")
                 .is_empty(),
-            "without the wasmcloud:host/workload import nothing may be left to a workload"
+            "without the wasmcloud:host/workload-call import nothing may be left to a workload"
         );
     }
 
