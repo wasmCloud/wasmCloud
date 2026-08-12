@@ -200,9 +200,11 @@ async fn async_handler_receives_and_replies() -> Result<()> {
 
     assert_eq!(h.count(host_header).await?, 0, "no messages handled yet");
 
-    // `reply_to` is set, so the guest's handler must await an async
-    // `consumer.publish` before it returns — the reply path is what would break
-    // if the async import were mis-bound.
+    // The host-side `publish` helper sets no `reply_to`, so the guest echoes to
+    // its sink subject — but it still has to await an async `consumer.publish`
+    // before returning, and it counts the message only afterwards. The count
+    // below is therefore evidence the async import completed; a mis-bound
+    // import would leave it at zero.
     h.messaging
         .publish(&workload_id, "test.async", b"hello".to_vec())
         .await
