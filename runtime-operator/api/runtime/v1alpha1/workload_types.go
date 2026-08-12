@@ -180,6 +180,24 @@ type WorkloadComponent struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Minimum=0
 	MaxConcurrency int32 `json:"maxConcurrency,omitempty"`
+	// MaxInFlight is how many messages this component may process at the same
+	// time when it is driven by a wasmcloud:messaging subscription. Each
+	// in-flight message holds its own component instance for the duration of
+	// the handler call, so this is simultaneously the ceiling on instances the
+	// subscription may create.
+	//
+	// Unset takes the host default (32); 0 means the host default. Unlike
+	// PoolSize, this is a hard ceiling: once it is reached the subscriber stops
+	// taking messages off the subject until a handler completes.
+	//
+	// MaxInFlight is a per-component total, and is separately bounded by a
+	// host-wide total across every messaging component on the host. It is NOT
+	// interchangeable with MaxConcurrency, which is a per-instance number (how
+	// many calls one warm instance may overlap), and is not derivable from
+	// PoolSize x MaxConcurrency.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=0
+	MaxInFlight int32 `json:"maxInFlight,omitempty"`
 	// +kubebuilder:validation:Optional
 	LocalResources *LocalResources `json:"localResources,omitempty"`
 }
