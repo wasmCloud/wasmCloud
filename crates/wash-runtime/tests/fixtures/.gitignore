@@ -1,8 +1,10 @@
 # Fixture WIT deps are materialized at build time by `wash build` — its
 # `wit fetch` resolves the local file refs in each fixture's wkg.toml (see
-# `cargo xtask build-fixtures` in /xtask). The shared p2-wit-deps/ and
-# p3-wit-deps/ dirs (and the bespoke wasmcloud-bridge/ contract) are not
-# matched by this pattern because they have no `wit/` subtree.
+# `cargo xtask build-fixtures` in /xtask); the handful of fixtures whose world
+# needs two versions of one package are staged by xtask instead, from the same
+# shared source. The p2-wit-deps/ and p3-wit-deps/ dirs (and the bespoke
+# wasmcloud-bridge/ contract) are not matched by this pattern because they have
+# no `wit/` subtree.
 */wit/deps/
 
 # Lock files written by the fetch
@@ -11,7 +13,3 @@
 # Build artifacts
 */target/
 target/
-
-# messaging-dual-handler needs BOTH wasmcloud:messaging versions, which no wkg
-# override can serve; its deps are committed instead (see its wit/world.wit).
-!messaging-dual-handler/wit/deps/

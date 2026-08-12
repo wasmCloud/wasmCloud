@@ -7,10 +7,11 @@ package wasmcloud:dual-handler;
 // fixture exists to pin that selection (each handler echoes a distinguishable
 // marker, so a test can prove which one ran).
 //
-// Unlike every other fixture, its `wit/deps` is COMMITTED and `wash build`
-// runs with `--skip-fetch` (see xtask): a wkg path override maps the package
-// NAME to a single directory, so no override can serve two versions of
-// `wasmcloud:messaging` — but the classic deps layout can, as sibling dirs.
+// Unlike every other fixture it has no `wkg.toml`: a wkg path override maps a
+// package NAME to a single directory, so no override can serve two versions of
+// `wasmcloud:messaging`. `cargo xtask build-fixtures` stages `wit/deps` from
+// the shared `p3-wit-deps/` source instead and builds with `--skip-fetch`; the
+// directory is still a build artifact, never committed.
 // `wasi:cli/run` is required — a service exporting only messaging handlers
 // never gets its trigger ingress registered — so the wasi:* deps ride along
 // for cli/run's sake.

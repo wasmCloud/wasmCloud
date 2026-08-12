@@ -96,11 +96,31 @@ const P2_FIXTURES: &[&str] = &[
     "postgres-implements",
 ];
 
-/// Fixtures whose `wit/deps` is committed rather than fetched, built with
-/// `wash build --skip-fetch`: a wkg override maps a package NAME to one
-/// directory, so a fixture whose world needs two versions of the same package
-/// cannot resolve through overrides.
-const SKIP_FETCH_FIXTURES: &[&str] = &["messaging-dual-handler"];
+/// Fixtures whose world needs two versions of the same WIT package, mapped to
+/// the `p3-wit-deps/` directories that make up their `wit/deps`.
+///
+/// Every other fixture lists its deps in a `wkg.toml` and lets `wash build`
+/// fetch them through relative path overrides — do that, not this. This exists
+/// only because a wkg override is keyed by package NAME with no version
+/// (`Override.version` is ignored outright once `path` is set), so no single
+/// `wkg.toml` can point `wasmcloud:messaging` at both `0.2.0` and `0.3.0`. A
+/// fetch that cannot resolve every package the world names also writes nothing
+/// rather than a partial tree, so there is no fetch-then-add either. Instead
+/// xtask stages `wit/deps` from the same shared source the overrides would
+/// have resolved to and builds with `--skip-fetch`; nothing is committed and
+/// the directory stays a build artifact, as it is everywhere else.
+const MULTI_VERSION_FIXTURES: &[(&str, &[&str])] = &[(
+    "messaging-dual-handler",
+    &[
+        "wasi-cli-0.3.0",
+        "wasi-clocks-0.3.0",
+        "wasi-filesystem-0.3.0",
+        "wasi-random-0.3.0",
+        "wasi-sockets-0.3.0",
+        "wasmcloud-messaging-0.2.0",
+        "wasmcloud-messaging-0.3.0",
+    ],
+)];
 
 const P3_FIXTURES: &[&str] = &[
     "messaging-echo-p3",
@@ -212,6 +232,33 @@ pub(crate) fn ensure_wash(workspace: &Path) -> Result<PathBuf> {
     Ok(target_dir.join("debug").join("wash"))
 }
 
+/// Materialize a fixture's `wit/deps` from the shared `p3-wit-deps/` source,
+/// standing in for the `wash wit fetch` that cannot serve it (see
+/// [`MULTI_VERSION_FIXTURES`]). The directory is rebuilt from scratch so a
+/// stale dep from an earlier layout cannot survive into the build.
+fn stage_wit_deps(fixtures_dir: &Path, fixture: &str, deps: &[&str]) -> Result<()> {
+    let deps_dir = fixtures_dir.join(fixture).join("wit").join("deps");
+    if deps_dir.exists() {
+        fs::remove_dir_all(&deps_dir)
+            .with_context(|| format!("failed to clear {}", deps_dir.display()))?;
+    }
+    for dep in deps {
+        let src = fixtures_dir
+            .join("p3-wit-deps")
+            .join(dep)
+            .join("package.wit");
+        if !src.exists() {
+            bail!("no WIT source for dependency at {}", src.display());
+        }
+        let dst_dir = deps_dir.join(dep);
+        fs::create_dir_all(&dst_dir)
+            .with_context(|| format!("failed to create {}", dst_dir.display()))?;
+        fs::copy(&src, dst_dir.join("package.wit"))
+            .with_context(|| format!("failed to copy {}", src.display()))?;
+    }
+    Ok(())
+}
+
 /// Build one fixture through `wash build` and stage the resulting component
 /// under `tests/wasm/`.
 fn build_and_stage(
@@ -228,7 +275,9 @@ fn build_and_stage(
 
     let mut args = vec!["-C".to_string(), fixture_dir.to_string_lossy().into_owned()];
     args.push("build".to_string());
-    if SKIP_FETCH_FIXTURES.contains(&fixture) {
+    if let Some((_, deps)) = MULTI_VERSION_FIXTURES.iter().find(|(f, _)| *f == fixture) {
+        stage_wit_deps(fixtures_dir, fixture, deps)
+            .with_context(|| format!("failed to stage wit/deps for {fixture}"))?;
         args.push("--skip-fetch".to_string());
     }
 

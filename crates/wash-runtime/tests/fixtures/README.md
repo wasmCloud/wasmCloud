@@ -36,9 +36,12 @@ build logic lives in `/xtask/src/main.rs`.
    it imports wasi interfaces) a `wit/` world.
 2. Add it to the `members` list in this directory's `Cargo.toml`.
 3. Add its package name to `P2_FIXTURES` or `P3_FIXTURES` in
-   `/xtask/src/main.rs`. If its world uses only local interfaces (no wasi
-   imports), also add it to `P2_SKIP_SHARED_WIT` so shared WIT deps aren't
-   copied in.
+   `/xtask/src/main.rs`.
+4. Declare its WIT dependencies in a `wkg.toml`, as relative path overrides
+   onto the shared dep directories.
 
-Shared WIT dependencies live in `p2-wit-deps/` and `p3-wit-deps/`; `xtask`
-copies them into each fixture's `wit/deps/` at build time.
+Shared WIT dependencies live in `p2-wit-deps/` and `p3-wit-deps/`. `wash build`
+resolves each fixture's `wkg.toml` overrides and materializes `wit/deps/` at
+build time, so that directory is a build artifact and is never committed. The
+sole exception is a world that needs two versions of the same package, which no
+override can express — see `MULTI_VERSION_FIXTURES` in `/xtask/src/main.rs`.
