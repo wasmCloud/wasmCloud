@@ -656,13 +656,22 @@ impl HostPlugin for InMemoryMessaging {
                         // held and instances alive are the same number. Mirrors
                         // the NATS backend exactly; see `Admission::acquire`
                         // for why the component level is taken before the host
-                        // one.
+                        // one, and `DEFAULT_ADMISSION_WAIT` for why the wait is
+                        // bounded. Here the bound also keeps the inbox draining:
+                        // a loop parked forever lets the inbox reach
+                        // `MAX_QUEUE_SIZE`, at which point a guest's `publish`
+                        // starts failing with "message queue full".
                         let permit = tokio::select! {
-                            permit = admission.acquire() => match permit {
-                                Some(permit) => permit,
-                                // Closed: the component is going away.
-                                None => break 'task,
-                            },
+                            admitted = admission.acquire_before_deadline(&component_id, &msg.subject) => {
+                                match admitted {
+                                    super::Admitted::Slot(permit) => permit,
+                                    // Already logged and counted; drop this
+                                    // message and resume draining.
+                                    super::Admitted::Shed => continue,
+                                    // Closed: the component is going away.
+                                    super::Admitted::Closed => break 'task,
+                                }
+                            }
                             _ = cancel_token.cancelled() => {
                                 debug!(
                                     component_id = %component_id,

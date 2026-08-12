@@ -6,7 +6,10 @@ mod multiplexed_async;
 mod nats;
 
 use std::sync::Arc;
+use std::time::Duration;
 
+use opentelemetry::KeyValue;
+use opentelemetry::metrics::Counter;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 pub use in_memory::InMemoryMessaging;
@@ -406,6 +409,82 @@ pub const DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT: usize = 32;
 /// costs nothing on a host that never bursts.
 pub const DEFAULT_MAX_IN_FLIGHT_HOST: usize = 128;
 
+/// How long a subscriber loop waits for an admission slot before shedding the
+/// message it is holding.
+///
+/// A bounded wait, not an unbounded one, because parking the loop stops it
+/// draining the transport: async-nats `try_send`s into a per-subscription
+/// buffer and drops on overflow, so an indefinite park does not preserve the
+/// backlog — it converts it into silent loss with no log and no metric. Shedding
+/// deliberately at a known deadline turns that into one `warn!` and one counter
+/// increment per message, which is the difference between a host an operator can
+/// diagnose and one that merely looks idle.
+///
+/// It also bounds the one inversion this design cannot otherwise avoid: a
+/// handler holds its host permit for the whole call, including any outbound
+/// `request`, so host-local request/reply between two messaging components can
+/// have the responder waiting on a permit the requester is holding. The guest's
+/// own `timeout_ms` already breaks that, but only after every such request has
+/// burned its full timeout; the deadline here caps how long the queue behind
+/// them grows.
+///
+/// 30s is chosen to be well past any legitimate burst — a message that has
+/// waited this long is behind work that is not clearing — and well past typical
+/// guest `timeout_ms` values, so the guest's own deadline fires first in the
+/// request/reply case and this one only catches genuine saturation.
+pub const DEFAULT_ADMISSION_WAIT: Duration = Duration::from_secs(30);
+
+/// Worst measured core-instance count for a single component: Componentize-Go,
+/// which compiles to `$main`, the `wasi_snapshot_preview1` adapter, and three
+/// glue modules. Rust p2 measures 3.
+///
+/// The pool is spent in *core* instances, so this is what converts "instances
+/// the pool can hold" into "messages we may admit".
+const WORST_CASE_CORE_INSTANCES_PER_COMPONENT: u32 = 5;
+
+/// Share of the pool's component capacity messaging may claim. The remainder is
+/// what HTTP-triggered work, warm pools, and long-lived services draw on — the
+/// workloads that otherwise fail to *start* when a messaging burst drains the
+/// pool.
+const MESSAGING_POOL_SHARE_NUM: u32 = 2;
+const MESSAGING_POOL_SHARE_DEN: u32 = 3;
+
+/// Simultaneously-saturated components a host should fit before the host-wide
+/// ceiling is what binds. Deriving the per-component default from the host
+/// total this way makes that relationship a property of the code rather than a
+/// coincidence between two independently-chosen constants — in particular the
+/// per-component default can never exceed the host total.
+const SATURATED_COMPONENTS_PER_HOST: u32 = 4;
+
+/// Bounds on the derived host ceiling. The floor keeps a host with a tiny pool
+/// usable; the cap stops a host with an enormous one producing a number so
+/// large it stops being a bound at all. Mirrors
+/// `MIN/MAX_DERIVED_MAX_CONNECTIONS` in [`crate::host::quota`].
+const MIN_DERIVED_IN_FLIGHT: usize = 8;
+const MAX_DERIVED_IN_FLIGHT: usize = 4096;
+
+/// Derive the two ceilings from the engine's core-instance budget.
+///
+/// `total_core_instances` is [`crate::engine::Engine::total_core_instances`]:
+/// `None` when pooling is off, in which case there is no budget to divide and
+/// the pinned defaults stand. The §1 failure cannot happen without a pool, but
+/// the memory bound still applies, so a ceiling is still wanted.
+fn derive_defaults(total_core_instances: Option<u32>) -> (usize, usize) {
+    let Some(total) = total_core_instances else {
+        return (
+            DEFAULT_MAX_IN_FLIGHT_HOST,
+            DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT,
+        );
+    };
+    let capacity = total / WORST_CASE_CORE_INSTANCES_PER_COMPONENT;
+    let host = usize::try_from(capacity * MESSAGING_POOL_SHARE_NUM / MESSAGING_POOL_SHARE_DEN)
+        .unwrap_or(MAX_DERIVED_IN_FLIGHT)
+        .clamp(MIN_DERIVED_IN_FLIGHT, MAX_DERIVED_IN_FLIGHT);
+    // Computed from `host`, so it is always <= it: the two cannot contradict.
+    let per_component = (host / SATURATED_COMPONENTS_PER_HOST as usize).max(1);
+    (host, per_component)
+}
+
 /// The two-level admission ceiling on messaging-triggered work, built once per
 /// host and shared by every messaging backend on it.
 ///
@@ -420,6 +499,8 @@ pub struct MessagingLimits {
     host: Arc<Semaphore>,
     host_total: usize,
     per_component_default: usize,
+    admission_wait: Duration,
+    timeouts: AdmissionTimeouts,
 }
 
 impl Default for MessagingLimits {
@@ -432,15 +513,45 @@ impl Default for MessagingLimits {
 }
 
 impl MessagingLimits {
+    /// Build the host's messaging ceilings, resolving whatever the operator did
+    /// not specify against the engine's core-instance budget.
+    ///
+    /// `None` for either ceiling means "the operator said nothing" — which is
+    /// why the flags must not carry a `default_value_t`. A CLI-parse-time
+    /// default is indistinguishable downstream from an operator typing the same
+    /// number, and the information needed to do better is gone by the time this
+    /// runs.
+    pub fn resolve(
+        host_total: Option<usize>,
+        per_component_default: Option<usize>,
+        total_core_instances: Option<u32>,
+    ) -> Self {
+        let (derived_host, derived_per_component) = derive_defaults(total_core_instances);
+        Self::new(
+            host_total.unwrap_or(derived_host),
+            per_component_default.unwrap_or(derived_per_component),
+        )
+    }
+
+    /// The largest ceiling either knob may take: what a [`Semaphore`] can hold.
+    ///
+    /// Above this `Semaphore::new` panics, so a number beyond it is not a large
+    /// limit but a crash at host startup. The CLI rejects it with a config
+    /// error (see `wash`'s config layer); [`MessagingLimits::new`] clamps, for
+    /// the same belt-and-braces reason it floors a zero.
+    pub const MAX_IN_FLIGHT: usize = Semaphore::MAX_PERMITS;
+
     /// Build the host's messaging ceilings.
     ///
-    /// Both arguments are clamped to at least 1: a zero would mean "process no
-    /// messages", which is never what an operator meant. The CLI rejects an
-    /// explicit zero outright (see `wash`'s config layer) so this is a
-    /// belt-and-braces floor for programmatic callers.
+    /// Both arguments are clamped into `1..=`[`Self::MAX_IN_FLIGHT`]: a zero
+    /// would mean "process no messages", which is never what an operator meant,
+    /// and anything above the maximum would panic inside [`Semaphore::new`]
+    /// rather than act as a ceiling. The CLI rejects both outright (see `wash`'s
+    /// config layer) so this is a belt-and-braces bound for programmatic
+    /// callers.
     pub fn new(host_total: usize, per_component_default: usize) -> Self {
-        let host_total = host_total.max(1);
-        let per_component_default = per_component_default.max(1);
+        let host_total = host_total.clamp(1, Self::MAX_IN_FLIGHT);
+        let per_component_default = per_component_default.clamp(1, Self::MAX_IN_FLIGHT);
         if per_component_default > host_total {
             // Harmless — the host semaphore gates first regardless — but
             // almost certainly an operator mixing the two knobs up. Mirrors
@@ -456,7 +567,22 @@ impl MessagingLimits {
             host: Arc::new(Semaphore::new(host_total)),
             host_total,
             per_component_default,
+            admission_wait: DEFAULT_ADMISSION_WAIT,
+            timeouts: AdmissionTimeouts::new(),
         }
+    }
+
+    /// Override how long a subscriber loop waits for a slot before shedding the
+    /// message it is holding. See [`DEFAULT_ADMISSION_WAIT`].
+    #[must_use]
+    pub fn with_admission_wait(mut self, wait: Duration) -> Self {
+        self.admission_wait = wait;
+        self
+    }
+
+    /// How long a subscriber loop waits for a slot before shedding.
+    pub fn admission_wait(&self) -> Duration {
+        self.admission_wait
     }
 
     /// The host-wide ceiling.
@@ -472,22 +598,91 @@ impl MessagingLimits {
     /// Resolve one component's wire value into its admission gate.
     ///
     /// `max_in_flight` is the wire field, where non-positive spells "unset"
-    /// exactly as the other instance limits do. A component asking for more
-    /// than the host-wide total is clamped to it rather than rejected: the host
-    /// semaphore would gate first anyway, so honouring the larger number would
-    /// only mislead whoever reads it back.
+    /// exactly as the other instance limits do.
+    ///
+    /// An explicit request is clamped to **both** ceilings: the per-component
+    /// one, which the operator flag documents as "the most any single component
+    /// may ask for", and the host-wide total. Clamping to the host total alone
+    /// would leave the per-component flag enforcing nothing — a workload
+    /// manifest could name the whole host budget and starve every co-tenant
+    /// component on the host, which is precisely the runaway the per-component
+    /// ceiling exists to stop.
+    ///
+    /// Clamped rather than rejected, because a manifest that outlives the host
+    /// it was written for should still run: the host it lands on may be smaller
+    /// than the one it was sized against, and refusing to start is a worse
+    /// answer than running at the ceiling that host can actually offer.
     pub(crate) fn admission(&self, max_in_flight: i32) -> Admission {
-        let requested = usize::try_from(max_in_flight)
-            .ok()
-            .filter(|v| *v > 0)
-            .unwrap_or(self.per_component_default);
-        let resolved = requested.min(self.host_total);
+        let requested = usize::try_from(max_in_flight).ok().filter(|v| *v > 0);
+        let ceiling = self.per_component_default.min(self.host_total);
+        let resolved = match requested {
+            Some(requested) if requested > ceiling => {
+                tracing::warn!(
+                    requested,
+                    ceiling,
+                    per_component_default = self.per_component_default,
+                    host_total = self.host_total,
+                    "component asked for a higher messaging maxInFlight than this host allows; \
+                     clamping to the host's per-component ceiling"
+                );
+                ceiling
+            }
+            Some(requested) => requested,
+            // Unset: the default is already within both ceilings by
+            // construction, but `min` keeps that true if either is reconfigured.
+            None => ceiling,
+        };
         Admission {
             component: Arc::new(Semaphore::new(resolved)),
             host: Arc::clone(&self.host),
             limit: resolved,
+            wait: self.admission_wait,
+            timeouts: self.timeouts.clone(),
         }
     }
+}
+
+/// Counters for messages the admission gate could not admit in time. Built once
+/// per host and cloned into every [`Admission`], so a single `messaging.admission.shed`
+/// series covers the host with the component as an attribute.
+#[derive(Clone, Debug)]
+struct AdmissionTimeouts {
+    shed: Counter<u64>,
+}
+
+impl AdmissionTimeouts {
+    fn new() -> Self {
+        Self {
+            shed: opentelemetry::global::meter("wash-runtime")
+                .u64_counter("messaging.admission.shed")
+                .with_description(
+                    "Messages dropped because no admission slot became free before the deadline",
+                )
+                .build(),
+        }
+    }
+
+    fn record(&self, component_id: &str, subject: &str) {
+        self.shed.add(
+            1,
+            &[
+                KeyValue::new("component", component_id.to_string()),
+                KeyValue::new("subject", subject.to_string()),
+            ],
+        );
+    }
+}
+
+/// What [`Admission::acquire_before_deadline`] settled on.
+#[derive(Debug)]
+pub(crate) enum Admitted {
+    /// A slot was free, or came free inside the deadline.
+    Slot(AdmissionPermit),
+    /// Nothing came free in time; the caller must shed the message it holds.
+    Shed,
+    /// A semaphore was closed: the component is going away and the loop should
+    /// stop.
+    Closed,
 }
 
 /// One component's admission gate: its own ceiling plus the shared host one.
@@ -496,6 +691,8 @@ pub(crate) struct Admission {
     component: Arc<Semaphore>,
     host: Arc<Semaphore>,
     limit: usize,
+    wait: Duration,
+    timeouts: AdmissionTimeouts,
 }
 
 impl Admission {
@@ -521,6 +718,41 @@ impl Admission {
             _component: component,
             _host: host,
         })
+    }
+
+    /// [`Admission::acquire`], but giving up after [`MessagingLimits::admission_wait`]
+    /// so the caller can shed the message and get back to draining the
+    /// transport rather than parking on a saturated host indefinitely.
+    ///
+    /// Logging and the counter live here rather than at each call site so both
+    /// backends shed identically and a new backend cannot forget to.
+    ///
+    /// Cancel-safe for the same reason [`Admission::acquire`] is: the timeout
+    /// wraps the acquire future whole, so expiring drops it and releases
+    /// whichever permit it had already taken.
+    pub(crate) async fn acquire_before_deadline(
+        &self,
+        component_id: &str,
+        subject: &str,
+    ) -> Admitted {
+        match tokio::time::timeout(self.wait, self.acquire()).await {
+            Ok(Some(permit)) => Admitted::Slot(permit),
+            Ok(None) => Admitted::Closed,
+            Err(_) => {
+                self.timeouts.record(component_id, subject);
+                tracing::warn!(
+                    %component_id,
+                    %subject,
+                    waited = ?self.wait,
+                    limit = self.limit,
+                    "no messaging admission slot came free before the deadline; \
+                     dropping message. The host or this component is saturated — \
+                     raise --wasmcloud-messaging-max-in-flight, raise the component's \
+                     maxInFlight, or reduce inbound rate"
+                );
+                Admitted::Shed
+            }
+        }
     }
 
     /// The resolved per-component ceiling, after defaulting and clamping.
@@ -704,10 +936,13 @@ mod tests {
 
     // --- Admission ceilings -------------------------------------------------
 
-    use super::{DEFAULT_MAX_IN_FLIGHT_HOST, DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT, MessagingLimits};
+    use super::{
+        Admitted, DEFAULT_MAX_IN_FLIGHT_HOST, DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT, MessagingLimits,
+    };
     use futures::FutureExt as _;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
     #[test]
     fn unset_resolves_to_the_per_component_default() {
@@ -727,17 +962,63 @@ mod tests {
     fn an_explicit_value_is_honored() {
         let limits = MessagingLimits::new(128, 32);
         assert_eq!(limits.admission(4).limit(), 4);
-        assert_eq!(limits.admission(64).limit(), 64);
+        assert_eq!(limits.admission(32).limit(), 32);
+    }
+
+    #[test]
+    fn a_component_may_not_exceed_the_per_component_ceiling() {
+        // The flag is documented as "the most any single component may ask
+        // for". Clamping only to the host total would leave it enforcing
+        // nothing: a tenant manifest could name the entire host budget and
+        // starve every co-tenant component on the host.
+        let limits = MessagingLimits::new(128, 32);
+        assert_eq!(
+            limits.admission(64).limit(),
+            32,
+            "a component asking above the per-component ceiling must be clamped to it"
+        );
+        assert_eq!(
+            limits.admission(128).limit(),
+            32,
+            "asking for the whole host budget must not grant it"
+        );
+        assert_eq!(
+            limits.admission(i32::MAX).limit(),
+            32,
+            "nor must asking for everything representable"
+        );
     }
 
     #[test]
     fn a_component_may_not_exceed_the_host_total() {
-        // Clamped rather than rejected: the host semaphore gates first anyway,
-        // so honouring the larger number would only mislead whoever reads it.
+        // Clamped rather than rejected: a manifest sized against a bigger host
+        // should still run on a smaller one, at the ceiling it can offer.
         let limits = MessagingLimits::new(16, 32);
         assert_eq!(limits.admission(1024).limit(), 16);
         // ...including via the default, when the default itself is the larger.
         assert_eq!(limits.admission(0).limit(), 16);
+    }
+
+    #[test]
+    fn the_effective_ceiling_is_the_lower_of_the_two() {
+        // Whichever way round the operator sets them, no component may exceed
+        // either ceiling — the property that makes the pair a bound rather than
+        // a suggestion.
+        for (host, per_component) in [(128, 32), (32, 128), (64, 64), (1, 4096)] {
+            let limits = MessagingLimits::new(host, per_component);
+            let expected = host.min(per_component);
+            for requested in [1, 8, 64, 4096, i32::MAX as usize] {
+                let limit = limits
+                    .admission(i32::try_from(requested).unwrap_or(i32::MAX))
+                    .limit();
+                assert!(
+                    limit <= expected,
+                    "host={host} per_component={per_component} requested={requested} \
+                     resolved to {limit}, above the effective ceiling {expected}"
+                );
+            }
+            assert_eq!(limits.admission(0).limit(), expected, "and so does the default");
+        }
     }
 
     #[test]
@@ -906,6 +1187,77 @@ mod tests {
         assert!(
             admission.acquire().await.is_none(),
             "a closed component semaphore must report None, not park forever"
+        );
+    }
+
+    #[test]
+    fn ceilings_above_what_a_semaphore_holds_clamp_rather_than_panic() {
+        // `Semaphore::new` panics above MAX_PERMITS, so an unchecked huge value
+        // would abort the host at startup rather than act as a large ceiling.
+        let limits = MessagingLimits::new(usize::MAX, usize::MAX);
+        assert_eq!(limits.host_total(), MessagingLimits::MAX_IN_FLIGHT);
+        assert_eq!(
+            limits.per_component_default(),
+            MessagingLimits::MAX_IN_FLIGHT
+        );
+        // And the gate it mints must be constructible too.
+        assert_eq!(
+            limits.admission(i32::MAX).limit(),
+            i32::MAX as usize,
+            "an in-range request is still honored at the maximum"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_saturated_gate_sheds_at_the_deadline_rather_than_parking() {
+        // Parking forever does not preserve the backlog: it stops the loop
+        // draining the transport, and the transport drops on overflow with no
+        // log and no metric. Shedding at a known deadline is what makes the
+        // loss countable.
+        let limits = MessagingLimits::new(1, 1).with_admission_wait(Duration::from_secs(5));
+        let admission = limits.admission(1);
+        let _held = admission.acquire().await.expect("first admits");
+
+        let outcome = admission.acquire_before_deadline("comp", "subj").await;
+        assert!(
+            matches!(outcome, Admitted::Shed),
+            "a gate that never frees must shed, not park"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slot_freed_inside_the_deadline_is_still_admitted() {
+        // The deadline must not turn ordinary queueing into loss: a burst that
+        // clears within the wait has to be processed, not shed.
+        let limits = MessagingLimits::new(1, 1).with_admission_wait(Duration::from_secs(30));
+        let admission = limits.admission(1);
+        let held = admission.acquire().await.expect("first admits");
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            drop(held);
+        });
+
+        let outcome = admission.acquire_before_deadline("comp", "subj").await;
+        assert!(
+            matches!(outcome, Admitted::Slot(_)),
+            "a slot freed well inside the deadline must be admitted"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_still_reports_closed_rather_than_shedding() {
+        // Shedding and shutting down are different outcomes: the loop must stop
+        // on the latter, not drop one message and go round again.
+        let limits = MessagingLimits::new(1, 1).with_admission_wait(Duration::from_secs(30));
+        let admission = limits.admission(1);
+        admission.component.close();
+        assert!(
+            matches!(
+                admission.acquire_before_deadline("comp", "subj").await,
+                Admitted::Closed
+            ),
+            "a closed semaphore must end the loop, not be mistaken for saturation"
         );
     }
 

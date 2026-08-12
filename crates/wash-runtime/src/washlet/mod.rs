@@ -311,6 +311,29 @@ pub async fn connect_nats(
         opts = opts.add_client_certificate(cert_path, key_path)
     }
 
+    // Without a callback these events are raised and discarded. `SlowConsumer`
+    // in particular is the *only* signal that a subscription's buffer
+    // overflowed and messages were dropped — async-nats `try_send`s into that
+    // buffer and drops silently on overflow, so an unobserved event means
+    // core-NATS traffic disappearing from a host that otherwise looks healthy.
+    opts = opts.event_callback(|event| async move {
+        match event {
+            async_nats::Event::SlowConsumer(sid) => tracing::warn!(
+                subscription = sid,
+                "NATS slow consumer: the subscription buffer overflowed and messages were \
+                 dropped. The handler is not keeping up — check for saturated messaging \
+                 admission (`messaging.admission.shed`) or slow handlers"
+            ),
+            async_nats::Event::Disconnected => {
+                tracing::warn!("disconnected from NATS; buffered operations will be retried")
+            }
+            async_nats::Event::Connected => tracing::info!("connected to NATS"),
+            async_nats::Event::ClientError(err) => tracing::warn!(%err, "NATS client error"),
+            async_nats::Event::ServerError(err) => tracing::warn!(%err, "NATS server error"),
+            other => tracing::debug!(event = %other, "NATS connection event"),
+        }
+    });
+
     opts.connect(addr)
         .await
         .context("failed to connect to NATS")

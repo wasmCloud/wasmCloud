@@ -59,6 +59,7 @@ super::messaging_handler_dispatch! {
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::{ResolvedWorkload, WorkloadItem};
 use crate::observability::Meters;
+use crate::plugin::wasmcloud_messaging::Admitted;
 use crate::plugin::{HostPlugin, WitInterfaces, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
@@ -611,22 +612,30 @@ impl HostPlugin for NatsMessaging {
                         // held and instances alive are the same number and the
                         // ceiling is structural rather than advisory.
                         //
-                        // Parking here stops us reading the subject, which is
-                        // safe: async-nats' socket reader `try_send`s into a
+                        // Waiting here stops us draining the subscription.
+                        // That cannot back up the socket or endanger the shared
+                        // connection — async-nats' reader `try_send`s into a
                         // per-subscription buffer and drops on overflow rather
-                        // than blocking, so a parked consumer cannot back up
-                        // the socket or endanger the shared connection.
+                        // than blocking — but the overflow it does cause is
+                        // silent, so the wait is bounded and we shed loudly at
+                        // the deadline instead of letting the buffer discard
+                        // messages nobody counted.
                         //
                         // Selecting on the cancel token keeps shutdown prompt
                         // while parked on a saturated semaphore, and is
                         // cancel-safe: dropping the future releases whichever
                         // permit it had already taken.
                         let permit = tokio::select! {
-                            permit = admission.acquire() => match permit {
-                                Some(permit) => permit,
-                                // Closed: the component is going away.
-                                None => break,
-                            },
+                            admitted = admission.acquire_before_deadline(&component_id, &subject) => {
+                                match admitted {
+                                    Admitted::Slot(permit) => permit,
+                                    // Already logged and counted; drop this
+                                    // message and resume draining.
+                                    Admitted::Shed => continue,
+                                    // Closed: the component is going away.
+                                    Admitted::Closed => break,
+                                }
+                            }
                             _ = cancel_token.cancelled() => {
                                 debug!(
                                     parent: &span,

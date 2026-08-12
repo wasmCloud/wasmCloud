@@ -167,27 +167,35 @@ pub struct HostCommand {
     /// and 128 keeps roughly a third of the pool for HTTP-triggered work, warm
     /// pools, and long-lived services.
     ///
-    /// Raise it alongside `WASMTIME_POOLING_TOTAL_CORE_INSTANCES`: this default
-    /// assumes the stock 1000 and does not scale with that setting.
+    /// Unset, this is derived from the host's actual instance pool, so raising
+    /// `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` raises this with it. Set, the
+    /// number given is used as-is.
+    //
+    // Deliberately no `default_value_t`: a parse-time default is
+    // indistinguishable downstream from an operator typing the same number, and
+    // `MessagingLimits::resolve` needs to tell them apart to derive from the
+    // pool. The default that would go here is documented above instead.
     #[arg(
         long = "wasmcloud-messaging-max-in-flight",
-        env = "WASH_WASMCLOUD_MESSAGING_MAX_IN_FLIGHT",
-        default_value_t = wash_runtime::plugin::wasmcloud_messaging::DEFAULT_MAX_IN_FLIGHT_HOST
+        env = "WASH_WASMCLOUD_MESSAGING_MAX_IN_FLIGHT"
     )]
-    pub wasmcloud_messaging_max_in_flight: usize,
+    pub wasmcloud_messaging_max_in_flight: Option<usize>,
 
     /// What a component's `maxInFlight` resolves to when it does not set one,
     /// and the most any single component may ask for.
     ///
     /// A per-component total, unlike `maxConcurrency`, which is per warm
-    /// instance. A component asking for more than
-    /// `--wasmcloud-messaging-max-in-flight` is clamped to it.
+    /// instance. A component asking for more than this — or more than
+    /// `--wasmcloud-messaging-max-in-flight` — is clamped to it, and the clamp
+    /// is logged.
+    ///
+    /// Unset, this is derived from `--wasmcloud-messaging-max-in-flight`, so the
+    /// two cannot contradict each other.
     #[arg(
         long = "wasmcloud-messaging-max-in-flight-per-component",
-        env = "WASH_WASMCLOUD_MESSAGING_MAX_IN_FLIGHT_PER_COMPONENT",
-        default_value_t = wash_runtime::plugin::wasmcloud_messaging::DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT
+        env = "WASH_WASMCLOUD_MESSAGING_MAX_IN_FLIGHT_PER_COMPONENT"
     )]
-    pub wasmcloud_messaging_max_in_flight_per_component: usize,
+    pub wasmcloud_messaging_max_in_flight_per_component: Option<usize>,
 
     /// How long a pooled HTTP connect waits for a slot before failing with a
     /// connect timeout (e.g. `5s`, `500ms`).
@@ -435,14 +443,6 @@ impl CliCommand for HostCommand {
             self.http_connection_wait,
         )?;
 
-        // Likewise one set of messaging ceilings for the whole host: the
-        // host-wide semaphore lives inside this value, so every messaging
-        // backend must be handed the *same* one or each gets its own budget.
-        let messaging_limits = crate::config::wasmcloud_messaging_limits(
-            self.wasmcloud_messaging_max_in_flight,
-            self.wasmcloud_messaging_max_in_flight_per_component,
-        )?;
-
         let socket_policy = Arc::new(wash_runtime::sockets::policy::SocketPolicy {
             host_loopback_enabled: self.allow_host_loopback,
             egress_mode: self.socket_egress.into(),
@@ -457,6 +457,20 @@ impl CliCommand for HostCommand {
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
 
         let engine = engine_builder.build()?;
+
+        // Likewise one set of messaging ceilings for the whole host: the
+        // host-wide semaphore lives inside this value, so every messaging
+        // backend must be handed the *same* one or each gets its own budget.
+        //
+        // Built after the engine, not before, because an unset ceiling is
+        // derived from the pool the engine actually installed — which accounts
+        // for `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` and for pooling being
+        // unavailable, neither of which is knowable from the flags alone.
+        let messaging_limits = crate::config::wasmcloud_messaging_limits(
+            self.wasmcloud_messaging_max_in_flight,
+            self.wasmcloud_messaging_max_in_flight_per_component,
+            engine.total_core_instances(),
+        )?;
 
         let mut cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default()
             .with_engine(engine.clone())
