@@ -68,6 +68,7 @@ fn events_workload(workload_id: &str, host: &str, tag: &str) -> WorkloadStartReq
                 pool_size: 1,
                 max_invocations: 100,
                 max_concurrency: 4,
+                max_in_flight: 0,
             }],
             host_interfaces: vec![
                 http_incoming_handler_interface(host, None),

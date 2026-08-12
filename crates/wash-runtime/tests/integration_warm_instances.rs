@@ -72,6 +72,7 @@ async fn start_pair_with_caller_pool(
                     pool_size: caller_pool_size,
                     max_invocations: 0,
                     max_concurrency: 1,
+                    max_in_flight: 0,
                 },
                 Component {
                     name: "ephemeral-callee".to_string(),
@@ -81,6 +82,7 @@ async fn start_pair_with_caller_pool(
                     pool_size: callee_pool_size,
                     max_invocations: callee_max_invocations,
                     max_concurrency: 1,
+                    max_in_flight: 0,
                 },
             ],
             host_interfaces: http_only_host_interfaces(host_header),
@@ -120,6 +122,7 @@ async fn start_http_component(
                 pool_size,
                 max_invocations,
                 max_concurrency,
+                max_in_flight: 0,
             }],
             host_interfaces: http_only_host_interfaces(host_header),
             volumes: vec![],

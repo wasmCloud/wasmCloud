@@ -88,6 +88,7 @@ async fn test_p3_socket_component_initialization() -> Result<()> {
             pool_size: 1,
             max_invocations: 10,
             max_concurrency: 1,
+            max_in_flight: 0,
         }],
         host_interfaces: vec![],
         volumes: vec![],
