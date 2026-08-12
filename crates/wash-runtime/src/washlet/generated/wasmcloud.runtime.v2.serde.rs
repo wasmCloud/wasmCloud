@@ -1104,6 +1104,9 @@ impl serde::Serialize for LocalResources {
         if !self.allowed_ip_name_lookups.is_empty() {
             len += 1;
         }
+        if !self.allowed_host_loopback_ports.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("wasmcloud.runtime.v2.LocalResources", len)?;
         if self.memory_limit_mb != 0 {
             struct_ser.serialize_field("memoryLimitMb", &self.memory_limit_mb)?;
@@ -1125,6 +1128,9 @@ impl serde::Serialize for LocalResources {
         }
         if !self.allowed_ip_name_lookups.is_empty() {
             struct_ser.serialize_field("allowedIpNameLookups", &self.allowed_ip_name_lookups)?;
+        }
+        if !self.allowed_host_loopback_ports.is_empty() {
+            struct_ser.serialize_field("allowedHostLoopbackPorts", &self.allowed_host_loopback_ports)?;
         }
         struct_ser.end()
     }
@@ -1148,6 +1154,8 @@ impl<'de> serde::Deserialize<'de> for LocalResources {
             "allowedHosts",
             "allowed_ip_name_lookups",
             "allowedIpNameLookups",
+            "allowed_host_loopback_ports",
+            "allowedHostLoopbackPorts",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1159,6 +1167,7 @@ impl<'de> serde::Deserialize<'de> for LocalResources {
             VolumeMounts,
             AllowedHosts,
             AllowedIpNameLookups,
+            AllowedHostLoopbackPorts,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1187,6 +1196,7 @@ impl<'de> serde::Deserialize<'de> for LocalResources {
                             "volumeMounts" | "volume_mounts" => Ok(GeneratedField::VolumeMounts),
                             "allowedHosts" | "allowed_hosts" => Ok(GeneratedField::AllowedHosts),
                             "allowedIpNameLookups" | "allowed_ip_name_lookups" => Ok(GeneratedField::AllowedIpNameLookups),
+                            "allowedHostLoopbackPorts" | "allowed_host_loopback_ports" => Ok(GeneratedField::AllowedHostLoopbackPorts),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1213,6 +1223,7 @@ impl<'de> serde::Deserialize<'de> for LocalResources {
                 let mut volume_mounts__ = None;
                 let mut allowed_hosts__ = None;
                 let mut allowed_ip_name_lookups__ = None;
+                let mut allowed_host_loopback_ports__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::MemoryLimitMb => {
@@ -1265,6 +1276,12 @@ impl<'de> serde::Deserialize<'de> for LocalResources {
                             }
                             allowed_ip_name_lookups__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::AllowedHostLoopbackPorts => {
+                            if allowed_host_loopback_ports__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("allowedHostLoopbackPorts"));
+                            }
+                            allowed_host_loopback_ports__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(LocalResources {
@@ -1275,6 +1292,7 @@ impl<'de> serde::Deserialize<'de> for LocalResources {
                     volume_mounts: volume_mounts__.unwrap_or_default(),
                     allowed_hosts: allowed_hosts__.unwrap_or_default(),
                     allowed_ip_name_lookups: allowed_ip_name_lookups__.unwrap_or_default(),
+                    allowed_host_loopback_ports: allowed_host_loopback_ports__.unwrap_or_default(),
                 })
             }
         }
