@@ -704,15 +704,15 @@ pub fn connection_quotas(
 /// than a host that looks healthy and quietly consumes nothing.
 ///
 /// [`MessagingLimits`]: wash_runtime::plugin::wasmcloud_messaging::MessagingLimits
-pub fn messaging_limits(
+pub fn wasmcloud_messaging_limits(
     max_in_flight: usize,
     max_in_flight_per_component: usize,
 ) -> anyhow::Result<wash_runtime::plugin::wasmcloud_messaging::MessagingLimits> {
     if max_in_flight == 0 {
-        anyhow::bail!("max_messaging_in_flight must be at least 1");
+        anyhow::bail!("wasmcloud_messaging_max_in_flight must be at least 1");
     }
     if max_in_flight_per_component == 0 {
-        anyhow::bail!("max_messaging_in_flight_per_component must be at least 1");
+        anyhow::bail!("wasmcloud_messaging_max_in_flight_per_component must be at least 1");
     }
     // A per-component ceiling above the host-wide total is harmless — the host
     // semaphore gates first — but almost certainly an operator mixing the two
@@ -1412,23 +1412,23 @@ mod tests {
     }
 
     #[test]
-    fn messaging_limits_reject_zero() {
+    fn wasmcloud_messaging_limits_reject_zero() {
         // Zero would silently mean "process no messages" — a host that looks
         // healthy and quietly consumes nothing. Better a startup error.
-        assert!(messaging_limits(0, 32).is_err());
-        assert!(messaging_limits(128, 0).is_err());
+        assert!(wasmcloud_messaging_limits(0, 32).is_err());
+        assert!(wasmcloud_messaging_limits(128, 0).is_err());
     }
 
     #[test]
-    fn messaging_limits_apply_overrides() {
-        let limits = messaging_limits(64, 8).expect("valid ceilings");
+    fn wasmcloud_messaging_limits_apply_overrides() {
+        let limits = wasmcloud_messaging_limits(64, 8).expect("valid ceilings");
         assert_eq!(limits.host_total(), 64);
         assert_eq!(limits.per_component_default(), 8);
     }
 
     #[test]
-    fn messaging_limits_default_to_the_documented_pair() {
-        let limits = messaging_limits(
+    fn wasmcloud_messaging_limits_default_to_the_documented_pair() {
+        let limits = wasmcloud_messaging_limits(
             wash_runtime::plugin::wasmcloud_messaging::DEFAULT_MAX_IN_FLIGHT_HOST,
             wash_runtime::plugin::wasmcloud_messaging::DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT,
         )
