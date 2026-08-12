@@ -267,6 +267,26 @@ spec:
                               format: int32
                               minimum: 0
                               type: integer
+                            maxInFlight:
+                              description: |-
+                                MaxInFlight is how many messages this component may process at the same
+                                time when it is driven by a wasmcloud:messaging subscription. Each
+                                in-flight message holds its own component instance for the duration of
+                                the handler call, so this is simultaneously the ceiling on instances the
+                                subscription may create.
+
+                                Unset takes the host default (32); 0 means the host default. Unlike
+                                PoolSize, this is a hard ceiling: once it is reached the subscriber stops
+                                taking messages off the subject until a handler completes.
+
+                                MaxInFlight is a per-component total, and is separately bounded by a
+                                host-wide total across every messaging component on the host. It is NOT
+                                interchangeable with MaxConcurrency, which is a per-instance number (how
+                                many calls one warm instance may overlap), and is not derivable from
+                                PoolSize x MaxConcurrency.
+                              format: int32
+                              minimum: 0
+                              type: integer
                             maxInvocations:
                               description: |-
                                 MaxInvocations retires a warm instance once it has served this many
