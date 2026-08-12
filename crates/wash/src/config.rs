@@ -1444,8 +1444,7 @@ mod tests {
         // Above this the semaphore panics at startup, so an unchecked value is
         // not a large ceiling but an abort with a backtrace. `usize::MAX` is
         // what a fat-fingered "unlimited" looks like.
-        let too_big =
-            wash_runtime::plugin::wasmcloud_messaging::MessagingLimits::MAX_IN_FLIGHT + 1;
+        let too_big = wash_runtime::plugin::wasmcloud_messaging::MessagingLimits::MAX_IN_FLIGHT + 1;
         assert!(wasmcloud_messaging_limits(Some(too_big), None, None).is_err());
         assert!(wasmcloud_messaging_limits(None, Some(too_big), None).is_err());
         assert!(wasmcloud_messaging_limits(Some(usize::MAX), None, None).is_err());

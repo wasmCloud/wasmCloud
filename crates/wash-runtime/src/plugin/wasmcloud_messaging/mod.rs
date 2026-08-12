@@ -1017,7 +1017,11 @@ mod tests {
                      resolved to {limit}, above the effective ceiling {expected}"
                 );
             }
-            assert_eq!(limits.admission(0).limit(), expected, "and so does the default");
+            assert_eq!(
+                limits.admission(0).limit(),
+                expected,
+                "and so does the default"
+            );
         }
     }
 
