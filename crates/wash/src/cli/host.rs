@@ -170,24 +170,24 @@ pub struct HostCommand {
     /// Raise it alongside `WASMTIME_POOLING_TOTAL_CORE_INSTANCES`: this default
     /// assumes the stock 1000 and does not scale with that setting.
     #[arg(
-        long = "max-messaging-in-flight",
-        env = "WASH_MAX_MESSAGING_IN_FLIGHT",
+        long = "wasmcloud-messaging-max-in-flight",
+        env = "WASH_WASMCLOUD_MESSAGING_MAX_IN_FLIGHT",
         default_value_t = wash_runtime::plugin::wasmcloud_messaging::DEFAULT_MAX_IN_FLIGHT_HOST
     )]
-    pub max_messaging_in_flight: usize,
+    pub wasmcloud_messaging_max_in_flight: usize,
 
     /// What a component's `maxInFlight` resolves to when it does not set one,
     /// and the most any single component may ask for.
     ///
     /// A per-component total, unlike `maxConcurrency`, which is per warm
     /// instance. A component asking for more than
-    /// `--max-messaging-in-flight` is clamped to it.
+    /// `--wasmcloud-messaging-max-in-flight` is clamped to it.
     #[arg(
-        long = "max-messaging-in-flight-per-component",
-        env = "WASH_MAX_MESSAGING_IN_FLIGHT_PER_COMPONENT",
+        long = "wasmcloud-messaging-max-in-flight-per-component",
+        env = "WASH_WASMCLOUD_MESSAGING_MAX_IN_FLIGHT_PER_COMPONENT",
         default_value_t = wash_runtime::plugin::wasmcloud_messaging::DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT
     )]
-    pub max_messaging_in_flight_per_component: usize,
+    pub wasmcloud_messaging_max_in_flight_per_component: usize,
 
     /// How long a pooled HTTP connect waits for a slot before failing with a
     /// connect timeout (e.g. `5s`, `500ms`).
@@ -438,9 +438,9 @@ impl CliCommand for HostCommand {
         // Likewise one set of messaging ceilings for the whole host: the
         // host-wide semaphore lives inside this value, so every messaging
         // backend must be handed the *same* one or each gets its own budget.
-        let messaging_limits = crate::config::messaging_limits(
-            self.max_messaging_in_flight,
-            self.max_messaging_in_flight_per_component,
+        let messaging_limits = crate::config::wasmcloud_messaging_limits(
+            self.wasmcloud_messaging_max_in_flight,
+            self.wasmcloud_messaging_max_in_flight_per_component,
         )?;
 
         let socket_policy = Arc::new(wash_runtime::sockets::policy::SocketPolicy {
