@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use crate::engine::workload::WorkloadItem;
 use crate::{
     engine::workload::{ResolvedWorkload, UnresolvedWorkload, WorkloadMetadata},
-    wit::WitWorld,
+    wit::{WitInterface, WitWorld},
 };
 
 #[cfg(feature = "wasi-config")]
@@ -188,6 +188,27 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// # Returns
     /// A `WitWorld` containing the plugin's imports and exports.
     fn world(&self) -> WitWorld;
+
+    /// Returns whether this plugin will actually serve `interface`, for an
+    /// interface its [`HostPlugin::world`] already matched.
+    ///
+    /// World matching answers "same namespace:package, compatible version,
+    /// interfaces covered", and it treats a host-interface entry that omits its
+    /// version as compatible with *any* version. That is the right default —
+    /// most workloads pin no version and expect the one plugin serving the
+    /// package to take it — but it leaves no way to say "only a version I can
+    /// actually bind". Two plugins serving one namespace:package at different
+    /// revisions (the sync and async `wasmcloud:messaging` multiplexers) both
+    /// match a versionless entry, and only one of them can serve it.
+    ///
+    /// A matched interface a plugin does not claim is offered to the next
+    /// plugin instead, so refusing here hands it to a sibling rather than
+    /// failing the workload. Overriding this is only necessary when
+    /// [`HostPlugin::world`] cannot express the distinction; the default claims
+    /// everything the world matched.
+    fn claims(&self, _interface: &WitInterface) -> bool {
+        true
+    }
 
     /// Returns whether this plugin supports handling multiple named instances
     /// of the same namespace:package interface.
