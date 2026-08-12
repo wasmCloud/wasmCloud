@@ -50,6 +50,7 @@ fn echo_workload(host: &str) -> WorkloadStartRequest {
                 pool_size: 1,
                 max_invocations: 1000,
                 max_concurrency: 1,
+                max_in_flight: 0,
             }],
             host_interfaces: http_only_host_interfaces(host),
             volumes: vec![],
