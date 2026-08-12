@@ -5,6 +5,10 @@ mod multiplexed;
 mod multiplexed_async;
 mod nats;
 
+use std::sync::Arc;
+
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
 pub use in_memory::InMemoryMessaging;
 #[cfg(feature = "wasm_component_model_implements")]
 pub use multiplexed::{
@@ -377,6 +381,166 @@ macro_rules! messaging_handler_dispatch {
 
 pub(crate) use messaging_handler_dispatch;
 
+/// What an unset `maxInFlight` resolves to: how many messages one component
+/// may process at once.
+///
+/// A messaging-triggered component gets a fresh instance per message, so this
+/// is equally a ceiling on instances. 32 of a Componentize-Go component (the
+/// worst measured shape, at 5 core instances each) is 160 core instances —
+/// a bound on one workload's blast radius, well inside the host's pool.
+pub const DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT: usize = 32;
+
+/// What the host-wide ceiling defaults to: how many messages *every* messaging
+/// component on this host may process at once, added together.
+///
+/// The per-component ceiling alone does not bound the host — twenty components
+/// at 32 is 640 in flight, which at 5 core instances apiece is 3200 against a
+/// pool of 1000 ([`crate::engine`] sizes `total_core_instances` from
+/// `max_instances`, default 1000). Sizing against the worst measured component
+/// shape, 1000 / 5 = 200 is the real ceiling; 128 sits below it and keeps
+/// roughly a third of the pool for HTTP-triggered work, warm pools, and
+/// long-lived services — the workloads that otherwise fail to *start* when a
+/// messaging burst drains the pool.
+///
+/// This is a bound, not a reservation: nothing is preallocated, so the default
+/// costs nothing on a host that never bursts.
+pub const DEFAULT_MAX_IN_FLIGHT_HOST: usize = 128;
+
+/// The two-level admission ceiling on messaging-triggered work, built once per
+/// host and shared by every messaging backend on it.
+///
+/// Both levels are needed and neither subsumes the other: the per-component
+/// ceiling stops one runaway workload taking the host, and the host-wide
+/// ceiling stops a crowd of components each sitting inside its own limit from
+/// adding up to more than the pool can carry.
+#[derive(Clone, Debug)]
+pub struct MessagingLimits {
+    /// Shared across every component on this host. Cloned into each
+    /// subscriber loop's [`Admission`].
+    host: Arc<Semaphore>,
+    host_total: usize,
+    per_component_default: usize,
+}
+
+impl Default for MessagingLimits {
+    fn default() -> Self {
+        Self::new(
+            DEFAULT_MAX_IN_FLIGHT_HOST,
+            DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT,
+        )
+    }
+}
+
+impl MessagingLimits {
+    /// Build the host's messaging ceilings.
+    ///
+    /// Both arguments are clamped to at least 1: a zero would mean "process no
+    /// messages", which is never what an operator meant. The CLI rejects an
+    /// explicit zero outright (see `wash`'s config layer) so this is a
+    /// belt-and-braces floor for programmatic callers.
+    pub fn new(host_total: usize, per_component_default: usize) -> Self {
+        let host_total = host_total.max(1);
+        let per_component_default = per_component_default.max(1);
+        if per_component_default > host_total {
+            // Harmless — the host semaphore gates first regardless — but
+            // almost certainly an operator mixing the two knobs up. Mirrors
+            // the warning `connection_quotas` emits for the same shape.
+            tracing::warn!(
+                per_component_default,
+                host_total,
+                "the per-component messaging ceiling exceeds the host-wide total; \
+                 the host-wide cap will gate first"
+            );
+        }
+        Self {
+            host: Arc::new(Semaphore::new(host_total)),
+            host_total,
+            per_component_default,
+        }
+    }
+
+    /// The host-wide ceiling.
+    pub fn host_total(&self) -> usize {
+        self.host_total
+    }
+
+    /// What an unset component field resolves to.
+    pub fn per_component_default(&self) -> usize {
+        self.per_component_default
+    }
+
+    /// Resolve one component's wire value into its admission gate.
+    ///
+    /// `max_in_flight` is the wire field, where non-positive spells "unset"
+    /// exactly as the other instance limits do. A component asking for more
+    /// than the host-wide total is clamped to it rather than rejected: the host
+    /// semaphore would gate first anyway, so honouring the larger number would
+    /// only mislead whoever reads it back.
+    pub(crate) fn admission(&self, max_in_flight: i32) -> Admission {
+        let requested = usize::try_from(max_in_flight)
+            .ok()
+            .filter(|v| *v > 0)
+            .unwrap_or(self.per_component_default);
+        let resolved = requested.min(self.host_total);
+        Admission {
+            component: Arc::new(Semaphore::new(resolved)),
+            host: Arc::clone(&self.host),
+            limit: resolved,
+        }
+    }
+}
+
+/// One component's admission gate: its own ceiling plus the shared host one.
+#[derive(Clone, Debug)]
+pub(crate) struct Admission {
+    component: Arc<Semaphore>,
+    host: Arc<Semaphore>,
+    limit: usize,
+}
+
+impl Admission {
+    /// Take one slot, parking until both levels have room.
+    ///
+    /// Returns `None` once either semaphore is closed, which is how a
+    /// shutting-down component tells its subscriber loop to stop.
+    ///
+    /// **Order matters: component first, then host.** A task holding a *host*
+    /// permit while it waited for a component permit would block every other
+    /// component on the host; holding a component permit while waiting for the
+    /// host's only throttles the component that is already at its own limit.
+    /// There is no deadlock either way — two semaphores, one consistent order,
+    /// no cycle — but only this order confines the head-of-line blocking to
+    /// the workload responsible for it.
+    ///
+    /// Cancel-safe: dropping the returned future before it resolves releases
+    /// whichever permit it had already taken.
+    pub(crate) async fn acquire(&self) -> Option<AdmissionPermit> {
+        let component = Arc::clone(&self.component).acquire_owned().await.ok()?;
+        let host = Arc::clone(&self.host).acquire_owned().await.ok()?;
+        Some(AdmissionPermit {
+            _component: component,
+            _host: host,
+        })
+    }
+
+    /// The resolved per-component ceiling, after defaulting and clamping.
+    pub(crate) fn limit(&self) -> usize {
+        self.limit
+    }
+}
+
+/// Both permits for one in-flight message, released together on drop.
+///
+/// Held by the spawned handler task, so a slot is freed when the handler
+/// returns — whether it succeeded, failed, or trapped — and equally on the
+/// error paths between admission and spawn, where this is simply a local that
+/// falls out of scope.
+#[derive(Debug)]
+pub(crate) struct AdmissionPermit {
+    _component: OwnedSemaphorePermit,
+    _host: OwnedSemaphorePermit,
+}
+
 /// Returns `true` if the world exports the `wasmcloud:messaging/handler`
 /// interface at any version. Matches via [`WitInterface::contains`] rather
 /// than set equality, so an exported `handler@0.2.x` is recognized no matter
@@ -536,5 +700,244 @@ mod tests {
             vec!["tasks.leet".to_string(), "tasks.reverse".to_string()]
         );
         assert!(parse_subscriptions(None).is_empty());
+    }
+
+    // --- Admission ceilings -------------------------------------------------
+
+    use super::{DEFAULT_MAX_IN_FLIGHT_HOST, DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT, MessagingLimits};
+    use futures::FutureExt as _;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn unset_resolves_to_the_per_component_default() {
+        let limits = MessagingLimits::default();
+        // Non-positive is how the wire spells "unset", for all three of the
+        // signed limits. Every spelling must land on the same default.
+        for unset in [0, -1, i32::MIN] {
+            assert_eq!(
+                limits.admission(unset).limit(),
+                DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT,
+                "{unset} should resolve to the default"
+            );
+        }
+    }
+
+    #[test]
+    fn an_explicit_value_is_honored() {
+        let limits = MessagingLimits::new(128, 32);
+        assert_eq!(limits.admission(4).limit(), 4);
+        assert_eq!(limits.admission(64).limit(), 64);
+    }
+
+    #[test]
+    fn a_component_may_not_exceed_the_host_total() {
+        // Clamped rather than rejected: the host semaphore gates first anyway,
+        // so honouring the larger number would only mislead whoever reads it.
+        let limits = MessagingLimits::new(16, 32);
+        assert_eq!(limits.admission(1024).limit(), 16);
+        // ...including via the default, when the default itself is the larger.
+        assert_eq!(limits.admission(0).limit(), 16);
+    }
+
+    #[test]
+    fn zero_ceilings_floor_to_one_rather_than_meaning_unbounded() {
+        // The CLI rejects an explicit zero outright; this is the belt-and-braces
+        // floor for programmatic callers. Zero must never read as "no limit".
+        let limits = MessagingLimits::new(0, 0);
+        assert_eq!(limits.host_total(), 1);
+        assert_eq!(limits.per_component_default(), 1);
+        assert_eq!(limits.admission(0).limit(), 1);
+    }
+
+    #[test]
+    fn defaults_are_the_documented_pair() {
+        let limits = MessagingLimits::default();
+        assert_eq!(limits.host_total(), DEFAULT_MAX_IN_FLIGHT_HOST);
+        assert_eq!(
+            limits.per_component_default(),
+            DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT
+        );
+        // The pairing the sizing arithmetic assumes: the per-component ceiling
+        // is below the host total, so several components fit before the host
+        // binds.
+        const {
+            assert!(DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT < DEFAULT_MAX_IN_FLIGHT_HOST);
+        }
+    }
+
+    #[tokio::test]
+    async fn admission_bounds_one_component() {
+        let limits = MessagingLimits::new(64, 32);
+        let admission = limits.admission(3);
+
+        // Bound individually rather than collected: all three must be held at
+        // once, and the release below must drop exactly one of them.
+        let admit = || {
+            admission
+                .acquire()
+                .now_or_never()
+                .flatten()
+                .expect("a free slot should admit immediately")
+        };
+        let first = admit();
+        let _second = admit();
+        let _third = admit();
+
+        // Fourth must park rather than admit.
+        assert!(
+            admission.acquire().now_or_never().is_none(),
+            "the ceiling must bind at 3"
+        );
+
+        // Releasing ONE frees exactly one slot.
+        drop(first);
+        assert!(
+            admission.acquire().now_or_never().flatten().is_some(),
+            "a completed handler must free its slot"
+        );
+    }
+
+    /// The assertion the per-component test cannot make: three components each
+    /// allowed 32 must still peak at the host total across all three, not 96.
+    #[tokio::test]
+    async fn the_host_total_bounds_every_component_together() {
+        let limits = MessagingLimits::new(4, 32);
+        let components: Vec<_> = (0..3).map(|_| limits.admission(32)).collect();
+
+        let mut held = Vec::new();
+        // Round-robin so no single component could have taken all four.
+        for round in 0..4 {
+            let a = &components[round % components.len()];
+            held.push(
+                a.acquire()
+                    .now_or_never()
+                    .flatten()
+                    .expect("within the host total"),
+            );
+        }
+
+        for (i, a) in components.iter().enumerate() {
+            assert!(
+                a.acquire().now_or_never().is_none(),
+                "component {i} must be blocked by the exhausted host total, \
+                 despite having its own slots free"
+            );
+        }
+
+        drop(held.pop());
+        assert!(
+            components[0].acquire().now_or_never().flatten().is_some(),
+            "freeing a host slot must admit again"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_permit_frees_both_levels() {
+        // A host-permit leak is the worst failure mode here: it silently lowers
+        // the ceiling for every component on the host, not just the leaker.
+        let limits = MessagingLimits::new(1, 1);
+        let a = limits.admission(1);
+        let b = limits.admission(1);
+
+        let permit = a.acquire().await.expect("first admits");
+        assert!(
+            b.acquire().now_or_never().is_none(),
+            "the host total is exhausted by the other component"
+        );
+
+        drop(permit);
+        assert!(
+            b.acquire().now_or_never().flatten().is_some(),
+            "dropping the permit must free the host slot too, not just the component one"
+        );
+    }
+
+    #[tokio::test]
+    async fn acquire_is_cancel_safe() {
+        // Cancelling an acquire that is parked on the HOST semaphore must not
+        // strand the component permit it already took. If it did, every
+        // shutdown race would erode that component's ceiling by one.
+        //
+        // Host total 2 with a per-component default of 8 gives each component a
+        // resolved ceiling of 2 (clamped), so the blocker can exhaust the host
+        // while the waiter still has component slots free — the only shape in
+        // which a waiter parks on the host level rather than its own.
+        let limits = MessagingLimits::new(2, 8);
+        let blocker = limits.admission(8);
+        let waiter = limits.admission(8);
+        assert_eq!(waiter.limit(), 2, "clamped to the host total");
+
+        let held: Vec<_> = (0..2)
+            .map(|_| blocker.acquire().now_or_never().flatten().expect("admits"))
+            .collect();
+
+        // Box::pin, not tokio::pin!: the latter rebinds the name to a
+        // `Pin<&mut F>`, so dropping it would drop the *reference* and leave
+        // the future — and its permit — alive on the stack.
+        let mut parked = Box::pin(waiter.acquire());
+        assert!(
+            futures::poll!(parked.as_mut()).is_pending(),
+            "the waiter has its own slots free, so it must be the host level parking it"
+        );
+        drop(parked);
+
+        // With the host freed, the waiter must get its FULL ceiling back. One
+        // short would mean the cancelled future kept its component permit.
+        drop(held);
+        let leak_check = || {
+            waiter
+                .acquire()
+                .now_or_never()
+                .flatten()
+                .expect("no permit should have leaked from the cancelled acquire")
+        };
+        // Both held simultaneously: taking them one at a time would pass even
+        // if only a single slot had come back.
+        let (_a, _b) = (leak_check(), leak_check());
+    }
+
+    #[tokio::test]
+    async fn a_closed_semaphore_ends_the_loop() {
+        // How a shutting-down component tells its subscriber loop to stop.
+        let limits = MessagingLimits::new(4, 4);
+        let admission = limits.admission(4);
+        admission.component.close();
+        assert!(
+            admission.acquire().await.is_none(),
+            "a closed component semaphore must report None, not park forever"
+        );
+    }
+
+    #[tokio::test]
+    async fn permits_are_handed_out_in_arrival_order() {
+        let limits = MessagingLimits::new(8, 1);
+        let admission = limits.admission(1);
+        let held = admission.acquire().await.expect("first admits");
+
+        let order = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for i in 0..3 {
+            let admission = admission.clone();
+            let order = Arc::clone(&order);
+            // Stagger so the waiters queue in a known order.
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            handles.push(tokio::spawn(async move {
+                let _p = admission.acquire().await.expect("eventually admitted");
+                (i, order.fetch_add(1, Ordering::SeqCst))
+            }));
+        }
+
+        drop(held);
+        let mut seen: Vec<(usize, usize)> = Vec::new();
+        for h in handles {
+            seen.push(h.await.expect("waiter task"));
+        }
+        seen.sort_by_key(|(_, position)| *position);
+        assert_eq!(
+            seen.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+            vec![0, 1, 2],
+            "tokio's Semaphore is FIFO-fair, so a hot component cannot starve the rest"
+        );
     }
 }

@@ -409,6 +409,16 @@ pub struct DevComponent {
     /// itself. Only meaningful alongside `poolSize`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_concurrency: Option<i32>,
+    /// How many messages this component may process at once when driven by a
+    /// `wasmcloud:messaging` subscription.
+    ///
+    /// Each in-flight message holds its own instance for the length of the
+    /// handler, so this equally bounds instances. Unset (or `0`) takes the
+    /// host default. Unlike `poolSize` this is a hard ceiling: at the limit the
+    /// subscriber stops taking messages off the subject until a handler
+    /// finishes. Unrelated to `maxConcurrency`, which is per warm instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_in_flight: Option<i32>,
 }
 
 impl DevComponent {
@@ -431,6 +441,7 @@ impl DevComponent {
             pool_size: None,
             max_invocations: None,
             max_concurrency: None,
+            max_in_flight: None,
         }
     }
 }
@@ -678,6 +689,41 @@ pub fn connection_quotas(
         )),
         None => Ok(registry),
     }
+}
+
+/// Resolve the messaging admission ceilings into the [`MessagingLimits`] every
+/// messaging backend on this host shares.
+///
+/// Mirrors [`connection_quotas`]: the same two-level host-wide/per-workload
+/// shape, and the same treatment of a zero.
+///
+/// # Errors
+///
+/// Rejects a zero for either ceiling. Zero would silently mean "process no
+/// messages", which is never what an operator meant — better a startup error
+/// than a host that looks healthy and quietly consumes nothing.
+///
+/// [`MessagingLimits`]: wash_runtime::plugin::wasmcloud_messaging::MessagingLimits
+pub fn messaging_limits(
+    max_in_flight: usize,
+    max_in_flight_per_component: usize,
+) -> anyhow::Result<wash_runtime::plugin::wasmcloud_messaging::MessagingLimits> {
+    if max_in_flight == 0 {
+        anyhow::bail!("max_messaging_in_flight must be at least 1");
+    }
+    if max_in_flight_per_component == 0 {
+        anyhow::bail!("max_messaging_in_flight_per_component must be at least 1");
+    }
+    // A per-component ceiling above the host-wide total is harmless — the host
+    // semaphore gates first — but almost certainly an operator mixing the two
+    // knobs up, so `MessagingLimits::new` warns about it, exactly as
+    // `connection_quotas` does for its equivalent.
+    Ok(
+        wash_runtime::plugin::wasmcloud_messaging::MessagingLimits::new(
+            max_in_flight,
+            max_in_flight_per_component,
+        ),
+    )
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1363,6 +1409,32 @@ mod tests {
         assert!(connection_quotas(None, None, Some(0), None, None).is_err());
         assert!(connection_quotas(None, None, None, Some(0), None).is_err());
         assert!(connection_quotas(None, None, None, None, Some(Duration::ZERO)).is_err());
+    }
+
+    #[test]
+    fn messaging_limits_reject_zero() {
+        // Zero would silently mean "process no messages" — a host that looks
+        // healthy and quietly consumes nothing. Better a startup error.
+        assert!(messaging_limits(0, 32).is_err());
+        assert!(messaging_limits(128, 0).is_err());
+    }
+
+    #[test]
+    fn messaging_limits_apply_overrides() {
+        let limits = messaging_limits(64, 8).expect("valid ceilings");
+        assert_eq!(limits.host_total(), 64);
+        assert_eq!(limits.per_component_default(), 8);
+    }
+
+    #[test]
+    fn messaging_limits_default_to_the_documented_pair() {
+        let limits = messaging_limits(
+            wash_runtime::plugin::wasmcloud_messaging::DEFAULT_MAX_IN_FLIGHT_HOST,
+            wash_runtime::plugin::wasmcloud_messaging::DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT,
+        )
+        .expect("the built-in defaults must be valid");
+        assert_eq!(limits.host_total(), 128);
+        assert_eq!(limits.per_component_default(), 32);
     }
 
     #[test]

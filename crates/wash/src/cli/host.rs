@@ -157,6 +157,38 @@ pub struct HostCommand {
     )]
     pub max_inbound_socket_connections_per_workload: usize,
 
+    /// Host-wide cap on messages being processed at once across every
+    /// `wasmcloud:messaging` component on this host.
+    ///
+    /// A messaging-triggered component gets a fresh instance per message, so
+    /// this equally bounds instances. The default is derived from the host's
+    /// instance pool: at the worst measured component shape (Componentize-Go,
+    /// 5 core instances each) a `total_core_instances` of 1000 supports 200,
+    /// and 128 keeps roughly a third of the pool for HTTP-triggered work, warm
+    /// pools, and long-lived services.
+    ///
+    /// Raise it alongside `WASMTIME_POOLING_TOTAL_CORE_INSTANCES`: this default
+    /// assumes the stock 1000 and does not scale with that setting.
+    #[arg(
+        long = "max-messaging-in-flight",
+        env = "WASH_MAX_MESSAGING_IN_FLIGHT",
+        default_value_t = wash_runtime::plugin::wasmcloud_messaging::DEFAULT_MAX_IN_FLIGHT_HOST
+    )]
+    pub max_messaging_in_flight: usize,
+
+    /// What a component's `maxInFlight` resolves to when it does not set one,
+    /// and the most any single component may ask for.
+    ///
+    /// A per-component total, unlike `maxConcurrency`, which is per warm
+    /// instance. A component asking for more than
+    /// `--max-messaging-in-flight` is clamped to it.
+    #[arg(
+        long = "max-messaging-in-flight-per-component",
+        env = "WASH_MAX_MESSAGING_IN_FLIGHT_PER_COMPONENT",
+        default_value_t = wash_runtime::plugin::wasmcloud_messaging::DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT
+    )]
+    pub max_messaging_in_flight_per_component: usize,
+
     /// How long a pooled HTTP connect waits for a slot before failing with a
     /// connect timeout (e.g. `5s`, `500ms`).
     ///
@@ -403,6 +435,14 @@ impl CliCommand for HostCommand {
             self.http_connection_wait,
         )?;
 
+        // Likewise one set of messaging ceilings for the whole host: the
+        // host-wide semaphore lives inside this value, so every messaging
+        // backend must be handed the *same* one or each gets its own budget.
+        let messaging_limits = crate::config::messaging_limits(
+            self.max_messaging_in_flight,
+            self.max_messaging_in_flight_per_component,
+        )?;
+
         let socket_policy = Arc::new(wash_runtime::sockets::policy::SocketPolicy {
             host_loopback_enabled: self.allow_host_loopback,
             egress_mode: self.socket_egress.into(),
@@ -433,9 +473,12 @@ impl CliCommand for HostCommand {
             .with_plugin(Arc::new(plugin::wasi_blobstore::NatsBlobstore::new(
                 &data_nats_client,
             )))?
-            .with_plugin(Arc::new(plugin::wasmcloud_messaging::NatsMessaging::new(
-                data_nats_client.clone(),
-            )))?
+            .with_plugin(Arc::new(
+                plugin::wasmcloud_messaging::NatsMessaging::with_limits(
+                    data_nats_client.clone(),
+                    messaging_limits.clone(),
+                ),
+            ))?
             .with_plugin(Arc::new(plugin::wasi_keyvalue::NatsKeyValue::new(
                 &data_nats_client,
             )))?

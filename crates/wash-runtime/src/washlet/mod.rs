@@ -410,6 +410,7 @@ fn component_from_wire(
         pool_size: wire.pool_size,
         max_invocations: wire.max_invocations,
         max_concurrency: wire.max_concurrency,
+        max_in_flight: wire.max_in_flight,
     }
 }
 
@@ -826,6 +827,7 @@ mod tests {
             pool_size: 4,
             max_invocations: 100,
             max_concurrency: 8,
+            max_in_flight: 16,
             ..Default::default()
         };
 
@@ -842,6 +844,7 @@ mod tests {
         assert_eq!(component.pool_size, 4);
         assert_eq!(component.max_invocations, 100);
         assert_eq!(component.max_concurrency, 8);
+        assert_eq!(component.max_in_flight, 16);
 
         // And the runtime reads those limits as the policy they name.
         assert_eq!(

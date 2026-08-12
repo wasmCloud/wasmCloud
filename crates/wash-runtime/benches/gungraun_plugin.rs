@@ -230,6 +230,7 @@ impl Call {
                     pool_size: 0,
                     max_invocations: 0,
                     max_concurrency: 0,
+                    max_in_flight: 0,
                 }],
                 host_interfaces: self.host_interfaces(),
                 volumes: vec![],
