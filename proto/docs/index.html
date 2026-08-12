@@ -791,6 +791,23 @@ that yields rather than blocks -- a guest driving its own executor with a
 blocking call must stay at one. Only meaningful alongside pool_size. </p></td>
                 </tr>
               
+                <tr>
+                  <td>max_in_flight</td>
+                  <td><a href="#sint32">sint32</a></td>
+                  <td></td>
+                  <td><p>How many messages this component may process at the same time when it is
+driven by a wasmcloud:messaging subscription.
+
+Each in-flight message holds its own component instance for the duration
+of the handler call, so this is simultaneously the ceiling on instances
+the subscription may create. Unset or 0 takes the host default (32).
+
+Unlike pool_size this is a hard ceiling: once reached, the subscriber
+stops taking messages off the subject until a handler completes. It is a
+per-component total, separately bounded by a host-wide total, and is not
+interchangeable with max_concurrency (a per-instance number). </p></td>
+                </tr>
+              
             </tbody>
           </table>
 
