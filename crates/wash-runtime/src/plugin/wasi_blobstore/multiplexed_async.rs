@@ -11,17 +11,14 @@
 //! `async fn`s taking an [`Accessor`] (rather than the `&mut ActiveCtx` style of
 //! the `wasi:blobstore` layer). `get-data`/`list-objects` build a
 //! [`StreamReader`] from a buffered `Vec` (the backend reads whole objects into
-//! memory); `write-data` drains the guest's `stream<u8>` into a `Vec` via a
-//! [`StreamConsumer`] before handing it to the backend.
+//! memory); `write-data` drains the guest's `stream<u8>` into a `Vec` via
+//! [`collect_stream`](crate::plugin::stream_collect::collect_stream) before
+//! handing it to the backend.
 
 use std::collections::HashSet;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
-use tokio::sync::oneshot;
-use wasmtime::StoreContextMut;
-use wasmtime::component::{Accessor, Resource, Source, StreamConsumer, StreamReader, StreamResult};
+use wasmtime::component::{Accessor, Resource, StreamReader};
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::WorkloadItem;
@@ -309,29 +306,14 @@ impl<T: 'static + Send> bindings::wasmcloud::blobstore::container::HostContainer
         data: StreamReader<u8>,
     ) -> wasmtime::Result<Result<(), AsyncError>> {
         let (backend, container) = accessor.with(|mut a| container_ref(&mut a, &self_))?;
-        // Drain the guest's stream into memory, then hand the whole object to the
-        // backend. `CollectConsumer` sends the collected bytes when the stream
-        // ends (it is dropped by the runtime at end-of-stream).
-        let (tx, rx) = oneshot::channel::<Vec<u8>>();
-        accessor.with(|mut a| {
-            data.pipe(
-                &mut a,
-                CollectConsumer {
-                    buf: Vec::new(),
-                    done: Some(tx),
-                },
-            )
-        })?;
-        // The consumer always delivers on `Drop` at end-of-stream; a receive
-        // error means it was dropped without finishing, so surface that rather
-        // than silently writing a zero-length object.
-        let bytes = match rx.await {
+        // Drain the guest's stream into memory, then hand the whole object to
+        // the backend. Unbounded: an object body has no size the blobstore API
+        // declares too large, so the backend's own limits are the only ones.
+        let bytes = match crate::plugin::stream_collect::collect_stream(accessor, data, usize::MAX)
+            .await?
+        {
             Ok(bytes) => bytes,
-            Err(_) => {
-                return Ok(Err(AsyncError::Other(
-                    "object body stream ended without delivering data".to_string(),
-                )));
-            }
+            Err(e) => return Ok(Err(AsyncError::Other(e.to_string()))),
         };
         Ok(backend
             .write_data(&container, &name, bytes)
@@ -425,51 +407,6 @@ impl bindings::wasmcloud::blobstore::container::HostContainer for ActiveCtx<'_> 
 }
 
 impl bindings::wasmcloud::blobstore::container::Host for ActiveCtx<'_> {}
-
-/// A [`StreamConsumer`] that accumulates every byte the guest writes and hands
-/// the buffer back once the stream ends. The runtime drops the consumer at
-/// end-of-stream, which fires [`Drop`] and delivers the bytes over `done`.
-struct CollectConsumer {
-    buf: Vec<u8>,
-    done: Option<oneshot::Sender<Vec<u8>>>,
-}
-
-impl Drop for CollectConsumer {
-    fn drop(&mut self) {
-        if let Some(tx) = self.done.take() {
-            let _ = tx.send(std::mem::take(&mut self.buf));
-        }
-    }
-}
-
-impl<D> StreamConsumer<D> for CollectConsumer {
-    type Item = u8;
-
-    fn poll_consume(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        store: StoreContextMut<D>,
-        src: Source<Self::Item>,
-        finish: bool,
-    ) -> Poll<wasmtime::Result<StreamResult>> {
-        let this = self.get_mut();
-        let mut src = src.as_direct(store);
-        let bytes = src.remaining();
-        if bytes.is_empty() {
-            // No items offered (count == 0). This is an unbounded in-memory sink,
-            // so it is always ready to accept. The actual end-of-stream is observed via `Drop`.
-            return Poll::Ready(Ok(if finish {
-                StreamResult::Cancelled
-            } else {
-                StreamResult::Completed
-            }));
-        }
-        let n = bytes.len();
-        this.buf.extend_from_slice(bytes);
-        src.mark_read(n);
-        Poll::Ready(Ok(StreamResult::Completed))
-    }
-}
 
 /// A blobstore [`HostPlugin`] that multiplexes async `wasmcloud:blobstore`
 /// across backends selected per `(implements ..)` import. Shares the

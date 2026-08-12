@@ -76,6 +76,10 @@ pub use component_plugin_spec::ComponentPluginSpec;
 #[cfg(feature = "wasm_component_model_implements")]
 pub mod multiplex;
 
+/// Shared bounded `stream<u8>` collection for host impls whose backend takes a
+/// complete payload.
+pub(crate) mod stream_collect;
+
 #[cfg(all(
     feature = "wasi-webgpu",
     not(target_os = "windows"),

@@ -152,6 +152,36 @@ macro_rules! async_messaging_conversions {
 
 pub(crate) use async_messaging_conversions;
 
+/// Expands `render_handle_error`, which renders one `bindgen!`-generated
+/// `@0.3.0` `handle-message-error` for the host's ack/log path: the payload-less
+/// dispositions as their case name, `other` keeping its detail.
+///
+/// Same reason as [`async_messaging_conversions`] — every module binding the
+/// handler gets its own generated disposition type — but a separate macro
+/// because the two are needed in different places: the multiplexed plugin
+/// lowers errors without ever invoking a handler, and the trigger service
+/// invokes a handler without lowering errors.
+///
+/// The rendered strings are a host-observable contract (the delivery outcome a
+/// backend logs, and what the trigger-service tests assert on), so every path
+/// that reports a disposition has to spell it the same way.
+macro_rules! messaging_disposition_rendering {
+    (disposition: $disposition:ty $(,)?) => {
+        fn render_handle_error(e: $disposition) -> String {
+            // Aliased because a variant cannot be named through a qualified
+            // path in a pattern, which is all an interpolated type is.
+            type Disposition = $disposition;
+            match e {
+                Disposition::Reject => "reject".to_string(),
+                Disposition::Retry => "retry".to_string(),
+                Disposition::Other(d) => format!("other: {d}"),
+            }
+        }
+    };
+}
+
+pub(crate) use messaging_disposition_rendering;
+
 /// Drain a `@0.3.0` message body (`stream<u8>`) into memory.
 ///
 /// The `@0.3.0` WIT carries bodies as native streams, but every current backend
@@ -161,15 +191,11 @@ pub(crate) use async_messaging_conversions;
 /// forward a stream incrementally can bypass this helper.
 ///
 /// One helper serves every plugin because [`StreamReader`] is a wasmtime type,
-/// not a `bindgen!`-generated one. An `Err` from the oneshot means the consumer
-/// was torn down without observing end-of-stream, which is surfaced as a
-/// [`MsgError`] rather than silently treating the body as empty.
+/// not a `bindgen!`-generated one; it wraps the shared
+/// [`collect_stream`](crate::plugin::stream_collect::collect_stream) with
+/// messaging's cap and error vocabulary.
 ///
-/// Collection is bounded by [`MAX_COLLECTED_BODY_BYTES`]: past the cap it fails
-/// with `message-too-large` without buffering the excess, so a guest streaming
-/// unboundedly cannot balloon host memory — the send-side broker limit (NATS
-/// `max_payload`) only rejects a message AFTER it is fully in memory, which is
-/// too late to be the bound.
+/// [`StreamReader`]: wasmtime::component::StreamReader
 pub(crate) async fn collect_body<T, D>(
     accessor: &wasmtime::component::Accessor<T, D>,
     body: wasmtime::component::StreamReader<u8>,
@@ -178,23 +204,15 @@ where
     T: 'static,
     D: wasmtime::component::HasData,
 {
-    let (tx, rx) = tokio::sync::oneshot::channel::<Result<Vec<u8>, MsgError>>();
-    accessor.with(|mut a| {
-        body.pipe(
-            &mut a,
-            CollectConsumer {
-                buf: Vec::new(),
-                limit: MAX_COLLECTED_BODY_BYTES,
-                done: Some(tx),
-            },
-        )
-    })?;
-    Ok(match rx.await {
-        Ok(outcome) => outcome,
-        Err(_) => Err(MsgError::Other(
-            "message body stream ended without delivering data".to_string(),
-        )),
-    })
+    use crate::plugin::stream_collect::{CollectError, collect_stream};
+    Ok(collect_stream(accessor, body, MAX_COLLECTED_BODY_BYTES)
+        .await?
+        .map_err(|e| match e {
+            // The one collection failure with a named WIT case: the guest
+            // wrote a body no broker would have taken anyway.
+            e @ CollectError::LimitExceeded { .. } => MsgError::MessageTooLarge(e.to_string()),
+            e @ CollectError::Abandoned => MsgError::Other(e.to_string()),
+        }))
 }
 
 /// Upper bound on a collected message body, bounding host memory against a
@@ -203,69 +221,6 @@ where
 /// so the broker's own limit stays the effective one for sendable messages and
 /// this cap only stops runaway streams.
 const MAX_COLLECTED_BODY_BYTES: usize = 16 * 1024 * 1024;
-
-/// A [`StreamConsumer`] that accumulates every byte the guest writes and hands
-/// the buffer back once the stream ends. The runtime drops the consumer at
-/// end-of-stream, which fires [`Drop`] and delivers the bytes over `done`.
-/// Mirrors the blobstore `write-data` consumer.
-///
-/// [`StreamConsumer`]: wasmtime::component::StreamConsumer
-struct CollectConsumer {
-    buf: Vec<u8>,
-    limit: usize,
-    done: Option<tokio::sync::oneshot::Sender<Result<Vec<u8>, MsgError>>>,
-}
-
-impl Drop for CollectConsumer {
-    fn drop(&mut self) {
-        if let Some(tx) = self.done.take() {
-            let _ = tx.send(Ok(std::mem::take(&mut self.buf)));
-        }
-    }
-}
-
-impl<D> wasmtime::component::StreamConsumer<D> for CollectConsumer {
-    type Item = u8;
-
-    fn poll_consume(
-        self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-        store: wasmtime::StoreContextMut<D>,
-        src: wasmtime::component::Source<Self::Item>,
-        finish: bool,
-    ) -> std::task::Poll<wasmtime::Result<wasmtime::component::StreamResult>> {
-        use wasmtime::component::StreamResult;
-        let this = self.get_mut();
-        let mut src = src.as_direct(store);
-        let bytes = src.remaining();
-        if bytes.is_empty() {
-            // No items offered (count == 0). This is an unbounded in-memory
-            // sink, so it is always ready to accept; the actual end-of-stream
-            // is observed via `Drop`.
-            return std::task::Poll::Ready(Ok(if finish {
-                StreamResult::Cancelled
-            } else {
-                StreamResult::Completed
-            }));
-        }
-        let n = bytes.len();
-        if this.buf.len().saturating_add(n) > this.limit {
-            // Refuse the excess instead of buffering it; delivering the error
-            // here (rather than via `Drop`) is what lets the caller see
-            // `message-too-large` instead of a truncated body.
-            if let Some(tx) = this.done.take() {
-                let _ = tx.send(Err(MsgError::MessageTooLarge(format!(
-                    "message body exceeded the host collection limit of {} bytes",
-                    this.limit
-                ))));
-            }
-            return std::task::Poll::Ready(Ok(StreamResult::Cancelled));
-        }
-        this.buf.extend_from_slice(bytes);
-        src.mark_read(n);
-        std::task::Poll::Ready(Ok(StreamResult::Completed))
-    }
-}
 
 /// Mint a `stream<u8>` carrying `bytes`, for handing a message body to a guest.
 pub(crate) fn mint_body<T, D>(
@@ -401,17 +356,8 @@ macro_rules! messaging_handler_dispatch {
             }
         }
 
-        /// Render the `@0.3.0` handler disposition for the ack/log path:
-        /// payload-less cases as the case name, `other` keeping its detail.
-        fn render_handle_error(
-            e: $async::wasmcloud::messaging0_3_0::types::HandleMessageError,
-        ) -> String {
-            use $async::wasmcloud::messaging0_3_0::types::HandleMessageError as E;
-            match e {
-                E::Reject => "reject".to_string(),
-                E::Retry => "retry".to_string(),
-                E::Other(d) => format!("other: {d}"),
-            }
+        $crate::plugin::wasmcloud_messaging::messaging_disposition_rendering! {
+            disposition: $async::wasmcloud::messaging0_3_0::types::HandleMessageError,
         }
     };
 }

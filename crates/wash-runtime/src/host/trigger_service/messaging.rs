@@ -28,6 +28,12 @@ use bindings::wasmcloud::messaging0_3_0::types::{
     BrokerMessage as WitBrokerMessage, HandleMessageError,
 };
 
+// The disposition strings a delivery reports are shared with the standalone
+// plugins' per-message path, so they come from one place.
+crate::plugin::wasmcloud_messaging::messaging_disposition_rendering! {
+    disposition: HandleMessageError,
+}
+
 /// An inbound message delivered to the service's `wasmcloud:messaging/handler`
 /// export. Bytes rather than a stream: the host-side ingress receives a bounded
 /// payload from its backend, and the per-invocation task mints the `stream<u8>`
@@ -147,16 +153,6 @@ impl AccessorTask<SharedCtx> for MessagingTask {
                 Err(e.context("messaging handler trapped; restarting the trigger service"))
             }
         }
-    }
-}
-
-/// Render the handler's `handle-message-error` disposition for the ack/log
-/// path: payload-less cases as the case name, `other` keeping its detail.
-fn render_handle_error(e: HandleMessageError) -> String {
-    match e {
-        HandleMessageError::Reject => "reject".to_string(),
-        HandleMessageError::Retry => "retry".to_string(),
-        HandleMessageError::Other(d) => format!("other: {d}"),
     }
 }
 
