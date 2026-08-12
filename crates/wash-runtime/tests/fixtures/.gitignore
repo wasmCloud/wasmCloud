@@ -11,7 +11,3 @@
 # Build artifacts
 */target/
 target/
-
-# messaging-dual-handler needs BOTH wasmcloud:messaging versions, which no wkg
-# override can serve; its deps are committed instead (see its wit/world.wit).
-!messaging-dual-handler/wit/deps/
