@@ -90,7 +90,7 @@ pub struct Component {
     /// duration of the handler call, so this is simultaneously the ceiling on
     /// instances the subscription may create. Unset or below `1` takes the
     /// host default; see
-    /// [`crate::plugin::wasmcloud_messaging::AdmissionLimits`].
+    /// [`crate::plugin::wasmcloud_messaging::MessagingLimits`].
     ///
     /// Unlike the pool limits above this is a hard ceiling, and unlike
     /// `max_concurrency` it is a per-component total rather than a per-instance
