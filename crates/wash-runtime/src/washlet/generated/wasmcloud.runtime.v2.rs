@@ -510,6 +510,18 @@ pub struct LocalResources {
     pub allowed_ip_name_lookups: ::prost::alloc::vec::Vec<
         ::prost::alloc::string::String,
     >,
+    /// Ports on the machine's own loopback this component may reach through
+    /// `host.wasmcloud.internal`. Each entry is a port with an optional
+    /// protocol: "5432", "5432/tcp", "53/udp".
+    ///
+    /// An empty or absent list denies every host-loopback connection, and a
+    /// non-empty one is inert unless the host was started with
+    /// --allow-host-loopback: neither the workload author nor the operator can
+    /// open this door alone.
+    #[prost(string, repeated, tag = "8")]
+    pub allowed_host_loopback_ports: ::prost::alloc::vec::Vec<
+        ::prost::alloc::string::String,
+    >,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Volume {
