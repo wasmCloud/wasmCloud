@@ -116,7 +116,6 @@ pub async fn start_postgres_workload(
                 pool_size: 1,
                 max_invocations: 100,
                 max_concurrency: 1,
-                max_in_flight: 0,
             }],
             host_interfaces: vec![
                 http_incoming_handler_interface(host_header, None),

@@ -72,6 +72,7 @@ fastrand = { workspace = true }
 futures = { workspace = true }
 hostname = { workspace = true }
 http = { workspace = true }
+humantime = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper-rustls = { workspace = true, features = ["http1", "http2", "tls12", "aws-lc-rs"] }

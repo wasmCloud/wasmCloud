@@ -97,25 +97,7 @@ struct ComponentData {
     admission: super::Admission,
 }
 
-/// Returns whether `subject` matches NATS subscription `pattern`, where `*`
-/// matches exactly one token and `>` matches one or more trailing tokens.
-fn subject_matches(pattern: &str, subject: &str) -> bool {
-    let mut subject_tokens = subject.split('.');
-    let mut pattern_tokens = pattern.split('.').peekable();
-    while let Some(pat) = pattern_tokens.next() {
-        if pat == ">" {
-            // `>` is only valid as the final token and matches one or more
-            // remaining subject tokens.
-            return pattern_tokens.peek().is_none() && subject_tokens.next().is_some();
-        }
-        match subject_tokens.next() {
-            Some(sub) if pat == "*" || pat == sub => continue,
-            _ => return false,
-        }
-    }
-    // Every pattern token matched; the subject must be fully consumed too.
-    subject_tokens.next().is_none()
-}
+use super::subject_matches;
 
 /// Whether any of a component's `subscriptions` match `subject`. An empty
 /// subscription list matches everything (single-handler back-compat).
@@ -509,12 +491,28 @@ impl HostPlugin for InMemoryMessaging {
         // Per-component subscriptions come from this component's
         // `LocalResources.config` (set via `dev.components[].config` or a
         // WorkloadDeployment), so workers in one workload can subscribe to
-        // different subjects.
+        // different subjects. `max_in_flight` is read from the same place for
+        // the same reason: both are messaging-plugin configuration, scoped to
+        // one component.
         let subscriptions = super::parse_subscriptions(
             component_handle
                 .local_resources()
                 .config
                 .get("subscriptions")
+                .map(String::as_str),
+        );
+        let max_in_flight = super::parse_max_in_flight(
+            component_handle
+                .local_resources()
+                .config
+                .get(super::MAX_IN_FLIGHT_CONFIG)
+                .map(String::as_str),
+        );
+        let admission_wait = super::parse_admission_wait(
+            component_handle
+                .local_resources()
+                .config
+                .get(super::ADMISSION_WAIT_CONFIG)
                 .map(String::as_str),
         );
 
@@ -523,13 +521,11 @@ impl HostPlugin for InMemoryMessaging {
         // subscriber loop is set up either way (and its receive loop delivers to
         // the running service when one is registered).
         if super::exports_messaging_handler(&component_handle.world()) {
-            // A long-lived handler service has no per-message instance to
-            // bound; resolve the default so the tracker entry is uniform.
-            let max_in_flight = match component_handle {
-                WorkloadItem::Component(component) => component.max_in_flight(),
-                WorkloadItem::Service(_) => 0,
-            };
-            let admission = self.limits.admission(max_in_flight);
+            let admission = self
+                .limits
+                .admission(max_in_flight)
+                .with_admission_wait(admission_wait)
+                .with_subscriptions(&subscriptions);
             debug!(
                 ?subscriptions,
                 max_in_flight = admission.limit(),
@@ -760,6 +756,11 @@ impl HostPlugin for InMemoryMessaging {
         let workload_cleanup = |_| async {};
         let component_cleanup = |component_data: ComponentData| async move {
             component_data.cancel_token.cancel();
+            // Wakes a loop parked on a saturated gate with `Admitted::Closed`.
+            // The token above covers the same case; this makes the closed
+            // semaphore a real signal rather than a documented one that only
+            // tests ever produce.
+            component_data.admission.close();
             if let Some(handle) = component_data.task_handle {
                 handle.abort();
             }

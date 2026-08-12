@@ -101,7 +101,6 @@ fn workload(
                 pool_size: 1,
                 max_invocations: 100,
                 max_concurrency: 1,
-                max_in_flight: 0,
             }],
             host_interfaces,
             volumes: vec![],

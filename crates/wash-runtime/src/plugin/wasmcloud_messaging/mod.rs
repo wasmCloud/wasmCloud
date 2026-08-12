@@ -1,3 +1,33 @@
+//! The `wasmcloud:messaging` host plugin, over NATS or an in-memory broker.
+//!
+//! # Per-component configuration
+//!
+//! Every knob below is read from the component's `LocalResources.config` —
+//! `dev.components[].config` in a `wash dev` config, or `localResources.config`
+//! on a workload — falling back to the workload-scoped `wasmcloud:messaging`
+//! host-interface config where the backend supports it. All are optional.
+//!
+//! | Key | Value | Unset |
+//! | --- | --- | --- |
+//! | `subscriptions` | Comma-separated subjects, NATS wildcards allowed (`orders.*`, `audit.>`) | Receive everything |
+//! | `consumer_group` | Queue-group name, or `broadcast` for no grouping (NATS only) | A name derived from namespace/workload/component |
+//! | `max_in_flight` | Messages this component may process at once | The host's per-component default |
+//! | `admission_wait` | How long to wait for a slot before shedding (`45s`, `2m`, or bare seconds) | [`DEFAULT_ADMISSION_WAIT`] |
+//!
+//! ```yaml
+//! localResources:
+//!   config:
+//!     subscriptions: "orders.*.created,audit.>"
+//!     max_in_flight: "64"
+//!     admission_wait: "5m"     # this handler is slow on purpose
+//! ```
+//!
+//! `max_in_flight` is a **per-component total**, unlike `max_concurrency`
+//! (per warm instance), and is separately bounded by the host-wide ceiling —
+//! see [`MessagingLimits`]. `admission_wait` is per component rather than per
+//! host because the right answer depends on the handler: minutes-long work
+//! wants to queue, interactive work wants to shed and stay responsive.
+
 mod in_memory;
 #[cfg(feature = "wasm_component_model_implements")]
 mod multiplexed;
@@ -384,17 +414,23 @@ macro_rules! messaging_handler_dispatch {
 
 pub(crate) use messaging_handler_dispatch;
 
-/// What an unset `maxInFlight` resolves to: how many messages one component
-/// may process at once.
+/// What an unset per-component ceiling resolves to **when pooling is
+/// disabled**: how many messages one component may process at once.
 ///
 /// A messaging-triggered component gets a fresh instance per message, so this
 /// is equally a ceiling on instances. 32 of a Componentize-Go component (the
 /// worst measured shape, at 5 core instances each) is 160 core instances —
-/// a bound on one workload's blast radius, well inside the host's pool.
+/// a bound on one workload's blast radius.
+///
+/// On a pooled host this constant does not apply: `per_component_ceiling`
+/// divides whatever host total is in force, so the number moves with the pool
+/// and with `--wasmcloud-messaging-max-in-flight`. The stock pool derives 33.
+/// See [`DEFAULT_MAX_IN_FLIGHT_HOST`] for the arithmetic.
 pub const DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT: usize = 32;
 
-/// What the host-wide ceiling defaults to: how many messages *every* messaging
-/// component on this host may process at once, added together.
+/// What the host-wide ceiling defaults to **when pooling is disabled**: how
+/// many messages *every* messaging component on this host may process at once,
+/// added together.
 ///
 /// The per-component ceiling alone does not bound the host — twenty components
 /// at 32 is 640 in flight, which at 5 core instances apiece is 3200 against a
@@ -404,6 +440,18 @@ pub const DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT: usize = 32;
 /// roughly a third of the pool for HTTP-triggered work, warm pools, and
 /// long-lived services — the workloads that otherwise fail to *start* when a
 /// messaging burst drains the pool.
+///
+/// With a pool to divide, `derive_host_ceiling` computes that same share from
+/// the pool the host actually has rather than from the stock one, so resizing
+/// `total_core_instances` resizes the ceiling with it. The stock pool of 1000
+/// derives 133 host-wide and 33 per component — close to these constants but
+/// not equal to them, because the derivation takes two-thirds of 200 rather
+/// than the round number below it. This constant is the fallback for the one
+/// case where there is no budget to divide.
+///
+/// `the_documented_defaults_are_what_the_host_uses` pins both pairs, so the
+/// numbers quoted here and in `--wasmcloud-messaging-max-in-flight`'s help
+/// cannot drift away from what the host resolves.
 ///
 /// This is a bound, not a reservation: nothing is preallocated, so the default
 /// costs nothing on a host that never bursts.
@@ -460,29 +508,58 @@ const SATURATED_COMPONENTS_PER_HOST: u32 = 4;
 /// usable; the cap stops a host with an enormous one producing a number so
 /// large it stops being a bound at all. Mirrors
 /// `MIN/MAX_DERIVED_MAX_CONNECTIONS` in [`crate::host::quota`].
+///
+/// The floor is itself bounded by what the pool can hold — see
+/// [`derive_host_ceiling`]. A floor that raised the ceiling above the pool's
+/// own capacity would admit more work than the pool can instantiate, which is
+/// the exact exhaustion these ceilings exist to prevent.
 const MIN_DERIVED_IN_FLIGHT: usize = 8;
 const MAX_DERIVED_IN_FLIGHT: usize = 4096;
 
-/// Derive the two ceilings from the engine's core-instance budget.
+/// Derive the host-wide ceiling from the engine's core-instance budget.
 ///
 /// `total_core_instances` is [`crate::engine::Engine::total_core_instances`]:
 /// `None` when pooling is off, in which case there is no budget to divide and
-/// the pinned defaults stand. The §1 failure cannot happen without a pool, but
+/// the pinned default stands. The §1 failure cannot happen without a pool, but
 /// the memory bound still applies, so a ceiling is still wanted.
-fn derive_defaults(total_core_instances: Option<u32>) -> (usize, usize) {
+fn derive_host_ceiling(total_core_instances: Option<u32>) -> usize {
     let Some(total) = total_core_instances else {
-        return (
-            DEFAULT_MAX_IN_FLIGHT_HOST,
-            DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT,
-        );
+        return DEFAULT_MAX_IN_FLIGHT_HOST;
     };
+    // Messages the pool could hold if messaging had all of it. `share` is what
+    // messaging may actually claim; `capacity` is the hard wall behind it.
+    // No overflow: `capacity` is at most `u32::MAX / 5`, so the multiply stays
+    // inside `u32`.
     let capacity = total / WORST_CASE_CORE_INSTANCES_PER_COMPONENT;
-    let host = usize::try_from(capacity * MESSAGING_POOL_SHARE_NUM / MESSAGING_POOL_SHARE_DEN)
-        .unwrap_or(MAX_DERIVED_IN_FLIGHT)
-        .clamp(MIN_DERIVED_IN_FLIGHT, MAX_DERIVED_IN_FLIGHT);
-    // Computed from `host`, so it is always <= it: the two cannot contradict.
-    let per_component = (host / SATURATED_COMPONENTS_PER_HOST as usize).max(1);
-    (host, per_component)
+    let share = capacity * MESSAGING_POOL_SHARE_NUM / MESSAGING_POOL_SHARE_DEN;
+    let capacity = usize::try_from(capacity).unwrap_or(MAX_DERIVED_IN_FLIGHT);
+    let share = usize::try_from(share).unwrap_or(MAX_DERIVED_IN_FLIGHT);
+    // The floor may not raise the ceiling past what the pool actually holds.
+    // On a small pool the honest answer is a small number: a host that cannot
+    // run more than two messages at once should say two and shed the rest,
+    // not admit eight and fail at instantiation. `max(1)` because a pool too
+    // small for even one component still has to name some ceiling, and one is
+    // the least wrong of the available answers.
+    let floor = MIN_DERIVED_IN_FLIGHT.min(capacity).max(1);
+    share.clamp(floor, MAX_DERIVED_IN_FLIGHT)
+}
+
+/// The per-component ceiling implied by a host-wide one.
+///
+/// Always derived from the host total that is actually in force — including an
+/// operator-supplied one — so the two knobs compose: raising the host ceiling
+/// raises what a single component may use, and lowering it lowers it. Deriving
+/// this from the *pool* instead would leave `--wasmcloud-messaging-max-in-flight`
+/// unable to raise any individual component past a number the operator never
+/// chose, and could place the per-component default above an explicitly-set
+/// host total.
+///
+/// `max(1)` keeps a host whose total is below
+/// [`SATURATED_COMPONENTS_PER_HOST`] able to run one message at a time rather
+/// than none. The result is never above `host_total`, so the two can never
+/// contradict.
+fn per_component_ceiling(host_total: usize) -> usize {
+    (host_total / SATURATED_COMPONENTS_PER_HOST as usize).max(1)
 }
 
 /// The two-level admission ceiling on messaging-triggered work, built once per
@@ -521,16 +598,22 @@ impl MessagingLimits {
     /// default is indistinguishable downstream from an operator typing the same
     /// number, and the information needed to do better is gone by the time this
     /// runs.
+    ///
+    /// The host total resolves first and the per-component default is derived
+    /// from **that**, not from the pool, so setting one knob moves the other
+    /// with it. Deriving both independently would make
+    /// `--wasmcloud-messaging-max-in-flight 1024` a no-op for every individual
+    /// component, and `--wasmcloud-messaging-max-in-flight 4` produce a
+    /// per-component default above the host total the operator just set.
     pub fn resolve(
         host_total: Option<usize>,
         per_component_default: Option<usize>,
         total_core_instances: Option<u32>,
     ) -> Self {
-        let (derived_host, derived_per_component) = derive_defaults(total_core_instances);
-        Self::new(
-            host_total.unwrap_or(derived_host),
-            per_component_default.unwrap_or(derived_per_component),
-        )
+        let host_total = host_total.unwrap_or_else(|| derive_host_ceiling(total_core_instances));
+        let per_component_default =
+            per_component_default.unwrap_or_else(|| per_component_ceiling(host_total));
+        Self::new(host_total, per_component_default)
     }
 
     /// The largest ceiling either knob may take: what a [`Semaphore`] can hold.
@@ -595,10 +678,11 @@ impl MessagingLimits {
         self.per_component_default
     }
 
-    /// Resolve one component's wire value into its admission gate.
+    /// Resolve one component's configured ceiling into its admission gate.
     ///
-    /// `max_in_flight` is the wire field, where non-positive spells "unset"
-    /// exactly as the other instance limits do.
+    /// `requested` is what [`parse_max_in_flight`] made of the component's
+    /// [`MAX_IN_FLIGHT_CONFIG`] entry: `None` where the component named no
+    /// ceiling of its own.
     ///
     /// An explicit request is clamped to **both** ceilings: the per-component
     /// one, which the operator flag documents as "the most any single component
@@ -612,8 +696,7 @@ impl MessagingLimits {
     /// it was written for should still run: the host it lands on may be smaller
     /// than the one it was sized against, and refusing to start is a worse
     /// answer than running at the ceiling that host can actually offer.
-    pub(crate) fn admission(&self, max_in_flight: i32) -> Admission {
-        let requested = usize::try_from(max_in_flight).ok().filter(|v| *v > 0);
+    pub(crate) fn admission(&self, requested: Option<usize>) -> Admission {
         let ceiling = self.per_component_default.min(self.host_total);
         let resolved = match requested {
             Some(requested) if requested > ceiling => {
@@ -622,7 +705,7 @@ impl MessagingLimits {
                     ceiling,
                     per_component_default = self.per_component_default,
                     host_total = self.host_total,
-                    "component asked for a higher messaging maxInFlight than this host allows; \
+                    "component asked for a higher messaging max_in_flight than this host allows; \
                      clamping to the host's per-component ceiling"
                 );
                 ceiling
@@ -638,6 +721,7 @@ impl MessagingLimits {
             limit: resolved,
             wait: self.admission_wait,
             timeouts: self.timeouts.clone(),
+            subscriptions: Arc::from([]),
         }
     }
 }
@@ -649,6 +733,11 @@ impl MessagingLimits {
 struct AdmissionTimeouts {
     shed: Counter<u64>,
 }
+
+/// Attribute value used when a shed message matches none of the component's
+/// configured patterns — which should not happen, since the message arrived on
+/// one of them, but a metric attribute must never be derived from traffic.
+const UNMATCHED_SUBSCRIPTION: &str = "<unmatched>";
 
 impl AdmissionTimeouts {
     fn new() -> Self {
@@ -662,12 +751,22 @@ impl AdmissionTimeouts {
         }
     }
 
-    fn record(&self, component_id: &str, subject: &str) {
+    /// Record one shed message.
+    ///
+    /// `subscription` is the *configured pattern* the message arrived on, never
+    /// the concrete subject. Cardinality here is bounded by configuration: a
+    /// component has as many patterns as its `subscriptions` names. Attributing
+    /// the concrete subject instead would mint a new series per distinct
+    /// subject under a wildcard subscription — unbounded growth, arriving
+    /// precisely during the flood this counter exists to report, when the
+    /// metrics pipeline can least afford it. The concrete subject is on the
+    /// `warn!` at the call site, where it costs nothing.
+    fn record(&self, component_id: &str, subscription: &str) {
         self.shed.add(
             1,
             &[
                 KeyValue::new("component", component_id.to_string()),
-                KeyValue::new("subject", subject.to_string()),
+                KeyValue::new("subscription", subscription.to_string()),
             ],
         );
     }
@@ -693,6 +792,11 @@ pub(crate) struct Admission {
     limit: usize,
     wait: Duration,
     timeouts: AdmissionTimeouts,
+    /// The component's configured subscription patterns, used to attribute a
+    /// shed message to a pattern rather than to its concrete subject. Set by
+    /// [`Admission::with_subscriptions`] once the backend has parsed them;
+    /// empty until then, and empty is also legitimate (it means "everything").
+    subscriptions: Arc<[String]>,
 }
 
 impl Admission {
@@ -739,7 +843,7 @@ impl Admission {
             Ok(Some(permit)) => Admitted::Slot(permit),
             Ok(None) => Admitted::Closed,
             Err(_) => {
-                self.timeouts.record(component_id, subject);
+                self.timeouts.record(component_id, self.subscription_for(subject));
                 tracing::warn!(
                     %component_id,
                     %subject,
@@ -748,7 +852,7 @@ impl Admission {
                     "no messaging admission slot came free before the deadline; \
                      dropping message. The host or this component is saturated — \
                      raise --wasmcloud-messaging-max-in-flight, raise the component's \
-                     maxInFlight, or reduce inbound rate"
+                     max_in_flight config, or reduce inbound rate"
                 );
                 Admitted::Shed
             }
@@ -758,6 +862,70 @@ impl Admission {
     /// The resolved per-component ceiling, after defaulting and clamping.
     pub(crate) fn limit(&self) -> usize {
         self.limit
+    }
+
+    /// Close this component's gate on teardown, so a loop parked in
+    /// [`Admission::acquire_before_deadline`] wakes with [`Admitted::Closed`]
+    /// and stops.
+    ///
+    /// Only the *component* semaphore is closed. The host one is shared by
+    /// every messaging component on the host and must outlive any single
+    /// component's teardown.
+    ///
+    /// The cancel token also wakes that loop, and both backends select on it,
+    /// so this is belt-and-braces rather than the sole shutdown path — but
+    /// without it `Admitted::Closed` is unreachable outside tests, and a
+    /// documented shutdown signal that never fires is a trap for the next
+    /// reader. Closing is idempotent, so ordering against the token does not
+    /// matter.
+    pub(crate) fn close(&self) {
+        self.component.close();
+    }
+
+    /// Override how long this component's loop waits before shedding, from its
+    /// [`ADMISSION_WAIT_CONFIG`] entry. `None` leaves the host default in
+    /// place.
+    #[must_use]
+    pub(crate) fn with_admission_wait(mut self, wait: Option<Duration>) -> Self {
+        if let Some(wait) = wait {
+            self.wait = wait;
+        }
+        self
+    }
+
+    /// How long this gate waits before shedding.
+    #[cfg(test)]
+    pub(crate) fn wait(&self) -> Duration {
+        self.wait
+    }
+
+    /// Attach the component's configured subscription patterns, so a shed
+    /// message can be attributed to the pattern it arrived on.
+    ///
+    /// Separate from [`MessagingLimits::admission`] because the ceiling and the
+    /// subscriptions are read from different config keys and the backends parse
+    /// them at slightly different points; a builder keeps `admission` from
+    /// growing a second argument every backend has to remember to thread.
+    #[must_use]
+    pub(crate) fn with_subscriptions(mut self, subscriptions: &[String]) -> Self {
+        self.subscriptions = subscriptions.into();
+        self
+    }
+
+    /// The configured pattern `subject` arrived on.
+    ///
+    /// An empty pattern list means "everything" (single-handler back-compat),
+    /// which is itself one bounded value. Anything unmatched falls back to a
+    /// constant rather than to the subject, so this can never return a value
+    /// derived from traffic.
+    fn subscription_for(&self, subject: &str) -> &str {
+        if self.subscriptions.is_empty() {
+            return ">";
+        }
+        self.subscriptions
+            .iter()
+            .find(|pattern| subject_matches(pattern, subject))
+            .map_or(UNMATCHED_SUBSCRIPTION, String::as_str)
     }
 }
 
@@ -796,6 +964,105 @@ pub(crate) fn declares_async_messaging(interfaces: &crate::plugin::WitInterfaces
             && i.package == "messaging"
             && i.version.as_ref().is_some_and(|v| *v >= ASYNC_MIN)
     })
+}
+
+/// Config key naming a component's messaging admission ceiling.
+///
+/// Read from the component's `LocalResources.config`, falling back to the
+/// workload-scoped `wasmcloud:messaging` host interface config — the same two
+/// places, in the same order, as [`parse_subscriptions`]'s `subscriptions` and
+/// the NATS backend's `consumer_group`. This is plugin configuration and only
+/// the messaging plugin reads it, so it travels the way the plugin's other
+/// per-component settings do rather than as a field on a core engine type.
+pub(crate) const MAX_IN_FLIGHT_CONFIG: &str = "max_in_flight";
+
+/// Config key naming how long this component's subscriber loop waits for an
+/// admission slot before shedding.
+///
+/// Read from the same two places as [`MAX_IN_FLIGHT_CONFIG`], and per component
+/// rather than per host because the right answer depends on the handler: a
+/// component whose work legitimately takes minutes wants to wait, and one
+/// serving interactive traffic wants to shed early and stay responsive. A
+/// single host-wide number cannot be right for both, and
+/// [`DEFAULT_ADMISSION_WAIT`] alone would turn a slow handler's queued messages
+/// into dropped ones with no way to say otherwise.
+pub(crate) const ADMISSION_WAIT_CONFIG: &str = "admission_wait";
+
+/// Parses an [`ADMISSION_WAIT_CONFIG`] value into a wait duration.
+///
+/// Accepts what `humantime` accepts — `30s`, `5m`, `1m30s`, `500ms` — and a
+/// bare integer as seconds, since that is what an operator used to plain
+/// numeric knobs is most likely to write. `None` for absent, empty, or
+/// unparseable; the caller falls back to [`DEFAULT_ADMISSION_WAIT`].
+///
+/// A zero wait is honored rather than treated as unset: "shed immediately if no
+/// slot is free" is a coherent policy for latency-sensitive work, and unlike a
+/// zero *ceiling* it does not mean "process nothing" — it means "do not queue".
+pub(crate) fn parse_admission_wait(raw: Option<&str>) -> Option<Duration> {
+    let raw = raw.map(str::trim).filter(|s| !s.is_empty())?;
+    if let Ok(secs) = raw.parse::<u64>() {
+        return Some(Duration::from_secs(secs));
+    }
+    match humantime::parse_duration(raw) {
+        Ok(d) => Some(d),
+        Err(_) => {
+            tracing::warn!(
+                config_key = ADMISSION_WAIT_CONFIG,
+                value = raw,
+                default = ?DEFAULT_ADMISSION_WAIT,
+                "messaging admission_wait is not a duration (expected e.g. `45s`, `2m`, \
+                 or a bare number of seconds); falling back to the default"
+            );
+            None
+        }
+    }
+}
+
+/// Parses a [`MAX_IN_FLIGHT_CONFIG`] value into an explicit ceiling.
+///
+/// `None` — absent, empty, unparseable, or zero — means "unset", which
+/// [`MessagingLimits::admission`] resolves to the host's per-component default.
+/// A malformed value warns rather than failing the component: a typo in one
+/// tuning knob should not stop a workload from starting, and the default it
+/// falls back to is the safe direction.
+pub(crate) fn parse_max_in_flight(raw: Option<&str>) -> Option<usize> {
+    let raw = raw.map(str::trim).filter(|s| !s.is_empty())?;
+    match raw.parse::<usize>() {
+        // Zero spells "unset" here for the same reason it does on the pool
+        // limits: it can only have meant "no ceiling of my own", never
+        // "process no messages".
+        Ok(0) => None,
+        Ok(v) => Some(v),
+        Err(_) => {
+            tracing::warn!(
+                config_key = MAX_IN_FLIGHT_CONFIG,
+                value = raw,
+                "messaging max_in_flight is not a non-negative integer; \
+                 falling back to the host's per-component default"
+            );
+            None
+        }
+    }
+}
+
+/// Returns whether `subject` matches NATS subscription `pattern`, where `*`
+/// matches exactly one token and `>` matches one or more trailing tokens.
+pub(crate) fn subject_matches(pattern: &str, subject: &str) -> bool {
+    let mut subject_tokens = subject.split('.');
+    let mut pattern_tokens = pattern.split('.').peekable();
+    while let Some(pat) = pattern_tokens.next() {
+        if pat == ">" {
+            // `>` is only valid as the final token and matches one or more
+            // remaining subject tokens.
+            return pattern_tokens.peek().is_none() && subject_tokens.next().is_some();
+        }
+        match subject_tokens.next() {
+            Some(sub) if pat == "*" || pat == sub => continue,
+            _ => return false,
+        }
+    }
+    // Every pattern token matched; the subject must be fully consumed too.
+    subject_tokens.next().is_none()
 }
 
 /// Parses a comma-separated `subscriptions` config value into trimmed,
@@ -947,22 +1214,152 @@ mod tests {
     #[test]
     fn unset_resolves_to_the_per_component_default() {
         let limits = MessagingLimits::default();
-        // Non-positive is how the wire spells "unset", for all three of the
-        // signed limits. Every spelling must land on the same default.
-        for unset in [0, -1, i32::MIN] {
+        assert_eq!(
+            limits.admission(None).limit(),
+            DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT,
+        );
+    }
+
+    #[test]
+    fn every_spelling_of_unset_parses_to_none() {
+        // The config value is a string now, so "unset" has more spellings than
+        // the wire's non-positive integer had: absent, empty, whitespace, zero,
+        // and anything that is not a number at all. All must reach the host
+        // default rather than a ceiling of their own.
+        for unset in [None, Some(""), Some("   "), Some("0"), Some("-1")] {
             assert_eq!(
-                limits.admission(unset).limit(),
-                DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT,
-                "{unset} should resolve to the default"
+                super::parse_max_in_flight(unset),
+                None,
+                "{unset:?} should parse as unset"
+            );
+        }
+        // A typo must not take the workload down with it.
+        assert_eq!(super::parse_max_in_flight(Some("thirty-two")), None);
+        assert_eq!(super::parse_max_in_flight(Some("32.5")), None);
+    }
+
+    #[test]
+    fn the_two_knobs_compose() {
+        // Setting one knob must move the other with it. Deriving both from the
+        // pool independently made `--wasmcloud-messaging-max-in-flight` a no-op
+        // for any individual component: the host ceiling rose and every
+        // component stayed pinned at the pool-derived per-component default.
+        let raised = MessagingLimits::resolve(Some(1024), None, Some(1000));
+        assert_eq!(raised.host_total(), 1024);
+        assert!(
+            raised.per_component_default() > DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT,
+            "raising the host ceiling must raise what one component may use, got {}",
+            raised.per_component_default()
+        );
+
+        // And in the other direction: lowering the host total must not leave a
+        // per-component default sitting above it.
+        let lowered = MessagingLimits::resolve(Some(4), None, Some(1000));
+        assert_eq!(lowered.host_total(), 4);
+        assert!(
+            lowered.per_component_default() <= lowered.host_total(),
+            "per-component default {} exceeds the host total {} the operator set",
+            lowered.per_component_default(),
+            lowered.host_total()
+        );
+    }
+
+    #[test]
+    fn the_per_component_default_never_exceeds_the_host_total() {
+        // The invariant the code documents, across every combination of "the
+        // operator said something" and "the operator said nothing".
+        for host in [None, Some(1), Some(4), Some(128), Some(1024)] {
+            for pool in [None, Some(16), Some(1000), Some(64_000)] {
+                let limits = MessagingLimits::resolve(host, None, pool);
+                assert!(
+                    limits.per_component_default() <= limits.host_total(),
+                    "host={host:?} pool={pool:?} produced per_component {} > host {}",
+                    limits.per_component_default(),
+                    limits.host_total()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_small_pool_is_not_floored_above_its_own_capacity() {
+        // The floor exists to keep a tiny host usable, but clamping *up* past
+        // what the pool holds admits work the pool cannot instantiate — the
+        // exact exhaustion these ceilings exist to prevent. A 16-instance pool
+        // holds 3 components at the worst-case 5 core instances each, so the
+        // ceiling may not be the unclamped floor of 8.
+        for total in [4u32, 5, 16, 32] {
+            let limits = MessagingLimits::resolve(None, None, Some(total));
+            let admitted_core_instances =
+                limits.host_total() * super::WORST_CASE_CORE_INSTANCES_PER_COMPONENT as usize;
+            assert!(
+                admitted_core_instances <= total as usize || limits.host_total() == 1,
+                "pool of {total} core instances derived a ceiling of {} messages, \
+                 which needs {admitted_core_instances} core instances",
+                limits.host_total()
             );
         }
     }
 
     #[test]
+    fn a_stock_pool_is_unaffected_by_the_floor() {
+        // The floor only ever binds on a small pool; the stock 1000 must still
+        // derive from its share, not from either bound.
+        let limits = MessagingLimits::resolve(None, None, Some(1000));
+        assert!(
+            limits.host_total() > super::MIN_DERIVED_IN_FLIGHT
+                && limits.host_total() < super::MAX_DERIVED_IN_FLIGHT,
+            "the stock pool derived {}, which is one of the bounds, not its share",
+            limits.host_total()
+        );
+    }
+
+    #[test]
+    fn the_documented_defaults_are_what_the_host_uses() {
+        // Every user-facing surface quotes these numbers: the doc comments on
+        // DEFAULT_MAX_IN_FLIGHT_HOST and DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT,
+        // and the help for `--wasmcloud-messaging-max-in-flight` and
+        // `--wasmcloud-messaging-max-in-flight-per-component`. They are two
+        // different pairs — the pinned constants apply only where there is no
+        // pool to divide — and the pooled pair is the one a stock `wash host`
+        // actually runs with, so it is the one prose is most likely to get
+        // wrong. Both are pinned here: changing the derivation, the pool share,
+        // or either constant without rewriting the docs fails this test.
+        let stock_pool = MessagingLimits::resolve(None, None, Some(1000));
+        assert_eq!(stock_pool.host_total(), 133);
+        assert_eq!(stock_pool.per_component_default(), 33);
+
+        let unpooled = MessagingLimits::resolve(None, None, None);
+        assert_eq!(unpooled.host_total(), 128);
+        assert_eq!(unpooled.per_component_default(), 32);
+    }
+
+    #[test]
+    fn the_pinned_defaults_stand_in_the_same_relationship_as_derived_ones() {
+        // The values themselves are pinned by
+        // `the_documented_defaults_are_what_the_host_uses`; what this adds is
+        // the *relationship* between them. The pooled path divides the host
+        // total by SATURATED_COMPONENTS_PER_HOST, so if the two pinned
+        // constants ever drift out of that same ratio, the unpooled and pooled
+        // paths stop meaning the same thing even while both still pass.
+        assert_eq!(
+            super::per_component_ceiling(DEFAULT_MAX_IN_FLIGHT_HOST),
+            DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT
+        );
+    }
+
+    #[test]
+    fn an_explicit_config_value_parses_to_that_ceiling() {
+        assert_eq!(super::parse_max_in_flight(Some("32")), Some(32));
+        // Surrounding whitespace is the most likely YAML artifact.
+        assert_eq!(super::parse_max_in_flight(Some(" 8 ")), Some(8));
+    }
+
+    #[test]
     fn an_explicit_value_is_honored() {
         let limits = MessagingLimits::new(128, 32);
-        assert_eq!(limits.admission(4).limit(), 4);
-        assert_eq!(limits.admission(32).limit(), 32);
+        assert_eq!(limits.admission(Some(4)).limit(), 4);
+        assert_eq!(limits.admission(Some(32)).limit(), 32);
     }
 
     #[test]
@@ -973,17 +1370,17 @@ mod tests {
         // starve every co-tenant component on the host.
         let limits = MessagingLimits::new(128, 32);
         assert_eq!(
-            limits.admission(64).limit(),
+            limits.admission(Some(64)).limit(),
             32,
             "a component asking above the per-component ceiling must be clamped to it"
         );
         assert_eq!(
-            limits.admission(128).limit(),
+            limits.admission(Some(128)).limit(),
             32,
             "asking for the whole host budget must not grant it"
         );
         assert_eq!(
-            limits.admission(i32::MAX).limit(),
+            limits.admission(Some(usize::MAX)).limit(),
             32,
             "nor must asking for everything representable"
         );
@@ -994,9 +1391,9 @@ mod tests {
         // Clamped rather than rejected: a manifest sized against a bigger host
         // should still run on a smaller one, at the ceiling it can offer.
         let limits = MessagingLimits::new(16, 32);
-        assert_eq!(limits.admission(1024).limit(), 16);
+        assert_eq!(limits.admission(Some(1024)).limit(), 16);
         // ...including via the default, when the default itself is the larger.
-        assert_eq!(limits.admission(0).limit(), 16);
+        assert_eq!(limits.admission(None).limit(), 16);
     }
 
     #[test]
@@ -1009,8 +1406,7 @@ mod tests {
             let expected = host.min(per_component);
             for requested in [1, 8, 64, 4096, i32::MAX as usize] {
                 let limit = limits
-                    .admission(i32::try_from(requested).unwrap_or(i32::MAX))
-                    .limit();
+                    .admission(Some(requested)).limit();
                 assert!(
                     limit <= expected,
                     "host={host} per_component={per_component} requested={requested} \
@@ -1018,7 +1414,7 @@ mod tests {
                 );
             }
             assert_eq!(
-                limits.admission(0).limit(),
+                limits.admission(None).limit(),
                 expected,
                 "and so does the default"
             );
@@ -1032,7 +1428,7 @@ mod tests {
         let limits = MessagingLimits::new(0, 0);
         assert_eq!(limits.host_total(), 1);
         assert_eq!(limits.per_component_default(), 1);
-        assert_eq!(limits.admission(0).limit(), 1);
+        assert_eq!(limits.admission(None).limit(), 1);
     }
 
     #[test]
@@ -1054,7 +1450,7 @@ mod tests {
     #[tokio::test]
     async fn admission_bounds_one_component() {
         let limits = MessagingLimits::new(64, 32);
-        let admission = limits.admission(3);
+        let admission = limits.admission(Some(3));
 
         // Bound individually rather than collected: all three must be held at
         // once, and the release below must drop exactly one of them.
@@ -1088,7 +1484,7 @@ mod tests {
     #[tokio::test]
     async fn the_host_total_bounds_every_component_together() {
         let limits = MessagingLimits::new(4, 32);
-        let components: Vec<_> = (0..3).map(|_| limits.admission(32)).collect();
+        let components: Vec<_> = (0..3).map(|_| limits.admission(Some(32))).collect();
 
         let mut held = Vec::new();
         // Round-robin so no single component could have taken all four.
@@ -1122,8 +1518,8 @@ mod tests {
         // A host-permit leak is the worst failure mode here: it silently lowers
         // the ceiling for every component on the host, not just the leaker.
         let limits = MessagingLimits::new(1, 1);
-        let a = limits.admission(1);
-        let b = limits.admission(1);
+        let a = limits.admission(Some(1));
+        let b = limits.admission(Some(1));
 
         let permit = a.acquire().await.expect("first admits");
         assert!(
@@ -1149,8 +1545,8 @@ mod tests {
         // while the waiter still has component slots free — the only shape in
         // which a waiter parks on the host level rather than its own.
         let limits = MessagingLimits::new(2, 8);
-        let blocker = limits.admission(8);
-        let waiter = limits.admission(8);
+        let blocker = limits.admission(Some(8));
+        let waiter = limits.admission(Some(8));
         assert_eq!(waiter.limit(), 2, "clamped to the host total");
 
         let held: Vec<_> = (0..2)
@@ -1186,7 +1582,7 @@ mod tests {
     async fn a_closed_semaphore_ends_the_loop() {
         // How a shutting-down component tells its subscriber loop to stop.
         let limits = MessagingLimits::new(4, 4);
-        let admission = limits.admission(4);
+        let admission = limits.admission(Some(4));
         admission.component.close();
         assert!(
             admission.acquire().await.is_none(),
@@ -1204,10 +1600,17 @@ mod tests {
             limits.per_component_default(),
             MessagingLimits::MAX_IN_FLIGHT
         );
-        // And the gate it mints must be constructible too.
+        // And the gate it mints must be constructible too. The config value is
+        // an unbounded `usize` now rather than a wire `i32`, so a request above
+        // what a semaphore can hold has to clamp here as well.
         assert_eq!(
-            limits.admission(i32::MAX).limit(),
-            i32::MAX as usize,
+            limits.admission(Some(usize::MAX)).limit(),
+            MessagingLimits::MAX_IN_FLIGHT,
+            "a request above the maximum clamps rather than panicking"
+        );
+        assert_eq!(
+            limits.admission(Some(4096)).limit(),
+            4096,
             "an in-range request is still honored at the maximum"
         );
     }
@@ -1219,7 +1622,7 @@ mod tests {
         // log and no metric. Shedding at a known deadline is what makes the
         // loss countable.
         let limits = MessagingLimits::new(1, 1).with_admission_wait(Duration::from_secs(5));
-        let admission = limits.admission(1);
+        let admission = limits.admission(Some(1));
         let _held = admission.acquire().await.expect("first admits");
 
         let outcome = admission.acquire_before_deadline("comp", "subj").await;
@@ -1234,7 +1637,7 @@ mod tests {
         // The deadline must not turn ordinary queueing into loss: a burst that
         // clears within the wait has to be processed, not shed.
         let limits = MessagingLimits::new(1, 1).with_admission_wait(Duration::from_secs(30));
-        let admission = limits.admission(1);
+        let admission = limits.admission(Some(1));
         let held = admission.acquire().await.expect("first admits");
 
         tokio::spawn(async move {
@@ -1254,8 +1657,10 @@ mod tests {
         // Shedding and shutting down are different outcomes: the loop must stop
         // on the latter, not drop one message and go round again.
         let limits = MessagingLimits::new(1, 1).with_admission_wait(Duration::from_secs(30));
-        let admission = limits.admission(1);
-        admission.component.close();
+        let admission = limits.admission(Some(1));
+        // Through the same method teardown calls, so this covers the production
+        // path rather than a semaphore only the test knows how to close.
+        admission.close();
         assert!(
             matches!(
                 admission.acquire_before_deadline("comp", "subj").await,
@@ -1266,9 +1671,131 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn closing_the_gate_wakes_a_loop_already_parked_on_it() {
+        // The point of closing on teardown: a loop parked on a saturated gate
+        // must not sit there until the deadline before noticing it is going
+        // away. The 30s wait would make that obvious if it were still in force.
+        let limits = MessagingLimits::new(1, 1).with_admission_wait(Duration::from_secs(30));
+        let admission = limits.admission(Some(1));
+        let _held = admission.acquire().await.expect("first admits");
+
+        let parked = {
+            let admission = admission.clone();
+            tokio::spawn(async move { admission.acquire_before_deadline("comp", "subj").await })
+        };
+        // Let it reach the semaphore before closing underneath it.
+        tokio::task::yield_now().await;
+        admission.close();
+
+        let outcome = tokio::time::timeout(Duration::from_secs(5), parked)
+            .await
+            .expect("closing must wake the parked loop well inside the deadline")
+            .expect("task panicked");
+        assert!(
+            matches!(outcome, Admitted::Closed),
+            "a parked loop must wake as Closed, not Shed"
+        );
+    }
+
+    #[test]
+    fn only_the_component_gate_closes_not_the_shared_host_one() {
+        // Closing the host semaphore would take every other component on the
+        // host down with the one being torn down.
+        let limits = MessagingLimits::new(4, 2);
+        let going_away = limits.admission(Some(1));
+        let survivor = limits.admission(Some(1));
+        going_away.close();
+        assert!(survivor.host.try_acquire().is_ok(), "host gate must survive");
+        assert!(
+            survivor.component.try_acquire().is_ok(),
+            "an unrelated component's gate must survive"
+        );
+    }
+
+    #[test]
+    fn a_shed_metric_is_attributed_to_the_pattern_not_the_subject() {
+        // Cardinality has to be bounded by configuration, not by traffic: a
+        // wildcard subscription sees unboundedly many concrete subjects, and
+        // the counter fires precisely during the flood that produces them.
+        let limits = MessagingLimits::default();
+        let admission = limits
+            .admission(None)
+            .with_subscriptions(&["orders.*.created".to_string(), "audit.>".to_string()]);
+
+        assert_eq!(
+            admission.subscription_for("orders.12345.created"),
+            "orders.*.created"
+        );
+        assert_eq!(admission.subscription_for("audit.a.b.c"), "audit.>");
+        // Never a value derived from the message itself.
+        assert_eq!(
+            admission.subscription_for("something.else"),
+            super::UNMATCHED_SUBSCRIPTION
+        );
+    }
+
+    #[test]
+    fn no_configured_subscriptions_attributes_to_the_catch_all() {
+        // An empty list means "everything"; that is one bounded value, not a
+        // reason to fall back to the subject.
+        let admission = MessagingLimits::default().admission(None);
+        assert_eq!(admission.subscription_for("anything.at.all"), ">");
+    }
+
+    #[test]
+    fn an_admission_wait_is_read_from_config() {
+        // Durations in the spelling the rest of the CLI uses...
+        assert_eq!(
+            super::parse_admission_wait(Some("45s")),
+            Some(Duration::from_secs(45))
+        );
+        assert_eq!(
+            super::parse_admission_wait(Some("2m")),
+            Some(Duration::from_secs(120))
+        );
+        assert_eq!(
+            super::parse_admission_wait(Some("500ms")),
+            Some(Duration::from_millis(500))
+        );
+        // ...and a bare number, which is what a plain-numeric-knob habit writes.
+        assert_eq!(
+            super::parse_admission_wait(Some("90")),
+            Some(Duration::from_secs(90))
+        );
+        // Zero is a real policy ("do not queue"), not a spelling of unset.
+        assert_eq!(
+            super::parse_admission_wait(Some("0")),
+            Some(Duration::ZERO)
+        );
+        // Unset and malformed both fall back to the host default.
+        for unset in [None, Some(""), Some("  "), Some("soon"), Some("5 parsecs")] {
+            assert_eq!(super::parse_admission_wait(unset), None, "{unset:?}");
+        }
+    }
+
+    #[test]
+    fn a_configured_admission_wait_overrides_the_host_default() {
+        let limits = MessagingLimits::default();
+        assert_eq!(limits.admission(None).wait(), super::DEFAULT_ADMISSION_WAIT);
+        assert_eq!(
+            limits
+                .admission(None)
+                .with_admission_wait(Some(Duration::from_secs(300)))
+                .wait(),
+            Duration::from_secs(300),
+            "a slow handler must be able to ask for a longer wait than the host default"
+        );
+        // Unset leaves the host default alone.
+        assert_eq!(
+            limits.admission(None).with_admission_wait(None).wait(),
+            super::DEFAULT_ADMISSION_WAIT
+        );
+    }
+
+    #[tokio::test]
     async fn permits_are_handed_out_in_arrival_order() {
         let limits = MessagingLimits::new(8, 1);
-        let admission = limits.admission(1);
+        let admission = limits.admission(Some(1));
         let held = admission.acquire().await.expect("first admits");
 
         let order = Arc::new(AtomicUsize::new(0));
