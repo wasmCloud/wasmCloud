@@ -20,13 +20,11 @@ uploads, tag listing, and the referrers API.
 ## Prerequisites
 
 - `cargo` (Rust 2024 edition)
-- A `wash` built from the [`async-backends`][async-backends] line — it provides
-  the async `wasmcloud:blobstore` host plugin (on by default via the
-  `wasm_component_model_implements` feature) and a `wash` CLI that can build and
-  run wasip3 components. A released `wash` (≤ 2.x) does not yet support this.
+- `wash` 2.7.0 or later — stock releases build and run wasip3 components,
+  enable the async `wasmcloud:blobstore` backend by default, and ship the
+  built-in `wasmcloud:secrets` plugin that delivers the registry's Basic auth
+  credentials from bind-time config.
 - Optional, for the walkthrough: [`oras`](https://oras.land/docs/installation)
-
-[async-backends]: https://github.com/wasmCloud/wasmCloud/pull/5297
 
 ## Running with wash
 
@@ -37,9 +35,11 @@ wash dev
 This builds the component and serves it on [http://localhost:8000](http://localhost:8000),
 wiring up an HTTP server and the async blobstore host plugin.
 
-The `dev.host_interfaces` entry in `.wash/config.yaml` routes the `(implements ..)`
-blobstore label `store` to the **filesystem** backend rooted at `tmp/blobstore`,
-so registry contents persist across `wash dev` restarts:
+The `dev.host_interfaces` entries in `.wash/config.yaml` route the blobstore
+import to the **filesystem** backend rooted at `tmp/blobstore` (so registry
+contents persist across `wash dev` restarts) and supply the Basic auth
+credentials through the built-in `wasmcloud:secrets` plugin — without the
+secrets entry, the registry denies every request:
 
 ```yaml
 dev:
@@ -48,10 +48,15 @@ dev:
       package: blobstore
       interfaces: [blobstore]
       version: "0.1.0"
-      name: store              # matches the `import store:` label in wit/world.wit
       config:
-        backend: filesystem    # omit host_interfaces entirely to use in-memory
+        backend: filesystem    # omit this entry to use in-memory
         root: tmp/blobstore
+    - namespace: wasmcloud
+      package: secrets
+      interfaces: [store, reveal]
+      config:
+        registry-username: wasmcloud   # change these before exposing the registry
+        registry-password: wasmcloud
 ```
 
 ## Building
@@ -70,8 +75,9 @@ the linker componentizes the result into a wasip3 component (imports
 2. `wasmcloud:blobstore` to persist blobs, manifests, and tags
 3. `wasi:random` to mint upload-session identifiers
 4. `wasmcloud:secrets` (`store` + `reveal`) to supply the HTTP Basic auth
-   credentials (`registry-username` / `registry-password`), served by a
-   secrets backend such as a host component plugin
+   credentials (`registry-username` / `registry-password`), served by the
+   built-in `wasmcloud:secrets` plugin from bind-time config (or by an
+   external secrets backend via a host component plugin)
 
 ## Supported endpoints
 
