@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use crate::plugin::multiplex::BackendProvider;
 
-use super::{BrokerMessage, MsgBackend, MsgId};
+use super::{BrokerMessage, MsgBackend, MsgError, MsgId};
+
+use crate::plugin::wasmcloud_messaging::nats::{classify_publish, classify_request};
 
 /// A NATS-backed [`MsgBackend`]. The provider pools clients by `url`
 /// ([`NatsMsgProvider::pool_key`]), so named imports pointing at the same
@@ -25,15 +27,28 @@ impl MsgBackend for NatsMsgBackend {
         &self,
         subject: String,
         body: Vec<u8>,
-        timeout_ms: u32,
-    ) -> Result<BrokerMessage, String> {
-        let timeout = std::time::Duration::from_millis(timeout_ms as u64);
-        let resp =
-            match tokio::time::timeout(timeout, self.client.request(subject, body.into())).await {
-                Ok(Ok(msg)) => msg,
-                Ok(Err(e)) => return Err(format!("failed to send request: {e}")),
-                Err(_) => return Err(format!("request timed out after {timeout_ms}ms")),
-            };
+        timeout_ms: Option<u32>,
+    ) -> Result<BrokerMessage, MsgError> {
+        // `None` falls through to the NATS client's own request timeout
+        // (10s unless configured otherwise), reported as `TimedOut` and
+        // classified below.
+        let request = self.client.request(subject, body.into());
+        let resp = match timeout_ms {
+            Some(ms) => {
+                let timeout = std::time::Duration::from_millis(ms as u64);
+                match tokio::time::timeout(timeout, request).await {
+                    Ok(Ok(msg)) => msg,
+                    Ok(Err(e)) => return Err(classify_request(&e)),
+                    Err(_) => {
+                        return Err(MsgError::Timeout(format!("request timed out after {ms}ms")));
+                    }
+                }
+            }
+            None => match request.await {
+                Ok(msg) => msg,
+                Err(e) => return Err(classify_request(&e)),
+            },
+        };
         Ok(BrokerMessage {
             subject: resp.subject.to_string(),
             reply_to: resp.reply.as_ref().map(|r| r.to_string()),
@@ -41,7 +56,7 @@ impl MsgBackend for NatsMsgBackend {
         })
     }
 
-    async fn publish(&self, msg: BrokerMessage) -> Result<(), String> {
+    async fn publish(&self, msg: BrokerMessage) -> Result<(), MsgError> {
         let result = if let Some(reply_to) = msg.reply_to {
             self.client
                 .publish_with_reply(msg.subject, reply_to, msg.body.into())
@@ -49,7 +64,7 @@ impl MsgBackend for NatsMsgBackend {
         } else {
             self.client.publish(msg.subject, msg.body.into()).await
         };
-        result.map_err(|e| format!("failed to send message: {e}"))
+        result.map_err(|e| classify_publish(&e))
     }
 }
 

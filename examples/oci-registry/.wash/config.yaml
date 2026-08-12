@@ -17,3 +17,12 @@ dev:
       config:
         backend: filesystem
         root: tmp/blobstore
+    # Basic auth credentials, served by the built-in wasmcloud:secrets plugin.
+    # The registry requires auth on every request; without this entry it
+    # denies everything. Change these before exposing the registry.
+    - namespace: wasmcloud
+      package: secrets
+      interfaces: [store, reveal]
+      config:
+        registry-username: wasmcloud
+        registry-password: wasmcloud

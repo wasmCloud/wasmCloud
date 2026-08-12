@@ -80,7 +80,7 @@ names = { workspace = true }
 redis = { workspace = true }
 semver = { workspace = true }
 sysinfo = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
+uuid = { workspace = true, features = ["v4", "v7"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["sync", "net", "macros"] }
 tracing = { workspace = true }

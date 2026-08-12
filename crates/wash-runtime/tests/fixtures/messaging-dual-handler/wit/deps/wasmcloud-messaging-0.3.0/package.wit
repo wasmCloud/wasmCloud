@@ -1,0 +1,122 @@
+package wasmcloud:messaging@0.3.0;
+
+/// Types common to message broker interactions.
+///
+/// Unlike `wasmcloud:messaging@0.2.0`, every broker operation in this package is an `async func`,
+/// and message bodies are native `stream<u8>` values rather than `list<u8>`. A single component
+/// can keep many publishes and requests in flight at once, and a payload can flow incrementally
+/// instead of being held in memory in its totality.
+interface types {
+  /// A message sent to or received from a broker.
+  ///
+  /// The body is a `stream<u8>`: the payload flows incrementally on both the producing and the
+  /// consuming side, so neither end is required to hold it whole in memory. Hosts whose backend
+  /// cannot stream a message (e.g. core NATS, which sends a message as one bounded payload) MAY
+  /// buffer a body internally before forwarding it — the interface permits streaming without
+  /// requiring every backend to provide it, and a backend that can fan a stream out efficiently
+  /// pays no buffering cost.
+  record broker-message {
+    subject: string,
+    body: stream<u8>,
+    reply-to: option<string>,
+  }
+
+  /// The set of errors which may be raised by broker operations (the `consumer` interface).
+
+  variant error {
+    /// The subject is malformed, empty, or otherwise rejected by the broker.
+    subject-invalid,
+    /// The requesting component is not permitted to publish to this subject.
+    access-denied,
+    /// A `request` did not receive a reply within its `timeout-ms`.
+    timeout,
+    /// The broker is currently unreachable or otherwise unavailable. The operation
+    /// may succeed if retried later.
+    broker-unavailable,
+    /// The message body exceeded the broker's maximum payload size.
+    message-too-large,
+    /// The operation was rejected because a quota or rate limit was exceeded.
+    quota-exceeded,
+    /// Some other implementation-specific error has occurred (e.g. I/O). Used for
+    /// backend-specific failures that do not map to a named case above.
+    other(string),
+  }
+
+  /// The disposition a message handler reports for a delivery it could not process.
+  /// 
+  /// Hosts currently record the disposition; backends with redelivery semantics
+  /// (e.g. NATS JetStream) can map `retry` to a negative acknowledgement and
+  /// `reject` to a terminal one.
+  variant handle-message-error {
+    /// The message cannot be processed, and redelivering the same message will
+    /// not help (malformed payload, unrecognized subject shape, ...).
+    reject,
+    /// Processing failed transiently; redelivering the message later may succeed
+    /// (e.g. a downstream dependency was briefly unavailable).
+    retry,
+    /// Some other handler-specific failure, with detail. Hosts treat it as
+    /// `reject` for redelivery purposes.
+    other(string),
+  }
+}
+
+/// The producing side of a broker: operations a component calls to send messages.
+interface consumer {
+  use types.{broker-message, error};
+
+  /// Perform a request operation on a subject, resolving once the reply arrives.
+  ///
+  /// Because this is an `async func`, a component may have many requests
+  /// outstanding concurrently; awaiting one does not block the instance.
+  ///
+  /// The request `body` is a `stream<u8>` the callee consumes; the reply's body
+  /// streams back inside the returned `broker-message`. `timeout-ms` bounds the
+  /// wait for the reply, measured once the request body has been fully consumed
+  /// and sent — the caller controls how fast its own body is produced, so that
+  /// time is not counted against the broker. Pass `none` to use the backend's
+  /// default request timeout (e.g. the NATS client's configured timeout).
+  ///
+  /// Returns `error::timeout` if no reply arrives in time.
+  request: async func(subject: string, body: stream<u8>, timeout-ms: option<u32>) -> result<broker-message, error>;
+
+  /// Publish a message to a subject without awaiting a response.
+  ///
+  /// Resolving indicates the callee has fully consumed `msg.body` and the broker
+  /// accepted the message — not that any subscriber received it.
+  publish: async func(msg: broker-message) -> result<_, error>;
+}
+
+/// The consuming side of a broker: implemented by components that subscribe.
+interface handler {
+  use types.{broker-message, handle-message-error};
+
+  /// Callback invoked when a message is received from a subscription.
+  ///
+  /// As an `async func` this may await other operations — including
+  /// `consumer.publish` to reply on `msg.reply-to` — while the host continues to
+  /// deliver further messages to the same instance concurrently. The message
+  /// body is a `stream<u8>` the handler drains, or drops to discard the payload.
+  ///
+  /// The error is a per-delivery disposition (`handle-message-error`), not the
+  /// broker `error` — a handler cannot raise transport failures about a message
+  /// it has already received; what it reports is whether redelivery could help.
+  handle-message: async func(msg: broker-message) -> result<_, handle-message-error>;
+}
+
+/// The `wasmcloud:messaging/imports` world is for components that only produce
+/// messages — publishing to subjects and issuing request/reply calls.
+world imports {
+  import types;
+  import consumer;
+}
+
+/// The `wasmcloud:messaging/handler-service` world is implemented by components
+/// that consume a subscription. The host delivers each received message to the
+/// exported `handler`, and the component may also produce messages itself (for
+/// example, to reply on a message's `reply-to` subject).
+world handler-service {
+  import types;
+  import consumer;
+
+  export handler;
+}
