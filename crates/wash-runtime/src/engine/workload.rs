@@ -398,6 +398,11 @@ pub struct WorkloadComponent {
     /// Instances kept warm between ephemeral linked calls. Shared by every
     /// clone of this component, so all importers draw on the one warm set.
     pub(crate) instances: Arc<InstancePool>,
+    /// How many messages this component may process at once when driven by a
+    /// `wasmcloud:messaging` subscription, exactly as the wire carried it —
+    /// non-positive spells "unset", as it does for the pool limits. Decoded by
+    /// the messaging plugin, which is the only thing that reads it.
+    max_in_flight: i32,
 }
 
 impl WorkloadComponent {
@@ -439,7 +444,25 @@ impl WorkloadComponent {
             },
             name: component_name.into(),
             instances: Arc::new(InstancePool::new(instances)),
+            max_in_flight: 0,
         }
+    }
+
+    /// Set the messaging admission ceiling this component asked for.
+    ///
+    /// A builder rather than an eleventh positional argument to
+    /// [`Self::new`]: only the wire-conversion path sets it, and every other
+    /// caller wants the "unset" default.
+    #[must_use]
+    pub fn with_max_in_flight(mut self, max_in_flight: i32) -> Self {
+        self.max_in_flight = max_in_flight;
+        self
+    }
+
+    /// The messaging admission ceiling as the wire carried it. Non-positive
+    /// means unset; the messaging plugin resolves it against the host default.
+    pub fn max_in_flight(&self) -> i32 {
+        self.max_in_flight
     }
 
     /// Pre-instantiate the component to prepare for instantiation.

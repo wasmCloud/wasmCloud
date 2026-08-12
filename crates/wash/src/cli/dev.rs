@@ -437,6 +437,9 @@ struct SidecarComponent {
     pool_size: Option<i32>,
     max_invocations: Option<i32>,
     max_concurrency: Option<i32>,
+    /// Messaging admission ceiling from `dev.components[].maxInFlight`, `None`
+    /// where the config left it unset.
+    max_in_flight: Option<i32>,
 }
 
 /// Thin wrapper around [`build_workload`]: extracts dev-component
@@ -485,6 +488,7 @@ async fn create_workload(
             pool_size: dev_component.pool_size,
             max_invocations: dev_component.max_invocations,
             max_concurrency: dev_component.max_concurrency,
+            max_in_flight: dev_component.max_in_flight,
         });
     }
 
@@ -603,6 +607,7 @@ fn build_workload(
             pool_size: UNSET_LIMIT,
             max_invocations: UNSET_LIMIT,
             max_concurrency: UNSET_LIMIT,
+            max_in_flight: UNSET_LIMIT,
         });
 
         if let Some(service_bytes) = service_bytes {
@@ -627,6 +632,7 @@ fn build_workload(
             pool_size: sidecar.pool_size.unwrap_or(UNSET_LIMIT),
             max_invocations: sidecar.max_invocations.unwrap_or(UNSET_LIMIT),
             max_concurrency: sidecar.max_concurrency.unwrap_or(UNSET_LIMIT),
+            max_in_flight: sidecar.max_in_flight.unwrap_or(UNSET_LIMIT),
         });
     }
 
@@ -814,6 +820,7 @@ mod tests {
             pool_size: None,
             max_invocations: None,
             max_concurrency: None,
+            max_in_flight: None,
         }
     }
 
@@ -1115,6 +1122,7 @@ mod tests {
             pool_size: None,
             max_invocations: None,
             max_concurrency: None,
+            max_in_flight: None,
         }];
 
         let workload = build_workload(

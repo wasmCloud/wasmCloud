@@ -92,6 +92,9 @@ struct ComponentData {
     /// here; the component's processing task drains it.
     inbox: Inbox,
     notify: Arc<Notify>,
+    /// Bounds how many messages this component processes at once, and so how
+    /// many instances the receive loop may create. See [`super::Admission`].
+    admission: super::Admission,
 }
 
 /// Returns whether `subject` matches NATS subscription `pattern`, where `*`
@@ -271,13 +274,25 @@ async fn do_publish(
 pub struct InMemoryMessaging {
     tracker: Arc<RwLock<WorkloadTracker<WorkloadData, ComponentData>>>,
     meters: Arc<RwLock<Meters>>,
+    limits: super::MessagingLimits,
 }
 
 impl InMemoryMessaging {
+    /// Build the backend with the default messaging ceilings
+    /// ([`super::DEFAULT_MAX_IN_FLIGHT_HOST`] /
+    /// [`super::DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT`]).
     pub fn new() -> Self {
+        Self::with_limits(super::MessagingLimits::default())
+    }
+
+    /// Build the backend with operator-configured ceilings. The `limits` carry
+    /// the host-wide semaphore, so pass the *same* value to every messaging
+    /// backend on a host or each gets its own host budget.
+    pub fn with_limits(limits: super::MessagingLimits) -> Self {
         Self {
             tracker: Arc::new(RwLock::new(WorkloadTracker::default())),
             meters: Default::default(),
+            limits,
         }
     }
 
@@ -508,7 +523,18 @@ impl HostPlugin for InMemoryMessaging {
         // subscriber loop is set up either way (and its receive loop delivers to
         // the running service when one is registered).
         if super::exports_messaging_handler(&component_handle.world()) {
-            debug!(?subscriptions, "Tracking component in in-memory messaging");
+            // A long-lived handler service has no per-message instance to
+            // bound; resolve the default so the tracker entry is uniform.
+            let max_in_flight = match component_handle {
+                WorkloadItem::Component(component) => component.max_in_flight(),
+                WorkloadItem::Service(_) => 0,
+            };
+            let admission = self.limits.admission(max_in_flight);
+            debug!(
+                ?subscriptions,
+                max_in_flight = admission.limit(),
+                "Tracking component in in-memory messaging"
+            );
             self.tracker.write().await.add_component(
                 component_handle,
                 ComponentData {
@@ -517,6 +543,7 @@ impl HostPlugin for InMemoryMessaging {
                     subscriptions,
                     inbox: Arc::default(),
                     notify: Arc::new(Notify::new()),
+                    admission,
                 },
             );
         }
@@ -529,13 +556,14 @@ impl HostPlugin for InMemoryMessaging {
         workload: &ResolvedWorkload,
         component_id: &str,
     ) -> anyhow::Result<()> {
-        let (inbox, notify, cancel_token) = {
+        let (inbox, notify, cancel_token, admission) = {
             let lock = self.tracker.read().await;
             match lock.get_component_data(component_id) {
                 Some(data) => (
                     data.inbox.clone(),
                     data.notify.clone(),
                     data.cancel_token.clone(),
+                    data.admission.clone(),
                 ),
                 None => return Ok(()),
             }
@@ -566,7 +594,9 @@ impl HostPlugin for InMemoryMessaging {
         let fuel_meter = self.meters.read().await.fuel_consumption.clone();
 
         let handle = tokio::spawn(async move {
-            loop {
+            // Labelled so the inner drain below can end the whole task on
+            // cancellation or teardown, not just the current drain pass.
+            'task: loop {
                 tokio::select! {
                     _ = cancel_token.cancelled() => {
                         break;
@@ -620,6 +650,28 @@ impl HostPlugin for InMemoryMessaging {
                             );
                             continue;
                         };
+
+                        // Admission. Taken BEFORE the store and instance are
+                        // built and held until the handler returns, so permits
+                        // held and instances alive are the same number. Mirrors
+                        // the NATS backend exactly; see `Admission::acquire`
+                        // for why the component level is taken before the host
+                        // one.
+                        let permit = tokio::select! {
+                            permit = admission.acquire() => match permit {
+                                Some(permit) => permit,
+                                // Closed: the component is going away.
+                                None => break 'task,
+                            },
+                            _ = cancel_token.cancelled() => {
+                                debug!(
+                                    component_id = %component_id,
+                                    "in-memory receive loop cancelled while awaiting admission"
+                                );
+                                break 'task;
+                            }
+                        };
+
                         let mut store = match workload.new_store(&component_id).await {
                             Err(e) => {
                                 warn!("failed to create store for component {component_id}: {e}");
@@ -646,6 +698,9 @@ impl HostPlugin for InMemoryMessaging {
                         let fuel_meter = fuel_meter.clone();
 
                         tokio::spawn(async move {
+                            // Released on completion, trap or not — which is
+                            // what frees the instance slot this message holds.
+                            let _permit = permit;
                             let result = fuel_meter.observe(
                                 &[
                                     KeyValue::new("plugin", PLUGIN_MESSAGING_MEMORY_ID),
