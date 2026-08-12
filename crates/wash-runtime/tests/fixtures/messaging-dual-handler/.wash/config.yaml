@@ -1,4 +1,5 @@
 build:
-  # wit/deps is committed (see wit/world.wit); xtask builds with --skip-fetch.
+  # `wash build` runs `wit fetch` (resolving the wkg.toml local refs), then this
+  # command; a wasm32-wasip1 core module is wrapped into a component afterward.
   command: cargo build --target wasm32-wasip1 --release
   component_path: ../target/wasm32-wasip1/release/messaging_dual_handler.wasm
