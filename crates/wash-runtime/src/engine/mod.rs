@@ -612,9 +612,6 @@ impl Engine {
             }
         }
 
-        // Read before the call moves `name` and `local_resources` out.
-        let max_in_flight = component.max_in_flight;
-
         // Create the WorkloadComponent with volume mounts
         let mut workload_component = WorkloadComponent::new(
             workload_id.as_ref(),
@@ -627,8 +624,7 @@ impl Engine {
             component.local_resources,
             loopback,
             instances,
-        )
-        .with_max_in_flight(max_in_flight);
+        );
         workload_component.metadata.socket_policy = Arc::clone(&self.socket_policy);
         Ok(workload_component)
     }

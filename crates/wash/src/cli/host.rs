@@ -161,15 +161,14 @@ pub struct HostCommand {
     /// `wasmcloud:messaging` component on this host.
     ///
     /// A messaging-triggered component gets a fresh instance per message, so
-    /// this equally bounds instances. The default is derived from the host's
+    /// this equally bounds instances. Unset, it is derived from the host's
     /// instance pool: at the worst measured component shape (Componentize-Go,
-    /// 5 core instances each) a `total_core_instances` of 1000 supports 200,
-    /// and 128 keeps roughly a third of the pool for HTTP-triggered work, warm
-    /// pools, and long-lived services.
-    ///
-    /// Unset, this is derived from the host's actual instance pool, so raising
-    /// `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` raises this with it. Set, the
-    /// number given is used as-is.
+    /// 5 core instances each) a `total_core_instances` of 1000 supports 200
+    /// components, and messaging claims two thirds of that — 133 — leaving the
+    /// rest for HTTP-triggered work, warm pools, and long-lived services.
+    /// Raising `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` raises this with it;
+    /// with pooling disabled there is no budget to divide and the pinned
+    /// default of 128 stands. Set, the number given is used as-is.
     //
     // Deliberately no `default_value_t`: a parse-time default is
     // indistinguishable downstream from an operator typing the same number, and
@@ -181,16 +180,18 @@ pub struct HostCommand {
     )]
     pub wasmcloud_messaging_max_in_flight: Option<usize>,
 
-    /// What a component's `maxInFlight` resolves to when it does not set one,
+    /// What a component's `max_in_flight` config resolves to when it does not set one,
     /// and the most any single component may ask for.
     ///
-    /// A per-component total, unlike `maxConcurrency`, which is per warm
+    /// A per-component total, unlike `max_concurrency`, which is per warm
     /// instance. A component asking for more than this — or more than
     /// `--wasmcloud-messaging-max-in-flight` — is clamped to it, and the clamp
     /// is logged.
     ///
-    /// Unset, this is derived from `--wasmcloud-messaging-max-in-flight`, so the
-    /// two cannot contradict each other.
+    /// Unset, this is a quarter of whatever `--wasmcloud-messaging-max-in-flight`
+    /// resolved to, so the two cannot contradict each other: the pool-derived
+    /// 133 of a stock host gives 33, and the pinned 128 of a host with pooling
+    /// disabled gives 32.
     #[arg(
         long = "wasmcloud-messaging-max-in-flight-per-component",
         env = "WASH_WASMCLOUD_MESSAGING_MAX_IN_FLIGHT_PER_COMPONENT"

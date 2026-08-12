@@ -409,16 +409,6 @@ pub struct DevComponent {
     /// itself. Only meaningful alongside `poolSize`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_concurrency: Option<i32>,
-    /// How many messages this component may process at once when driven by a
-    /// `wasmcloud:messaging` subscription.
-    ///
-    /// Each in-flight message holds its own instance for the length of the
-    /// handler, so this equally bounds instances. Unset (or `0`) takes the
-    /// host default. Unlike `poolSize` this is a hard ceiling: at the limit the
-    /// subscriber stops taking messages off the subject until a handler
-    /// finishes. Unrelated to `maxConcurrency`, which is per warm instance.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_in_flight: Option<i32>,
 }
 
 impl DevComponent {
@@ -441,7 +431,6 @@ impl DevComponent {
             pool_size: None,
             max_invocations: None,
             max_concurrency: None,
-            max_in_flight: None,
         }
     }
 }
@@ -1471,6 +1460,42 @@ mod tests {
             wasmcloud_messaging_limits(None, None, None).expect("the built-in defaults are valid");
         assert_eq!(limits.host_total(), 128);
         assert_eq!(limits.per_component_default(), 32);
+    }
+
+    #[test]
+    fn setting_only_the_host_ceiling_still_moves_the_per_component_default() {
+        // The operator-visible symptom of deriving the two independently:
+        // `--wasmcloud-messaging-max-in-flight 1024` was accepted, the host
+        // ceiling rose, and every component stayed pinned at the pool-derived
+        // default — so on any host with fewer than ~31 messaging components the
+        // flag changed nothing at all.
+        let derived = wasmcloud_messaging_limits(None, None, Some(1000)).expect("valid");
+        let raised = wasmcloud_messaging_limits(Some(1024), None, Some(1000)).expect("valid");
+        assert_eq!(raised.host_total(), 1024);
+        assert!(
+            raised.per_component_default() > derived.per_component_default(),
+            "raising only the host ceiling left the per-component default at {}",
+            raised.per_component_default()
+        );
+
+        // Lowering it must not leave the per-component default stranded above
+        // the total the operator just set.
+        let lowered = wasmcloud_messaging_limits(Some(4), None, Some(1000)).expect("valid");
+        assert!(lowered.per_component_default() <= lowered.host_total());
+    }
+
+    #[test]
+    fn wasmcloud_messaging_limits_do_not_over_commit_a_small_pool() {
+        // A pool of 16 core instances holds 3 worst-case components. The
+        // derived ceiling must not exceed that: admitting 8 would need 40 core
+        // instances and fail at instantiation, which is the exhaustion these
+        // ceilings exist to prevent.
+        let limits = wasmcloud_messaging_limits(None, None, Some(16)).expect("valid");
+        assert!(
+            limits.host_total() <= 3,
+            "a 16-instance pool derived a ceiling of {} messages",
+            limits.host_total()
+        );
     }
 
     #[test]

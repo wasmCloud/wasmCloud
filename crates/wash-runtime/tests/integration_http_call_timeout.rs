@@ -123,7 +123,6 @@ async fn a_wedged_pooled_instance_is_retired_and_replaced() -> Result<()> {
                 pool_size: 1,
                 max_invocations: 0,
                 max_concurrency: 4,
-                max_in_flight: 0,
             }],
             host_interfaces: http_only_host_interfaces("wedge-pooled"),
             volumes: vec![],

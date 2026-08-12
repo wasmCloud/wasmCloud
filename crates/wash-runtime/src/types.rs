@@ -83,19 +83,6 @@ pub struct Component {
     /// blocks — a guest driving its own executor with `block_on` must stay at
     /// one.
     pub max_concurrency: i32,
-    /// How many messages this component may process at the same time when it
-    /// is driven by a `wasmcloud:messaging` subscription.
-    ///
-    /// Each in-flight message holds its own component instance for the
-    /// duration of the handler call, so this is simultaneously the ceiling on
-    /// instances the subscription may create. Unset or below `1` takes the
-    /// host default; see
-    /// [`crate::plugin::wasmcloud_messaging::MessagingLimits`].
-    ///
-    /// Unlike the pool limits above this is a hard ceiling, and unlike
-    /// `max_concurrency` it is a per-component total rather than a per-instance
-    /// number. The two are not interchangeable.
-    pub max_in_flight: i32,
 }
 
 /// Resource limits and configuration for a component or service.

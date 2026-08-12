@@ -360,6 +360,8 @@ impl HostPlugin for NatsMessaging {
         // the host-interface fallback before borrowing the component.
         let interface_subscriptions = interface.config.get("subscriptions").cloned();
         let interface_consumer_group = interface.config.get(CONSUMER_GROUP_CONFIG).cloned();
+        let interface_max_in_flight = interface.config.get(super::MAX_IN_FLIGHT_CONFIG).cloned();
+        let interface_admission_wait = interface.config.get(super::ADMISSION_WAIT_CONFIG).cloned();
 
         // Bind only the revision(s) the workload actually declared: the two
         // surfaces are separate linker instances, and binding one a component
@@ -388,6 +390,16 @@ impl HostPlugin for NatsMessaging {
             .config
             .get(CONSUMER_GROUP_CONFIG)
             .cloned();
+        let local_max_in_flight = component_handle
+            .local_resources()
+            .config
+            .get(super::MAX_IN_FLIGHT_CONFIG)
+            .cloned();
+        let local_admission_wait = component_handle
+            .local_resources()
+            .config
+            .get(super::ADMISSION_WAIT_CONFIG)
+            .cloned();
 
         // Track a handler component OR a long-lived handler service:
         // `WorkloadItem` derefs to the underlying metadata for both, so the
@@ -398,15 +410,17 @@ impl HostPlugin for NatsMessaging {
         if super::exports_messaging_handler(&component_handle.world()) {
             let raw = local_subscriptions.or(interface_subscriptions);
             let raw_subscriptions = super::parse_subscriptions(raw.as_deref());
-            let (component_name, max_in_flight) = match component_handle {
-                WorkloadItem::Component(component) => {
-                    (component.name().to_string(), component.max_in_flight())
-                }
+            let component_name = match component_handle {
+                WorkloadItem::Component(component) => component.name().to_string(),
                 // A long-lived handler service has no per-message instance to
-                // bound; its delivery path is gated elsewhere. Resolve the
-                // default so the tracker entry is uniform.
-                WorkloadItem::Service(_) => ("service".to_string(), 0),
+                // bound; its delivery path is gated elsewhere.
+                WorkloadItem::Service(_) => "service".to_string(),
             };
+            let max_in_flight = super::parse_max_in_flight(
+                local_max_in_flight
+                    .as_deref()
+                    .or(interface_max_in_flight.as_deref()),
+            );
             let consumer_group = ConsumerGroup::resolve(
                 local_consumer_group
                     .as_deref()
@@ -416,7 +430,16 @@ impl HostPlugin for NatsMessaging {
                 &component_name,
             )?;
 
-            let admission = self.limits.admission(max_in_flight);
+            let admission_wait = super::parse_admission_wait(
+                local_admission_wait
+                    .as_deref()
+                    .or(interface_admission_wait.as_deref()),
+            );
+            let admission = self
+                .limits
+                .admission(max_in_flight)
+                .with_admission_wait(admission_wait)
+                .with_subscriptions(&raw_subscriptions);
 
             debug!(
                 component_id = component_handle.id(),
@@ -739,6 +762,11 @@ impl HostPlugin for NatsMessaging {
         let workload_cleanup = |_| async {};
         let component_cleanup = |component_data: ComponentData| async move {
             component_data.cancel_token.cancel();
+            // Wakes a loop parked on a saturated gate with `Admitted::Closed`.
+            // The token above covers the same case; this makes the closed
+            // semaphore a real signal rather than a documented one that only
+            // tests ever produce.
+            component_data.admission.close();
             if let Some(handle) = component_data.task_handle {
                 handle.abort();
             }
@@ -883,7 +911,7 @@ mod tests {
                     consumer_group: ConsumerGroup::Grouped("workers".to_string()),
                     task_handle: None,
                     admission: crate::plugin::wasmcloud_messaging::MessagingLimits::default()
-                        .admission(0),
+                        .admission(None),
                 },
             );
         tracker

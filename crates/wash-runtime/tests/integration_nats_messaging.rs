@@ -124,9 +124,10 @@ async fn setup_with_limits(
 struct MessagingHandlerWorkloadConfig {
     workload_name: Option<String>,
     pool_size: Option<i32>,
-    /// The component's `maxInFlight`. `None` leaves it unset, which resolves
-    /// to the host default.
-    max_in_flight: Option<i32>,
+    /// The component's `max_in_flight`, carried in its `LocalResources.config`
+    /// the way the messaging plugin's other per-component settings are. `None`
+    /// leaves it unset, which resolves to the host default.
+    max_in_flight: Option<usize>,
 }
 
 /// Build a messaging workload with a variable amount of handlers
@@ -151,7 +152,10 @@ fn messaging_handler_workload(
                 local_resources: LocalResources {
                     memory_limit_mb: 256,
                     cpu_limit: 1,
-                    config: HashMap::new(),
+                    config: max_in_flight
+                        .map(|v| ("max_in_flight".to_string(), v.to_string()))
+                        .into_iter()
+                        .collect(),
                     environment: HashMap::new(),
                     volume_mounts: vec![],
                     allowed_hosts: Default::default(),
@@ -161,7 +165,6 @@ fn messaging_handler_workload(
                 pool_size: pool_size.unwrap_or(1),
                 max_invocations: 100,
                 max_concurrency: 1,
-                max_in_flight: max_in_flight.unwrap_or(0),
             }],
             host_interfaces: vec![WitInterface {
                 namespace: "wasmcloud".to_string(),
@@ -348,7 +351,7 @@ async fn test_nats_messaging_subscription_registered_on_server() -> Result<()> {
 /// full — the gate delays messages, it must not drop them, wedge the
 /// subscriber loop, or leak permits.
 ///
-/// A leak is the failure mode this is really guarding: with `maxInFlight: 1`,
+/// A leak is the failure mode this is really guarding: with `max_in_flight: 1`,
 /// one un-released permit stops the loop dead after the first message, so the
 /// reply count would stall at 1 rather than reaching `BURST`. Peak concurrency
 /// itself is asserted by the unit tests over `Admission`, which can observe it
