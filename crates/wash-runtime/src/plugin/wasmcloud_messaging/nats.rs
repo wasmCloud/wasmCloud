@@ -435,9 +435,19 @@ impl HostPlugin for NatsMessaging {
                     .as_deref()
                     .or(interface_admission_wait.as_deref()),
             );
+            // The same namespace/workload/component triple the consumer group
+            // is built from above. It both attributes a shed message to
+            // something a manifest author recognizes and selects the gate, so
+            // replicas of this deployment on this host share one ceiling
+            // rather than getting one apiece.
+            let identity = super::AdmissionIdentity::new(
+                component_handle.workload_namespace(),
+                component_handle.workload_name(),
+                &component_name,
+            );
             let admission = self
                 .limits
-                .admission(max_in_flight)
+                .admission(&identity, max_in_flight)
                 .with_admission_wait(admission_wait)
                 .with_subscriptions(&raw_subscriptions);
 
@@ -654,6 +664,20 @@ impl HostPlugin for NatsMessaging {
                                     Admitted::Slot(permit) => permit,
                                     // Already logged and counted; drop this
                                     // message and resume draining.
+                                    //
+                                    // A request/reply caller is NOT told, and
+                                    // waits out its own `timeout_ms`. Telling
+                                    // it would mean publishing to `reply_to`,
+                                    // and `request` resolves on the first
+                                    // message to reach its inbox — so where
+                                    // more than one component subscribes to a
+                                    // subject, the saturated one's instant
+                                    // notice would beat a healthy one's real
+                                    // reply and fail a request that was about
+                                    // to succeed. The in-memory backend can
+                                    // fast-fail precisely because it knows its
+                                    // own fan-out; here that is unknowable
+                                    // from inside a single subscriber.
                                     Admitted::Shed => continue,
                                     // Closed: the component is going away.
                                     Admitted::Closed => break,
@@ -911,7 +935,12 @@ mod tests {
                     consumer_group: ConsumerGroup::Grouped("workers".to_string()),
                     task_handle: None,
                     admission: crate::plugin::wasmcloud_messaging::MessagingLimits::default()
-                        .admission(None),
+                        .admission(
+                            &crate::plugin::wasmcloud_messaging::AdmissionIdentity::new(
+                                "test-ns", "test-workload", "worker",
+                            ),
+                            None,
+                        ),
                 },
             );
         tracker
