@@ -248,6 +248,61 @@ async fn async_handler_handles_messages_concurrently() -> Result<()> {
     Ok(())
 }
 
+/// Regression for an oversized guest stream returning `Cancelled` without
+/// consuming an item while `finish == false`. Wasmtime treats that disposition
+/// as a protocol violation and trapped the guest instead of returning the
+/// messaging API's `message-too-large` error.
+#[tokio::test]
+async fn oversized_publish_returns_message_too_large_without_trapping() -> Result<()> {
+    let h = start_harness().await?;
+    let workload_id = uuid::Uuid::new_v4().to_string();
+    let host_header = "async-echo-oversized";
+
+    h.host
+        .workload_start(async_echo_request(
+            &workload_id,
+            host_header,
+            "test.oversized",
+        ))
+        .await
+        .context("failed to start the async echo workload")?;
+
+    let response = timeout(
+        Duration::from_secs(30),
+        h.client
+            .get(format!("http://{}/oversized-publish", h.addr))
+            .header("HOST", host_header)
+            .send(),
+    )
+    .await
+    .context("oversized publish timed out")??;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "oversized publish endpoint returned {}",
+        response.status()
+    );
+    let result = response.text().await?;
+    assert_eq!(
+        result, "Err(MessageTooLarge)",
+        "the oversized guest stream must return the typed error rather than trap"
+    );
+
+    // A rejected stream must not poison the long-lived service or the host's
+    // stream machinery. Exercise the normal async handler/publish path on the
+    // same instance immediately afterward.
+    h.messaging
+        .publish(&workload_id, "test.oversized", b"still-alive".to_vec())
+        .await
+        .map_err(|e| anyhow::anyhow!("follow-up publish failed: {e}"))?;
+    assert_eq!(
+        h.await_count(host_header, 1).await?,
+        1,
+        "the service must remain usable after rejecting the oversized stream"
+    );
+
+    Ok(())
+}
+
 /// The regression that matters most: a `@0.2.0` guest and a `@0.3.0` guest on
 /// ONE host. The two surfaces are separate linker instances served by the same
 /// plugin, so binding one must not disturb the other.

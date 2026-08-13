@@ -99,7 +99,28 @@ impl MsgGuest for Component {
 }
 
 impl HttpGuest for Component {
-    async fn handle(_request: Request) -> Result<Response, ErrorCode> {
+    async fn handle(request: Request) -> Result<Response, ErrorCode> {
+        if request.get_path_with_query().as_deref() == Some("/oversized-publish") {
+            // One byte beyond the host's 16 MiB collection limit. Feed it as a
+            // stream so this exercises the StreamConsumer disposition at the
+            // guest/host boundary: the regression returned `Cancelled` while
+            // `finish == false`, which trapped instead of returning the WIT
+            // `message-too-large` error.
+            let (mut tx, body) = bindings::wit_stream::new();
+            wit_bindgen::spawn_local(async move {
+                let bytes = vec![0_u8; 16 * 1024 * 1024 + 1];
+                let _ = tx.write_all(bytes).await;
+                drop(tx);
+            });
+            let result = consumer::publish(BrokerMessage {
+                subject: SINK_SUBJECT.to_string(),
+                body,
+                reply_to: None,
+            })
+            .await;
+            return Ok(make_response(200, format!("{result:?}").into_bytes()));
+        }
+
         let count = MSG_COUNT.load(Ordering::SeqCst);
         Ok(make_response(200, format!("{{\"count\":{count}}}").into_bytes()))
     }
