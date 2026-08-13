@@ -725,14 +725,38 @@ pub fn wasmcloud_messaging_limits(
     // semaphore gates first — but almost certainly an operator mixing the two
     // knobs up, so `MessagingLimits::new` warns about it, exactly as
     // `connection_quotas` does for its equivalent.
-    Ok(MessagingLimits::resolve(
+    let limits = MessagingLimits::resolve(
         checked(max_in_flight, "wasmcloud_messaging_max_in_flight")?,
         checked(
             max_in_flight_per_component,
             "wasmcloud_messaging_max_in_flight_per_component",
         )?,
         total_core_instances,
-    ))
+    );
+
+    // Both numbers vary by host — pooling on or off, the size of the pool, and
+    // which flags were given — so an operator cannot read them off the docs.
+    // They are also the numbers a shed warning tells them to go and raise, which
+    // makes this the one derived ceiling worth a line at startup.
+    tracing::info!(
+        host_total = limits.host_total(),
+        per_component_default = limits.per_component_default(),
+        host_total_source = if max_in_flight.is_some() {
+            "flag"
+        } else if total_core_instances.is_some() {
+            "derived from the instance pool"
+        } else {
+            "built-in default (pooling disabled)"
+        },
+        per_component_source = if max_in_flight_per_component.is_some() {
+            "flag"
+        } else {
+            "derived from the host total"
+        },
+        "wasmcloud:messaging admission ceilings resolved"
+    );
+
+    Ok(limits)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

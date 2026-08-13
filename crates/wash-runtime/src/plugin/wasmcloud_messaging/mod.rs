@@ -11,7 +11,7 @@
 //! | --- | --- | --- |
 //! | `subscriptions` | Comma-separated subjects, NATS wildcards allowed (`orders.*`, `audit.>`) | Receive everything |
 //! | `consumer_group` | Queue-group name, or `broadcast` for no grouping (NATS only) | A name derived from namespace/workload/component |
-//! | `max_in_flight` | Messages this component may process at once | The host's per-component default |
+//! | `max_in_flight` | Messages this component may process at once, across every replica of it on this host | The host's per-component default |
 //! | `admission_wait` | How long to wait for a slot before shedding (`45s`, `2m`, or bare seconds) | [`DEFAULT_ADMISSION_WAIT`] |
 //!
 //! ```yaml
@@ -24,9 +24,13 @@
 //!
 //! `max_in_flight` is a **per-component total**, unlike `max_concurrency`
 //! (per warm instance), and is separately bounded by the host-wide ceiling —
-//! see [`MessagingLimits`]. `admission_wait` is per component rather than per
-//! host because the right answer depends on the handler: minutes-long work
-//! wants to queue, interactive work wants to shed and stay responsive.
+//! see [`MessagingLimits`]. It is a total for the *component*, not for one
+//! replica of it: replicas of a deployment that land on the same host share
+//! one ceiling rather than getting one apiece, so `replicas: 4` with
+//! `max_in_flight: "32"` admits 32 messages on a host, not 128. `admission_wait`
+//! is per component rather than per host because the right answer depends on
+//! the handler: minutes-long work wants to queue, interactive work wants to
+//! shed and stay responsive.
 
 mod in_memory;
 #[cfg(feature = "wasm_component_model_implements")]
@@ -482,6 +486,24 @@ pub const DEFAULT_MAX_IN_FLIGHT_HOST: usize = 128;
 /// request/reply case and this one only catches genuine saturation.
 pub const DEFAULT_ADMISSION_WAIT: Duration = Duration::from_secs(30);
 
+/// The longest [`ADMISSION_WAIT_CONFIG`] may set the wait to.
+///
+/// Waiting is a real choice — a handler whose work legitimately takes minutes
+/// wants its messages queued, not shed — but it is bought with the transport's
+/// buffer, and past some point that is a trade nobody would take knowingly. A
+/// parked loop is not draining its subscription, async-nats `try_send`s into a
+/// per-subscription buffer (65536 messages by default) and drops on overflow,
+/// and those drops are counted by nothing: they surface only as a
+/// `SlowConsumer` event. So a long wait does not preserve the backlog, it
+/// converts *countable* sheds into *uncountable* transport loss. At any rate
+/// that saturates a component, the buffer is gone in seconds.
+///
+/// Ten minutes is far past any handler this is meant to accommodate and far
+/// short of "forever". A larger value is clamped to it with a warning rather
+/// than rejected, for the same reason an oversized `max_in_flight` is: a
+/// manifest written for a different host should still run.
+pub const MAX_ADMISSION_WAIT: Duration = Duration::from_secs(600);
+
 /// Worst measured core-instance count for a single component: Componentize-Go,
 /// which compiles to `$main`, the `wasi_snapshot_preview1` adapter, and three
 /// glue modules. Rust p2 measures 3.
@@ -578,6 +600,114 @@ pub struct MessagingLimits {
     per_component_default: usize,
     admission_wait: Duration,
     timeouts: AdmissionTimeouts,
+    /// Per-component gates, keyed by manifest identity so replicas of one
+    /// deployment share one. See [`ComponentGates`].
+    gates: ComponentGates,
+}
+
+/// The per-component gates on this host, keyed by [`AdmissionIdentity`].
+///
+/// **Keyed by manifest identity, not by component id.** Every replica of a
+/// deployment is a separate workload with its own `uuid::Uuid::new_v4()`
+/// component id, so keying by that gives each replica its own full ceiling:
+/// four replicas of a component at `max_in_flight: 32` could hold 128 messages
+/// on one host, against a stock host-wide total of 133. The per-component
+/// ceiling exists to stop one workload taking the host, and per-replica gates
+/// let it do the opposite. Keyed by identity, `max_in_flight` means what a
+/// manifest author reads it to mean: a total for that component, however many
+/// replicas of it this host happens to run.
+///
+/// The namespace is part of the key because workload names are only unique
+/// within one — without it, two teams' `ingester` workloads would contend for
+/// a single gate.
+///
+/// An entry is reference-counted by *binding*, not by [`Admission`] clone:
+/// [`MessagingLimits::admission`] takes a reference and [`Admission::close`]
+/// gives it back, so the gate closes when the last replica on this host goes
+/// away and not before. `close` takes `self` by value, which is what the
+/// backends' `component_cleanup` has, so one binding cannot return its
+/// reference twice.
+#[derive(Clone, Debug, Default)]
+struct ComponentGates {
+    // `std::sync::Mutex`: every critical section is a map lookup with no await
+    // inside, so an async mutex would buy nothing and cost a scheduling point
+    // on the message path.
+    inner: Arc<std::sync::Mutex<std::collections::HashMap<AdmissionIdentity, GateEntry>>>,
+}
+
+#[derive(Debug)]
+struct GateEntry {
+    semaphore: Arc<Semaphore>,
+    /// The ceiling the first binding resolved. Kept to notice a later binding
+    /// asking for a different one, which means two genuinely different
+    /// components collided on one identity.
+    limit: usize,
+    /// Live bindings sharing this gate — replicas of one deployment on this
+    /// host.
+    bindings: usize,
+}
+
+impl ComponentGates {
+    /// Take a reference to `identity`'s gate, creating it at `limit` if this is
+    /// the first binding.
+    ///
+    /// Returns the shared semaphore and the ceiling actually in force, which is
+    /// the first binding's where they disagree — a semaphore cannot be resized
+    /// under tasks already holding permits, and silently adopting the newer
+    /// number would change a running component's ceiling.
+    fn acquire(&self, identity: &AdmissionIdentity, limit: usize) -> (Arc<Semaphore>, usize) {
+        let mut gates = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = gates
+            .entry(identity.clone())
+            .or_insert_with(|| GateEntry {
+                semaphore: Arc::new(Semaphore::new(limit)),
+                limit,
+                bindings: 0,
+            });
+        entry.bindings += 1;
+        if entry.limit != limit {
+            tracing::warn!(
+                namespace = %identity.namespace,
+                workload = %identity.workload,
+                component = %identity.component,
+                in_force = entry.limit,
+                requested = limit,
+                "two messaging components share one workload/component name but ask for \
+                 different max_in_flight ceilings; keeping the first. Replicas of one \
+                 deployment share a gate, so this means two distinct components collided \
+                 on one name"
+            );
+        }
+        (Arc::clone(&entry.semaphore), entry.limit)
+    }
+
+    /// Give back one binding's reference, closing and dropping the gate once
+    /// the last replica is gone.
+    ///
+    /// Closing wakes any loop parked on a saturated gate with
+    /// [`Admitted::Closed`]. Closing while another replica is still running
+    /// would stop *its* subscriber loop, which is why this is refcounted rather
+    /// than closing on the first teardown.
+    fn release(&self, identity: &AdmissionIdentity) {
+        let mut gates = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(entry) = gates.get_mut(identity) else {
+            return;
+        };
+        entry.bindings = entry.bindings.saturating_sub(1);
+        if entry.bindings == 0 {
+            entry.semaphore.close();
+            gates.remove(identity);
+        }
+    }
+
+    #[cfg(test)]
+    fn bindings(&self, identity: &AdmissionIdentity) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(identity)
+            .map_or(0, |e| e.bindings)
+    }
 }
 
 impl Default for MessagingLimits {
@@ -652,14 +782,21 @@ impl MessagingLimits {
             per_component_default,
             admission_wait: DEFAULT_ADMISSION_WAIT,
             timeouts: AdmissionTimeouts::new(),
+            gates: ComponentGates::default(),
         }
     }
 
     /// Override how long a subscriber loop waits for a slot before shedding the
     /// message it is holding. See [`DEFAULT_ADMISSION_WAIT`].
+    ///
+    /// Held to [`MAX_ADMISSION_WAIT`], the same bound the per-component config
+    /// key takes. Clamping only at the config layer would leave this — the way
+    /// an embedder sets the host-wide default — able to reinstate the unbounded
+    /// park that bound exists to prevent, and would make the maximum a property
+    /// of one code path rather than of the type.
     #[must_use]
     pub fn with_admission_wait(mut self, wait: Duration) -> Self {
-        self.admission_wait = wait;
+        self.admission_wait = clamp_admission_wait(wait);
         self
     }
 
@@ -696,7 +833,15 @@ impl MessagingLimits {
     /// it was written for should still run: the host it lands on may be smaller
     /// than the one it was sized against, and refusing to start is a worse
     /// answer than running at the ceiling that host can actually offer.
-    pub(crate) fn admission(&self, requested: Option<usize>) -> Admission {
+    /// `identity` is the manifest identity of what is being bound. It selects
+    /// the gate as well as labelling it: every replica of one deployment on
+    /// this host resolves to the same identity and therefore shares one
+    /// ceiling. See [`ComponentGates`].
+    pub(crate) fn admission(
+        &self,
+        identity: &AdmissionIdentity,
+        requested: Option<usize>,
+    ) -> Admission {
         let ceiling = self.per_component_default.min(self.host_total);
         let resolved = match requested {
             Some(requested) if requested > ceiling => {
@@ -714,21 +859,30 @@ impl MessagingLimits {
             // Unset: the default is already within both ceilings by
             // construction, but `min` keeps that true if either is reconfigured.
             None => ceiling,
-        };
+        }
+        // A zero would build a gate that admits nothing, ever — a component
+        // that silently processes no messages. `parse_max_in_flight` already
+        // spells zero as "unset", so this only catches a programmatic caller,
+        // and it floors for the same reason `MessagingLimits::new` does.
+        .max(1);
+        let (component, limit) = self.gates.acquire(identity, resolved);
         Admission {
-            component: Arc::new(Semaphore::new(resolved)),
+            component,
             host: Arc::clone(&self.host),
-            limit: resolved,
+            limit,
             wait: self.admission_wait,
             timeouts: self.timeouts.clone(),
             subscriptions: Arc::from([]),
+            identity: identity.clone(),
+            gates: self.gates.clone(),
         }
     }
 }
 
 /// Counters for messages the admission gate could not admit in time. Built once
-/// per host and cloned into every [`Admission`], so a single `messaging.admission.shed`
-/// series covers the host with the component as an attribute.
+/// per host and cloned into every [`Admission`], so a single
+/// `messaging.admission.shed` series covers the host, split by the manifest
+/// identity of whatever is shedding.
 #[derive(Clone, Debug)]
 struct AdmissionTimeouts {
     shed: Counter<u64>,
@@ -738,6 +892,44 @@ struct AdmissionTimeouts {
 /// configured patterns — which should not happen, since the message arrived on
 /// one of them, but a metric attribute must never be derived from traffic.
 const UNMATCHED_SUBSCRIPTION: &str = "<unmatched>";
+
+/// Who is shedding, in terms a manifest author and a dashboard both recognize.
+///
+/// Deliberately **not** the component id: that is a `uuid::Uuid::new_v4()`
+/// minted per workload construction (`engine::workload`), so attributing a
+/// counter with it mints a fresh time series on every restart, rolling update,
+/// and replica — unbounded growth driven by deployment churn, and a value no
+/// operator can map back to a workload. Every field here comes from the
+/// manifest instead, so the series count is bounded by what is deployed rather
+/// than by how often it is redeployed.
+///
+/// Named to match the span convention the host already uses for workload
+/// identity (`workload.id` / `workload.name` / `workload.namespace`, see
+/// `host::HostApi::start_workload`). The component id keeps its place on the
+/// shed `warn!`, where identity is per-event and therefore free, and where it
+/// still joins to the `wasmcloud.messaging.on_workload_resolved` span.
+/// It is also the key the per-component gate is registered under, so that
+/// replicas of one deployment share one ceiling — see [`ComponentGates`].
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct AdmissionIdentity {
+    namespace: Arc<str>,
+    workload: Arc<str>,
+    component: Arc<str>,
+}
+
+impl AdmissionIdentity {
+    /// Build the identity from a bound item's manifest names. `WorkloadItem`
+    /// derefs to the workload metadata, so both backends have all three in hand
+    /// at bind time.
+    pub(crate) fn new(namespace: &str, workload: &str, component: &str) -> Self {
+        Self {
+            namespace: Arc::from(namespace),
+            workload: Arc::from(workload),
+            component: Arc::from(component),
+        }
+    }
+}
+
 
 impl AdmissionTimeouts {
     fn new() -> Self {
@@ -753,23 +945,56 @@ impl AdmissionTimeouts {
 
     /// Record one shed message.
     ///
+    /// Every attribute is bounded by configuration rather than by traffic or by
+    /// deployment churn — see [`AdmissionIdentity`] for why the component id is
+    /// not among them.
+    ///
     /// `subscription` is the *configured pattern* the message arrived on, never
-    /// the concrete subject. Cardinality here is bounded by configuration: a
-    /// component has as many patterns as its `subscriptions` names. Attributing
-    /// the concrete subject instead would mint a new series per distinct
-    /// subject under a wildcard subscription — unbounded growth, arriving
-    /// precisely during the flood this counter exists to report, when the
-    /// metrics pipeline can least afford it. The concrete subject is on the
-    /// `warn!` at the call site, where it costs nothing.
-    fn record(&self, component_id: &str, subscription: &str) {
+    /// the concrete subject. A component has as many patterns as its
+    /// `subscriptions` names. Attributing the concrete subject instead would
+    /// mint a new series per distinct subject under a wildcard subscription —
+    /// unbounded growth, arriving precisely during the flood this counter exists
+    /// to report, when the metrics pipeline can least afford it. The concrete
+    /// subject is on the `warn!` at the call site, where it costs nothing.
+    fn record(&self, identity: &AdmissionIdentity, subscription: &str) {
         self.shed.add(
             1,
             &[
-                KeyValue::new("component", component_id.to_string()),
+                KeyValue::new("workload.namespace", identity.namespace.to_string()),
+                KeyValue::new("workload.name", identity.workload.to_string()),
+                // The component's *manifest* name. Kept alongside the workload
+                // so a workload running more than one messaging component can
+                // still be told apart; bounded by the manifest exactly as the
+                // two above are.
+                KeyValue::new("component", identity.component.to_string()),
                 KeyValue::new("subscription", subscription.to_string()),
             ],
         );
     }
+}
+
+/// Detail carried on the [`MsgError::QuotaExceeded`] a shed request turns into.
+///
+/// [`MsgError::QuotaExceeded`] rather than a new case because that is precisely
+/// what happened — a rate limit was exceeded — and it already exists on both
+/// messaging surfaces, so the async WIT lowers it to `quota-exceeded` with no
+/// new vocabulary.
+pub(crate) const ADMISSION_SHED_DETAIL: &str =
+    "the responding component's messaging admission gate is saturated; \
+     the request was shed rather than queued";
+
+/// The error a requester gets when the host shed its request.
+///
+/// **Only the in-memory backend produces this.** Telling a requester means
+/// answering on its reply subject, and a `request` resolves on the *first*
+/// message to reach its inbox — so where several components subscribe to one
+/// subject, a saturated component's instant notice beats a healthy one's real
+/// reply and fails a request that was about to succeed. The in-memory backend
+/// routes its own fan-out and so knows when a component is the sole subscriber
+/// ([`in_memory`]); a NATS subscriber cannot know that, and there the caller's
+/// `timeout_ms` remains the only honest signal.
+pub(crate) fn shed_error() -> MsgError {
+    MsgError::QuotaExceeded(ADMISSION_SHED_DETAIL.to_string())
 }
 
 /// What [`Admission::acquire_before_deadline`] settled on.
@@ -797,6 +1022,13 @@ pub(crate) struct Admission {
     /// [`Admission::with_subscriptions`] once the backend has parsed them;
     /// empty until then, and empty is also legitimate (it means "everything").
     subscriptions: Arc<[String]>,
+    /// Manifest identity of whatever this gate fronts. Both the attribution on
+    /// a shed message and the key the gate is registered under.
+    identity: AdmissionIdentity,
+    /// The host's gate registry, so teardown can give this binding's reference
+    /// back. Held rather than reached through `MessagingLimits` because an
+    /// `Admission` outlives the borrow it was built from.
+    gates: ComponentGates,
 }
 
 impl Admission {
@@ -843,9 +1075,18 @@ impl Admission {
             Ok(Some(permit)) => Admitted::Slot(permit),
             Ok(None) => Admitted::Closed,
             Err(_) => {
-                self.timeouts.record(component_id, self.subscription_for(subject));
+                self.timeouts
+                    .record(&self.identity, self.subscription_for(subject));
+                // The component id stays here rather than on the counter:
+                // per-event identity is free, and it joins this line to the
+                // `wasmcloud.messaging.on_workload_resolved` span. The manifest
+                // names come along so the warning names the same thing the
+                // metric does.
                 tracing::warn!(
                     %component_id,
+                    workload.namespace = %self.identity.namespace,
+                    workload.name = %self.identity.workload,
+                    component = %self.identity.component,
                     %subject,
                     waited = ?self.wait,
                     limit = self.limit,
@@ -864,31 +1105,45 @@ impl Admission {
         self.limit
     }
 
-    /// Close this component's gate on teardown, so a loop parked in
-    /// [`Admission::acquire_before_deadline`] wakes with [`Admitted::Closed`]
-    /// and stops.
+    /// Give this binding's reference to the component gate back on teardown.
     ///
-    /// Only the *component* semaphore is closed. The host one is shared by
-    /// every messaging component on the host and must outlive any single
-    /// component's teardown.
+    /// The gate is closed — waking any loop parked in
+    /// [`Admission::acquire_before_deadline`] with [`Admitted::Closed`] — only
+    /// once the *last* binding releases it. Replicas of one deployment share a
+    /// gate (see [`ComponentGates`]), so closing on the first teardown would
+    /// stop a healthy replica's subscriber loop dead: it would see `Closed`,
+    /// break, and silently never receive another message. Refcounting is what
+    /// makes gate sharing safe to combine with the round-2 close-on-teardown
+    /// behavior instead of having to choose between them.
     ///
-    /// The cancel token also wakes that loop, and both backends select on it,
-    /// so this is belt-and-braces rather than the sole shutdown path — but
-    /// without it `Admitted::Closed` is unreachable outside tests, and a
-    /// documented shutdown signal that never fires is a trap for the next
-    /// reader. Closing is idempotent, so ordering against the token does not
-    /// matter.
-    pub(crate) fn close(&self) {
-        self.component.close();
+    /// Only the component gate is ever closed. The host semaphore is shared by
+    /// every messaging component on the host and must outlive all of them.
+    ///
+    /// Takes `self` by value — which is what the backends' `component_cleanup`
+    /// has, since it owns the `ComponentData` it is handed — so one binding
+    /// cannot return its reference twice and drive the count to zero under a
+    /// live replica. Clones handed to subscriber loops are not bindings and
+    /// never release.
+    ///
+    /// The per-component cancel token also wakes that loop, and both backends
+    /// select on it, so this remains belt-and-braces for the last replica; what
+    /// it adds is that the documented `Closed` signal actually fires.
+    pub(crate) fn close(self) {
+        self.gates.release(&self.identity);
     }
 
     /// Override how long this component's loop waits before shedding, from its
     /// [`ADMISSION_WAIT_CONFIG`] entry. `None` leaves the host default in
     /// place.
+    ///
+    /// Clamped to [`MAX_ADMISSION_WAIT`] like every other way of setting a
+    /// wait. Redundant for the config path, which arrives already clamped from
+    /// [`parse_admission_wait`], and deliberately so: the bound holds because
+    /// no setter lets it through, not because each caller remembered.
     #[must_use]
     pub(crate) fn with_admission_wait(mut self, wait: Option<Duration>) -> Self {
         if let Some(wait) = wait {
-            self.wait = wait;
+            self.wait = clamp_admission_wait(wait);
         }
         self
     }
@@ -911,6 +1166,7 @@ impl Admission {
         self.subscriptions = subscriptions.into();
         self
     }
+
 
     /// The configured pattern `subject` arrived on.
     ///
@@ -974,6 +1230,11 @@ pub(crate) fn declares_async_messaging(interfaces: &crate::plugin::WitInterfaces
 /// the NATS backend's `consumer_group`. This is plugin configuration and only
 /// the messaging plugin reads it, so it travels the way the plugin's other
 /// per-component settings do rather than as a field on a core engine type.
+///
+/// The ceiling covers the component across every replica of it on this host —
+/// see [`ComponentGates`] — so scaling a deployment out does not multiply it.
+/// It can only lower a component below the host's per-component default, never
+/// raise it above: [`MessagingLimits::admission`] clamps to both ceilings.
 pub(crate) const MAX_IN_FLIGHT_CONFIG: &str = "max_in_flight";
 
 /// Config key naming how long this component's subscriber loop waits for an
@@ -986,6 +1247,14 @@ pub(crate) const MAX_IN_FLIGHT_CONFIG: &str = "max_in_flight";
 /// single host-wide number cannot be right for both, and
 /// [`DEFAULT_ADMISSION_WAIT`] alone would turn a slow handler's queued messages
 /// into dropped ones with no way to say otherwise.
+///
+/// **What raising it costs.** A loop waiting for a slot is not draining its
+/// subscription, and the transport's buffer is what absorbs the difference —
+/// silently, since an overflow there is dropped without a counter. Raising this
+/// therefore trades sheds you can see for losses you cannot; it is the right
+/// trade for a handler that genuinely needs minutes and the wrong one as a
+/// reflex against shed warnings, where the answer is `max_in_flight` or fewer
+/// messages. Bounded by [`MAX_ADMISSION_WAIT`] so it cannot become "forever".
 pub(crate) const ADMISSION_WAIT_CONFIG: &str = "admission_wait";
 
 /// Parses an [`ADMISSION_WAIT_CONFIG`] value into a wait duration.
@@ -998,13 +1267,18 @@ pub(crate) const ADMISSION_WAIT_CONFIG: &str = "admission_wait";
 /// A zero wait is honored rather than treated as unset: "shed immediately if no
 /// slot is free" is a coherent policy for latency-sensitive work, and unlike a
 /// zero *ceiling* it does not mean "process nothing" — it means "do not queue".
+///
+/// Bounded above by [`MAX_ADMISSION_WAIT`]. Raising this queues messages that
+/// would otherwise be shed, which is the point — but it buys that with the
+/// transport's buffer, and past the cap the trade stops being one anybody would
+/// make on purpose. See [`MAX_ADMISSION_WAIT`].
 pub(crate) fn parse_admission_wait(raw: Option<&str>) -> Option<Duration> {
     let raw = raw.map(str::trim).filter(|s| !s.is_empty())?;
     if let Ok(secs) = raw.parse::<u64>() {
-        return Some(Duration::from_secs(secs));
+        return Some(clamp_admission_wait(Duration::from_secs(secs)));
     }
     match humantime::parse_duration(raw) {
-        Ok(d) => Some(d),
+        Ok(d) => Some(clamp_admission_wait(d)),
         Err(_) => {
             tracing::warn!(
                 config_key = ADMISSION_WAIT_CONFIG,
@@ -1016,6 +1290,23 @@ pub(crate) fn parse_admission_wait(raw: Option<&str>) -> Option<Duration> {
             None
         }
     }
+}
+
+/// Hold a configured wait to [`MAX_ADMISSION_WAIT`], warning when it bites so
+/// the operator learns the number in force is not the one they wrote.
+fn clamp_admission_wait(wait: Duration) -> Duration {
+    if wait > MAX_ADMISSION_WAIT {
+        tracing::warn!(
+            config_key = ADMISSION_WAIT_CONFIG,
+            requested = ?wait,
+            max = ?MAX_ADMISSION_WAIT,
+            "messaging admission_wait exceeds the maximum; clamping. Waiting longer does not \
+             preserve the backlog — a parked subscriber stops draining its subscription, and \
+             the transport drops on buffer overflow without counting it"
+        );
+        return MAX_ADMISSION_WAIT;
+    }
+    wait
 }
 
 /// Parses a [`MAX_IN_FLIGHT_CONFIG`] value into an explicit ceiling.
@@ -1086,6 +1377,18 @@ mod tests {
     use crate::plugin::WitInterfaces;
     use crate::wit::{WitInterface, WitWorld};
     use std::collections::HashSet;
+
+    /// A fresh identity per call, so a test that wants independent per-component
+    /// gates gets them. Gates are keyed by identity now (replicas of one
+    /// deployment share one), so a test asserting that two components do *not*
+    /// contend has to name them differently — which is exactly what production
+    /// does. Tests about sharing build their identity explicitly instead.
+    fn unique_identity() -> super::AdmissionIdentity {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        super::AdmissionIdentity::new("test-ns", "test-workload", &format!("component-{n}"))
+    }
 
     fn messaging_iface(version: Option<&str>) -> WitInterface {
         WitInterface {
@@ -1215,7 +1518,7 @@ mod tests {
     fn unset_resolves_to_the_per_component_default() {
         let limits = MessagingLimits::default();
         assert_eq!(
-            limits.admission(None).limit(),
+            limits.admission(&unique_identity(), None).limit(),
             DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT,
         );
     }
@@ -1358,8 +1661,8 @@ mod tests {
     #[test]
     fn an_explicit_value_is_honored() {
         let limits = MessagingLimits::new(128, 32);
-        assert_eq!(limits.admission(Some(4)).limit(), 4);
-        assert_eq!(limits.admission(Some(32)).limit(), 32);
+        assert_eq!(limits.admission(&unique_identity(), Some(4)).limit(), 4);
+        assert_eq!(limits.admission(&unique_identity(), Some(32)).limit(), 32);
     }
 
     #[test]
@@ -1370,17 +1673,17 @@ mod tests {
         // starve every co-tenant component on the host.
         let limits = MessagingLimits::new(128, 32);
         assert_eq!(
-            limits.admission(Some(64)).limit(),
+            limits.admission(&unique_identity(), Some(64)).limit(),
             32,
             "a component asking above the per-component ceiling must be clamped to it"
         );
         assert_eq!(
-            limits.admission(Some(128)).limit(),
+            limits.admission(&unique_identity(), Some(128)).limit(),
             32,
             "asking for the whole host budget must not grant it"
         );
         assert_eq!(
-            limits.admission(Some(usize::MAX)).limit(),
+            limits.admission(&unique_identity(), Some(usize::MAX)).limit(),
             32,
             "nor must asking for everything representable"
         );
@@ -1391,9 +1694,9 @@ mod tests {
         // Clamped rather than rejected: a manifest sized against a bigger host
         // should still run on a smaller one, at the ceiling it can offer.
         let limits = MessagingLimits::new(16, 32);
-        assert_eq!(limits.admission(Some(1024)).limit(), 16);
+        assert_eq!(limits.admission(&unique_identity(), Some(1024)).limit(), 16);
         // ...including via the default, when the default itself is the larger.
-        assert_eq!(limits.admission(None).limit(), 16);
+        assert_eq!(limits.admission(&unique_identity(), None).limit(), 16);
     }
 
     #[test]
@@ -1406,7 +1709,7 @@ mod tests {
             let expected = host.min(per_component);
             for requested in [1, 8, 64, 4096, i32::MAX as usize] {
                 let limit = limits
-                    .admission(Some(requested)).limit();
+                    .admission(&unique_identity(), Some(requested)).limit();
                 assert!(
                     limit <= expected,
                     "host={host} per_component={per_component} requested={requested} \
@@ -1414,7 +1717,7 @@ mod tests {
                 );
             }
             assert_eq!(
-                limits.admission(None).limit(),
+                limits.admission(&unique_identity(), None).limit(),
                 expected,
                 "and so does the default"
             );
@@ -1428,7 +1731,14 @@ mod tests {
         let limits = MessagingLimits::new(0, 0);
         assert_eq!(limits.host_total(), 1);
         assert_eq!(limits.per_component_default(), 1);
-        assert_eq!(limits.admission(None).limit(), 1);
+        assert_eq!(limits.admission(&unique_identity(), None).limit(), 1);
+
+        // Same floor on the requested side. `parse_max_in_flight` spells zero
+        // as "unset" so this is unreachable from config, but a zero arriving
+        // here would build a gate that admits nothing for the life of the
+        // component — a silently dead subscriber rather than a small one.
+        let limits = MessagingLimits::new(128, 32);
+        assert_eq!(limits.admission(&unique_identity(), Some(0)).limit(), 1);
     }
 
     #[test]
@@ -1450,7 +1760,7 @@ mod tests {
     #[tokio::test]
     async fn admission_bounds_one_component() {
         let limits = MessagingLimits::new(64, 32);
-        let admission = limits.admission(Some(3));
+        let admission = limits.admission(&unique_identity(), Some(3));
 
         // Bound individually rather than collected: all three must be held at
         // once, and the release below must drop exactly one of them.
@@ -1484,7 +1794,7 @@ mod tests {
     #[tokio::test]
     async fn the_host_total_bounds_every_component_together() {
         let limits = MessagingLimits::new(4, 32);
-        let components: Vec<_> = (0..3).map(|_| limits.admission(Some(32))).collect();
+        let components: Vec<_> = (0..3).map(|_| limits.admission(&unique_identity(), Some(32))).collect();
 
         let mut held = Vec::new();
         // Round-robin so no single component could have taken all four.
@@ -1518,8 +1828,8 @@ mod tests {
         // A host-permit leak is the worst failure mode here: it silently lowers
         // the ceiling for every component on the host, not just the leaker.
         let limits = MessagingLimits::new(1, 1);
-        let a = limits.admission(Some(1));
-        let b = limits.admission(Some(1));
+        let a = limits.admission(&unique_identity(), Some(1));
+        let b = limits.admission(&unique_identity(), Some(1));
 
         let permit = a.acquire().await.expect("first admits");
         assert!(
@@ -1545,8 +1855,8 @@ mod tests {
         // while the waiter still has component slots free — the only shape in
         // which a waiter parks on the host level rather than its own.
         let limits = MessagingLimits::new(2, 8);
-        let blocker = limits.admission(Some(8));
-        let waiter = limits.admission(Some(8));
+        let blocker = limits.admission(&unique_identity(), Some(8));
+        let waiter = limits.admission(&unique_identity(), Some(8));
         assert_eq!(waiter.limit(), 2, "clamped to the host total");
 
         let held: Vec<_> = (0..2)
@@ -1582,7 +1892,7 @@ mod tests {
     async fn a_closed_semaphore_ends_the_loop() {
         // How a shutting-down component tells its subscriber loop to stop.
         let limits = MessagingLimits::new(4, 4);
-        let admission = limits.admission(Some(4));
+        let admission = limits.admission(&unique_identity(), Some(4));
         admission.component.close();
         assert!(
             admission.acquire().await.is_none(),
@@ -1604,12 +1914,12 @@ mod tests {
         // an unbounded `usize` now rather than a wire `i32`, so a request above
         // what a semaphore can hold has to clamp here as well.
         assert_eq!(
-            limits.admission(Some(usize::MAX)).limit(),
+            limits.admission(&unique_identity(), Some(usize::MAX)).limit(),
             MessagingLimits::MAX_IN_FLIGHT,
             "a request above the maximum clamps rather than panicking"
         );
         assert_eq!(
-            limits.admission(Some(4096)).limit(),
+            limits.admission(&unique_identity(), Some(4096)).limit(),
             4096,
             "an in-range request is still honored at the maximum"
         );
@@ -1622,7 +1932,7 @@ mod tests {
         // log and no metric. Shedding at a known deadline is what makes the
         // loss countable.
         let limits = MessagingLimits::new(1, 1).with_admission_wait(Duration::from_secs(5));
-        let admission = limits.admission(Some(1));
+        let admission = limits.admission(&unique_identity(), Some(1));
         let _held = admission.acquire().await.expect("first admits");
 
         let outcome = admission.acquire_before_deadline("comp", "subj").await;
@@ -1637,7 +1947,7 @@ mod tests {
         // The deadline must not turn ordinary queueing into loss: a burst that
         // clears within the wait has to be processed, not shed.
         let limits = MessagingLimits::new(1, 1).with_admission_wait(Duration::from_secs(30));
-        let admission = limits.admission(Some(1));
+        let admission = limits.admission(&unique_identity(), Some(1));
         let held = admission.acquire().await.expect("first admits");
 
         tokio::spawn(async move {
@@ -1657,13 +1967,16 @@ mod tests {
         // Shedding and shutting down are different outcomes: the loop must stop
         // on the latter, not drop one message and go round again.
         let limits = MessagingLimits::new(1, 1).with_admission_wait(Duration::from_secs(30));
-        let admission = limits.admission(Some(1));
+        let admission = limits.admission(&unique_identity(), Some(1));
+        // The clone stands in for the copy a subscriber loop holds: teardown
+        // consumes the binding, the loop keeps running on its clone.
+        let in_loop = admission.clone();
         // Through the same method teardown calls, so this covers the production
         // path rather than a semaphore only the test knows how to close.
         admission.close();
         assert!(
             matches!(
-                admission.acquire_before_deadline("comp", "subj").await,
+                in_loop.acquire_before_deadline("comp", "subj").await,
                 Admitted::Closed
             ),
             "a closed semaphore must end the loop, not be mistaken for saturation"
@@ -1676,7 +1989,7 @@ mod tests {
         // must not sit there until the deadline before noticing it is going
         // away. The 30s wait would make that obvious if it were still in force.
         let limits = MessagingLimits::new(1, 1).with_admission_wait(Duration::from_secs(30));
-        let admission = limits.admission(Some(1));
+        let admission = limits.admission(&unique_identity(), Some(1));
         let _held = admission.acquire().await.expect("first admits");
 
         let parked = {
@@ -1697,18 +2010,135 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn replicas_of_one_deployment_share_a_gate() {
+        // The whole point of keying by manifest identity. Each replica is a
+        // separate workload with its own uuid component id, so keying by that
+        // gave each one a full ceiling of its own: `replicas: 4` at
+        // `max_in_flight: 32` could hold 128 messages on a host whose total is
+        // 133. `max_in_flight` has to be a total for the component, however
+        // many replicas of it happen to land here.
+        let limits = MessagingLimits::new(64, 32);
+        let identity = super::AdmissionIdentity::new("team-a", "ingester", "worker");
+        let replica_a = limits.admission(&identity, Some(1));
+        let replica_b = limits.admission(&identity, Some(1));
+
+        let _held = replica_a.acquire().await.expect("first replica admits");
+        assert!(
+            replica_b.component.try_acquire().is_err(),
+            "a second replica must contend for the same one-message ceiling, \
+             not be handed a second one"
+        );
+    }
+
+    #[tokio::test]
+    async fn distinct_components_do_not_share_a_gate() {
+        // The bound is per component, not per workload: two different
+        // components of one workload must not contend, and neither must the
+        // same component name in another namespace.
+        let limits = MessagingLimits::new(64, 32);
+        let ingester = limits.admission(
+            &super::AdmissionIdentity::new("team-a", "pipeline", "ingester"),
+            Some(1),
+        );
+        let indexer = limits.admission(
+            &super::AdmissionIdentity::new("team-a", "pipeline", "indexer"),
+            Some(1),
+        );
+        let other_tenant = limits.admission(
+            &super::AdmissionIdentity::new("team-b", "pipeline", "ingester"),
+            Some(1),
+        );
+
+        let _held = ingester.acquire().await.expect("admits");
+        assert!(
+            indexer.component.try_acquire().is_ok(),
+            "a different component in the same workload must have its own gate"
+        );
+        assert!(
+            other_tenant.component.try_acquire().is_ok(),
+            "the same names in another namespace must not contend"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_gate_closes_only_when_its_last_replica_goes_away() {
+        // Sharing a gate makes close-on-teardown dangerous: closing when the
+        // first replica goes away would wake a healthy replica's loop with
+        // `Closed`, which breaks it out of its subscriber loop for good. The
+        // refcount is what lets gate sharing and close-on-teardown coexist.
+        let limits = MessagingLimits::new(64, 32);
+        let identity = super::AdmissionIdentity::new("team-a", "ingester", "worker");
+        let replica_a = limits.admission(&identity, Some(2));
+        let replica_b = limits.admission(&identity, Some(2));
+        assert_eq!(limits.gates.bindings(&identity), 2);
+
+        replica_a.close();
+        assert_eq!(limits.gates.bindings(&identity), 1);
+        assert!(
+            replica_b.acquire().await.is_some(),
+            "a surviving replica must still be admitted after a sibling tears down"
+        );
+
+        replica_b.close();
+        assert_eq!(
+            limits.gates.bindings(&identity),
+            0,
+            "the last release must drop the entry rather than leaking it"
+        );
+
+        // And the gate really is closed now, so a loop still parked on it stops
+        // rather than shedding.
+        let rebound = limits.admission(&identity, Some(2));
+        assert!(
+            rebound.acquire().await.is_some(),
+            "a later binding must get a fresh, open gate"
+        );
+    }
+
     #[test]
     fn only_the_component_gate_closes_not_the_shared_host_one() {
         // Closing the host semaphore would take every other component on the
         // host down with the one being torn down.
         let limits = MessagingLimits::new(4, 2);
-        let going_away = limits.admission(Some(1));
-        let survivor = limits.admission(Some(1));
+        let going_away = limits.admission(&unique_identity(), Some(1));
+        let survivor = limits.admission(&unique_identity(), Some(1));
         going_away.close();
         assert!(survivor.host.try_acquire().is_ok(), "host gate must survive");
         assert!(
             survivor.component.try_acquire().is_ok(),
             "an unrelated component's gate must survive"
+        );
+    }
+
+    #[test]
+    fn a_shed_metric_is_attributed_to_manifest_identity_not_the_component_id() {
+        // The component id is a fresh uuid per workload construction, so
+        // attributing the counter with it mints a new series on every restart,
+        // rolling update, and replica — cardinality driven by deployment churn,
+        // and a value no operator can map back to a workload. Every attribute
+        // here has to come from the manifest instead.
+        let admission = MessagingLimits::default().admission(
+            &super::AdmissionIdentity::new("team-a", "ingester", "worker"),
+            None,
+        );
+
+        assert_eq!(&*admission.identity.namespace, "team-a");
+        assert_eq!(&*admission.identity.workload, "ingester");
+        assert_eq!(&*admission.identity.component, "worker");
+
+        // The id passed per message is for the log line only; it must not reach
+        // the identity the counter is split by.
+        let uuid = uuid::Uuid::new_v4().to_string();
+        assert!(
+            [
+                &*admission.identity.namespace,
+                &*admission.identity.workload,
+                &*admission.identity.component,
+            ]
+            .iter()
+            .all(|v| *v != uuid),
+            "a component id must never become a metric attribute"
         );
     }
 
@@ -1719,7 +2149,7 @@ mod tests {
         // the counter fires precisely during the flood that produces them.
         let limits = MessagingLimits::default();
         let admission = limits
-            .admission(None)
+            .admission(&unique_identity(), None)
             .with_subscriptions(&["orders.*.created".to_string(), "audit.>".to_string()]);
 
         assert_eq!(
@@ -1738,7 +2168,7 @@ mod tests {
     fn no_configured_subscriptions_attributes_to_the_catch_all() {
         // An empty list means "everything"; that is one bounded value, not a
         // reason to fall back to the subject.
-        let admission = MessagingLimits::default().admission(None);
+        let admission = MessagingLimits::default().admission(&unique_identity(), None);
         assert_eq!(admission.subscription_for("anything.at.all"), ">");
     }
 
@@ -1774,12 +2204,68 @@ mod tests {
     }
 
     #[test]
+    fn an_admission_wait_cannot_become_forever() {
+        // Waiting is bought with the transport's buffer, and the transport
+        // drops on overflow without counting it. An unbounded wait therefore
+        // trades countable sheds for uncountable loss — the exact failure the
+        // bounded wait exists to prevent, reintroduced through a config knob.
+        for too_long in ["1h", "24h", "3600", "18446744073709551615"] {
+            assert_eq!(
+                super::parse_admission_wait(Some(too_long)),
+                Some(super::MAX_ADMISSION_WAIT),
+                "{too_long} must clamp rather than park the loop indefinitely"
+            );
+        }
+        // Clamped, not rejected: a manifest written for another host still runs.
+        assert_eq!(
+            super::parse_admission_wait(Some("5m")),
+            Some(Duration::from_secs(300)),
+            "a legitimately slow handler must still get the wait it asked for"
+        );
+        assert_eq!(
+            super::parse_admission_wait(Some("10m")),
+            Some(super::MAX_ADMISSION_WAIT),
+            "the boundary itself is allowed through unchanged"
+        );
+    }
+
+    #[test]
+    fn every_setter_holds_the_admission_wait_bound() {
+        // The bound has to be a property of the type, not of the config path.
+        // `MessagingLimits::with_admission_wait` is how an embedder sets the
+        // host-wide default, so clamping only in `parse_admission_wait` would
+        // leave the unbounded park reachable from outside this crate.
+        let over = Duration::from_secs(3600);
+        assert_eq!(
+            MessagingLimits::default()
+                .with_admission_wait(over)
+                .admission_wait(),
+            super::MAX_ADMISSION_WAIT
+        );
+        assert_eq!(
+            MessagingLimits::default()
+                .admission(&unique_identity(), None)
+                .with_admission_wait(Some(over))
+                .wait(),
+            super::MAX_ADMISSION_WAIT
+        );
+        // A wait inside the bound is still passed through untouched.
+        let fine = Duration::from_secs(120);
+        assert_eq!(
+            MessagingLimits::default()
+                .with_admission_wait(fine)
+                .admission_wait(),
+            fine
+        );
+    }
+
+    #[test]
     fn a_configured_admission_wait_overrides_the_host_default() {
         let limits = MessagingLimits::default();
-        assert_eq!(limits.admission(None).wait(), super::DEFAULT_ADMISSION_WAIT);
+        assert_eq!(limits.admission(&unique_identity(), None).wait(), super::DEFAULT_ADMISSION_WAIT);
         assert_eq!(
             limits
-                .admission(None)
+                .admission(&unique_identity(), None)
                 .with_admission_wait(Some(Duration::from_secs(300)))
                 .wait(),
             Duration::from_secs(300),
@@ -1787,7 +2273,7 @@ mod tests {
         );
         // Unset leaves the host default alone.
         assert_eq!(
-            limits.admission(None).with_admission_wait(None).wait(),
+            limits.admission(&unique_identity(), None).with_admission_wait(None).wait(),
             super::DEFAULT_ADMISSION_WAIT
         );
     }
@@ -1795,7 +2281,7 @@ mod tests {
     #[tokio::test]
     async fn permits_are_handed_out_in_arrival_order() {
         let limits = MessagingLimits::new(8, 1);
-        let admission = limits.admission(Some(1));
+        let admission = limits.admission(&unique_identity(), Some(1));
         let held = admission.acquire().await.expect("first admits");
 
         let order = Arc::new(AtomicUsize::new(0));

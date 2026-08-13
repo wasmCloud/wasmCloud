@@ -188,6 +188,10 @@ pub struct HostCommand {
     /// `--wasmcloud-messaging-max-in-flight` — is clamped to it, and the clamp
     /// is logged.
     ///
+    /// "Per component" means per component of a deployment, not per replica of
+    /// it: replicas that land on the same host share one ceiling, so a
+    /// deployment cannot multiply its way past this by scaling out.
+    ///
     /// Unset, this is a quarter of whatever `--wasmcloud-messaging-max-in-flight`
     /// resolved to, so the two cannot contradict each other: the pool-derived
     /// 133 of a stock host gives 33, and the pinned 128 of a host with pooling
