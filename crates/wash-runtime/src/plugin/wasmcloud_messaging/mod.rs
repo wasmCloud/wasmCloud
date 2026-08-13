@@ -656,14 +656,15 @@ impl ComponentGates {
     /// under tasks already holding permits, and silently adopting the newer
     /// number would change a running component's ceiling.
     fn acquire(&self, identity: &AdmissionIdentity, limit: usize) -> (Arc<Semaphore>, usize) {
-        let mut gates = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let entry = gates
-            .entry(identity.clone())
-            .or_insert_with(|| GateEntry {
-                semaphore: Arc::new(Semaphore::new(limit)),
-                limit,
-                bindings: 0,
-            });
+        let mut gates = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = gates.entry(identity.clone()).or_insert_with(|| GateEntry {
+            semaphore: Arc::new(Semaphore::new(limit)),
+            limit,
+            bindings: 0,
+        });
         entry.bindings += 1;
         if entry.limit != limit {
             tracing::warn!(
@@ -689,7 +690,10 @@ impl ComponentGates {
     /// would stop *its* subscriber loop, which is why this is refcounted rather
     /// than closing on the first teardown.
     fn release(&self, identity: &AdmissionIdentity) {
-        let mut gates = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut gates = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(entry) = gates.get_mut(identity) else {
             return;
         };
@@ -930,7 +934,6 @@ impl AdmissionIdentity {
     }
 }
 
-
 impl AdmissionTimeouts {
     fn new() -> Self {
         Self {
@@ -979,8 +982,7 @@ impl AdmissionTimeouts {
 /// what happened — a rate limit was exceeded — and it already exists on both
 /// messaging surfaces, so the async WIT lowers it to `quota-exceeded` with no
 /// new vocabulary.
-pub(crate) const ADMISSION_SHED_DETAIL: &str =
-    "the responding component's messaging admission gate is saturated; \
+pub(crate) const ADMISSION_SHED_DETAIL: &str = "the responding component's messaging admission gate is saturated; \
      the request was shed rather than queued";
 
 /// The error a requester gets when the host shed its request.
@@ -1166,7 +1168,6 @@ impl Admission {
         self.subscriptions = subscriptions.into();
         self
     }
-
 
     /// The configured pattern `subject` arrived on.
     ///
@@ -1683,7 +1684,9 @@ mod tests {
             "asking for the whole host budget must not grant it"
         );
         assert_eq!(
-            limits.admission(&unique_identity(), Some(usize::MAX)).limit(),
+            limits
+                .admission(&unique_identity(), Some(usize::MAX))
+                .limit(),
             32,
             "nor must asking for everything representable"
         );
@@ -1709,7 +1712,8 @@ mod tests {
             let expected = host.min(per_component);
             for requested in [1, 8, 64, 4096, i32::MAX as usize] {
                 let limit = limits
-                    .admission(&unique_identity(), Some(requested)).limit();
+                    .admission(&unique_identity(), Some(requested))
+                    .limit();
                 assert!(
                     limit <= expected,
                     "host={host} per_component={per_component} requested={requested} \
@@ -1794,7 +1798,9 @@ mod tests {
     #[tokio::test]
     async fn the_host_total_bounds_every_component_together() {
         let limits = MessagingLimits::new(4, 32);
-        let components: Vec<_> = (0..3).map(|_| limits.admission(&unique_identity(), Some(32))).collect();
+        let components: Vec<_> = (0..3)
+            .map(|_| limits.admission(&unique_identity(), Some(32)))
+            .collect();
 
         let mut held = Vec::new();
         // Round-robin so no single component could have taken all four.
@@ -1914,7 +1920,9 @@ mod tests {
         // an unbounded `usize` now rather than a wire `i32`, so a request above
         // what a semaphore can hold has to clamp here as well.
         assert_eq!(
-            limits.admission(&unique_identity(), Some(usize::MAX)).limit(),
+            limits
+                .admission(&unique_identity(), Some(usize::MAX))
+                .limit(),
             MessagingLimits::MAX_IN_FLIGHT,
             "a request above the maximum clamps rather than panicking"
         );
@@ -2104,7 +2112,10 @@ mod tests {
         let going_away = limits.admission(&unique_identity(), Some(1));
         let survivor = limits.admission(&unique_identity(), Some(1));
         going_away.close();
-        assert!(survivor.host.try_acquire().is_ok(), "host gate must survive");
+        assert!(
+            survivor.host.try_acquire().is_ok(),
+            "host gate must survive"
+        );
         assert!(
             survivor.component.try_acquire().is_ok(),
             "an unrelated component's gate must survive"
@@ -2193,10 +2204,7 @@ mod tests {
             Some(Duration::from_secs(90))
         );
         // Zero is a real policy ("do not queue"), not a spelling of unset.
-        assert_eq!(
-            super::parse_admission_wait(Some("0")),
-            Some(Duration::ZERO)
-        );
+        assert_eq!(super::parse_admission_wait(Some("0")), Some(Duration::ZERO));
         // Unset and malformed both fall back to the host default.
         for unset in [None, Some(""), Some("  "), Some("soon"), Some("5 parsecs")] {
             assert_eq!(super::parse_admission_wait(unset), None, "{unset:?}");
@@ -2262,7 +2270,10 @@ mod tests {
     #[test]
     fn a_configured_admission_wait_overrides_the_host_default() {
         let limits = MessagingLimits::default();
-        assert_eq!(limits.admission(&unique_identity(), None).wait(), super::DEFAULT_ADMISSION_WAIT);
+        assert_eq!(
+            limits.admission(&unique_identity(), None).wait(),
+            super::DEFAULT_ADMISSION_WAIT
+        );
         assert_eq!(
             limits
                 .admission(&unique_identity(), None)
@@ -2273,7 +2284,10 @@ mod tests {
         );
         // Unset leaves the host default alone.
         assert_eq!(
-            limits.admission(&unique_identity(), None).with_admission_wait(None).wait(),
+            limits
+                .admission(&unique_identity(), None)
+                .with_admission_wait(None)
+                .wait(),
             super::DEFAULT_ADMISSION_WAIT
         );
     }

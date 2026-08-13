@@ -937,7 +937,9 @@ mod tests {
                     admission: crate::plugin::wasmcloud_messaging::MessagingLimits::default()
                         .admission(
                             &crate::plugin::wasmcloud_messaging::AdmissionIdentity::new(
-                                "test-ns", "test-workload", "worker",
+                                "test-ns",
+                                "test-workload",
+                                "worker",
                             ),
                             None,
                         ),
