@@ -283,7 +283,7 @@ async fn oversized_publish_returns_message_too_large_without_trapping() -> Resul
     );
     let result = response.text().await?;
     assert_eq!(
-        result, "Err(MessageTooLarge)",
+        result, "Err(Error::MessageTooLarge)",
         "the oversized guest stream must return the typed error rather than trap"
     );
 
