@@ -80,7 +80,11 @@ const SPIN_BOUND: Duration = Duration::from_secs(20);
 /// Set this binary's deadlines and grace. All are cached process-wide on first
 /// read, so every test must want the same values and must call this before
 /// starting a host.
-fn abandonment_env() {
+/// Every test here pins or starves CPUs and then makes timing assertions, so
+/// two at once on a small CI runner can hold each other's guests off-core past
+/// the pause threshold. The returned guard runs them one at a time.
+fn abandonment_env() -> std::sync::MutexGuard<'static, ()> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
@@ -93,7 +97,17 @@ fn abandonment_env() {
         std::env::set_var("WASH_PLUGIN_CAPABILITY_CALL_TIMEOUT_SECS", &deadline);
         std::env::set_var("WASH_ABANDONED_CALL_GRACE_SECS", &GRACE_SECS.to_string());
         std::env::set_var("WASH_ABANDONED_CALL_ESCALATION_SECS", "3");
+        // CI runners are small and this binary's tests deliberately pin cores,
+        // so a pinned guest can go unscheduled long enough for the default
+        // 500ms pause threshold to read the gap as a yield and reset its
+        // stretch — postponing the escalation past the probes' patience. The
+        // tests that depend on real pauses being seen (slow guest, SSE) pause
+        // for 5s+ per await, so 2s keeps them intact.
+        std::env::set_var("WASH_ABANDONED_CALL_PAUSE_THRESHOLD_MS", "2000");
     });
+    SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn client() -> Result<reqwest::Client> {
@@ -242,7 +256,7 @@ async fn served(
 /// is the epoch deadline doing it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_spinning_pooled_instance_is_trapped_and_replaced() -> Result<()> {
-    abandonment_env();
+    let _serial = abandonment_env();
     let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
     start_sleeper(&host, "spin-pooled", false).await?;
     let client = client()?;
@@ -293,7 +307,7 @@ async fn a_spinning_pooled_instance_is_trapped_and_replaced() -> Result<()> {
 /// whichever workload resolved last.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_spinning_service_is_trapped_and_restarted() -> Result<()> {
-    abandonment_env();
+    let _serial = abandonment_env();
     let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
     start_sleeper(&host, "spin-svc", true).await?;
     start_sleeper(&host, "bystander", false).await?;
@@ -369,7 +383,7 @@ async fn a_spinning_service_is_trapped_and_restarted() -> Result<()> {
 /// what fails them; without it they hang until their clients give up.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_component_wedged_by_its_input_is_trapped_and_replaced() -> Result<()> {
-    abandonment_env();
+    let _serial = abandonment_env();
     let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
     start_sleeper(&host, "redos", false).await?;
     let client = client()?;
@@ -419,7 +433,7 @@ async fn a_component_wedged_by_its_input_is_trapped_and_replaced() -> Result<()>
 /// the callee's store — built for this one call — is the one that must die.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_abandoned_linked_call_to_a_cold_ephemeral_store_is_ended() -> Result<()> {
-    abandonment_env();
+    let _serial = abandonment_env();
     let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
     start_linked(&host, "linked-cold", 0).await?;
     let client = client()?;
@@ -467,7 +481,7 @@ async fn an_abandoned_linked_call_to_a_cold_ephemeral_store_is_ended() -> Result
 /// that climbs and then restarts at one is the reap, observed from inside.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_abandoned_linked_call_to_a_pooled_instance_is_ended() -> Result<()> {
-    abandonment_env();
+    let _serial = abandonment_env();
     let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
     start_linked(&host, "linked-pooled", 1).await?;
     let client = client()?;
@@ -539,7 +553,7 @@ async fn deliver(
 /// the service supervisor restarts the instance (its count resets).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_abandoned_message_delivery_traps_and_restarts_the_service() -> Result<()> {
-    abandonment_env();
+    let _serial = abandonment_env();
     let (_addr, host, ingress) = common::start_host_with_p3_handler("127.0.0.1:0").await?;
     let workload_id = uuid::Uuid::new_v4().to_string();
     host.workload_start(WorkloadStartRequest {
@@ -616,7 +630,7 @@ async fn an_abandoned_capability_call_escalates_to_a_plugin_restart() -> Result<
         start_host_with_component_plugin,
     };
 
-    abandonment_env();
+    let _serial = abandonment_env();
     let (addr, host) =
         start_host_with_component_plugin("127.0.0.1:0", "kv-plugin", KV_PLUGIN_WASM).await?;
     host.workload_start(component_workload_request(
@@ -688,7 +702,7 @@ async fn an_abandoned_capability_call_escalates_to_a_plugin_restart() -> Result<
 /// `served` climbing unbroken rather than restarting at 1.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_client_that_gives_up_does_not_disturb_a_healthy_slow_guest() -> Result<()> {
-    abandonment_env();
+    let _serial = abandonment_env();
     let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
     start_sleeper(&host, "slow-svc", true).await?;
     let client = client()?;
@@ -741,7 +755,7 @@ async fn a_client_that_gives_up_does_not_disturb_a_healthy_slow_guest() -> Resul
 /// it from a wedged guest.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_sse_client_disconnecting_between_frames_does_not_trap_the_service() -> Result<()> {
-    abandonment_env();
+    let _serial = abandonment_env();
     // Frames further apart than deadline + grace, so the guest is mid-sleep
     // for the whole window in which a time-only trap would fire.
     const GAP_MS: u64 = (DEADLINE_SECS + GRACE_SECS) * 1_000 + 2_000;
@@ -794,7 +808,7 @@ async fn an_sse_client_disconnecting_between_frames_does_not_trap_the_service() 
 /// would show up as a failed request and a count restarting.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_healthy_instance_under_steady_traffic_is_never_trapped() -> Result<()> {
-    abandonment_env();
+    let _serial = abandonment_env();
     // Several deadline periods, so a spurious once-per-period trap cannot hide.
     const DRIVE: Duration = Duration::from_secs(DEADLINE_SECS * 3);
     const GAP: Duration = Duration::from_millis(200);
