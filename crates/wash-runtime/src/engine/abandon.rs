@@ -16,18 +16,23 @@
 //!   the guest's own loop back-edges, the only host code a non-yielding guest
 //!   cannot block — to read it.
 //!
-//! A store is acted on only when two things hold for longer than
-//! [`crate::timeouts::abandoned_call_grace`]: a call on it is abandoned and
-//! still registered, and `Continuity` shows guest code running without a
-//! pause. The second is what separates the two kinds of stuck call — a guest
-//! waiting in a host call stops executing, so the stretch resets, while a
-//! pinned one never does. Abandonment alone would not do: dropping the
-//! dispatcher arms the flag, so an ordinary client disconnect would condemn a
-//! store whose guest is healthy and merely slow.
+//! A store is acted on only when three things hold: a call on it has been
+//! abandoned longer than [`crate::timeouts::abandoned_call_grace`] and is
+//! still registered, *every* other registered call has been abandoned too,
+//! and `Continuity` shows guest code running without a pause. The last
+//! separates the two kinds of stuck call — a guest waiting in a host call
+//! stops executing, so the stretch resets, while a pinned one never does.
+//! Abandonment alone would not do: dropping the dispatcher arms the flag, so
+//! an ordinary client disconnect would condemn a store whose guest is healthy
+//! and merely slow.
 //!
-//! The two are scoped differently — abandonment per call, continuity per store
-//! — so they can be satisfied by different calls. That is intended: a call
-//! pinning the store wedges every other call on it, abandoned or not.
+//! The all-abandoned condition is what keeps the per-store blast radius safe:
+//! continuity cannot tell a guest that yields every few hundred milliseconds
+//! from a pinned one whose fires are spread that far by scheduler jitter, so
+//! the trap waits until it would end nothing still wanted. Teardown of a
+//! really pinned store is delayed by that, not lost — such a guest admits no
+//! new calls, and the calls already on it are abandoned by their own
+//! deadlines in turn.
 //!
 //! No judgement of *speed* is made anywhere here. The epoch advances on wall
 //! clock, so it can report whether guest code is running, never whether it is
@@ -131,6 +136,12 @@ impl AbandonedCalls {
     /// Whether nothing watched is abandoned, which re-arms the warning.
     fn none_abandoned(&self) -> bool {
         self.lock().iter().all(|f| f.armed_at().is_none())
+    }
+
+    /// Whether every watched call has been abandoned, so trapping the store
+    /// would end nothing still wanted.
+    fn all_abandoned(&self) -> bool {
+        self.lock().iter().all(|f| f.armed_at().is_some())
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Arc<AbandonFlag>>> {
@@ -425,6 +436,13 @@ pub(crate) fn arm_epoch_deadline(
         if !abandoned.any_abandoned_longer_than(grace) {
             return keep_running(&mut warned);
         }
+        // A call is still wanted: trapping the store would take it too. This
+        // also protects a yielding guest whose wakes land closer together
+        // than the pause threshold and so read as one pinned stretch — its
+        // own wanted call is what keeps its store alive.
+        if !abandoned.all_abandoned() {
+            return keep_running(&mut warned);
+        }
         // Abandoned, but the guest is still pausing to wait: slow, not wedged.
         if pinned_for < grace_millis {
             return keep_running(&mut warned);
@@ -470,6 +488,23 @@ mod tests {
         assert!(calls.any_abandoned_longer_than(Duration::ZERO));
         drop(guard);
         assert!(!calls.any_abandoned_longer_than(Duration::ZERO));
+    }
+
+    #[test]
+    fn a_wanted_call_blocks_all_abandoned() {
+        let calls = Arc::new(AbandonedCalls::default());
+        let given_up = DispatchedCall::new("test", Duration::ZERO);
+        let wanted = DispatchedCall::new("test", Duration::ZERO);
+        let _given_up_guard = calls.watch(given_up.flag());
+        let wanted_guard = calls.watch(wanted.flag());
+
+        given_up.flag().arm();
+        assert!(calls.any_abandoned_longer_than(Duration::ZERO));
+        assert!(!calls.all_abandoned());
+        // The wanted call ends (or is abandoned in turn); nothing on the
+        // store is wanted any more.
+        drop(wanted_guard);
+        assert!(calls.all_abandoned());
     }
 
     /// The grace holds the callback off a freshly abandoned call, and only the
