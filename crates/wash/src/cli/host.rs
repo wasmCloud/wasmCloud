@@ -157,6 +157,51 @@ pub struct HostCommand {
     )]
     pub max_inbound_socket_connections_per_workload: usize,
 
+    /// Host-wide cap on messages being processed at once across every
+    /// `wasmcloud:messaging` component on this host.
+    ///
+    /// A messaging-triggered component gets a fresh instance per message, so
+    /// this equally bounds instances. Unset, it is derived from the host's
+    /// instance pool: at the worst measured component shape (Componentize-Go,
+    /// 5 core instances each) a `total_core_instances` of 1000 supports 200
+    /// components, and messaging claims two thirds of that — 133 — leaving the
+    /// rest for HTTP-triggered work, warm pools, and long-lived services.
+    /// Raising `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` raises this with it;
+    /// with pooling disabled there is no budget to divide and the pinned
+    /// default of 128 stands. Set, the number given is used as-is.
+    //
+    // Deliberately no `default_value_t`: a parse-time default is
+    // indistinguishable downstream from an operator typing the same number, and
+    // `MessagingLimits::resolve` needs to tell them apart to derive from the
+    // pool. The default that would go here is documented above instead.
+    #[arg(
+        long = "wasmcloud-messaging-max-in-flight",
+        env = "WASH_WASMCLOUD_MESSAGING_MAX_IN_FLIGHT"
+    )]
+    pub wasmcloud_messaging_max_in_flight: Option<usize>,
+
+    /// What a component's `max_in_flight` config resolves to when it does not set one,
+    /// and the most any single component may ask for.
+    ///
+    /// A per-component total, unlike `max_concurrency`, which is per warm
+    /// instance. A component asking for more than this — or more than
+    /// `--wasmcloud-messaging-max-in-flight` — is clamped to it, and the clamp
+    /// is logged.
+    ///
+    /// "Per component" means per component of a deployment, not per replica of
+    /// it: replicas that land on the same host share one ceiling, so a
+    /// deployment cannot multiply its way past this by scaling out.
+    ///
+    /// Unset, this is a quarter of whatever `--wasmcloud-messaging-max-in-flight`
+    /// resolved to, so the two cannot contradict each other: the pool-derived
+    /// 133 of a stock host gives 33, and the pinned 128 of a host with pooling
+    /// disabled gives 32.
+    #[arg(
+        long = "wasmcloud-messaging-max-in-flight-per-component",
+        env = "WASH_WASMCLOUD_MESSAGING_MAX_IN_FLIGHT_PER_COMPONENT"
+    )]
+    pub wasmcloud_messaging_max_in_flight_per_component: Option<usize>,
+
     /// How long a pooled HTTP connect waits for a slot before failing with a
     /// connect timeout (e.g. `5s`, `500ms`).
     ///
@@ -418,6 +463,20 @@ impl CliCommand for HostCommand {
 
         let engine = engine_builder.build()?;
 
+        // Likewise one set of messaging ceilings for the whole host: the
+        // host-wide semaphore lives inside this value, so every messaging
+        // backend must be handed the *same* one or each gets its own budget.
+        //
+        // Built after the engine, not before, because an unset ceiling is
+        // derived from the pool the engine actually installed — which accounts
+        // for `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` and for pooling being
+        // unavailable, neither of which is knowable from the flags alone.
+        let messaging_limits = crate::config::wasmcloud_messaging_limits(
+            self.wasmcloud_messaging_max_in_flight,
+            self.wasmcloud_messaging_max_in_flight_per_component,
+            engine.total_core_instances(),
+        )?;
+
         let mut cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default()
             .with_engine(engine.clone())
             .with_host_config(host_config)
@@ -433,9 +492,12 @@ impl CliCommand for HostCommand {
             .with_plugin(Arc::new(plugin::wasi_blobstore::NatsBlobstore::new(
                 &data_nats_client,
             )))?
-            .with_plugin(Arc::new(plugin::wasmcloud_messaging::NatsMessaging::new(
-                data_nats_client.clone(),
-            )))?
+            .with_plugin(Arc::new(
+                plugin::wasmcloud_messaging::NatsMessaging::with_limits(
+                    data_nats_client.clone(),
+                    messaging_limits.clone(),
+                ),
+            ))?
             .with_plugin(Arc::new(plugin::wasi_keyvalue::NatsKeyValue::new(
                 &data_nats_client,
             )))?

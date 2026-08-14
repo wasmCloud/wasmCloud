@@ -19,7 +19,26 @@ const DEFAULT_REQUEST_TIMEOUT_MS: u32 = 10_000;
 
 /// A component's message inbox, shared between the publisher side
 /// (`route_to_subscribers`) and the component's processing task.
-type Inbox = Arc<RwLock<VecDeque<types_p2::BrokerMessage>>>;
+type Inbox = Arc<RwLock<VecDeque<QueuedMessage>>>;
+
+/// A message queued for one component, with what the router knew when it was
+/// routed.
+struct QueuedMessage {
+    msg: types_p2::BrokerMessage,
+    /// Whether this component was the *only* subscriber the message went to.
+    ///
+    /// Decides whether shedding this message may fail its requester outright.
+    /// If another component also received it, that one may still reply, and
+    /// completing the pending request now would fail a request that was about
+    /// to succeed — the sole subscriber is exactly the case where "I dropped
+    /// it" and "nobody will answer" are the same statement.
+    ///
+    /// Known only at routing time, which is why it is carried on the message
+    /// rather than recomputed in the drain loop: by then the subscriber set may
+    /// have changed, and the answer that matters is the one that was true when
+    /// the message fanned out.
+    sole_subscriber: bool,
+}
 
 mod bindings {
     crate::wasmtime::component::bindgen!({
@@ -70,12 +89,26 @@ super::messaging_handler_dispatch! {
     async: async_bindings,
 }
 
+/// The workload's reply-routing table: one entry per in-flight `request`,
+/// keyed by the `_INBOX.*` subject it is waiting on.
+type PendingRequests =
+    Arc<RwLock<HashMap<String, oneshot::Sender<Result<types_p2::BrokerMessage, MsgError>>>>>;
+
 /// Per-workload tracking data. Holds the reply-routing table shared by every
 /// component in the workload; message delivery itself is per-component (see
 /// [`ComponentData`]).
 #[derive(Default)]
 struct WorkloadData {
-    pending_requests: Arc<RwLock<HashMap<String, oneshot::Sender<types_p2::BrokerMessage>>>>,
+    /// In-flight `request` calls, keyed by the `_INBOX.*` subject each is
+    /// waiting on.
+    ///
+    /// Carries a `Result` rather than a bare message so a request the admission
+    /// gate sheds can be failed immediately, with the same
+    /// [`MsgError::QuotaExceeded`] the NATS backend produces. A shed message is
+    /// dropped, and without this the requester cannot tell that from a slow
+    /// handler until its own `timeout_ms` expires — under exactly the
+    /// saturation that produces shedding.
+    pending_requests: PendingRequests,
 }
 
 /// Per-component tracking data. Each handler component has its own subject
@@ -92,27 +125,12 @@ struct ComponentData {
     /// here; the component's processing task drains it.
     inbox: Inbox,
     notify: Arc<Notify>,
+    /// Bounds how many messages this component processes at once, and so how
+    /// many instances the receive loop may create. See [`super::Admission`].
+    admission: super::Admission,
 }
 
-/// Returns whether `subject` matches NATS subscription `pattern`, where `*`
-/// matches exactly one token and `>` matches one or more trailing tokens.
-fn subject_matches(pattern: &str, subject: &str) -> bool {
-    let mut subject_tokens = subject.split('.');
-    let mut pattern_tokens = pattern.split('.').peekable();
-    while let Some(pat) = pattern_tokens.next() {
-        if pat == ">" {
-            // `>` is only valid as the final token and matches one or more
-            // remaining subject tokens.
-            return pattern_tokens.peek().is_none() && subject_tokens.next().is_some();
-        }
-        match subject_tokens.next() {
-            Some(sub) if pat == "*" || pat == sub => continue,
-            _ => return false,
-        }
-    }
-    // Every pattern token matched; the subject must be fully consumed too.
-    subject_tokens.next().is_none()
-}
+use super::subject_matches;
 
 /// Whether any of a component's `subscriptions` match `subject`. An empty
 /// subscription list matches everything (single-handler back-compat).
@@ -140,6 +158,7 @@ async fn route_to_subscribers(
             .collect()
     };
 
+    let sole_subscriber = targets.len() == 1;
     for (inbox, notify) in targets {
         {
             let mut queue = inbox.write().await;
@@ -148,7 +167,10 @@ async fn route_to_subscribers(
                 // subscriber is not draining fast enough.
                 return Err(MsgError::QuotaExceeded("message queue full".to_string()));
             }
-            queue.push_back(msg.clone());
+            queue.push_back(QueuedMessage {
+                msg: msg.clone(),
+                sole_subscriber,
+            });
         }
         notify.notify_one();
     }
@@ -207,7 +229,7 @@ async fn do_request(
     // Wait for the response with timeout
     let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
     match tokio::time::timeout(timeout_duration, rx).await {
-        Ok(Ok(response)) => Ok(Ok(response)),
+        Ok(Ok(response)) => Ok(response),
         Ok(Err(_)) => {
             // Channel was dropped without sending
             warn!("request channel closed without response");
@@ -251,7 +273,7 @@ async fn do_publish(
         if let Some(sender) = lock.remove(&msg.subject) {
             debug!(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>"), "Responding message");
             // This is a response to a request - send it via the oneshot channel
-            let _ = sender.send(msg);
+            let _ = sender.send(Ok(msg));
             return Ok(Ok(()));
         }
     }
@@ -271,13 +293,25 @@ async fn do_publish(
 pub struct InMemoryMessaging {
     tracker: Arc<RwLock<WorkloadTracker<WorkloadData, ComponentData>>>,
     meters: Arc<RwLock<Meters>>,
+    limits: super::MessagingLimits,
 }
 
 impl InMemoryMessaging {
+    /// Build the backend with the default messaging ceilings
+    /// ([`super::DEFAULT_MAX_IN_FLIGHT_HOST`] /
+    /// [`super::DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT`]).
     pub fn new() -> Self {
+        Self::with_limits(super::MessagingLimits::default())
+    }
+
+    /// Build the backend with operator-configured ceilings. The `limits` carry
+    /// the host-wide semaphore, so pass the *same* value to every messaging
+    /// backend on a host or each gets its own host budget.
+    pub fn with_limits(limits: super::MessagingLimits) -> Self {
         Self {
             tracker: Arc::new(RwLock::new(WorkloadTracker::default())),
             meters: Default::default(),
+            limits,
         }
     }
 
@@ -494,12 +528,28 @@ impl HostPlugin for InMemoryMessaging {
         // Per-component subscriptions come from this component's
         // `LocalResources.config` (set via `dev.components[].config` or a
         // WorkloadDeployment), so workers in one workload can subscribe to
-        // different subjects.
+        // different subjects. `max_in_flight` is read from the same place for
+        // the same reason: both are messaging-plugin configuration, scoped to
+        // one component.
         let subscriptions = super::parse_subscriptions(
             component_handle
                 .local_resources()
                 .config
                 .get("subscriptions")
+                .map(String::as_str),
+        );
+        let max_in_flight = super::parse_max_in_flight(
+            component_handle
+                .local_resources()
+                .config
+                .get(super::MAX_IN_FLIGHT_CONFIG)
+                .map(String::as_str),
+        );
+        let admission_wait = super::parse_admission_wait(
+            component_handle
+                .local_resources()
+                .config
+                .get(super::ADMISSION_WAIT_CONFIG)
                 .map(String::as_str),
         );
 
@@ -508,7 +558,29 @@ impl HostPlugin for InMemoryMessaging {
         // subscriber loop is set up either way (and its receive loop delivers to
         // the running service when one is registered).
         if super::exports_messaging_handler(&component_handle.world()) {
-            debug!(?subscriptions, "Tracking component in in-memory messaging");
+            // Manifest identity for the shed metric, resolved exactly as the
+            // NATS backend does. A trigger service never reaches the admission
+            // gate — the receive loop delivers to it before admitting — so that
+            // arm is a bounded placeholder rather than a name that appears.
+            let component_name = match component_handle {
+                WorkloadItem::Component(component) => component.name().to_string(),
+                WorkloadItem::Service(_) => "service".to_string(),
+            };
+            let identity = super::AdmissionIdentity::new(
+                component_handle.workload_namespace(),
+                component_handle.workload_name(),
+                &component_name,
+            );
+            let admission = self
+                .limits
+                .admission(&identity, max_in_flight)
+                .with_admission_wait(admission_wait)
+                .with_subscriptions(&subscriptions);
+            debug!(
+                ?subscriptions,
+                max_in_flight = admission.limit(),
+                "Tracking component in in-memory messaging"
+            );
             self.tracker.write().await.add_component(
                 component_handle,
                 ComponentData {
@@ -517,6 +589,7 @@ impl HostPlugin for InMemoryMessaging {
                     subscriptions,
                     inbox: Arc::default(),
                     notify: Arc::new(Notify::new()),
+                    admission,
                 },
             );
         }
@@ -529,17 +602,32 @@ impl HostPlugin for InMemoryMessaging {
         workload: &ResolvedWorkload,
         component_id: &str,
     ) -> anyhow::Result<()> {
-        let (inbox, notify, cancel_token) = {
+        let (inbox, notify, cancel_token, admission) = {
             let lock = self.tracker.read().await;
             match lock.get_component_data(component_id) {
                 Some(data) => (
                     data.inbox.clone(),
                     data.notify.clone(),
                     data.cancel_token.clone(),
+                    data.admission.clone(),
                 ),
                 None => return Ok(()),
             }
         };
+        // Used only to fail a shed request/reply message immediately rather
+        // than leaving the requester on its own timeout. Workload-scoped, like
+        // the table itself, and registered by `on_workload_bind` before this
+        // runs. `None` is not reachable from there — and if it ever were,
+        // `request` itself bails on the same lookup, so there would be no
+        // requester to notify. Kept as an `Option` rather than defaulted to an
+        // empty map so that stays visible instead of becoming a lookup that
+        // silently never matches.
+        let pending_requests = self
+            .tracker
+            .read()
+            .await
+            .get_workload_data(workload.id())
+            .map(|data| data.pending_requests.clone());
 
         // A long-lived handler service has no per-component instance to
         // pre-instantiate; its receive loop delivers to the running service
@@ -566,7 +654,9 @@ impl HostPlugin for InMemoryMessaging {
         let fuel_meter = self.meters.read().await.fuel_consumption.clone();
 
         let handle = tokio::spawn(async move {
-            loop {
+            // Labelled so the inner drain below can end the whole task on
+            // cancellation or teardown, not just the current drain pass.
+            'task: loop {
                 tokio::select! {
                     _ = cancel_token.cancelled() => {
                         break;
@@ -575,9 +665,9 @@ impl HostPlugin for InMemoryMessaging {
                         // Drain every message queued since the last wakeup, so a
                         // coalesced notification can't strand a message.
                         loop {
-                        let msg = inbox.write().await.pop_front();
+                        let queued = inbox.write().await.pop_front();
 
-                        let Some(msg) = msg else {
+                        let Some(QueuedMessage { msg, sole_subscriber }) = queued else {
                             break;
                         };
 
@@ -620,6 +710,57 @@ impl HostPlugin for InMemoryMessaging {
                             );
                             continue;
                         };
+
+                        // Admission. Taken BEFORE the store and instance are
+                        // built and held until the handler returns, so permits
+                        // held and instances alive are the same number. Mirrors
+                        // the NATS backend exactly; see `Admission::acquire`
+                        // for why the component level is taken before the host
+                        // one, and `DEFAULT_ADMISSION_WAIT` for why the wait is
+                        // bounded. Here the bound also keeps the inbox draining:
+                        // a loop parked forever lets the inbox reach
+                        // `MAX_QUEUE_SIZE`, at which point a guest's `publish`
+                        // starts failing with "message queue full".
+                        let permit = tokio::select! {
+                            admitted = admission.acquire_before_deadline(&component_id, &msg.subject) => {
+                                match admitted {
+                                    super::Admitted::Slot(permit) => permit,
+                                    // Already logged and counted; drop this
+                                    // message and resume draining.
+                                    //
+                                    // A requester is failed now rather than
+                                    // left waiting out its own timeout on a
+                                    // reply that is never coming — but only
+                                    // when this component was the sole
+                                    // subscriber. Otherwise another component
+                                    // still holds the same message and may
+                                    // answer, and completing the pending
+                                    // request here would fail a request that
+                                    // was about to succeed.
+                                    super::Admitted::Shed => {
+                                        if sole_subscriber
+                                            && let (Some(reply_to), Some(pending)) =
+                                                (&msg.reply_to, &pending_requests)
+                                            && let Some(sender) =
+                                                pending.write().await.remove(reply_to)
+                                        {
+                                            let _ = sender.send(Err(super::shed_error()));
+                                        }
+                                        continue;
+                                    }
+                                    // Closed: the component is going away.
+                                    super::Admitted::Closed => break 'task,
+                                }
+                            }
+                            _ = cancel_token.cancelled() => {
+                                debug!(
+                                    component_id = %component_id,
+                                    "in-memory receive loop cancelled while awaiting admission"
+                                );
+                                break 'task;
+                            }
+                        };
+
                         let mut store = match workload.new_store(&component_id).await {
                             Err(e) => {
                                 warn!("failed to create store for component {component_id}: {e}");
@@ -646,6 +787,9 @@ impl HostPlugin for InMemoryMessaging {
                         let fuel_meter = fuel_meter.clone();
 
                         tokio::spawn(async move {
+                            // Released on completion, trap or not — which is
+                            // what frees the instance slot this message holds.
+                            let _permit = permit;
                             let result = fuel_meter.observe(
                                 &[
                                     KeyValue::new("plugin", PLUGIN_MESSAGING_MEMORY_ID),
@@ -696,6 +840,11 @@ impl HostPlugin for InMemoryMessaging {
         let workload_cleanup = |_| async {};
         let component_cleanup = |component_data: ComponentData| async move {
             component_data.cancel_token.cancel();
+            // Wakes a loop parked on a saturated gate with `Admitted::Closed`.
+            // The token above covers the same case; this makes the closed
+            // semaphore a real signal rather than a documented one that only
+            // tests ever produce.
+            component_data.admission.close();
             if let Some(handle) = component_data.task_handle {
                 handle.abort();
             }
@@ -713,7 +862,93 @@ impl HostPlugin for InMemoryMessaging {
 
 #[cfg(test)]
 mod tests {
-    use super::{subject_matches, subscriptions_match};
+    use super::*;
+    use crate::plugin::WorkloadTrackerItem;
+
+    /// Build a plugin whose one workload has a component per entry in
+    /// `subscriptions`, each subscribed to what it names.
+    fn plugin_with(subscriptions: &[&[&str]]) -> (InMemoryMessaging, String, Vec<Inbox>) {
+        let plugin = InMemoryMessaging::new();
+        let workload_id = "workload-1".to_string();
+        let mut item = WorkloadTrackerItem {
+            workload_data: Some(WorkloadData::default()),
+            components: HashMap::new(),
+        };
+        let mut inboxes = Vec::new();
+        for (i, subs) in subscriptions.iter().enumerate() {
+            let inbox: Inbox = Arc::default();
+            inboxes.push(inbox.clone());
+            item.components.insert(
+                format!("component-{i}"),
+                ComponentData {
+                    cancel_token: tokio_util::sync::CancellationToken::new(),
+                    task_handle: None,
+                    subscriptions: subs.iter().map(|s| s.to_string()).collect(),
+                    inbox,
+                    notify: Arc::new(Notify::new()),
+                    admission: super::super::MessagingLimits::default().admission(
+                        &super::super::AdmissionIdentity::new("ns", "workload-1", &format!("c{i}")),
+                        None,
+                    ),
+                },
+            );
+        }
+        plugin
+            .tracker
+            .try_write()
+            .expect("fresh tracker")
+            .workloads
+            .insert(workload_id.clone(), item);
+        (plugin, workload_id, inboxes)
+    }
+
+    fn broker(subject: &str) -> types_p2::BrokerMessage {
+        types_p2::BrokerMessage {
+            subject: subject.to_string(),
+            reply_to: Some("_INBOX.abc".to_string()),
+            body: Vec::new(),
+        }
+    }
+
+    /// Only the sole subscriber may fail a requester on shed. With more than
+    /// one, the other component still holds the same message and may reply, so
+    /// completing the pending request would fail a request about to succeed —
+    /// which is exactly the race that made this unsafe to do over NATS, where
+    /// the fan-out is not knowable from inside a subscriber.
+    #[tokio::test]
+    async fn fan_out_is_recorded_so_only_a_sole_subscriber_may_fast_fail() {
+        let (plugin, workload_id, inboxes) = plugin_with(&[&["tasks.new"]]);
+        route_to_subscribers(&plugin, &workload_id, &broker("tasks.new"))
+            .await
+            .expect("routes");
+        assert!(
+            inboxes[0].read().await[0].sole_subscriber,
+            "one matching component must be marked as the sole subscriber"
+        );
+
+        // Two components on the same subject: neither may fast-fail.
+        let (plugin, workload_id, inboxes) = plugin_with(&[&["tasks.new"], &["tasks.*"]]);
+        route_to_subscribers(&plugin, &workload_id, &broker("tasks.new"))
+            .await
+            .expect("routes");
+        for (i, inbox) in inboxes.iter().enumerate() {
+            assert!(
+                !inbox.read().await[0].sole_subscriber,
+                "component {i} shares the message and must not fail the requester"
+            );
+        }
+
+        // A second component that does NOT match leaves the first one sole.
+        let (plugin, workload_id, inboxes) = plugin_with(&[&["tasks.new"], &["other.thing"]]);
+        route_to_subscribers(&plugin, &workload_id, &broker("tasks.new"))
+            .await
+            .expect("routes");
+        assert!(inboxes[0].read().await[0].sole_subscriber);
+        assert!(
+            inboxes[1].read().await.is_empty(),
+            "a non-matching component must not receive the message at all"
+        );
+    }
 
     #[test]
     fn exact_and_literal_tokens() {

@@ -108,25 +108,46 @@ impl CliCommand for DevCommand {
         // `--data-nats-url`. When `dev.data_nats_url` is set it backs
         // blobstore, keyvalue, and messaging unless a per-plugin config overrides
         // it. Connected once and shared across the three plugins.
+        // Through `washlet::connect_nats` rather than `async_nats::connect`, so
+        // dev installs the same event callback `wash host` does. `SlowConsumer`
+        // is the only signal that a subscription buffer overflowed and dropped
+        // messages; without the callback dev is the one place that failure stays
+        // silent, which is exactly backwards for the command people reproduce
+        // messaging problems in.
         let data_nats_client = if let Some(url) = &dev_config.data_nats_url {
-            let client = async_nats::connect(url.as_str())
-                .await
-                .context("failed to connect to NATS for dev.data_nats_url")?;
+            let client = wash_runtime::washlet::connect_nats(
+                url.as_str(),
+                wash_runtime::washlet::NatsConnectionOptions::default(),
+            )
+            .await
+            .context("failed to connect to NATS for dev.data_nats_url")?;
             Some(Arc::new(client))
         } else {
             None
         };
 
+        // One set of messaging ceilings for the dev host, derived from the pool
+        // the engine above actually installed — same construction as `wash
+        // host`, so a limit reproduced in dev is the limit production applies.
+        // Dev takes no messaging flags, hence `None` for both knobs.
+        let messaging_limits =
+            crate::config::wasmcloud_messaging_limits(None, None, engine.total_core_instances())?;
+
         // Enable wasmcloud:messaging — NATS when data_nats_url is configured,
         // otherwise the in-memory backend.
         if let Some(client) = &data_nats_client {
             host_builder = host_builder.with_plugin(Arc::new(
-                plugin::wasmcloud_messaging::NatsMessaging::new(client.clone()),
+                plugin::wasmcloud_messaging::NatsMessaging::with_limits(
+                    client.clone(),
+                    messaging_limits.clone(),
+                ),
             ))?;
             debug!("wasmcloud:messaging plugin registered with NATS backend (data_nats_url)");
         } else {
             host_builder = host_builder.with_plugin(Arc::new(
-                plugin::wasmcloud_messaging::InMemoryMessaging::default(),
+                plugin::wasmcloud_messaging::InMemoryMessaging::with_limits(
+                    messaging_limits.clone(),
+                ),
             ))?;
             debug!("wasmcloud:messaging plugin registered with in-memory backend");
         }

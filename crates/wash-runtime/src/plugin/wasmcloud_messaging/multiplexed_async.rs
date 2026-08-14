@@ -248,6 +248,19 @@ impl HostPlugin for MultiplexedAsyncMessaging {
         }
     }
 
+    /// Take only interfaces that name the async revision. The sync
+    /// [`MultiplexedMessaging`] plugin serves `@0.2.0` off the same backends and
+    /// both are registered on a host at once, so this is what keeps the two from
+    /// fighting over one linker instance — and, because an entry that pins no
+    /// version world-matches BOTH plugins, it is also what leaves a versionless
+    /// entry to the sync plugin (which is the surface a versionless declaration
+    /// selects everywhere else; see [`super::declares_async_messaging`]).
+    ///
+    /// [`MultiplexedMessaging`]: super::MultiplexedMessaging
+    fn claims(&self, interface: &WitInterface) -> bool {
+        is_async_version(interface)
+    }
+
     fn supports_named_instances(&self) -> bool {
         true
     }
@@ -257,10 +270,9 @@ impl HostPlugin for MultiplexedAsyncMessaging {
         item: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        // Only claim `@0.3.0` interfaces: the sync `MultiplexedMessaging` plugin
-        // serves `@0.2.0` off the same backends, and both are registered on a
-        // host at once. Binding on a bare namespace/package match would have the
-        // two plugins fight over one linker instance.
+        // `claims` already refused everything that is not an async messaging
+        // interface, so this only narrows to the package (a workload item binds
+        // one plugin for one package, but filtering keeps the registry honest).
         let async_ifaces: Vec<&WitInterface> = interfaces
             .iter()
             .filter(|i| {
@@ -392,6 +404,26 @@ mod tests {
         assert!(is_async_version(&msg_iface(None, Some("0.4.0"))));
         assert!(!is_async_version(&msg_iface(None, Some("0.2.0"))));
         assert!(!is_async_version(&msg_iface(None, None)));
+    }
+
+    /// The plugin's `world()` matches a versionless entry — a missing version is
+    /// compatible with every version — so `claims` is what stops this plugin
+    /// taking an entry the SYNC multiplexer has to serve. Without it a
+    /// versionless `(implements ..)` entry is claimed here and then bound by
+    /// nobody, and the workload fails on an unresolved import.
+    #[test]
+    fn refuses_entries_the_sync_multiplexer_must_serve() {
+        let plugin = MultiplexedAsyncMessaging::new();
+        let versionless = msg_iface(Some("team-a"), None);
+
+        assert!(
+            plugin.world().includes_bidirectional(&versionless),
+            "precondition: the world matches a versionless entry, which is why \
+             `claims` has to refuse it"
+        );
+        assert!(!plugin.claims(&versionless));
+        assert!(!plugin.claims(&msg_iface(Some("team-a"), Some("0.2.0"))));
+        assert!(plugin.claims(&msg_iface(Some("team-a"), Some("0.3.0"))));
     }
 
     /// The decisive routing case: two named interfaces of the same backend type

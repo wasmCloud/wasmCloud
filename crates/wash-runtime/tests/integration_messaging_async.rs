@@ -200,9 +200,11 @@ async fn async_handler_receives_and_replies() -> Result<()> {
 
     assert_eq!(h.count(host_header).await?, 0, "no messages handled yet");
 
-    // `reply_to` is set, so the guest's handler must await an async
-    // `consumer.publish` before it returns — the reply path is what would break
-    // if the async import were mis-bound.
+    // The host-side `publish` helper sets no `reply_to`, so the guest echoes to
+    // its sink subject — but it still has to await an async `consumer.publish`
+    // before returning, and it counts the message only afterwards. The count
+    // below is therefore evidence the async import completed; a mis-bound
+    // import would leave it at zero.
     h.messaging
         .publish(&workload_id, "test.async", b"hello".to_vec())
         .await
@@ -243,6 +245,61 @@ async fn async_handler_handles_messages_concurrently() -> Result<()> {
         N,
         "every published message should reach the async handler"
     );
+    Ok(())
+}
+
+/// Regression for an oversized guest stream returning `Cancelled` without
+/// consuming an item while `finish == false`. Wasmtime treats that disposition
+/// as a protocol violation and trapped the guest instead of returning the
+/// messaging API's `message-too-large` error.
+#[tokio::test]
+async fn oversized_publish_returns_message_too_large_without_trapping() -> Result<()> {
+    let h = start_harness().await?;
+    let workload_id = uuid::Uuid::new_v4().to_string();
+    let host_header = "async-echo-oversized";
+
+    h.host
+        .workload_start(async_echo_request(
+            &workload_id,
+            host_header,
+            "test.oversized",
+        ))
+        .await
+        .context("failed to start the async echo workload")?;
+
+    let response = timeout(
+        Duration::from_secs(30),
+        h.client
+            .get(format!("http://{}/oversized-publish", h.addr))
+            .header("HOST", host_header)
+            .send(),
+    )
+    .await
+    .context("oversized publish timed out")??;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "oversized publish endpoint returned {}",
+        response.status()
+    );
+    let result = response.text().await?;
+    assert_eq!(
+        result, "Err(Error::MessageTooLarge)",
+        "the oversized guest stream must return the typed error rather than trap"
+    );
+
+    // A rejected stream must not poison the long-lived service or the host's
+    // stream machinery. Exercise the normal async handler/publish path on the
+    // same instance immediately afterward.
+    h.messaging
+        .publish(&workload_id, "test.oversized", b"still-alive".to_vec())
+        .await
+        .map_err(|e| anyhow::anyhow!("follow-up publish failed: {e}"))?;
+    assert_eq!(
+        h.await_count(host_header, 1).await?,
+        1,
+        "the service must remain usable after rejecting the oversized stream"
+    );
+
     Ok(())
 }
 

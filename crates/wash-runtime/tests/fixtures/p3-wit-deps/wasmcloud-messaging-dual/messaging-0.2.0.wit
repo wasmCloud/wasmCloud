@@ -1,0 +1,39 @@
+// The sync revision, as a NESTED package beside this directory's root
+// `@0.3.0`. That layout is the whole point of this directory: a wkg path
+// override maps a package NAME to one directory, so a fixture whose world
+// needs both revisions of `wasmcloud:messaging` has to receive both through a
+// single override — and one directory can hold two versions of a package only
+// by nesting one of them.
+//
+// Copied verbatim from `../../p2-wit-deps/wasmcloud-messaging-0.2.0/package.wit`
+// (the braces are the only edit); `package.wit` is likewise a verbatim copy of
+// `../wasmcloud-messaging-0.3.0/package.wit`. Update both when the source
+// packages under /wit change.
+package wasmcloud:messaging@0.2.0 {
+  /// Types common to message broker interactions
+  interface types {
+    /// A message sent to or received from a broker
+    record broker-message {
+      subject: string,
+      body: list<u8>,
+      reply-to: option<string>,
+    }
+  }
+
+  interface handler {
+    use types.{broker-message};
+
+    /// Callback handled to invoke a function when a message is received from a subscription
+    handle-message: func(msg: broker-message) -> result<_, string>;
+  }
+
+  interface consumer {
+    use types.{broker-message};
+
+    /// Perform a request operation on a subject
+    request: func(subject: string, body: list<u8>, timeout-ms: u32) -> result<broker-message, string>;
+
+    /// Publish a message to a subject without awaiting a response
+    publish: func(msg: broker-message) -> result<_, string>;
+  }
+}

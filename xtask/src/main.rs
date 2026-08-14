@@ -102,12 +102,6 @@ const P2_FIXTURES: &[&str] = &[
     "postgres-implements",
 ];
 
-/// Fixtures whose `wit/deps` is committed rather than fetched, built with
-/// `wash build --skip-fetch`: a wkg override maps a package NAME to one
-/// directory, so a fixture whose world needs two versions of the same package
-/// cannot resolve through overrides.
-const SKIP_FETCH_FIXTURES: &[&str] = &["messaging-dual-handler"];
-
 const P3_FIXTURES: &[&str] = &[
     "messaging-echo-p3",
     "messaging-dual-handler",
@@ -232,14 +226,8 @@ fn build_and_stage(
         bail!("fixture directory {} does not exist", fixture_dir.display());
     }
 
-    let mut args = vec!["-C".to_string(), fixture_dir.to_string_lossy().into_owned()];
-    args.push("build".to_string());
-    if SKIP_FETCH_FIXTURES.contains(&fixture) {
-        args.push("--skip-fetch".to_string());
-    }
-
     let status = Command::new(wash)
-        .args(&args)
+        .args(["-C", &fixture_dir.to_string_lossy(), "build"])
         // The bench hosts set a job-wide CARGO_TARGET_DIR; drop it so the nested
         // build lands in `fixtures_dir/target`, where staging looks below.
         .env_remove("CARGO_TARGET_DIR")

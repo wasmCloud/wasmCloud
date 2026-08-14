@@ -59,6 +59,7 @@ super::messaging_handler_dispatch! {
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::{ResolvedWorkload, WorkloadItem};
 use crate::observability::Meters;
+use crate::plugin::wasmcloud_messaging::Admitted;
 use crate::plugin::{HostPlugin, WitInterfaces, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
@@ -73,6 +74,9 @@ pub struct ComponentData {
     consumer_group: ConsumerGroup,
     cancel_token: tokio_util::sync::CancellationToken,
     task_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Bounds how many messages this component processes at once, and so how
+    /// many instances the subscription may create. See [`super::Admission`].
+    admission: super::Admission,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,14 +119,26 @@ pub struct NatsMessaging {
     tracker: Arc<RwLock<WorkloadTracker<(), ComponentData>>>,
     client: Arc<async_nats::Client>,
     meters: Arc<RwLock<Meters>>,
+    limits: super::MessagingLimits,
 }
 
 impl NatsMessaging {
+    /// Build the plugin with the default messaging ceilings
+    /// ([`super::DEFAULT_MAX_IN_FLIGHT_HOST`] /
+    /// [`super::DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT`]).
     pub fn new(client: Arc<async_nats::Client>) -> Self {
+        Self::with_limits(client, super::MessagingLimits::default())
+    }
+
+    /// Build the plugin with operator-configured ceilings. The `limits` carry
+    /// the host-wide semaphore, so pass the *same* value to every messaging
+    /// backend on a host or each gets its own host budget.
+    pub fn with_limits(client: Arc<async_nats::Client>, limits: super::MessagingLimits) -> Self {
         Self {
             client,
             tracker: Arc::new(RwLock::new(WorkloadTracker::default())),
             meters: Default::default(),
+            limits,
         }
     }
 }
@@ -344,6 +360,8 @@ impl HostPlugin for NatsMessaging {
         // the host-interface fallback before borrowing the component.
         let interface_subscriptions = interface.config.get("subscriptions").cloned();
         let interface_consumer_group = interface.config.get(CONSUMER_GROUP_CONFIG).cloned();
+        let interface_max_in_flight = interface.config.get(super::MAX_IN_FLIGHT_CONFIG).cloned();
+        let interface_admission_wait = interface.config.get(super::ADMISSION_WAIT_CONFIG).cloned();
 
         // Bind only the revision(s) the workload actually declared: the two
         // surfaces are separate linker instances, and binding one a component
@@ -372,6 +390,16 @@ impl HostPlugin for NatsMessaging {
             .config
             .get(CONSUMER_GROUP_CONFIG)
             .cloned();
+        let local_max_in_flight = component_handle
+            .local_resources()
+            .config
+            .get(super::MAX_IN_FLIGHT_CONFIG)
+            .cloned();
+        let local_admission_wait = component_handle
+            .local_resources()
+            .config
+            .get(super::ADMISSION_WAIT_CONFIG)
+            .cloned();
 
         // Track a handler component OR a long-lived handler service:
         // `WorkloadItem` derefs to the underlying metadata for both, so the
@@ -384,8 +412,15 @@ impl HostPlugin for NatsMessaging {
             let raw_subscriptions = super::parse_subscriptions(raw.as_deref());
             let component_name = match component_handle {
                 WorkloadItem::Component(component) => component.name().to_string(),
+                // A long-lived handler service has no per-message instance to
+                // bound; its delivery path is gated elsewhere.
                 WorkloadItem::Service(_) => "service".to_string(),
             };
+            let max_in_flight = super::parse_max_in_flight(
+                local_max_in_flight
+                    .as_deref()
+                    .or(interface_max_in_flight.as_deref()),
+            );
             let consumer_group = ConsumerGroup::resolve(
                 local_consumer_group
                     .as_deref()
@@ -395,10 +430,32 @@ impl HostPlugin for NatsMessaging {
                 &component_name,
             )?;
 
+            let admission_wait = super::parse_admission_wait(
+                local_admission_wait
+                    .as_deref()
+                    .or(interface_admission_wait.as_deref()),
+            );
+            // The same namespace/workload/component triple the consumer group
+            // is built from above. It both attributes a shed message to
+            // something a manifest author recognizes and selects the gate, so
+            // replicas of this deployment on this host share one ceiling
+            // rather than getting one apiece.
+            let identity = super::AdmissionIdentity::new(
+                component_handle.workload_namespace(),
+                component_handle.workload_name(),
+                &component_name,
+            );
+            let admission = self
+                .limits
+                .admission(&identity, max_in_flight)
+                .with_admission_wait(admission_wait)
+                .with_subscriptions(&raw_subscriptions);
+
             debug!(
                 component_id = component_handle.id(),
                 subscriptions = ?raw_subscriptions,
                 consumer_group = consumer_group.name().unwrap_or(BROADCAST_CONSUMER_GROUP),
+                max_in_flight = admission.limit(),
                 "tracking handler component for NATS messaging"
             );
             self.tracker.write().await.add_component(
@@ -408,6 +465,7 @@ impl HostPlugin for NatsMessaging {
                     subscriptions: raw_subscriptions,
                     consumer_group,
                     task_handle: None,
+                    admission,
                 },
             );
         }
@@ -423,13 +481,14 @@ impl HostPlugin for NatsMessaging {
     ) -> anyhow::Result<()> {
         debug!("on_workload_resolved entered for NATS messaging");
 
-        let (cancel_token, subjects, consumer_group) = {
+        let (cancel_token, subjects, consumer_group, admission) = {
             let lock = self.tracker.read().await;
             match lock.get_component_data(component_id) {
                 Some(data) => (
                     data.cancel_token.clone(),
                     data.subscriptions.clone(),
                     data.consumer_group.clone(),
+                    data.admission.clone(),
                 ),
                 None => {
                     debug!("no tracker entry for component, skipping subscription setup");
@@ -580,6 +639,60 @@ impl HostPlugin for NatsMessaging {
                             );
                             continue;
                         };
+
+                        // Admission. Taken BEFORE the store and instance are
+                        // built and held until the handler returns, so permits
+                        // held and instances alive are the same number and the
+                        // ceiling is structural rather than advisory.
+                        //
+                        // Waiting here stops us draining the subscription.
+                        // That cannot back up the socket or endanger the shared
+                        // connection — async-nats' reader `try_send`s into a
+                        // per-subscription buffer and drops on overflow rather
+                        // than blocking — but the overflow it does cause is
+                        // silent, so the wait is bounded and we shed loudly at
+                        // the deadline instead of letting the buffer discard
+                        // messages nobody counted.
+                        //
+                        // Selecting on the cancel token keeps shutdown prompt
+                        // while parked on a saturated semaphore, and is
+                        // cancel-safe: dropping the future releases whichever
+                        // permit it had already taken.
+                        let permit = tokio::select! {
+                            admitted = admission.acquire_before_deadline(&component_id, &subject) => {
+                                match admitted {
+                                    Admitted::Slot(permit) => permit,
+                                    // Already logged and counted; drop this
+                                    // message and resume draining.
+                                    //
+                                    // A request/reply caller is NOT told, and
+                                    // waits out its own `timeout_ms`. Telling
+                                    // it would mean publishing to `reply_to`,
+                                    // and `request` resolves on the first
+                                    // message to reach its inbox — so where
+                                    // more than one component subscribes to a
+                                    // subject, the saturated one's instant
+                                    // notice would beat a healthy one's real
+                                    // reply and fail a request that was about
+                                    // to succeed. The in-memory backend can
+                                    // fast-fail precisely because it knows its
+                                    // own fan-out; here that is unknowable
+                                    // from inside a single subscriber.
+                                    Admitted::Shed => continue,
+                                    // Closed: the component is going away.
+                                    Admitted::Closed => break,
+                                }
+                            }
+                            _ = cancel_token.cancelled() => {
+                                debug!(
+                                    parent: &span,
+                                    component_id = %component_id,
+                                    "NATS subscriber loop cancelled while awaiting admission"
+                                );
+                                break;
+                            }
+                        };
+
                         let mut store = match workload.new_store(&component_id).await {
                             Err(e) => {
                                 warn!("failed to create store for component {component_id}: {e}");
@@ -610,6 +723,9 @@ impl HostPlugin for NatsMessaging {
                         let fuel_meter = fuel_meter.clone();
 
                         tokio::spawn(async move {
+                            // Released on completion, trap or not — which is
+                            // what frees the instance slot this message holds.
+                            let _permit = permit;
                             let result = fuel_meter.observe(
                                 &[
                                     KeyValue::new("plugin", PLUGIN_MESSAGING_ID),
@@ -670,6 +786,11 @@ impl HostPlugin for NatsMessaging {
         let workload_cleanup = |_| async {};
         let component_cleanup = |component_data: ComponentData| async move {
             component_data.cancel_token.cancel();
+            // Wakes a loop parked on a saturated gate with `Admitted::Closed`.
+            // The token above covers the same case; this makes the closed
+            // semaphore a real signal rather than a documented one that only
+            // tests ever produce.
+            component_data.admission.close();
             if let Some(handle) = component_data.task_handle {
                 handle.abort();
             }
@@ -813,6 +934,15 @@ mod tests {
                     subscriptions: vec!["tasks.x".to_string()],
                     consumer_group: ConsumerGroup::Grouped("workers".to_string()),
                     task_handle: None,
+                    admission: crate::plugin::wasmcloud_messaging::MessagingLimits::default()
+                        .admission(
+                            &crate::plugin::wasmcloud_messaging::AdmissionIdentity::new(
+                                "test-ns",
+                                "test-workload",
+                                "worker",
+                            ),
+                            None,
+                        ),
                 },
             );
         tracker

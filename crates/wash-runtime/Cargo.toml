@@ -72,6 +72,7 @@ futures = { workspace = true }
 hostname = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
+humantime = { workspace = true }
 hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper-rustls = { workspace = true, features = ["http1", "http2", "tls12", "aws-lc-rs"] }
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio", "server-auto"] }

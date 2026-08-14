@@ -5,7 +5,9 @@
 //! `handle-message` increments a process-global `MSG_COUNT` and echoes
 //! `"{count}:{subject}"` as its error result (observed directly by the trigger
 //! service spike). `@0.3.0`'s error is a variant, so the echo travels in
-//! `error::other` and the host renders it as `other: {count}:{subject}`. The http handler reports the live `MSG_COUNT` as `{"count":N}`, so an
+//! `error::other` and the host renders it as `other: {count}:{subject}`.
+//!
+//! The http handler reports the live `MSG_COUNT` as `{"count":N}`, so an
 //! end-to-end test can publish a message through a messaging backend and read
 //! the count over HTTP — proving the message reached the handler on the SAME
 //! long-lived instance the trigger service co-drives, not a fresh one per message.

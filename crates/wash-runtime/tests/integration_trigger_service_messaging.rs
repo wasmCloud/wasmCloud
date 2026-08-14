@@ -7,8 +7,8 @@
 //! `error::other`, which the host renders as `other: {count}:{subject}`.
 //! Delivering two messages and observing the count climb (1, then 2) proves the
 //! handler runs on the SAME long-lived instance the trigger service co-drives —
-//! invoked via the dynamic `call_concurrent` path under `run_concurrent` —
-//! rather than a fresh instance per message.
+//! invoked through its typed `@0.3.0` bindings under `run_concurrent` — rather
+//! than a fresh instance per message.
 //!
 //! Trigger services are p3-only, so `@0.3.0` is the only handler revision this
 //! path resolves; a sync `@0.2.0` handler runs as a per-message component and is

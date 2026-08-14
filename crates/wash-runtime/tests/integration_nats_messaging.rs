@@ -24,7 +24,7 @@ use wash_runtime::{
         HostApi, HostBuilder,
         http::{DevRouter, Ingress},
     },
-    plugin::wasmcloud_messaging::NatsMessaging,
+    plugin::wasmcloud_messaging::{MessagingLimits, NatsMessaging},
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
     wit::WitInterface,
 };
@@ -41,6 +41,15 @@ struct TestHarness {
 }
 
 async fn setup(workloads: Vec<WorkloadStartRequest>) -> Result<TestHarness> {
+    setup_with_limits(workloads, MessagingLimits::default()).await
+}
+
+/// As [`setup`], but with explicit messaging admission ceilings so a test can
+/// make the bound bind at a number small enough to assert against.
+async fn setup_with_limits(
+    workloads: Vec<WorkloadStartRequest>,
+    limits: MessagingLimits,
+) -> Result<TestHarness> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init()
@@ -86,7 +95,7 @@ async fn setup(workloads: Vec<WorkloadStartRequest>) -> Result<TestHarness> {
     // Ingress is required by HostBuilder even though this test doesn't
     // exercise HTTP — bind to ephemeral port 0.
     let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
-    let messaging_plugin = NatsMessaging::new(plugin_client);
+    let messaging_plugin = NatsMessaging::with_limits(plugin_client, limits);
 
     let host = HostBuilder::new()
         .with_engine(engine)
@@ -115,6 +124,10 @@ async fn setup(workloads: Vec<WorkloadStartRequest>) -> Result<TestHarness> {
 struct MessagingHandlerWorkloadConfig {
     workload_name: Option<String>,
     pool_size: Option<i32>,
+    /// The component's `max_in_flight`, carried in its `LocalResources.config`
+    /// the way the messaging plugin's other per-component settings are. `None`
+    /// leaves it unset, which resolves to the host default.
+    max_in_flight: Option<usize>,
 }
 
 /// Build a messaging workload with a variable amount of handlers
@@ -122,6 +135,7 @@ fn messaging_handler_workload(
     MessagingHandlerWorkloadConfig {
         workload_name,
         pool_size,
+        max_in_flight,
     }: MessagingHandlerWorkloadConfig,
 ) -> WorkloadStartRequest {
     WorkloadStartRequest {
@@ -138,7 +152,10 @@ fn messaging_handler_workload(
                 local_resources: LocalResources {
                     memory_limit_mb: 256,
                     cpu_limit: 1,
-                    config: HashMap::new(),
+                    config: max_in_flight
+                        .map(|v| ("max_in_flight".to_string(), v.to_string()))
+                        .into_iter()
+                        .collect(),
                     environment: HashMap::new(),
                     volume_mounts: vec![],
                     allowed_hosts: Default::default(),
@@ -328,4 +345,143 @@ async fn test_nats_messaging_subscription_registered_on_server() -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+/// A burst far larger than the admission ceiling must still be processed in
+/// full — the gate delays messages, it must not drop them, wedge the
+/// subscriber loop, or leak permits.
+///
+/// A leak is the failure mode this is really guarding: with `max_in_flight: 1`,
+/// one un-released permit stops the loop dead after the first message, so the
+/// reply count would stall at 1 rather than reaching `BURST`. Peak concurrency
+/// itself is asserted by the unit tests over `Admission`, which can observe it
+/// directly; here the observable is that everything still gets through.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn test_max_in_flight_delays_a_burst_without_losing_it() -> Result<()> {
+    const BURST: usize = 25;
+
+    // Host total deliberately above the component ceiling so it is the
+    // component level under test, not the host one.
+    let harness = setup_with_limits(
+        vec![messaging_handler_workload(MessagingHandlerWorkloadConfig {
+            max_in_flight: Some(1),
+            ..Default::default()
+        })],
+        MessagingLimits::new(8, 32),
+    )
+    .await?;
+
+    let inbox = harness.nats_client.new_inbox();
+    let mut replies = harness
+        .nats_client
+        .subscribe(inbox.clone())
+        .await
+        .context("failed to subscribe to reply inbox")?;
+
+    for i in 0..BURST {
+        harness
+            .nats_client
+            .publish_with_reply(
+                SUBSCRIPTION_SUBJECT,
+                inbox.clone(),
+                bytes::Bytes::from(format!("msg-{i}")),
+            )
+            .await
+            .with_context(|| format!("failed to publish message {i}"))?;
+    }
+    harness
+        .nats_client
+        .flush()
+        .await
+        .context("failed to flush publishes")?;
+
+    let mut seen = 0usize;
+    while seen < BURST {
+        tokio::time::timeout(Duration::from_secs(30), replies.next())
+            .await
+            .with_context(|| {
+                format!(
+                    "timed out after {seen}/{BURST} replies — the admission gate \
+                     dropped messages or stopped releasing permits"
+                )
+            })?
+            .context("reply subscription closed unexpectedly")?;
+        seen += 1;
+    }
+
+    assert_eq!(seen, BURST, "every message in the burst must be handled");
+    Ok(())
+}
+
+/// The host-wide ceiling binds even when each component sits inside its own.
+/// Same observable as above: a burst across two workloads must complete.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn test_host_wide_ceiling_still_lets_a_burst_complete() -> Result<()> {
+    const BURST: usize = 10;
+
+    // Host total of 1 is below both components' ceilings, so every message on
+    // the host serializes through one slot shared by two workloads. Both must
+    // still drain.
+    let harness = setup_with_limits(
+        vec![
+            messaging_handler_workload(MessagingHandlerWorkloadConfig {
+                workload_name: Some("worker-0".into()),
+                max_in_flight: Some(4),
+                ..Default::default()
+            }),
+            messaging_handler_workload(MessagingHandlerWorkloadConfig {
+                workload_name: Some("worker-1".into()),
+                max_in_flight: Some(4),
+                ..Default::default()
+            }),
+        ],
+        MessagingLimits::new(1, 32),
+    )
+    .await?;
+
+    let inbox = harness.nats_client.new_inbox();
+    let mut replies = harness
+        .nats_client
+        .subscribe(inbox.clone())
+        .await
+        .context("failed to subscribe to reply inbox")?;
+
+    for i in 0..BURST {
+        harness
+            .nats_client
+            .publish_with_reply(
+                SUBSCRIPTION_SUBJECT,
+                inbox.clone(),
+                bytes::Bytes::from(format!("msg-{i}")),
+            )
+            .await
+            .with_context(|| format!("failed to publish message {i}"))?;
+    }
+    harness
+        .nats_client
+        .flush()
+        .await
+        .context("failed to flush publishes")?;
+
+    // Two distinct workloads are in distinct queue groups, so each sees every
+    // message: 2 x BURST replies.
+    let expected = BURST * 2;
+    let mut seen = 0usize;
+    while seen < expected {
+        tokio::time::timeout(Duration::from_secs(30), replies.next())
+            .await
+            .with_context(|| {
+                format!(
+                    "timed out after {seen}/{expected} replies — the host-wide \
+                     ceiling wedged or leaked"
+                )
+            })?
+            .context("reply subscription closed unexpectedly")?;
+        seen += 1;
+    }
+
+    assert_eq!(seen, expected);
+    Ok(())
 }

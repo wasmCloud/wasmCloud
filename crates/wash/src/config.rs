@@ -680,6 +680,85 @@ pub fn connection_quotas(
     }
 }
 
+/// Resolve the messaging admission ceilings into the [`MessagingLimits`] every
+/// messaging backend on this host shares.
+///
+/// Mirrors [`connection_quotas`]: the same two-level host-wide/per-workload
+/// shape, and the same treatment of a zero.
+///
+/// `None` for either ceiling means the operator said nothing, and the number is
+/// derived from `total_core_instances` — the engine's actual pool budget — so a
+/// host told it is larger sizes its messaging ceiling to match instead of
+/// leaving a stock default silently binding. This is why the flags must not
+/// carry a `default_value_t`: a parse-time default is indistinguishable here
+/// from an operator typing the same number.
+///
+/// # Errors
+///
+/// Rejects a ceiling outside `1..=`[`MessagingLimits::MAX_IN_FLIGHT`]. Zero
+/// would silently mean "process no messages", which is never what an operator
+/// meant; a value above the maximum would panic inside the semaphore at
+/// startup. Better a startup error than a host that looks healthy and quietly
+/// consumes nothing, or one that aborts with a backtrace.
+///
+/// [`MessagingLimits`]: wash_runtime::plugin::wasmcloud_messaging::MessagingLimits
+/// [`MessagingLimits::MAX_IN_FLIGHT`]: wash_runtime::plugin::wasmcloud_messaging::MessagingLimits::MAX_IN_FLIGHT
+pub fn wasmcloud_messaging_limits(
+    max_in_flight: Option<usize>,
+    max_in_flight_per_component: Option<usize>,
+    total_core_instances: Option<u32>,
+) -> anyhow::Result<wash_runtime::plugin::wasmcloud_messaging::MessagingLimits> {
+    use wash_runtime::plugin::wasmcloud_messaging::MessagingLimits;
+
+    let checked = |value: Option<usize>, flag: &str| -> anyhow::Result<Option<usize>> {
+        match value {
+            Some(0) => anyhow::bail!("{flag} must be at least 1"),
+            Some(v) if v > MessagingLimits::MAX_IN_FLIGHT => anyhow::bail!(
+                "{flag} must be at most {} (the most a semaphore can hold), got {v}",
+                MessagingLimits::MAX_IN_FLIGHT
+            ),
+            other => Ok(other),
+        }
+    };
+
+    // A per-component ceiling above the host-wide total is harmless — the host
+    // semaphore gates first — but almost certainly an operator mixing the two
+    // knobs up, so `MessagingLimits::new` warns about it, exactly as
+    // `connection_quotas` does for its equivalent.
+    let limits = MessagingLimits::resolve(
+        checked(max_in_flight, "wasmcloud_messaging_max_in_flight")?,
+        checked(
+            max_in_flight_per_component,
+            "wasmcloud_messaging_max_in_flight_per_component",
+        )?,
+        total_core_instances,
+    );
+
+    // Both numbers vary by host — pooling on or off, the size of the pool, and
+    // which flags were given — so an operator cannot read them off the docs.
+    // They are also the numbers a shed warning tells them to go and raise, which
+    // makes this the one derived ceiling worth a line at startup.
+    tracing::info!(
+        host_total = limits.host_total(),
+        per_component_default = limits.per_component_default(),
+        host_total_source = if max_in_flight.is_some() {
+            "flag"
+        } else if total_core_instances.is_some() {
+            "derived from the instance pool"
+        } else {
+            "built-in default (pooling disabled)"
+        },
+        per_component_source = if max_in_flight_per_component.is_some() {
+            "flag"
+        } else {
+            "derived from the host total"
+        },
+        "wasmcloud:messaging admission ceilings resolved"
+    );
+
+    Ok(limits)
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DevConfig {
     /// Command to run the component in dev mode
@@ -1363,6 +1442,104 @@ mod tests {
         assert!(connection_quotas(None, None, Some(0), None, None).is_err());
         assert!(connection_quotas(None, None, None, Some(0), None).is_err());
         assert!(connection_quotas(None, None, None, None, Some(Duration::ZERO)).is_err());
+    }
+
+    #[test]
+    fn wasmcloud_messaging_limits_reject_zero() {
+        // Zero would silently mean "process no messages" — a host that looks
+        // healthy and quietly consumes nothing. Better a startup error.
+        assert!(wasmcloud_messaging_limits(Some(0), Some(32), None).is_err());
+        assert!(wasmcloud_messaging_limits(Some(128), Some(0), None).is_err());
+    }
+
+    #[test]
+    fn wasmcloud_messaging_limits_reject_more_than_a_semaphore_can_hold() {
+        // Above this the semaphore panics at startup, so an unchecked value is
+        // not a large ceiling but an abort with a backtrace. `usize::MAX` is
+        // what a fat-fingered "unlimited" looks like.
+        let too_big = wash_runtime::plugin::wasmcloud_messaging::MessagingLimits::MAX_IN_FLIGHT + 1;
+        assert!(wasmcloud_messaging_limits(Some(too_big), None, None).is_err());
+        assert!(wasmcloud_messaging_limits(None, Some(too_big), None).is_err());
+        assert!(wasmcloud_messaging_limits(Some(usize::MAX), None, None).is_err());
+    }
+
+    #[test]
+    fn wasmcloud_messaging_limits_apply_overrides() {
+        let limits = wasmcloud_messaging_limits(Some(64), Some(8), None).expect("valid ceilings");
+        assert_eq!(limits.host_total(), 64);
+        assert_eq!(limits.per_component_default(), 8);
+
+        // An explicit ceiling wins over what the pool would have derived —
+        // otherwise the flag would be advisory on a pooled host.
+        let limits =
+            wasmcloud_messaging_limits(Some(64), Some(8), Some(3000)).expect("valid ceilings");
+        assert_eq!(limits.host_total(), 64);
+        assert_eq!(limits.per_component_default(), 8);
+    }
+
+    #[test]
+    fn wasmcloud_messaging_limits_default_to_the_documented_pair() {
+        // No flags and no pool to derive from: the pinned defaults stand.
+        let limits =
+            wasmcloud_messaging_limits(None, None, None).expect("the built-in defaults are valid");
+        assert_eq!(limits.host_total(), 128);
+        assert_eq!(limits.per_component_default(), 32);
+    }
+
+    #[test]
+    fn setting_only_the_host_ceiling_still_moves_the_per_component_default() {
+        // The operator-visible symptom of deriving the two independently:
+        // `--wasmcloud-messaging-max-in-flight 1024` was accepted, the host
+        // ceiling rose, and every component stayed pinned at the pool-derived
+        // default — so on any host with fewer than ~31 messaging components the
+        // flag changed nothing at all.
+        let derived = wasmcloud_messaging_limits(None, None, Some(1000)).expect("valid");
+        let raised = wasmcloud_messaging_limits(Some(1024), None, Some(1000)).expect("valid");
+        assert_eq!(raised.host_total(), 1024);
+        assert!(
+            raised.per_component_default() > derived.per_component_default(),
+            "raising only the host ceiling left the per-component default at {}",
+            raised.per_component_default()
+        );
+
+        // Lowering it must not leave the per-component default stranded above
+        // the total the operator just set.
+        let lowered = wasmcloud_messaging_limits(Some(4), None, Some(1000)).expect("valid");
+        assert!(lowered.per_component_default() <= lowered.host_total());
+    }
+
+    #[test]
+    fn wasmcloud_messaging_limits_do_not_over_commit_a_small_pool() {
+        // A pool of 16 core instances holds 3 worst-case components. The
+        // derived ceiling must not exceed that: admitting 8 would need 40 core
+        // instances and fail at instantiation, which is the exhaustion these
+        // ceilings exist to prevent.
+        let limits = wasmcloud_messaging_limits(None, None, Some(16)).expect("valid");
+        assert!(
+            limits.host_total() <= 3,
+            "a 16-instance pool derived a ceiling of {} messages",
+            limits.host_total()
+        );
+    }
+
+    #[test]
+    fn wasmcloud_messaging_limits_scale_with_the_pool() {
+        // The point of deriving: a host told it is larger gets a larger
+        // messaging ceiling, instead of the stock default silently binding.
+        let stock = wasmcloud_messaging_limits(None, None, Some(1000)).expect("valid");
+        let big = wasmcloud_messaging_limits(None, None, Some(8000)).expect("valid");
+        assert!(
+            big.host_total() > stock.host_total(),
+            "raising WASMTIME_POOLING_TOTAL_CORE_INSTANCES must raise the messaging ceiling: \
+             {} vs {}",
+            big.host_total(),
+            stock.host_total()
+        );
+        // And the per-component ceiling never exceeds the host one, however the
+        // pool is sized.
+        for limits in [&stock, &big] {
+            assert!(limits.per_component_default() <= limits.host_total());
+        }
     }
 
     #[test]

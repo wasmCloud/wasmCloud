@@ -22,7 +22,6 @@ interface types {
   }
 
   /// The set of errors which may be raised by broker operations (the `consumer` interface).
-
   variant error {
     /// The subject is malformed, empty, or otherwise rejected by the broker.
     subject-invalid,
@@ -43,7 +42,7 @@ interface types {
   }
 
   /// The disposition a message handler reports for a delivery it could not process.
-  /// 
+  ///
   /// Hosts currently record the disposition; backends with redelivery semantics
   /// (e.g. NATS JetStream) can map `retry` to a negative acknowledgement and
   /// `reject` to a terminal one.

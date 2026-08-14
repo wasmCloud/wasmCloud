@@ -2161,13 +2161,20 @@ impl UnresolvedWorkload {
                     {
                         if name.as_str() == *plugin_id
                             && plugin_interfaces.includes_bidirectional(wit_interface)
+                            && p.claims(wit_interface)
                         {
                             matching_interfaces.insert(wit_interface.clone());
                         }
                         continue;
                     }
-                    // Check if plugin supports this interface
-                    if plugin_interfaces.includes_bidirectional(wit_interface) {
+                    // Check if plugin supports this interface. `claims` is the
+                    // plugin's own veto over a world match it cannot serve
+                    // (e.g. an entry that pins no version, which matches every
+                    // revision); a refusal leaves the interface unmatched so a
+                    // sibling plugin gets it.
+                    if plugin_interfaces.includes_bidirectional(wit_interface)
+                        && p.claims(wit_interface)
+                    {
                         // an `(implements ..)` named interface is served only
                         // by a plugin that supports named instances.
                         let defer_to_other = if wit_interface.name.is_some() {
@@ -2662,6 +2669,9 @@ fn served_within_workload(
 /// `supports_named_instances() == want_named` can serve `iface`.
 /// Used to determine whether a plugin can defer an `(implements ..)`
 ///  interface to a named-capable one, and vice versa).
+///
+/// A plugin that would refuse `iface` via [`HostPlugin::claims`] is not a
+/// deferral target: deferring to it would leave the interface bound by nobody.
 fn other_plugin_serves(
     plugins: &HashMap<&'static str, Arc<dyn HostPlugin + 'static>>,
     self_id: &str,
@@ -2672,6 +2682,7 @@ fn other_plugin_serves(
         *id != self_id
             && q.supports_named_instances() == want_named
             && q.world().includes_bidirectional(iface)
+            && q.claims(iface)
     })
 }
 
@@ -2810,6 +2821,9 @@ mod tests {
         on_workload_item_bind_count: Arc<AtomicUsize>,
         on_workload_resolved_count: Arc<AtomicUsize>,
         named_instance_support: bool,
+        /// Minimum version this plugin will claim, mirroring a plugin whose
+        /// `world()` cannot express the constraint. `None` claims everything.
+        claims_from: Option<semver::Version>,
     }
 
     impl MockPlugin {
@@ -2826,11 +2840,19 @@ mod tests {
                 on_workload_item_bind_count: Arc::new(AtomicUsize::new(0)),
                 on_workload_resolved_count: Arc::new(AtomicUsize::new(0)),
                 named_instance_support: false,
+                claims_from: None,
             }
         }
 
         fn with_named_instance_support(mut self) -> Self {
             self.named_instance_support = true;
+            self
+        }
+
+        /// Claim only interfaces pinning a version at or above `min`, the way
+        /// the async messaging multiplexer claims only `>= 0.3.0`.
+        fn claiming_from(mut self, min: &str) -> Self {
+            self.claims_from = Some(semver::Version::parse(min).unwrap());
             self
         }
 
@@ -2862,6 +2884,13 @@ mod tests {
 
         fn supports_named_instances(&self) -> bool {
             self.named_instance_support
+        }
+
+        fn claims(&self, interface: &WitInterface) -> bool {
+            match &self.claims_from {
+                Some(min) => interface.version.as_ref().is_some_and(|v| v >= min),
+                None => true,
+            }
         }
 
         async fn on_workload_bind(
@@ -3368,6 +3397,104 @@ mod tests {
             "a name with no matching plugin id must still resolve via world-matching"
         );
         assert_eq!(bound_plugins.len(), 1);
+    }
+
+    /// Two plugins serve one namespace:package at different revisions, the way
+    /// the sync and async `wasmcloud:messaging` multiplexers do. An entry that
+    /// pins NO version world-matches both — a versionless entry is compatible
+    /// with any version — so the one that refuses it via `claims` must leave it
+    /// for the other rather than claiming it and binding nothing.
+    ///
+    /// Both are `(implements ..)`-capable, so the named/unnamed deferral does
+    /// not separate them; `claims` is the only thing that does. The interface is
+    /// blobstore rather than messaging only because it has to be one the
+    /// `http_counter.wasm` fixture actually imports.
+    #[tokio::test]
+    async fn test_unclaimed_interface_falls_through_to_another_plugin() {
+        let iface = WitInterface::from("wasi:blobstore/container");
+
+        // Sorts FIRST, so it is offered every interface before the other plugin
+        // — which is exactly the case that used to strand a versionless entry.
+        let newer = Arc::new(
+            MockPlugin::new("blobstore-a-newer", vec![iface.clone()], vec![])
+                .with_named_instance_support()
+                .claiming_from("0.3.0"),
+        );
+        let older = Arc::new(
+            MockPlugin::new("blobstore-b-older", vec![iface.clone()], vec![])
+                .with_named_instance_support(),
+        );
+
+        let mut plugins = HashMap::new();
+        plugins.insert(newer.id(), newer.clone() as Arc<dyn HostPlugin>);
+        plugins.insert(older.id(), older.clone() as Arc<dyn HostPlugin>);
+
+        let mut versionless = iface.clone();
+        versionless.name = Some("team-a".to_string());
+
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![create_test_component("component1")],
+            vec![versionless],
+        );
+
+        let bound_plugins = workload.bind_plugins(&plugins).await.unwrap();
+
+        assert_eq!(
+            newer.get_call_count("on_workload_bind"),
+            0,
+            "a plugin that refuses an interface must not claim it"
+        );
+        assert_eq!(
+            older.get_call_count("on_workload_item_bind"),
+            1,
+            "the refused interface must reach the plugin that will serve it"
+        );
+        assert_eq!(bound_plugins.len(), 1);
+        assert_eq!(bound_plugins[0].0.id(), "blobstore-b-older");
+    }
+
+    /// The other half of the pair: an entry that DOES pin a claimed version goes
+    /// to the claiming plugin, so refusing versionless entries has not simply
+    /// disabled it. `0.2.0-draft` is the version the fixture imports; the
+    /// refusing plugin here claims from below it.
+    #[tokio::test]
+    async fn test_claimed_interface_binds_the_claiming_plugin() {
+        let iface = WitInterface::from("wasi:blobstore/container@0.2.0-draft");
+
+        let newer = Arc::new(
+            MockPlugin::new("blobstore-a-newer", vec![iface.clone()], vec![])
+                .with_named_instance_support()
+                .claiming_from("0.1.0"),
+        );
+        let older = Arc::new(
+            MockPlugin::new("blobstore-b-older", vec![iface.clone()], vec![])
+                .with_named_instance_support(),
+        );
+
+        let mut plugins = HashMap::new();
+        plugins.insert(newer.id(), newer.clone() as Arc<dyn HostPlugin>);
+        plugins.insert(older.id(), older.clone() as Arc<dyn HostPlugin>);
+
+        let mut versioned = iface.clone();
+        versioned.name = Some("team-a".to_string());
+
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![create_test_component("component1")],
+            vec![versioned],
+        );
+
+        let bound_plugins = workload.bind_plugins(&plugins).await.unwrap();
+
+        assert_eq!(bound_plugins.len(), 1);
+        assert_eq!(bound_plugins[0].0.id(), "blobstore-a-newer");
     }
 
     /// Tests basic plugin binding with one plugin and one component.
