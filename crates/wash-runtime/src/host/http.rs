@@ -946,21 +946,41 @@ impl<B: hyper::body::Body + Unpin> hyper::body::Body for WatchedBody<B> {
         // exchange broke off, and if the guest is wedged behind it, the armed
         // flag is what ends it (a completed call deregisters, so arming a
         // healthy one is harmless).
-        if let std::task::Poll::Ready(None) = poll
-            && let Some(watch) = this.watch.take()
-        {
+        // `is_end_stream` too, since hyper stops polling once a declared
+        // `content-length` is written and never delivers that final `None`.
+        let ended = matches!(poll, std::task::Poll::Ready(None)) || this.inner.is_end_stream();
+        if ended && let Some(watch) = this.watch.take() {
             watch.disarm();
         }
         poll
+    }
+
+    // Forwarded, not defaulted: hyper frames the response from these, so
+    // defaulting them sends a fixed-length body chunked and close-delimits a
+    // HEAD or 204/304 that would otherwise keep its connection alive.
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        self.inner.size_hint()
     }
 }
 
 /// Wrap `resp`'s body so the dispatched call behind it stays condemned-on-drop
 /// until the body finishes streaming.
+///
+/// An already-complete body is left unwrapped and disarmed: hyper never polls
+/// one, so a wrapper would be dropped un-disarmed and arm the flag on a
+/// response that was delivered whole.
 fn watch_body(
     resp: hyper::Response<HyperOutgoingBody>,
     watch: AbandonOnDrop,
 ) -> hyper::Response<HyperOutgoingBody> {
+    if hyper::body::Body::is_end_stream(resp.body()) {
+        watch.disarm();
+        return resp;
+    }
     resp.map(|inner| {
         HyperOutgoingBody::new(
             WatchedBody {

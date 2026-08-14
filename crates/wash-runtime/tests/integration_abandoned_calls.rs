@@ -566,7 +566,7 @@ async fn an_abandoned_message_delivery_traps_and_restarts_the_service() -> Resul
     // and this instance has served one message.
     assert_eq!(
         deliver(&ingress, &workload_id, "first").await?,
-        Err("1:first".to_string())
+        Err("other: 1:first".to_string())
     );
 
     // `spin` wedges the handler. The delivery must error at the deadline
@@ -593,7 +593,7 @@ async fn an_abandoned_message_delivery_traps_and_restarts_the_service() -> Resul
     })
     .await?;
     assert_eq!(
-        echoed, "1:after",
+        echoed, "other: 1:after",
         "the restarted service must count from one"
     );
     Ok(())
@@ -675,6 +675,112 @@ async fn an_abandoned_capability_call_escalates_to_a_plugin_restart() -> Result<
         404,
         "the seeded state must be gone after the supervised restart"
     );
+    Ok(())
+}
+
+/// A client that gives up must cost a healthy call nothing, even when the guest
+/// keeps working long past both the deadline and the grace.
+///
+/// A disconnect arms the flag, so acting on abandonment alone would condemn the
+/// store a grace later and take every co-tenant request with it. The guest here
+/// yields throughout, so its stretch keeps resetting and the store is left
+/// alone. The bystander requests are the assertion: same instance throughout,
+/// `served` climbing unbroken rather than restarting at 1.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_client_that_gives_up_does_not_disturb_a_healthy_slow_guest() -> Result<()> {
+    abandonment_env();
+    let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
+    start_sleeper(&host, "slow-svc", true).await?;
+    let client = client()?;
+
+    assert_eq!(served(&client, addr, "slow-svc").await?, 1);
+
+    // A request the guest spends far longer on than deadline + grace, whose
+    // client walks away almost at once — dropping the future is a disconnect.
+    let abandon_ms = (DEADLINE_SECS + GRACE_SECS) * 1_000 + 4_000;
+    let mut gave_up = Box::pin(
+        client
+            .get(format!("http://{addr}/slow?ms={abandon_ms}"))
+            .header("HOST", "slow-svc")
+            .send(),
+    );
+    tokio::select! {
+        _ = &mut gave_up => anyhow::bail!("the slow request answered before the client gave up"),
+        () = tokio::time::sleep(Duration::from_millis(300)) => {}
+    }
+    drop(gave_up);
+
+    // Well past deadline + grace, the same instance must still be serving.
+    let until = Instant::now() + Duration::from_millis(abandon_ms);
+    let mut previous = 1;
+    while Instant::now() < until {
+        let now = served(&client, addr, "slow-svc")
+            .await
+            .context("a healthy service must keep serving after a client disconnects")?;
+        anyhow::ensure!(
+            now > previous,
+            "the service was restarted by an abandoned-but-healthy call: served {previous} -> {now}"
+        );
+        previous = now;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+    anyhow::ensure!(
+        previous > 5,
+        "expected the bystander traffic to keep flowing, only saw {previous}"
+    );
+    Ok(())
+}
+
+/// The streaming form of the same guarantee: an SSE / long-poll client that
+/// disconnects between heartbeats.
+///
+/// The head arrives at once, so the call rides on the body wrapper, which the
+/// disconnect drops and arms. The guest only finds out at its next frame write,
+/// so with a heartbeat longer than the grace it is always still holding the
+/// call when the grace expires — and only its pauses between frames distinguish
+/// it from a wedged guest.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_sse_client_disconnecting_between_frames_does_not_trap_the_service() -> Result<()> {
+    abandonment_env();
+    // Frames further apart than deadline + grace, so the guest is mid-sleep
+    // for the whole window in which a time-only trap would fire.
+    const GAP_MS: u64 = (DEADLINE_SECS + GRACE_SECS) * 1_000 + 2_000;
+
+    let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
+    start_sleeper(&host, "sse-svc", true).await?;
+    let client = client()?;
+
+    assert_eq!(served(&client, addr, "sse-svc").await?, 1);
+
+    // Take the head, then walk away without reading the body: a closed tab.
+    let stream = client
+        .get(format!("http://{addr}/sse?frames=10&gap_ms={GAP_MS}"))
+        .header("HOST", "sse-svc")
+        .send()
+        .await
+        .context("SSE response head should arrive immediately")?;
+    assert!(
+        stream.status().is_success(),
+        "SSE head should be 2xx, got {}",
+        stream.status()
+    );
+    drop(stream);
+
+    // Past deadline + grace with the guest asleep between frames.
+    let until = Instant::now() + Duration::from_millis(GAP_MS);
+    let mut previous = 1;
+    while Instant::now() < until {
+        let now = served(&client, addr, "sse-svc")
+            .await
+            .context("a service must survive an SSE client disconnecting")?;
+        anyhow::ensure!(
+            now > previous,
+            "the service was restarted by an abandoned SSE stream: served {previous} -> {now}"
+        );
+        previous = now;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+    anyhow::ensure!(previous > 5, "expected steady traffic, only saw {previous}");
     Ok(())
 }
 

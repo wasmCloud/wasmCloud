@@ -283,8 +283,9 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
         } = call;
 
         // Watch this call for the rest of its life. The guard deregisters on
-        // drop, however the call ends.
+        // drop, however the call ends; the deadline is re-armed for it here.
         let _abandoned = accessor.with(|mut access| {
+            crate::engine::abandon::rearm_for_call(&mut access);
             let calls = Arc::clone(&access.get().abandoned);
             calls.watch(abandoned)
         });
