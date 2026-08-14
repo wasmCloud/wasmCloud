@@ -16,20 +16,23 @@
 //!   the guest's own loop back-edges, the only host code a non-yielding guest
 //!   cannot block — to read it.
 //!
-//! The callback acts only on a call that has stayed abandoned *and still
-//! registered* for longer than [`crate::timeouts::abandoned_call_grace`]. The
-//! grace is what makes abandonment safe to signal eagerly: a healthy guest
-//! finishes the abandoned call and deregisters it well inside the grace, so a
-//! client disconnect costs nothing, while a wedged call is still there when
-//! the grace runs out. Without it, every mid-call disconnect would condemn a
-//! store that was serving other callers perfectly well.
+//! A store is acted on only when two things hold for longer than
+//! [`crate::timeouts::abandoned_call_grace`]: a call on it is abandoned and
+//! still registered, and `Continuity` shows guest code running without a
+//! pause. The second is what separates the two kinds of stuck call — a guest
+//! waiting in a host call stops executing, so the stretch resets, while a
+//! pinned one never does. Abandonment alone would not do: dropping the
+//! dispatcher arms the flag, so an ordinary client disconnect would condemn a
+//! store whose guest is healthy and merely slow.
 //!
-//! No judgement of the guest is made anywhere here. The epoch advances on wall
+//! The two are scoped differently — abandonment per call, continuity per store
+//! — so they can be satisfied by different calls. That is intended: a call
+//! pinning the store wedges every other call on it, abandoned or not.
+//!
+//! No judgement of *speed* is made anywhere here. The epoch advances on wall
 //! clock, so it can report whether guest code is running, never whether it is
 //! getting anywhere: a store pegged at 100% CPU serving calls its callers
-//! still want is left alone. The one decision — "nobody wants this any more" —
-//! is the dispatcher's, and it is one the host already makes today by dropping
-//! futures; this module only makes it stick against a guest that never yields.
+//! still want is left alone.
 //!
 //! What this cannot see: a guest burning CPU with *no* call outstanding
 //! against it — one that delivered its response and then kept spinning.
@@ -65,15 +68,21 @@ impl AbandonFlag {
             .compare_exchange(0, now_millis(), Ordering::Relaxed, Ordering::Relaxed);
     }
 
-    /// Arm this flag when `deadline` elapses, from a detached timer. For
-    /// re-bounding a call that outlives its reply (a post-reply stream drain),
-    /// and for waiters that themselves live inside the dispatched-to store. A
-    /// call already deregistered by then makes the arming invisible.
-    pub(crate) fn arm_after(self: Arc<Self>, deadline: Duration) {
-        tokio::spawn(async move {
-            tokio::time::sleep(deadline).await;
-            self.arm();
-        });
+    /// Arm this flag when `deadline` elapses. For re-bounding a call that
+    /// outlives its reply (a post-reply stream drain), and for waiters that
+    /// themselves live inside the dispatched-to store.
+    ///
+    /// The timer sleeps the whole deadline, so the handle must be held by the
+    /// work it bounds and dropped when that work ends; detaching one per call
+    /// accumulates a task and a timer entry per call on healthy traffic.
+    #[must_use = "dropping the handle immediately cancels the timer; bind it to the work it bounds"]
+    pub(crate) fn arm_after(self: Arc<Self>, deadline: Duration) -> ArmTimer {
+        ArmTimer(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+            async move {
+                tokio::time::sleep(deadline).await;
+                self.arm();
+            },
+        )))
     }
 
     fn armed_at(&self) -> Option<u64> {
@@ -83,6 +92,9 @@ impl AbandonFlag {
         }
     }
 }
+
+/// Cancels a pending [`AbandonFlag::arm_after`] timer when dropped.
+pub(crate) struct ArmTimer(#[expect(dead_code)] tokio_util::task::AbortOnDropHandle<()>);
 
 /// The in-flight calls on one store, so the store's epoch callback can see
 /// which of them have been abandoned. One per store, on [`SharedCtx`].
@@ -116,9 +128,66 @@ impl AbandonedCalls {
         })
     }
 
+    /// Whether nothing watched is abandoned, which re-arms the warning.
+    fn none_abandoned(&self) -> bool {
+        self.lock().iter().all(|f| f.armed_at().is_none())
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Arc<AbandonFlag>>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// How long guest code has been executing on one store without pausing.
+///
+/// The callback runs only while guest code does, so consecutive fires stay
+/// about one sampling interval apart while a guest keeps executing, and a
+/// wider gap means it stopped to wait for something. Measured here rather than
+/// from the host side because the callback forces a yield on every fire, which
+/// would refresh any host-side liveness signal and make a pinned guest look
+/// healthy.
+#[derive(Default)]
+struct Continuity {
+    /// When the current unbroken stretch of guest execution began.
+    stretch_start: Option<u64>,
+    /// When this callback last fired.
+    last_fire: Option<u64>,
+}
+
+impl Continuity {
+    /// Record a fire and return how long the guest has now been executing
+    /// without a pause, in milliseconds.
+    fn observe(&mut self, now: u64, pause_threshold_millis: u64) -> u64 {
+        // A gap wider than the threshold means guest code stopped running in
+        // between, so this starts a new stretch.
+        let broken = self
+            .last_fire
+            .is_none_or(|last| now.saturating_sub(last) > pause_threshold_millis);
+        if broken {
+            self.stretch_start = Some(now);
+        }
+        self.last_fire = Some(now);
+        now.saturating_sub(self.stretch_start.unwrap_or(now))
+    }
+}
+
+/// How many sampling intervals a gap must exceed to count as a pause. Fires
+/// are one interval apart while a guest runs straight through, so this leaves
+/// room for scheduler jitter while staying well below any real wait.
+const PAUSE_FACTOR: u32 = 5;
+
+/// How long a gap between fires counts as the guest having paused, derived
+/// from the sampling interval so it follows if that changes.
+///
+/// `WASH_ABANDONED_CALL_PAUSE_THRESHOLD_MS` overrides it, for a host loaded
+/// enough that a pinned guest's fires land further apart than this — which
+/// reads as a pause and stops anything from being trapped.
+pub(crate) fn pause_threshold() -> Duration {
+    static VALUE: LazyLock<Duration> = LazyLock::new(|| {
+        let derived = crate::engine::EPOCH_TICK * (EPOCH_DEADLINE_TICKS as u32) * PAUSE_FACTOR;
+        crate::timeouts::env_millis("WASH_ABANDONED_CALL_PAUSE_THRESHOLD_MS", derived)
+    });
+    *VALUE
 }
 
 /// Stops watching a call's flag when dropped, so a completed call leaves
@@ -216,14 +285,20 @@ impl DispatchedCall {
     /// For a dispatcher that must await from *inside* the store it dispatched
     /// to (a lifecycle replay, whose serve loop shares the plugin store): its
     /// own timeout can be starved by the very guest it bounds, so consume the
-    /// call and arm the flag from a detached timer at the deadline instead.
+    /// call and arm the flag from a timer instead.
+    ///
+    /// The returned [`ArmTimer`] must be held for as long as the call it
+    /// bounds — dropping it cancels the arming, and dropping it once the call
+    /// has finished is exactly the point.
     #[cfg_attr(not(feature = "host-component-plugins"), allow(dead_code))]
-    pub(crate) fn arm_detached(self) {
+    #[must_use = "hold the timer for the life of the call; dropping it cancels the arming"]
+    pub(crate) fn arm_on_timer(self) -> ArmTimer {
         let Self {
             watch, deadline, ..
         } = self;
-        watch.flag().arm_after(deadline);
+        let timer = watch.flag().arm_after(deadline);
         watch.disarm();
+        timer
     }
 
     /// Like [`await_reply`], but the reply is only the *head* of the exchange:
@@ -257,46 +332,52 @@ impl DispatchedCall {
     }
 }
 
-/// How many epoch ticks between deadline checks — how promptly an abandoned
-/// call is noticed once its grace runs out, and how often a busy guest yields
-/// its worker thread back to the executor.
+/// How many epoch ticks of *continuous guest execution* between deadline
+/// checks — how promptly an abandoned call is noticed once its grace runs out,
+/// and how often a busy guest yields its worker thread back to the executor.
 ///
-/// Neither purpose wants this fine. Noticing an armed flag within ~100ms is
-/// ample against deadlines measured in seconds, and yielding every ~100ms of
-/// continuous guest execution is enough to keep a spinning guest from
-/// starving the executor (and tokio's time driver) for longer than that. What
-/// rules out a *finer* setting is the yield itself: it requeues the store's
-/// task through the executor, and paying that on every 10ms tick showed up as
-/// a measurable per-request cost on the p3 request path — ~2% of requests
-/// cross a tick mid-guest and eat a ~1ms reschedule.
+/// Neither purpose wants this fine. Noticing within ~100ms is ample against
+/// deadlines measured in seconds, and yielding every ~100ms of unbroken guest
+/// execution is enough to keep a pinned guest from starving the executor (and
+/// tokio's time driver) for longer than that. What rules out a *finer* setting
+/// is the yield itself, which requeues the store's task through the executor.
+///
+/// The epoch advances on wall clock whether or not a guest is running, so this
+/// counts continuous execution only because [`rearm_for_call`] restarts it per
+/// call; left armed at construction, an idle store is already past its deadline
+/// when its next call arrives.
 const EPOCH_DEADLINE_TICKS: u64 = 10;
 
-/// What a store does about a call abandoned past its grace; see
+/// Re-arm the epoch deadline at the start of a call, so its countdown measures
+/// that call's own execution. See [`EPOCH_DEADLINE_TICKS`].
+pub(crate) fn rearm_for_call(store: &mut impl wasmtime::AsContextMut<Data = SharedCtx>) {
+    store
+        .as_context_mut()
+        .set_epoch_deadline(EPOCH_DEADLINE_TICKS);
+}
+
+/// What a store does about a call that is both abandoned and wedged; see
 /// [`arm_epoch_deadline`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AbandonedCallPolicy {
-    /// Trap the store at the grace. For a store that can be replaced: an
-    /// ephemeral store serves one call, a pooled instance is reaped and
-    /// rebuilt on the next call, and a trapped service is restarted by its
-    /// supervisor. Everything sharing the store goes down with it — the same
-    /// blast radius as a guest trap, bounded the same way.
+    /// Trap the store. For a store that can be replaced: an ephemeral store
+    /// serves one call, a pooled instance is reaped and rebuilt on the next
+    /// call, and a trapped service is restarted by its supervisor. Everything
+    /// sharing the store goes down with it, and by this point was already
+    /// stuck behind the pinned guest anyway.
     Trap,
-    /// Warn at the grace, trap only at
+    /// Warn first, trap only once the same conditions have held for
     /// [`crate::timeouts::abandoned_call_escalation`]. For a host component
-    /// plugin's store, which serves every tenant at once: the long runway lets
-    /// an abandoned call that still *yields* finish harmlessly, costing no one
-    /// anything. A call that never yields, though, holds the store's guest
-    /// execution for as long as it lives — no other tenant's call can enter —
-    /// so a store still carrying it at the escalation is already down for
-    /// everyone, and trapping it is what brings it back (the supervisor
-    /// rebuilds it and replays binds, the same path an organic plugin trap
-    /// takes). Per-task cancellation (bytecodealliance/wasmtime#11833) is what
-    /// would end the one call instead.
+    /// plugin's store, which serves every tenant at once, so the restart it
+    /// costs is worth delaying while there is any chance the guest frees the
+    /// store on its own. Per-task cancellation
+    /// (bytecodealliance/wasmtime#11833) is what would end the one call
+    /// instead.
     WarnThenTrap,
 }
 
-/// Let the host end guest work whose caller has abandoned it, even if the
-/// guest never yields.
+/// Let the host end guest work that has been abandoned *and* has wedged its
+/// store, even though the guest never yields.
 ///
 /// Every store needs this call whether or not anything will ever abandon a
 /// call on it — a store that never sets a deadline traps the moment it runs
@@ -306,8 +387,9 @@ pub(crate) enum AbandonedCallPolicy {
 /// guest that never yields never returns from its poll, so every host future
 /// on that store — timeouts included — is stuck behind it. wasmtime compiles
 /// the deadline check into the guest's own loop back-edges, which is the one
-/// place a spinning guest cannot avoid. The module docs
-/// ([`crate::engine::abandon`]) cover the model.
+/// place a pinned guest cannot avoid. Both conditions are required — an armed
+/// flag alone only says nobody wants the result, which a client disconnect is
+/// enough to cause. The module docs ([`crate::engine::abandon`]) cover it.
 pub(crate) fn arm_epoch_deadline(
     store: &mut wasmtime::Store<SharedCtx>,
     policy: AbandonedCallPolicy,
@@ -316,36 +398,53 @@ pub(crate) fn arm_epoch_deadline(
     let store_id = Arc::clone(&store.data().active_ctx.store_id);
     let grace = crate::timeouts::abandoned_call_grace();
     let escalation = crate::timeouts::abandoned_call_escalation();
+    let grace_millis = u64::try_from(grace.as_millis()).unwrap_or(u64::MAX);
+    let escalation_millis = u64::try_from(escalation.as_millis()).unwrap_or(u64::MAX);
+    let pause_millis = u64::try_from(pause_threshold().as_millis()).unwrap_or(u64::MAX);
+    let mut continuity = Continuity::default();
+    // Reset below once nothing is abandoned, so a later wedge warns again.
     let mut warned = false;
 
     store.set_epoch_deadline(EPOCH_DEADLINE_TICKS);
     store.epoch_deadline_callback(move |_| {
+        // Every fire counts, or the pattern means nothing.
+        let pinned_for = continuity.observe(now_millis(), pause_millis);
+
+        // Yield, never merely continue: this callback is the only point at
+        // which a pinned guest hands the host back its thread. Ridden straight
+        // through, the guest keeps the worker — and if that worker holds
+        // tokio's time driver, *no timer on the runtime fires*, including the
+        // very deadline whose expiry would abandon this call.
+        let keep_running = |warned: &mut bool| {
+            if abandoned.none_abandoned() {
+                *warned = false;
+            }
+            Ok(wasmtime::UpdateDeadline::Yield(EPOCH_DEADLINE_TICKS))
+        };
+
         if !abandoned.any_abandoned_longer_than(grace) {
-            // Yield, never merely continue: this callback is the only point at
-            // which a non-yielding guest hands the host back its thread. Ridden
-            // straight through, the guest keeps the worker — and if that worker
-            // holds tokio's time driver, *no timer on the runtime fires*,
-            // including the very deadline whose expiry would abandon this call.
-            // The yield is what keeps the enforcement loop closed.
-            return Ok(wasmtime::UpdateDeadline::Yield(EPOCH_DEADLINE_TICKS));
+            return keep_running(&mut warned);
         }
-        if policy == AbandonedCallPolicy::WarnThenTrap
-            && !abandoned.any_abandoned_longer_than(escalation)
-        {
+        // Abandoned, but the guest is still pausing to wait: slow, not wedged.
+        if pinned_for < grace_millis {
+            return keep_running(&mut warned);
+        }
+        if policy == AbandonedCallPolicy::WarnThenTrap && pinned_for < escalation_millis {
             if !warned {
                 warned = true;
                 tracing::warn!(
                     store_id = %store_id,
                     escalation = ?escalation,
-                    "a call on this store was abandoned past its grace but its guest is still \
-                     running; the store is shared, so it is not trapped before the escalation"
+                    "an abandoned call has wedged this store; it is shared, so it is not trapped \
+                     before the escalation"
                 );
             }
             return Ok(wasmtime::UpdateDeadline::Yield(EPOCH_DEADLINE_TICKS));
         }
         tracing::error!(
             store_id = %store_id,
-            "a call on this store was abandoned but its guest is still running; trapping the store"
+            pinned_for_ms = pinned_for,
+            "an abandoned call has wedged this store past its grace; trapping it"
         );
         Ok(wasmtime::UpdateDeadline::Interrupt)
     });
@@ -387,6 +486,26 @@ mod tests {
         // Re-arming must not push the abandonment instant forward.
         flag.arm();
         assert!(calls.any_abandoned_longer_than(Duration::ZERO));
+    }
+
+    /// A pause between fires starts a new stretch; unbroken fires accumulate.
+    #[test]
+    fn continuity_resets_on_a_pause_and_accumulates_otherwise() {
+        const T: u64 = 500;
+        let mut c = Continuity::default();
+        // A run of fires one sampling interval apart: one unbroken stretch.
+        assert_eq!(c.observe(1_000, T), 0);
+        assert_eq!(c.observe(1_100, T), 100);
+        assert_eq!(c.observe(1_200, T), 200);
+        // A gap past the threshold — the guest stopped running and waited, so
+        // the next fire begins a fresh stretch however long the last one was.
+        let after_pause = 1_200 + T + 1;
+        assert_eq!(c.observe(after_pause, T), 0);
+        assert_eq!(c.observe(after_pause + 100, T), 100);
+        // A gap *at* the threshold is still the same stretch: only a wider one
+        // counts as a pause, so scheduler jitter cannot reset it.
+        let jittered = after_pause + 100 + T;
+        assert_eq!(c.observe(jittered, T), jittered - after_pause);
     }
 
     /// `await_reply` disarms on delivery and arms on deadline or drop.

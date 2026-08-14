@@ -61,6 +61,23 @@ impl HttpGuest for Component {
             monotonic_clock::wait_for(3_600_000_000_000).await; // one hour
         }
 
+        // `/sse?frames=N&gap_ms=M` answers at once, then emits N frames M ms
+        // apart. A client disconnecting mid-stream is not noticed until the
+        // next write, so with a long gap the response is abandoned while the
+        // guest is asleep — healthy, and its store must be left alone.
+        if path.starts_with("/sse") {
+            let frames = query_u64(&path, "frames=").unwrap_or(10);
+            let gap_ms = query_u64(&path, "gap_ms=").unwrap_or(1_000);
+            return Ok(make_sse_response(frames, gap_ms));
+        }
+
+        // Slow but healthy: `/slow?ms=N` sleeps N ms and then answers. It
+        // yields the whole time, however large N is.
+        if path.starts_with("/slow") {
+            let ms = query_u64(&path, "ms=").unwrap_or(1_000);
+            monotonic_clock::wait_for(ms.saturating_mul(1_000_000)).await;
+        }
+
         // Spinning: never yields, so it is unreachable by every host-side
         // timeout — those are futures, and this call's poll never returns for
         // one to be polled. Only the epoch deadline compiled into this loop's
@@ -169,6 +186,26 @@ fn redos_match(subject: &[u8], at: usize) -> bool {
         }
     }
     false
+}
+
+/// A `text/event-stream` response whose frames are produced `gap_ms` apart,
+/// awaiting the clock in between.
+fn make_sse_response(frames: u64, gap_ms: u64) -> Response {
+    let headers = Fields::new();
+    let _ = headers.set(&"content-type".to_string(), &[b"text/event-stream".to_vec()]);
+    let (mut tx, rx) = bindings::wit_stream::new();
+    let (trailers_tx, trailers_rx) = bindings::wit_future::new(|| Ok(None));
+    wit_bindgen::spawn_local(async move {
+        for n in 0..frames {
+            monotonic_clock::wait_for(gap_ms.saturating_mul(1_000_000)).await;
+            tx.write_all(format!("data: {n}\n\n").into_bytes()).await;
+        }
+        drop(tx);
+        let _ = trailers_tx.write(Ok(None)).await;
+    });
+    let (response, _result) = Response::new(headers, Some(rx), trailers_rx);
+    let _ = response.set_status_code(200);
+    response
 }
 
 fn make_response(status: u16, body: Vec<u8>) -> Response {

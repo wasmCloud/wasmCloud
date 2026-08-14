@@ -280,7 +280,8 @@ impl PreparedIngress {
                         crate::timeouts::plugin_lifecycle_call(),
                     );
                     let abandoned = call.flag();
-                    call.arm_detached();
+                    // Dropped once the outcome is in, cancelling the arming.
+                    let _replay_timer = call.arm_on_timer();
                     admit_and_spawn_call(
                         accessor,
                         *instance,

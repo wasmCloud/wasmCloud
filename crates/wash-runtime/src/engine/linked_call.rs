@@ -593,6 +593,7 @@ async fn invoke_ephemeral_relocated(
         };
         // Watched for the store's whole run, the post-reply stream drain
         // included.
+        let drain_flag = Arc::clone(&call_flag);
         let _abandoned = store.data().abandoned.watch(call_flag);
         let instance = match callee_pre.instantiate_async(&mut store).await {
             Ok(i) => i,
@@ -655,6 +656,12 @@ async fn invoke_ephemeral_relocated(
                         // stream would otherwise pin this ephemeral store — and its
                         // core-instance slots — indefinitely. A transfer still making
                         // progress past this bound is truncated when the store drops.
+                        // The `timeout` below is a future on this store, so it
+                        // cannot fire if the guest stops yielding mid-drain.
+                        // This timer runs off-store, and is cancelled when the
+                        // drain ends.
+                        let _drain_timer =
+                            Arc::clone(&drain_flag).arm_after(crate::timeouts::stream_drain());
                         let drain = async {
                             for done in dones {
                                 let _ = done.await;
@@ -676,7 +683,6 @@ async fn invoke_ephemeral_relocated(
             .await;
     }));
 
-    let drain_flag = call.flag();
     let relocated = call
         .await_reply(ready_rx)
         .await
@@ -685,14 +691,9 @@ async fn invoke_ephemeral_relocated(
 
     // Results are in hand; the task must keep running to feed any result streams,
     // so detach it (cancellation past this point is handled by the result-stream
-    // consumers closing their pump channels).
+    // consumers closing their pump channels). The drain is bounded from inside
+    // that task.
     std::mem::forget(task);
-
-    // The detached store bounds its own stream drain, but that bound is a
-    // future on the store and cannot fire against a guest that never yields.
-    // Re-abandon the call when the drain budget expires: a store already done
-    // by then has deregistered the flag, so this only ever ends a wedged drain.
-    drain_flag.arm_after(crate::timeouts::stream_drain());
 
     // Inject results into the caller store; result-stream producers pull from
     // the still-draining ephemeral store.
