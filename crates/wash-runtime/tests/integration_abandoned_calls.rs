@@ -798,6 +798,71 @@ async fn an_sse_client_disconnecting_between_frames_does_not_trap_the_service() 
     Ok(())
 }
 
+/// A store with a call somebody still wants must not be trapped over a call
+/// somebody else gave up on.
+///
+/// The chatty stream here wakes every 150ms — closer together than the pause
+/// threshold, so its epoch fires chain into what continuity reads as one
+/// pinned stretch. When a co-tenant's client walks away and that call passes
+/// its grace, the first two trap conditions hold and the third looks like it
+/// does; the stream's own still-wanted call is what must keep the store
+/// alive. The frames all arriving is the assertion — a trap cuts the stream
+/// mid-flight and restarts the service.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_abandoned_co_tenant_does_not_trap_a_chatty_healthy_stream() -> Result<()> {
+    let _serial = abandonment_env();
+    let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
+    start_sleeper(&host, "chatty-svc", true).await?;
+    let client = client()?;
+
+    assert_eq!(served(&client, addr, "chatty-svc").await?, 1);
+
+    // The co-tenant: a slow request whose client walks away, arming its flag
+    // at ~0.3s; it stays registered until its exchange bound ends its task.
+    let mut gone = Box::pin(
+        client
+            .get(format!("http://{addr}/slow?ms=8000"))
+            .header("HOST", "chatty-svc")
+            .send(),
+    );
+    tokio::select! {
+        _ = &mut gone => anyhow::bail!("the slow request answered before the client gave up"),
+        () = tokio::time::sleep(Duration::from_millis(300)) => {}
+    }
+    drop(gone);
+
+    // The wanted call: sub-threshold frames for 1.5s, spanning the whole
+    // window in which the abandoned co-tenant is past its grace.
+    let resp = client
+        .get(format!("http://{addr}/sse?frames=10&gap_ms=150"))
+        .header("HOST", "chatty-svc")
+        .send()
+        .await
+        .context("SSE response head should arrive immediately")?;
+    anyhow::ensure!(resp.status().is_success(), "sse head: {}", resp.status());
+    let body = resp
+        .bytes()
+        .await
+        .context("the chatty stream must survive an abandoned co-tenant")?;
+    let frames = String::from_utf8_lossy(&body).matches("data: ").count();
+    anyhow::ensure!(frames == 10, "stream cut short: {frames}/10 frames");
+
+    // And the same instance is still serving: a trap would have restarted it.
+    let mut previous = 1;
+    for _ in 0..3 {
+        let now = served(&client, addr, "chatty-svc")
+            .await
+            .context("the service must keep serving after the stream ends")?;
+        anyhow::ensure!(
+            now > previous,
+            "the service was restarted: served {previous} -> {now}"
+        );
+        previous = now;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+    Ok(())
+}
+
 /// A busy but *healthy* instance must never be touched, however long it lives.
 ///
 /// There is no CPU budget and no heuristic left to get wrong here: a store is
