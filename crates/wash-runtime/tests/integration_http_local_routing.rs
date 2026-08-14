@@ -5,12 +5,14 @@
 //!   request per route: `/example` → `http://example.com`, `/org` →
 //!   `http://example.org`, `/path` → `http://gateway.test/functiona/items`.
 //! - **callee** — the `http-handler-p2` fixture (responds `200 "hello from
-//!   p2"`), reachable at the hostname its `wasi:http/incoming-handler`
-//!   interface config declares (`host`, plus any `host-aliases`).
+//!   p2"`), published to the network at its `host`/`host-aliases` and offered
+//!   to co-located callers at its `localRoute` entries (`host` or `host/path`).
 //!
-//! With local routing enabled on the [`Ingress`], an outgoing request whose
-//! authority matches a hostname the ingress serves is dispatched to the
-//! co-located workload in-memory — no extra per-workload declaration.
+//! Same-host routing takes two keys, and these tests exercise both halves: the
+//! host must run with local routing enabled ([`Ingress`]), *and* the callee must
+//! declare a `localRoute`. Neither alone routes anything, and the two scopes do
+//! not leak into each other — a published hostname is never short-circuited, a
+//! `localRoute` name is never reachable from the network.
 //!
 //! Egress is stubbed with [`RefuseOutgoingHandler`], which fails every network
 //! send with `ConnectionRefused`. The caller fixture maps that to 502 and a
@@ -132,6 +134,7 @@ fn http_workload(
                     volume_mounts: vec![],
                     allowed_hosts: parsed.into(),
                     allowed_ip_name_lookups: Default::default(),
+                    allowed_host_loopback_ports: Default::default(),
                 },
                 pool_size: 1,
                 max_invocations: 100,
@@ -151,12 +154,22 @@ fn http_workload(
 }
 
 async fn call(addr: std::net::SocketAddr, path: &str) -> Result<(u16, String)> {
+    call_host(addr, "caller.test", path).await
+}
+
+/// `call`, but addressing an arbitrary ingress hostname — used to check that an
+/// inbound request resolves to the same workload a locally routed egress does.
+async fn call_host(
+    addr: std::net::SocketAddr,
+    host_header: &str,
+    path: &str,
+) -> Result<(u16, String)> {
     let client = reqwest::Client::new();
     let response = timeout(
         Duration::from_secs(10),
         client
             .get(format!("http://{addr}{path}"))
-            .header("HOST", "caller.test")
+            .header("HOST", host_header)
             .send(),
     )
     .await
@@ -167,11 +180,11 @@ async fn call(addr: std::net::SocketAddr, path: &str) -> Result<(u16, String)> {
     Ok((status, body))
 }
 
-/// An egress whose authority is the callee's ingress `host` (`example.com`) is
-/// short-circuited in-memory; a non-served authority still egresses (and is
-/// refused by the stub handler).
+/// The base case: the callee declares `localRoute` for the authority the caller
+/// dials, so the egress is served in-memory. An authority nothing declares
+/// still egresses (and is refused by the stub handler).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_local_routing_served_host() -> Result<()> {
+async fn test_local_routing_declared_route() -> Result<()> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
@@ -190,8 +203,8 @@ async fn test_local_routing_served_host() -> Result<()> {
     host.workload_start(http_workload(
         "callee",
         CALLEE_WASM,
-        "example.com",
-        &[],
+        "callee.test",
+        &[("localRoute", "example.com")],
         &[],
     ))
     .await
@@ -200,7 +213,7 @@ async fn test_local_routing_served_host() -> Result<()> {
     let (status, body) = call(addr, "/example").await?;
     assert_eq!(
         status, 200,
-        "egress to example.com should be served in-memory by the callee: {body}"
+        "egress to a declared localRoute should be served in-memory: {body}"
     );
     assert!(
         body.contains("upstream 200"),
@@ -210,16 +223,18 @@ async fn test_local_routing_served_host() -> Result<()> {
     let (status, body) = call(addr, "/org").await?;
     assert_eq!(
         status, 502,
-        "egress to a non-served authority must still hit the network path: {body}"
+        "egress to an undeclared authority must still hit the network path: {body}"
     );
 
     Ok(())
 }
 
-/// `host-aliases` route locally exactly like the primary `host`, and the
-/// egress URL's path travels with the locally dispatched request.
+/// The two-key contract, workload half: a hostname the callee publishes to the
+/// network via `host`/`host-aliases` is *not* short-circuited. Without a
+/// `localRoute` declaration nothing routes locally, however reachable the name
+/// is from outside.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_local_routing_host_alias() -> Result<()> {
+async fn test_ingress_hostnames_alone_do_not_route_locally() -> Result<()> {
     let (addr, host) = start_host(true).await?;
 
     host.workload_start(http_workload(
@@ -230,35 +245,32 @@ async fn test_local_routing_host_alias() -> Result<()> {
         &["*"],
     ))
     .await?;
+    // Serves example.com to the network, and declares no localRoute at all.
     host.workload_start(http_workload(
         "callee",
         CALLEE_WASM,
-        "callee.test",
+        "example.com",
         &[("host-aliases", "gateway.test")],
         &[],
     ))
     .await?;
 
-    // `/path` egresses to `http://gateway.test/functiona/items`: the alias
-    // matches the authority; the non-root path rides along.
-    let (status, body) = call(addr, "/path").await?;
-    assert_eq!(
-        status, 200,
-        "an aliased hostname should serve the egress in-memory: {body}"
-    );
-
-    // Same callee, an authority it does not serve.
-    let (status, _) = call(addr, "/example").await?;
+    let (status, body) = call(addr, "/example").await?;
     assert_eq!(
         status, 502,
-        "a non-served authority must egress to the network"
+        "the primary `host` must not be locally routed without localRoute: {body}"
+    );
+    let (status, body) = call(addr, "/path").await?;
+    assert_eq!(
+        status, 502,
+        "a `host-aliases` entry must not be locally routed either: {body}"
     );
 
     Ok(())
 }
 
-/// Local routing is off by default: even when the callee serves the authority,
-/// egress uses the network path unless the ingress opts in.
+/// The two-key contract, host half: a declared `localRoute` is inert unless the
+/// host itself enables local routing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_local_routing_disabled_by_default() -> Result<()> {
     let (addr, host) = start_host(false).await?;
@@ -274,8 +286,8 @@ async fn test_local_routing_disabled_by_default() -> Result<()> {
     host.workload_start(http_workload(
         "callee",
         CALLEE_WASM,
-        "example.com",
-        &[],
+        "callee.test",
+        &[("localRoute", "example.com")],
         &[],
     ))
     .await?;
@@ -283,7 +295,7 @@ async fn test_local_routing_disabled_by_default() -> Result<()> {
     let (status, _) = call(addr, "/example").await?;
     assert_eq!(
         status, 502,
-        "with local routing disabled the egress must use the (refusing) network path"
+        "a declared localRoute is inert on a host without local routing enabled"
     );
 
     Ok(())
@@ -296,7 +308,7 @@ async fn test_local_routing_respects_allowed_hosts() -> Result<()> {
     let (addr, host) = start_host(true).await?;
 
     // Caller may only reach example.org; example.com is denied by policy even
-    // though the callee serves it locally.
+    // though the callee declares a localRoute for it.
     host.workload_start(http_workload(
         "caller",
         CALLER_WASM,
@@ -308,8 +320,8 @@ async fn test_local_routing_respects_allowed_hosts() -> Result<()> {
     host.workload_start(http_workload(
         "callee",
         CALLEE_WASM,
-        "example.com",
-        &[],
+        "callee.test",
+        &[("localRoute", "example.com")],
         &[],
     ))
     .await?;
@@ -319,6 +331,142 @@ async fn test_local_routing_respects_allowed_hosts() -> Result<()> {
         status, 403,
         "allowed_hosts must deny the egress before local routing is consulted"
     );
+
+    Ok(())
+}
+
+/// A `localRoute` carrying a path serves only egress under that prefix. The
+/// caller's `/path` route egresses to `http://gateway.test/functiona/items`,
+/// which `gateway.test/functiona` claims.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_local_routing_matches_a_path_scoped_route() -> Result<()> {
+    let (addr, host) = start_host(true).await?;
+
+    host.workload_start(http_workload(
+        "caller",
+        CALLER_WASM,
+        "caller.test",
+        &[],
+        &["*"],
+    ))
+    .await?;
+    host.workload_start(http_workload(
+        "callee",
+        CALLEE_WASM,
+        "callee.test",
+        &[("localRoute", "gateway.test/functiona")],
+        &[],
+    ))
+    .await?;
+
+    let (status, body) = call(addr, "/path").await?;
+    assert_eq!(
+        status, 200,
+        "an egress under the declared path prefix should be served in-memory: {body}"
+    );
+
+    Ok(())
+}
+
+/// The other half: a hostname declared *only* under a narrower prefix must not
+/// swallow paths outside it. Keyed on the authority alone this egress was
+/// short-circuited to a workload that does not serve the route.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_local_routing_skips_a_path_outside_the_prefix() -> Result<()> {
+    let (addr, host) = start_host(true).await?;
+
+    host.workload_start(http_workload(
+        "caller",
+        CALLER_WASM,
+        "caller.test",
+        &[],
+        &["*"],
+    ))
+    .await?;
+    // Declares gateway.test, but only under /elsewhere. The caller's `/path`
+    // egress is to /functiona/items, which no route claims.
+    host.workload_start(http_workload(
+        "callee",
+        CALLEE_WASM,
+        "callee.test",
+        &[("localRoute", "gateway.test/elsewhere")],
+        &[],
+    ))
+    .await?;
+
+    let (status, body) = call(addr, "/path").await?;
+    assert_eq!(
+        status, 502,
+        "a path outside every declared prefix must egress to the network: {body}"
+    );
+
+    Ok(())
+}
+
+/// Prefix matching is on `/` segment boundaries, so `/function` must not claim
+/// `/functiona/items` — the string-prefix bug this guards is easy to reintroduce.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_local_routing_prefix_stops_at_a_segment_boundary() -> Result<()> {
+    let (addr, host) = start_host(true).await?;
+
+    host.workload_start(http_workload(
+        "caller",
+        CALLER_WASM,
+        "caller.test",
+        &[],
+        &["*"],
+    ))
+    .await?;
+    host.workload_start(http_workload(
+        "callee",
+        CALLEE_WASM,
+        "callee.test",
+        &[("localRoute", "gateway.test/function")],
+        &[],
+    ))
+    .await?;
+
+    let (status, body) = call(addr, "/path").await?;
+    assert_eq!(
+        status, 502,
+        "/function is not a segment-boundary prefix of /functiona/items: {body}"
+    );
+
+    Ok(())
+}
+
+/// A `localRoute` name is reachable in-memory and nowhere else. Anyone inside
+/// the cluster can dial the host's port with a forged `Host` header, so a
+/// local-only name answering an inbound request would be a real hole.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_local_routes_are_not_reachable_from_the_network() -> Result<()> {
+    let (addr, host) = start_host(true).await?;
+
+    host.workload_start(http_workload(
+        "callee",
+        CALLEE_WASM,
+        "callee.test",
+        &[("localRoute", "gateway.test/functiona")],
+        &[],
+    ))
+    .await?;
+
+    // The published hostname serves normally.
+    let (status, body) = call_host(addr, "callee.test", "/anything").await?;
+    assert_eq!(
+        status, 200,
+        "the published `host` must serve inbound: {body}"
+    );
+    assert!(body.contains("hello from p2"), "unexpected body: {body}");
+
+    // The localRoute name does not, at its own prefix or anywhere else.
+    let (status, _) = call_host(addr, "gateway.test", "/functiona/items").await?;
+    assert_eq!(
+        status, 404,
+        "a localRoute name must not answer a forged inbound Host header"
+    );
+    let (status, _) = call_host(addr, "gateway.test", "/").await?;
+    assert_eq!(status, 404, "nor at any other path");
 
     Ok(())
 }

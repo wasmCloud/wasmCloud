@@ -80,17 +80,141 @@ fn is_valid_hostname(host: &str) -> bool {
         })
 }
 
-/// Collect the ingress hostnames a workload's HTTP handler serves on: the
-/// `host` config plus any comma-separated `host-aliases`, keeping only entries
-/// that are valid RFC 1123 hostnames.
+/// Normalize a configured `path` prefix into the form the routing table stores:
+/// no trailing slash, and a leading slash supplied if the author omitted one.
+/// An absent, empty, or `"/"` value normalizes to the empty prefix, which is a
+/// catch-all matching every path.
+fn normalize_path_prefix(path: &str) -> String {
+    let path = path.trim().trim_end_matches('/');
+    if path.is_empty() {
+        return String::new();
+    }
+    if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    }
+}
+
+/// Whether `path` falls under `prefix`, matching on `/` segment boundaries so
+/// `/fn` covers `/fn` and `/fn/x` but not `/fnord`. The empty prefix is the
+/// catch-all and matches everything.
+fn path_prefix_matches(prefix: &str, path: &str) -> bool {
+    if prefix.is_empty() {
+        return true;
+    }
+    match path.strip_prefix(prefix) {
+        Some(rest) => rest.is_empty() || rest.starts_with('/'),
+        None => false,
+    }
+}
+
+/// Who may reach a route.
+///
+/// The two are a partition, not a hierarchy: a name reachable over the network
+/// is not automatically reachable in-memory, and vice versa. That is the whole
+/// point of [`RouteScope::Local`] — a workload opts a name into the same-host
+/// short-circuit deliberately, and the host must also have local routing
+/// enabled, so neither the workload author nor the operator can open that door
+/// alone (the same two-key shape as `allowedHostLoopback` +
+/// `--allow-host-loopback`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteScope {
+    /// Declared by `host`/`host-aliases`: served for requests arriving on the
+    /// host's HTTP listener. Never short-circuits a co-located caller's egress.
+    Ingress,
+    /// Declared by `localRoute`: served only to a co-located workload's
+    /// outgoing request, in-memory, and only when the host runs with local
+    /// routing enabled. Never reachable from the network, so a name that exists
+    /// nowhere in DNS cannot be reached by anyone dialling the host's port with
+    /// a forged `Host` header.
+    Local,
+}
+
+/// One route a workload's HTTP handler serves: a hostname, optionally scoped to
+/// a path prefix, reachable by one [`RouteScope`].
+///
+/// The inbound path ([`Router::route_incoming_request`]) and the same-host
+/// egress short-circuit ([`Router::route_local_egress`]) resolve against one
+/// table of these through one matcher, differing only in the scope they ask
+/// for — so the two directions cannot drift apart in how they match, only in
+/// what they are allowed to see.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IngressRoute {
+    /// RFC 1123 hostname, stored lowercased and without any port.
+    pub host: String,
+    /// Path prefix scoping this route; empty is a catch-all. Normalized by
+    /// [`normalize_path_prefix`].
+    pub path_prefix: String,
+    /// Who may reach this route.
+    pub scope: RouteScope,
+}
+
+impl IngressRoute {
+    /// A network-reachable route serving every path on `host`.
+    pub fn ingress(host: impl AsRef<str>) -> Self {
+        Self::new(host, "", RouteScope::Ingress)
+    }
+
+    /// A same-host-only route serving `path_prefix` and below on `host`. An
+    /// empty prefix serves every path.
+    pub fn local(host: impl AsRef<str>, path_prefix: impl AsRef<str>) -> Self {
+        Self::new(host, path_prefix, RouteScope::Local)
+    }
+
+    fn new(host: impl AsRef<str>, path_prefix: impl AsRef<str>, scope: RouteScope) -> Self {
+        Self {
+            // Hostnames are case-insensitive (RFC 1123) and the host serves one
+            // HTTP port, so neither case nor port carries routing information.
+            // Normalizing here means every lookup can normalize the same way and
+            // the two sides are guaranteed to agree.
+            host: split_host_port(host.as_ref()).0.to_ascii_lowercase(),
+            path_prefix: normalize_path_prefix(path_prefix.as_ref()),
+            scope,
+        }
+    }
+}
+
+/// Parse one comma-separated `localRoute` entry: either a bare hostname
+/// (`functiona.internal`, serving every path on it) or a hostname with a path
+/// prefix (`functiona.internal/hello`, serving that prefix and below).
+///
+/// Returns `None` for anything whose authority is not a valid RFC 1123
+/// hostname, including a bare path — a `localRoute` always names a host,
+/// because "every authority, this path" would let one workload intercept a
+/// co-located caller's traffic to any destination.
+fn parse_local_route(entry: &str) -> Option<IngressRoute> {
+    let entry = entry.trim();
+    if entry.is_empty() {
+        return None;
+    }
+    let (host, path) = match entry.split_once('/') {
+        Some((host, path)) => (host, path),
+        None => (entry, ""),
+    };
+    // Tolerate a port on the authority the way the routing table does; it
+    // carries no routing information and is normalized away either way.
+    is_valid_hostname(split_host_port(host).0).then(|| IngressRoute::local(host, path))
+}
+
+/// Collect the routes a workload's HTTP handler serves:
+///
+/// - `host` plus any comma-separated `host-aliases` become
+///   [`RouteScope::Ingress`] routes serving every path.
+/// - Any comma-separated `localRoute` entries become [`RouteScope::Local`]
+///   routes, each optionally scoped to a path prefix (`host` or `host/path`).
+///
+/// Entries that are not valid RFC 1123 hostnames are skipped with a warning
+/// rather than failing the workload — a discarded alias should be visible, but
+/// it must not take a serving workload down.
 ///
 /// Unlike [`DynamicRouter::on_workload_resolved`], which fails a component
 /// workload that declares no valid host, this is lenient: it returns whatever
-/// valid hostnames exist (possibly none). Service workloads call it from their
+/// valid routes exist (possibly none). Service workloads call it from their
 /// startup path, where a missing host must not abort the service. It simply
 /// won't be reachable via a hostname router (matching how the host-agnostic
 /// `DevRouter` ignores hostnames entirely).
-pub(crate) fn http_ingress_hostnames(interfaces: &[crate::wit::WitInterface]) -> Vec<String> {
+pub(crate) fn http_ingress_routes(interfaces: &[crate::wit::WitInterface]) -> Vec<IngressRoute> {
     let Some(http_iface) = interfaces
         .iter()
         .find(|iface| iface.is_incoming_http_handler())
@@ -98,21 +222,68 @@ pub(crate) fn http_ingress_hostnames(interfaces: &[crate::wit::WitInterface]) ->
         return Vec::new();
     };
 
-    let mut hosts = Vec::new();
-    if let Some(primary) = http_iface.config.get("host")
-        && is_valid_hostname(primary)
-    {
-        hosts.push(primary.clone());
+    let mut routes = Vec::new();
+    if let Some(primary) = http_iface.config.get("host") {
+        if is_valid_hostname(primary) {
+            routes.push(IngressRoute::ingress(primary));
+        } else {
+            warn!(host = %primary, "ignoring `host`: not a valid RFC 1123 hostname");
+        }
     }
-    if let Some(aliases) = http_iface.config.get("host-aliases") {
-        hosts.extend(
-            aliases
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty() && is_valid_hostname(s)),
-        );
-    }
-    hosts
+    routes.extend(ingress_aliases(http_iface));
+    routes.extend(local_routes(http_iface));
+    routes
+}
+
+/// The [`RouteScope::Ingress`] routes from a handler's `host-aliases` config,
+/// warning about (and skipping) entries that are not valid hostnames.
+fn ingress_aliases(http_iface: &crate::wit::WitInterface) -> Vec<IngressRoute> {
+    let Some(aliases) = http_iface.config.get("host-aliases") else {
+        return Vec::new();
+    };
+    aliases
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .filter_map(|entry| {
+            if is_valid_hostname(entry) {
+                Some(IngressRoute::ingress(entry))
+            } else {
+                // Silently dropping this is how a workload ends up unreachable
+                // at a name its manifest plainly lists — say so.
+                warn!(
+                    alias = entry,
+                    "ignoring `host-aliases` entry: not a valid RFC 1123 hostname \
+                     (a path belongs in `localRoute`, not in an alias)"
+                );
+                None
+            }
+        })
+        .collect()
+}
+
+/// The [`RouteScope::Local`] routes from a handler's `localRoute` config,
+/// warning about (and skipping) entries that do not parse.
+fn local_routes(http_iface: &crate::wit::WitInterface) -> Vec<IngressRoute> {
+    let Some(declared) = http_iface.config.get("localRoute") else {
+        return Vec::new();
+    };
+    declared
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .filter_map(|entry| {
+            let route = parse_local_route(entry);
+            if route.is_none() {
+                warn!(
+                    entry,
+                    "ignoring `localRoute` entry: expected `host` or `host/path` \
+                     with a valid RFC 1123 hostname"
+                );
+            }
+            route
+        })
+        .collect()
 }
 
 /// Why a request could not be routed to a workload.
@@ -125,6 +296,11 @@ pub enum RouteError {
     /// `DynamicRouter` passes the offending host header; `DevRouter` is
     /// host-agnostic and passes an empty string. Maps to 404.
     NoWorkloadForHost(String),
+    /// The host is served, but no workload claims a path prefix covering this
+    /// request's path. Distinct from [`Self::NoWorkloadForHost`] because the
+    /// two have different causes — an unrouted hostname versus a hostname
+    /// whose routes are all path-scoped more narrowly. Maps to 404.
+    NoWorkloadForPath { host: String, path: String },
     /// Router is momentarily unable to read its routing table (lock
     /// contention under heavy load). Retrying should succeed. Maps to 503.
     Unavailable,
@@ -135,7 +311,7 @@ impl RouteError {
     pub fn status(&self) -> u16 {
         match self {
             Self::MissingHost => 400,
-            Self::NoWorkloadForHost(_) => 404,
+            Self::NoWorkloadForHost(_) | Self::NoWorkloadForPath { .. } => 404,
             Self::Unavailable => 503,
         }
     }
@@ -152,6 +328,10 @@ impl std::fmt::Display for RouteError {
                 write!(f, "no workload registered")
             }
             Self::NoWorkloadForHost(host) => write!(f, "no workload bound to host {host:?}"),
+            Self::NoWorkloadForPath { host, path } => write!(
+                f,
+                "host {host:?} is served, but no workload's path prefix covers {path:?}"
+            ),
             Self::Unavailable => write!(f, "router is temporarily unavailable"),
         }
     }
@@ -176,14 +356,14 @@ pub trait Router: Send + Sync + 'static {
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()>;
 
     /// Register a workload whose long-lived service handles HTTP ingress (the
-    /// service exports `wasi:http/handler`). `hostnames` are the ingress
-    /// hostnames the service serves on (see [`http_ingress_hostnames`]); a
-    /// hostname-keyed router registers the workload under each so requests
-    /// resolve to it. Default: no-op.
+    /// service exports `wasi:http/handler`). `routes` are the ingress routes the
+    /// service serves (see [`http_ingress_routes`]); a hostname-keyed router
+    /// registers the workload under each so requests resolve to it.
+    /// Default: no-op.
     async fn on_service_http_resolved(
         &self,
         _workload_id: &str,
-        _hostnames: &[String],
+        _routes: &[IngressRoute],
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -217,9 +397,15 @@ pub trait Router: Send + Sync + 'static {
         req: &hyper::Request<hyper::body::Incoming>,
     ) -> Result<String, RouteError>;
 
-    /// Match an outgoing request's authority against hostnames this ingress
-    /// serves, returning the workload ID to dispatch to in-memory, or `None`
-    /// to egress over the network as usual.
+    /// Match an outgoing request's authority *and path* against the
+    /// [`RouteScope::Local`] routes this ingress serves — the `localRoute`
+    /// entries co-located workloads declared — returning the workload ID to
+    /// dispatch to in-memory, or `None` to egress over the network as usual.
+    ///
+    /// Resolves through the same matcher as [`Self::route_incoming_request`],
+    /// differing only in the scope it asks for: a name published to the network
+    /// via `host`/`host-aliases` is not short-circuited, and a `localRoute` name
+    /// is not reachable from the network.
     ///
     /// Only consulted when same-host local routing is enabled on the ingress
     /// (see [`IngressBuilder::local_routing`]). Default: never route locally.
@@ -243,75 +429,139 @@ pub struct DynamicRouter {
 /// reader never sees the forward and reverse maps disagree.
 #[derive(Default, Clone)]
 struct Routes {
-    /// Maps a hostname to every workload replica bound to it. A `BTreeSet` keeps
-    /// membership ordered and deterministic; a request picks one replica at
-    /// random (see [`DynamicRouter::select_workload`]).
-    host_to_workload: HashMap<String, BTreeSet<String>>,
-    /// Maps workload_id -> all hostnames (primary + aliases) registered for it,
-    /// so `on_workload_unbind` can remove all entries cleanly.
-    workload_to_host: HashMap<String, Vec<String>>,
+    /// Maps a hostname to the path-scoped buckets registered under it, held
+    /// longest-prefix-first so a lookup is an ordered scan that stops at the
+    /// first match. One hostname carries few prefixes in practice, so this
+    /// stays cheaper than a trie and keeps the table clonable for `rcu`.
+    host_to_workload: HashMap<String, Vec<PathBucket>>,
+    /// Maps workload_id -> every route (primary + aliases, each with its path
+    /// prefix) registered for it, so `on_workload_unbind` can remove all
+    /// entries cleanly.
+    workload_to_host: HashMap<String, Vec<IngressRoute>>,
+}
+
+/// Every workload replica serving one `(hostname, path_prefix, scope)` triple.
+/// A `BTreeSet` keeps membership ordered and deterministic; a request picks one
+/// replica at random (see [`DynamicRouter::select_workload`]).
+///
+/// `scope` is part of the key, not a property of the bucket: the same
+/// `host/path` may be declared both network-reachable and same-host-reachable,
+/// by the same workload or by different ones, and those are different routes.
+#[derive(Clone)]
+struct PathBucket {
+    prefix: String,
+    scope: RouteScope,
+    workloads: BTreeSet<String>,
 }
 
 impl DynamicRouter {
-    /// Register `workload_id` under every hostname in `hosts`, updating both the
-    /// forward (host -> replicas) and reverse (workload -> hosts) maps so
-    /// [`Router::on_workload_unbind`] can later remove every entry cleanly.
-    /// Idempotent: re-registering the same workload (e.g. a service restart)
-    /// leaves the tables unchanged.
-    fn register_hostnames(&self, workload_id: &str, hosts: &[String]) {
-        // Keyed without the port, matching how a request's Host header is
-        // looked up (see [`Self::select_workload`]).
-        let hosts: Vec<String> = hosts
-            .iter()
-            .map(|host| split_host_port(host).0.to_string())
-            .collect();
+    /// Register `workload_id` under every route in `routes`, updating both the
+    /// forward (host -> path buckets -> replicas) and reverse (workload ->
+    /// routes) maps so [`Router::on_workload_unbind`] can later remove every
+    /// entry cleanly. Idempotent: re-registering the same workload (e.g. a
+    /// service restart) leaves the tables unchanged.
+    fn register_routes(&self, workload_id: &str, routes: &[IngressRoute]) {
         self.routes.rcu(|cur| {
-            let mut routes = (**cur).clone();
-            routes
+            let mut table = (**cur).clone();
+            table
                 .workload_to_host
-                .insert(workload_id.to_string(), hosts.clone());
-            for host in &hosts {
-                routes
+                .insert(workload_id.to_string(), routes.to_vec());
+            for route in routes {
+                let buckets = table
                     .host_to_workload
-                    .entry(host.clone())
-                    .or_default()
-                    .insert(workload_id.to_string());
+                    .entry(route.host.clone())
+                    .or_default();
+                match buckets
+                    .iter_mut()
+                    .find(|b| b.prefix == route.path_prefix && b.scope == route.scope)
+                {
+                    Some(bucket) => {
+                        bucket.workloads.insert(workload_id.to_string());
+                    }
+                    None => {
+                        buckets.push(PathBucket {
+                            prefix: route.path_prefix.clone(),
+                            scope: route.scope,
+                            workloads: BTreeSet::from([workload_id.to_string()]),
+                        });
+                        // Longest prefix first, so the most specific route that
+                        // matches is the first one found. The catch-all (empty
+                        // prefix) sorts last, which is what makes it a fallback
+                        // rather than a shadow over every scoped route.
+                        buckets.sort_by(|a, b| {
+                            b.prefix
+                                .len()
+                                .cmp(&a.prefix.len())
+                                .then_with(|| a.prefix.cmp(&b.prefix))
+                        });
+                    }
+                }
             }
-            routes
+            table
         });
     }
 
-    /// Pick one replica bound to `host` at random so requests fan out across
-    /// every replica instead of pinning to one. A per-thread PRNG
-    /// ([`fastrand`]) avoids the cross-core cache-line contention a shared
-    /// atomic cursor would incur under concurrent load, and spreads load just as
-    /// evenly in aggregate. Split out from [`Router::route_incoming_request`] so
-    /// the selection logic is unit-testable without constructing a
-    /// [`hyper::body::Incoming`].
-    fn select_workload(&self, host: &str) -> Result<String, RouteError> {
+    /// Resolve `(host, path)` to one workload reachable at `scope`, spreading
+    /// load at random across every replica bound to the matching route.
+    ///
+    /// `scope` is what separates the two directions: an inbound request asks for
+    /// [`RouteScope::Ingress`] and can never land on a `localRoute`, while a
+    /// co-located caller's egress asks for [`RouteScope::Local`] and can never
+    /// short-circuit to a name that was only published to the network. Both go
+    /// through this one function, so the matching rules cannot drift apart.
+    ///
+    /// A per-thread PRNG ([`fastrand`]) avoids the cross-core cache-line
+    /// contention a shared atomic cursor would incur under concurrent load, and
+    /// spreads load just as evenly in aggregate. Split out from
+    /// [`Router::route_incoming_request`] so the selection logic is
+    /// unit-testable without constructing a [`hyper::body::Incoming`].
+    fn select_workload(
+        &self,
+        host: &str,
+        path: &str,
+        scope: RouteScope,
+    ) -> Result<String, RouteError> {
         // A Host header may carry the port the client connected on
         // (`example.com:8080`), and whether it does is up to the client: a
         // browser omits it for the scheme's default port, an OCI client
         // pushing to `127.0.0.1:5000` does not. The host serves one HTTP port,
         // so the port carries no routing information; match on the name alone
         // rather than making callers register every port they might be reached
-        // on. Registration is normalized the same way.
-        let host = split_host_port(host).0;
+        // on. Hostnames are also case-insensitive per RFC 1123. Registration
+        // normalizes both the same way (see [`IngressRoute::new`]).
+        let host = split_host_port(host).0.to_ascii_lowercase();
         // Lock-free read of a routing-table snapshot.
         let routes = self.routes.load();
-        let Some(workload_set) = routes.host_to_workload.get(host) else {
-            return Err(RouteError::NoWorkloadForHost(host.to_string()));
+        let Some(buckets) = routes.host_to_workload.get(&host) else {
+            return Err(RouteError::NoWorkloadForHost(host));
         };
-        // An entry can exist but be empty; treat that as "no workload bound"
-        // (same 404) and, importantly, keep the range below non-empty.
-        if workload_set.is_empty() {
-            return Err(RouteError::NoWorkloadForHost(host.to_string()));
+        // Only buckets this caller may see. A hostname serving `localRoute`
+        // entries is invisible to the network, and vice versa, so "visible"
+        // has to be decided before "does the hostname exist" is answered.
+        let mut visible = buckets
+            .iter()
+            .filter(|b| b.scope == scope && !b.workloads.is_empty())
+            .peekable();
+        if visible.peek().is_none() {
+            return Err(RouteError::NoWorkloadForHost(host));
         }
-        let idx = fastrand::usize(..workload_set.len());
-        let workload_id = workload_set
+        // Buckets are sorted longest-prefix-first, so the first match is the
+        // most specific one.
+        let Some(bucket) = visible.find(|b| path_prefix_matches(&b.prefix, path)) else {
+            // The hostname is served at this scope, but only under prefixes that
+            // do not cover this path — a routing-config mistake worth naming
+            // separately from an entirely unserved hostname.
+            return Err(RouteError::NoWorkloadForPath {
+                host,
+                path: path.to_string(),
+            });
+        };
+        let idx = fastrand::usize(..bucket.workloads.len());
+        let workload_id = bucket
+            .workloads
             .iter()
             .nth(idx)
-            .ok_or_else(|| RouteError::NoWorkloadForHost(host.to_string()))?;
+            .ok_or_else(|| RouteError::NoWorkloadForHost(host.clone()))?;
         Ok(workload_id.clone())
     }
 }
@@ -346,21 +596,18 @@ impl Router for DynamicRouter {
             "primary host {primary_host:?} is not a valid RFC 1123 hostname"
         );
 
-        // Collect primary hostname plus any DNS aliases injected by the operator.
+        // Primary hostname plus any DNS aliases injected by the operator.
         // Aliases are a comma-separated list of Service DNS names (e.g.
         // "my-svc,my-svc.default,my-svc.default.svc,my-svc.default.svc.cluster.local")
         // that allow cluster-internal callers to reach this workload via Service DNS.
-        let mut all_hosts = vec![primary_host];
-        if let Some(aliases) = http_iface.config.get("host-aliases") {
-            all_hosts.extend(
-                aliases
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty() && is_valid_hostname(s)),
-            );
-        }
+        let mut routes = vec![IngressRoute::ingress(&primary_host)];
+        routes.extend(ingress_aliases(http_iface));
+        // Same-host routes are a separate, opt-in declaration: `localRoute`
+        // entries are reachable only in-memory from a co-located workload, and
+        // only when the host runs with local routing enabled.
+        routes.extend(local_routes(http_iface));
 
-        self.register_hostnames(resolved_handle.id(), &all_hosts);
+        self.register_routes(resolved_handle.id(), &routes);
 
         Ok(())
     }
@@ -368,12 +615,12 @@ impl Router for DynamicRouter {
     async fn on_service_http_resolved(
         &self,
         workload_id: &str,
-        hostnames: &[String],
+        routes: &[IngressRoute],
     ) -> anyhow::Result<()> {
         // A service-only workload (a p3 trigger service serving HTTP) reaches
         // routing here rather than through `on_workload_resolved`. Register its
-        // hostnames exactly like a component workload so requests resolve to it.
-        if hostnames.is_empty() {
+        // routes exactly like a component workload so requests resolve to it.
+        if routes.is_empty() {
             // debug, not warn: a service restart re-resolves, so a misconfigured one would spam.
             debug!(
                 workload_id,
@@ -381,24 +628,34 @@ impl Router for DynamicRouter {
             );
             return Ok(());
         }
-        self.register_hostnames(workload_id, hostnames);
+        self.register_routes(workload_id, routes);
         Ok(())
     }
 
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
         self.routes.rcu(|cur| {
-            let mut routes = (**cur).clone();
-            if let Some(hostnames) = routes.workload_to_host.remove(workload_id) {
-                for hostname in &hostnames {
-                    if let Some(workload_set) = routes.host_to_workload.get_mut(hostname) {
-                        workload_set.remove(workload_id);
-                        if workload_set.is_empty() {
-                            routes.host_to_workload.remove(hostname);
-                        }
+            let mut table = (**cur).clone();
+            if let Some(routes) = table.workload_to_host.remove(workload_id) {
+                for route in &routes {
+                    let Some(buckets) = table.host_to_workload.get_mut(&route.host) else {
+                        continue;
+                    };
+                    if let Some(bucket) = buckets
+                        .iter_mut()
+                        .find(|b| b.prefix == route.path_prefix && b.scope == route.scope)
+                    {
+                        bucket.workloads.remove(workload_id);
+                    }
+                    // Drop emptied buckets, and the hostname itself once its
+                    // last route is gone, so an unbound workload leaves nothing
+                    // behind for `select_workload` to walk past.
+                    buckets.retain(|b| !b.workloads.is_empty());
+                    if buckets.is_empty() {
+                        table.host_to_workload.remove(&route.host);
                     }
                 }
             }
-            routes
+            table
         });
         Ok(())
     }
@@ -413,8 +670,9 @@ impl Router for DynamicRouter {
         check_allowed_hosts(request, allowed_hosts)
     }
 
-    /// Pick a workload ID based on the incoming request, spreading load at
-    /// random across every replica bound to the request's `Host`.
+    /// Pick a workload ID based on the incoming request's `Host` and path,
+    /// spreading load at random across every replica bound to the matching
+    /// route.
     fn route_incoming_request(
         &self,
         req: &hyper::Request<hyper::body::Incoming>,
@@ -428,19 +686,19 @@ impl Router for DynamicRouter {
         // `select_workload` does a lock-free `ArcSwap` load and an in-memory
         // lookup, so it runs inline on the async worker — no `block_in_place`
         // needed (and routing works on any runtime flavor).
-        self.select_workload(workload_host)
+        self.select_workload(workload_host, req.uri().path(), RouteScope::Ingress)
     }
 
-    /// Match an outgoing request's authority against the same hostname table
-    /// used for inbound routing (each workload's `host`/`host-aliases` config),
-    /// picking a replica at random exactly like [`Self::route_incoming_request`]
-    /// so locally routed calls spread across co-located replicas too.
+    /// Match an outgoing request against the `localRoute` entries co-located
+    /// workloads declared, picking a replica at random exactly like
+    /// [`Self::route_incoming_request`] so locally routed calls spread across
+    /// co-located replicas too.
+    ///
+    /// Asks for [`RouteScope::Local`], so a hostname a workload only published
+    /// to the network is *not* short-circuited: a workload opts into being
+    /// reachable in-memory by declaring `localRoute`, and nothing else.
     fn route_local_egress(&self, uri: &hyper::Uri) -> Option<String> {
-        let host = uri.host()?;
-        // Registered hostnames are RFC 1123 names as configured; the URI
-        // authority a guest dials may differ only in case.
-        self.select_workload(host)
-            .or_else(|_| self.select_workload(&host.to_ascii_lowercase()))
+        self.select_workload(uri.host()?, uri.path(), RouteScope::Local)
             .ok()
     }
 }
@@ -718,11 +976,11 @@ impl Router for DevRouter {
     async fn on_service_http_resolved(
         &self,
         workload_id: &str,
-        _hostnames: &[String],
+        _routes: &[IngressRoute],
     ) -> anyhow::Result<()> {
         // A service-handled workload routes the same way as a component one:
         // DevRouter sends all requests to the most-recently resolved workload,
-        // so it ignores hostnames.
+        // so it ignores hostnames and paths alike.
         let mut lock = self
             .last_workload_id
             .write()
@@ -787,14 +1045,14 @@ pub trait HostHandler: Send + Sync + 'static {
 
     /// Register a long-lived service instance that serves HTTP ingress: inbound
     /// requests for `workload_id` are delivered over `sender` instead of
-    /// instantiating a component per request. `hostnames` are the ingress
-    /// hostnames the service serves on, forwarded to the router so a
-    /// hostname-keyed router can resolve requests to this workload. Default:
-    /// no-op (the workload keeps the per-request path).
+    /// instantiating a component per request. `routes` are the ingress routes
+    /// the service serves, forwarded to the router so a hostname-keyed router
+    /// can resolve requests to this workload. Default: no-op (the workload keeps
+    /// the per-request path).
     async fn on_service_http_resolved(
         &self,
         _workload_id: &str,
-        _hostnames: &[String],
+        _routes: &[IngressRoute],
         _sender: tokio::sync::mpsc::Sender<ServiceHttpJob>,
     ) -> anyhow::Result<()> {
         Ok(())
@@ -1106,13 +1364,19 @@ impl<T: Router, O: OutgoingHandler> IngressBuilder<T, O> {
         self
     }
 
-    /// Enable same-host local routing: outgoing requests whose authority
-    /// matches a hostname this ingress serves (a co-located workload's
-    /// `host`/`host-aliases` interface config) are dispatched to that workload
-    /// in-memory instead of egressing to the network. Locally routed calls
-    /// bypass anything on the network path (ingress middleware, mesh mTLS,
-    /// NetworkPolicy); the caller's `allowed_hosts` policy still applies.
-    /// Off by default.
+    /// Enable same-host local routing: outgoing requests matching a
+    /// [`RouteScope::Local`] route — a co-located workload's `localRoute`
+    /// interface config, either `host` or `host/path` — are dispatched to that
+    /// workload in-memory instead of egressing to the network.
+    ///
+    /// This is one of two keys. The host enabling it does not make any workload
+    /// locally reachable; a workload declaring `localRoute` does nothing unless
+    /// the host enables it here. Names published only via `host`/`host-aliases`
+    /// are never short-circuited.
+    ///
+    /// Locally routed calls bypass anything on the network path (ingress
+    /// middleware, mesh mTLS, NetworkPolicy); the caller's `allowed_hosts`
+    /// policy still applies. Off by default.
     pub fn local_routing(mut self, enabled: bool) -> Self {
         self.local_routing = enabled;
         self
@@ -1474,11 +1738,11 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
     async fn on_service_http_resolved(
         &self,
         workload_id: &str,
-        hostnames: &[String],
+        routes: &[IngressRoute],
         sender: tokio::sync::mpsc::Sender<ServiceHttpJob>,
     ) -> anyhow::Result<()> {
         self.router
-            .on_service_http_resolved(workload_id, hostnames)
+            .on_service_http_resolved(workload_id, routes)
             .await?;
         // A re-resolve without an intervening unbind is expected: the trigger
         // service supervisor re-registers a fresh sender on every restart (see
@@ -3226,20 +3490,20 @@ mod tests {
     }
 
     #[test]
-    fn http_ingress_hostnames_collects_primary_and_valid_aliases() {
+    fn http_ingress_routes_collect_primary_and_valid_aliases() {
         let ifaces = vec![http_iface(Some("primary.local"), Some("a.local, b.local"))];
         assert_eq!(
-            http_ingress_hostnames(&ifaces),
+            http_ingress_routes(&ifaces),
             vec![
-                "primary.local".to_string(),
-                "a.local".to_string(),
-                "b.local".to_string(),
+                IngressRoute::ingress("primary.local"),
+                IngressRoute::ingress("a.local"),
+                IngressRoute::ingress("b.local"),
             ],
         );
     }
 
     #[test]
-    fn http_ingress_hostnames_filters_invalid_and_empty_entries() {
+    fn http_ingress_routes_filter_invalid_and_empty_entries() {
         // Underscores are not valid RFC 1123 hostname chars, and leading/trailing
         // hyphens are rejected: the bad primary is dropped and only the valid
         // aliases survive.
@@ -3248,13 +3512,116 @@ mod tests {
             Some("ok.local,,-nope-,also_bad,fine.local"),
         )];
         assert_eq!(
-            http_ingress_hostnames(&ifaces),
-            vec!["ok.local".to_string(), "fine.local".to_string()],
+            http_ingress_routes(&ifaces),
+            vec![
+                IngressRoute::ingress("ok.local"),
+                IngressRoute::ingress("fine.local"),
+            ],
+        );
+    }
+
+    /// `localRoute` adds same-host-only routes alongside the network-reachable
+    /// ones, in both forms: a bare host, and a host with a path prefix.
+    #[test]
+    fn http_ingress_routes_collect_local_routes_in_both_forms() {
+        let mut iface = http_iface(Some("primary.local"), Some("alias.local"));
+        iface.config.insert(
+            "localRoute".to_string(),
+            "svc.internal, other.internal/hello/".to_string(),
+        );
+        assert_eq!(
+            http_ingress_routes(&[iface]),
+            vec![
+                IngressRoute::ingress("primary.local"),
+                IngressRoute::ingress("alias.local"),
+                IngressRoute::local("svc.internal", ""),
+                IngressRoute::local("other.internal", "/hello"),
+            ],
+            "a bare localRoute serves every path; a trailing slash is normalized away"
+        );
+    }
+
+    /// The `examples/local-ingress` callee, verbatim. The example's README makes
+    /// four claims about what this config does; this asserts all four against
+    /// the real parser and router so the docs cannot drift from the behavior.
+    #[tokio::test]
+    async fn the_local_ingress_example_routes_as_its_readme_claims() {
+        let mut iface = http_iface(Some("functiona.localhost.cosmonic.sh"), None);
+        iface
+            .config
+            .insert("localRoute".to_string(), "functiona.internal/hello".into());
+
+        let router = DynamicRouter::default();
+        router.register_routes("callee", &http_ingress_routes(&[iface]));
+
+        let local = |uri: &str| router.route_local_egress(&uri.parse::<hyper::Uri>().unwrap());
+        let inbound =
+            |host: &str, path: &str| router.select_workload(host, path, RouteScope::Ingress);
+
+        // 1. The caller's URL is served in-memory, prefix and below.
+        assert_eq!(
+            local("http://functiona.internal/hello"),
+            Some("callee".into())
+        );
+        assert_eq!(
+            local("http://functiona.internal/hello/items"),
+            Some("callee".into())
+        );
+        // 2. Outside the prefix, including the segment-boundary case, it is not.
+        assert_eq!(local("http://functiona.internal/"), None);
+        assert_eq!(local("http://functiona.internal/hello-world"), None);
+        // 3. The public hostname still serves every path from the network, and
+        //    is *not* short-circuited for a co-located caller.
+        assert_eq!(
+            inbound("functiona.localhost.cosmonic.sh", "/anything").unwrap(),
+            "callee"
+        );
+        assert_eq!(local("http://functiona.localhost.cosmonic.sh/hello"), None);
+        // 4. The localRoute name answers nothing arriving over the network.
+        assert!(inbound("functiona.internal", "/hello").is_err());
+    }
+
+    /// `localRoute` grammar: `host` or `host/path`, authority always a valid
+    /// hostname. A bare path is refused — "any authority, this path" would let
+    /// one workload intercept a co-located caller's traffic to any destination.
+    #[test]
+    fn local_route_entries_require_a_valid_authority() {
+        assert_eq!(
+            parse_local_route("svc.internal"),
+            Some(IngressRoute::local("svc.internal", ""))
+        );
+        assert_eq!(
+            parse_local_route("svc.internal/hello"),
+            Some(IngressRoute::local("svc.internal", "/hello"))
+        );
+        assert_eq!(
+            parse_local_route("svc.internal:8080/hello"),
+            Some(IngressRoute::local("svc.internal", "/hello")),
+            "a port on the authority is normalized away, as everywhere else"
+        );
+        assert_eq!(
+            parse_local_route("/hello"),
+            None,
+            "bare path has no authority"
+        );
+        assert_eq!(parse_local_route("bad_host/hello"), None);
+        assert_eq!(parse_local_route(""), None);
+    }
+
+    /// An alias carrying a path is the mistake `localRoute` exists to catch. It
+    /// must be dropped rather than silently registered as a nonsense hostname.
+    #[test]
+    fn an_alias_containing_a_path_is_discarded() {
+        let iface = http_iface(Some("primary.local"), Some("hello.com/me"));
+        assert_eq!(
+            http_ingress_routes(&[iface]),
+            vec![IngressRoute::ingress("primary.local")],
+            "`hello.com/me` is not a hostname; it belongs in localRoute"
         );
     }
 
     #[test]
-    fn http_ingress_hostnames_empty_without_http_interface() {
+    fn http_ingress_routes_empty_without_http_interface() {
         let kv = crate::wit::WitInterface {
             namespace: "wasi".to_string(),
             package: "keyvalue".to_string(),
@@ -3263,7 +3630,7 @@ mod tests {
             config: HashMap::new(),
             name: None,
         };
-        assert!(http_ingress_hostnames(&[kv]).is_empty());
+        assert!(http_ingress_routes(&[kv]).is_empty());
     }
 
     /// A client decides whether to put the port in the Host header, and the
@@ -3275,14 +3642,26 @@ mod tests {
     async fn dynamic_router_ignores_the_port_in_the_host_header() {
         let router = DynamicRouter::default();
         router
-            .on_service_http_resolved("w0", &["registry.local".to_string()])
+            .on_service_http_resolved("w0", &[IngressRoute::ingress("registry.local")])
             .await
             .unwrap();
 
-        assert_eq!(router.select_workload("registry.local").unwrap(), "w0");
-        assert_eq!(router.select_workload("registry.local:5000").unwrap(), "w0");
+        assert_eq!(
+            router
+                .select_workload("registry.local", "/", RouteScope::Ingress)
+                .unwrap(),
+            "w0"
+        );
+        assert_eq!(
+            router
+                .select_workload("registry.local:5000", "/", RouteScope::Ingress)
+                .unwrap(),
+            "w0"
+        );
         assert!(
-            router.select_workload("other.local:5000").is_err(),
+            router
+                .select_workload("other.local:5000", "/", RouteScope::Ingress)
+                .is_err(),
             "stripping the port must not make unrelated hostnames match"
         );
     }
@@ -3294,12 +3673,22 @@ mod tests {
     async fn dynamic_router_normalizes_a_registered_host_with_a_port() {
         let router = DynamicRouter::default();
         router
-            .on_service_http_resolved("w0", &["registry.local:5000".to_string()])
+            .on_service_http_resolved("w0", &[IngressRoute::ingress("registry.local:5000")])
             .await
             .unwrap();
 
-        assert_eq!(router.select_workload("registry.local").unwrap(), "w0");
-        assert_eq!(router.select_workload("registry.local:5000").unwrap(), "w0");
+        assert_eq!(
+            router
+                .select_workload("registry.local", "/", RouteScope::Ingress)
+                .unwrap(),
+            "w0"
+        );
+        assert_eq!(
+            router
+                .select_workload("registry.local:5000", "/", RouteScope::Ingress)
+                .unwrap(),
+            "w0"
+        );
     }
 
     /// Regression guard for the "N replicas serve like one" defect: with several
@@ -3317,7 +3706,7 @@ mod tests {
         let replicas = ["r0", "r1", "r2", "r3"];
         for id in replicas {
             router
-                .on_service_http_resolved(id, &["svc.local".to_string()])
+                .on_service_http_resolved(id, &[IngressRoute::ingress("svc.local")])
                 .await
                 .unwrap();
         }
@@ -3326,7 +3715,9 @@ mod tests {
         let mut counts: std::collections::BTreeMap<String, usize> =
             std::collections::BTreeMap::new();
         for _ in 0..DRAWS {
-            let id = router.select_workload("svc.local").unwrap();
+            let id = router
+                .select_workload("svc.local", "/", RouteScope::Ingress)
+                .unwrap();
             *counts.entry(id).or_default() += 1;
         }
 
@@ -3353,7 +3744,7 @@ mod tests {
         let router = DynamicRouter::default();
         assert!(
             matches!(
-                router.select_workload("svc.local"),
+                router.select_workload("svc.local", "/", RouteScope::Ingress),
                 Err(RouteError::NoWorkloadForHost(_))
             ),
             "host should not resolve before the service is registered"
@@ -3362,13 +3753,26 @@ mod tests {
         router
             .on_service_http_resolved(
                 "svc-1",
-                &["svc.local".to_string(), "svc.internal".to_string()],
+                &[
+                    IngressRoute::ingress("svc.local"),
+                    IngressRoute::ingress("svc.internal"),
+                ],
             )
             .await
             .unwrap();
 
-        assert_eq!(router.select_workload("svc.local").unwrap(), "svc-1");
-        assert_eq!(router.select_workload("svc.internal").unwrap(), "svc-1");
+        assert_eq!(
+            router
+                .select_workload("svc.local", "/", RouteScope::Ingress)
+                .unwrap(),
+            "svc-1"
+        );
+        assert_eq!(
+            router
+                .select_workload("svc.internal", "/", RouteScope::Ingress)
+                .unwrap(),
+            "svc-1"
+        );
     }
 
     /// A service resolving with no valid hostnames (e.g. under a host-agnostic
@@ -3378,7 +3782,7 @@ mod tests {
         let router = DynamicRouter::default();
         router.on_service_http_resolved("svc-1", &[]).await.unwrap();
         assert!(matches!(
-            router.select_workload("anything.local"),
+            router.select_workload("anything.local", "/", RouteScope::Ingress),
             Err(RouteError::NoWorkloadForHost(_))
         ));
     }
@@ -3389,11 +3793,11 @@ mod tests {
     async fn dynamic_router_unbind_removes_replica_from_rotation() {
         let router = DynamicRouter::default();
         router
-            .on_service_http_resolved("r0", &["svc.local".to_string()])
+            .on_service_http_resolved("r0", &[IngressRoute::ingress("svc.local")])
             .await
             .unwrap();
         router
-            .on_service_http_resolved("r1", &["svc.local".to_string()])
+            .on_service_http_resolved("r1", &[IngressRoute::ingress("svc.local")])
             .await
             .unwrap();
 
@@ -3401,7 +3805,9 @@ mod tests {
 
         for _ in 0..4 {
             assert_eq!(
-                router.select_workload("svc.local").unwrap(),
+                router
+                    .select_workload("svc.local", "/", RouteScope::Ingress)
+                    .unwrap(),
                 "r1",
                 "only the surviving replica should be selected after unbind"
             );
@@ -3421,15 +3827,23 @@ mod tests {
 
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         server
-            .on_service_http_resolved("svc-1", &["svc.local".to_string()], tx)
+            .on_service_http_resolved("svc-1", &[IngressRoute::ingress("svc.local")], tx)
             .await
             .unwrap();
-        assert_eq!(server.router.select_workload("svc.local").unwrap(), "svc-1");
+        assert_eq!(
+            server
+                .router
+                .select_workload("svc.local", "/", RouteScope::Ingress)
+                .unwrap(),
+            "svc-1"
+        );
 
         server.on_service_http_unbind("svc-1").await.unwrap();
         assert!(
             matches!(
-                server.router.select_workload("svc.local"),
+                server
+                    .router
+                    .select_workload("svc.local", "/", RouteScope::Ingress),
                 Err(RouteError::NoWorkloadForHost(_))
             ),
             "hostname must stop routing once the service unbinds"
@@ -3439,16 +3853,16 @@ mod tests {
     // --- same-host local routing tests ---
 
     #[tokio::test]
-    async fn route_local_egress_uses_the_ingress_hostname_table() {
+    async fn route_local_egress_matches_a_declared_local_route() {
         let router = DynamicRouter::default();
-        router.register_hostnames("callee", &["callee.internal".to_string()]);
+        router.register_routes("callee", &[IngressRoute::local("callee.internal", "")]);
 
         let route = |uri: &str| router.route_local_egress(&uri.parse::<hyper::Uri>().unwrap());
 
         assert_eq!(
             route("http://callee.internal/api/items"),
             Some("callee".to_string()),
-            "any path on a served hostname routes locally"
+            "a bare localRoute serves any path on that hostname"
         );
         assert_eq!(
             route("http://callee.internal:8080/api"),
@@ -3472,14 +3886,295 @@ mod tests {
         let router = DynamicRouter::default();
         let uri: hyper::Uri = "http://callee.internal/fn".parse().unwrap();
 
-        router.register_hostnames("callee", &["callee.internal".to_string()]);
+        router.register_routes("callee", &[IngressRoute::local("callee.internal", "")]);
         assert_eq!(router.route_local_egress(&uri), Some("callee".to_string()));
 
         router.on_workload_unbind("callee").await.unwrap();
         assert_eq!(
             router.route_local_egress(&uri),
             None,
-            "unbind must drop the workload's hostnames from local routing too"
+            "unbind must drop the workload's local routes too"
+        );
+    }
+
+    // --- the Ingress/Local partition ---
+
+    /// The central guarantee of the two-key design: publishing a name to the
+    /// network does not make it locally reachable, and declaring a `localRoute`
+    /// does not expose it to the network. Anyone inside the cluster can dial the
+    /// host's port with a forged `Host` header, so a local-only name leaking
+    /// into inbound routing would be a real hole.
+    #[tokio::test]
+    async fn ingress_and_local_routes_do_not_leak_into_each_other() {
+        let router = DynamicRouter::default();
+        router.register_routes(
+            "callee",
+            &[
+                IngressRoute::ingress("public.example.com"),
+                IngressRoute::local("callee.internal", ""),
+            ],
+        );
+
+        // The public name is not short-circuited for a co-located caller.
+        assert_eq!(
+            router.route_local_egress(&"http://public.example.com/x".parse().unwrap()),
+            None,
+            "a host/host-aliases name must not be locally routed"
+        );
+        // The local-only name is not reachable from the network.
+        assert!(
+            router
+                .select_workload("callee.internal", "/x", RouteScope::Ingress)
+                .is_err(),
+            "a localRoute name must not answer a forged inbound Host header"
+        );
+
+        // Each is reachable at its own scope.
+        assert_eq!(
+            router
+                .select_workload("public.example.com", "/x", RouteScope::Ingress)
+                .unwrap(),
+            "callee"
+        );
+        assert_eq!(
+            router.route_local_egress(&"http://callee.internal/x".parse().unwrap()),
+            Some("callee".to_string())
+        );
+    }
+
+    /// One name may be declared at both scopes, and then it works both ways —
+    /// the scopes are a partition of the table, not a restriction on what an
+    /// author may say.
+    #[tokio::test]
+    async fn one_name_may_be_declared_at_both_scopes() {
+        let router = DynamicRouter::default();
+        router.register_routes(
+            "callee",
+            &[
+                IngressRoute::ingress("both.example.com"),
+                IngressRoute::local("both.example.com", ""),
+            ],
+        );
+
+        assert_eq!(
+            router
+                .select_workload("both.example.com", "/x", RouteScope::Ingress)
+                .unwrap(),
+            "callee"
+        );
+        assert_eq!(
+            router.route_local_egress(&"http://both.example.com/x".parse().unwrap()),
+            Some("callee".to_string())
+        );
+    }
+
+    // --- path-scoped local routes ---
+
+    /// Prefixes match on `/` segment boundaries, so a route scoped to `/fn`
+    /// does not swallow `/fnord`. The empty prefix is the catch-all.
+    #[test]
+    fn path_prefixes_match_on_segment_boundaries() {
+        assert!(path_prefix_matches("", "/anything"));
+        assert!(path_prefix_matches("/fn", "/fn"));
+        assert!(path_prefix_matches("/fn", "/fn/x"));
+        assert!(!path_prefix_matches("/fn", "/fnord"));
+        assert!(!path_prefix_matches("/fn", "/"));
+        assert!(!path_prefix_matches("/fn", "/other/fn"));
+    }
+
+    /// Whatever an author writes, the table stores one canonical form, so the
+    /// two sides of a lookup cannot disagree over a slash.
+    #[test]
+    fn path_prefixes_are_normalized_to_one_form() {
+        assert_eq!(normalize_path_prefix("/api"), "/api");
+        assert_eq!(normalize_path_prefix("/api/"), "/api");
+        assert_eq!(normalize_path_prefix(" api "), "/api");
+        assert_eq!(normalize_path_prefix("/"), "");
+        assert_eq!(normalize_path_prefix(""), "");
+    }
+
+    /// Two workloads declaring the same local hostname under different prefixes
+    /// must resolve independently. Keyed on the hostname alone they landed in
+    /// one replica set and a caller got whichever the random pick returned.
+    #[tokio::test]
+    async fn path_scoped_local_routes_resolve_independently_on_one_hostname() {
+        let router = DynamicRouter::default();
+        router.register_routes("api", &[IngressRoute::local("svc.internal", "/api")]);
+        router.register_routes("web", &[IngressRoute::local("svc.internal", "/web")]);
+
+        let local = |uri: &str| router.route_local_egress(&uri.parse::<hyper::Uri>().unwrap());
+
+        assert_eq!(local("http://svc.internal/api"), Some("api".into()));
+        assert_eq!(local("http://svc.internal/api/items"), Some("api".into()));
+        assert_eq!(local("http://svc.internal/web"), Some("web".into()));
+        assert_eq!(
+            local("http://svc.internal/other"),
+            None,
+            "a path no local route claims egresses to the network instead of guessing"
+        );
+    }
+
+    /// A hostname served only under a narrower prefix must report the path as
+    /// the reason, not pretend the hostname is unknown — the two are different
+    /// configuration mistakes.
+    #[tokio::test]
+    async fn a_path_outside_every_prefix_is_reported_as_such() {
+        let router = DynamicRouter::default();
+        router.register_routes("api", &[IngressRoute::local("svc.internal", "/api")]);
+
+        let err = router
+            .select_workload("svc.internal", "/other", RouteScope::Local)
+            .unwrap_err();
+        assert!(
+            matches!(err, RouteError::NoWorkloadForPath { .. }),
+            "expected NoWorkloadForPath, got {err:?}"
+        );
+        assert_eq!(err.status(), 404);
+
+        let err = router
+            .select_workload("nope.internal", "/api", RouteScope::Local)
+            .unwrap_err();
+        assert!(
+            matches!(err, RouteError::NoWorkloadForHost(_)),
+            "an unserved hostname is a different failure, got {err:?}"
+        );
+    }
+
+    /// The most specific prefix wins, and a bare `localRoute` registered
+    /// alongside scoped ones is a fallback rather than a shadow over them.
+    #[tokio::test]
+    async fn the_longest_matching_prefix_wins_over_a_catch_all() {
+        let router = DynamicRouter::default();
+        router.register_routes("root", &[IngressRoute::local("svc.internal", "")]);
+        router.register_routes("api", &[IngressRoute::local("svc.internal", "/api")]);
+        router.register_routes("v2", &[IngressRoute::local("svc.internal", "/api/v2")]);
+
+        let local = |uri: &str| router.route_local_egress(&uri.parse::<hyper::Uri>().unwrap());
+
+        assert_eq!(local("http://svc.internal/api/v2/items"), Some("v2".into()));
+        assert_eq!(local("http://svc.internal/api/v1"), Some("api".into()));
+        assert_eq!(
+            local("http://svc.internal/elsewhere"),
+            Some("root".into()),
+            "the bare localRoute still serves paths no scoped route claims"
+        );
+    }
+
+    /// Unbinding one path-scoped workload must leave its neighbours on the same
+    /// hostname untouched, and must not leave an empty bucket that a later
+    /// lookup would match and find nothing in.
+    #[tokio::test]
+    async fn unbinding_one_path_route_leaves_its_neighbours_serving() {
+        let router = DynamicRouter::default();
+        router.register_routes("api", &[IngressRoute::local("svc.internal", "/api")]);
+        router.register_routes("web", &[IngressRoute::local("svc.internal", "/web")]);
+
+        router.on_workload_unbind("api").await.unwrap();
+
+        assert_eq!(
+            router
+                .select_workload("svc.internal", "/web", RouteScope::Local)
+                .unwrap(),
+            "web"
+        );
+        let err = router
+            .select_workload("svc.internal", "/api", RouteScope::Local)
+            .unwrap_err();
+        assert!(
+            matches!(err, RouteError::NoWorkloadForPath { .. }),
+            "the vacated prefix must stop resolving, got {err:?}"
+        );
+
+        router.on_workload_unbind("web").await.unwrap();
+        let err = router
+            .select_workload("svc.internal", "/web", RouteScope::Local)
+            .unwrap_err();
+        assert!(
+            matches!(err, RouteError::NoWorkloadForHost(_)),
+            "the last route leaving must drop the hostname entirely, got {err:?}"
+        );
+    }
+
+    /// Unbinding must clear a workload's routes at *both* scopes. Keying bucket
+    /// removal on the prefix alone would strand whichever of the two shared it.
+    #[tokio::test]
+    async fn unbind_clears_both_scopes_for_one_name() {
+        let router = DynamicRouter::default();
+        router.register_routes(
+            "callee",
+            &[
+                IngressRoute::ingress("both.example.com"),
+                IngressRoute::local("both.example.com", ""),
+            ],
+        );
+
+        router.on_workload_unbind("callee").await.unwrap();
+
+        assert!(
+            router
+                .select_workload("both.example.com", "/", RouteScope::Ingress)
+                .is_err(),
+            "the ingress route must be gone"
+        );
+        assert_eq!(
+            router.route_local_egress(&"http://both.example.com/".parse().unwrap()),
+            None,
+            "the local route must be gone too"
+        );
+    }
+
+    /// Replicas of one workload share a `(hostname, prefix, scope)` bucket, so
+    /// path-scoping must not cost the random spread across them.
+    #[tokio::test]
+    async fn replicas_of_a_path_scoped_route_share_one_bucket() {
+        let router = DynamicRouter::default();
+        for id in ["r0", "r1"] {
+            router.register_routes(id, &[IngressRoute::local("svc.internal", "/api")]);
+        }
+
+        let mut seen = BTreeSet::new();
+        for _ in 0..200 {
+            seen.insert(
+                router
+                    .select_workload("svc.internal", "/api", RouteScope::Local)
+                    .unwrap(),
+            );
+        }
+        assert_eq!(
+            seen,
+            BTreeSet::from(["r0".to_string(), "r1".to_string()]),
+            "both replicas must be selected"
+        );
+    }
+
+    /// Hostnames are case-insensitive per RFC 1123, and both scopes must agree
+    /// on that — previously registration preserved case while only the egress
+    /// lookup folded it, so a mixed-case registration was unreachable.
+    #[tokio::test]
+    async fn hostname_matching_is_case_insensitive_at_both_scopes() {
+        let router = DynamicRouter::default();
+        router.register_routes(
+            "callee",
+            &[
+                IngressRoute::ingress("Callee.Public"),
+                IngressRoute::local("Callee.Internal", "/Hello"),
+            ],
+        );
+
+        assert_eq!(
+            router
+                .select_workload("CALLEE.PUBLIC", "/", RouteScope::Ingress)
+                .unwrap(),
+            "callee"
+        );
+        assert_eq!(
+            router.route_local_egress(&"http://CALLEE.INTERNAL/Hello".parse().unwrap()),
+            Some("callee".to_string()),
+        );
+        assert_eq!(
+            router.route_local_egress(&"http://callee.internal/hello".parse().unwrap()),
+            None,
+            "paths are case-sensitive even though hostnames are not"
         );
     }
 }

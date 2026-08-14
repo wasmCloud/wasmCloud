@@ -216,12 +216,19 @@ pub struct HostCommand {
     )]
     pub http_connection_wait: Option<Duration>,
 
-    /// Enable same-host local routing: outgoing HTTP requests whose authority
-    /// matches a hostname this host's ingress serves (a co-located workload's
-    /// `host`/`host-aliases` interface config) are served in-memory by that
-    /// workload instead of egressing to the network. Locally routed calls
-    /// bypass ingress middleware (auth, rate limits, mesh mTLS, network
-    /// policy), so enable deliberately. allowed_hosts policy still applies.
+    /// Enable same-host local routing: an outgoing HTTP request matching a
+    /// co-located workload's `localRoute` interface config (`host`, or
+    /// `host/path` for a prefix) is served in-memory by that workload instead
+    /// of egressing to the network.
+    ///
+    /// One of two keys: this flag alone makes nothing locally reachable — each
+    /// workload must also declare its own `localRoute` entries. Hostnames
+    /// published only via `host`/`host-aliases` are never short-circuited, and
+    /// `localRoute` names are never reachable from the network.
+    ///
+    /// Locally routed calls bypass ingress middleware (auth, rate limits, mesh
+    /// mTLS, network policy), so enable deliberately. allowed_hosts still
+    /// applies.
     #[arg(
         long = "http-local-routing",
         env = "WASH_HTTP_LOCAL_ROUTING",

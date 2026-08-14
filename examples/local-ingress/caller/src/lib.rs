@@ -8,8 +8,10 @@ use wstd::http::{Body, Client, Request, Response, StatusCode};
 /// 2. the `CALLEE_URL` environment variable,
 /// 3. `http://callee.internal/hello` — a hostname that resolves nowhere on
 ///    the real network, so the call only succeeds when the host serves it
-///    via same-host local routing (`--http-local-routing` + the callee's
-///    `local-ingress` config).
+///    via same-host local routing (`--http-local-routing` on the host, plus a
+///    co-located callee whose `wasi:http/incoming-handler` config registers
+///    that authority in `host`/`host-aliases` and covers `/hello` with its
+///    optional `path` prefix).
 #[wstd::http_server]
 async fn main(req: Request<Body>) -> Result<Response<Body>, wstd::http::Error> {
     let target = req

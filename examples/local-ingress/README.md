@@ -12,16 +12,42 @@ ingress in between.
 - [`callee/`](./callee/) — HTTP handler that answers with a greeting echoing
   the path and `Host` header it received.
 
-There is nothing to declare on the workloads: the callee is reachable at the
-hostnames its `wasi:http/incoming-handler` interface config already registers
-with the host's ingress (`host`, plus any comma-separated `host-aliases`).
-When local routing is enabled on the host, an outgoing request whose authority
-matches one of those hostnames (port ignored) is dispatched to the co-located
-workload in-memory instead of egressing.
+Same-host routing takes **two keys**, and neither works alone:
 
-The example gives the callee the alias `functiona.internal`, which resolves
-nowhere in real DNS — which is the point: a 200 from the caller proves the
-request was short-circuited on the host.
+1. The **host operator** enables the capability — `--http-local-routing`, or
+   `runtime.hostGroups[].http.localRouting` in the chart.
+2. The **workload** declares what it offers co-located callers, with
+   `localRoute` on its `wasi:http/incoming-handler` interface config.
+
+This mirrors how `allowedHostLoopback` works elsewhere in the runtime: a
+workload author cannot open the door, and neither can an operator.
+
+`localRoute` is comma-separated and takes two forms:
+
+| Entry | Serves |
+| --- | --- |
+| `functiona.internal` | every path on that hostname |
+| `functiona.internal/hello` | `/hello` and below, on that hostname |
+
+The example uses `functiona.internal/hello`. That name resolves nowhere in real
+DNS — which is the point: a 200 from the caller proves the request was
+short-circuited on the host.
+
+Three things worth knowing:
+
+- **Prefixes match on `/` segment boundaries.** `/hello` covers `/hello` and
+  `/hello/items`, but not `/hello-world`. A request to a path no route claims
+  falls through to the network rather than being handed to a workload that does
+  not serve it.
+- **The two scopes do not overlap.** `host` and `host-aliases` publish to the
+  network; `localRoute` offers in-memory. A hostname published only to the
+  network is never short-circuited for a co-located caller, and a `localRoute`
+  name is never reachable from the network — so nobody inside the cluster can
+  reach `functiona.internal` by dialing the host pod with a forged `Host`
+  header. Declare a name in both places if you want it reachable both ways.
+- **Only the callee declares anything.** The caller needs no config beyond an
+  `allowedHosts` entry permitting the authority, which is enforced *before*
+  local routing is consulted.
 
 > **Heads up:** locally routed calls bypass whatever sits on the network path
 > (ingress auth, rate limits, mesh mTLS, NetworkPolicy). The feature is off by
@@ -76,10 +102,11 @@ wash host --http-addr 0.0.0.0:9191 --http-local-routing ...
 ```
 
 With both workloads placed on that host — and the callee declaring
-`callee.internal` as its `host` (or in `host-aliases`) — the caller's request
-to `http://callee.internal/hello` succeeds even though `callee.internal` has
-no DNS entry. Stop the host without `--http-local-routing` and the same call
-fails with a connection error — the flag is the only thing serving it.
+`localRoute: callee.internal/hello` — the caller's request to
+`http://callee.internal/hello` succeeds even though
+`callee.internal` has no DNS entry. Stop the host without
+`--http-local-routing` and the same call fails with a connection error — the
+flag is the only thing serving it.
 
 ## Deploying to a kind cluster
 
@@ -238,17 +265,42 @@ the caller is directly reachable from the laptop — no port-forward needed:
 
 ```shell
 $ curl http://hello.localhost.cosmonic.sh/
-caller -> http://functiona.internal/
+caller -> http://functiona.internal/hello
 upstream status: 200 OK
-upstream body: hello from the callee! (path: /, host: functiona.internal)
+upstream body: hello from the callee! (path: /hello, host: functiona.internal)
 ```
 
 The echoed `host: functiona.internal` is the proof: no DNS record or Service
 exists for that name, so the only way the request reached the callee is the
-host's in-memory local route.
+host's in-memory local route. The echoed `path: /hello` is the prefix the
+callee's `localRoute` is scoped to.
 
-To see the failure mode, set `localRouting: false`, upgrade the release, and
-the same curl reports `request failed` with a connection error.
+Three things worth reproducing, because each isolates one property:
+
+```shell
+# Wrong path — the authority still matches, but no route claims `/`, so the
+# request falls through to the network and there is nothing there.
+$ curl 'http://hello.localhost.cosmonic.sh/?url=http://functiona.internal/'
+caller -> http://functiona.internal/
+request failed: ...
+
+# Wrong host — `/hello` is right, but nothing offers this name locally.
+$ curl 'http://hello.localhost.cosmonic.sh/?url=http://nope.internal/hello'
+caller -> http://nope.internal/hello
+request failed: ...
+
+# The localRoute name is not reachable from the network: it exists only in the
+# host's in-memory table, so a forged Host header gets a 404, not the callee.
+$ curl -H 'Host: functiona.internal' http://localhost/hello
+404 page not found
+```
+
+(The second is also denied by the caller's `allowedHosts`, which lists only
+`functiona.internal` — policy is checked before local routing, so a co-located
+callee can never widen a caller's egress.)
+
+To see the feature itself turned off, set `localRouting: false`, upgrade the
+release, and the original curl reports `request failed` too.
 
 ## Required Capabilities
 

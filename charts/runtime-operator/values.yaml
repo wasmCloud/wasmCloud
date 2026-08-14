@@ -503,12 +503,20 @@ runtime:
       http:
         enabled: true
         port: 9191
-        # -- Enable same-host local routing: outgoing HTTP requests whose
-        # authority matches a hostname this host's ingress serves (a co-located
-        # workload's `host`/`host-aliases` config) are served in-memory by that
-        # workload instead of leaving the pod. Locally routed calls bypass
-        # anything on the network path (ingress auth, rate limits, mesh mTLS,
-        # NetworkPolicy), so enable deliberately.
+        # -- Enable same-host local routing: an outgoing HTTP request matching a
+        # co-located workload's `localRoute` config is served in-memory by that
+        # workload instead of leaving the pod.
+        #
+        # This is one of two keys. Enabling it here makes no workload locally
+        # reachable on its own — each workload must also declare what it offers,
+        # via `hostInterfaces[].config.localRoute` (`host` for a whole hostname,
+        # or `host/path` for a prefix). Names published only through
+        # `host`/`host-aliases` are never short-circuited, and `localRoute` names
+        # are never reachable from the network.
+        #
+        # Locally routed calls bypass anything on the network path (ingress
+        # auth, rate limits, mesh mTLS, NetworkPolicy), so enable deliberately.
+        # The caller's `allowedHosts` egress policy is still enforced first.
         localRouting: false
         tls:
           # -- Enable TLS for the HTTP server. Requires global.tls.enabled to be true.
