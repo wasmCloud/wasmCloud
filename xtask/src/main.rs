@@ -14,6 +14,9 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
 mod e2e_images;
+mod example_index;
+mod example_wizard;
+mod wizard_verify;
 
 #[derive(Parser)]
 #[command(name = "xtask", about = "wasmCloud workspace tasks", version)]
@@ -31,6 +34,36 @@ enum Task {
     /// oci-registry, and push the fixtures into it. Configured via env
     /// (E2E_IMAGES_MODE, E2E_FIXTURES_DIR); see the e2e_images module.
     E2eImages,
+    /// Derive the topology of every project under `templates/` and `examples/`
+    /// by applying the host's own linking rules to their WIT worlds — the same
+    /// derivation the wizard's catalog and `wash oci push` run. Prints the
+    /// picker preview by default and writes nothing anywhere.
+    ExampleIndex {
+        /// Fail if any project no longer derives or the committed
+        /// catalog.json is stale — the CI gate.
+        #[arg(long)]
+        check: bool,
+        /// Write the repo's catalog.json, the published document the wizard
+        /// fetches instead of cloning.
+        #[arg(long, conflicts_with_all = ["check", "wizard"])]
+        write_catalog: bool,
+        /// Run each project's `build.command` first, so every node's
+        /// interfaces are read off the built component rather than its WIT.
+        #[arg(long)]
+        build: bool,
+        /// Open the interactive picker instead of printing the listing.
+        #[arg(long, conflicts_with = "check")]
+        wizard: bool,
+        /// Index only this project directory instead of scanning
+        /// `templates/` and `examples/`.
+        #[arg(long, value_name = "DIR")]
+        path: Option<PathBuf>,
+    },
+    /// Prove every architecture `wash wizard` generates actually builds and
+    /// runs: generate, build warning-free, boot `wash dev`, make a request,
+    /// and re-derive the topology. Takes minutes; run before touching the
+    /// generator.
+    WizardVerify,
 }
 
 fn main() -> Result<()> {
@@ -39,6 +72,22 @@ fn main() -> Result<()> {
     match cli.task {
         Task::BuildFixtures => build_fixtures(&workspace),
         Task::E2eImages => e2e_images::run(&workspace),
+        Task::ExampleIndex {
+            check,
+            build,
+            wizard,
+            path,
+            write_catalog,
+        } => {
+            let mode = match (check, wizard, write_catalog) {
+                (true, _, _) => example_index::Mode::Check,
+                (_, true, _) => example_index::Mode::Wizard,
+                (_, _, true) => example_index::Mode::WriteCatalog,
+                _ => example_index::Mode::Print,
+            };
+            example_index::run(&workspace, mode, build, path.as_deref())
+        }
+        Task::WizardVerify => wizard_verify::run(&workspace),
     }
 }
 

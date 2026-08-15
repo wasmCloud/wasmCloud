@@ -6085,6 +6085,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "sha2 0.10.9",
  "tar",
  "tempfile",
  "testcontainers",
@@ -6095,6 +6096,7 @@ dependencies = [
  "url",
  "uuid",
  "wash-runtime",
+ "wash-topology",
  "wasi-preview1-component-adapter-provider",
  "wasm-metadata 0.254.0",
  "wasm-pkg-client",
@@ -6190,6 +6192,20 @@ dependencies = [
  "webpki-roots 0.26.11",
  "wit-component 0.254.0",
  "zeroize",
+]
+
+[[package]]
+name = "wash-topology"
+version = "2.7.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
+ "toml 0.8.23",
+ "wit-component 0.254.0",
+ "wit-parser 0.254.0",
 ]
 
 [[package]]
@@ -7726,6 +7742,14 @@ version = "2.7.0"
 dependencies = [
  "anyhow",
  "clap",
+ "console",
+ "serde",
+ "serde_yaml_ng",
+ "tempfile",
+ "toml 0.8.23",
+ "wash-topology",
+ "wit-component 0.254.0",
+ "wit-parser 0.254.0",
 ]
 
 [[package]]

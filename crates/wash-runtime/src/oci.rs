@@ -465,17 +465,25 @@ impl std::str::FromStr for OciPullPolicy {
 ///     Ok(())
 /// }
 /// ```
-#[instrument(skip(config), fields(reference = %reference, pull_policy = ?pull_policy))]
-pub async fn pull_component(
+/// Fetch a reference's OCI manifest — annotations included — without pulling
+/// any layer.
+///
+/// The read side of the topology annotations `push_component` writes: an
+/// inspector wants the workload shape and its digest, both of which live in
+/// the manifest, and pulling megabytes of wasm to read a kilobyte of metadata
+/// would make inspection cost what it is meant to avoid.
+/// Parse a reference and build the client + resolved credentials for it.
+///
+/// The one home for the protocol/trust-roots/credential dance — three call
+/// sites used to carry verbatim copies, and they had already drifted (the
+/// manifest fetch forgot the timeout its siblings honour).
+async fn client_and_auth(
     reference: &str,
-    config: OciConfig,
-    pull_policy: OciPullPolicy,
-) -> Result<(Vec<u8>, String)> {
-    // Parse OCI reference
+    config: &OciConfig,
+) -> Result<(Reference, Client, RegistryAuth)> {
     let reference_parsed = Reference::try_from(reference)
         .with_context(|| format!("invalid OCI reference: {reference}"))?;
 
-    // Configure OCI client
     let client_config = ClientConfig {
         protocol: if config.insecure {
             ClientProtocol::Http
@@ -485,14 +493,41 @@ pub async fn pull_component(
         extra_root_certificates: extra_ca_certificates(),
         ..Default::default()
     };
-
     let client = Client::new(client_config);
 
-    // Setup credential resolver
-    let credential_resolver = CredentialResolver::new(config.credentials);
+    let credential_resolver = CredentialResolver::new(config.credentials.clone());
     let auth = credential_resolver
         .resolve_credentials(reference_parsed.registry())
         .await;
+    Ok((reference_parsed, client, auth))
+}
+
+pub async fn fetch_manifest(
+    reference: &str,
+    config: OciConfig,
+) -> Result<oci_client::manifest::OciImageManifest> {
+    let (reference_parsed, client, auth) = client_and_auth(reference, &config).await?;
+
+    let fetch = client.pull_image_manifest(&reference_parsed, &auth);
+    let (manifest, _digest) = if let Some(timeout) = config.timeout {
+        tokio::time::timeout(timeout, fetch)
+            .await
+            .with_context(|| format!("timed out fetching the manifest for {reference}"))?
+    } else {
+        fetch.await
+    }
+    .with_context(|| format!("failed to fetch the manifest for {reference}"))?;
+    Ok(manifest)
+}
+
+#[instrument(skip(config), fields(reference = %reference, pull_policy = ?pull_policy))]
+pub async fn pull_component(
+    reference: &str,
+    config: OciConfig,
+    pull_policy: OciPullPolicy,
+) -> Result<(Vec<u8>, String)> {
+    // Parse OCI reference
+    let (reference_parsed, client, auth) = client_and_auth(reference, &config).await?;
 
     // Initialize cache manager
     let cache_manager = config
@@ -622,33 +657,12 @@ pub async fn push_component(
     config: OciConfig,
     annotations: Option<HashMap<String, String>>,
 ) -> Result<String> {
-    // Parse OCI reference
-    let reference_parsed = Reference::try_from(reference)
-        .with_context(|| format!("invalid OCI reference: {reference}"))?;
-
     // Validate the component before pushing
     validate_component(component_data)
         .await
         .with_context(|| "component data is not a valid WebAssembly component")?;
 
-    // Setup credential resolver
-    let credential_resolver = CredentialResolver::new(config.credentials);
-    let auth = credential_resolver
-        .resolve_credentials(reference_parsed.registry())
-        .await;
-
-    // Configure OCI client
-    let client_config = ClientConfig {
-        protocol: if config.insecure {
-            ClientProtocol::Http
-        } else {
-            ClientProtocol::Https
-        },
-        extra_root_certificates: extra_ca_certificates(),
-        ..Default::default()
-    };
-
-    let client = Client::new(client_config);
+    let (reference_parsed, client, auth) = client_and_auth(reference, &config).await?;
 
     // Create the WebAssembly configuration and layer using oci-wasm
     let (wasm_config, image_layer) = WasmConfig::from_raw_component(component_data.to_vec(), None)

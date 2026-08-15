@@ -155,6 +155,19 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           cargo test -p wash-runtime --benches --no-run
+      # `wash wizard` fetches the published catalog.json (regenerated with
+      # `cargo xtask example-index --build --write-catalog`) and falls back to
+      # cloning + deriving each project from source. This gates both: every
+      # shipped project must derive cleanly, and the committed catalog must
+      # match fresh derivation. `--build` compiles each template first so
+      # derivation reads the BUILT components (a world alone misses
+      # macro-injected exports). Linux only: a content check, not a
+      # platform-dependent one, and it costs a full template build.
+      - name: Every project derives; catalog.json is current
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          rustup target add wasm32-wasip2
+          cargo xtask example-index --build --check
 
   lint:
     needs:

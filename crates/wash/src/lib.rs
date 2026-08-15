@@ -15,4 +15,5 @@ pub mod new;
 /// Manage WebAssembly Interface Types (WIT) for wash components
 pub(crate) mod wit;
 /// Resolve workload-level env, secrets, and config from project configuration
+pub mod wizard;
 pub mod workload;
