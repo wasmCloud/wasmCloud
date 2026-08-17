@@ -13,3 +13,23 @@ publish = false
 anyhow = { workspace = true, default-features = true }
 # Workspace clap is default-features=false; xtask needs std on top.
 clap = { workspace = true, features = ["std"] }
+# example-index reads each template's `.wash/config.yaml` and writes the
+# derived topology manifest back out as YAML.
+serde = { workspace = true, features = ["derive", "std"] }
+serde_yaml_ng = { workspace = true }
+# `wash` accepts config.yaml/yml/json/toml; the indexer has to read all four
+# or a valid project is silently skipped.
+toml = { workspace = true, features = ["parse"] }
+# The manifest schema, shared with `wash` so the deriver and the consumer
+# cannot drift.
+wash-topology = { workspace = true }
+# example-index reads the interface names out of each built component, which is
+# what the host itself links against. Falls back to scanning WIT when a
+# component has not been built.
+wit-component = { workspace = true }
+wit-parser = { version = "0.254.0", default-features = false }
+# Raw key reading and cursor control for the example-index wizard. Already in
+# the tree as dialoguer's terminal backend, so this pulls in nothing new.
+console = { version = "0.15", default-features = false }
+# wizard-verify generates throwaway projects to build and run.
+tempfile = { workspace = true }

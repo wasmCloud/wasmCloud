@@ -34,6 +34,27 @@ pub struct NewCommand {
     git_ref: Option<String>,
 }
 
+impl NewCommand {
+    /// The same command the CLI parses, built in-process.
+    ///
+    /// `wash wizard` scaffolds a catalog entry by running this rather than
+    /// printing an invocation for the user to paste: cloning, subfolder
+    /// extraction, the already-exists guard and the template's post-create
+    /// prompt all live here, and none of it is worth duplicating.
+    pub(crate) fn from_template(
+        git: String,
+        name: Option<String>,
+        subfolder: Option<String>,
+    ) -> Self {
+        Self {
+            git,
+            name,
+            subfolder,
+            git_ref: None,
+        }
+    }
+}
+
 impl CliCommand for NewCommand {
     #[instrument(level = "debug", skip(self, ctx), name = "new")]
     async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {

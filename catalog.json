@@ -1,0 +1,620 @@
+{
+  "_generated": "cargo xtask example-index --build --write-catalog (wasmCloud repo) or wash wizard index --write-catalog; do not edit by hand",
+  "schema": 1,
+  "entries": [
+    {
+      "schema": 1,
+      "id": "blobby",
+      "source": "examples/blobby",
+      "title": "Blobby",
+      "shape": "single",
+      "capabilities": [
+        "wasi:blobstore/blobstore@0.2.0-draft",
+        "wasi:blobstore/container@0.2.0-draft",
+        "wasi:blobstore/types@0.2.0-draft"
+      ],
+      "nodes": [
+        {
+          "id": "blobby",
+          "role": "ingress",
+          "world": "root",
+          "facts_from": "wasm",
+          "file": "target/wasm32-wasip2/release/blobby.wasm",
+          "imports": [
+            "wasi:io/poll@0.2.9",
+            "wasi:clocks/monotonic-clock@0.2.9",
+            "wasi:io/error@0.2.9",
+            "wasi:io/streams@0.2.9",
+            "wasi:cli/stdout@0.2.9",
+            "wasi:cli/stderr@0.2.9",
+            "wasi:cli/stdin@0.2.9",
+            "wasi:http/types@0.2.9",
+            "wasi:blobstore/types@0.2.0-draft",
+            "wasi:blobstore/container@0.2.0-draft",
+            "wasi:blobstore/blobstore@0.2.0-draft",
+            "wasi:cli/environment@0.2.9",
+            "wasi:cli/exit@0.2.9",
+            "wasi:cli/terminal-input@0.2.9",
+            "wasi:cli/terminal-output@0.2.9",
+            "wasi:cli/terminal-stdin@0.2.9",
+            "wasi:cli/terminal-stdout@0.2.9",
+            "wasi:cli/terminal-stderr@0.2.9",
+            "wasi:random/insecure-seed@0.2.9"
+          ],
+          "exports": [
+            "wasi:http/incoming-handler@0.2.9"
+          ]
+        }
+      ]
+    },
+    {
+      "schema": 1,
+      "id": "http-api-with-distributed-workloads",
+      "source": "templates/http-api-with-distributed-workloads",
+      "title": "http-api-with-distributed-workloads",
+      "shape": "fan-out",
+      "capabilities": [
+        "wasi:config/store@0.2.0-rc.1",
+        "wasmcloud:messaging/consumer@0.2.0",
+        "wasmcloud:messaging/types@0.2.0"
+      ],
+      "nodes": [
+        {
+          "id": "http-api",
+          "role": "ingress",
+          "world": "root",
+          "facts_from": "wasm",
+          "file": "target/wasm32-wasip2/release/http_api.wasm",
+          "imports": [
+            "wasmcloud:messaging/types@0.2.0",
+            "wasmcloud:messaging/consumer@0.2.0",
+            "wasi:io/poll@0.2.9",
+            "wasi:clocks/monotonic-clock@0.2.9",
+            "wasi:io/error@0.2.9",
+            "wasi:io/streams@0.2.9",
+            "wasi:cli/stdout@0.2.9",
+            "wasi:cli/stderr@0.2.9",
+            "wasi:cli/stdin@0.2.9",
+            "wasi:http/types@0.2.9",
+            "wasi:cli/environment@0.2.9",
+            "wasi:cli/exit@0.2.9",
+            "wasi:cli/terminal-input@0.2.9",
+            "wasi:cli/terminal-output@0.2.9",
+            "wasi:cli/terminal-stdin@0.2.9",
+            "wasi:cli/terminal-stdout@0.2.9",
+            "wasi:cli/terminal-stderr@0.2.9",
+            "wasi:random/insecure-seed@0.2.9"
+          ],
+          "exports": [
+            "wasi:http/incoming-handler@0.2.9"
+          ]
+        },
+        {
+          "id": "task-leet",
+          "role": "worker",
+          "world": "root",
+          "facts_from": "wasm",
+          "file": "target/wasm32-wasip2/release/task_leet.wasm",
+          "subscriptions": [
+            "tasks.leet"
+          ],
+          "imports": [
+            "wasmcloud:messaging/types@0.2.0",
+            "wasmcloud:messaging/consumer@0.2.0",
+            "wasi:config/store@0.2.0-rc.1",
+            "wasi:io/poll@0.2.9",
+            "wasi:clocks/monotonic-clock@0.2.9",
+            "wasi:io/error@0.2.9",
+            "wasi:io/streams@0.2.9",
+            "wasi:cli/stdout@0.2.9",
+            "wasi:cli/stderr@0.2.9",
+            "wasi:cli/stdin@0.2.9",
+            "wasi:cli/environment@0.2.9",
+            "wasi:cli/exit@0.2.9",
+            "wasi:cli/terminal-input@0.2.9",
+            "wasi:cli/terminal-output@0.2.9",
+            "wasi:cli/terminal-stdin@0.2.9",
+            "wasi:cli/terminal-stdout@0.2.9",
+            "wasi:cli/terminal-stderr@0.2.9"
+          ],
+          "exports": [
+            "wasmcloud:messaging/handler@0.2.0"
+          ]
+        },
+        {
+          "id": "task-reverse",
+          "role": "worker",
+          "world": "root",
+          "facts_from": "wasm",
+          "file": "target/wasm32-wasip2/release/task_reverse.wasm",
+          "subscriptions": [
+            "tasks.reverse"
+          ],
+          "imports": [
+            "wasmcloud:messaging/types@0.2.0",
+            "wasmcloud:messaging/consumer@0.2.0",
+            "wasi:config/store@0.2.0-rc.1",
+            "wasi:io/poll@0.2.9",
+            "wasi:clocks/monotonic-clock@0.2.9",
+            "wasi:io/error@0.2.9",
+            "wasi:io/streams@0.2.9",
+            "wasi:cli/stdout@0.2.9",
+            "wasi:cli/stderr@0.2.9",
+            "wasi:cli/stdin@0.2.9",
+            "wasi:cli/environment@0.2.9",
+            "wasi:cli/exit@0.2.9",
+            "wasi:cli/terminal-input@0.2.9",
+            "wasi:cli/terminal-output@0.2.9",
+            "wasi:cli/terminal-stdin@0.2.9",
+            "wasi:cli/terminal-stdout@0.2.9",
+            "wasi:cli/terminal-stderr@0.2.9"
+          ],
+          "exports": [
+            "wasmcloud:messaging/handler@0.2.0"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "from": "http-api",
+          "to": "task-leet",
+          "via": "wasmcloud:messaging/handler@0.2.0",
+          "kind": "messaging",
+          "subject": "tasks.leet"
+        },
+        {
+          "from": "http-api",
+          "to": "task-reverse",
+          "via": "wasmcloud:messaging/handler@0.2.0",
+          "kind": "messaging",
+          "subject": "tasks.reverse"
+        }
+      ],
+      "unresolved": [
+        {
+          "node": "task-leet",
+          "reason": "dynamic-publish-subject",
+          "hint": "imports the messaging consumer while also handling messages, so it publishes to a subject carried by the incoming message; the destination is not statically known"
+        },
+        {
+          "node": "task-reverse",
+          "reason": "dynamic-publish-subject",
+          "hint": "imports the messaging consumer while also handling messages, so it publishes to a subject carried by the incoming message; the destination is not statically known"
+        }
+      ]
+    },
+    {
+      "schema": 1,
+      "id": "http-client",
+      "source": "templates/http-client",
+      "title": "HTTP Client in Rust",
+      "shape": "single",
+      "capabilities": [
+        "wasi:http/outgoing-handler@0.2.9"
+      ],
+      "nodes": [
+        {
+          "id": "http-client",
+          "role": "ingress",
+          "world": "root",
+          "facts_from": "wasm",
+          "file": "target/wasm32-wasip2/release/http_client.wasm",
+          "imports": [
+            "wasi:io/poll@0.2.9",
+            "wasi:clocks/monotonic-clock@0.2.9",
+            "wasi:io/error@0.2.9",
+            "wasi:io/streams@0.2.9",
+            "wasi:cli/stdout@0.2.9",
+            "wasi:cli/stderr@0.2.9",
+            "wasi:cli/stdin@0.2.9",
+            "wasi:http/types@0.2.9",
+            "wasi:http/outgoing-handler@0.2.9",
+            "wasi:cli/environment@0.2.9",
+            "wasi:cli/exit@0.2.9",
+            "wasi:cli/terminal-input@0.2.9",
+            "wasi:cli/terminal-output@0.2.9",
+            "wasi:cli/terminal-stdin@0.2.9",
+            "wasi:cli/terminal-stdout@0.2.9",
+            "wasi:cli/terminal-stderr@0.2.9",
+            "wasi:random/insecure-seed@0.2.9"
+          ],
+          "exports": [
+            "wasi:http/incoming-handler@0.2.9"
+          ]
+        }
+      ]
+    },
+    {
+      "schema": 1,
+      "id": "http-handler",
+      "source": "templates/http-handler",
+      "title": "HTTP Handler in Rust",
+      "shape": "single",
+      "nodes": [
+        {
+          "id": "http-handler",
+          "role": "ingress",
+          "world": "root",
+          "facts_from": "wasm",
+          "file": "target/wasm32-wasip2/release/http_handler.wasm",
+          "imports": [
+            "wasi:io/poll@0.2.9",
+            "wasi:clocks/monotonic-clock@0.2.9",
+            "wasi:io/error@0.2.9",
+            "wasi:io/streams@0.2.9",
+            "wasi:cli/stdout@0.2.9",
+            "wasi:cli/stderr@0.2.9",
+            "wasi:cli/stdin@0.2.9",
+            "wasi:http/types@0.2.9",
+            "wasi:cli/environment@0.2.9",
+            "wasi:cli/exit@0.2.9",
+            "wasi:cli/terminal-input@0.2.9",
+            "wasi:cli/terminal-output@0.2.9",
+            "wasi:cli/terminal-stdin@0.2.9",
+            "wasi:cli/terminal-stdout@0.2.9",
+            "wasi:cli/terminal-stderr@0.2.9",
+            "wasi:random/insecure-seed@0.2.9"
+          ],
+          "exports": [
+            "wasi:http/incoming-handler@0.2.9"
+          ]
+        }
+      ]
+    },
+    {
+      "schema": 1,
+      "id": "http-hello-world",
+      "source": "templates/http-hello-world",
+      "title": "HTTP Hello World in Rust",
+      "shape": "single",
+      "nodes": [
+        {
+          "id": "hello-world",
+          "role": "ingress",
+          "world": "root",
+          "facts_from": "wasm",
+          "file": "target/wasm32-wasip2/release/hello_world.wasm",
+          "imports": [
+            "wasi:io/poll@0.2.9",
+            "wasi:clocks/monotonic-clock@0.2.9",
+            "wasi:io/error@0.2.9",
+            "wasi:io/streams@0.2.9",
+            "wasi:cli/stdout@0.2.9",
+            "wasi:cli/stderr@0.2.9",
+            "wasi:cli/stdin@0.2.9",
+            "wasi:http/types@0.2.9",
+            "wasi:cli/environment@0.2.9",
+            "wasi:cli/exit@0.2.9",
+            "wasi:cli/terminal-input@0.2.9",
+            "wasi:cli/terminal-output@0.2.9",
+            "wasi:cli/terminal-stdin@0.2.9",
+            "wasi:cli/terminal-stdout@0.2.9",
+            "wasi:cli/terminal-stderr@0.2.9",
+            "wasi:random/insecure-seed@0.2.9"
+          ],
+          "exports": [
+            "wasi:http/incoming-handler@0.2.9"
+          ]
+        }
+      ]
+    },
+    {
+      "schema": 1,
+      "id": "http-hello-world-persistent-storage",
+      "source": "examples/http-hello-world-persistent-storage",
+      "title": "`http-hello-world-persistent-storage`",
+      "shape": "single",
+      "capabilities": [
+        "wasi:keyvalue/atomics@0.2.0-draft",
+        "wasi:keyvalue/store@0.2.0-draft"
+      ],
+      "nodes": [
+        {
+          "id": "http-hello-world-persistent-storage",
+          "role": "ingress",
+          "world": "root",
+          "facts_from": "wasm",
+          "file": "target/wasm32-wasip2/release/http_hello_world_persistent_storage.wasm",
+          "imports": [
+            "wasi:keyvalue/store@0.2.0-draft",
+            "wasi:keyvalue/atomics@0.2.0-draft",
+            "wasi:io/poll@0.2.12",
+            "wasi:clocks/monotonic-clock@0.2.12",
+            "wasi:io/error@0.2.12",
+            "wasi:io/streams@0.2.12",
+            "wasi:cli/stdout@0.2.12",
+            "wasi:cli/stderr@0.2.12",
+            "wasi:cli/stdin@0.2.12",
+            "wasi:http/types@0.2.12",
+            "wasi:cli/environment@0.2.12",
+            "wasi:cli/exit@0.2.12",
+            "wasi:cli/terminal-input@0.2.12",
+            "wasi:cli/terminal-output@0.2.12",
+            "wasi:cli/terminal-stdin@0.2.12",
+            "wasi:cli/terminal-stdout@0.2.12",
+            "wasi:cli/terminal-stderr@0.2.12",
+            "wasi:random/insecure-seed@0.2.12"
+          ],
+          "exports": [
+            "wasi:http/incoming-handler@0.2.12"
+          ]
+        }
+      ]
+    },
+    {
+      "schema": 1,
+      "id": "http-kv-handler",
+      "source": "templates/http-kv-handler",
+      "title": "HTTP + Key-Value Handler in Rust",
+      "shape": "single",
+      "capabilities": [
+        "wasi:keyvalue/store@0.2.0-draft"
+      ],
+      "nodes": [
+        {
+          "id": "http-kv-handler",
+          "role": "ingress",
+          "world": "root",
+          "facts_from": "wasm",
+          "file": "target/wasm32-wasip2/release/http_kv_handler.wasm",
+          "imports": [
+            "wasi:keyvalue/store@0.2.0-draft",
+            "wasi:io/poll@0.2.9",
+            "wasi:clocks/monotonic-clock@0.2.9",
+            "wasi:io/error@0.2.9",
+            "wasi:io/streams@0.2.9",
+            "wasi:cli/stdout@0.2.9",
+            "wasi:cli/stderr@0.2.9",
+            "wasi:cli/stdin@0.2.9",
+            "wasi:http/types@0.2.9",
+            "wasi:cli/environment@0.2.9",
+            "wasi:cli/exit@0.2.9",
+            "wasi:cli/terminal-input@0.2.9",
+            "wasi:cli/terminal-output@0.2.9",
+            "wasi:cli/terminal-stdin@0.2.9",
+            "wasi:cli/terminal-stdout@0.2.9",
+            "wasi:cli/terminal-stderr@0.2.9"
+          ],
+          "exports": [
+            "wasi:http/incoming-handler@0.2.2"
+          ]
+        }
+      ]
+    },
+    {
+      "schema": 1,
+      "id": "oci-registry",
+      "source": "examples/oci-registry",
+      "title": "OCI Registry",
+      "shape": "single",
+      "capabilities": [
+        "wasmcloud:blobstore/blobstore@0.1.0",
+        "wasmcloud:blobstore/container@0.1.0",
+        "wasmcloud:blobstore/types@0.1.0",
+        "wasmcloud:secrets/reveal@2.1.0",
+        "wasmcloud:secrets/store@2.1.0"
+      ],
+      "nodes": [
+        {
+          "id": "oci-registry",
+          "role": "ingress",
+          "world": "root",
+          "facts_from": "wasm",
+          "file": "target/wasm32-wasip2/release/oci_registry.wasm",
+          "imports": [
+            "wasmcloud:blobstore/types@0.1.0",
+            "wasmcloud:blobstore/container@0.1.0",
+            "wasmcloud:blobstore/blobstore@0.1.0",
+            "wasi:random/random@0.3.0",
+            "wasmcloud:secrets/store@2.1.0",
+            "wasmcloud:secrets/reveal@2.1.0",
+            "wasi:http/types@0.3.0",
+            "wasi:io/poll@0.2.9",
+            "wasi:clocks/monotonic-clock@0.2.9",
+            "wasi:io/error@0.2.9",
+            "wasi:io/streams@0.2.9",
+            "wasi:cli/stdout@0.2.9",
+            "wasi:cli/stderr@0.2.9",
+            "wasi:cli/stdin@0.2.9",
+            "wasi:cli/environment@0.2.9",
+            "wasi:cli/exit@0.2.9",
+            "wasi:cli/terminal-input@0.2.9",
+            "wasi:cli/terminal-output@0.2.9",
+            "wasi:cli/terminal-stdin@0.2.9",
+            "wasi:cli/terminal-stdout@0.2.9",
+            "wasi:cli/terminal-stderr@0.2.9"
+          ],
+          "exports": [
+            "wasi:http/handler@0.3.0"
+          ]
+        }
+      ]
+    },
+    {
+      "schema": 1,
+      "id": "otel-config",
+      "source": "examples/otel-config",
+      "title": "otel-config",
+      "shape": "single",
+      "capabilities": [
+        "wasi:blobstore/blobstore@0.2.0-draft",
+        "wasi:blobstore/container@0.2.0-draft",
+        "wasi:blobstore/types@0.2.0-draft",
+        "wasi:config/store@0.2.0-rc.1",
+        "wasi:http/outgoing-handler@0.2.9",
+        "wasi:keyvalue/atomics@0.2.0-draft",
+        "wasi:keyvalue/store@0.2.0-draft",
+        "wasi:otel/logs@0.2.0-rc.2",
+        "wasi:otel/metrics@0.2.0-rc.2",
+        "wasi:otel/tracing@0.2.0-rc.2",
+        "wasi:otel/types@0.2.0-rc.2"
+      ],
+      "nodes": [
+        {
+          "id": "otel-config",
+          "role": "ingress",
+          "world": "root",
+          "facts_from": "wasm",
+          "file": "target/wasm32-wasip2/release/otel_config.wasm",
+          "imports": [
+            "wasi:io/error@0.2.9",
+            "wasi:io/poll@0.2.9",
+            "wasi:io/streams@0.2.9",
+            "wasi:blobstore/types@0.2.0-draft",
+            "wasi:blobstore/container@0.2.0-draft",
+            "wasi:blobstore/blobstore@0.2.0-draft",
+            "wasi:keyvalue/store@0.2.0-draft",
+            "wasi:keyvalue/atomics@0.2.0-draft",
+            "wasi:config/store@0.2.0-rc.1",
+            "wasi:otel/types@0.2.0-rc.2",
+            "wasi:clocks/wall-clock@0.2.9",
+            "wasi:otel/tracing@0.2.0-rc.2",
+            "wasi:otel/logs@0.2.0-rc.2",
+            "wasi:clocks/monotonic-clock@0.2.9",
+            "wasi:otel/metrics@0.2.0-rc.2",
+            "wasi:random/random@0.2.9",
+            "wasi:cli/stdout@0.2.9",
+            "wasi:cli/stderr@0.2.9",
+            "wasi:cli/stdin@0.2.9",
+            "wasi:http/types@0.2.9",
+            "wasi:http/outgoing-handler@0.2.9",
+            "wasi:cli/environment@0.2.9",
+            "wasi:cli/exit@0.2.9",
+            "wasi:cli/terminal-input@0.2.9",
+            "wasi:cli/terminal-output@0.2.9",
+            "wasi:cli/terminal-stdin@0.2.9",
+            "wasi:cli/terminal-stdout@0.2.9",
+            "wasi:cli/terminal-stderr@0.2.9",
+            "wasi:random/insecure-seed@0.2.9"
+          ],
+          "exports": [
+            "wasi:http/incoming-handler@0.2.9"
+          ]
+        }
+      ]
+    },
+    {
+      "schema": 1,
+      "id": "qrcode",
+      "source": "examples/qrcode",
+      "title": "`qrcode`",
+      "shape": "single",
+      "nodes": [
+        {
+          "id": "qrcode",
+          "role": "ingress",
+          "world": "root",
+          "facts_from": "wasm",
+          "file": "target/wasm32-wasip2/release/qrcode.wasm",
+          "imports": [
+            "wasi:io/poll@0.2.9",
+            "wasi:clocks/monotonic-clock@0.2.9",
+            "wasi:io/error@0.2.9",
+            "wasi:io/streams@0.2.9",
+            "wasi:cli/stdout@0.2.9",
+            "wasi:cli/stderr@0.2.9",
+            "wasi:cli/stdin@0.2.9",
+            "wasi:http/types@0.2.9",
+            "wasi:cli/environment@0.2.9",
+            "wasi:cli/exit@0.2.9",
+            "wasi:cli/terminal-input@0.2.9",
+            "wasi:cli/terminal-output@0.2.9",
+            "wasi:cli/terminal-stdin@0.2.9",
+            "wasi:cli/terminal-stdout@0.2.9",
+            "wasi:cli/terminal-stderr@0.2.9",
+            "wasi:random/insecure-seed@0.2.9"
+          ],
+          "exports": [
+            "wasi:http/incoming-handler@0.2.9"
+          ]
+        }
+      ]
+    },
+    {
+      "schema": 1,
+      "id": "service-tcp",
+      "source": "templates/service-tcp",
+      "title": "service-tcp",
+      "shape": "service",
+      "capabilities": [
+        "wasi:sockets/instance-network@0.2.9",
+        "wasi:sockets/ip-name-lookup@0.2.9",
+        "wasi:sockets/network@0.2.9",
+        "wasi:sockets/tcp-create-socket@0.2.9",
+        "wasi:sockets/tcp@0.2.9"
+      ],
+      "nodes": [
+        {
+          "id": "http-api",
+          "role": "ingress",
+          "world": "root",
+          "facts_from": "wasm",
+          "file": "target/wasm32-wasip2/release/http_api.wasm",
+          "imports": [
+            "wasi:io/poll@0.2.9",
+            "wasi:clocks/monotonic-clock@0.2.9",
+            "wasi:io/error@0.2.9",
+            "wasi:io/streams@0.2.9",
+            "wasi:cli/stdout@0.2.9",
+            "wasi:cli/stderr@0.2.9",
+            "wasi:cli/stdin@0.2.9",
+            "wasi:http/types@0.2.9",
+            "wasi:cli/environment@0.2.9",
+            "wasi:cli/exit@0.2.9",
+            "wasi:cli/terminal-input@0.2.9",
+            "wasi:cli/terminal-output@0.2.9",
+            "wasi:cli/terminal-stdin@0.2.9",
+            "wasi:cli/terminal-stdout@0.2.9",
+            "wasi:cli/terminal-stderr@0.2.9",
+            "wasi:sockets/network@0.2.9",
+            "wasi:sockets/instance-network@0.2.9",
+            "wasi:sockets/tcp@0.2.9",
+            "wasi:sockets/tcp-create-socket@0.2.9",
+            "wasi:sockets/ip-name-lookup@0.2.9",
+            "wasi:random/insecure-seed@0.2.9"
+          ],
+          "exports": [
+            "wasi:http/incoming-handler@0.2.9"
+          ]
+        },
+        {
+          "id": "service-leet",
+          "role": "service",
+          "world": "root",
+          "facts_from": "wasm",
+          "file": "target/wasm32-wasip2/release/service-leet.wasm",
+          "imports": [
+            "wasi:io/poll@0.2.9",
+            "wasi:clocks/monotonic-clock@0.2.9",
+            "wasi:io/error@0.2.9",
+            "wasi:io/streams@0.2.9",
+            "wasi:cli/stdout@0.2.9",
+            "wasi:cli/stderr@0.2.9",
+            "wasi:cli/stdin@0.2.9",
+            "wasi:cli/environment@0.2.9",
+            "wasi:cli/exit@0.2.9",
+            "wasi:cli/terminal-input@0.2.9",
+            "wasi:cli/terminal-output@0.2.9",
+            "wasi:cli/terminal-stdin@0.2.9",
+            "wasi:cli/terminal-stdout@0.2.9",
+            "wasi:cli/terminal-stderr@0.2.9",
+            "wasi:sockets/network@0.2.9",
+            "wasi:sockets/instance-network@0.2.9",
+            "wasi:sockets/tcp@0.2.9",
+            "wasi:sockets/tcp-create-socket@0.2.9",
+            "wasi:random/insecure-seed@0.2.9"
+          ],
+          "exports": [
+            "wasi:cli/run@0.2.0"
+          ]
+        }
+      ],
+      "unresolved": [
+        {
+          "reason": "socket-edge",
+          "hint": "source binds a TcpListener and connects a TcpStream, so components are wired by a hardcoded address in Rust rather than by WIT; no edge could be derived for this project"
+        }
+      ]
+    }
+  ]
+}

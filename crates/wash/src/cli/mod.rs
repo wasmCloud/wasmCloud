@@ -36,6 +36,7 @@ pub mod new;
 pub mod oci;
 pub mod update;
 pub mod wit;
+pub mod wizard;
 
 pub const CONFIG_FILE_NAME: &str = "config.yaml";
 pub const CONFIG_DIR_NAME: &str = ".wash";

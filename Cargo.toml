@@ -4,6 +4,7 @@ default-members = ["crates/wash"]
 members = [
     "crates/bench-tools",
     "crates/wash-runtime",
+    "crates/wash-topology",
     "crates/wash",
     # Repo task runner (`cargo xtask`). Deliberately excluded from
     # default-members so normal builds/tests don't pull it in.
@@ -132,6 +133,7 @@ wasmtime-wasi-http = { version = "47.0.3", default-features = false }
 wasmtime-wasi-tls = { version = "47.0.3", default-features = false }
 wit-component = { version = "0.254.0", default-features = false }
 wash-runtime = { path = "crates/wash-runtime", default-features = false }
+wash-topology = { path = "crates/wash-topology" }
 wat = { version = "1.254.0", default-features = false }
 zeroize = { version = "1.8", default-features = false, features = ["alloc"] }
 

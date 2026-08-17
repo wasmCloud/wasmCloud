@@ -85,6 +85,9 @@ enum WashCliCommand {
     Update(wash::cli::update::UpdateCommand),
     /// Manage WIT dependencies
     Wit(wash::cli::wit::WitArgs),
+    /// Browse wasmCloud templates, examples and community projects — or
+    /// generate a new multi-component workload
+    Wizard(wash::cli::wizard::WizardCommand),
 }
 
 impl CliCommand for WashCliCommand {
@@ -110,6 +113,7 @@ impl CliCommand for WashCliCommand {
             WashCliCommand::Oci(cmd) => cmd.handle(ctx).await,
             WashCliCommand::Update(cmd) => cmd.handle(ctx).await,
             WashCliCommand::Wit(cmd) => cmd.handle(ctx).await,
+            WashCliCommand::Wizard(cmd) => cmd.handle(ctx).await,
         }
     }
 }

@@ -1,0 +1,32 @@
+# Shared schema, derivation and rendering for workload topologies.
+#
+# A leaf crate on purpose: `xtask` and `wash` both need the types, but making
+# `xtask` depend on `wash` would pull wasmtime into the repo's task runner.
+[package]
+name = "wash-topology"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license = "Apache-2.0"
+description = "Schema, derivation and rendering for wasmCloud workload topologies"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true, default-features = true }
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+# `wash` accepts config.yaml/yml/json/toml; reading only one silently skips
+# projects that are otherwise perfectly valid.
+toml = { workspace = true, features = ["parse"] }
+# Interface names come from the built component wherever one exists — the same
+# surface the host links against.
+wit-component = { workspace = true }
+wit-parser = { version = "0.254.0", default-features = false }
+
+[dev-dependencies]
+tempfile = { workspace = true }
