@@ -8,6 +8,9 @@ wit_bindgen::generate!({
 
 use wasi::keyvalue::{atomics, store};
 
+/// Name of the keyvalue bucket holding the per-name counters.
+const BUCKET: &str = "counters";
+
 #[wstd::http_server]
 async fn main(req: Request<Body>) -> Result<Response<Body>, wstd::http::Error> {
     match req.uri().path() {
@@ -23,7 +26,7 @@ async fn home(req: Request<Body>) -> Result<Response<Body>, wstd::http::Error> {
         _ => "World",
     };
 
-    let bucket = store::open("")
+    let bucket = store::open(BUCKET)
         .map_err(|e| wstd::http::Error::msg(format!("keyvalue open error: {:?}", e)))?;
 
     let count = atomics::increment(&bucket, name, 1)

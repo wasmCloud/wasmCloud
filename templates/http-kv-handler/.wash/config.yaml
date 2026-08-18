@@ -15,6 +15,23 @@ dev:
   # Requires a running NATS server with JetStream enabled.
   # wasi_keyvalue_nats_url: nats://127.0.0.1:4222
 
+  # The bucket a name passed to `open()` resolves to, and whether `wash dev`
+  # may create it. Every key is optional; `wash dev` creates missing buckets.
+  # wasi_keyvalue_nats:
+  #   # `missing` creates a bucket on first open; `never` opens only buckets
+  #   # that already exist, which is what `wash host` defaults to.
+  #   create: missing
+  #   # Namespace this project's buckets on a shared NATS server.
+  #   bucket_prefix: my-app_
+  #   # Pin every identifier to one bucket, ignoring the name in `open()`.
+  #   bucket: MY_APP_STORE
+  #   # Settings for a bucket wash creates. They do not change an existing one.
+  #   replicas: 1
+  #   storage: file
+  #   max_age: 24h
+  #   history: 1
+  #   max_bytes: 1048576
+
   # Backend: redis
   # Uncomment the line below to use Redis as the keyvalue store.
   # Requires a running Redis server.

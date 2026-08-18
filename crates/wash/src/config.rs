@@ -19,6 +19,7 @@ use wash_runtime::host::allowed_hosts::AllowedHost;
 use wash_runtime::host::allowed_ip_name::AllowedIpName;
 use wash_runtime::host::allowed_loopback::AllowedLoopbackPort;
 use wash_runtime::oci::OciPullPolicy;
+use wash_runtime::plugin::wasi_keyvalue::BucketPolicy;
 use wash_runtime::wit::WitInterface;
 
 use crate::{
@@ -759,6 +760,86 @@ pub fn wasmcloud_messaging_limits(
     Ok(limits)
 }
 
+/// How a guest's `wasi:keyvalue/store.open` identifier maps onto a JetStream KV
+/// bucket, and whether the host may create one.
+///
+/// The guest names a store; these keys decide which bucket that is. `create`
+/// is `missing` here — a `wash dev` loop against a bare JetStream server works
+/// with no configuration — while `wash host` defaults it to `never`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NatsKeyvalueConfig {
+    /// Pin the plain (unlabeled) import to this one physical bucket, ignoring
+    /// the name the guest passes. Not inherited by `(implements ..)`
+    /// interfaces — a pin names one store, so each states its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bucket: Option<String>,
+
+    /// Prefix prepended to every physical bucket name, to namespace one host's
+    /// buckets away from another's on a shared NATS cluster.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bucket_prefix: Option<String>,
+
+    /// `missing` (default) creates a bucket on first open; `never` opens only
+    /// buckets that already exist and answers `no-such-store` otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub create: Option<String>,
+
+    /// Replicas for a bucket this host creates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replicas: Option<usize>,
+
+    /// Storage for a bucket this host creates: `file` or `memory`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage: Option<String>,
+
+    /// Maximum age of an entry in a bucket this host creates, as a humantime
+    /// duration such as `24h`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_age: Option<String>,
+
+    /// Historical entries kept per key in a bucket this host creates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<i64>,
+
+    /// Size ceiling, in bytes, for a bucket this host creates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<i64>,
+}
+
+impl NatsKeyvalueConfig {
+    /// The set keys, in the string form the runtime's policy parser reads, so
+    /// this config and an `(implements ..)` interface's config are parsed and
+    /// validated by exactly the same code.
+    fn policy_config(&self) -> HashMap<String, String> {
+        let mut config = HashMap::new();
+        if let Some(bucket) = &self.bucket {
+            config.insert("bucket".to_string(), bucket.clone());
+        }
+        if let Some(prefix) = &self.bucket_prefix {
+            config.insert("bucket_prefix".to_string(), prefix.clone());
+        }
+        if let Some(create) = &self.create {
+            config.insert("create".to_string(), create.clone());
+        }
+        if let Some(replicas) = self.replicas {
+            config.insert("replicas".to_string(), replicas.to_string());
+        }
+        if let Some(storage) = &self.storage {
+            config.insert("storage".to_string(), storage.clone());
+        }
+        if let Some(max_age) = &self.max_age {
+            config.insert("max_age".to_string(), max_age.clone());
+        }
+        if let Some(history) = self.history {
+            config.insert("history".to_string(), history.to_string());
+        }
+        if let Some(max_bytes) = self.max_bytes {
+            config.insert("max_bytes".to_string(), max_bytes.to_string());
+        }
+        config
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DevConfig {
     /// Command to run the component in dev mode
@@ -916,6 +997,11 @@ pub struct DevConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasi_keyvalue_nats_url: Option<String>,
 
+    /// Bucket naming and creation policy for the NATS keyvalue backend. Only
+    /// read when keyvalue resolves to NATS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wasi_keyvalue_nats: Option<NatsKeyvalueConfig>,
+
     /// Optional path for WASI blobstore filesystem storage. If not set, an in-memory store is used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasi_blobstore_path: Option<PathBuf>,
@@ -982,6 +1068,25 @@ impl DevConfig {
         }
         .to_source("dev.service_file/service_image")
         .map(Some)
+    }
+
+    /// The NATS keyvalue bucket policy this dev config asks for.
+    ///
+    /// `wash dev` creates a missing bucket unless the config says otherwise,
+    /// so the first `open` of a new store works against a bare JetStream
+    /// server.
+    ///
+    /// # Errors
+    ///
+    /// Fails if any `dev.wasi_keyvalue_nats` value is malformed.
+    pub fn keyvalue_bucket_policy(&self) -> Result<BucketPolicy> {
+        let config = self
+            .wasi_keyvalue_nats
+            .as_ref()
+            .map(NatsKeyvalueConfig::policy_config)
+            .unwrap_or_default();
+        BucketPolicy::from_config(&config, &BucketPolicy::create_missing())
+            .context("dev.wasi_keyvalue_nats is not a valid bucket policy")
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -1065,6 +1170,10 @@ impl DevConfig {
         }
 
         if let Err(err) = self.service_source() {
+            errors.push(format!("{err:#}"));
+        }
+
+        if let Err(err) = self.keyvalue_bucket_policy() {
             errors.push(format!("{err:#}"));
         }
 
@@ -1371,6 +1480,8 @@ fn check_url_scheme(field: &str, value: &str, expected: &[&str], errors: &mut Ve
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    use wash_runtime::plugin::wasi_keyvalue::CreatePolicy;
 
     use super::*;
 
@@ -1691,6 +1802,57 @@ workload:
         };
         let err = cfg.validate().unwrap_err().to_string();
         assert!(err.contains("tls_key_path"));
+    }
+
+    /// With nothing configured, `wash dev` creates a missing bucket and leaves
+    /// the identifier alone, so a first `open` works against a bare JetStream.
+    #[test]
+    fn dev_keyvalue_policy_defaults_to_create_missing() {
+        let policy = DevConfig::default()
+            .keyvalue_bucket_policy()
+            .expect("the empty config must be a valid policy");
+        assert_eq!(policy.create, CreatePolicy::Missing);
+        assert_eq!(policy.physical_name("counters"), "counters");
+    }
+
+    /// The configured keys reach the policy.
+    #[test]
+    fn dev_keyvalue_policy_reads_config() {
+        let cfg = DevConfig {
+            wasi_keyvalue_nats: Some(NatsKeyvalueConfig {
+                create: Some("never".to_string()),
+                bucket_prefix: Some("team-a_".to_string()),
+                replicas: Some(3),
+                max_age: Some("24h".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let policy = cfg.keyvalue_bucket_policy().expect("must be valid");
+        assert_eq!(policy.create, CreatePolicy::Never);
+        assert_eq!(policy.physical_name("counters"), "team-a_counters");
+        assert_eq!(policy.replicas, Some(3));
+        assert_eq!(
+            policy.max_age,
+            Some(std::time::Duration::from_secs(24 * 60 * 60))
+        );
+    }
+
+    /// A malformed value fails validation rather than the first `open`.
+    #[test]
+    fn dev_keyvalue_policy_rejects_bad_values() {
+        let cfg = DevConfig {
+            wasi_keyvalue_nats: Some(NatsKeyvalueConfig {
+                create: Some("sometimes".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("dev.wasi_keyvalue_nats"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

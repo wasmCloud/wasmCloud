@@ -8,15 +8,19 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::RwLock;
 
 use crate::plugin::multiplex::BackendProvider;
+use crate::plugin::wasi_keyvalue::nats_bucket::{BucketPolicy, OpenError};
 
 use super::{
     CasGuard, CasOutcome, KeyResponse, KvBackend, KvId, LIST_KEYS_BATCH_SIZE, StoreError, Versioned,
 };
 
-/// A NATS JetStream KV-backed [`KvBackend`]. Each bucket maps to a JetStream KV
-/// store (which must already exist); store handles are cached by name.
+/// A NATS JetStream KV-backed [`KvBackend`]. A [`BucketPolicy`] maps the
+/// identifier a guest opens onto the physical JetStream bucket and decides
+/// whether a missing one may be created; store handles are cached by physical
+/// name.
 pub struct NatsBackend {
     context: Arc<async_nats::jetstream::Context>,
+    policy: BucketPolicy,
     stores: RwLock<HashMap<String, async_nats::jetstream::kv::Store>>,
 }
 
@@ -25,50 +29,49 @@ impl NatsBackend {
         StoreError::Other(format!("JetStream error: {e}"))
     }
 
+    fn open_err(e: OpenError) -> StoreError {
+        match e {
+            OpenError::NoSuchStore => StoreError::NoSuchStore,
+            OpenError::Other(e) => StoreError::Other(e),
+        }
+    }
+
+    /// Resolve a bucket for an operation. Look-up only: a bucket is created
+    /// (when the policy allows) by `open` alone, so a stray `get` on an
+    /// identifier that was never opened cannot mint a stream.
     async fn store(&self, bucket: &str) -> Result<async_nats::jetstream::kv::Store, StoreError> {
-        if let Some(s) = self.stores.read().await.get(bucket) {
+        let physical = self.policy.physical_name(bucket);
+        if let Some(s) = self.stores.read().await.get(&physical) {
             return Ok(s.clone());
         }
-        use async_nats::jetstream::context::{
-            GetStreamError, GetStreamErrorKind, KeyValueErrorKind,
-        };
-        use std::error::Error as _;
         let kv = self
-            .context
-            .get_key_value(bucket)
+            .policy
+            .get(&self.context, &physical)
             .await
-            .map_err(|e| match e.kind() {
-                // An invalid name is never a real store.
-                KeyValueErrorKind::InvalidStoreName => StoreError::NoSuchStore,
-                // `GetBucket` wraps a `get_stream` failure: a missing/invalid
-                // stream is `no-such-store`, but a `Request` (transport/timeout)
-                // failure is a real error that must propagate so a guest can retry
-                // instead of seeing "not found".
-                KeyValueErrorKind::GetBucket => {
-                    if matches!(
-                        e.source().and_then(|s| s.downcast_ref::<GetStreamError>()),
-                        Some(g) if g.kind() == GetStreamErrorKind::Request
-                    ) {
-                        Self::err(e)
-                    } else {
-                        StoreError::NoSuchStore
-                    }
-                }
-                // A JetStream/transport failure is a real error, not "not found".
-                KeyValueErrorKind::JetStream => Self::err(e),
-            })?;
-        self.stores
-            .write()
-            .await
-            .insert(bucket.to_string(), kv.clone());
+            .map_err(Self::open_err)?;
+        self.cache(physical, kv.clone()).await;
         Ok(kv)
+    }
+
+    async fn cache(&self, physical: String, kv: async_nats::jetstream::kv::Store) {
+        self.stores.write().await.insert(physical, kv);
     }
 }
 
 #[async_trait::async_trait]
 impl KvBackend for NatsBackend {
     async fn open(&self, identifier: &str) -> Result<(), StoreError> {
-        self.store(identifier).await.map(|_| ())
+        let physical = self.policy.physical_name(identifier);
+        if self.stores.read().await.contains_key(&physical) {
+            return Ok(());
+        }
+        let (kv, _outcome) = self
+            .policy
+            .open(&self.context, identifier)
+            .await
+            .map_err(Self::open_err)?;
+        self.cache(physical, kv).await;
+        Ok(())
     }
 
     async fn get(&self, bucket: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
@@ -318,13 +321,45 @@ async fn present_entry(
 
 /// Provider for [`NatsBackend`], selected by `config.backend = "nats"`. Requires
 /// `config.url` (e.g. `nats://127.0.0.1:4222`).
+///
+/// The remaining config is the interface's [`BucketPolicy`]: `bucket`,
+/// `bucket_prefix`, `create` (`never` — the default here — or `missing`), and
+/// the settings a created bucket is given (`replicas`, `storage`, `max_age`,
+/// `history`, `max_bytes`). Any key an interface leaves unset comes from the
+/// embedder's [`NatsProvider::with_defaults`] policy, whose own default is
+/// `create = never`: a guest's identifier cannot create JetStream streams, so
+/// an operator declares the buckets and anything else is `no-such-store`.
 #[derive(Default)]
-pub struct NatsProvider;
+pub struct NatsProvider {
+    defaults: BucketPolicy,
+}
+
+impl NatsProvider {
+    /// The bucket policy interfaces inherit from unless they configure their
+    /// own. This is how a host's `--keyvalue-nats-*` flags reach a named
+    /// import, and it is shared by the `wasi:keyvalue` and `wasmcloud:keyvalue`
+    /// plugins, which register the same providers.
+    pub fn with_defaults(defaults: BucketPolicy) -> Self {
+        Self { defaults }
+    }
+}
 
 #[async_trait::async_trait]
 impl BackendProvider<KvId> for NatsProvider {
+    /// Pooled per URL *and* resolved bucket policy: the backend carries its
+    /// policy, so two interfaces on one NATS server may only share a backend
+    /// when they resolve buckets the same way. The policy is fingerprinted
+    /// after merging with the embedder's defaults, so what an interface
+    /// inherits counts the same as what it spells out — including an empty
+    /// `bucket_prefix` opting out of an inherited one.
+    ///
+    /// A config this provider cannot parse yields no pool key at all: it is
+    /// about to fail in `instantiate`, and a placeholder key could collide
+    /// with a valid one.
     fn pool_key(&self, config: &HashMap<String, String>) -> Option<String> {
-        config.get("url").cloned()
+        let url = config.get("url")?;
+        let policy = BucketPolicy::from_config(config, &self.defaults).ok()?;
+        Some(format!("{url}\u{1}{}", policy.fingerprint()))
     }
     fn backend_type(&self) -> &'static str {
         "nats"
@@ -334,10 +369,12 @@ impl BackendProvider<KvId> for NatsProvider {
         let url = config
             .get("url")
             .ok_or_else(|| anyhow::anyhow!("nats keyvalue backend requires a 'url' config"))?;
+        let policy = BucketPolicy::from_config(config, &self.defaults)?;
         let client = async_nats::connect(url).await?;
         let context = async_nats::jetstream::new(client);
         Ok(Arc::new(NatsBackend {
             context: Arc::new(context),
+            policy,
             stores: RwLock::new(HashMap::new()),
         }))
     }

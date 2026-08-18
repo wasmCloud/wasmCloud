@@ -3,7 +3,10 @@
 //! This module implements `wasi:keyvalue@0.2.0-draft` interfaces using
 //! Redis as the backend storage.
 //! The `open` identifier is used as a key prefix (`{identifier}:{key}`) to
-//! namespace keys within a single Redis database.
+//! namespace keys within a single Redis database. The prefix is host-global,
+//! not per workload: two workloads that open the same identifier against one
+//! Redis database share the store. Give a deployment its own database (or its
+//! own server) to separate them.
 
 use std::collections::HashSet;
 use std::sync::Arc;

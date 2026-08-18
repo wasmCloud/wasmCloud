@@ -2,6 +2,18 @@
 //!
 //! This module implements an in-memory keyvalue plugin for the wasmCloud runtime,
 //! providing the `wasi:keyvalue@0.2.0-draft` interfaces for development and testing scenarios.
+//!
+//! Buckets here are keyed by workload id, so two workloads that open the same
+//! identifier get separate stores. That isolation is a property of this
+//! development backend, not of `wasi:keyvalue`: the external backends
+//! ([`nats`](super::nats), [`redis`](super::redis),
+//! [`filesystem`](super::filesystem)) key buckets host-globally, so the same
+//! guest code that is isolated here shares a store there. Those backends
+//! separate one host or deployment from another — the NATS backend's
+//! [`BucketPolicy::prefix`](super::BucketPolicy), a per-deployment redis
+//! database, a per-deployment filesystem root — but two workloads on one host
+//! still share a bucket they both name. Give them distinct identifiers, or
+//! distinct `(implements ..)` interfaces, to keep them apart.
 
 use std::{
     collections::{HashMap, HashSet},
