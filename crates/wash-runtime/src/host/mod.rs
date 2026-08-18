@@ -856,14 +856,25 @@ impl HostApi for Host {
         {
             let mut workloads = self.workloads.write().await;
             if workloads.contains_key(&request.workload_id) {
+                let message = format!(
+                    "Workload ID [{}] already exists (the exising workload must be stopped to reuse the ID)",
+                    request.workload_id
+                );
+                // Logged here rather than at the single site below, because
+                // this refusal returns before the start ever begins. At `warn`,
+                // not `error`: this is the guard that makes a replayed start
+                // request idempotent, and a scheduler retrying one is not a
+                // host malfunction.
+                tracing::warn!(
+                    workload_id = request.workload_id,
+                    reason = message,
+                    "refused to start workload"
+                );
                 return Ok(WorkloadStartResponse {
                     workload_status: WorkloadStatus {
                         workload_id: request.workload_id.clone(),
                         workload_state: WorkloadState::Error,
-                        message: format!(
-                            "Workload ID [{}] already exists (the exising workload must be stopped to reuse the ID)",
-                            request.workload_id
-                        ),
+                        message,
                     },
                 });
             }
@@ -914,7 +925,10 @@ impl HostApi for Host {
                     Some(resolved),
                 ),
                 Err(err) => {
-                    let message = err.to_string();
+                    // `{:#}` so the whole context chain reaches the caller and
+                    // the log below: the outer layer alone ("failed to pull
+                    // image for component 'x'") never names the cause.
+                    let message = format!("{err:#}");
                     if mine {
                         workloads.insert(workload_id.clone(), HostWorkload::Error(message.clone()));
                     } else if handed_back {
@@ -927,6 +941,17 @@ impl HostApi for Host {
                 }
             }
         };
+
+        // A start that failed is reported to whoever asked and nowhere else.
+        // Say so locally too: the operator diagnosing it — a pull against a
+        // registry this host does not trust, a plugin that would not bind — is
+        // reading the host's log, and without this the host has nothing to say.
+        if workload_state == WorkloadState::Error {
+            // `reason`, not `message`: `message` is the field tracing gives
+            // the event's own text, and a second one under that name displaces
+            // it.
+            tracing::error!(workload_id, reason = message, "failed to start workload");
+        }
 
         if let Some(resolved) = orphaned {
             release(&workload_id, &resolved).await;
@@ -1125,6 +1150,21 @@ pub struct HostConfig {
     pub allow_oci_insecure: bool,
     pub oci_pull_timeout: Option<Duration>,
     pub oci_cache_dir: Option<PathBuf>,
+    /// PEM CA bundles to trust for OCI pulls, on top of the compiled-in webpki
+    /// roots. Needed to reach a registry behind a private CA — an in-cluster
+    /// one, or a corporate mirror.
+    ///
+    /// Applied by [`HostBuilder::build`] to the process-wide trust store, so an
+    /// embedder that fills in this struct configures registry trust the same
+    /// way it configures every other OCI setting. `wash oci pull`/`push`, which
+    /// build no host at all, reach that store through
+    /// [`oci::set_extra_ca_certificates`](crate::oci::set_extra_ca_certificates)
+    /// directly.
+    ///
+    /// That store holds one set for the whole process. Two hosts in one process
+    /// may name the same bundles; a second host naming *different* ones fails
+    /// to build, rather than running on trust it did not ask for.
+    pub oci_ca_paths: Vec<PathBuf>,
 }
 
 impl Default for HostConfig {
@@ -1133,6 +1173,7 @@ impl Default for HostConfig {
             allow_oci_insecure: false,
             oci_pull_timeout: Duration::from_secs(30).into(),
             oci_cache_dir: None,
+            oci_ca_paths: Vec::new(),
         }
     }
 }
@@ -1323,8 +1364,20 @@ impl HostBuilder {
     /// A new `Host` instance ready to be started.
     ///
     /// # Errors
-    /// Returns an error if the default engine cannot be created (when no engine is provided).
+    /// Returns an error if the default engine cannot be created (when no engine
+    /// is provided), if a CA bundle named by [`HostConfig::oci_ca_paths`]
+    /// cannot be read or does not parse, or if a different set of bundles is
+    /// already configured for this process.
     pub fn build(self) -> anyhow::Result<Host> {
+        let config = self.config.unwrap_or_default();
+
+        // Trust roots first, before anything this host builds can pull: the
+        // host pulls on behalf of every workload, and a bundle that cannot be
+        // read is a startup failure rather than a registry that rejects every
+        // pull much later.
+        crate::oci::set_extra_ca_certificates(&config.oci_ca_paths)
+            .context("failed to load the OCI CA certificates in the host config")?;
+
         let engine = if let Some(engine) = self.engine {
             engine
         } else {
@@ -1367,7 +1420,7 @@ impl HostBuilder {
             started_at: chrono::Utc::now(),
             system_monitor: Arc::new(RwLock::new(SystemMonitor::new())),
             http_handler,
-            config: self.config.unwrap_or_default(),
+            config,
             meters: self.meters,
         })
     }
@@ -1377,6 +1430,26 @@ impl HostBuilder {
 mod tests {
     use super::*;
     use crate::types::Component;
+
+    /// An unreadable CA bundle has to stop the host being built. Trust is
+    /// configured once and used much later, so accepting it here would surface
+    /// as every pull from that registry failing to verify, far from the typo
+    /// that caused it.
+    #[test]
+    fn an_unreadable_oci_ca_bundle_fails_the_build() {
+        let err = Host::builder()
+            .with_config(HostConfig {
+                oci_ca_paths: vec![PathBuf::from("/definitely/not/a/ca.pem")],
+                ..Default::default()
+            })
+            .build()
+            .expect_err("a host must not build around a CA bundle it cannot read");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("/definitely/not/a/ca.pem"),
+            "the error should name the bundle it could not read: {msg}"
+        );
+    }
 
     fn empty_workload_start_request(workload_id: &str) -> WorkloadStartRequest {
         WorkloadStartRequest {
