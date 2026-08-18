@@ -10,7 +10,7 @@ use wash_runtime::{
 };
 
 use crate::cli::{CliCommand, CliContext, CommandOutput};
-use crate::config::{HttpClientTrustRoots, load_config};
+use crate::config::{HttpClientTrustRoots, OtelProtocol, load_config};
 
 #[derive(Debug, Clone, Args)]
 pub struct HostCommand {
@@ -264,6 +264,7 @@ pub struct HostCommand {
 
     /// OTLP endpoint for host/platform telemetry.
     /// Only takes effect with --wasi-otel.
+    /// NOTE: Should we add value_parser with local function (like what is done for parse_host_plugin_spec)?
     #[arg(long = "otel-host-endpoint", env = "WASH_OTEL_HOST_ENDPOINT")]
     pub otel_host_endpoint: Option<String>,
 
@@ -271,6 +272,27 @@ pub struct HostCommand {
     /// Only takes effect with --wasi-otel.
     #[arg(long = "otel-workload-endpoint", env = "WASH_OTEL_WORKLOAD_ENDPOINT")]
     pub otel_workload_endpoint: Option<String>,
+
+    /// OTLP protocol for host/platform telemetry. Unset inherits the
+    /// OTEL_EXPORTER_OTLP_PROTOCOL env var, then defaults to grpc.
+    /// Only takes effect with --wasi-otel, and only when --otel-host-endpoint is
+    /// also set.
+    #[arg(
+        long = "otel-host-protocol",
+        env = "WASH_OTEL_HOST_PROTOCOL",
+        value_enum
+    )]
+    pub otel_host_protocol: Option<OtelProtocol>,
+
+    /// OTLP protocol for workload/application telemetry. Unset inherits
+    /// --otel-host-protocol. Only takes effect with --wasi-otel, and only when
+    /// --otel-workload-endpoint is also set.
+    #[arg(
+        long = "otel-workload-protocol",
+        env = "WASH_OTEL_WORKLOAD_PROTOCOL",
+        value_enum
+    )]
+    pub otel_workload_protocol: Option<OtelProtocol>,
 
     /// Let workloads and plugins reach the machine's own loopback through
     /// `host.wasmcloud.internal`.
@@ -580,18 +602,12 @@ impl CliCommand for HostCommand {
 
         // Enable otel plugin
         if self.wasi_otel {
-            let otel_config = plugin::wasi_otel::WasiOtelConfig::builder()
-                .maybe_host(
-                    self.otel_host_endpoint
-                        .as_ref()
-                        .map(|e| plugin::wasi_otel::OtelTarget::builder().endpoint(e).build()),
-                )
-                .maybe_workload(
-                    self.otel_workload_endpoint
-                        .as_ref()
-                        .map(|e| plugin::wasi_otel::OtelTarget::builder().endpoint(e).build()),
-                )
-                .build();
+            let otel_config = crate::config::wasi_otel_config(
+                self.otel_host_endpoint.as_deref(),
+                self.otel_host_protocol,
+                self.otel_workload_endpoint.as_deref(),
+                self.otel_workload_protocol,
+            );
             cluster_host_builder = cluster_host_builder
                 .with_plugin(Arc::new(plugin::wasi_otel::WasiOtel::new(otel_config)))?;
         }

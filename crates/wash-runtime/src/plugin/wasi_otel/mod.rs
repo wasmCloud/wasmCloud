@@ -33,11 +33,15 @@ use crate::wit::{WitInterface, WitWorld};
 
 const WASI_OTEL_ID: &str = "wasi-otel";
 
-/// OTel gRPC default per the OTLP/gRPC spec. Matches what
-/// `opentelemetry_otlp::SpanExporter::builder().with_tonic()` falls back to
-/// when no `OTEL_EXPORTER_OTLP_*_ENDPOINT` is set; duplicated here only so
-/// the log line at plugin start reflects what the exporter actually used.
+/// OTel gRPC default per the OTLP/gRPC spec.
 const DEFAULT_OTLP_GRPC_ENDPOINT: &str = "http://localhost:4317";
+
+/// OTel HTTP default per the OTLP/HTTP spec.
+const DEFAULT_OTLP_HTTP_ENDPOINT: &str = "http://localhost:4318";
+
+/// TODO: This message is temporary. His only purpose is to allow compilation and test while http
+/// protocol not supported. Must be removed before merge on main branch.
+const UNSUPPORTED_HTTP_MSG: &str = "OTLP protocol 'http/protobuf' is not yet supported; use 'grpc'";
 
 mod bindings {
     wasmtime::component::bindgen!({
@@ -48,6 +52,39 @@ mod bindings {
 
 use bindings::wasi::otel::tracing::{SpanContext as WitSpanContext, TraceFlags as WitTraceFlags};
 
+/// OTLP wire protocol used to reach an [`OtelTarget`].
+///
+/// This selects the exporter *transport* config in builder (`.with_tonic()` vs `.with_http()`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OtelProtocol {
+    /// OTLP over gRPC.
+    #[default]
+    Grpc,
+    /// OTLP over HTTP with protobuf-encoded bodies.
+    /// Not yet implemented.
+    HttpProtobuf,
+}
+
+impl std::fmt::Display for OtelProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Grpc => write!(f, "grpc"),
+            Self::HttpProtobuf => write!(f, "http/protobuf"),
+        }
+    }
+}
+
+impl OtelProtocol {
+    /// The OTLP spec's conventional default endpoint for this protocol.
+    fn default_endpoint(self) -> String {
+        match self {
+            Self::Grpc => DEFAULT_OTLP_GRPC_ENDPOINT.to_string(),
+            Self::HttpProtobuf => DEFAULT_OTLP_HTTP_ENDPOINT.to_string(),
+        }
+    }
+}
+
 /// A single OTLP destination.
 ///
 /// Construct via [`OtelTarget::builder`].
@@ -57,6 +94,8 @@ pub struct OtelTarget {
     /// OTLP endpoint, e.g. `http://localhost:4317`.
     #[builder(into)]
     pub endpoint: String,
+    /// OTLP wire protocol for this target.
+    pub protocol: Option<OtelProtocol>,
 }
 
 /// Configuration for the [`WasiOtel`] plugin.
@@ -83,12 +122,8 @@ pub struct WasiOtelConfig {
     pub service_name: String,
 
     /// Host/platform telemetry target. When unset, falls back to
-    /// `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT`,
-    /// then [`DEFAULT_OTLP_GRPC_ENDPOINT`] — preserves prior behavior.
-    ///
-    /// No host-originated signal flows through this plugin yet, so today
-    /// this only matters as the default `workload` falls back to.
-    /// TODO: Handle protocol and backward compatibility in following commit
+    /// `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT` /
+    /// `OTEL_EXPORTER_OTLP_PROTOCOL`. Preserves prior behavior for deployments that only set the standard env vars.
     pub host: Option<OtelTarget>,
 
     /// Workload/application telemetry target, used for all spans, logs, and
@@ -103,17 +138,56 @@ impl Default for WasiOtelConfig {
     }
 }
 
+/// A fully-resolved OTLP destination — a concrete endpoint and protocol.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResolvedTarget {
+    endpoint: String,
+    protocol: OtelProtocol,
+}
+
+#[derive(Clone, Debug, Default)]
+struct EnvDefaults {
+    /// From `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT`.
+    endpoint: Option<String>,
+    /// From `OTEL_EXPORTER_OTLP_PROTOCOL`.
+    protocol: Option<OtelProtocol>,
+}
+
 impl WasiOtelConfig {
-    /// Resolves the effective `(host_endpoint, workload_endpoint)` pair.
-    fn resolve_endpoints(&self, env_default_host_endpoint: String) -> (String, String) {
-        let host = self
+    /// Resolves the effective `(host, workload)` target pair.
+    fn resolve_targets(&self, env: &EnvDefaults) -> (ResolvedTarget, ResolvedTarget) {
+        let host_protocol = self
             .host
             .as_ref()
-            .map_or(env_default_host_endpoint, |t| t.endpoint.clone());
-        let workload = self
+            .and_then(|t| t.protocol)
+            .or(env.protocol)
+            .unwrap_or_default();
+        let host_endpoint = self
+            .host
+            .as_ref()
+            .map(|t| t.endpoint.clone())
+            .or_else(|| env.endpoint.clone())
+            .unwrap_or_else(|| host_protocol.default_endpoint());
+        let host = ResolvedTarget {
+            endpoint: host_endpoint,
+            protocol: host_protocol,
+        };
+
+        let workload_protocol = self
             .workload
             .as_ref()
-            .map_or_else(|| host.clone(), |t| t.endpoint.clone());
+            .and_then(|t| t.protocol)
+            .unwrap_or(host.protocol);
+        let workload_endpoint = self
+            .workload
+            .as_ref()
+            .map(|t| t.endpoint.clone())
+            .unwrap_or_else(|| host.endpoint.clone());
+        let workload = ResolvedTarget {
+            endpoint: workload_endpoint,
+            protocol: workload_protocol,
+        };
+
         (host, workload)
     }
 }
@@ -172,47 +246,46 @@ impl HostPlugin for WasiOtel {
     }
 
     async fn start(&self) -> anyhow::Result<()> {
-        // Absent an explicit `host` target, fall back to `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
-        // then `OTEL_EXPORTER_OTLP_ENDPOINT`, then the OTel gRPC default
-        // ([`DEFAULT_OTLP_GRPC_ENDPOINT`]) — preserves prior behavior for
-        // deployments that only set the standard env vars.
-        let env_default_host_endpoint = std::env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+        // Absent explicit config, fall back to the standard `OTEL_EXPORTER_OTLP_*`
+        // env vars, then a protocol-dependent default — preserves prior behavior
+        // for deployments that only set the standard env vars.
+        let env_endpoint = std::env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
             .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
-            .unwrap_or_else(|_| DEFAULT_OTLP_GRPC_ENDPOINT.to_string());
-        let (host_endpoint, workload_endpoint) =
-            self.config.resolve_endpoints(env_default_host_endpoint);
+            .ok();
+        let env_protocol = match std::env::var("OTEL_EXPORTER_OTLP_PROTOCOL") {
+            Ok(v) if v == "grpc" => Some(OtelProtocol::Grpc),
+            Ok(v) if v == "http/protobuf" => Some(OtelProtocol::HttpProtobuf),
+            Ok(v) => {
+                // An unparseable value shouldn't stop the host from booting;
+                // fall through to the next link in the chain instead.
+                tracing::warn!(
+                    value = %v,
+                    "Unrecognized OTEL_EXPORTER_OTLP_PROTOCOL value, ignoring"
+                );
+                None
+            }
+            Err(_) => None,
+        };
+        let (host, workload) = self.config.resolve_targets(&EnvDefaults {
+            endpoint: env_endpoint,
+            protocol: env_protocol,
+        });
 
         tracing::info!(
-            host_endpoint = %host_endpoint,
-            workload_endpoint = %workload_endpoint,
-            protocol = "grpc",
+            host_endpoint = %host.endpoint,
+            host_protocol = %host.protocol,
+            workload_endpoint = %workload.endpoint,
+            workload_protocol = %workload.protocol,
             "Starting WASI OTel plugin"
         );
 
         // Every signal this plugin currently exports (span/log/metric handlers
         // below) is workload-originated, so all three exporters target
-        // `workload_endpoint`. `host_endpoint` has no traffic of its own yet;
-        // it only matters as the default `workload_endpoint` falls back to.
-
-        // set up the grpc span exporter
-        let span_exporter = SpanExporter::builder()
-            .with_tonic()
-            .with_endpoint(&workload_endpoint)
-            .build()
-            .map_err(|e| anyhow::anyhow!("Failed to create span exporter: {e}"))?;
-
-        // set up the grpc log exporter
-        let log_exporter = LogExporter::builder()
-            .with_tonic()
-            .with_endpoint(&workload_endpoint)
-            .build()?;
-
-        // set up metric exporter
-        let metric_exporter = MetricExporter::builder()
-            .with_tonic()
-            .with_endpoint(&workload_endpoint)
-            .build()
-            .map_err(|e| anyhow::anyhow!("Failed to create metric exporter: {e}"))?;
+        // `workload`. `host` has no traffic of its own yet; it only matters as
+        // the default `workload` falls back to.
+        let span_exporter = build_span_exporter(&workload)?;
+        let log_exporter = build_log_exporter(&workload)?;
+        let metric_exporter = build_metric_exporter(&workload)?;
 
         // processor
         let processor = BatchLogProcessor::builder(log_exporter).build();
@@ -337,6 +410,42 @@ impl HostPlugin for WasiOtel {
 
         tracing::info!("WASI OTel plugin stopped");
         Ok(())
+    }
+}
+
+/// NOTE: Could be impl in `ResolvedTarget` instead of root level functions
+/// But the returned types SpanExporter, LogExporter, MetricExporter are not
+/// related to ResolvedTarget.
+fn build_span_exporter(target: &ResolvedTarget) -> anyhow::Result<SpanExporter> {
+    match target.protocol {
+        OtelProtocol::Grpc => SpanExporter::builder()
+            .with_tonic()
+            .with_endpoint(&target.endpoint)
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to create span exporter: {e}")),
+        OtelProtocol::HttpProtobuf => anyhow::bail!("{UNSUPPORTED_HTTP_MSG}"),
+    }
+}
+
+fn build_log_exporter(target: &ResolvedTarget) -> anyhow::Result<LogExporter> {
+    match target.protocol {
+        OtelProtocol::Grpc => LogExporter::builder()
+            .with_tonic()
+            .with_endpoint(&target.endpoint)
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to create log exporter: {e}")),
+        OtelProtocol::HttpProtobuf => anyhow::bail!("{UNSUPPORTED_HTTP_MSG}"),
+    }
+}
+
+fn build_metric_exporter(target: &ResolvedTarget) -> anyhow::Result<MetricExporter> {
+    match target.protocol {
+        OtelProtocol::Grpc => MetricExporter::builder()
+            .with_tonic()
+            .with_endpoint(&target.endpoint)
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to create metric exporter: {e}")),
+        OtelProtocol::HttpProtobuf => anyhow::bail!("{UNSUPPORTED_HTTP_MSG}"),
     }
 }
 
@@ -551,22 +660,31 @@ impl<'a> bindings::wasi::otel::types::Host for ActiveCtx<'a> {}
 mod tests {
     use super::*;
 
+    fn env(endpoint: Option<&str>, protocol: Option<OtelProtocol>) -> EnvDefaults {
+        EnvDefaults {
+            endpoint: endpoint.map(str::to_string),
+            protocol,
+        }
+    }
+
     #[test]
     fn workload_falls_back_to_explicit_host() {
         let config = WasiOtelConfig::builder()
             .host(OtelTarget::builder().endpoint("http://host:4317").build())
             .build();
-        let (host, workload) = config.resolve_endpoints("http://env-default:4317".to_string());
-        assert_eq!(host, "http://host:4317");
-        assert_eq!(workload, "http://host:4317");
+        let (host, workload) = config.resolve_targets(&env(Some("http://env-default:4317"), None));
+        assert_eq!(host.endpoint, "http://host:4317");
+        assert_eq!(workload.endpoint, "http://host:4317");
+        assert_eq!(host.protocol, OtelProtocol::Grpc);
+        assert_eq!(workload.protocol, OtelProtocol::Grpc);
     }
 
     #[test]
     fn workload_falls_back_to_env_default_host() {
         let config = WasiOtelConfig::builder().build();
-        let (host, workload) = config.resolve_endpoints("http://env-default:4317".to_string());
-        assert_eq!(host, "http://env-default:4317");
-        assert_eq!(workload, "http://env-default:4317");
+        let (host, workload) = config.resolve_targets(&env(Some("http://env-default:4317"), None));
+        assert_eq!(host.endpoint, "http://env-default:4317");
+        assert_eq!(workload.endpoint, "http://env-default:4317");
     }
 
     #[test]
@@ -579,9 +697,9 @@ mod tests {
             )
             .workload(OtelTarget::builder().endpoint("http://app:4317").build())
             .build();
-        let (host, workload) = config.resolve_endpoints("http://env-default:4317".to_string());
-        assert_eq!(host, "http://platform:4317");
-        assert_eq!(workload, "http://app:4317");
+        let (host, workload) = config.resolve_targets(&env(Some("http://env-default:4317"), None));
+        assert_eq!(host.endpoint, "http://platform:4317");
+        assert_eq!(workload.endpoint, "http://app:4317");
     }
 
     #[test]
@@ -589,8 +707,109 @@ mod tests {
         let config = WasiOtelConfig::builder()
             .workload(OtelTarget::builder().endpoint("http://app:4317").build())
             .build();
-        let (host, workload) = config.resolve_endpoints("http://env-default:4317".to_string());
-        assert_eq!(host, "http://env-default:4317");
-        assert_eq!(workload, "http://app:4317");
+        let (host, workload) = config.resolve_targets(&env(Some("http://env-default:4317"), None));
+        assert_eq!(host.endpoint, "http://env-default:4317");
+        assert_eq!(workload.endpoint, "http://app:4317");
+    }
+
+    #[test]
+    fn protocol_inherits_workload_from_host() {
+        let config = WasiOtelConfig::builder()
+            .host(
+                OtelTarget::builder()
+                    .endpoint("http://platform:4318")
+                    .protocol(OtelProtocol::HttpProtobuf)
+                    .build(),
+            )
+            // Sets only an endpoint, so its protocol should inherit from `host`.
+            .workload(OtelTarget::builder().endpoint("http://app:4317").build())
+            .build();
+        let (host, workload) = config.resolve_targets(&env(None, None));
+        assert_eq!(host.protocol, OtelProtocol::HttpProtobuf);
+        assert_eq!(workload.protocol, OtelProtocol::HttpProtobuf);
+        // The endpoint itself is NOT inherited, since workload set its own.
+        assert_eq!(workload.endpoint, "http://app:4317");
+    }
+
+    #[test]
+    fn protocol_falls_back_to_env_then_default() {
+        let config = WasiOtelConfig::builder().build();
+
+        let (host, workload) = config.resolve_targets(&env(None, Some(OtelProtocol::HttpProtobuf)));
+        assert_eq!(host.protocol, OtelProtocol::HttpProtobuf);
+        assert_eq!(workload.protocol, OtelProtocol::HttpProtobuf);
+
+        let (host, workload) = config.resolve_targets(&env(None, None));
+        assert_eq!(host.protocol, OtelProtocol::Grpc);
+        assert_eq!(workload.protocol, OtelProtocol::Grpc);
+    }
+
+    #[test]
+    fn split_protocols_resolve_independently() {
+        // This is the case the host/workload split exists for: two collectors
+        // that don't even speak the same OTLP transport.
+        let config = WasiOtelConfig::builder()
+            .host(
+                OtelTarget::builder()
+                    .endpoint("http://platform:4317")
+                    .protocol(OtelProtocol::Grpc)
+                    .build(),
+            )
+            .workload(
+                OtelTarget::builder()
+                    .endpoint("http://app:4318")
+                    .protocol(OtelProtocol::HttpProtobuf)
+                    .build(),
+            )
+            .build();
+        let (host, workload) = config.resolve_targets(&env(None, None));
+        assert_eq!(host.protocol, OtelProtocol::Grpc);
+        assert_eq!(workload.protocol, OtelProtocol::HttpProtobuf);
+    }
+
+    #[test]
+    fn protocol_dependent_default_endpoint() {
+        let config = WasiOtelConfig::builder().build();
+
+        let (host, workload) = config.resolve_targets(&env(None, None));
+        assert_eq!(host.endpoint, DEFAULT_OTLP_GRPC_ENDPOINT);
+        assert_eq!(workload.endpoint, DEFAULT_OTLP_GRPC_ENDPOINT);
+
+        let (host, workload) = config.resolve_targets(&env(None, Some(OtelProtocol::HttpProtobuf)));
+        assert_eq!(host.endpoint, DEFAULT_OTLP_HTTP_ENDPOINT);
+        assert_eq!(workload.endpoint, DEFAULT_OTLP_HTTP_ENDPOINT);
+    }
+
+    #[test]
+    fn explicit_endpoint_wins_over_protocol_dependent_default() {
+        // A non-default collector port is a legitimate choice; an explicit
+        // endpoint is honored even when it doesn't match the protocol's
+        // conventional port.
+        let config = WasiOtelConfig::builder()
+            .host(
+                OtelTarget::builder()
+                    .endpoint("http://collector:4317")
+                    .protocol(OtelProtocol::HttpProtobuf)
+                    .build(),
+            )
+            .build();
+        let (host, _workload) = config.resolve_targets(&env(None, None));
+        assert_eq!(host.endpoint, "http://collector:4317");
+        assert_eq!(host.protocol, OtelProtocol::HttpProtobuf);
+    }
+
+    #[test]
+    fn http_protobuf_exporter_construction_is_not_yet_supported() {
+        let target = ResolvedTarget {
+            endpoint: "http://localhost:4318".to_string(),
+            protocol: OtelProtocol::HttpProtobuf,
+        };
+        for err in [
+            build_span_exporter(&target).unwrap_err(),
+            build_log_exporter(&target).unwrap_err(),
+            build_metric_exporter(&target).unwrap_err(),
+        ] {
+            assert!(err.to_string().contains("not yet supported"));
+        }
     }
 }

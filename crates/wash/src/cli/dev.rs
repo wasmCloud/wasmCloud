@@ -311,20 +311,12 @@ impl CliCommand for DevCommand {
 
         // Add otel plugin if configured
         if dev_config.wasi_otel {
-            let otel_config = plugin::wasi_otel::WasiOtelConfig::builder()
-                .maybe_host(
-                    dev_config
-                        .otel_host_endpoint
-                        .as_ref()
-                        .map(|e| plugin::wasi_otel::OtelTarget::builder().endpoint(e).build()),
-                )
-                .maybe_workload(
-                    dev_config
-                        .otel_workload_endpoint
-                        .as_ref()
-                        .map(|e| plugin::wasi_otel::OtelTarget::builder().endpoint(e).build()),
-                )
-                .build();
+            let otel_config = crate::config::wasi_otel_config(
+                dev_config.otel_host_endpoint.as_deref(),
+                dev_config.otel_host_protocol,
+                dev_config.otel_workload_endpoint.as_deref(),
+                dev_config.otel_workload_protocol,
+            );
             host_builder = host_builder
                 .with_plugin(Arc::new(plugin::wasi_otel::WasiOtel::new(otel_config)))?;
             debug!("WASI OpenTelemetry plugin registered");

@@ -599,6 +599,55 @@ impl From<HttpClientTrustRoots> for wash_runtime::host::http_client::TrustRoots 
     }
 }
 
+/// OTLP wire protocol for a `wasi:otel` target. CLI/config mirror of
+/// [`wash_runtime::plugin::wasi_otel::OtelProtocol`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+pub enum OtelProtocol {
+    /// OTLP over gRPC.
+    #[serde(rename = "grpc")]
+    #[value(name = "grpc")]
+    Grpc,
+    /// OTLP over HTTP with protobuf-encoded bodies.
+    /// TODO: add support for http config. Should decide for an http lib to use first.
+    #[serde(rename = "http/protobuf", alias = "http-protobuf")]
+    #[value(name = "http/protobuf", alias = "http-protobuf")]
+    HttpProtobuf,
+}
+
+impl From<OtelProtocol> for wash_runtime::plugin::wasi_otel::OtelProtocol {
+    fn from(protocol: OtelProtocol) -> Self {
+        match protocol {
+            OtelProtocol::Grpc => Self::Grpc,
+            OtelProtocol::HttpProtobuf => Self::HttpProtobuf,
+        }
+    }
+}
+
+/// Builds a [`wash_runtime::plugin::wasi_otel::WasiOtelConfig`] from the four
+/// optional CLI/config host_endpoint, workload_endpoint, host_protocol, workload_protocol.
+pub fn wasi_otel_config(
+    host_endpoint: Option<&str>,
+    host_protocol: Option<OtelProtocol>,
+    workload_endpoint: Option<&str>,
+    workload_protocol: Option<OtelProtocol>,
+) -> wash_runtime::plugin::wasi_otel::WasiOtelConfig {
+    use wash_runtime::plugin::wasi_otel::{OtelTarget, WasiOtelConfig};
+
+    let target = |endpoint: Option<&str>, protocol: Option<OtelProtocol>| {
+        endpoint.map(|e| {
+            OtelTarget::builder()
+                .endpoint(e)
+                .maybe_protocol(protocol.map(Into::into))
+                .build()
+        })
+    };
+
+    WasiOtelConfig::builder()
+        .maybe_host(target(host_endpoint, host_protocol))
+        .maybe_workload(target(workload_endpoint, workload_protocol))
+        .build()
+}
+
 /// Build the host's [`QuotaRegistry`] from optional config/CLI overrides.
 ///
 /// One registry governs every surface a guest can hold a connection on, so
@@ -940,6 +989,16 @@ pub struct DevConfig {
     /// Example: http://app-collector:4317
     #[serde(skip_serializing_if = "Option::is_none")]
     pub otel_workload_endpoint: Option<String>,
+
+    /// OTLP protocol for host/platform telemetry: `grpc` or `http/protobuf`.
+    /// If not set, falls back to OTEL_EXPORTER_OTLP_PROTOCOL env var, then `grpc`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub otel_host_protocol: Option<OtelProtocol>,
+
+    /// OTLP protocol for workload/application telemetry: `grpc` or `http/protobuf`.
+    /// If not set, falls back to otel_host_protocol.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub otel_workload_protocol: Option<OtelProtocol>,
 
     /// Additional wasm proposals to enable on the engine, by name. Accepted
     /// names match `wash_runtime`'s `WasmProposal`: component-model-async,
@@ -1667,6 +1726,48 @@ dev:
                 .to_string()
                 .contains("dev.otel_workload_endpoint")
         );
+    }
+
+    #[test]
+    fn dev_otel_protocols_deserialize_from_yaml() {
+        let yaml = r#"
+dev:
+  wasi_otel: true
+  otel_host_protocol: grpc
+  otel_workload_protocol: http/protobuf
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let dev = config.dev();
+        assert_eq!(dev.otel_host_protocol, Some(OtelProtocol::Grpc));
+        assert_eq!(dev.otel_workload_protocol, Some(OtelProtocol::HttpProtobuf));
+        assert!(dev.validate().is_ok());
+    }
+
+    #[test]
+    fn dev_otel_protocol_accepts_kebab_case_alias() {
+        let yaml = r#"
+dev:
+  otel_workload_protocol: http-protobuf
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(
+            config.dev().otel_workload_protocol,
+            Some(OtelProtocol::HttpProtobuf)
+        );
+    }
+
+    #[test]
+    fn dev_otel_protocols_absent_deserialize_to_none() {
+        // Unset must stay `None`, not a default variant — that's what lets
+        // `wasi_otel::OtelTarget::protocol` inherit rather than pin gRPC.
+        let yaml = r#"
+dev:
+  wasi_otel: true
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let dev = config.dev();
+        assert_eq!(dev.otel_host_protocol, None);
+        assert_eq!(dev.otel_workload_protocol, None);
     }
 
     #[test]
