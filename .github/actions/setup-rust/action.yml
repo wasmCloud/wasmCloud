@@ -82,7 +82,7 @@ runs:
           --component rustfmt \
           --no-self-update
 
-    - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         # Only save the cache on main pushes; PR runs restore but never save.
         # Tar+zstd of `target/` over the GHA cache API runs a very long time on
@@ -110,7 +110,7 @@ runs:
 
     - name: Install cargo-zigbuild
       if: ${{ inputs.install-zigbuild == 'true' }}
-      uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
+      uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
       env:
         # Authenticate the action's GitHub API calls so they aren't throttled
         # by the 60/hr anonymous per-IP limit shared across hosted runners.
@@ -128,7 +128,7 @@ runs:
     # component fails with "decoding custom section ... invalid leading byte".
     # Drop once a Rust release bundles wasm-component-ld >= 0.5.23.
     - name: Install wasm-component-ld
-      uses: taiki-e/cache-cargo-install-action@417450f3c33ee20393705369577571770643d4c7 # v3.0.7
+      uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
       with:
         tool: wasm-component-ld@${{ inputs.wasm-component-ld-version }}
     - name: Override bundled wasm-component-ld
