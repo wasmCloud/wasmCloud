@@ -51,15 +51,31 @@ runs:
         # with the previous dtolnay/rust-toolchain input format.
         COMPONENTS="${COMPONENTS// /}"
         TARGETS="${TARGETS// /}"
+        # Both inputs are optional, and rustup rejects an empty value rather
+        # than ignoring it ("some components are unavailable ... ''"), so the
+        # flags have to be omitted entirely when unset. dtolnay's action built
+        # them per-item, which had the same effect.
+        args=(--profile minimal --no-self-update)
+        if [ -n "${COMPONENTS}" ]; then
+          args+=(--component "${COMPONENTS}")
+        fi
+        if [ -n "${TARGETS}" ]; then
+          args+=(--target "${TARGETS}")
+        fi
+        # Nightly regularly ships without a given component (rustfmt most
+        # often). Without --allow-downgrade rustup hard-errors on those days
+        # and takes the job down; with it, rustup falls back to the most recent
+        # nightly that has the component. dtolnay's action passed the flag for
+        # exactly this case `toolchain == 'nightly' && components` which is
+        # how wash.yml calls this action.
+        if [ "${TOOLCHAIN}" = "nightly" ] && [ -n "${COMPONENTS}" ]; then
+          args+=(--allow-downgrade)
+        fi
         # Install targets onto the named channel itself. Builds that run
         # outside the repo (e.g. a template scaffolded into a temp dir) see no
         # rust-toolchain.toml, so they use this default toolchain and need the
         # targets here.
-        rustup toolchain install "${TOOLCHAIN}" \
-          --profile minimal \
-          --component "${COMPONENTS}" \
-          --target "${TARGETS}" \
-          --no-self-update
+        rustup toolchain install "${TOOLCHAIN}" "${args[@]}"
         rustup default "${TOOLCHAIN}"
         # Also add the targets to the toolchain rustup resolves *inside* this
         # repo. A checked-in rust-toolchain.toml pins a specific channel and
@@ -77,9 +93,13 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        # --allow-downgrade for the same reason as above: nightly regularly
+        # ships without rustfmt, and without the flag rustup hard-errors on
+        # those days and fails the job before `cargo +nightly fmt` runs.
         rustup toolchain install nightly \
           --profile minimal \
           --component rustfmt \
+          --allow-downgrade \
           --no-self-update
 
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
