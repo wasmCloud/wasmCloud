@@ -135,6 +135,27 @@ fn extra_ca_certificates() -> Vec<Certificate> {
 #[deprecated = "old media type used before Wasm WG standardization"]
 const WASMCLOUD_MEDIA_TYPE: &str = "application/vnd.module.wasm.content.layer.v1+wasm";
 
+/// The `config.json` [`get_credential`] reads, or `None` when it would find no
+/// config directory at all.
+///
+/// Mirrors `docker_credential`'s own resolution, which is not public: the crate
+/// reports a file that is absent and one that is malformed as the same error,
+/// and this is what tells them apart.
+fn docker_config_path() -> Option<PathBuf> {
+    docker_config_dir(std::env::var_os("DOCKER_CONFIG"), std::env::var_os("HOME"))
+        .map(|dir| dir.join("config.json"))
+}
+
+/// [`docker_config_path`]'s directory rule, over the environment it reads.
+fn docker_config_dir(
+    docker_config: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    docker_config
+        .map(PathBuf::from)
+        .or_else(|| home.map(|home| Path::new(&home).join(".docker")))
+}
+
 /// Configuration for OCI operations
 /// ️ **Credential Precedence**:
 /// 1. Explicit credentials (if provided in this config)
@@ -392,10 +413,30 @@ impl CredentialResolver {
             Ok(DockerCredential::IdentityToken(_)) => {
                 bail!("docker credential helper returned identity token, which is not supported")
             }
+            // No credentials configured is the ordinary case for a host that
+            // pulls anonymously, not a problem to report.
             Err(
                 CredentialRetrievalError::ConfigNotFound
                 | CredentialRetrievalError::NoCredentialConfigured,
             ) => Ok(None),
+            // `docker_credential` reports an absent `~/.docker/config.json` as
+            // `ConfigReadError`, not `ConfigNotFound`: `ConfigNotFound` means
+            // there is no home directory at all, while an absent file, an
+            // unreadable one, and one that does not parse all flatten into this
+            // variant. Only the first is ordinary — a host with `HOME` set and
+            // no docker config is the normal case in a container — so the file
+            // itself is what separates "nothing to use" from "something is
+            // wrong with what you configured".
+            Err(CredentialRetrievalError::ConfigReadError) => {
+                match docker_config_path() {
+                    Some(path) if path.is_file() => warn!(
+                        path = %path.display(),
+                        "docker config exists but could not be read or parsed; pulling anonymously"
+                    ),
+                    _ => debug!("no docker config; pulling anonymously"),
+                }
+                Ok(None)
+            }
             // Edge case for macOS, shows as an error when really it's just not found
             Err(CredentialRetrievalError::HelperFailure { stdout, .. })
                 if stdout.contains("credentials not found in native keychain") =>
@@ -776,6 +817,29 @@ pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Where the docker config is looked for has to match `docker_credential`'s
+    /// own rule, since telling an absent config from an unparseable one is done
+    /// by checking that path: `DOCKER_CONFIG` wins, `$HOME/.docker` is the
+    /// fallback, and neither present means there is no config to blame.
+    #[test]
+    fn the_docker_config_directory_follows_the_credential_crates_rule() {
+        use std::ffi::OsString;
+
+        assert_eq!(
+            docker_config_dir(
+                Some(OsString::from("/etc/docker")),
+                Some(OsString::from("/home/u"))
+            ),
+            Some(PathBuf::from("/etc/docker")),
+            "DOCKER_CONFIG wins over HOME"
+        );
+        assert_eq!(
+            docker_config_dir(None, Some(OsString::from("/home/u"))),
+            Some(PathBuf::from("/home/u/.docker"))
+        );
+        assert_eq!(docker_config_dir(None, None), None);
+    }
 
     /// A bundle that cannot be read has to fail loudly at startup. Trust is
     /// configured once and used much later, so a silently skipped bundle would
