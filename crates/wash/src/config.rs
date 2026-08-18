@@ -929,6 +929,18 @@ pub struct DevConfig {
     #[serde(default)]
     pub wasi_otel: bool,
 
+    /// Optional OTEL collector endpoint for host/platform Spans, Logs, Metrics.
+    /// If not set, falls back to OTEL_EXPORTER_OTLP_TRACES_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT env var.
+    /// Example: http://platform-collector:4317
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub otel_host_endpoint: Option<String>,
+
+    /// Optional OTEL collector endpoint for workload/application Spans, Logs, Metrics.
+    /// If not set, falls back to otel_host_endpoint.
+    /// Example: http://app-collector:4317
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub otel_workload_endpoint: Option<String>,
+
     /// Additional wasm proposals to enable on the engine, by name. Accepted
     /// names match `wash_runtime`'s `WasmProposal`: component-model-async,
     /// component-model-map, gc, exception-handling, wide-arithmetic, threads,
@@ -1029,6 +1041,22 @@ impl DevConfig {
                 "dev.postgres_url",
                 url,
                 &["postgres", "postgresql"],
+                &mut errors,
+            );
+        }
+        if let Some(url) = &self.otel_host_endpoint {
+            check_url_scheme(
+                "dev.otel_host_endpoint",
+                url,
+                &["http", "https"],
+                &mut errors,
+            );
+        }
+        if let Some(url) = &self.otel_workload_endpoint {
+            check_url_scheme(
+                "dev.otel_workload_endpoint",
+                url,
+                &["http", "https"],
                 &mut errors,
             );
         }
@@ -1588,6 +1616,56 @@ dev:
         assert_eq!(
             env.get("OTEL_EXPORTER_OTLP_ENDPOINT").map(String::as_str),
             Some("http://localhost:4317")
+        );
+    }
+
+    #[test]
+    fn dev_otel_endpoints_deserialize_from_yaml() {
+        let yaml = r#"
+dev:
+  wasi_otel: true
+  otel_host_endpoint: http://platform-collector:4317
+  otel_workload_endpoint: http://app-collector:4317
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let dev = config.dev();
+        assert!(dev.wasi_otel);
+        assert_eq!(
+            dev.otel_host_endpoint.as_deref(),
+            Some("http://platform-collector:4317")
+        );
+        assert_eq!(
+            dev.otel_workload_endpoint.as_deref(),
+            Some("http://app-collector:4317")
+        );
+        assert!(dev.validate().is_ok());
+    }
+
+    #[test]
+    fn dev_otel_host_endpoint_bad_scheme_is_err() {
+        let cfg = DevConfig {
+            otel_host_endpoint: Some("nats://localhost:4317".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            cfg.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("dev.otel_host_endpoint")
+        );
+    }
+
+    #[test]
+    fn dev_otel_workload_endpoint_bad_scheme_is_err() {
+        let cfg = DevConfig {
+            otel_workload_endpoint: Some("nats://localhost:4317".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            cfg.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("dev.otel_workload_endpoint")
         );
     }
 

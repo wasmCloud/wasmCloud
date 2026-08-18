@@ -262,6 +262,16 @@ pub struct HostCommand {
     #[arg(long = "wasi-otel", default_value_t = false)]
     pub wasi_otel: bool,
 
+    /// OTLP endpoint for host/platform telemetry.
+    /// Only takes effect with --wasi-otel.
+    #[arg(long = "otel-host-endpoint", env = "WASH_OTEL_HOST_ENDPOINT")]
+    pub otel_host_endpoint: Option<String>,
+
+    /// OTLP endpoint for workload/application telemetry emitted by components via wasi:otel.
+    /// Only takes effect with --wasi-otel.
+    #[arg(long = "otel-workload-endpoint", env = "WASH_OTEL_WORKLOAD_ENDPOINT")]
+    pub otel_workload_endpoint: Option<String>,
+
     /// Let workloads and plugins reach the machine's own loopback through
     /// `host.wasmcloud.internal`.
     ///
@@ -570,8 +580,20 @@ impl CliCommand for HostCommand {
 
         // Enable otel plugin
         if self.wasi_otel {
+            let otel_config = plugin::wasi_otel::WasiOtelConfig::builder()
+                .maybe_host(
+                    self.otel_host_endpoint
+                        .as_ref()
+                        .map(|e| plugin::wasi_otel::OtelTarget::builder().endpoint(e).build()),
+                )
+                .maybe_workload(
+                    self.otel_workload_endpoint
+                        .as_ref()
+                        .map(|e| plugin::wasi_otel::OtelTarget::builder().endpoint(e).build()),
+                )
+                .build();
             cluster_host_builder = cluster_host_builder
-                .with_plugin(Arc::new(plugin::wasi_otel::WasiOtel::default()))?;
+                .with_plugin(Arc::new(plugin::wasi_otel::WasiOtel::new(otel_config)))?;
         }
 
         // Enable WASI WebGPU if requested

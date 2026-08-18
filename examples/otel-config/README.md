@@ -172,6 +172,32 @@ Open the dashboard at [http://localhost:18888](http://localhost:18888). You shou
   `http.server.response_body.size` gauge, both labelled by the Resource attributes from
   `workload.config`.
 
+## Routing host vs. workload telemetry to different backends
+
+By default all telemetry from this plugin — including every span, log, and metric this
+component emits via `wasi:otel` — goes to one OTLP endpoint (`OTEL_EXPORTER_OTLP_ENDPOINT`
+above). To split platform/host telemetry from application/workload telemetry, set
+`dev.otel_host_endpoint` and `dev.otel_workload_endpoint` in `.wash/config.yaml` instead:
+
+```yaml
+dev:
+  wasi_otel: true
+  otel_host_endpoint: http://localhost:28889     # platform-engineering collector
+  otel_workload_endpoint: http://localhost:18889 # app-team collector
+```
+
+Equivalent `wash host` flags: `--otel-host-endpoint` / `--otel-workload-endpoint` (or
+`WASH_OTEL_HOST_ENDPOINT` / `WASH_OTEL_WORKLOAD_ENDPOINT`).
+
+- Everything this component emits through `wasi:otel` is workload telemetry, so it all ships
+  to `otel_workload_endpoint`.
+- Omitting `otel_workload_endpoint` falls back to `otel_host_endpoint`.
+- Omitting both falls back to `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` /
+  `OTEL_EXPORTER_OTLP_ENDPOINT` / `http://localhost:4317`, i.e. today's single-endpoint
+  behavior is unchanged.
+- `otel_host_endpoint` has no plugin-emitted traffic of its own yet — it only matters as the
+  default `otel_workload_endpoint` falls back to.
+
 ## Multi-workload trace roll-up
 
 The single workload above already shows the two ingredients of a distributed
