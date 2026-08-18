@@ -119,13 +119,18 @@ pub struct SocketPolicy {
 }
 
 impl Default for SocketPolicy {
+    /// The same policy the `wash` CLI builds when an operator passes no socket
+    /// flags: range filtering on, egress gate counting rather than enforcing,
+    /// host loopback closed. An embedder that installs no policy of its own
+    /// gets what an operator running the host would get, rather than a
+    /// permissive one nobody chose.
     fn default() -> Self {
         Self {
             kind: GuestKind::Component,
             allowed_hosts: Arc::from([]),
             host_loopback: Arc::from([]),
             host_loopback_enabled: false,
-            egress_addrs: EgressAddressPolicy::permissive(),
+            egress_addrs: EgressAddressPolicy::default(),
             host_owned_ports: None,
             egress_mode: EgressMode::Count,
             quota: None,
@@ -768,5 +773,21 @@ mod tests {
             denied(&policy.decide(SocketAddrUse::TcpConnect, addr("127.255.255.254:5432"))),
             Some(DenyReason::HostLoopbackNotPermitted)
         );
+    }
+
+    /// An embedder that installs no policy of its own takes this default, so
+    /// it has to be the policy `wash host start` builds from its own flag
+    /// defaults. Otherwise the library is the weaker of the two and nobody
+    /// chose that.
+    #[test]
+    fn the_default_matches_the_cli_flag_defaults() {
+        let policy = SocketPolicy::default();
+        // `--deny-special-ranges` defaults on, `--deny-private-ranges` off.
+        assert_eq!(policy.egress_addrs, EgressAddressPolicy::default());
+        assert!(policy.egress_addrs.deny_special);
+        assert!(policy.egress_addrs.allow_private);
+        // `--socket-egress count`, `--allow-host-loopback` off.
+        assert_eq!(policy.egress_mode, EgressMode::Count);
+        assert!(!policy.host_loopback_enabled);
     }
 }
