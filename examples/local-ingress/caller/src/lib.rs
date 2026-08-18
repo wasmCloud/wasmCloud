@@ -10,8 +10,7 @@ use wstd::http::{Body, Client, Request, Response, StatusCode};
 ///    the real network, so the call only succeeds when the host serves it
 ///    via same-host local routing (`--http-local-routing` on the host, plus a
 ///    co-located callee whose `wasi:http/incoming-handler` config registers
-///    that authority in `host`/`host-aliases` and covers `/hello` with its
-///    optional `path` prefix).
+///    that authority in `localRoute` with "callee.internal/hello" as the path).
 #[wstd::http_server]
 async fn main(req: Request<Body>) -> Result<Response<Body>, wstd::http::Error> {
     let target = req

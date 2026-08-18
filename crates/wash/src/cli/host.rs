@@ -226,9 +226,17 @@ pub struct HostCommand {
     /// published only via `host`/`host-aliases` are never short-circuited, and
     /// `localRoute` names are never reachable from the network.
     ///
-    /// Locally routed calls bypass ingress middleware (auth, rate limits, mesh
-    /// mTLS, network policy), so enable deliberately. allowed_hosts still
-    /// applies.
+    /// SECURITY: a `localRoute` is a claim, not a proof of ownership. Any
+    /// workload on this host may claim any hostname — including a public one it
+    /// has nothing to do with — and will then receive its neighbours' requests
+    /// to that name. Because dispatch is in-memory there is no TLS: an
+    /// `https://` request to a claimed name is handed over in plaintext,
+    /// certificate never checked. The caller's allowed_hosts does not help,
+    /// since the caller legitimately lists the name it means to reach. Enable
+    /// only where every workload on the host is equally trusted.
+    ///
+    /// Locally routed calls also bypass ingress middleware (auth, rate limits,
+    /// mesh mTLS, network policy). allowed_hosts is still enforced first.
     #[arg(
         long = "http-local-routing",
         env = "WASH_HTTP_LOCAL_ROUTING",
@@ -580,7 +588,11 @@ impl CliCommand for HostCommand {
 
             let mut ingress_builder = wash_runtime::host::http::Ingress::builder(http_router, addr)
                 .outgoing_handler(outgoing_handler)
-                .local_routing(self.http_local_routing);
+                .local_routing(self.http_local_routing)
+                // The same registry the outgoing handler and socket policy draw
+                // on, so a workload's locally routed calls count against the
+                // ceiling its network egress counts against.
+                .quotas(Arc::clone(&quotas));
             if let (Some(cert_path), Some(key_path)) = (&self.tls_cert_path, &self.tls_key_path) {
                 let mut tls = wash_runtime::host::http::TlsConfig::new(cert_path, key_path);
                 if let Some(ca) = self.tls_ca_path.as_deref() {

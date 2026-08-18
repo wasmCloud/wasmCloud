@@ -49,10 +49,21 @@ Three things worth knowing:
   `allowedHosts` entry permitting the authority, which is enforced *before*
   local routing is consulted.
 
-> **Heads up:** locally routed calls bypass whatever sits on the network path
-> (ingress auth, rate limits, mesh mTLS, NetworkPolicy). The feature is off by
-> default and must be enabled per host; the caller's `allowedHosts` egress
-> policy is still enforced first.
+> **Heads up — this is a trust boundary, not just a performance switch.**
+>
+> A `localRoute` is a *claim*, not a proof of ownership. Any workload on the
+> host may claim any hostname — `api.stripe.com` included — and will then
+> receive its neighbours' requests to that name. Dispatch is in-memory, so
+> there is no TLS: an `https://` request to a claimed name is handed over in
+> plaintext with the certificate never checked. `allowedHosts` does not protect
+> the caller here, because the caller legitimately lists the name it means to
+> reach.
+>
+> Locally routed calls also bypass whatever sits on the network path (ingress
+> auth, rate limits, mesh mTLS, NetworkPolicy).
+>
+> Enable it only on a hostgroup whose workloads are equally trusted. It is off
+> by default, and both keys are required.
 
 ## Prerequisites
 

@@ -44,7 +44,7 @@ runtime:
         enabled: true
         port: 80
         # Same-host local routing: outgoing requests to a hostname a
-        # co-located workload serves (its `host`/`host-aliases` config) are
+        # co-located workload serves (`localRoute` config) are
         # served in-memory instead of leaving the pod. Renders
         # `--http-local-routing` on the host args.
         localRouting: true

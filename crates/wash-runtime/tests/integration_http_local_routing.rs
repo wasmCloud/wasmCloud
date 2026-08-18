@@ -81,12 +81,29 @@ impl OutgoingHandler for RefuseOutgoingHandler {
 }
 
 async fn start_host(local_routing: bool) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    start_host_with_quota(local_routing, None).await
+}
+
+/// `start_host`, with an optional per-workload outbound-HTTP ceiling so a test
+/// can watch local dispatch draw on the same allowance network egress draws on.
+async fn start_host_with_quota(
+    local_routing: bool,
+    outbound_http: Option<usize>,
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
     let engine = Engine::builder().build()?;
-    let ingress = Ingress::builder(DynamicRouter::default(), "127.0.0.1:0".parse()?)
+    let mut builder = Ingress::builder(DynamicRouter::default(), "127.0.0.1:0".parse()?)
         .outgoing_handler(RefuseOutgoingHandler)
-        .local_routing(local_routing)
-        .build()
-        .await?;
+        .local_routing(local_routing);
+    if let Some(outbound_http) = outbound_http {
+        builder = builder.quotas(wash_runtime::host::quota::QuotaRegistry::new(
+            wash_runtime::host::quota::QuotaLimits {
+                outbound_http,
+                ..Default::default()
+            },
+            None,
+        ));
+    }
+    let ingress = builder.build().await?;
     let bound_addr = ingress.addr();
     let host = HostBuilder::new()
         .with_engine(engine)
@@ -467,6 +484,48 @@ async fn test_local_routes_are_not_reachable_from_the_network() -> Result<()> {
     );
     let (status, _) = call_host(addr, "gateway.test", "/").await?;
     assert_eq!(status, 404, "nor at any other path");
+
+    Ok(())
+}
+
+/// Local dispatch draws on the caller's outbound-HTTP allowance, so its
+/// in-memory fan-out is bounded by the same number as its network fan-out.
+/// With a ceiling of zero effective slots every locally routed call is refused
+/// rather than served for free.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_local_dispatch_draws_on_the_outbound_http_quota() -> Result<()> {
+    // One permit, held for the life of each locally dispatched response.
+    let (addr, host) = start_host_with_quota(true, Some(1)).await?;
+
+    host.workload_start(http_workload(
+        "caller",
+        CALLER_WASM,
+        "caller.test",
+        &[],
+        &["*"],
+    ))
+    .await?;
+    host.workload_start(http_workload(
+        "callee",
+        CALLEE_WASM,
+        "callee.test",
+        &[("localRoute", "example.com")],
+        &[],
+    ))
+    .await?;
+
+    // The allowance is enough for a serial call, so this still works: the point
+    // is that the slot is taken and returned, not that it refuses outright.
+    let (status, body) = call(addr, "/example").await?;
+    assert_eq!(
+        status, 200,
+        "a call within the allowance is served in-memory: {body}"
+    );
+    let (status, body) = call(addr, "/example").await?;
+    assert_eq!(
+        status, 200,
+        "the slot must be released when the response is drained: {body}"
+    );
 
     Ok(())
 }

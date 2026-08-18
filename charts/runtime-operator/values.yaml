@@ -514,9 +514,19 @@ runtime:
         # `host`/`host-aliases` are never short-circuited, and `localRoute` names
         # are never reachable from the network.
         #
-        # Locally routed calls bypass anything on the network path (ingress
-        # auth, rate limits, mesh mTLS, NetworkPolicy), so enable deliberately.
-        # The caller's `allowedHosts` egress policy is still enforced first.
+        # SECURITY: a `localRoute` is a claim, not a proof of ownership. Any
+        # workload on this host may claim any hostname — including a public one
+        # it has nothing to do with — and will then receive its neighbours'
+        # requests to that name. Dispatch is in-memory, so there is no TLS: an
+        # `https://` request to a claimed name is handed over in plaintext with
+        # the certificate never checked, and `allowedHosts` does not help
+        # because the caller legitimately lists the name it means to reach.
+        # Enable only on a hostgroup whose workloads are equally trusted — not
+        # on a shared multi-tenant hostgroup.
+        #
+        # Locally routed calls also bypass anything on the network path (ingress
+        # auth, rate limits, mesh mTLS, NetworkPolicy). The caller's
+        # `allowedHosts` egress policy is still enforced first.
         localRouting: false
         tls:
           # -- Enable TLS for the HTTP server. Requires global.tls.enabled to be true.
