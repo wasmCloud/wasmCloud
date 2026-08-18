@@ -205,17 +205,36 @@ async fn test_component_plugin_streams_and_futures() -> Result<()> {
         start_host_with_component_plugin("127.0.0.1:0", PLUGIN_ID, KV_PLUGIN_WASM).await?;
     h.workload_start(caller_workload(host)).await?;
     let client = reqwest::Client::new();
+    const BYTES: u64 = 6 * 1024 * 1024;
 
-    // caller -> plugin stream
-    let (status, body) = req(&client, &addr, host, "/total?count=5000").await?;
-    assert_eq!(status.as_u16(), 200);
-    assert_eq!(body, "5000", "plugin should total every streamed byte");
+    // A caller->plugin `stream<u8>` big enough (6MB) that the pump must run under
+    // sustained backpressure, rather than fitting the channel's few in-flight chunks
+    let (status, body) = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        req(&client, &addr, host, &format!("/total?count={BYTES}")),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("streaming {BYTES} bytes to the plugin stalled"))??;
 
-    // plugin -> caller stream (persistent store feeds it while the caller drains)
-    let (status, body) = req(&client, &addr, host, "/emit?count=9000").await?;
     assert_eq!(status.as_u16(), 200);
     assert_eq!(
-        body, "9000",
+        body,
+        BYTES.to_string(),
+        "the plugin should total every streamed byte, not just what fit in the channel"
+    );
+
+    // plugin -> caller stream (persistent store feeds it while the caller drains)
+    let (status, body) = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        req(&client, &addr, host, &format!("/emit?count={BYTES}")),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("streaming {BYTES} bytes to the caller stalled"))??;
+
+    assert_eq!(status.as_u16(), 200);
+    assert_eq!(
+        body,
+        BYTES.to_string(),
         "caller should drain every byte the plugin emits"
     );
 
