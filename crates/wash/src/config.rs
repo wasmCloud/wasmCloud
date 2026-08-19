@@ -897,13 +897,13 @@ pub struct DevConfig {
     /// `wasi_keyvalue_path`, `wasi_keyvalue_nats_url`, `wasi_blobstore_path`).
     /// Example: nats://127.0.0.1:4222
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub data_nats_url: Option<String>,
+    pub data_nats_url: Option<url::Url>,
 
     /// Optional Redis connection URL for the WASI keyvalue plugin.
     /// Example: redis://127.0.0.1:6379
     /// When set, takes precedence over wasi_keyvalue_path.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub wasi_keyvalue_redis_url: Option<String>,
+    pub wasi_keyvalue_redis_url: Option<url::Url>,
 
     /// Optional path for WASI keyvalue filesystem storage. If not set, an in-memory store is used.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -914,7 +914,7 @@ pub struct DevConfig {
     /// Example: nats://127.0.0.1:4222
     /// When set, takes precedence over wasi_keyvalue_path but is overridden by wasi_keyvalue_redis_url.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub wasi_keyvalue_nats_url: Option<String>,
+    pub wasi_keyvalue_nats_url: Option<url::Url>,
 
     /// Optional path for WASI blobstore filesystem storage. If not set, an in-memory store is used.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -923,7 +923,7 @@ pub struct DevConfig {
     /// Optional PostgreSQL connection URL for the wasmcloud:postgres plugin.
     /// Example: postgres://user:pass@bouncer:6432?sslmode=require&pool_size=10
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub postgres_url: Option<String>,
+    pub postgres_url: Option<url::Url>,
 
     /// Enable WASI OpenTelemetry support
     #[serde(default)]
@@ -1321,12 +1321,12 @@ pub fn example_config() -> Config {
                 config: HashMap::new(),
                 name: None,
             }],
-            data_nats_url: Some("nats://127.0.0.1:4222".to_string()),
-            wasi_keyvalue_redis_url: Some("redis://127.0.0.1:6379".to_string()),
+            data_nats_url: Some(url::Url::parse("nats://127.0.0.1:4222").unwrap()),
+            wasi_keyvalue_redis_url: Some(url::Url::parse("redis://127.0.0.1:6379").unwrap()),
             wasi_keyvalue_path: Some(PathBuf::from("./data/keyvalue")),
-            wasi_keyvalue_nats_url: Some("nats://127.0.0.1:4222".to_string()),
+            wasi_keyvalue_nats_url: Some(url::Url::parse("nats://127.0.0.1:4222").unwrap()),
             wasi_blobstore_path: Some(PathBuf::from("./data/blobstore")),
-            postgres_url: Some("postgres://user:pass@127.0.0.1:5432".to_string()),
+            postgres_url: Some(url::Url::parse("postgres://user:pass@127.0.0.1:5432").unwrap()),
             ..Default::default()
         }),
         host: None,
@@ -1356,16 +1356,16 @@ pub fn example_config() -> Config {
     }
 }
 
-fn check_url_scheme(field: &str, value: &str, expected: &[&str], errors: &mut Vec<String>) {
-    match url::Url::parse(value) {
-        Ok(u) if expected.contains(&u.scheme()) => {}
-        Ok(u) => errors.push(format!(
-            "{field} '{value}' has scheme '{}', expected one of: {}",
-            u.scheme(),
-            expected.join(", ")
-        )),
-        Err(e) => errors.push(format!("{field} '{value}' is not a valid URL: {e}")),
+fn check_url_scheme(field: &str, value: &url::Url, expected: &[&str], errors: &mut Vec<String>) {
+    if expected.contains(&value.scheme()) {
+        return;
     }
+
+    errors.push(format!(
+        "{field} '{value}' has scheme '{}', expected one of: {}",
+        value.scheme(),
+        expected.join(", ")
+    ));
 }
 
 #[cfg(test)]
@@ -1706,7 +1706,7 @@ workload:
     #[test]
     fn dev_redis_wrong_scheme_is_err() {
         let cfg = DevConfig {
-            wasi_keyvalue_redis_url: Some("http://localhost:6379".to_string()),
+            wasi_keyvalue_redis_url: Some(url::Url::parse("http://localhost:6379").unwrap()),
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
@@ -1716,7 +1716,7 @@ workload:
     #[test]
     fn dev_redis_valid_scheme_is_ok() {
         let cfg = DevConfig {
-            wasi_keyvalue_redis_url: Some("redis://127.0.0.1:6379".to_string()),
+            wasi_keyvalue_redis_url: Some(url::Url::parse("redis://127.0.0.1:6379").unwrap()),
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
@@ -1725,7 +1725,7 @@ workload:
     #[test]
     fn dev_rediss_valid_scheme_is_ok() {
         let cfg = DevConfig {
-            wasi_keyvalue_redis_url: Some("rediss://127.0.0.1:6380".to_string()),
+            wasi_keyvalue_redis_url: Some(url::Url::parse("rediss://127.0.0.1:6380").unwrap()),
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
@@ -1734,7 +1734,7 @@ workload:
     #[test]
     fn dev_nats_wrong_scheme_is_err() {
         let cfg = DevConfig {
-            wasi_keyvalue_nats_url: Some("http://localhost:4222".to_string()),
+            wasi_keyvalue_nats_url: Some(url::Url::parse("http://localhost:4222").unwrap()),
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
@@ -1744,7 +1744,7 @@ workload:
     #[test]
     fn dev_nats_valid_scheme_is_ok() {
         let cfg = DevConfig {
-            wasi_keyvalue_nats_url: Some("nats://127.0.0.1:4222".to_string()),
+            wasi_keyvalue_nats_url: Some(url::Url::parse("nats://127.0.0.1:4222").unwrap()),
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
@@ -1753,7 +1753,7 @@ workload:
     #[test]
     fn dev_data_nats_wrong_scheme_is_err() {
         let cfg = DevConfig {
-            data_nats_url: Some("http://localhost:4222".to_string()),
+            data_nats_url: Some(url::Url::parse("http://localhost:4222").unwrap()),
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
@@ -1763,7 +1763,7 @@ workload:
     #[test]
     fn dev_data_nats_valid_scheme_is_ok() {
         let cfg = DevConfig {
-            data_nats_url: Some("nats://127.0.0.1:4222".to_string()),
+            data_nats_url: Some(url::Url::parse("nats://127.0.0.1:4222").unwrap()),
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
@@ -1772,7 +1772,7 @@ workload:
     #[test]
     fn dev_postgres_wrong_scheme_is_err() {
         let cfg = DevConfig {
-            postgres_url: Some("mysql://localhost/db".to_string()),
+            postgres_url: Some(url::Url::parse("mysql://localhost/db").unwrap()),
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
@@ -1782,7 +1782,7 @@ workload:
     #[test]
     fn dev_postgres_valid_scheme_is_ok() {
         let cfg = DevConfig {
-            postgres_url: Some("postgres://user:pass@localhost/db".to_string()),
+            postgres_url: Some(url::Url::parse("postgres://user:pass@localhost/db").unwrap()),
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
@@ -1791,7 +1791,7 @@ workload:
     #[test]
     fn dev_postgresql_valid_scheme_is_ok() {
         let cfg = DevConfig {
-            postgres_url: Some("postgresql://user:pass@localhost/db".to_string()),
+            postgres_url: Some(url::Url::parse("postgresql://user:pass@localhost/db").unwrap()),
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
@@ -2113,7 +2113,7 @@ host:
         let cfg = DevConfig {
             address: Some("bad-addr".to_string()),
             tls_cert_path: Some("cert.pem".into()),
-            wasi_keyvalue_redis_url: Some("http://localhost".to_string()),
+            wasi_keyvalue_redis_url: Some(url::Url::parse("http://localhost").unwrap()),
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
