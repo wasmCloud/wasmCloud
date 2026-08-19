@@ -75,8 +75,8 @@ impl RedisKeyValue {
         }
     }
 
-    pub fn from_url(url: &str) -> anyhow::Result<Self> {
-        let client = redis::Client::open(url)?;
+    pub fn from_url(url: &url::Url) -> anyhow::Result<Self> {
+        let client = redis::Client::open(url.as_str())?;
         Ok(Self::new(client))
     }
 
