@@ -405,8 +405,13 @@ pub struct HostCommand {
 
     /// PostgreSQL connection URL for the wasmcloud:postgres plugin
     /// (e.g. postgres://user:pass@bouncer:6432?sslmode=require&pool_size=10)
-    #[arg(long = "postgres-url", env = "WASH_POSTGRES_URL")]
-    pub postgres_url: Option<String>,
+    #[arg(
+        long = "postgres-url",
+        env = "WASH_POSTGRES_URL",
+        hide_env_values = true,
+        value_parser = SecretUrlParser
+    )]
+    pub postgres_url: Option<url::Url>,
 
     /// Allow insecure OCI registries: when a component pull fails over HTTPS,
     /// retry it over plain HTTP (e.g. an in-cluster registry that serves no
@@ -604,6 +609,32 @@ pub struct HostCommand {
 
 /// clap value parser for `--host-plugin`: parse one spec, flattening the
 /// `anyhow` error chain into the `String` clap wants.
+/// Parses a URL that may carry credentials. clap's default parser error
+/// repeats the raw input, so this one reports only the argument and the reason.
+#[derive(Clone)]
+struct SecretUrlParser;
+
+impl clap::builder::TypedValueParser for SecretUrlParser {
+    type Value = url::Url;
+
+    fn parse_ref(
+        &self,
+        _cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        let arg = arg.map_or_else(|| "...".to_string(), |a| a.to_string());
+        let invalid = |reason: &dyn std::fmt::Display| {
+            clap::Error::raw(
+                clap::error::ErrorKind::ValueValidation,
+                format!("invalid URL for '{arg}': {reason}\n"),
+            )
+        };
+        let value = value.to_str().ok_or_else(|| invalid(&"not valid UTF-8"))?;
+        url::Url::parse(value).map_err(|e| invalid(&e))
+    }
+}
+
 fn parse_host_plugin_spec(s: &str) -> Result<wash_runtime::plugin::ComponentPluginSpec, String> {
     s.parse().map_err(|e: anyhow::Error| format!("{e:#}"))
 }
