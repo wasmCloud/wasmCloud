@@ -31,6 +31,17 @@ pub fn run(workspace: &Path) -> Result<()> {
         tempfile::tempdir().context("failed to create scratch dir for proto descriptor")?;
     let descriptor_file = tempdir.path().join("runtime.bin");
 
+    // Clear the directory rather than writing over it: a renamed or deleted
+    // proto would otherwise leave its stale `.rs` behind, tracked and
+    // unchanged, and the CI drift check would pass on output that no longer
+    // matches the protos.
+    match fs::remove_dir_all(&generated_dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(e).with_context(|| format!("failed to clear {}", generated_dir.display()));
+        }
+    }
     fs::create_dir_all(&generated_dir)
         .with_context(|| format!("failed to create {}", generated_dir.display()))?;
 
@@ -51,6 +62,8 @@ pub fn run(workspace: &Path) -> Result<()> {
         .build(&[".wasmcloud.runtime.v2"])
         .context("failed to build final protos")?;
 
+    // prost-build stamps its own `@generated` header; pbjson-build emits
+    // none, so add the matching one here.
     let serde_file = generated_dir.join("wasmcloud.runtime.v2.serde.rs");
     let body = fs::read_to_string(&serde_file)
         .with_context(|| format!("failed to read {}", serde_file.display()))?;
