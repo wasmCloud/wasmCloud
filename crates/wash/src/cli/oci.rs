@@ -44,10 +44,8 @@ impl RegistryArgs {
         // at startup. Fails rather than falling back to the public roots, which
         // would surface as a verification error against the registry the
         // bundle was meant to cover.
-        if !self.ca_paths.is_empty() {
-            wash_runtime::oci::set_extra_ca_certificates(&self.ca_paths)
-                .context("failed to load --ca-path CA certificates")?;
-        }
+        wash_runtime::oci::set_extra_ca_certificates(&self.ca_paths)
+            .context("failed to load --ca-path CA certificates")?;
 
         let mut oci_config = OciConfig::new_with_cache(ctx.cache_dir().join(OCI_CACHE_DIR));
         oci_config.insecure = self.insecure;

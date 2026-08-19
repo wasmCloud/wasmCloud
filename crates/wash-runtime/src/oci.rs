@@ -38,7 +38,7 @@ use oci_client::{
 use oci_wasm::{ToConfig, WASM_LAYER_MEDIA_TYPE, WasmConfig};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
     sync::OnceLock,
     time::Duration,
@@ -55,7 +55,23 @@ use tracing::{debug, instrument, warn};
 ///
 /// Empty unless [`set_extra_ca_certificates`] is called, which keeps the
 /// default behavior exactly as it was: the roots `oci-client` compiles in.
-static EXTRA_CA_CERTIFICATES: OnceLock<Vec<Certificate>> = OnceLock::new();
+static EXTRA_CA_CERTIFICATES: OnceLock<InstalledTrust> = OnceLock::new();
+
+/// The one set of extra trust roots a process runs with, and the configuration
+/// that asked for it.
+///
+/// Keyed by the paths rather than by the bytes read from them, because a bundle
+/// on disk is not immutable: cert-manager and projected Kubernetes secrets
+/// rewrite one in place, and the two calls that install a host's trust — the
+/// CLI before it pulls its host component plugins, the host it then builds —
+/// are separated by exactly those pulls. Comparing content would turn a
+/// rotation landing in that window into a startup failure.
+struct InstalledTrust {
+    /// A set, so the same bundles listed in a different order are the same
+    /// configuration.
+    paths: BTreeSet<PathBuf>,
+    certs: Vec<Certificate>,
+}
 
 /// Trust the PEM CA bundles at `paths` for every subsequent OCI pull or push.
 ///
@@ -66,13 +82,84 @@ static EXTRA_CA_CERTIFICATES: OnceLock<Vec<Certificate>> = OnceLock::new();
 ///
 /// Fails when a bundle cannot be read or does not parse, rather than starting
 /// a host that will reject every pull from the registry it was pointed at.
+///
+/// Naming the same bundles twice is a no-op, and does not re-read them: a
+/// `wash host` installs its CA paths before pulling its host component plugins,
+/// then the host it builds applies the same
+/// [`HostConfig::oci_ca_paths`](crate::host::HostConfig) again. *Different*
+/// paths arriving second fail, because the store holds one set for the whole
+/// process and that caller would otherwise be told its trust was configured
+/// when it was not.
 pub fn set_extra_ca_certificates(paths: &[PathBuf]) -> Result<()> {
+    install_ca_certificates(&EXTRA_CA_CERTIFICATES, paths)
+}
+
+/// [`set_extra_ca_certificates`] against a given store.
+///
+/// Split out to take the store as an argument: the real one can only be written
+/// once per process, so a test that exercised it would own it for the whole
+/// test binary.
+fn install_ca_certificates(store: &OnceLock<InstalledTrust>, paths: &[PathBuf]) -> Result<()> {
+    let requested: BTreeSet<PathBuf> = paths.iter().cloned().collect();
+    if requested.is_empty() {
+        // Claiming the store with nothing would lock out the caller that does
+        // have trust roots — and tell it that it succeeded. Say so when trust
+        // configured elsewhere in this process is in force regardless, because
+        // this caller asked for the compiled-in roots and is not getting them.
+        if let Some(installed) = store.get() {
+            warn!(
+                paths = %display_paths(&installed.paths),
+                "no OCI CA certificates requested, but extra trust roots configured earlier in \
+                 this process apply to every OCI client in it"
+            );
+        }
+        return Ok(());
+    }
+    // Already installed by an earlier caller naming the same bundles. Returning
+    // here rather than re-reading is what keeps a rotation landing between the
+    // two calls from failing the second one.
+    if let Some(installed) = store.get() {
+        return conflicting_trust(&installed.paths, &requested);
+    }
     let certs = load_ca_certificates(paths)?;
     debug!(count = certs.len(), "trusting extra OCI CA certificates");
-    if EXTRA_CA_CERTIFICATES.set(certs).is_err() {
-        warn!("extra OCI CA certificates were already set; keeping the first set");
+    match store.set(InstalledTrust {
+        paths: requested,
+        certs,
+    }) {
+        Ok(()) => Ok(()),
+        // Lost a race to another caller; the winner decides. `set` failing
+        // means the store is claimed, so `get` is `Some`.
+        Err(rejected) => match store.get() {
+            Some(installed) => conflicting_trust(&installed.paths, &rejected.paths),
+            None => Ok(()),
+        },
     }
-    Ok(())
+}
+
+/// Whether trust already installed covers what a caller asked for.
+fn conflicting_trust(installed: &BTreeSet<PathBuf>, requested: &BTreeSet<PathBuf>) -> Result<()> {
+    if installed == requested {
+        return Ok(());
+    }
+    bail!(
+        "different OCI CA certificates are already configured for this process ({}); the trust \
+         store holds one set, so {} would not take effect",
+        display_paths(installed),
+        display_paths(requested)
+    )
+}
+
+/// Paths as an operator wrote them, for an error they have to compare by eye.
+///
+/// `{:?}` on a `Path` escapes its separators, which turns a Windows path into
+/// something that does not match what is in the config it came from.
+fn display_paths(paths: &BTreeSet<PathBuf>) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Read and parse PEM CA bundles from disk. Split from
@@ -128,12 +215,36 @@ fn validate_ca_bundle(data: &[u8]) -> Result<()> {
 
 /// The extra CA certificates configured for this process, for a `ClientConfig`.
 fn extra_ca_certificates() -> Vec<Certificate> {
-    EXTRA_CA_CERTIFICATES.get().cloned().unwrap_or_default()
+    EXTRA_CA_CERTIFICATES
+        .get()
+        .map(|trust| trust.certs.clone())
+        .unwrap_or_default()
 }
 
 #[allow(deprecated)]
 #[deprecated = "old media type used before Wasm WG standardization"]
 const WASMCLOUD_MEDIA_TYPE: &str = "application/vnd.module.wasm.content.layer.v1+wasm";
+
+/// The `config.json` [`get_credential`] reads, or `None` when it would find no
+/// config directory at all.
+///
+/// Mirrors `docker_credential`'s own resolution, which is not public: the crate
+/// reports a file that is absent and one that is malformed as the same error,
+/// and this is what tells them apart.
+fn docker_config_path() -> Option<PathBuf> {
+    docker_config_dir(std::env::var_os("DOCKER_CONFIG"), std::env::var_os("HOME"))
+        .map(|dir| dir.join("config.json"))
+}
+
+/// [`docker_config_path`]'s directory rule, over the environment it reads.
+fn docker_config_dir(
+    docker_config: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    docker_config
+        .map(PathBuf::from)
+        .or_else(|| home.map(|home| Path::new(&home).join(".docker")))
+}
 
 /// Configuration for OCI operations
 /// ️ **Credential Precedence**:
@@ -392,10 +503,30 @@ impl CredentialResolver {
             Ok(DockerCredential::IdentityToken(_)) => {
                 bail!("docker credential helper returned identity token, which is not supported")
             }
+            // No credentials configured is the ordinary case for a host that
+            // pulls anonymously, not a problem to report.
             Err(
                 CredentialRetrievalError::ConfigNotFound
                 | CredentialRetrievalError::NoCredentialConfigured,
             ) => Ok(None),
+            // `docker_credential` reports an absent `~/.docker/config.json` as
+            // `ConfigReadError`, not `ConfigNotFound`: `ConfigNotFound` means
+            // there is no home directory at all, while an absent file, an
+            // unreadable one, and one that does not parse all flatten into this
+            // variant. Only the first is ordinary — a host with `HOME` set and
+            // no docker config is the normal case in a container — so the file
+            // itself is what separates "nothing to use" from "something is
+            // wrong with what you configured".
+            Err(CredentialRetrievalError::ConfigReadError) => {
+                match docker_config_path() {
+                    Some(path) if path.is_file() => warn!(
+                        path = %path.display(),
+                        "docker config exists but could not be read or parsed; pulling anonymously"
+                    ),
+                    _ => debug!("no docker config; pulling anonymously"),
+                }
+                Ok(None)
+            }
             // Edge case for macOS, shows as an error when really it's just not found
             Err(CredentialRetrievalError::HelperFailure { stdout, .. })
                 if stdout.contains("credentials not found in native keychain") =>
@@ -777,6 +908,29 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Where the docker config is looked for has to match `docker_credential`'s
+    /// own rule, since telling an absent config from an unparseable one is done
+    /// by checking that path: `DOCKER_CONFIG` wins, `$HOME/.docker` is the
+    /// fallback, and neither present means there is no config to blame.
+    #[test]
+    fn the_docker_config_directory_follows_the_credential_crates_rule() {
+        use std::ffi::OsString;
+
+        assert_eq!(
+            docker_config_dir(
+                Some(OsString::from("/etc/docker")),
+                Some(OsString::from("/home/u"))
+            ),
+            Some(PathBuf::from("/etc/docker")),
+            "DOCKER_CONFIG wins over HOME"
+        );
+        assert_eq!(
+            docker_config_dir(None, Some(OsString::from("/home/u"))),
+            Some(PathBuf::from("/home/u/.docker"))
+        );
+        assert_eq!(docker_config_dir(None, None), None);
+    }
+
     /// A bundle that cannot be read has to fail loudly at startup. Trust is
     /// configured once and used much later, so a silently skipped bundle would
     /// surface as every pull from that registry failing to verify, far from
@@ -789,6 +943,101 @@ mod tests {
             err.to_string().contains("CA bundle"),
             "the error should name what it failed to read, got: {err}"
         );
+    }
+
+    /// An empty configuration must leave the store unclaimed. It can only be
+    /// written once, so an empty set taking it would lock out the caller that
+    /// does have trust roots — and that caller would be told it succeeded.
+    #[test]
+    fn no_ca_paths_leaves_the_trust_store_unclaimed() {
+        set_extra_ca_certificates(&[]).expect("an empty set is not a failure");
+        assert!(
+            extra_ca_certificates().is_empty(),
+            "nothing to install must install nothing"
+        );
+    }
+
+    /// The ordinary double-apply: `wash host start` installs its CA paths
+    /// before pulling its host component plugins, then the host it builds
+    /// applies the same [`HostConfig::oci_ca_paths`] again. In any order — the
+    /// two callers hold the same configuration, not the same `Vec`.
+    #[test]
+    fn the_same_bundles_installed_twice_are_a_no_op() {
+        let dir = TempDir::new().unwrap();
+        let paths = [written_bundle(&dir, "a.pem"), written_bundle(&dir, "b.pem")];
+        let store = OnceLock::new();
+
+        install_ca_certificates(&store, &paths).expect("the first configuration installs");
+        let reversed = [paths[1].clone(), paths[0].clone()];
+        install_ca_certificates(&store, &reversed).expect("the same bundles are not a conflict");
+        assert_eq!(store.get().map(|t| t.certs.len()), Some(2));
+    }
+
+    /// The window between those two calls is a network pull of every host
+    /// component plugin, and the bundle on disk is not immutable: cert-manager
+    /// and projected Kubernetes secrets rewrite one in place. A rotation
+    /// landing in that window must not fail the host's startup.
+    #[test]
+    fn a_bundle_rewritten_between_two_installs_is_still_the_same_configuration() {
+        let dir = TempDir::new().unwrap();
+        let path = written_bundle(&dir, "ca.pem");
+        let store = OnceLock::new();
+
+        install_ca_certificates(&store, std::slice::from_ref(&path)).expect("the first install");
+        std::fs::write(&path, test_certificate_pem("rotated.test")).unwrap();
+        install_ca_certificates(&store, std::slice::from_ref(&path))
+            .expect("a rotated bundle at the same path is the same configuration");
+    }
+
+    /// Different bundles cannot be honored — the store holds one set for the
+    /// whole process — so the caller has to hear that, rather than be told its
+    /// trust was configured and watch every pull fail verification.
+    #[test]
+    fn conflicting_trust_is_an_error_not_a_silent_first_wins() {
+        let dir = TempDir::new().unwrap();
+        let (first, second) = (
+            written_bundle(&dir, "first.pem"),
+            written_bundle(&dir, "second.pem"),
+        );
+        let store = OnceLock::new();
+
+        install_ca_certificates(&store, std::slice::from_ref(&first))
+            .expect("the first bundle installs");
+        let err = install_ca_certificates(&store, std::slice::from_ref(&second))
+            .expect_err("different bundles must not be silently dropped");
+        let msg = err.to_string();
+        // Both halves, because the operator's next move is to compare them —
+        // spelled as they are on disk, which is what a Windows path escaped by
+        // `{:?}` would not be.
+        for named in [&first, &second] {
+            assert!(
+                msg.contains(named.to_str().unwrap()),
+                "the error should name {}: {msg}",
+                named.display()
+            );
+        }
+        // The first bundle is what is trusted, and it is intact.
+        assert_eq!(store.get().map(|t| t.certs.len()), Some(1));
+    }
+
+    /// A path in an error has to read as it does in the configuration it came
+    /// from. `{:?}` escapes separators, so a Windows path came out doubled and
+    /// matched nothing an operator could search for. Asserted with a
+    /// backslash-bearing path, which is an ordinary filename on Unix, so the
+    /// property holds on every platform this runs on.
+    #[test]
+    fn paths_in_errors_are_not_debug_escaped() {
+        let windows_ish = PathBuf::from(r"C:\etc\pki\ca.pem");
+        let rendered = display_paths(&BTreeSet::from([windows_ish.clone()]));
+        assert_eq!(rendered, windows_ish.display().to_string());
+        assert!(!rendered.contains(r"\\"), "separators must not be doubled");
+    }
+
+    /// A self-signed certificate written to `name` under `dir`.
+    fn written_bundle(dir: &TempDir, name: &str) -> PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, test_certificate_pem(name)).unwrap();
+        path
     }
 
     /// A self-signed certificate, PEM encoded, for the bundles below.

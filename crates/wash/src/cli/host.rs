@@ -448,18 +448,18 @@ impl CliCommand for HostCommand {
         .context("failed to connect to NATS")?;
         let data_nats_client = Arc::new(data_nats_client);
 
-        // Parse the CA bundles before anything pulls, and fail if any is
-        // invalid.
-        if !self.oci_ca_paths.is_empty() {
-            wash_runtime::oci::set_extra_ca_certificates(&self.oci_ca_paths)
-                .context("failed to load --oci-ca-path CA certificates")?;
-        }
-
         let host_config = wash_runtime::host::HostConfig {
             allow_oci_insecure: self.allow_insecure_registries,
             oci_pull_timeout: Some(self.registry_pull_timeout),
             oci_cache_dir: self.oci_cache_dir.clone(),
+            oci_ca_paths: self.oci_ca_paths.clone(),
         };
+
+        // The host applies these itself when it is built, but host component
+        // plugins are pulled before that. Install them here too — the same
+        // bundles a second time are a no-op — and fail now if any is invalid.
+        wash_runtime::oci::set_extra_ca_certificates(&host_config.oci_ca_paths)
+            .context("failed to load --oci-ca-path CA certificates")?;
 
         let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)

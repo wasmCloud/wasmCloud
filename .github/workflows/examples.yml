@@ -49,9 +49,9 @@ jobs:
           {"key": "blobby",                   "workdir": "examples/blobby",                              "image": "ghcr.io/wasmcloud/components/blobby"},
           {"key": "grpc-hello-world-client",  "filter": "grpc-hello-world",   "workdir": "examples/grpc-hello-world/component-client", "image": "ghcr.io/wasmcloud/components/grpc-hello-world-client", "needs_protoc": true},
           {"key": "grpc-hello-world-server",  "filter": "grpc-hello-world",   "workdir": "examples/grpc-hello-world/component-server", "image": "ghcr.io/wasmcloud/components/grpc-hello-world-server", "needs_protoc": true},
-          {"key": "http-hello-world-persistent-storage", "workdir": "examples/http-hello-world-persistent-storage"},
           {"key": "local-ingress-callee",     "filter": "local-ingress",      "workdir": "examples/local-ingress/callee"},
           {"key": "local-ingress-caller",     "filter": "local-ingress",      "workdir": "examples/local-ingress/caller"},
+          {"key": "http-hello-world-persistent-storage", "workdir": "examples/http-hello-world-persistent-storage", "image": "ghcr.io/wasmcloud/components/http-hello-world-persistent-storage"},
           {"key": "oci-registry",            "workdir": "examples/oci-registry",                       "image": "ghcr.io/wasmcloud/components/oci-registry"},
           {"key": "otel-config",              "workdir": "examples/otel-config",                         "image": "ghcr.io/wasmcloud/components/otel-config"},
           {"key": "qrcode",                   "workdir": "examples/qrcode",                              "image": "ghcr.io/wasmcloud/components/qrcode"}
