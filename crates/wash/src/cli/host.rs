@@ -366,7 +366,7 @@ pub struct HostCommand {
     /// PostgreSQL connection URL for the wasmcloud:postgres plugin
     /// (e.g. postgres://user:pass@bouncer:6432?sslmode=require&pool_size=10)
     #[arg(long = "postgres-url", env = "WASH_POSTGRES_URL")]
-    pub postgres_url: Option<String>,
+    pub postgres_url: Option<url::Url>,
 
     /// Allow insecure OCI registries: when a component pull fails over HTTPS,
     /// retry it over plain HTTP (e.g. an in-cluster registry that serves no
