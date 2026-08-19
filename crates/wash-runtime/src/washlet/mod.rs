@@ -445,6 +445,26 @@ async fn host_heartbeat(host: &impl HostApi) -> anyhow::Result<types::v2::HostHe
     Ok(hb.into())
 }
 
+/// A workload that could not be started, reported to the scheduler and to this
+/// host's own log.
+///
+/// The response travels back to whoever asked, and nothing else here would say
+/// why: an image the host cannot pull — a registry behind a CA it does not
+/// trust, a reference that does not exist — otherwise leaves no trace on the
+/// machine that failed to pull it.
+fn workload_start_error(workload_id: &str, message: String) -> types::v2::WorkloadStartResponse {
+    // `reason`, not `message`: `message` is the field tracing gives the event's
+    // own text, and a second one under that name displaces it.
+    error!(workload_id, reason = message, "failed to start workload");
+    types::v2::WorkloadStartResponse {
+        workload_status: Some(types::v2::WorkloadStatus {
+            workload_id: workload_id.to_string(),
+            workload_state: types::v2::WorkloadState::Error.into(),
+            message,
+        }),
+    }
+}
+
 #[instrument(skip_all, fields(
     workload_id = %req.workload_id,
     workload.name=?req.workload.as_ref().map(|w| &w.name).unwrap_or(&"<none>".to_string()),
@@ -488,30 +508,19 @@ async fn workload_start(
                     format!("failed to pull image for component '{}'", component.name)
                 }) {
                     Ok(loaded) => loaded,
-                    Err(e) => {
-                        return Ok(types::v2::WorkloadStartResponse {
-                            workload_status: Some(types::v2::WorkloadStatus {
-                                workload_id: workload_id.clone(),
-                                workload_state: types::v2::WorkloadState::Error.into(),
-                                message: format!("{e:#}"),
-                            }),
-                        });
-                    }
+                    Err(e) => return Ok(workload_start_error(&workload_id, format!("{e:#}"))),
                 };
             let local_resources = match component.local_resources.clone() {
                 Some(lr) => match crate::types::LocalResources::try_from(lr) {
                     Ok(lr) => lr,
                     Err(e) => {
-                        return Ok(types::v2::WorkloadStartResponse {
-                            workload_status: Some(types::v2::WorkloadStatus {
-                                workload_id: workload_id.clone(),
-                                workload_state: types::v2::WorkloadState::Error.into(),
-                                message: format!(
-                                    "invalid local_resources for component {}: {e:#}",
-                                    component.name
-                                ),
-                            }),
-                        });
+                        return Ok(workload_start_error(
+                            &workload_id,
+                            format!(
+                                "invalid local_resources for component {}: {e:#}",
+                                component.name
+                            ),
+                        ));
                     }
                 },
                 None => crate::types::LocalResources::default(),
@@ -544,27 +553,16 @@ async fn workload_start(
             .context("failed to pull image for the workload service")
         {
             Ok(loaded) => loaded,
-            Err(e) => {
-                return Ok(types::v2::WorkloadStartResponse {
-                    workload_status: Some(types::v2::WorkloadStatus {
-                        workload_id: workload_id.clone(),
-                        workload_state: types::v2::WorkloadState::Error.into(),
-                        message: format!("{e:#}"),
-                    }),
-                });
-            }
+            Err(e) => return Ok(workload_start_error(&workload_id, format!("{e:#}"))),
         };
         let local_resources = match service.local_resources.clone() {
             Some(lr) => match crate::types::LocalResources::try_from(lr) {
                 Ok(lr) => lr,
                 Err(e) => {
-                    return Ok(types::v2::WorkloadStartResponse {
-                        workload_status: Some(types::v2::WorkloadStatus {
-                            workload_id: workload_id.clone(),
-                            workload_state: types::v2::WorkloadState::Error.into(),
-                            message: format!("invalid local_resources for service: {e:#}"),
-                        }),
-                    });
+                    return Ok(workload_start_error(
+                        &workload_id,
+                        format!("invalid local_resources for service: {e:#}"),
+                    ));
                 }
             },
             None => crate::types::LocalResources::default(),
