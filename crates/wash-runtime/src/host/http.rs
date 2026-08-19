@@ -183,7 +183,11 @@ impl IngressRoute {
 /// hostname, including a bare path — a `localRoute` always names a host,
 /// because "every authority, this path" would let one workload intercept a
 /// co-located caller's traffic to any destination.
-fn parse_local_route(entry: &str) -> Option<IngressRoute> {
+///
+/// Public so a host front-end can validate `localRoute` entries at
+/// configuration time rather than discovering a typo when the router silently
+/// drops it, such as when using with `wash dev`.
+pub fn parse_local_route(entry: &str) -> Option<IngressRoute> {
     let entry = entry.trim();
     if entry.is_empty() {
         return None;
