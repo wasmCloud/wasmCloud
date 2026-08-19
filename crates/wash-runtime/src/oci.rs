@@ -108,7 +108,7 @@ fn install_ca_certificates(store: &OnceLock<InstalledTrust>, paths: &[PathBuf]) 
         // this caller asked for the compiled-in roots and is not getting them.
         if let Some(installed) = store.get() {
             warn!(
-                paths = ?installed.paths,
+                paths = %display_paths(&installed.paths),
                 "no OCI CA certificates requested, but extra trust roots configured earlier in \
                  this process apply to every OCI client in it"
             );
@@ -143,9 +143,23 @@ fn conflicting_trust(installed: &BTreeSet<PathBuf>, requested: &BTreeSet<PathBuf
         return Ok(());
     }
     bail!(
-        "different OCI CA certificates are already configured for this process ({installed:?}); \
-         the trust store holds one set, so {requested:?} would not take effect"
+        "different OCI CA certificates are already configured for this process ({}); the trust \
+         store holds one set, so {} would not take effect",
+        display_paths(installed),
+        display_paths(requested)
     )
+}
+
+/// Paths as an operator wrote them, for an error they have to compare by eye.
+///
+/// `{:?}` on a `Path` escapes its separators, which turns a Windows path into
+/// something that does not match what is in the config it came from.
+fn display_paths(paths: &BTreeSet<PathBuf>) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Read and parse PEM CA bundles from disk. Split from
@@ -928,7 +942,9 @@ mod tests {
         let err = install_ca_certificates(&store, std::slice::from_ref(&second))
             .expect_err("different bundles must not be silently dropped");
         let msg = err.to_string();
-        // Both halves, because the operator's next move is to compare them.
+        // Both halves, because the operator's next move is to compare them —
+        // spelled as they are on disk, which is what a Windows path escaped by
+        // `{:?}` would not be.
         for named in [&first, &second] {
             assert!(
                 msg.contains(named.to_str().unwrap()),
@@ -938,6 +954,19 @@ mod tests {
         }
         // The first bundle is what is trusted, and it is intact.
         assert_eq!(store.get().map(|t| t.certs.len()), Some(1));
+    }
+
+    /// A path in an error has to read as it does in the configuration it came
+    /// from. `{:?}` escapes separators, so a Windows path came out doubled and
+    /// matched nothing an operator could search for. Asserted with a
+    /// backslash-bearing path, which is an ordinary filename on Unix, so the
+    /// property holds on every platform this runs on.
+    #[test]
+    fn paths_in_errors_are_not_debug_escaped() {
+        let windows_ish = PathBuf::from(r"C:\etc\pki\ca.pem");
+        let rendered = display_paths(&BTreeSet::from([windows_ish.clone()]));
+        assert_eq!(rendered, windows_ish.display().to_string());
+        assert!(!rendered.contains(r"\\"), "separators must not be doubled");
     }
 
     /// A self-signed certificate written to `name` under `dir`.
