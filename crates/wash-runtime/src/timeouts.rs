@@ -3,34 +3,9 @@
 //! Every timeout is declared in the single [`declare_timeouts!`] invocation
 //! below and read through a generated accessor. Add a new timeout by adding one
 //! line there.
-//!
-//! [`crate::engine::abandon::pause_threshold`] is the exception: a sampling
-//! tolerance whose default is derived rather than declared, reading its
-//! override through [`env_millis`].
 
 use std::sync::LazyLock;
 use std::time::Duration;
-
-/// Parse `var` as whole milliseconds, falling back to `default` if it is unset
-/// or unparseable (with a warning, so a typo is not swallowed). Anything
-/// expressible in seconds belongs in [`declare_timeouts!`] instead.
-pub(crate) fn env_millis(var: &str, default: Duration) -> Duration {
-    match std::env::var(var) {
-        Ok(v) => match v.parse::<u64>() {
-            Ok(millis) => Duration::from_millis(millis),
-            Err(_) => {
-                tracing::warn!(
-                    var,
-                    value = %v,
-                    default_millis = default.as_millis() as u64,
-                    "ignoring unparseable override (want whole milliseconds)"
-                );
-                default
-            }
-        },
-        Err(_) => default,
-    }
-}
 
 /// Parse `var` as whole seconds, falling back to `default_secs` if it is unset.
 /// A set-but-unparseable value also falls back, with a warning — silently

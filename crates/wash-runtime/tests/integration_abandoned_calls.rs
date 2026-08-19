@@ -81,8 +81,8 @@ const SPIN_BOUND: Duration = Duration::from_secs(20);
 /// read, so every test must want the same values and must call this before
 /// starting a host.
 /// Every test here pins or starves CPUs and then makes timing assertions, so
-/// two at once on a small CI runner can hold each other's guests off-core past
-/// the pause threshold. The returned guard runs them one at a time.
+/// two at once on a small CI runner distort the very timing the assertions
+/// depend on. The returned guard runs them one at a time.
 fn abandonment_env() -> std::sync::MutexGuard<'static, ()> {
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _ = tracing_subscriber::fmt()
@@ -97,13 +97,6 @@ fn abandonment_env() -> std::sync::MutexGuard<'static, ()> {
         std::env::set_var("WASH_PLUGIN_CAPABILITY_CALL_TIMEOUT_SECS", &deadline);
         std::env::set_var("WASH_ABANDONED_CALL_GRACE_SECS", &GRACE_SECS.to_string());
         std::env::set_var("WASH_ABANDONED_CALL_ESCALATION_SECS", "3");
-        // CI runners are small and this binary's tests deliberately pin cores,
-        // so a pinned guest can go unscheduled long enough for the default
-        // 500ms pause threshold to read the gap as a yield and reset its
-        // stretch — postponing the escalation past the probes' patience. The
-        // tests that depend on real pauses being seen (slow guest, SSE) pause
-        // for 5s+ per await, so 2s keeps them intact.
-        std::env::set_var("WASH_ABANDONED_CALL_PAUSE_THRESHOLD_MS", "2000");
     });
     SERIAL
         .lock()
@@ -859,6 +852,60 @@ async fn an_abandoned_co_tenant_does_not_trap_a_chatty_healthy_stream() -> Resul
         );
         previous = now;
         tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+    Ok(())
+}
+
+/// A guest that awaits repeatedly in **short hops** must survive being
+/// abandoned, exactly like the single-long-await guest above.
+///
+/// Each hop wakes onto an expired epoch deadline, so the store's fires land
+/// one hop apart — a wake pattern that wall-clock sampling cannot tell from a
+/// pinned guest inside any single window. What protects it is the per-fire
+/// credit cap: its only call is abandoned (so the wanted-call gate does not
+/// apply), but each fire can only prove one sampling window of execution, so
+/// the credit stays far below the grace for as long as the guest actually
+/// spends its time awaiting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guest_awaiting_in_short_hops_survives_being_abandoned() -> Result<()> {
+    let _serial = abandonment_env();
+    let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
+    start_sleeper(&host, "hoppy-svc", true).await?;
+    let client = client()?;
+
+    assert_eq!(served(&client, addr, "hoppy-svc").await?, 1);
+
+    // Eight 400ms hops ≈ 3.2s of constant short awaits, whose client walks
+    // away almost at once: the call is abandoned past its grace while the
+    // guest is still hopping, with no other call registered to shield it.
+    let mut gone = Box::pin(
+        client
+            .get(format!("http://{addr}/chatter?hops=8&hop_ms=400"))
+            .header("HOST", "hoppy-svc")
+            .send(),
+    );
+    tokio::select! {
+        _ = &mut gone => anyhow::bail!("the chatter answered before the client gave up"),
+        () = tokio::time::sleep(Duration::from_millis(300)) => {}
+    }
+    drop(gone);
+
+    // Stay quiet while the guest hops: a request in this window would re-arm
+    // the epoch deadline and shield the hops from firing at all, and the
+    // scenario is precisely an otherwise-idle store. Then the same instance
+    // must still be serving, its count climbing from where it left off.
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    let mut previous = 1;
+    for _ in 0..4 {
+        let now = served(&client, addr, "hoppy-svc")
+            .await
+            .context("a hopping guest must not be trapped when abandoned")?;
+        anyhow::ensure!(
+            now > previous,
+            "the service was restarted over a short-hop awaiter: served {previous} -> {now}"
+        );
+        previous = now;
+        tokio::time::sleep(Duration::from_millis(300)).await;
     }
     Ok(())
 }

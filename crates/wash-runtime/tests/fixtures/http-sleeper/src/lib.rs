@@ -78,6 +78,19 @@ impl HttpGuest for Component {
             monotonic_clock::wait_for(ms.saturating_mul(1_000_000)).await;
         }
 
+        // Chatty but healthy: `/chatter?hops=N&hop_ms=M` computes briefly,
+        // awaits M ms, and repeats N times before answering — a guest that
+        // yields constantly but never pauses for long. Each wake lands on an
+        // expired epoch deadline, so this is the wake pattern that a sampled
+        // view cannot tell from a pinned guest within a single window.
+        if path.starts_with("/chatter") {
+            let hops = query_u64(&path, "hops=").unwrap_or(4);
+            let hop_ms = query_u64(&path, "hop_ms=").unwrap_or(200);
+            for _ in 0..hops {
+                monotonic_clock::wait_for(hop_ms.saturating_mul(1_000_000)).await;
+            }
+        }
+
         // Spinning: never yields, so it is unreachable by every host-side
         // timeout — those are futures, and this call's poll never returns for
         // one to be polled. Only the epoch deadline compiled into this loop's
