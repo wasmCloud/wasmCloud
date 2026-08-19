@@ -19,20 +19,22 @@
 //! A store is acted on only when three things hold: a call on it has been
 //! abandoned longer than [`crate::timeouts::abandoned_call_grace`] and is
 //! still registered, *every* other registered call has been abandoned too,
-//! and `Continuity` shows guest code running without a pause. The last
-//! separates the two kinds of stuck call — a guest waiting in a host call
-//! stops executing, so the stretch resets, while a pinned one never does.
+//! and the guest has since run through a grace's worth of execution.
+//! Execution is credited from the callback's own fires (`ExecutionCredit`):
+//! each fire proves the guest was running and is worth at most one sampling
+//! window, and only a pause too long to be scheduler delay clears the credit
+//! — so a guest waiting in a host call accrues nothing, while a pinned one
+//! keeps accruing even when a loaded scheduler spreads its fires out.
 //! Abandonment alone would not do: dropping the dispatcher arms the flag, so
 //! an ordinary client disconnect would condemn a store whose guest is healthy
 //! and merely slow.
 //!
 //! The all-abandoned condition is what keeps the per-store blast radius safe:
-//! continuity cannot tell a guest that yields every few hundred milliseconds
-//! from a pinned one whose fires are spread that far by scheduler jitter, so
-//! the trap waits until it would end nothing still wanted. Teardown of a
-//! really pinned store is delayed by that, not lost — such a guest admits no
-//! new calls, and the calls already on it are abandoned by their own
-//! deadlines in turn.
+//! inside one sampling window a burst-then-await guest (frames, tokens, short
+//! outbound calls) is indistinguishable from a pinned one, so the trap waits
+//! until it would end nothing still wanted. Teardown of a really pinned store
+//! is delayed by that, not lost — such a guest admits no new calls, and the
+//! calls already on it are abandoned by their own deadlines in turn.
 //!
 //! No judgement of *speed* is made anywhere here. The epoch advances on wall
 //! clock, so it can report whether guest code is running, never whether it is
@@ -149,57 +151,62 @@ impl AbandonedCalls {
     }
 }
 
-/// How long guest code has been executing on one store without pausing.
+/// Guest execution credited against one store, accumulated from the epoch
+/// callback's own fires while the host wants the store back.
 ///
-/// The callback runs only while guest code does, so consecutive fires stay
-/// about one sampling interval apart while a guest keeps executing, and a
-/// wider gap means it stopped to wait for something. Measured here rather than
-/// from the host side because the callback forces a yield on every fire, which
-/// would refresh any host-side liveness signal and make a pinned guest look
-/// healthy.
+/// The callback runs only while guest code does, so each fire proves the
+/// guest was executing at that instant — and is worth at most one sampling
+/// window ([`EXECUTION_WINDOW_MS`]) of credit, however wide the gap before it.
+/// The per-fire cap is what keeps both failure directions out: a brief await
+/// between fires donates one window rather than its whole off-CPU length, and
+/// a pinned guest whose fires land late under scheduler load keeps
+/// accumulating instead of having its record wiped by the delay. Only a gap
+/// no scheduler could plausibly cause ([`RESET_THRESHOLD_MS`]) proves a real
+/// pause and clears the credit.
+///
+/// Measured here rather than from the host side because the callback forces a
+/// yield on every fire, which would refresh any host-side liveness signal and
+/// make a pinned guest look healthy.
 #[derive(Default)]
-struct Continuity {
-    /// When the current unbroken stretch of guest execution began.
-    stretch_start: Option<u64>,
+struct ExecutionCredit {
+    credited_millis: u64,
     /// When this callback last fired.
     last_fire: Option<u64>,
 }
 
-impl Continuity {
-    /// Record a fire and return how long the guest has now been executing
-    /// without a pause, in milliseconds.
-    fn observe(&mut self, now: u64, pause_threshold_millis: u64) -> u64 {
-        // A gap wider than the threshold means guest code stopped running in
-        // between, so this starts a new stretch.
-        let broken = self
-            .last_fire
-            .is_none_or(|last| now.saturating_sub(last) > pause_threshold_millis);
-        if broken {
-            self.stretch_start = Some(now);
+impl ExecutionCredit {
+    /// Record a fire and return the credit accumulated so far, in
+    /// milliseconds.
+    fn observe(&mut self, now: u64) -> u64 {
+        let gap = self.last_fire.map_or(0, |last| now.saturating_sub(last));
+        if gap > RESET_THRESHOLD_MS {
+            self.credited_millis = 0;
+        } else {
+            self.credited_millis = self
+                .credited_millis
+                .saturating_add(gap.min(EXECUTION_WINDOW_MS));
         }
         self.last_fire = Some(now);
-        now.saturating_sub(self.stretch_start.unwrap_or(now))
+        self.credited_millis
+    }
+
+    /// Clear the credit: the store is not wanted back right now, so whatever
+    /// its guest is doing is not held against it.
+    fn reset(&mut self) {
+        self.credited_millis = 0;
     }
 }
 
-/// How many sampling intervals a gap must exceed to count as a pause. Fires
-/// are one interval apart while a guest runs straight through, so this leaves
-/// room for scheduler jitter while staying well below any real wait.
-const PAUSE_FACTOR: u32 = 5;
+/// The most execution one fire-to-fire gap can prove: fires land one sampling
+/// window apart while a guest runs straight through.
+const EXECUTION_WINDOW_MS: u64 =
+    crate::engine::EPOCH_TICK.as_millis() as u64 * EPOCH_DEADLINE_TICKS;
 
-/// How long a gap between fires counts as the guest having paused, derived
-/// from the sampling interval so it follows if that changes.
-///
-/// `WASH_ABANDONED_CALL_PAUSE_THRESHOLD_MS` overrides it, for a host loaded
-/// enough that a pinned guest's fires land further apart than this — which
-/// reads as a pause and stops anything from being trapped.
-pub(crate) fn pause_threshold() -> Duration {
-    static VALUE: LazyLock<Duration> = LazyLock::new(|| {
-        let derived = crate::engine::EPOCH_TICK * (EPOCH_DEADLINE_TICKS as u32) * PAUSE_FACTOR;
-        crate::timeouts::env_millis("WASH_ABANDONED_CALL_PAUSE_THRESHOLD_MS", derived)
-    });
-    *VALUE
-}
+/// A gap between fires that only a real pause can explain — the guest waiting
+/// on host I/O measured in seconds, or going idle — never scheduler delay or
+/// a brief await. A fixed order-of-seconds invariant on purpose, not derived
+/// from the window: it models what schedulers do, not how often we sample.
+const RESET_THRESHOLD_MS: u64 = 3_000;
 
 /// Stops watching a call's flag when dropped, so a completed call leaves
 /// nothing behind — and so an abandoned flag whose call has ended is invisible
@@ -398,9 +405,10 @@ pub(crate) enum AbandonedCallPolicy {
 /// guest that never yields never returns from its poll, so every host future
 /// on that store — timeouts included — is stuck behind it. wasmtime compiles
 /// the deadline check into the guest's own loop back-edges, which is the one
-/// place a pinned guest cannot avoid. Both conditions are required — an armed
-/// flag alone only says nobody wants the result, which a client disconnect is
-/// enough to cause. The module docs ([`crate::engine::abandon`]) cover it.
+/// place a pinned guest cannot avoid. All three conditions are required — an
+/// armed flag alone only says nobody wants the result, which a client
+/// disconnect is enough to cause. The module docs ([`crate::engine::abandon`])
+/// cover it.
 pub(crate) fn arm_epoch_deadline(
     store: &mut wasmtime::Store<SharedCtx>,
     policy: AbandonedCallPolicy,
@@ -411,43 +419,48 @@ pub(crate) fn arm_epoch_deadline(
     let escalation = crate::timeouts::abandoned_call_escalation();
     let grace_millis = u64::try_from(grace.as_millis()).unwrap_or(u64::MAX);
     let escalation_millis = u64::try_from(escalation.as_millis()).unwrap_or(u64::MAX);
-    let pause_millis = u64::try_from(pause_threshold().as_millis()).unwrap_or(u64::MAX);
-    let mut continuity = Continuity::default();
+    let mut credit = ExecutionCredit::default();
     // Reset below once nothing is abandoned, so a later wedge warns again.
     let mut warned = false;
 
     store.set_epoch_deadline(EPOCH_DEADLINE_TICKS);
     store.epoch_deadline_callback(move |_| {
-        // Every fire counts, or the pattern means nothing.
-        let pinned_for = continuity.observe(now_millis(), pause_millis);
+        // Every fire counts, or the credit means nothing.
+        let executed_for = credit.observe(now_millis());
 
         // Yield, never merely continue: this callback is the only point at
         // which a pinned guest hands the host back its thread. Ridden straight
         // through, the guest keeps the worker — and if that worker holds
         // tokio's time driver, *no timer on the runtime fires*, including the
         // very deadline whose expiry would abandon this call.
-        let keep_running = |warned: &mut bool| {
+        let keep_running = |warned: &mut bool, credit: &mut ExecutionCredit| {
             if abandoned.none_abandoned() {
                 *warned = false;
             }
+            // Execution only counts against a store the host wants back:
+            // otherwise a service's own background wakes (a run loop ticking
+            // faster than the reset threshold) would bank credit for the
+            // store's whole lifetime and any later abandonment would trap at
+            // the grace with no execution since.
+            credit.reset();
             Ok(wasmtime::UpdateDeadline::Yield(EPOCH_DEADLINE_TICKS))
         };
 
         if !abandoned.any_abandoned_longer_than(grace) {
-            return keep_running(&mut warned);
+            return keep_running(&mut warned, &mut credit);
         }
-        // A call is still wanted: trapping the store would take it too. This
-        // also protects a yielding guest whose wakes land closer together
-        // than the pause threshold and so read as one pinned stretch — its
-        // own wanted call is what keeps its store alive.
+        // A call is still wanted: trapping the store would take it too — and
+        // this is what keeps a yielding guest's store alive however its wakes
+        // land relative to the sampling window.
         if !abandoned.all_abandoned() {
-            return keep_running(&mut warned);
+            return keep_running(&mut warned, &mut credit);
         }
-        // Abandoned, but the guest is still pausing to wait: slow, not wedged.
-        if pinned_for < grace_millis {
-            return keep_running(&mut warned);
+        // Wanted back, but the guest has not yet run through a grace's worth
+        // of execution since then: it is waiting, or finishing.
+        if executed_for < grace_millis {
+            return Ok(wasmtime::UpdateDeadline::Yield(EPOCH_DEADLINE_TICKS));
         }
-        if policy == AbandonedCallPolicy::WarnThenTrap && pinned_for < escalation_millis {
+        if policy == AbandonedCallPolicy::WarnThenTrap && executed_for < escalation_millis {
             if !warned {
                 warned = true;
                 tracing::warn!(
@@ -461,7 +474,7 @@ pub(crate) fn arm_epoch_deadline(
         }
         tracing::error!(
             store_id = %store_id,
-            pinned_for_ms = pinned_for,
+            executed_ms = executed_for,
             "an abandoned call has wedged this store past its grace; trapping it"
         );
         Ok(wasmtime::UpdateDeadline::Interrupt)
@@ -523,24 +536,28 @@ mod tests {
         assert!(calls.any_abandoned_longer_than(Duration::ZERO));
     }
 
-    /// A pause between fires starts a new stretch; unbroken fires accumulate.
+    /// One fire proves at most one window of execution however wide the gap
+    /// before it, sub-reset gaps (scheduler delay included) never wipe what a
+    /// pinned guest accrued, and only a real pause clears the credit.
     #[test]
-    fn continuity_resets_on_a_pause_and_accumulates_otherwise() {
-        const T: u64 = 500;
-        let mut c = Continuity::default();
-        // A run of fires one sampling interval apart: one unbroken stretch.
-        assert_eq!(c.observe(1_000, T), 0);
-        assert_eq!(c.observe(1_100, T), 100);
-        assert_eq!(c.observe(1_200, T), 200);
-        // A gap past the threshold — the guest stopped running and waited, so
-        // the next fire begins a fresh stretch however long the last one was.
-        let after_pause = 1_200 + T + 1;
-        assert_eq!(c.observe(after_pause, T), 0);
-        assert_eq!(c.observe(after_pause + 100, T), 100);
-        // A gap *at* the threshold is still the same stretch: only a wider one
-        // counts as a pause, so scheduler jitter cannot reset it.
-        let jittered = after_pause + 100 + T;
-        assert_eq!(c.observe(jittered, T), jittered - after_pause);
+    fn execution_credit_caps_each_gap_and_resets_only_on_a_real_pause() {
+        const W: u64 = EXECUTION_WINDOW_MS;
+        let mut c = ExecutionCredit::default();
+        // First fire: nothing before it to credit.
+        assert_eq!(c.observe(1_000), 0);
+        // Straight-through execution: every window fully credited.
+        assert_eq!(c.observe(1_000 + W), W);
+        // A wide-but-sub-reset gap — a brief await, or a slow requeue under
+        // load — donates one window, and does not wipe the accrual.
+        assert_eq!(c.observe(1_000 + W + 900), 2 * W);
+        assert_eq!(c.observe(1_000 + W + 900 + W), 3 * W);
+        // A gap past the reset threshold is a real pause: credit cleared.
+        let after_pause = 1_000 + W + 900 + W + RESET_THRESHOLD_MS + 1;
+        assert_eq!(c.observe(after_pause), 0);
+        assert_eq!(c.observe(after_pause + W), W);
+        // And the callback clears it whenever the store is not wanted back.
+        c.reset();
+        assert_eq!(c.observe(after_pause + 2 * W), W);
     }
 
     /// `await_reply` disarms on delivery and arms on deadline or drop.
