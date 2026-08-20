@@ -25,6 +25,17 @@ struct Component;
 
 impl Guest for Component {
     async fn run(n: u32) -> u32 {
+        // `run(0)` wedges: a loop that never yields, unreachable by any
+        // host-side timeout (those are futures on this store, and this poll
+        // never returns). Only the epoch deadline compiled into the loop's
+        // back-edge can end it. A magic argument rather than a separate
+        // function so the WIT (vendored into both fixtures) stays unchanged.
+        if n == 0 {
+            let mut x: u64 = 0;
+            loop {
+                x = std::hint::black_box(x.wrapping_add(1));
+            }
+        }
         n.wrapping_mul(2).wrapping_add(1)
     }
 

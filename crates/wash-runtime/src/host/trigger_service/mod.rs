@@ -200,11 +200,17 @@ impl PreparedIngress {
     async fn serve(&mut self, accessor: &Accessor<SharedCtx>) -> ServeOutcome {
         match self {
             PreparedIngress::Http { service, rx } => {
-                while let Some((req, resp_tx)) = rx.recv().await {
+                while let Some(ServiceHttpJob {
+                    req,
+                    resp_tx,
+                    abandoned,
+                }) = rx.recv().await
+                {
                     if let Err(e) = accessor.spawn(HttpTask {
                         service: Arc::clone(service),
                         req,
                         resp_tx,
+                        abandoned,
                         pool_slot: None,
                     }) {
                         tracing::error!(err = %e, "failed to spawn HTTP invocation task");
@@ -213,11 +219,17 @@ impl PreparedIngress {
                 ServeOutcome::Shutdown
             }
             PreparedIngress::Messaging { handler, rx } => {
-                while let Some((msg, result_tx)) = rx.recv().await {
+                while let Some(MessagingJob {
+                    msg,
+                    result_tx,
+                    abandoned,
+                }) = rx.recv().await
+                {
                     if let Err(e) = accessor.spawn(MessagingTask {
                         handler: Arc::clone(handler),
                         msg,
                         result_tx,
+                        abandoned,
                     }) {
                         tracing::error!(err = %e, "failed to spawn messaging invocation task");
                     }
@@ -260,6 +272,16 @@ impl PreparedIngress {
                     let workload_id = Arc::clone(&caller.workload_id);
                     registry.replay_begin(caller.clone());
                     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                    // This waiter lives inside the plugin's own store, where a
+                    // non-yielding bind would starve its timeout — so the
+                    // abandonment deadline is armed from a detached timer.
+                    let call = crate::engine::abandon::DispatchedCall::new(
+                        "workload-bind replay (plugin)",
+                        crate::timeouts::plugin_lifecycle_call(),
+                    );
+                    let abandoned = call.flag();
+                    // Dropped once the outcome is in, cancelling the arming.
+                    let _replay_timer = call.arm_on_timer();
                     admit_and_spawn_call(
                         accessor,
                         *instance,
@@ -273,6 +295,7 @@ impl PreparedIngress {
                             args,
                             result_tys,
                             reply: reply_tx,
+                            abandoned,
                         },
                     );
                     await_replay_outcome(workload_id, reply_rx).await;

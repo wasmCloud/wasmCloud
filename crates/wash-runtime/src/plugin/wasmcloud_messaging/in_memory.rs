@@ -786,10 +786,21 @@ impl HostPlugin for InMemoryMessaging {
 
                         let fuel_meter = fuel_meter.clone();
 
+                        // As in the NATS backend: nothing awaits this call, so
+                        // its deadline is a timer outliving the store's task.
+                        let call = crate::engine::abandon::DispatchedCall::new(
+                            "messaging (per-message store)",
+                            crate::timeouts::messaging_deliver(),
+                        );
+                        let abandoned = store.data().abandoned.watch(call.flag());
+                        let deadline = call.arm_on_timer();
+
                         tokio::spawn(async move {
                             // Released on completion, trap or not — which is
                             // what frees the instance slot this message holds.
                             let _permit = permit;
+                            let _abandoned = abandoned;
+                            let _deadline = deadline;
                             let result = fuel_meter.observe(
                                 &[
                                     KeyValue::new("plugin", PLUGIN_MESSAGING_MEMORY_ID),
