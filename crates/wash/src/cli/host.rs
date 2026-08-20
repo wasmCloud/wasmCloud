@@ -216,6 +216,34 @@ pub struct HostCommand {
     )]
     pub http_connection_wait: Option<Duration>,
 
+    /// Enable same-host local routing: an outgoing HTTP request matching a
+    /// co-located workload's `localRoute` interface config (`host`, or
+    /// `host/path` for a prefix) is served in-memory by that workload instead
+    /// of egressing to the network.
+    ///
+    /// One of two keys: this flag alone makes nothing locally reachable — each
+    /// workload must also declare its own `localRoute` entries. Hostnames
+    /// published only via `host`/`host-aliases` are never short-circuited, and
+    /// `localRoute` names are never reachable from the network.
+    ///
+    /// SECURITY: a `localRoute` is a claim, not a proof of ownership. Any
+    /// workload on this host may claim any hostname — including a public one it
+    /// has nothing to do with — and will then receive its neighbours' requests
+    /// to that name. Because dispatch is in-memory there is no TLS: an
+    /// `https://` request to a claimed name is handed over in plaintext,
+    /// certificate never checked. The caller's allowed_hosts does not help,
+    /// since the caller legitimately lists the name it means to reach. Enable
+    /// only where every workload on the host is equally trusted.
+    ///
+    /// Locally routed calls also bypass ingress middleware (auth, rate limits,
+    /// mesh mTLS, network policy). allowed_hosts is still enforced first.
+    #[arg(
+        long = "http-local-routing",
+        env = "WASH_HTTP_LOCAL_ROUTING",
+        default_value_t = false
+    )]
+    pub http_local_routing: bool,
+
     /// Enable WASI WebGPU support
     #[cfg(all(
         not(target_os = "windows"),
@@ -230,7 +258,10 @@ pub struct HostCommand {
     #[arg(long = "postgres-url", env = "WASH_POSTGRES_URL")]
     pub postgres_url: Option<String>,
 
-    /// Allow insecure OCI Registries
+    /// Allow insecure OCI registries: when a component pull fails over HTTPS,
+    /// retry it over plain HTTP (e.g. an in-cluster registry that serves no
+    /// TLS). Registries that do serve TLS are unaffected — HTTPS is always
+    /// attempted first.
     #[arg(long = "allow-insecure-registries", default_value_t = false)]
     pub allow_insecure_registries: bool,
 
@@ -556,7 +587,12 @@ impl CliCommand for HostCommand {
                 .with_quotas(Arc::clone(&quotas));
 
             let mut ingress_builder = wash_runtime::host::http::Ingress::builder(http_router, addr)
-                .outgoing_handler(outgoing_handler);
+                .outgoing_handler(outgoing_handler)
+                .local_routing(self.http_local_routing)
+                // The same registry the outgoing handler and socket policy draw
+                // on, so a workload's locally routed calls count against the
+                // ceiling its network egress counts against.
+                .quotas(Arc::clone(&quotas));
             if let (Some(cert_path), Some(key_path)) = (&self.tls_cert_path, &self.tls_key_path) {
                 let mut tls = wash_runtime::host::http::TlsConfig::new(cert_path, key_path);
                 if let Some(ca) = self.tls_ca_path.as_deref() {
