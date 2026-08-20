@@ -20,7 +20,6 @@ publish = false
 include = [
     "src/**/*",
     "wit/**/*",
-    "build.rs",
     "wkg.lock",
     "README.md",
     "LICENSE",
@@ -153,14 +152,6 @@ webpki-roots = { workspace = true }
 # `#[cfg]` on `plugin::wasi_webgpu`.
 [target.'cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))'.dependencies]
 wasi-webgpu-wasmtime = { version = "0.2", optional = true }
-
-# Proto codegen only. Wasm fixtures are built by `cargo xtask
-# build-fixtures` (see /xtask), which owns wit-component and the WASI
-# adapter provider.
-[build-dependencies]
-anyhow = { workspace = true, default-features = true }
-tonic-prost-build = { workspace = true, default-features = true }
-pbjson-build = { workspace = true, default-features = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

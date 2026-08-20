@@ -14,6 +14,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
 mod e2e_images;
+mod protos;
 
 #[derive(Parser)]
 #[command(name = "xtask", about = "wasmCloud workspace tasks", version)]
@@ -27,6 +28,10 @@ enum Task {
     /// Build the wash-runtime wasm test fixtures into
     /// `crates/wash-runtime/tests/wasm/`.
     BuildFixtures,
+    /// Regenerate the committed protobuf bindings in
+    /// `crates/wash-runtime/src/washlet/generated/` from
+    /// `/proto/wasmcloud/runtime/v2`. CI fails if they drift.
+    GenerateProtos,
     /// Build the runtime-operator e2e fixture components, deploy the in-cluster
     /// oci-registry, and push the fixtures into it. Configured via env
     /// (E2E_IMAGES_MODE, E2E_FIXTURES_DIR); see the e2e_images module.
@@ -39,6 +44,7 @@ fn main() -> Result<()> {
     match cli.task {
         Task::BuildFixtures => build_fixtures(&workspace),
         Task::E2eImages => e2e_images::run(&workspace),
+        Task::GenerateProtos => protos::run(&workspace),
     }
 }
 
