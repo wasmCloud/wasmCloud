@@ -256,7 +256,29 @@ impl CliCommand for DevCommand {
                 plugin::wasi_keyvalue::RedisKeyValue::from_url(redis_url)
                     .context("failed to configure Redis keyvalue plugin")?,
             ))?;
-            debug!(url = %redis_url, "WASI KeyValue plugin registered with Redis backend");
+            debug!(
+                scheme = %redis_url.scheme(),
+                username = if redis_url.username().is_empty() {
+                    "<none>"
+                } else {
+                    "<REDACTED>"
+                },
+                password = if redis_url.password().is_some() {
+                    "<REDACTED>"
+                } else {
+                    "<none>"
+                },
+                host = redis_url.host_str().unwrap_or("<none>"),
+                port = redis_url.port().map_or("<none>".to_string(), |p| p.to_string()),
+                path = if redis_url.path().is_empty() {
+                            "<none>"
+                        } else {
+                            redis_url.path()
+                        },
+                query = redis_url.query().unwrap_or("<none>"),
+                fragment = redis_url.fragment().unwrap_or("<none>"),
+                "WASI KeyValue plugin registered with Redis backend"
+            );
         } else if let Some(nats_url) = &dev_config.wasi_keyvalue_nats_url {
             let nats_client = async_nats::connect(nats_url.as_str())
                 .await
@@ -264,7 +286,29 @@ impl CliCommand for DevCommand {
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasi_keyvalue::NatsKeyValue::new(&nats_client),
             ))?;
-            debug!(url = %nats_url, "WASI KeyValue plugin registered with NATS backend");
+            debug!(
+                scheme = %nats_url.scheme(),
+                username = if nats_url.username().is_empty() {
+                    "<none>"
+                } else {
+                    "<REDACTED>"
+                },
+                password = if nats_url.password().is_some() {
+                    "<REDACTED>"
+                } else {
+                    "<none>"
+                },
+                host = nats_url.host_str().unwrap_or("<none>"),
+                port = nats_url.port().map_or("<none>".to_string(), |p| p.to_string()),
+                path = if nats_url.path().is_empty() {
+                            "<none>"
+                        } else {
+                            nats_url.path()
+                        },
+                query = nats_url.query().unwrap_or("<none>"),
+                fragment = nats_url.fragment().unwrap_or("<none>"),
+                "WASI KeyValue plugin registered with NATS backend"
+            );
         } else if let Some(keyvalue_path) = &dev_config.wasi_keyvalue_path {
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasi_keyvalue::FilesystemKeyValue::new(keyvalue_path.clone()),
