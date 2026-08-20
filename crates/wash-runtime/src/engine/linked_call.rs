@@ -465,11 +465,60 @@ pub(crate) async fn invoke_linked_async_export(
     results: &mut [Val],
     inv: &LinkedExportInvocation,
 ) -> wasmtime::Result<()> {
-    if let Some(ephemeral_call) = &inv.ephemeral_call {
+    let outcome = if let Some(ephemeral_call) = &inv.ephemeral_call {
         invoke_ephemeral_linked_export(accessor, params, results, inv, ephemeral_call).await
     } else {
         invoke_shared_store_linked_export(accessor, params, results, inv).await
+    };
+    outcome.or_else(|e| contain_cli_run_exit(results, inv, e))
+}
+
+/// Answer a `wasi:cli/run` call whose callee left through `wasi:cli/exit`
+/// instead of returning.
+///
+/// `exit` is delivered as an error carrying [`I32Exit`], and an error out of a
+/// linked call faults the CALLER's store — so a callee exiting deliberately,
+/// even with success, would take down the service or plugin that ran it. `run`
+/// already has somewhere to put that: its `result` is exactly the success or
+/// failure an exit status means, so the status becomes the answer.
+///
+/// Applied on every path a linked `run` can take — the p3 async paths and the
+/// p2 sync one, since `wasi:cli/run` is an interface of `wasi:cli` 0.2 as well.
+///
+/// The status is a value the caller cannot see beyond its sign, so it is logged
+/// here — `run` returns a bare `result` with no room for the number itself.
+/// Only `wasi:cli/run` is treated this way: another interface's result has an
+/// error arm the host cannot generally build, so an exit there stays an error.
+///
+/// [`I32Exit`]: wasmtime_wasi::I32Exit
+fn contain_cli_run_exit(
+    results: &mut [Val],
+    inv: &LinkedExportInvocation,
+    err: wasmtime::Error,
+) -> wasmtime::Result<()> {
+    if !crate::wit::WitInterface::from(inv.import_name.as_ref()).is_cli_run() {
+        return Err(err);
     }
+    // The exit is raised deep inside the guest call, so it arrives as the cause
+    // of a trap rather than as the error itself.
+    let Some(status) = err
+        .chain()
+        .find_map(|e| e.downcast_ref::<wasmtime_wasi::I32Exit>())
+        .map(|e| e.0)
+    else {
+        return Err(err);
+    };
+    let [slot] = results else {
+        return Err(err);
+    };
+    debug!(
+        status,
+        interface = %inv.import_name,
+        component = %inv.plugin_component_id,
+        "linked wasi:cli/run exited"
+    );
+    *slot = Val::Result(if status == 0 { Ok(None) } else { Err(None) });
+    Ok(())
 }
 
 /// Aborts the wrapped task when dropped before it completes, so a cancelled
@@ -805,7 +854,6 @@ async fn invoke_ephemeral_plain(
                 Ok::<Vec<Val>, wasmtime::Error>(results_buf)
             })
             .await
-            .map_err(|e| wasmtime::format_err!("{e:#}"))
             .and_then(|inner| inner)
     }));
     let vals = (&mut task.0)
@@ -939,4 +987,5 @@ pub(crate) async fn invoke_linked_sync_export(
         Ok(())
     }
     .await
+    .or_else(|e| contain_cli_run_exit(results, inv, e))
 }
