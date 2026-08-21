@@ -10,7 +10,10 @@ use wasmtime::component::Resource;
 use crate::engine::ctx::ActiveCtx;
 
 use super::bindings::wasmcloud::nats::{core, jetstream as js, kv, types};
-use super::handles::{BucketHandle, MessageHandle, PullConsumerHandle, jetstream_err};
+use super::conn::ConnHandle;
+use super::handles::{
+    BucketHandle, MessageHandle, PullConsumerHandle, already_settled, jetstream_err,
+};
 use super::{PLUGIN_NATS_ID, WasmcloudNats};
 
 pub(super) fn wit_headers_to_nats(headers: &[types::HeaderEntry]) -> async_nats::HeaderMap {
@@ -48,9 +51,46 @@ fn build_nats_message(
     }
 }
 
-fn plugin_for<'a>(ctx: &ActiveCtx<'a>) -> Result<Arc<WasmcloudNats>, types::NatsError> {
-    ctx.get_plugin::<WasmcloudNats>(PLUGIN_NATS_ID)
-        .ok_or_else(|| types::NatsError::Unexpected("nats plugin not available".to_string()))
+/// Reads the plugin and the calling workload's id off the context.
+///
+/// Capability calls carry no binding identity, so the workload id is what
+/// selects this tenant's client and grant. Kept synchronous so the context
+/// borrow is never held across an await — `ActiveCtx` is not `Send`.
+fn conn_args<'a>(ctx: &ActiveCtx<'a>) -> Result<(Arc<WasmcloudNats>, Arc<str>), types::NatsError> {
+    let plugin = ctx
+        .try_get_plugin::<WasmcloudNats>(PLUGIN_NATS_ID)
+        .map_err(|e| types::NatsError::Unexpected(format!("nats plugin not available: {e}")))?;
+    Ok((plugin, ctx.workload_id.clone()))
+}
+
+/// Resolves the calling workload's connection, or fails the call.
+macro_rules! conn_or_return {
+    ($ctx:expr) => {
+        match conn_args($ctx) {
+            Ok((plugin, workload_id)) => match plugin.conn_for(&workload_id).await {
+                Some(conn) => conn,
+                None => {
+                    return Ok(Err(types::NatsError::Unexpected(format!(
+                        "no NATS connection bound for workload `{workload_id}`"
+                    ))));
+                }
+            },
+            Err(e) => return Ok(Err(e)),
+        }
+    };
+}
+
+/// Maps a policy denial onto the wire error.
+fn denied(subject: &str) -> types::NatsError {
+    types::NatsError::SubjectDenied(subject.to_string())
+}
+
+/// Rejects an oversized payload before it reaches the connection.
+fn check_payload(len: usize, conn: &ConnHandle) -> Result<(), types::NatsError> {
+    if conn.max_payload > 0 && len as u64 > conn.max_payload {
+        return Err(types::NatsError::MaxPayloadExceeded(conn.max_payload));
+    }
+    Ok(())
 }
 
 fn kv_op_to_wit(op: jetstream::kv::Operation) -> kv::KvOperation {
@@ -79,37 +119,37 @@ impl<'a> core::Host for ActiveCtx<'a> {
         &mut self,
         msg: types::NatsMessage,
     ) -> wasmtime::Result<Result<(), types::NatsError>> {
-        let plugin = match plugin_for(self) {
-            Ok(p) => p,
-            Err(e) => return Ok(Err(e)),
-        };
+        let conn = conn_or_return!(self);
 
         let subject = msg.subject;
+        if conn.policy.check_subject(&subject).is_err() {
+            return Ok(Err(denied(&subject)));
+        }
+        if let Err(e) = check_payload(msg.body.len(), &conn) {
+            return Ok(Err(e));
+        }
         let payload: Bytes = msg.body.into();
         let has_headers = msg.headers.as_ref().is_some_and(|h| !h.is_empty());
 
         let result = match (msg.reply_to, has_headers) {
             (Some(reply_to), true) => {
                 let headers = wit_headers_to_nats(msg.headers.as_deref().unwrap_or_default());
-                plugin
-                    .client
+                conn.client
                     .publish_with_reply_and_headers(subject, reply_to, headers, payload)
                     .await
             }
             (Some(reply_to), false) => {
-                plugin
-                    .client
+                conn.client
                     .publish_with_reply(subject, reply_to, payload)
                     .await
             }
             (None, true) => {
                 let headers = wit_headers_to_nats(msg.headers.as_deref().unwrap_or_default());
-                plugin
-                    .client
+                conn.client
                     .publish_with_headers(subject, headers, payload)
                     .await
             }
-            (None, false) => plugin.client.publish(subject, payload).await,
+            (None, false) => conn.client.publish(subject, payload).await,
         };
 
         match result {
@@ -126,19 +166,25 @@ impl<'a> core::Host for ActiveCtx<'a> {
         msg: types::NatsMessage,
         timeout_ms: u32,
     ) -> wasmtime::Result<Result<types::NatsMessage, types::NatsError>> {
-        let plugin = match plugin_for(self) {
-            Ok(p) => p,
-            Err(e) => return Ok(Err(e)),
-        };
+        let conn = conn_or_return!(self);
 
         let types::NatsMessage { subject, body, .. } = msg;
+        if conn.policy.check_subject(&subject).is_err() {
+            return Ok(Err(denied(&subject)));
+        }
+        if let Err(e) = check_payload(body.len(), &conn) {
+            return Ok(Err(e));
+        }
 
         let timeout_duration = Duration::from_millis(timeout_ms as u64);
-        let request_future = plugin.client.request(subject, body.into());
+        let request_future = conn.client.request(subject, body.into());
 
         let resp = match tokio::time::timeout(timeout_duration, request_future).await {
             Ok(Ok(m)) => m,
             Ok(Err(e)) => {
+                if matches!(e.kind(), async_nats::RequestErrorKind::NoResponders) {
+                    return Ok(Err(types::NatsError::NoResponders));
+                }
                 warn!("failed to send request: {e}");
                 return Ok(Err(types::NatsError::Connection(format!(
                     "failed to send request: {e}"
@@ -167,14 +213,18 @@ impl<'a> js::Host for ActiveCtx<'a> {
         &mut self,
         msg: types::NatsMessage,
     ) -> wasmtime::Result<Result<js::PublishAck, types::NatsError>> {
-        let plugin = match plugin_for(self) {
-            Ok(p) => p,
-            Err(e) => return Ok(Err(e)),
-        };
+        let conn = conn_or_return!(self);
+
+        if conn.policy.check_subject(&msg.subject).is_err() {
+            return Ok(Err(denied(&msg.subject)));
+        }
+        if let Err(e) = check_payload(msg.body.len(), &conn) {
+            return Ok(Err(e));
+        }
 
         let ack_future = if let Some(headers) = msg.headers.as_ref().filter(|h| !h.is_empty()) {
             let header_map = wit_headers_to_nats(headers);
-            match plugin
+            match conn
                 .jetstream
                 .publish_with_headers(msg.subject, header_map, msg.body.into())
                 .await
@@ -183,7 +233,7 @@ impl<'a> js::Host for ActiveCtx<'a> {
                 Err(e) => return Ok(Err(jetstream_err("failed to publish", e))),
             }
         } else {
-            match plugin.jetstream.publish(msg.subject, msg.body.into()).await {
+            match conn.jetstream.publish(msg.subject, msg.body.into()).await {
                 Ok(f) => f,
                 Err(e) => return Ok(Err(jetstream_err("failed to publish", e))),
             }
@@ -207,12 +257,13 @@ impl<'a> js::Host for ActiveCtx<'a> {
         stream_name: String,
         sequence: u64,
     ) -> wasmtime::Result<Result<js::StoredMessage, types::NatsError>> {
-        let plugin = match plugin_for(self) {
-            Ok(p) => p,
-            Err(e) => return Ok(Err(e)),
-        };
+        let conn = conn_or_return!(self);
 
-        let stream = match plugin.jetstream.get_stream(&stream_name).await {
+        if conn.policy.check_stream(&stream_name).is_err() {
+            return Ok(Err(denied(&stream_name)));
+        }
+
+        let stream = match conn.jetstream.get_stream(&stream_name).await {
             Ok(s) => s,
             Err(e) => {
                 return Ok(Err(types::NatsError::NotFound(format!(
@@ -220,6 +271,12 @@ impl<'a> js::Host for ActiveCtx<'a> {
                 ))));
             }
         };
+
+        if !conn.server_at_least(2, 9) {
+            return Ok(Err(types::NatsError::UnsupportedByServer(
+                "direct get requires NATS server 2.9 or newer".to_string(),
+            )));
+        }
 
         match stream.direct_get(sequence).await {
             Ok(m) => Ok(Ok(js::StoredMessage {
@@ -239,12 +296,13 @@ impl<'a> js::Host for ActiveCtx<'a> {
         start_sequence: u64,
         max_count: u32,
     ) -> wasmtime::Result<Result<Vec<js::StoredMessage>, types::NatsError>> {
-        let plugin = match plugin_for(self) {
-            Ok(p) => p,
-            Err(e) => return Ok(Err(e)),
-        };
+        let conn = conn_or_return!(self);
 
-        let stream = match plugin.jetstream.get_stream(&stream_name).await {
+        if conn.policy.check_stream(&stream_name).is_err() {
+            return Ok(Err(denied(&stream_name)));
+        }
+
+        let stream = match conn.jetstream.get_stream(&stream_name).await {
             Ok(s) => s,
             Err(e) => {
                 return Ok(Err(types::NatsError::NotFound(format!(
@@ -320,12 +378,13 @@ impl<'a> js::Host for ActiveCtx<'a> {
         stream_name: String,
         consumer: String,
     ) -> wasmtime::Result<Result<Resource<PullConsumerHandle>, types::NatsError>> {
-        let plugin = match plugin_for(self) {
-            Ok(p) => p,
-            Err(e) => return Ok(Err(e)),
-        };
+        let conn = conn_or_return!(self);
 
-        let stream = match plugin.jetstream.get_stream(&stream_name).await {
+        if conn.policy.check_stream(&stream_name).is_err() {
+            return Ok(Err(denied(&stream_name)));
+        }
+
+        let stream = match conn.jetstream.get_stream(&stream_name).await {
             Ok(s) => s,
             Err(e) => {
                 return Ok(Err(types::NatsError::NotFound(format!(
@@ -360,10 +419,10 @@ impl<'a> js::HostMessageHandle for ActiveCtx<'a> {
     ) -> wasmtime::Result<types::NatsMessage> {
         let h = self.table.get(&rep)?;
         Ok(build_nats_message(
-            &h.subject,
-            &h.body,
-            h.reply_to.as_deref(),
-            h.headers.as_ref(),
+            h.message.subject.as_ref(),
+            &h.message.payload,
+            h.message.reply.as_deref(),
+            h.message.headers.as_ref(),
         ))
     }
 
@@ -382,12 +441,10 @@ impl<'a> js::HostMessageHandle for ActiveCtx<'a> {
         rep: Resource<MessageHandle>,
     ) -> wasmtime::Result<Result<(), types::NatsError>> {
         let h = self.table.get_mut(&rep)?;
-        let Some(msg) = h.inner.take() else {
-            return Ok(Err(types::NatsError::Unexpected(
-                "message already acked/nak'd/term'd".to_string(),
-            )));
+        let Some(acker) = h.acker.take() else {
+            return Ok(Err(already_settled()));
         };
-        match msg.ack().await {
+        match acker.ack().await {
             Ok(()) => Ok(Ok(())),
             Err(e) => Ok(Err(jetstream_err("ack failed", e))),
         }
@@ -399,13 +456,11 @@ impl<'a> js::HostMessageHandle for ActiveCtx<'a> {
         delay_ms: Option<u32>,
     ) -> wasmtime::Result<Result<(), types::NatsError>> {
         let h = self.table.get_mut(&rep)?;
-        let Some(msg) = h.inner.take() else {
-            return Ok(Err(types::NatsError::Unexpected(
-                "message already acked/nak'd/term'd".to_string(),
-            )));
+        let Some(acker) = h.acker.take() else {
+            return Ok(Err(already_settled()));
         };
         let kind = jetstream::AckKind::Nak(delay_ms.map(|ms| Duration::from_millis(ms as u64)));
-        match msg.ack_with(kind).await {
+        match acker.ack_with(kind).await {
             Ok(()) => Ok(Ok(())),
             Err(e) => Ok(Err(jetstream_err("nak failed", e))),
         }
@@ -416,12 +471,10 @@ impl<'a> js::HostMessageHandle for ActiveCtx<'a> {
         rep: Resource<MessageHandle>,
     ) -> wasmtime::Result<Result<(), types::NatsError>> {
         let h = self.table.get(&rep)?;
-        let Some(msg) = h.inner.as_ref() else {
-            return Ok(Err(types::NatsError::Unexpected(
-                "message already acked/nak'd/term'd".to_string(),
-            )));
+        let Some(acker) = h.acker.as_ref() else {
+            return Ok(Err(already_settled()));
         };
-        match msg.ack_with(jetstream::AckKind::Progress).await {
+        match acker.ack_with(jetstream::AckKind::Progress).await {
             Ok(()) => Ok(Ok(())),
             Err(e) => Ok(Err(jetstream_err("in-progress failed", e))),
         }
@@ -432,12 +485,10 @@ impl<'a> js::HostMessageHandle for ActiveCtx<'a> {
         rep: Resource<MessageHandle>,
     ) -> wasmtime::Result<Result<(), types::NatsError>> {
         let h = self.table.get_mut(&rep)?;
-        let Some(msg) = h.inner.take() else {
-            return Ok(Err(types::NatsError::Unexpected(
-                "message already acked/nak'd/term'd".to_string(),
-            )));
+        let Some(acker) = h.acker.take() else {
+            return Ok(Err(already_settled()));
         };
-        match msg.ack_with(jetstream::AckKind::Term).await {
+        match acker.ack_with(jetstream::AckKind::Term).await {
             Ok(()) => Ok(Ok(())),
             Err(e) => Ok(Err(jetstream_err("term failed", e))),
         }
@@ -481,25 +532,19 @@ impl<'a> js::HostPullConsumer for ActiveCtx<'a> {
         while let Some(next) = stream.next().await {
             match next {
                 Ok(msg) => {
-                    let info_res = msg.info();
-                    let (sequence, delivery_count) = match info_res {
+                    let (sequence, delivery_count) = match msg.info() {
                         Ok(info) => (info.stream_sequence, info.delivered as u32),
                         Err(_) => (0, 1),
                     };
-                    let subject = msg.subject.to_string();
-                    let body = msg.payload.to_vec();
-                    let reply_to = msg.reply.as_ref().map(|r| r.to_string());
-                    let headers = msg.headers.clone();
-                    let handle = MessageHandle {
-                        inner: Some(msg),
+                    // Pull consumers are always guest-driven, so the acker
+                    // goes to the handle regardless of ack-mode.
+                    let (message, acker) = msg.split();
+                    handles.push(self.table.push(MessageHandle {
+                        acker: Some(acker),
+                        message,
                         sequence,
                         delivery_count,
-                        subject,
-                        reply_to,
-                        body,
-                        headers,
-                    };
-                    handles.push(self.table.push(handle)?);
+                    })?);
                 }
                 Err(e) => {
                     warn!("pull-consumer fetch stream error: {e}");
@@ -526,15 +571,16 @@ impl<'a> kv::Host for ActiveCtx<'a> {
         &mut self,
         bucket: String,
     ) -> wasmtime::Result<Result<Resource<BucketHandle>, types::NatsError>> {
-        let plugin = match plugin_for(self) {
-            Ok(p) => p,
-            Err(e) => return Ok(Err(e)),
-        };
-        let store = match plugin.get_kv(&bucket).await {
-            Some(s) => s,
-            None => {
+        let conn = conn_or_return!(self);
+        if conn.policy.check_bucket(&bucket).is_err() {
+            return Ok(Err(denied(&bucket)));
+        }
+
+        let store = match conn.jetstream.get_key_value(&bucket).await {
+            Ok(store) => store,
+            Err(e) => {
                 return Ok(Err(types::NatsError::NotFound(format!(
-                    "bucket '{bucket}'"
+                    "bucket '{bucket}': {e}"
                 ))));
             }
         };

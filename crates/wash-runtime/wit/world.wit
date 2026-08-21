@@ -70,28 +70,53 @@ world async-messaging {
 }
 
 
+// Host-side bindgen input: every import the plugin serves, in one world so the
+// linker is populated from a single generated module. Not a world components
+// target; those are the role-shaped ones below.
 world nats-imports {
-    import wasmcloud:nats/types@0.2.0-draft;
-    import wasmcloud:nats/core@0.2.0-draft;
-    import wasmcloud:nats/jetstream@0.2.0-draft;
-    import wasmcloud:nats/kv@0.2.0-draft;
+    import wasmcloud:nats/types@0.1.0;
+    import wasmcloud:nats/core@0.1.0;
+    import wasmcloud:nats/jetstream@0.1.0;
+    import wasmcloud:nats/kv@0.1.0;
 }
 
-world nats-jetstream-handler {
-    import wasmcloud:nats/types@0.2.0-draft;
-    import wasmcloud:nats/jetstream@0.2.0-draft;
-    export wasmcloud:nats/jetstream-handler@0.2.0-draft;
+// A workload that publishes, or does request/reply. No subscriptions.
+world nats-publisher {
+    import wasmcloud:nats/types@0.1.0;
+    import wasmcloud:nats/core@0.1.0;
 }
 
-world nats-core-handler {
-    import wasmcloud:nats/types@0.2.0-draft;
-    export wasmcloud:nats/core-handler@0.2.0-draft;
+// A workload the host pushes core NATS messages into.
+world nats-subscriber {
+    import wasmcloud:nats/types@0.1.0;
+    export wasmcloud:nats/core-handler@0.1.0;
 }
 
-world nats-kv-handler {
-    import wasmcloud:nats/types@0.2.0-draft;
-    import wasmcloud:nats/kv@0.2.0-draft;
-    export wasmcloud:nats/kv-handler@0.2.0-draft;
+// A workload that publishes into JetStream.
+world nats-js-publisher {
+    import wasmcloud:nats/types@0.1.0;
+    import wasmcloud:nats/jetstream@0.1.0;
+}
+
+// A workload the host pushes JetStream deliveries into. Per-request: it holds
+// no consumer and no stream, so it scales down between bursts.
+world nats-js-processor {
+    import wasmcloud:nats/types@0.1.0;
+    import wasmcloud:nats/jetstream@0.1.0;
+    export wasmcloud:nats/jetstream-handler@0.1.0;
+}
+
+// A workload that reads and writes KV directly.
+world nats-kv-client {
+    import wasmcloud:nats/types@0.1.0;
+    import wasmcloud:nats/kv@0.1.0;
+}
+
+// A workload the host pushes KV change events into.
+world nats-kv-watcher {
+    import wasmcloud:nats/types@0.1.0;
+    import wasmcloud:nats/kv@0.1.0;
+    export wasmcloud:nats/kv-handler@0.1.0;
 }
 
 world otel {

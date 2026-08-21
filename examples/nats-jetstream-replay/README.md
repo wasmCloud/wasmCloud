@@ -1,0 +1,128 @@
+# NATS JetStream order processor
+
+A component that consumes orders from a JetStream stream, accumulates per-order
+totals in a JetStream KV bucket, and publishes a processed-order notification —
+using `wasmcloud:nats` rather than `wasmcloud:messaging`.
+
+The point of the example is what `wasmcloud:messaging` cannot express: durable
+delivery with explicit acknowledgement, redelivery on failure, compare-and-swap
+on a KV revision, and publish deduplication. Those are the reasons the
+NATS-native interface exists.
+
+## What it demonstrates
+
+| Behaviour | Where |
+| --- | --- |
+| At-least-once delivery, and why handlers must be idempotent | `handle_message` |
+| Auto-ack: returning `Ok` acks, `Err` naks and redelivers | `handle_message` |
+| Permanent rejection of a poison message with `term()` | the malformed-body branch |
+| CAS on a KV revision, with retry on conflict | `accumulate` |
+| Publish deduplication via `Nats-Msg-Id` | the notification publish |
+| Typed errors instead of string matching | `describe` |
+
+## Prerequisites
+
+A NATS server with JetStream, plus the stream and bucket this component expects.
+Neither is created by the component: stream and bucket lifecycle is deliberately
+outside `wasmcloud:nats`, so a workload cannot provision storage it was not
+granted.
+
+```bash
+nats-server -js &
+
+nats stream add ORDERS \
+  --subjects 'orders.received' \
+  --storage file --retention limits --discard old \
+  --max-msgs=-1 --max-bytes=-1 --max-age=24h \
+  --dupe-window=2m --replicas 1 --defaults
+
+nats stream add PROCESSED \
+  --subjects 'orders.processed' \
+  --storage file --dupe-window=5m --replicas 1 --defaults
+
+nats kv add order-totals --history 5
+```
+
+The `--dupe-window` on `PROCESSED` is what makes the `Nats-Msg-Id` header do
+anything. Without it, a redelivered order publishes a second notification.
+
+## Build
+
+```bash
+wash build
+```
+
+## Deploy
+
+```yaml
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: nats-jetstream-replay
+spec:
+  replicas: 1
+  components:
+    - name: processor
+      image: file://./target/wasm32-wasip2/release/nats_jetstream_replay.wasm
+  hostInterfaces:
+    - namespace: wasmcloud
+      package: nats
+      version: "0.1.0"
+      interfaces: [types, jetstream, kv, jetstream-handler]
+      config:
+        servers: nats://nats.default.svc:4222
+        # Deny-by-default: without these the component reaches nothing.
+        subject-allow: orders.processed
+        stream-allow: ORDERS,PROCESSED
+        bucket-allow: order-totals
+        # STREAM:filter[:policy[:queue]]
+        subscriptions: ORDERS:orders.received:all
+        ack-mode: auto
+        max-in-flight: "32"
+      secretFrom:
+        - nats-credentials
+```
+
+`subject-allow`, `stream-allow`, and `bucket-allow` are the capability boundary.
+They are separate on purpose: permission to publish to `orders.processed` does
+not carry permission to read or delete the `ORDERS` stream.
+
+Credentials never appear in `config`. The host merges
+`config` → `configFrom` → `secretFrom` (later wins) before the plugin sees them,
+so a creds file, JWT + nkey seed, username/password, or token arrives already
+resolved. An nkey seed is signed host-side and never crosses into the sandbox.
+
+## Try it
+
+```bash
+nats pub orders.received "order-1:100"
+nats pub orders.received "order-1:50"
+
+nats kv get order-totals order-1     # -> 150
+nats sub orders.processed            # -> order-1:100, then order-1:150
+```
+
+Replay is what the stream buys you. Deleting the KV bucket and replaying the
+stream from sequence 1 rebuilds every total, because the orders are still there:
+
+```bash
+nats kv del order-totals --force
+nats kv add order-totals --history 5
+nats consumer add ORDERS replay --deliver all --ack explicit --defaults
+```
+
+A malformed body is rejected permanently rather than redelivered forever:
+
+```bash
+nats pub orders.received "not-an-order"
+nats stream view ORDERS         # still stored; the consumer terminated it
+```
+
+## Notes
+
+- `ack-mode: auto` means the host acks on `Ok` and naks on `Err` or trap. Set
+  `manual` to take over, and call `handle.ack()` / `nak()` / `term()` yourself.
+- `max-in-flight` bounds concurrent handler invocations per consumer. Without a
+  bound, a backlog spike fans out into the component pool all at once.
+- The component is per-request. It holds no consumer and no stream, so it scales
+  down to nothing between bursts — the host owns the subscription.
