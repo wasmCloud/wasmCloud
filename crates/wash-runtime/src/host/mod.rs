@@ -64,7 +64,7 @@ pub mod declared_port;
 pub mod egress_policy;
 pub mod ports;
 pub mod quota;
-mod sysinfo;
+pub(crate) mod sysinfo;
 use sysinfo::SystemMonitor;
 
 pub mod allowed_hosts;
