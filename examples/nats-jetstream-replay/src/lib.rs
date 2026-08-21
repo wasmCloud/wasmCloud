@@ -104,13 +104,13 @@ impl JetstreamHandler for Component {
         let delivery = handle.delivery_count();
 
         let Some((order_id, amount)) = parse_order(&message.body) else {
-            // A malformed body will never parse, however many times it is
-            // redelivered, so reject it permanently instead of returning an
-            // error and having it come back forever.
-            let _ = handle.term();
-            return Err(format!(
-                "order at sequence {sequence} is not `order-id:amount`"
-            ));
+            // A malformed body will never parse, so returning `Err` would nak
+            // it and have it redelivered forever. Under `ack-mode: auto` the
+            // host owns the acknowledgement and `term()` is not the guest's to
+            // call, so report success and let the message be dropped. Bind with
+            // `ack-mode: manual` to term it explicitly instead.
+            println!("dropping malformed order at sequence {sequence}");
+            return Ok(());
         };
 
         if delivery > 1 {

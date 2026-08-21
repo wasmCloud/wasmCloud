@@ -24,6 +24,17 @@ use super::{
     core_bindings, jetstream_bindings, kv_bindings,
 };
 
+/// Naks immediately so a failed setup does not stall the consumer for the
+/// full ack-wait before the message is redelivered.
+async fn nak_now(acker: &async_nats::jetstream::message::Acker) {
+    if let Err(e) = acker
+        .ack_with(async_nats::jetstream::AckKind::Nak(None))
+        .await
+    {
+        warn!("failed to nak after a delivery setup failure: {e}");
+    }
+}
+
 fn nats_headers_to_core_wit(
     headers: &async_nats::HeaderMap,
 ) -> Vec<core_bindings::wasmcloud::nats::types::HeaderEntry> {
@@ -100,10 +111,22 @@ pub(super) async fn spawn_jetstream_subscriptions(
                 _ => jetstream::consumer::DeliverPolicy::New,
             };
 
+            // With a queue group the consumer must be shared across hosts, or
+            // each host creates its own and every host sees every message.
+            // Without one it stays ephemeral and per-host.
+            let (durable_name, deliver_subject) = match &sub.queue_group {
+                Some(group) => (
+                    Some(group.clone()),
+                    format!("_nats_push.{}.{group}", sub.stream),
+                ),
+                None => (None, format!("_nats_push.{}", uuid::Uuid::new_v4())),
+            };
+
             let consumer = match stream
                 .create_consumer(jetstream::consumer::push::Config {
+                    durable_name,
                     filter_subject: sub.filter_subject.clone(),
-                    deliver_subject: format!("_nats_push.{}", uuid::Uuid::new_v4()),
+                    deliver_subject,
                     deliver_group: sub.queue_group.clone(),
                     ack_policy: jetstream::consumer::AckPolicy::Explicit,
                     ack_wait: std::time::Duration::from_secs(30),
@@ -137,7 +160,14 @@ pub(super) async fn spawn_jetstream_subscriptions(
                 tokio::select! {
                     maybe_msg = messages.next() => {
                         let raw = match maybe_msg {
-                            None | Some(Err(_)) => break,
+                            None => break,
+                            Some(Err(e)) => {
+                                warn!(
+                                    stream = %sub.stream,
+                                    "transient JetStream delivery error, continuing: {e}"
+                                );
+                                continue;
+                            }
                             Some(Ok(m)) => m,
                         };
 
@@ -158,6 +188,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
                         let mut store = match workload.new_store(&component_id).await {
                             Err(e) => {
                                 warn!("failed to create store for {component_id}: {e}");
+                                nak_now(&acker).await;
                                 continue;
                             }
                             Ok(s) => s,
@@ -165,6 +196,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
                         let proxy = match pre.instantiate_async(&mut store).await {
                             Err(e) => {
                                 warn!("failed to instantiate {component_id}: {e}");
+                                nak_now(&acker).await;
                                 continue;
                             }
                             Ok(p) => p,
@@ -187,6 +219,9 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                 Ok(r) => r,
                                 Err(e) => {
                                     warn!("failed to push message-handle for {component_id}: {e}");
+                                    if let Some(acker) = host_acker {
+                                        nak_now(&acker).await;
+                                    }
                                     continue;
                                 }
                             };
@@ -262,6 +297,7 @@ pub(super) async fn spawn_core_subscriptions(
 
     for sub in subs {
         let conn = conn.clone();
+        let in_flight = Arc::new(tokio::sync::Semaphore::new(conn.limits.max_in_flight));
         let workload = workload.clone();
         let component_id = component_id.to_string();
         let pre = pre.clone();
@@ -323,8 +359,13 @@ pub(super) async fn spawn_core_subscriptions(
                             subject = %msg.subject,
                         );
 
+                        let permit = match in_flight.clone().acquire_owned().await {
+                            Ok(p) => p,
+                            Err(_) => break,
+                        };
                         let fuel_meter = fuel_meter.clone();
                         tokio::spawn(async move {
+                            let _permit = permit;
                             let result = fuel_meter.observe(
                                 &[
                                     KeyValue::new("plugin", PLUGIN_NATS_ID),
@@ -369,6 +410,7 @@ pub(super) async fn spawn_kv_watches(
 
     for watch in watches {
         let conn = conn.clone();
+        let in_flight = Arc::new(tokio::sync::Semaphore::new(conn.limits.max_in_flight));
         let workload = workload.clone();
         let component_id = component_id.to_string();
         let pre = pre.clone();
@@ -432,8 +474,13 @@ pub(super) async fn spawn_kv_watches(
                             key = %wit_entry.key,
                         );
 
+                        let permit = match in_flight.clone().acquire_owned().await {
+                            Ok(p) => p,
+                            Err(_) => break,
+                        };
                         let fuel_meter = fuel_meter.clone();
                         tokio::spawn(async move {
+                            let _permit = permit;
                             let bucket_for_label = bucket_name.clone();
                             let result = fuel_meter.observe(
                                 &[

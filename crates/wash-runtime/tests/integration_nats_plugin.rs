@@ -384,6 +384,49 @@ async fn reserved_subjects_are_denied_even_with_a_broad_grant() -> Result<()> {
 
 #[tokio::test]
 #[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn wildcard_publish_cannot_widen_a_grant() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+
+    // A grant of `other.*` must not let a publish to `other.>` through: the
+    // request would otherwise be matched by the grant's own wildcard.
+    host.workload_start(workload_request(
+        "wl-wildcard",
+        nats_interface(&[
+            ("servers", &h.nats_url),
+            ("subject-allow", "test.>,other.*"),
+            ("stream-allow", STREAM),
+            ("bucket-allow", COUNTS_BUCKET),
+            ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+        ]),
+    ))
+    .await?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let results = tokio::spawn({
+        let client = h.client.clone();
+        async move { collect_results(&client, 2).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    h.js.publish("test.orders.probe", "denied:other.>".into())
+        .await
+        .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?
+        .await
+        .map_err(|e| anyhow::anyhow!("publish ack failed: {e}"))?;
+
+    let results = results.await??;
+    assert!(
+        results
+            .iter()
+            .any(|r| r == "denied-probe:subject-denied:other.>"),
+        "a wildcard publish must not be matched against the grant, got {results:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
 async fn missing_servers_fails_the_deployment() -> Result<()> {
     let _h = start_nats().await?;
     let host = start_host().await?;

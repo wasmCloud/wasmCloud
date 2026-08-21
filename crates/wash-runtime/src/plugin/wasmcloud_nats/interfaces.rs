@@ -80,6 +80,11 @@ macro_rules! conn_or_return {
     };
 }
 
+/// Upper bound on messages one `scan` may buffer into host memory.
+const MAX_SCAN_MESSAGES: usize = 1_000;
+/// Wall-clock bound on one `scan`, so a slow stream cannot pin the call open.
+const MAX_SCAN_DURATION: Duration = Duration::from_secs(10);
+
 /// Maps a policy denial onto the wire error.
 fn denied(subject: &str) -> types::NatsError {
     types::NatsError::SubjectDenied(subject.to_string())
@@ -125,6 +130,11 @@ impl<'a> core::Host for ActiveCtx<'a> {
         if conn.policy.check_subject(&subject).is_err() {
             return Ok(Err(denied(&subject)));
         }
+        if let Some(reply_to) = msg.reply_to.as_deref()
+            && conn.policy.check_subject(reply_to).is_err()
+        {
+            return Ok(Err(denied(reply_to)));
+        }
         if let Err(e) = check_payload(msg.body.len(), &conn) {
             return Ok(Err(e));
         }
@@ -168,7 +178,12 @@ impl<'a> core::Host for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<types::NatsMessage, types::NatsError>> {
         let conn = conn_or_return!(self);
 
-        let types::NatsMessage { subject, body, .. } = msg;
+        let types::NatsMessage {
+            subject,
+            body,
+            headers,
+            ..
+        } = msg;
         if conn.policy.check_subject(&subject).is_err() {
             return Ok(Err(denied(&subject)));
         }
@@ -177,7 +192,16 @@ impl<'a> core::Host for ActiveCtx<'a> {
         }
 
         let timeout_duration = Duration::from_millis(timeout_ms as u64);
-        let request_future = conn.client.request(subject, body.into());
+        let request_future = async {
+            match headers.as_deref().filter(|h| !h.is_empty()) {
+                Some(headers) => {
+                    conn.client
+                        .request_with_headers(subject, wit_headers_to_nats(headers), body.into())
+                        .await
+                }
+                None => conn.client.request(subject, body.into()).await,
+            }
+        };
 
         let resp = match tokio::time::timeout(timeout_duration, request_future).await {
             Ok(Ok(m)) => m,
@@ -336,10 +360,11 @@ impl<'a> js::Host for ActiveCtx<'a> {
         };
 
         let mut messages = Vec::new();
-        let limit = max_count as usize;
+        let limit = (max_count as usize).min(MAX_SCAN_MESSAGES);
+        let deadline = tokio::time::Instant::now() + MAX_SCAN_DURATION;
 
         loop {
-            if messages.len() >= limit {
+            if messages.len() >= limit || tokio::time::Instant::now() >= deadline {
                 break;
             }
             match tokio::time::timeout(Duration::from_millis(100), msg_stream.next()).await {
@@ -368,6 +393,16 @@ impl<'a> js::Host for ActiveCtx<'a> {
             }
         }
 
+        // The consumer is ephemeral to this call; without this each scan leaves
+        // one behind on the stream.
+        drop(msg_stream);
+        if let Err(e) = stream
+            .delete_consumer(&pull_consumer.cached_info().name)
+            .await
+        {
+            warn!("failed to clean up scan consumer: {e}");
+        }
+
         messages.sort_by_key(|m| m.sequence);
         Ok(Ok(messages))
     }
@@ -393,15 +428,15 @@ impl<'a> js::Host for ActiveCtx<'a> {
             }
         };
 
-        let consumer_cfg = jetstream::consumer::pull::Config {
-            name: Some(consumer.clone()),
-            durable_name: Some(consumer.clone()),
-            ..Default::default()
-        };
-
-        let opened_consumer = match stream.create_consumer(consumer_cfg).await {
+        // Attach only: `create_consumer` is create-or-update and would rewrite
+        // an existing durable's filter subject and deliver policy.
+        let opened_consumer = match stream.get_consumer(&consumer).await {
             Ok(c) => c,
-            Err(e) => return Ok(Err(jetstream_err("open pull-consumer failed", e))),
+            Err(e) => {
+                return Ok(Err(types::NatsError::NotFound(format!(
+                    "consumer '{consumer}' on stream '{stream_name}': {e}"
+                ))));
+            }
         };
 
         let handle = PullConsumerHandle {
