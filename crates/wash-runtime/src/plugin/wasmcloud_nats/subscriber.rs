@@ -34,6 +34,16 @@ fn prime_fuel<T>(store: &mut crate::wasmtime::Store<T>) {
     let _ = store.set_fuel(u64::MAX);
 }
 
+/// Redelivery delay for a failed handler, growing with the delivery count.
+///
+/// Capped so a poison message settles into a slow retry rather than either
+/// spinning or disappearing for hours.
+fn redelivery_backoff(delivery_count: u32) -> std::time::Duration {
+    const CAP_SECS: u64 = 60;
+    let secs = u64::from(delivery_count.saturating_sub(1)).saturating_mul(2);
+    std::time::Duration::from_secs(secs.clamp(1, CAP_SECS))
+}
+
 /// Backoff applied when delivery setup fails.
 ///
 /// Long enough that a persistent failure — a component that trap-loops on
@@ -272,24 +282,43 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                         .map_err(Into::into)
                                 },
                             ).await;
+                            // The handler's own error is the useful one; the
+                            // outer result only carries traps.
+                            match &result {
+                                Ok(Err(handler_err)) => warn!(
+                                    subject = %subject_str,
+                                    sequence,
+                                    delivery_count,
+                                    "JetStream handler returned an error: {handler_err}"
+                                ),
+                                Err(e) => warn!(
+                                    subject = %subject_str,
+                                    sequence,
+                                    "JetStream handler trapped: {e}"
+                                ),
+                                Ok(Ok(())) => {}
+                            }
+
                             // Under `auto`, the handler's outcome decides the
-                            // ack. A trap or an `Err` naks, so the message is
-                            // redelivered instead of stalling for ack-wait.
+                            // ack. A trap or an `Err` naks so the message is
+                            // redelivered, with a backoff that grows by
+                            // delivery count: a handler that fails permanently
+                            // would otherwise spin as fast as the server can
+                            // redeliver.
                             if let Some(acker) = host_acker {
                                 let settled = match &result {
                                     Ok(Ok(())) => acker.ack().await,
                                     _ => {
                                         acker
-                                            .ack_with(async_nats::jetstream::AckKind::Nak(None))
+                                            .ack_with(async_nats::jetstream::AckKind::Nak(Some(
+                                                redelivery_backoff(delivery_count),
+                                            )))
                                             .await
                                     }
                                 };
                                 if let Err(e) = settled {
                                     warn!("failed to settle JetStream message: {e}");
                                 }
-                            }
-                            if let Err(e) = result {
-                                warn!("Error handling JetStream message: {e}");
                             }
                             drop(permit);
                         });
