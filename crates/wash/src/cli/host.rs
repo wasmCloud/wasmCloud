@@ -548,9 +548,14 @@ impl CliCommand for HostCommand {
             .with_plugin(Arc::new(plugin::wasi_keyvalue::NatsKeyValue::new(
                 &data_nats_client,
             )))?
-            .with_plugin(Arc::new(plugin::wasmcloud_nats::WasmcloudNats::new(
-                data_nats_client.clone(),
-            )))?
+            // Opens its own per-workload connections rather than borrowing the
+            // host's, and denies the host's control subjects to every workload.
+            .with_plugin(Arc::new(
+                plugin::wasmcloud_nats::WasmcloudNats::new().with_lattice_prefixes(vec![
+                    format!("{}.", wash_runtime::washlet::HOST_API_PREFIX),
+                    format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),
+                ]),
+            ))?
             .with_meters(Meters::new(ctx.enable_meters()));
 
         #[cfg(feature = "wasm_component_model_implements")]

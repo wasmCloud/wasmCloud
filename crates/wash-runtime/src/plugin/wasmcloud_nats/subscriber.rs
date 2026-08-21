@@ -16,6 +16,8 @@ use crate::engine::workload::ResolvedWorkload;
 use crate::observability::FuelConsumptionMeter;
 use crate::wasmtime::component::Resource;
 
+use super::config::AckMode;
+use super::conn::ConnHandle;
 use super::handles::{BucketHandle, MessageHandle};
 use super::{
     CoreSubscriptionConfig, JetStreamSubscriptionConfig, KvWatchConfig, PLUGIN_NATS_ID,
@@ -40,9 +42,7 @@ fn nats_headers_to_core_wit(
 fn kv_entry_to_kv_handler_wit(e: &jetstream::kv::Entry) -> kv_bindings::wasmcloud::nats::kv::Entry {
     let operation = match e.operation {
         jetstream::kv::Operation::Put => kv_bindings::wasmcloud::nats::kv::KvOperation::Put,
-        jetstream::kv::Operation::Delete => {
-            kv_bindings::wasmcloud::nats::kv::KvOperation::Delete
-        }
+        jetstream::kv::Operation::Delete => kv_bindings::wasmcloud::nats::kv::KvOperation::Delete,
         jetstream::kv::Operation::Purge => kv_bindings::wasmcloud::nats::kv::KvOperation::Purge,
     };
 
@@ -60,16 +60,18 @@ fn kv_entry_to_kv_handler_wit(e: &jetstream::kv::Entry) -> kv_bindings::wasmclou
 pub(super) async fn spawn_jetstream_subscriptions(
     workload: &ResolvedWorkload,
     component_id: &str,
-    jetstream: Arc<jetstream::Context>,
+    conn: Arc<ConnHandle>,
     subs: Vec<JetStreamSubscriptionConfig>,
     cancel_token: CancellationToken,
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
-    let pre = jetstream_bindings::NatsJetstreamHandlerPre::new(instance_pre)?;
+    let pre = jetstream_bindings::NatsJsProcessorPre::new(instance_pre)?;
 
     for sub in subs {
-        let jetstream = jetstream.clone();
+        let conn = conn.clone();
+        let ack_mode = conn.ack_mode;
+        let in_flight = Arc::new(tokio::sync::Semaphore::new(conn.limits.max_in_flight));
         let workload = workload.clone();
         let component_id = component_id.to_string();
         let pre = pre.clone();
@@ -77,15 +79,10 @@ pub(super) async fn spawn_jetstream_subscriptions(
         let fuel_meter = fuel_meter.clone();
 
         tokio::spawn(async move {
-            let stream = match jetstream
-                .get_or_create_stream(jetstream::stream::Config {
-                    name: sub.stream.clone(),
-                    subjects: vec![sub.filter_subject.clone()],
-                    storage: jetstream::stream::StorageType::File,
-                    ..Default::default()
-                })
-                .await
-            {
+            // Attach only. Creating the stream here would let a subscription
+            // provision arbitrary streams outside the grant; the interface
+            // contract is that streams are provisioned out-of-band.
+            let stream = match conn.jetstream.get_stream(&sub.stream).await {
                 Ok(s) => s,
                 Err(e) => {
                     warn!(
@@ -144,15 +141,19 @@ pub(super) async fn spawn_jetstream_subscriptions(
                             Some(Ok(m)) => m,
                         };
 
-                        let info = raw.info();
-                        let (sequence, delivery_count) = match info.as_ref() {
+                        let (sequence, delivery_count) = match raw.info() {
                             Ok(i) => (i.stream_sequence, i.delivered as u32),
                             Err(_) => (0, 1),
                         };
                         let subject_str = raw.subject.to_string();
-                        let body = raw.payload.to_vec();
-                        let reply_to = raw.reply.as_ref().map(|r| r.to_string());
-                        let headers = raw.headers.clone();
+                        let (message, acker) = raw.split();
+
+                        // Bound fan-out into the component pool: an unbounded
+                        // spawn per message turns a traffic spike into an OOM.
+                        let permit = match in_flight.clone().acquire_owned().await {
+                            Ok(p) => p,
+                            Err(_) => break,
+                        };
 
                         let mut store = match workload.new_store(&component_id).await {
                             Err(e) => {
@@ -169,14 +170,17 @@ pub(super) async fn spawn_jetstream_subscriptions(
                             Ok(p) => p,
                         };
 
+                        // Under `auto` the host settles the message, so the
+                        // guest handle carries no acker.
+                        let (guest_acker, host_acker) = match ack_mode {
+                            AckMode::Auto => (None, Some(acker)),
+                            AckMode::Manual => (Some(acker), None),
+                        };
                         let handle = MessageHandle {
-                            inner: Some(raw),
+                            acker: guest_acker,
+                            message,
                             sequence,
                             delivery_count,
-                            subject: subject_str.clone(),
-                            reply_to,
-                            body,
-                            headers,
                         };
                         let resource: Resource<MessageHandle> =
                             match store.data_mut().table.push(handle) {
@@ -213,9 +217,26 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                         .map_err(Into::into)
                                 },
                             ).await;
+                            // Under `auto`, the handler's outcome decides the
+                            // ack. A trap or an `Err` naks, so the message is
+                            // redelivered instead of stalling for ack-wait.
+                            if let Some(acker) = host_acker {
+                                let settled = match &result {
+                                    Ok(Ok(())) => acker.ack().await,
+                                    _ => {
+                                        acker
+                                            .ack_with(async_nats::jetstream::AckKind::Nak(None))
+                                            .await
+                                    }
+                                };
+                                if let Err(e) = settled {
+                                    warn!("failed to settle JetStream message: {e}");
+                                }
+                            }
                             if let Err(e) = result {
                                 warn!("Error handling JetStream message: {e}");
                             }
+                            drop(permit);
                         });
                     }
                     _ = cancel_token.cancelled() => break,
@@ -231,16 +252,16 @@ pub(super) async fn spawn_jetstream_subscriptions(
 pub(super) async fn spawn_core_subscriptions(
     workload: &ResolvedWorkload,
     component_id: &str,
-    client: Arc<async_nats::Client>,
+    conn: Arc<ConnHandle>,
     subs: Vec<CoreSubscriptionConfig>,
     cancel_token: CancellationToken,
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
-    let pre = core_bindings::NatsCoreHandlerPre::new(instance_pre)?;
+    let pre = core_bindings::NatsSubscriberPre::new(instance_pre)?;
 
     for sub in subs {
-        let client = client.clone();
+        let conn = conn.clone();
         let workload = workload.clone();
         let component_id = component_id.to_string();
         let pre = pre.clone();
@@ -250,11 +271,11 @@ pub(super) async fn spawn_core_subscriptions(
         tokio::spawn(async move {
             let subscriber = match &sub.queue_group {
                 Some(group) => {
-                    client
+                    conn.client
                         .queue_subscribe(sub.subject.clone(), group.clone())
                         .await
                 }
-                None => client.subscribe(sub.subject.clone()).await,
+                None => conn.client.subscribe(sub.subject.clone()).await,
             };
             let mut messages = match subscriber {
                 Ok(s) => s,
@@ -338,16 +359,16 @@ pub(super) async fn spawn_core_subscriptions(
 pub(super) async fn spawn_kv_watches(
     workload: &ResolvedWorkload,
     component_id: &str,
-    jetstream: Arc<jetstream::Context>,
+    conn: Arc<ConnHandle>,
     watches: Vec<KvWatchConfig>,
     cancel_token: CancellationToken,
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
-    let pre = kv_bindings::NatsKvHandlerPre::new(instance_pre)?;
+    let pre = kv_bindings::NatsKvWatcherPre::new(instance_pre)?;
 
     for watch in watches {
-        let jetstream = jetstream.clone();
+        let conn = conn.clone();
         let workload = workload.clone();
         let component_id = component_id.to_string();
         let pre = pre.clone();
@@ -355,7 +376,7 @@ pub(super) async fn spawn_kv_watches(
         let fuel_meter = fuel_meter.clone();
 
         tokio::spawn(async move {
-            let store_kv = match jetstream.get_key_value(&watch.bucket).await {
+            let store_kv = match conn.jetstream.get_key_value(&watch.bucket).await {
                 Ok(s) => s,
                 Err(e) => {
                     warn!("kv watch: bucket '{}' not available: {e}", watch.bucket);

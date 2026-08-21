@@ -1,23 +1,28 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use tokio::sync::RwLock;
-use tracing::warn;
+use tracing::info;
 
-use crate::engine::workload::{ResolvedWorkload, WorkloadItem};
+use crate::engine::workload::{ResolvedWorkload, UnresolvedWorkload, WorkloadItem};
 use crate::observability::Meters;
-use crate::plugin::HostPlugin;
-use crate::plugin::WorkloadTracker;
+use crate::plugin::{HostPlugin, WitInterfaces, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
+pub(super) mod config;
+pub(super) mod conn;
 pub(super) mod handles;
 mod interfaces;
+pub(super) mod policy;
 mod subscriber;
 
+use config::NatsConfig;
+use conn::{ConnHandle, ConnectionRegistry};
+
 pub(super) mod bindings {
-    // Imports-only world: used to install host imports into the linker
-    // and is the canonical source for shared types (types, core, jetstream, kv).
-    // Does not require the component to export any handler.
+    // Imports-only world: installs host imports into the linker and is the
+    // canonical source for the shared types.
     crate::wasmtime::component::bindgen!({
         world: "nats-imports",
         imports: { default: async | trappable | tracing },
@@ -29,14 +34,12 @@ pub(super) mod bindings {
     });
 }
 
-// Per-handler worlds, each in its own module so their duplicate import types
-// don't collide with `bindings::wasmcloud::nats::{types,core,jetstream,kv}`.
-// Each world only requires the single export that its spawner actually calls,
-// so a component exporting only one of the three handlers pre-instantiates
-// cleanly (previously a unified `nats` world forced all three exports).
+// Each handler world lives in its own module so their duplicate import types
+// don't collide, and so a component exporting only one handler still
+// pre-instantiates.
 pub(super) mod jetstream_bindings {
     crate::wasmtime::component::bindgen!({
-        world: "nats-jetstream-handler",
+        world: "nats-js-processor",
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
         with: {
@@ -48,7 +51,7 @@ pub(super) mod jetstream_bindings {
 
 pub(super) mod core_bindings {
     crate::wasmtime::component::bindgen!({
-        world: "nats-core-handler",
+        world: "nats-subscriber",
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
     });
@@ -56,7 +59,7 @@ pub(super) mod core_bindings {
 
 pub(super) mod kv_bindings {
     crate::wasmtime::component::bindgen!({
-        world: "nats-kv-handler",
+        world: "nats-kv-watcher",
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
         with: {
@@ -67,7 +70,9 @@ pub(super) mod kv_bindings {
 
 pub(super) const PLUGIN_NATS_ID: &str = "wasmcloud-nats";
 
-/// Per-component data held by the plugin for subscription lifecycle.
+const NATS_VERSION: &str = "0.1.0";
+
+/// Per-component subscription state.
 pub struct ComponentData {
     pub(super) jetstream_subs: Vec<JetStreamSubscriptionConfig>,
     pub(super) core_subs: Vec<CoreSubscriptionConfig>,
@@ -95,58 +100,63 @@ pub(super) struct KvWatchConfig {
     pub filter: String,
 }
 
-/// Parse JetStream subscriptions in format: `STREAM:filter[:policy[:queue]]` separated by commas.
-fn parse_jetstream_subscriptions(raw: &str) -> Vec<JetStreamSubscriptionConfig> {
+/// Parses `STREAM:filter[:policy[:queue]]`, comma separated.
+fn parse_jetstream_subscriptions(raw: &str) -> anyhow::Result<Vec<JetStreamSubscriptionConfig>> {
     raw.split(',')
-        .filter_map(|entry| {
-            let entry = entry.trim();
-            if entry.is_empty() {
-                return None;
-            }
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
             let parts: Vec<&str> = entry.splitn(4, ':').collect();
-            if parts.len() < 2 {
-                warn!("invalid jetstream subscription entry: {entry}");
-                return None;
+            let (Some(stream), Some(filter_subject)) = (parts.first(), parts.get(1)) else {
+                anyhow::bail!(
+                    "invalid jetstream subscription `{entry}`, expected STREAM:filter[:policy[:queue]]"
+                )
+            };
+            if stream.is_empty() || filter_subject.is_empty() {
+                anyhow::bail!("jetstream subscription `{entry}` has an empty stream or filter")
             }
-            // TODO: should replace unwrap with unwrap_or
-            Some(JetStreamSubscriptionConfig {
-                stream: parts.first()?.to_string(),
-                filter_subject: parts.get(1)?.to_string(),
+            Ok(JetStreamSubscriptionConfig {
+                stream: (*stream).to_string(),
+                filter_subject: (*filter_subject).to_string(),
                 deliver_policy: parts.get(2).unwrap_or(&"new").to_string(),
-                queue_group: parts.get(3).map(|s| s.to_string()),
+                queue_group: parts.get(3).map(|s| (*s).to_string()),
             })
         })
         .collect()
 }
 
-/// Parse core subscriptions in format: `subject[:queue]` separated by commas.
-fn parse_core_subscriptions(raw: &str) -> Vec<CoreSubscriptionConfig> {
+/// Parses `subject[:queue]`, comma separated.
+fn parse_core_subscriptions(raw: &str) -> anyhow::Result<Vec<CoreSubscriptionConfig>> {
     raw.split(',')
-        .filter_map(|entry| {
-            let entry = entry.trim();
-            if entry.is_empty() {
-                return None;
-            }
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
             let mut parts = entry.splitn(2, ':');
-            let subject = parts.next()?.to_string();
-            Some(CoreSubscriptionConfig {
-                subject,
-                queue_group: parts.next().map(|s| s.to_string()),
+            let subject = parts.next().unwrap_or_default();
+            if subject.is_empty() {
+                anyhow::bail!("core subscription `{entry}` has an empty subject")
+            }
+            Ok(CoreSubscriptionConfig {
+                subject: subject.to_string(),
+                queue_group: parts.next().map(str::to_string),
             })
         })
         .collect()
 }
 
-/// Parse KV watches in format: `bucket:filter` separated by commas.
-fn parse_kv_watches(raw: &str) -> Vec<KvWatchConfig> {
+/// Parses `bucket:filter`, comma separated.
+fn parse_kv_watches(raw: &str) -> anyhow::Result<Vec<KvWatchConfig>> {
     raw.split(',')
-        .filter_map(|entry| {
-            let entry = entry.trim();
-            if entry.is_empty() {
-                return None;
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let Some((bucket, filter)) = entry.split_once(':') else {
+                anyhow::bail!("invalid kv watch `{entry}`, expected bucket:filter")
+            };
+            if bucket.is_empty() || filter.is_empty() {
+                anyhow::bail!("kv watch `{entry}` has an empty bucket or filter")
             }
-            let (bucket, filter) = entry.split_once(':')?;
-            Some(KvWatchConfig {
+            Ok(KvWatchConfig {
                 bucket: bucket.to_string(),
                 filter: filter.to_string(),
             })
@@ -155,39 +165,55 @@ fn parse_kv_watches(raw: &str) -> Vec<KvWatchConfig> {
 }
 
 /// `wasmcloud:nats` host plugin — NATS-native capabilities split by interface.
-#[derive(Clone)]
 pub struct WasmcloudNats {
     pub(super) tracker: Arc<RwLock<WorkloadTracker<(), ComponentData>>>,
-    pub(super) client: Arc<async_nats::Client>,
-    pub(super) jetstream: Arc<async_nats::jetstream::Context>,
+    pub(super) connections: Arc<ConnectionRegistry>,
     pub(super) meters: Arc<RwLock<Meters>>,
-    pub(super) kv_stores: Arc<RwLock<HashMap<String, async_nats::jetstream::kv::Store>>>,
+    /// Subjects the host itself uses, denied to every workload.
+    lattice_prefixes: Vec<String>,
+}
+
+impl Default for WasmcloudNats {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WasmcloudNats {
-    pub fn new(client: Arc<async_nats::Client>) -> Self {
-        let jetstream = async_nats::jetstream::new((*client).clone());
+    pub fn new() -> Self {
         Self {
-            client,
-            jetstream: Arc::new(jetstream),
             tracker: Arc::new(RwLock::new(WorkloadTracker::default())),
+            connections: Arc::new(ConnectionRegistry::default()),
             meters: Default::default(),
-            kv_stores: Arc::new(RwLock::new(HashMap::new())),
+            lattice_prefixes: Vec::new(),
         }
     }
 
-    /// Cache-checked open of a KV bucket. If absent, attempts to open (not create).
-    pub(super) async fn get_kv(&self, bucket: &str) -> Option<async_nats::jetstream::kv::Store> {
-        if let Some(store) = self.kv_stores.read().await.get(bucket) {
-            return Some(store.clone());
-        }
-        let store = self.jetstream.get_key_value(bucket).await.ok()?;
-        self.kv_stores
-            .write()
-            .await
-            .insert(bucket.to_string(), store.clone());
-        Some(store)
+    /// Denies the host's own lattice subject space to every workload.
+    pub fn with_lattice_prefixes(mut self, prefixes: Vec<String>) -> Self {
+        self.lattice_prefixes = prefixes;
+        self
     }
+
+    /// Resolves the calling workload's connection.
+    pub(super) async fn conn_for(&self, workload_id: &str) -> Option<Arc<ConnHandle>> {
+        self.connections.get(workload_id).await
+    }
+}
+
+/// Collects this plugin's interfaces out of a bound set.
+fn nats_interfaces<'a>(interfaces: &'a WitInterfaces<'_>) -> Vec<&'a WitInterface> {
+    interfaces
+        .iter()
+        .filter(|i| i.namespace == "wasmcloud" && i.package == "nats")
+        .collect()
+}
+
+fn serves(interface: &WitInterface, names: &[&str]) -> bool {
+    interface
+        .interfaces
+        .iter()
+        .any(|name| names.contains(&name.as_str()))
 }
 
 #[async_trait::async_trait]
@@ -199,109 +225,141 @@ impl HostPlugin for WasmcloudNats {
     fn world(&self) -> WitWorld {
         WitWorld {
             imports: HashSet::from([WitInterface::from(
-                "wasmcloud:nats/types,core,jetstream,kv@0.2.0-draft",
+                format!("wasmcloud:nats/types,core,jetstream,kv@{NATS_VERSION}").as_str(),
             )]),
             exports: HashSet::from([WitInterface::from(
-                "wasmcloud:nats/jetstream-handler,core-handler,kv-handler@0.2.0-draft",
+                format!("wasmcloud:nats/jetstream-handler,core-handler,kv-handler@{NATS_VERSION}")
+                    .as_str(),
             )]),
         }
+    }
+
+    fn supports_named_instances(&self) -> bool {
+        true
     }
 
     async fn inject_meters(&self, meters: &Meters) {
         *self.meters.write().await = meters.clone();
     }
 
-    async fn on_workload_item_bind<'a>(
+    /// Validates config, resolves credentials, and opens the workload's own
+    /// connection. Failing here fails the deployment rather than the first call.
+    async fn on_workload_bind(
         &self,
-        component_handle: &mut WorkloadItem<'a>,
-        interfaces: HashSet<WitInterface>,
+        workload: &UnresolvedWorkload,
+        interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        let nats_interfaces: Vec<&WitInterface> = interfaces
-            .iter()
-            .filter(|i| i.namespace == "wasmcloud" && i.package == "nats")
-            .collect();
-
-        if nats_interfaces.is_empty() {
+        let bound = nats_interfaces(&interfaces);
+        if bound.is_empty() {
             return Ok(());
         }
 
+        let workload_id = workload.id();
+        for interface in bound {
+            let mut config = NatsConfig::from_map(&interface.config).with_context(|| {
+                format!(
+                    "invalid wasmcloud:nats configuration for workload `{workload_id}` \
+                     interface `{}`",
+                    interface.instance()
+                )
+            })?;
+
+            // Scope request-reply to this workload so two workloads on one
+            // server cannot observe each other's responses.
+            if config.inbox_prefix.is_none() {
+                config.inbox_prefix = Some(conn::workload_inbox_prefix(workload_id));
+            }
+
+            let handle = self
+                .connections
+                .acquire(workload_id, &config, self.lattice_prefixes.clone())
+                .await?;
+
+            info!(
+                workload_id,
+                servers = config.servers.join(","),
+                auth = config.auth.kind(),
+                server_version = handle.server_version,
+                "opened NATS connection"
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn on_workload_item_bind<'a>(
+        &self,
+        item: &mut WorkloadItem<'a>,
+        interfaces: WitInterfaces<'_>,
+    ) -> anyhow::Result<()> {
+        let bound = nats_interfaces(&interfaces);
+        if bound.is_empty() {
+            return Ok(());
+        }
+
+        let linker = item.linker();
         bindings::wasmcloud::nats::types::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-            component_handle.linker(),
+            linker,
             crate::engine::ctx::extract_active_ctx,
         )?;
         bindings::wasmcloud::nats::core::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-            component_handle.linker(),
+            linker,
             crate::engine::ctx::extract_active_ctx,
         )?;
         bindings::wasmcloud::nats::jetstream::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-            component_handle.linker(),
+            linker,
             crate::engine::ctx::extract_active_ctx,
         )?;
         bindings::wasmcloud::nats::kv::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-            component_handle.linker(),
+            linker,
             crate::engine::ctx::extract_active_ctx,
         )?;
 
-        let exports_handler = nats_interfaces.iter().any(|interface| {
-            interface.interfaces.iter().any(|name| {
-                matches!(
-                    name.as_str(),
-                    "handler" | "jetstream-handler" | "core-handler" | "kv-handler"
-                )
-            })
+        let exports_handler = bound.iter().any(|i| {
+            serves(
+                i,
+                &["jetstream-handler", "core-handler", "kv-handler", "handler"],
+            )
         });
-
-        if exports_handler {
-            let mut jetstream_subs = Vec::new();
-            let mut core_subs = Vec::new();
-            let mut kv_watches = Vec::new();
-
-            for interface in &nats_interfaces {
-                let has_jetstream = interface
-                    .interfaces
-                    .iter()
-                    .any(|name| matches!(name.as_str(), "handler" | "jetstream-handler"));
-                if has_jetstream {
-                    if let Some(value) = interface.config.get("subscriptions") {
-                        jetstream_subs.extend(parse_jetstream_subscriptions(value));
-                    }
-                }
-
-                let has_core = interface
-                    .interfaces
-                    .iter()
-                    .any(|name| matches!(name.as_str(), "handler" | "core-handler"));
-                if has_core {
-                    if let Some(value) = interface.config.get("core-subscriptions") {
-                        core_subs.extend(parse_core_subscriptions(value));
-                    }
-                }
-
-                let has_kv = interface
-                    .interfaces
-                    .iter()
-                    .any(|name| matches!(name.as_str(), "handler" | "kv-handler"));
-                if has_kv {
-                    if let Some(value) = interface.config.get("kv-watches") {
-                        kv_watches.extend(parse_kv_watches(value));
-                    }
-                }
-            }
-
-            let WorkloadItem::Component(component_handle) = component_handle else {
-                anyhow::bail!("Service can not be tracked");
-            };
-
-            self.tracker.write().await.add_component(
-                component_handle,
-                ComponentData {
-                    cancel_token: tokio_util::sync::CancellationToken::new(),
-                    jetstream_subs,
-                    core_subs,
-                    kv_watches,
-                },
-            );
+        if !exports_handler {
+            return Ok(());
         }
+
+        let mut jetstream_subs = Vec::new();
+        let mut core_subs = Vec::new();
+        let mut kv_watches = Vec::new();
+
+        for interface in &bound {
+            if serves(interface, &["handler", "jetstream-handler"])
+                && let Some(raw) = interface.config.get("subscriptions")
+            {
+                jetstream_subs.extend(parse_jetstream_subscriptions(raw)?);
+            }
+            if serves(interface, &["handler", "core-handler"])
+                && let Some(raw) = interface.config.get("core-subscriptions")
+            {
+                core_subs.extend(parse_core_subscriptions(raw)?);
+            }
+            if serves(interface, &["handler", "kv-handler"])
+                && let Some(raw) = interface.config.get("kv-watches")
+            {
+                kv_watches.extend(parse_kv_watches(raw)?);
+            }
+        }
+
+        let WorkloadItem::Component(component) = item else {
+            anyhow::bail!("wasmcloud:nats handlers are only supported on components")
+        };
+
+        self.tracker.write().await.add_component(
+            component,
+            ComponentData {
+                cancel_token: tokio_util::sync::CancellationToken::new(),
+                jetstream_subs,
+                core_subs,
+                kv_watches,
+            },
+        );
 
         Ok(())
     }
@@ -328,37 +386,68 @@ impl HostPlugin for WasmcloudNats {
             return Ok(());
         }
 
+        let workload_id = workload.id();
+        let Some(handle) = self.conn_for(workload_id).await else {
+            anyhow::bail!("no NATS connection bound for workload `{workload_id}`")
+        };
+
+        // A subscription outside the grant is a deployment error, not a
+        // per-message denial: the workload would otherwise start and silently
+        // receive nothing.
+        for sub in &core_subs {
+            handle.policy.check_subject(&sub.subject).map_err(|_| {
+                anyhow::anyhow!(
+                    "core subscription `{}` is outside this workload's subject grant",
+                    sub.subject
+                )
+            })?;
+        }
+        for sub in &jetstream_subs {
+            handle.policy.check_stream(&sub.stream).map_err(|_| {
+                anyhow::anyhow!(
+                    "jetstream subscription on stream `{}` is outside this workload's stream grant",
+                    sub.stream
+                )
+            })?;
+        }
+        for watch in &kv_watches {
+            handle.policy.check_bucket(&watch.bucket).map_err(|_| {
+                anyhow::anyhow!(
+                    "kv watch on bucket `{}` is outside this workload's bucket grant",
+                    watch.bucket
+                )
+            })?;
+        }
+
         let fuel_meter = self.meters.read().await.fuel_consumption.clone();
 
         if !jetstream_subs.is_empty() {
             subscriber::spawn_jetstream_subscriptions(
                 workload,
                 component_id,
-                self.jetstream.clone(),
+                handle.clone(),
                 jetstream_subs,
                 cancel_token.clone(),
                 fuel_meter.clone(),
             )
             .await?;
         }
-
         if !core_subs.is_empty() {
             subscriber::spawn_core_subscriptions(
                 workload,
                 component_id,
-                self.client.clone(),
+                handle.clone(),
                 core_subs,
                 cancel_token.clone(),
                 fuel_meter.clone(),
             )
             .await?;
         }
-
         if !kv_watches.is_empty() {
             subscriber::spawn_kv_watches(
                 workload,
                 component_id,
-                self.jetstream.clone(),
+                handle,
                 kv_watches,
                 cancel_token,
                 fuel_meter,
@@ -372,11 +461,11 @@ impl HostPlugin for WasmcloudNats {
     async fn on_workload_unbind(
         &self,
         workload_id: &str,
-        _interfaces: HashSet<WitInterface>,
+        _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         let workload_cleanup = |_| async {};
-        let component_cleanup = |component_data: ComponentData| async move {
-            component_data.cancel_token.cancel();
+        let component_cleanup = |data: ComponentData| async move {
+            data.cancel_token.cancel();
         };
 
         self.tracker
@@ -385,6 +474,12 @@ impl HostPlugin for WasmcloudNats {
             .remove_workload_with_cleanup(workload_id, workload_cleanup, component_cleanup)
             .await;
 
+        self.connections.release(workload_id).await;
+        Ok(())
+    }
+
+    async fn stop(&self) -> anyhow::Result<()> {
+        self.connections.shutdown().await;
         Ok(())
     }
 }
@@ -395,7 +490,7 @@ mod tests {
 
     #[test]
     fn jetstream_subs_basic() {
-        let subs = parse_jetstream_subscriptions("ORDERS:orders.*:new");
+        let subs = parse_jetstream_subscriptions("ORDERS:orders.*:new").unwrap();
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].stream, "ORDERS");
         assert_eq!(subs[0].filter_subject, "orders.*");
@@ -406,7 +501,8 @@ mod tests {
     #[test]
     fn jetstream_subs_with_queue() {
         let subs =
-            parse_jetstream_subscriptions("ORDERS:orders.*:new:workers,EVENTS:evt.>:all:group-a");
+            parse_jetstream_subscriptions("ORDERS:orders.*:new:workers,EVENTS:evt.>:all:group-a")
+                .unwrap();
         assert_eq!(subs.len(), 2);
         assert_eq!(subs[0].queue_group.as_deref(), Some("workers"));
         assert_eq!(subs[1].stream, "EVENTS");
@@ -414,8 +510,14 @@ mod tests {
     }
 
     #[test]
+    fn jetstream_subs_reject_malformed() {
+        assert!(parse_jetstream_subscriptions("ORDERS").is_err());
+        assert!(parse_jetstream_subscriptions(":orders.*").is_err());
+    }
+
+    #[test]
     fn core_subs_basic() {
-        let subs = parse_core_subscriptions("events.*,metrics.>:stats");
+        let subs = parse_core_subscriptions("events.*,metrics.>:stats").unwrap();
         assert_eq!(subs.len(), 2);
         assert_eq!(subs[0].subject, "events.*");
         assert_eq!(subs[0].queue_group, None);
@@ -425,11 +527,17 @@ mod tests {
 
     #[test]
     fn kv_watches_basic() {
-        let watches = parse_kv_watches("config:*,secrets:prod.>");
+        let watches = parse_kv_watches("config:*,secrets:prod.>").unwrap();
         assert_eq!(watches.len(), 2);
         assert_eq!(watches[0].bucket, "config");
         assert_eq!(watches[0].filter, "*");
         assert_eq!(watches[1].bucket, "secrets");
         assert_eq!(watches[1].filter, "prod.>");
+    }
+
+    #[test]
+    fn kv_watches_reject_malformed() {
+        assert!(parse_kv_watches("configonly").is_err());
+        assert!(parse_kv_watches("config:").is_err());
     }
 }
