@@ -244,6 +244,64 @@ async fn guest_open_honors_bucket_policy_over_jetstream() -> Result<()> {
     Ok(())
 }
 
+/// The path a CLI actually takes: the embedder's policy handed to
+/// [`HostBuilder::with_multiplexed_plugins_with`], rather than a provider
+/// constructed by hand.
+///
+/// `wash dev` and `wash host` register the multiplexed set this way, so this
+/// is what proves their `--keyvalue-nats-*` flags and `dev.wasi_keyvalue_nats`
+/// block reach an `(implements ..)` import at all.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn multiplexed_plugin_set_inherits_embedder_policy() -> Result<()> {
+    let (_container, url) = start_jetstream().await?;
+    let js = async_nats::jetstream::new(async_nats::connect(&url).await?);
+
+    let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let addr = ingress.addr();
+    let host = HostBuilder::new()
+        .with_engine(Engine::builder().build()?)
+        .with_http_handler(Arc::new(ingress))
+        .with_multiplexed_plugins_with(
+            &wash_runtime::plugin::MultiplexedDefaults::default().with_keyvalue_nats_bucket(
+                BucketPolicy {
+                    prefix: PREFIX.to_string(),
+                    create: CreatePolicy::Missing,
+                    ..BucketPolicy::default()
+                },
+            ),
+        )?
+        .build()?
+        .start()
+        .await
+        .context("failed to start host")?;
+
+    // The interface names its backend and URL; everything about *which* bucket
+    // and whether it may be created comes from the embedder.
+    host.workload_start(workload(
+        "keyvalue-default-p3",
+        KEYVALUE_DEFAULT_P3_WASM,
+        vec![
+            http_incoming_handler_interface("builder-defaults", None),
+            wasmcloud_kv_iface(&url),
+        ],
+    ))
+    .await
+    .context("failed to start keyvalue-default-p3 workload")?;
+
+    let (status, body) = request(addr, "builder-defaults").await?;
+    assert_eq!(status, 200, "expected the guest's value, got: {body}");
+    js.get_key_value("e2e-default-kv")
+        .await
+        .context("the embedder's prefix must have reached the multiplexed plugin set")?;
+    js.get_key_value("default-kv")
+        .await
+        .expect_err("the unprefixed name must not have been created");
+    drop(host);
+
+    Ok(())
+}
+
 /// The same policy, through a real async `wasmcloud:keyvalue` guest: the two
 /// packages share the providers, so an operator's policy must govern both.
 #[tokio::test]

@@ -1804,6 +1804,63 @@ workload:
         assert!(err.contains("tls_key_path"));
     }
 
+    /// Locks in the YAML contract a user writes in `.wash/config.yaml`. A
+    /// renamed or moved field would leave the block silently ignored, and a
+    /// `wash dev` loop would keep creating buckets under no prefix while the
+    /// project file says otherwise.
+    #[test]
+    fn dev_keyvalue_nats_deserializes_from_yaml() {
+        let yaml = r#"
+dev:
+  wasi_keyvalue_nats_url: nats://127.0.0.1:4222
+  wasi_keyvalue_nats:
+    create: never
+    bucket_prefix: my-app_
+    bucket: MY_APP_STORE
+    replicas: 3
+    storage: memory
+    max_age: 24h
+    history: 5
+    max_bytes: 1048576
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let policy = config
+            .dev()
+            .keyvalue_bucket_policy()
+            .expect("the YAML block must be a valid policy");
+
+        assert_eq!(policy.create, CreatePolicy::Never);
+        assert_eq!(policy.physical_name("counters"), "my-app_MY_APP_STORE");
+        assert_eq!(policy.replicas, Some(3));
+        assert!(matches!(
+            policy.storage,
+            Some(async_nats::jetstream::stream::StorageType::Memory)
+        ));
+        assert_eq!(policy.max_age, Some(Duration::from_secs(86400)));
+        assert_eq!(policy.history, Some(5));
+        assert_eq!(policy.max_bytes, Some(1_048_576));
+    }
+
+    /// The block is optional: a project that sets only the URL still gets the
+    /// dev default.
+    #[test]
+    fn dev_keyvalue_nats_block_is_optional() {
+        let yaml = r#"
+dev:
+  wasi_keyvalue_nats_url: nats://127.0.0.1:4222
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(config.dev().wasi_keyvalue_nats.is_none());
+        assert_eq!(
+            config
+                .dev()
+                .keyvalue_bucket_policy()
+                .expect("must be valid")
+                .create,
+            CreatePolicy::Missing
+        );
+    }
+
     /// With nothing configured, `wash dev` creates a missing bucket and leaves
     /// the identifier alone, so a first `open` works against a bare JetStream.
     #[test]

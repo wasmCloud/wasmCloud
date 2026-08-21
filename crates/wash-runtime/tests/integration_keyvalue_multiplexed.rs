@@ -277,6 +277,64 @@ async fn nats_bucket_policy_governs_creation_and_naming() -> Result<()> {
     Ok(())
 }
 
+/// A bucket is created by `open` and by nothing else: an operation on an
+/// identifier that was never opened must not bring a stream into existence,
+/// however permissive the policy is.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn only_open_may_create_a_bucket() -> Result<()> {
+    let nats = GenericImage::new("nats", "2.12.8-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+        .with_cmd(["-js"])
+        .start()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to start nats: {e}"))?;
+    let nats_port = nats.get_host_port_ipv4(4222).await?;
+    let nats_url = format!("nats://127.0.0.1:{nats_port}");
+
+    let backend = MultiplexedKeyValue::new()
+        .with_provider(Arc::new(NatsProvider::with_defaults(
+            BucketPolicy::create_missing(),
+        )))
+        .build_registry(&HashSet::from([kv_iface("kv", "nats", &nats_url)]))
+        .await?
+        .get("kv")
+        .expect("kv routed")
+        .clone();
+
+    // Reads and writes against an unopened identifier fail as no-such-store...
+    for result in [
+        backend.get("never-opened", "k").await.err(),
+        backend.set("never-opened", "k", b"v".to_vec()).await.err(),
+        backend.increment("never-opened", "k", 1).await.err(),
+    ] {
+        assert!(
+            matches!(
+                result,
+                Some(wash_runtime::plugin::wasi_keyvalue::StoreError::NoSuchStore)
+            ),
+            "an operation on an unopened identifier must be no-such-store, got {result:?}"
+        );
+    }
+
+    // ...and left no stream behind.
+    async_nats::jetstream::new(async_nats::connect(&nats_url).await?)
+        .get_key_value("never-opened")
+        .await
+        .expect_err("no operation other than `open` may create a bucket");
+
+    // The same identifier works once opened, so the refusals above were the
+    // create path being withheld, not a broken backend.
+    backend.open("never-opened").await.map_err(err)?;
+    backend
+        .set("never-opened", "k", b"v".to_vec())
+        .await
+        .map_err(err)?;
+
+    Ok(())
+}
+
 /// `wasi:keyvalue` and `wasmcloud:keyvalue` resolve NATS buckets identically:
 /// both plugins register the same providers, so an embedder's bucket policy —
 /// a `wash host`'s `--keyvalue-nats-*` flags, a `wash dev` project's

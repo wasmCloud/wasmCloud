@@ -374,8 +374,10 @@ pub struct HostCommand {
     #[arg(long = "keyvalue-nats-history")]
     pub keyvalue_nats_history: Option<i64>,
 
-    /// Size ceiling, in bytes, for a keyvalue bucket this host creates.
-    #[arg(long = "keyvalue-nats-max-bytes")]
+    /// Size ceiling, in bytes, for a keyvalue bucket this host creates. `-1`
+    /// is JetStream's "unlimited"; negative values are accepted here so it can
+    /// be passed as `--keyvalue-nats-max-bytes -1` rather than only with `=`.
+    #[arg(long = "keyvalue-nats-max-bytes", allow_negative_numbers = true)]
     pub keyvalue_nats_max_bytes: Option<i64>,
 
     /// Enable additional wasm proposals on the engine. Accepts a comma-separated
@@ -809,7 +811,114 @@ impl CliCommand for HostCommand {
 
 #[cfg(all(test, feature = "host-component-plugins"))]
 mod tests {
-    use super::host_plugin_registry_credentials;
+    use clap::Parser;
+
+    use super::{HostCommand, host_plugin_registry_credentials};
+
+    /// `HostCommand` is an `Args` group, so give it a `Parser` to parse under.
+    #[derive(Debug, Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        host: HostCommand,
+    }
+
+    fn parse(args: &[&str]) -> HostCommand {
+        TestCli::parse_from(std::iter::once("wash-host").chain(args.iter().copied())).host
+    }
+
+    /// With no flags a host opens only buckets that already exist and rewrites
+    /// no names — the conservative default a deployment inherits.
+    #[test]
+    fn keyvalue_policy_defaults_to_create_never() {
+        let policy = parse(&[])
+            .keyvalue_bucket_policy()
+            .expect("the default flags must be a valid policy");
+        assert_eq!(
+            policy.create,
+            wash_runtime::plugin::wasi_keyvalue::CreatePolicy::Never
+        );
+        assert_eq!(policy.physical_name("counters"), "counters");
+    }
+
+    /// Every `--keyvalue-nats-*` flag reaches the policy.
+    #[test]
+    fn keyvalue_policy_reads_every_flag() {
+        let policy = parse(&[
+            "--keyvalue-nats-create",
+            "missing",
+            "--keyvalue-nats-bucket-prefix",
+            "team-a_",
+            "--keyvalue-nats-bucket",
+            "APP_STORE",
+            "--keyvalue-nats-replicas",
+            "3",
+            "--keyvalue-nats-storage",
+            "memory",
+            "--keyvalue-nats-max-age",
+            "24h",
+            "--keyvalue-nats-history",
+            "5",
+            "--keyvalue-nats-max-bytes",
+            "1048576",
+        ])
+        .keyvalue_bucket_policy()
+        .expect("must be a valid policy");
+
+        assert_eq!(
+            policy.create,
+            wash_runtime::plugin::wasi_keyvalue::CreatePolicy::Missing
+        );
+        assert_eq!(policy.physical_name("counters"), "team-a_APP_STORE");
+        assert_eq!(policy.replicas, Some(3));
+        assert!(matches!(
+            policy.storage,
+            Some(async_nats::jetstream::stream::StorageType::Memory)
+        ));
+        assert_eq!(policy.max_age, Some(std::time::Duration::from_secs(86400)));
+        assert_eq!(policy.history, Some(5));
+        assert_eq!(policy.max_bytes, Some(1_048_576));
+    }
+
+    /// A value JetStream would refuse fails while resolving the flags, so the
+    /// host does not start and then break at some guest's first `open`.
+    #[test]
+    fn keyvalue_policy_rejects_invalid_flags() {
+        for args in [
+            vec!["--keyvalue-nats-replicas", "0"],
+            vec!["--keyvalue-nats-history", "0"],
+            vec!["--keyvalue-nats-history", "65"],
+            vec!["--keyvalue-nats-max-bytes", "-2"],
+            vec!["--keyvalue-nats-bucket-prefix", "my.app_"],
+            vec!["--keyvalue-nats-bucket", "my bucket"],
+        ] {
+            parse(&args)
+                .keyvalue_bucket_policy()
+                .expect_err(&format!("{args:?} must be rejected"));
+        }
+    }
+
+    /// `-1` — JetStream's "unlimited" — must reach the policy rather than
+    /// being read as another flag.
+    #[test]
+    fn keyvalue_max_bytes_accepts_unlimited() {
+        let policy = parse(&["--keyvalue-nats-max-bytes", "-1"])
+            .keyvalue_bucket_policy()
+            .expect("-1 must be a valid max_bytes");
+        assert_eq!(policy.max_bytes, Some(-1));
+    }
+
+    /// An unparseable flag value is a clap error, not a policy error.
+    #[test]
+    fn keyvalue_flag_values_are_typed() {
+        for args in [
+            vec!["--keyvalue-nats-create", "sometimes"],
+            vec!["--keyvalue-nats-storage", "tape"],
+            vec!["--keyvalue-nats-max-age", "many moons"],
+        ] {
+            TestCli::try_parse_from(std::iter::once("wash-host").chain(args.iter().copied()))
+                .expect_err(&format!("{args:?} must not parse"));
+        }
+    }
 
     #[test]
     fn both_halves_yield_credentials() {
