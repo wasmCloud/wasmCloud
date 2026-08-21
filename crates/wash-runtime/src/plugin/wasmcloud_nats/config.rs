@@ -259,6 +259,9 @@ impl NatsConfig {
         if limits.max_in_flight == 0 {
             bail!("`max-in-flight` must be greater than zero");
         }
+        if limits.subscription_capacity == 0 {
+            bail!("`subscription-capacity` must be greater than zero");
+        }
 
         let tls = TlsConfig {
             ca: get(cfg, "tls-ca").map(PathBuf::from),
@@ -421,6 +424,19 @@ mod tests {
         ]))
         .unwrap_err();
         assert!(err.to_string().contains("must be set together"));
+    }
+
+    #[test]
+    fn zero_limits_fail() {
+        for key in ["max-in-flight", "subscription-capacity"] {
+            let err =
+                NatsConfig::from_map(&map(&[("servers", "nats://localhost:4222"), (key, "0")]))
+                    .unwrap_err();
+            assert!(
+                err.to_string().contains("greater than zero"),
+                "{key}: {err}"
+            );
+        }
     }
 
     #[test]

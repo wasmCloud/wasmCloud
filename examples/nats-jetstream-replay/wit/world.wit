@@ -2,15 +2,13 @@ package wasmcloud:nats-jetstream-replay;
 
 /// Order processing over JetStream, with replay.
 ///
-/// The component both consumes and replays:
+/// The host pushes each new delivery into `jetstream-handler`, which is the
+/// at-least-once path. The handler is per-request: it holds no consumer and no
+/// stream, so it scales down to nothing between bursts.
 ///
-/// - The host pushes each new delivery into `jetstream-handler`, which is the
-///   at-least-once path. The handler is per-request: it holds no consumer and
-///   no stream, so it scales down to nothing between bursts.
-/// - `wasi:http/incoming-handler` exposes the replay path. `scan` reads from an
-///   arbitrary stream sequence without creating a durable consumer, which is
-///   the thing `wasmcloud:messaging` cannot express and the reason this
-///   interface exists.
+/// `wasmcloud:nats/jetstream` is imported for the durable publish and for
+/// `scan`, which replays from an arbitrary stream sequence without creating a
+/// consumer — the thing `wasmcloud:messaging` cannot express.
 world nats-jetstream-replay {
   import wasmcloud:nats/types@0.1.0;
   import wasmcloud:nats/jetstream@0.1.0;

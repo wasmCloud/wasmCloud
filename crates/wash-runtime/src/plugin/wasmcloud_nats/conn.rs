@@ -205,17 +205,29 @@ impl ConnectionRegistry {
         Ok(handle)
     }
 
-    /// Looks up a workload's connection. Any binding of that workload resolves
-    /// to the same client when configuration matched.
+    /// Looks up a workload's connection.
+    ///
+    /// A workload holds exactly one, enforced at bind time: capability calls
+    /// carry no binding identity, so a second connection would make the client
+    /// a call resolves to — and therefore its grant — arbitrary.
     pub async fn get(&self, workload_id: &str) -> Option<Arc<ConnHandle>> {
+        let workloads = self.workloads.read().await;
+        let conns = workloads.get(workload_id)?;
+        debug_assert!(
+            conns.by_key.len() <= 1,
+            "a workload must hold at most one NATS connection"
+        );
+        conns.by_key.values().next().cloned()
+    }
+
+    /// True when this workload already holds a connection opened with a
+    /// different configuration.
+    pub async fn has_conflicting(&self, workload_id: &str, key: &ConnKey) -> bool {
         self.workloads
             .read()
             .await
-            .get(workload_id)?
-            .by_key
-            .values()
-            .next()
-            .cloned()
+            .get(workload_id)
+            .is_some_and(|conns| conns.by_key.keys().any(|existing| existing != key))
     }
 
     /// Drops every connection held for a workload, draining within budget.

@@ -80,7 +80,7 @@ pub struct ComponentData {
     pub(super) cancel_token: tokio_util::sync::CancellationToken,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct JetStreamSubscriptionConfig {
     pub stream: String,
     pub filter_subject: String,
@@ -88,13 +88,13 @@ pub(super) struct JetStreamSubscriptionConfig {
     pub queue_group: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct CoreSubscriptionConfig {
     pub subject: String,
     pub queue_group: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct KvWatchConfig {
     pub bucket: String,
     pub filter: String,
@@ -115,10 +115,17 @@ fn parse_jetstream_subscriptions(raw: &str) -> anyhow::Result<Vec<JetStreamSubsc
             if stream.is_empty() || filter_subject.is_empty() {
                 anyhow::bail!("jetstream subscription `{entry}` has an empty stream or filter")
             }
+            let deliver_policy = parts.get(2).copied().unwrap_or("new");
+            if !matches!(deliver_policy, "all" | "last" | "last-per-subject" | "new") {
+                anyhow::bail!(
+                    "jetstream subscription `{entry}` has an unknown deliver policy \
+                     `{deliver_policy}`; expected all, last, last-per-subject, or new"
+                )
+            }
             Ok(JetStreamSubscriptionConfig {
                 stream: (*stream).to_string(),
                 filter_subject: (*filter_subject).to_string(),
-                deliver_policy: parts.get(2).unwrap_or(&"new").to_string(),
+                deliver_policy: deliver_policy.to_string(),
                 queue_group: parts.get(3).map(|s| (*s).to_string()),
             })
         })
@@ -234,10 +241,6 @@ impl HostPlugin for WasmcloudNats {
         }
     }
 
-    fn supports_named_instances(&self) -> bool {
-        true
-    }
-
     async fn inject_meters(&self, meters: &Meters) {
         *self.meters.write().await = meters.clone();
     }
@@ -268,6 +271,21 @@ impl HostPlugin for WasmcloudNats {
             // server cannot observe each other's responses.
             if config.inbox_prefix.is_none() {
                 config.inbox_prefix = Some(conn::workload_inbox_prefix(workload_id));
+            }
+
+            // One connection per workload. A capability call names no binding,
+            // so a second differing config would leave the grant a call is
+            // checked against undefined.
+            if self
+                .connections
+                .has_conflicting(workload_id, &config.connection_key())
+                .await
+            {
+                anyhow::bail!(
+                    "workload `{workload_id}` binds wasmcloud:nats more than once with \
+                     different configuration; a capability call cannot be attributed to one \
+                     of them. Use a single binding until named multi-cluster routing lands"
+                )
             }
 
             let handle = self
@@ -395,12 +413,15 @@ impl HostPlugin for WasmcloudNats {
         // per-message denial: the workload would otherwise start and silently
         // receive nothing.
         for sub in &core_subs {
-            handle.policy.check_subject(&sub.subject).map_err(|_| {
-                anyhow::anyhow!(
-                    "core subscription `{}` is outside this workload's subject grant",
-                    sub.subject
-                )
-            })?;
+            handle
+                .policy
+                .check_subscription(&sub.subject)
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "core subscription `{}` is outside this workload's subject grant",
+                        sub.subject
+                    )
+                })?;
         }
         for sub in &jetstream_subs {
             handle.policy.check_stream(&sub.stream).map_err(|_| {
@@ -513,6 +534,12 @@ mod tests {
     fn jetstream_subs_reject_malformed() {
         assert!(parse_jetstream_subscriptions("ORDERS").is_err());
         assert!(parse_jetstream_subscriptions(":orders.*").is_err());
+    }
+
+    #[test]
+    fn jetstream_subs_reject_unknown_deliver_policy() {
+        let err = parse_jetstream_subscriptions("ORDERS:orders.*:evrything").unwrap_err();
+        assert!(err.to_string().contains("unknown deliver policy"));
     }
 
     #[test]

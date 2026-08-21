@@ -72,6 +72,37 @@ impl Pattern {
                 Token::Literal(literal) => literal == part,
             })
     }
+
+    /// True when every subject `other` can match is also matched by `self`.
+    ///
+    /// This is set containment, not matching: a grant of `orders.*` does not
+    /// contain a subscription to `orders.>`, because `>` reaches deeper.
+    fn contains(&self, other: &Pattern) -> bool {
+        // A non-trailing grant cannot cover a trailing request, and lengths
+        // must line up exactly when neither side has a tail.
+        if other.trailing && !self.trailing {
+            return false;
+        }
+        if self.trailing {
+            if other.tokens.len() < self.tokens.len() {
+                return false;
+            }
+        } else if self.tokens.len() != other.tokens.len() {
+            return false;
+        }
+
+        self.tokens
+            .iter()
+            .zip(other.tokens.iter())
+            .all(|(grant, request)| match (grant, request) {
+                // `*` in the grant covers any single token, wildcard included.
+                (Token::Any, _) => true,
+                // A literal grant is only satisfied by that same literal; a
+                // wildcard request at this position could reach more.
+                (Token::Literal(g), Token::Literal(r)) => g == r,
+                (Token::Literal(_), Token::Any) => false,
+            })
+    }
 }
 
 /// Why a subject was refused.
@@ -81,6 +112,23 @@ pub enum Denied {
     Reserved,
     /// Not covered by any grant.
     NotGranted,
+    /// A publish or request subject contained `*` or `>`.
+    WildcardNotAllowed,
+}
+
+/// True when a subscription pattern could expand into a reserved space.
+///
+/// A leading wildcard makes the whole reserved set reachable, and a wildcard
+/// anywhere ahead of a reserved-looking token does the same for that branch.
+fn reaches_reserved(pattern: &str, lattice_prefixes: &[String]) -> bool {
+    let first = pattern.split('.').next().unwrap_or_default();
+    if first == "*" || first == ">" {
+        return true;
+    }
+    RESERVED.iter().any(|p| first == p.trim_end_matches('.'))
+        || lattice_prefixes
+            .iter()
+            .any(|p| first == p.trim_end_matches('.'))
 }
 
 impl PolicyEngine {
@@ -105,21 +153,50 @@ impl PolicyEngine {
         }
     }
 
-    /// Checks a subject for publish, subscribe, or request.
-    pub fn check_subject(&self, subject: &str) -> Result<(), Denied> {
-        if RESERVED.iter().any(|prefix| subject.starts_with(prefix))
-            || RESERVED.iter().any(|p| subject == p.trim_end_matches('.'))
-        {
-            return Err(Denied::Reserved);
-        }
-        if self
-            .lattice_prefixes
+    /// True when the subject is reserved or belongs to the host itself.
+    fn is_reserved(&self, subject: &str) -> bool {
+        RESERVED
             .iter()
-            .any(|prefix| subject.starts_with(prefix))
-        {
+            .any(|prefix| subject.starts_with(prefix) || subject == prefix.trim_end_matches('.'))
+            || self
+                .lattice_prefixes
+                .iter()
+                .any(|prefix| subject.starts_with(prefix))
+    }
+
+    /// Checks a concrete subject for publish or request.
+    ///
+    /// A published subject must be literal. Matching a request containing `*`
+    /// or `>` against the grant patterns would let `orders.>` satisfy a grant
+    /// of `orders.*`, and let `wash.*.>` slip past a literal reserved prefix.
+    pub fn check_subject(&self, subject: &str) -> Result<(), Denied> {
+        if subject.split('.').any(|token| token == "*" || token == ">") {
+            return Err(Denied::WildcardNotAllowed);
+        }
+        if self.is_reserved(subject) {
             return Err(Denied::Reserved);
         }
         if self.subject_allow.iter().any(|p| p.matches(subject)) {
+            Ok(())
+        } else {
+            Err(Denied::NotGranted)
+        }
+    }
+
+    /// Checks a subscription pattern, which may itself contain wildcards.
+    ///
+    /// The requested pattern must be *contained* by a grant: every subject the
+    /// subscription could receive must be one the grant already allows. A
+    /// subject-by-subject match is not enough here, because the request is a
+    /// set rather than a point.
+    pub fn check_subscription(&self, pattern: &str) -> Result<(), Denied> {
+        // A wildcard cannot be allowed to straddle into a reserved space, so
+        // reject any pattern whose literal head could reach one.
+        if self.is_reserved(pattern) || reaches_reserved(pattern, &self.lattice_prefixes) {
+            return Err(Denied::Reserved);
+        }
+        let requested = Pattern::parse(pattern);
+        if self.subject_allow.iter().any(|g| g.contains(&requested)) {
             Ok(())
         } else {
             Err(Denied::NotGranted)
@@ -211,6 +288,50 @@ mod tests {
         );
         assert_eq!(p.check_subject("$KV.config.key"), Err(Denied::Reserved));
         assert_eq!(p.check_subject("$OBJ.bucket.chunk"), Err(Denied::Reserved));
+    }
+
+    #[test]
+    fn publish_subject_may_not_contain_wildcards() {
+        // Otherwise `orders.>` would satisfy a grant of `orders.*`.
+        let p = engine(&["orders.*"], &[], &[]);
+        assert_eq!(p.check_subject("orders.>"), Err(Denied::WildcardNotAllowed));
+        assert_eq!(p.check_subject("orders.*"), Err(Denied::WildcardNotAllowed));
+        assert!(p.check_subject("orders.new").is_ok());
+    }
+
+    #[test]
+    fn wildcard_request_cannot_slip_past_reserved() {
+        let p = engine(&[">"], &[], &[]);
+        assert_eq!(p.check_subject("$JS.*.>"), Err(Denied::WildcardNotAllowed));
+        assert_eq!(p.check_subscription("$JS.>"), Err(Denied::Reserved));
+        assert_eq!(p.check_subscription("*.API.>"), Err(Denied::Reserved));
+        assert_eq!(p.check_subscription(">"), Err(Denied::Reserved));
+    }
+
+    #[test]
+    fn subscription_must_be_contained_by_the_grant() {
+        let p = engine(&["orders.*"], &[], &[]);
+        assert!(p.check_subscription("orders.new").is_ok());
+        assert!(p.check_subscription("orders.*").is_ok());
+        // `>` reaches deeper than the grant allows.
+        assert_eq!(p.check_subscription("orders.>"), Err(Denied::NotGranted));
+    }
+
+    #[test]
+    fn trailing_grant_contains_deeper_subscriptions() {
+        let p = engine(&["orders.>"], &[], &[]);
+        assert!(p.check_subscription("orders.new").is_ok());
+        assert!(p.check_subscription("orders.*").is_ok());
+        assert!(p.check_subscription("orders.>").is_ok());
+        assert!(p.check_subscription("orders.eu.new").is_ok());
+        assert_eq!(p.check_subscription("payments.>"), Err(Denied::NotGranted));
+    }
+
+    #[test]
+    fn literal_grant_is_not_satisfied_by_a_wildcard_request() {
+        let p = engine(&["orders.new"], &[], &[]);
+        assert!(p.check_subscription("orders.new").is_ok());
+        assert_eq!(p.check_subscription("orders.*"), Err(Denied::NotGranted));
     }
 
     #[test]
