@@ -221,6 +221,7 @@ pub mod ctx;
 pub(crate) mod instance_driver;
 pub(crate) mod instance_pool;
 pub use instance_pool::InstancePolicy;
+pub mod host_memory;
 pub(crate) mod linked_call;
 pub(crate) mod store;
 mod value;
@@ -242,6 +243,10 @@ pub struct Engine {
     /// the host's port table, and the connection budget. The workload-level half
     /// (`allowedHosts`, `allowedHostLoopbackPorts`) is layered over it per component.
     pub(crate) socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
+    /// The memory shape this engine was built with: the host's guest-memory
+    /// budget, the per-memory ceiling, and the instance count. See
+    /// [`crate::engine::host_memory`].
+    pub(crate) host_memory: host_memory::HostMemory,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
@@ -319,6 +324,15 @@ impl Engine {
     /// accounts for `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` and for a
     /// caller-supplied pooling config, neither of which is visible from
     /// [`EngineBuilder::with_max_instances`].
+    /// The memory shape this engine was built with.
+    ///
+    /// Read back rather than recomputed, so what a caller reports is what the
+    /// engine actually installed — including an embedder's `max_instances`
+    /// winning over the flag-driven count.
+    pub fn host_memory(&self) -> host_memory::HostMemory {
+        self.host_memory
+    }
+
     pub fn total_core_instances(&self) -> Option<u32> {
         self.total_core_instances
     }
@@ -809,6 +823,7 @@ pub struct EngineBuilder {
     compilation_cache_ttl: Option<Duration>,
     fuel_consumption: Option<bool>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
+    host_memory: Option<host_memory::HostMemory>,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -824,6 +839,16 @@ impl EngineBuilder {
     #[must_use]
     pub fn with_socket_policy(mut self, policy: Arc<crate::sockets::policy::SocketPolicy>) -> Self {
         self.socket_policy = Some(policy);
+        self
+    }
+
+    /// Set the host's memory budget, per-memory ceiling and instance count.
+    ///
+    /// Unset, the engine behaves exactly as it always has: wasmtime's own
+    /// defaults for both pool knobs, and a budget derived from the cgroup limit
+    /// purely so it can be reported.
+    pub fn with_host_memory(mut self, host_memory: host_memory::HostMemory) -> Self {
+        self.host_memory = Some(host_memory);
         self
     }
 
@@ -972,6 +997,12 @@ impl EngineBuilder {
             .or_else(|| getenv::<bool>("WASMTIME_POOLING"))
             .unwrap_or(!has_custom_config);
 
+        // Resolved before the pooling config, which both of its knobs feed.
+        let host_memory = self.host_memory.unwrap_or_default();
+        if let Some(advisory) = host_memory.advisory() {
+            tracing::warn!("{advisory}");
+        }
+
         // The pooling allocator can be more efficient for workloads with many short-lived instances
         let mut total_core_instances = None;
         if use_pooling_allocator && let Ok(true) = is_pooling_allocator_supported() {
@@ -979,7 +1010,16 @@ impl EngineBuilder {
             let pooling = self
                 .pooling_config
                 .take()
-                .unwrap_or_else(|| new_pooling_config(self.max_instances.unwrap_or(1000)));
+                .unwrap_or_else(|| {
+                    // `max_instances` stays the library-level override; the
+                    // flag-driven number arrives through `host_memory`, and an
+                    // explicit `max_instances` still wins so an embedder is not
+                    // overridden by a default it never set.
+                    new_pooling_config(
+                        self.max_instances.unwrap_or(host_memory.core_instances),
+                        host_memory.default_heap_memory,
+                    )
+                });
             // Read back what was actually configured rather than what was asked
             // for: `new_pooling_config` lets the environment override the count,
             // and a caller-supplied config ignores `max_instances` entirely.
@@ -1027,6 +1067,7 @@ impl EngineBuilder {
             inner,
             cache,
             socket_policy: self.socket_policy.unwrap_or_default(),
+            host_memory,
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
             total_core_instances,
@@ -1099,7 +1140,7 @@ where
     }
 }
 
-fn new_pooling_config(instances: u32) -> PoolingAllocationConfig {
+fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAllocationConfig {
     let mut config = PoolingAllocationConfig::default();
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_UNUSED_WASM_SLOTS") {
         config.max_unused_warm_slots(v);
@@ -1165,8 +1206,14 @@ fn new_pooling_config(instances: u32) -> PoolingAllocationConfig {
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_MEMORIES_PER_MODULE") {
         config.max_memories_per_module(v);
     }
+    // Unlike every other knob in this function this one had no `else` branch,
+    // so wasmtime's default stood on every host and nothing named it. The
+    // fallback is that same default unless an operator set the flag, so this
+    // changes no behaviour by itself — it only makes the number reachable.
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_MEMORY_SIZE") {
         config.max_memory_size(v);
+    } else {
+        config.max_memory_size(usize::try_from(default_heap_memory).unwrap_or(usize::MAX));
     }
     #[cfg(not(windows))]
     if let Some(v) = getenv("WASMTIME_POOLING_TOTAL_GC_HEAPS") {

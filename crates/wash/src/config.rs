@@ -2171,3 +2171,58 @@ secrets:
         assert!(config.dev().environment.is_empty());
     }
 }
+
+/// Resolve the host's memory budget, per-memory ceiling and instance count.
+///
+/// Mirrors [`wasmcloud_messaging_limits`]: the flags are parsed and validated
+/// here, once, so the runtime is handed a value that is already correct rather
+/// than a bag of strings to interpret later.
+///
+/// Nothing is gated on the result. Both pool knobs fall through to wasmtime's
+/// own defaults when unset, so a host that sets none of these behaves exactly
+/// as it always has — the point of this pass is that the three numbers are
+/// *reachable* and *reported*, not that anything new is enforced.
+///
+/// # Errors
+///
+/// Rejects an unparseable size and a zero for any of the three. A zero would
+/// mean "this host runs nothing", which is never what an operator meant, and
+/// two of the three would misbehave inside wasmtime rather than saying so.
+pub fn host_memory(
+    max_memory: Option<&str>,
+    default_heap_memory: Option<&str>,
+    core_instances: Option<u32>,
+) -> anyhow::Result<wash_runtime::engine::host_memory::HostMemory> {
+    use wash_runtime::engine::host_memory::{HostMemory, parse_bytes, render_bytes};
+
+    let max_memory = max_memory
+        .map(|raw| parse_bytes(raw).map_err(|e| anyhow::anyhow!("invalid --max-memory: {e}")))
+        .transpose()?;
+    let default_heap_memory = default_heap_memory
+        .map(|raw| {
+            parse_bytes(raw).map_err(|e| anyhow::anyhow!("invalid --default-heap-memory: {e}"))
+        })
+        .transpose()?;
+
+    let resolved = HostMemory::resolve(max_memory, default_heap_memory, core_instances)
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    // Every one of these varies by host — the cgroup it landed in, the flags it
+    // was given — so an operator cannot read them off the docs. The reservation
+    // in particular is a product of two knobs set independently, and is the
+    // number behind an instantiation failure nobody can otherwise explain.
+    tracing::info!(
+        max_memory = %render_bytes(resolved.max_memory),
+        default_heap_memory = %render_bytes(resolved.default_heap_memory),
+        core_instances = resolved.core_instances,
+        pool_reservation = %render_bytes(resolved.pool_reservation()),
+        max_memory_source = if resolved.max_memory_from_flag {
+            "flag"
+        } else {
+            "derived from the cgroup limit"
+        },
+        "host memory resolved"
+    );
+
+    Ok(resolved)
+}
