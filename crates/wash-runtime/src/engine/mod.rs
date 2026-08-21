@@ -243,9 +243,6 @@ pub struct Engine {
     /// the host's port table, and the connection budget. The workload-level half
     /// (`allowedHosts`, `allowedHostLoopbackPorts`) is layered over it per component.
     pub(crate) socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
-    /// The memory shape this engine was built with: the host's guest-memory
-    /// budget, the per-memory ceiling, and the instance count. See
-    /// [`crate::engine::host_memory`].
     pub(crate) host_memory: host_memory::HostMemory,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
@@ -843,10 +840,7 @@ impl EngineBuilder {
     }
 
     /// Set the host's memory budget, per-memory ceiling and instance count.
-    ///
-    /// Unset, the engine behaves exactly as it always has: wasmtime's own
-    /// defaults for both pool knobs, and a budget derived from the cgroup limit
-    /// purely so it can be reported.
+    /// Unset, the engine uses wasmtime's default memory limits.
     pub fn with_host_memory(mut self, host_memory: host_memory::HostMemory) -> Self {
         self.host_memory = Some(host_memory);
         self
@@ -1011,10 +1005,6 @@ impl EngineBuilder {
                 .pooling_config
                 .take()
                 .unwrap_or_else(|| {
-                    // `max_instances` stays the library-level override; the
-                    // flag-driven number arrives through `host_memory`, and an
-                    // explicit `max_instances` still wins so an embedder is not
-                    // overridden by a default it never set.
                     new_pooling_config(
                         self.max_instances.unwrap_or(host_memory.core_instances),
                         host_memory.default_heap_memory,

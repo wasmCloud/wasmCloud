@@ -333,21 +333,15 @@ runtime:
   # -- Additional CLI args appended to every host group container, for host
   # flags the chart does not template. Merged with per-host-group `extraArgs`.
   extraArgs: []
-  # -- Host memory knobs. Each maps to a wasmtime setting that was previously
-  # unreachable; leaving all three empty keeps today's behaviour exactly.
-  #
-  # A host group's own `memory` block overrides these key by key.
+  # -- Host memory values that maps to a wasmtime setting. Leaving all three
+  # empty keeps today's behaviour exactly.
   memory:
     # -- Total guest memory this host may use (e.g. "6GiB"). Empty falls back to
-    # the host group's own `resources.limits.memory`, which is the number the
-    # kernel would OOM-kill the pod at. With neither set, the flag is omitted
-    # and the host derives the budget from its cgroup — the same number by a
-    # different route.
+    # the host group's own `resources.limits.memory`. With neither set, the flag
+    # is omitted and the host derives the budget from its cgroup.
     maxMemory: ""
     # -- Ceiling on any single guest linear memory. Empty leaves wasmtime's
-    # default of 4GiB, which is what every host has run to date. Note that the
-    # pooling allocator reserves this on EVERY slot, so raising it multiplies
-    # by `coreInstances`.
+    # default of 4GiB.
     defaultHeapMemory: ""
     # -- Instance slots the pooling allocator keeps. Empty leaves wasmtime's
     # default of 1000.

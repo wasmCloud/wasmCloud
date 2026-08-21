@@ -206,12 +206,6 @@ spec:
             {{- if $fileBackedPlugins }}
             - "--user-config=/etc/wasmcloud/host-config/config.yaml"
             {{- end }}
-            {{- /* Host memory knobs. `maxMemory` defaults to this host group's own
-                   `resources.limits.memory` — the number the kernel would OOM-kill the
-                   pod at, and therefore the only honest input to "how much may guests
-                   use". An explicit runtime.memory.maxMemory overrides it; with neither,
-                   the flag is omitted and the host derives the budget from its cgroup,
-                   which reaches the same number by a different route. */}}
             {{- $memory := merge (deepCopy (.memory | default dict)) ($top.Values.runtime.memory | default dict) }}
             {{- $podMemoryLimit := "" }}
             {{- with .resources }}
