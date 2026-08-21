@@ -97,7 +97,9 @@ struct WasiKeyvalueMetrics {
     /// Opens by what the bucket policy did: `existing`, `created`, or
     /// `refused` (the policy declined to create a missing bucket). Separate
     /// from `operations_total` so the policy is measurable without changing
-    /// the attributes of the existing series.
+    /// the attributes of the existing series. `created` counts opens that took
+    /// the create path, which two racing opens can both do — see
+    /// [`OpenOutcome::Created`].
     bucket_opens_total: opentelemetry::metrics::Counter<u64>,
 }
 
@@ -109,7 +111,10 @@ impl WasiKeyvalueMetrics {
             .build();
         let bucket_opens_total = meter
             .u64_counter("wasi_keyvalue_bucket_opens_total")
-            .with_description("Bucket opens by outcome: existing, created, or refused")
+            .with_description(
+                "Bucket opens by outcome: existing, created (this open took the create path), \
+                 or refused (the policy declined to create a missing bucket)",
+            )
             .build();
         Self {
             operations_total,

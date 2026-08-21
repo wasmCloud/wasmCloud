@@ -10,7 +10,8 @@
 //! store, and the policy — owned by whoever configured the host — decides which
 //! physical bucket that is and what its limits are.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use async_nats::jetstream::Context;
@@ -121,13 +122,43 @@ pub struct BucketPolicy {
     pub max_bytes: Option<i64>,
 }
 
+/// Buckets a refusal has already been logged for, so an operator gets one
+/// warning per missing bucket instead of one per guest call.
+///
+/// Deliberately not a field on [`BucketPolicy`]: the policy is a plain
+/// configuration value an embedder builds with a struct literal, and this is
+/// bookkeeping. Capped because the names are guest-supplied — past the cap the
+/// set is cleared, which starts a fresh window rather than growing without
+/// bound or going permanently quiet.
+static REFUSED_BUCKETS: std::sync::LazyLock<Mutex<HashSet<String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// How many distinct refused buckets are remembered before the set resets.
+const REFUSED_BUCKETS_CAP: usize = 256;
+
+/// Whether this is the first refusal for `physical`, and so the one that warns.
+fn first_refusal(physical: &str) -> bool {
+    let mut refused = REFUSED_BUCKETS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if refused.len() >= REFUSED_BUCKETS_CAP {
+        refused.clear();
+    }
+    refused.insert(physical.to_string())
+}
+
 /// What an [`BucketPolicy::open`] did, for the caller to record. The physical
 /// bucket is on the span; this is what a metric needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpenOutcome {
     /// The bucket was already there.
     Existing,
-    /// The bucket was missing and the policy created it.
+    /// The bucket was missing and this open took the create path.
+    ///
+    /// `create_key_value` is idempotent, which is what makes two opens racing
+    /// to create the same bucket both succeed — so in that race both report
+    /// `Created`. Read the metric as "opens that had to create", not as a
+    /// count of streams brought into existence.
     Created,
 }
 
@@ -228,6 +259,16 @@ impl BucketPolicy {
         // outside that can never name a real bucket, so every open would come
         // back as `no-such-store` — the least informative way possible to
         // learn about a typo in a host flag.
+        // An empty pin is not "no pin": it resolves every identifier to the
+        // prefix alone, which JetStream rejects, so every open would come back
+        // as `no-such-store` and the warning would name a bucket that cannot
+        // exist. Leave `bucket` unset to opt out.
+        if self.bucket.as_deref() == Some("") {
+            anyhow::bail!(
+                "keyvalue bucket name is empty; omit `{BUCKET_KEY}` to resolve each identifier \
+                 to its own bucket"
+            );
+        }
         for (key, value) in [
             (BUCKET_PREFIX_KEY, Some(self.prefix.as_str())),
             (BUCKET_KEY, self.bucket.as_deref()),
@@ -382,6 +423,7 @@ impl BucketPolicy {
     /// existed or was created here.
     #[instrument(
         name = "wasi.keyvalue.bucket.open",
+        level = "debug",
         skip(self, context),
         fields(
             %identifier,
@@ -406,13 +448,21 @@ impl BucketPolicy {
             }
             Err(OpenError::NoSuchStore) if self.create == CreatePolicy::Never => {
                 span.record("outcome", "refused");
-                tracing::warn!(
-                    bucket = %physical,
-                    %identifier,
-                    "keyvalue bucket does not exist and this host does not create buckets; \
-                     create it in JetStream, or start the host with \
-                     `--keyvalue-nats-create missing`"
-                );
+                // A guest may open per request, so warn once per bucket rather
+                // than once per call: the operator needs the name and the fix,
+                // not a line per request. `wasi_keyvalue_bucket_opens_total`
+                // with `outcome = refused` counts the rest.
+                if first_refusal(&physical) {
+                    tracing::warn!(
+                        bucket = %physical,
+                        %identifier,
+                        "keyvalue bucket does not exist and this host does not create buckets; \
+                         create it in JetStream, or start the host with \
+                         `--keyvalue-nats-create missing`"
+                    );
+                } else {
+                    tracing::debug!(bucket = %physical, %identifier, "keyvalue bucket refused");
+                }
                 Err(OpenError::NoSuchStore)
             }
             Err(OpenError::NoSuchStore) => {
@@ -679,6 +729,50 @@ mod tests {
         let policy = BucketPolicy::from_config(&config(&[]), &pinned_host).expect("must parse");
         assert_eq!(policy.bucket, None);
         assert_eq!(policy.physical_name("sessions"), "sessions");
+    }
+
+    /// An empty pin is refused rather than resolving every identifier to a
+    /// name JetStream cannot accept.
+    #[test]
+    fn an_empty_pin_is_refused() {
+        BucketPolicy::from_config(&config(&[("bucket", "")]), &BucketPolicy::default())
+            .expect_err("an empty bucket must be rejected");
+
+        // Omitting it is how you opt out, and an empty *prefix* stays valid.
+        let policy =
+            BucketPolicy::from_config(&config(&[("bucket_prefix", "")]), &BucketPolicy::default())
+                .expect("an empty prefix means no prefix");
+        assert_eq!(policy.physical_name("counters"), "counters");
+    }
+
+    /// A refusal warns once per bucket, however many times a guest opens it.
+    #[test]
+    fn refusals_warn_once_per_bucket() {
+        // Unique names: the bookkeeping is process-wide, so a fixed name would
+        // couple this to whatever else has run.
+        let a = format!("bucket-a-{}", uuid::Uuid::new_v4());
+        let b = format!("bucket-b-{}", uuid::Uuid::new_v4());
+
+        assert!(first_refusal(&a), "the first refusal warns");
+        assert!(!first_refusal(&a), "a repeat does not");
+        assert!(first_refusal(&b), "a different bucket warns");
+    }
+
+    /// The set of remembered buckets is bounded: guests choose those names, so
+    /// it must not grow forever.
+    #[test]
+    fn refusal_bookkeeping_is_bounded() {
+        for _ in 0..(REFUSED_BUCKETS_CAP + 10) {
+            first_refusal(&format!("bucket-{}", uuid::Uuid::new_v4()));
+        }
+        let remembered = REFUSED_BUCKETS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len();
+        assert!(
+            remembered <= REFUSED_BUCKETS_CAP,
+            "remembered {remembered} buckets, cap is {REFUSED_BUCKETS_CAP}"
+        );
     }
 
     /// A bucket name JetStream would never accept is refused where it was

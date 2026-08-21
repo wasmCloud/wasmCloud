@@ -338,46 +338,64 @@ pub struct HostCommand {
     /// not a default: a workload's `(implements ..)` interface may tighten it
     /// to `never`, but cannot grant itself creation this host withheld.
     /// `missing` creates a bucket on first open, using the settings below.
-    #[arg(long = "keyvalue-nats-create", value_enum, default_value = "never")]
+    #[arg(
+        long = "keyvalue-nats-create",
+        env = "WASH_KEYVALUE_NATS_CREATE",
+        value_enum,
+        default_value = "never"
+    )]
     pub keyvalue_nats_create: KeyvalueCreateMode,
 
     /// Pin the plain (unlabeled) `wasi:keyvalue` import to this one JetStream
     /// bucket, ignoring the name the workload passes.
     ///
-    /// A pin names a single store, so it is not inherited by a workload's
-    /// `(implements ..)` interfaces — each of those states its own `bucket`,
-    /// or resolves its identifiers by name. The operator's controls that *do*
-    /// reach them are `--keyvalue-nats-bucket-prefix`, which bounds the names
-    /// they can reach, and `--keyvalue-nats-create`, which they cannot loosen.
-    #[arg(long = "keyvalue-nats-bucket")]
+    /// A pin names a single store, so it reaches only the standard NATS
+    /// keyvalue plugin — not an import a workload routes through a configured
+    /// backend, whether it is `(implements ..)`-named or an unnamed interface
+    /// declaring `backend: nats`. Those state their own `bucket`, or resolve
+    /// each identifier by name. The operator's controls that *do* reach them
+    /// are `--keyvalue-nats-bucket-prefix`, which bounds the names they can
+    /// reach, and `--keyvalue-nats-create`, which they cannot loosen.
+    #[arg(long = "keyvalue-nats-bucket", env = "WASH_KEYVALUE_NATS_BUCKET")]
     pub keyvalue_nats_bucket: Option<String>,
 
     /// Prefix prepended to every JetStream bucket name, to namespace this
     /// host's buckets away from another's on a shared NATS cluster.
-    #[arg(long = "keyvalue-nats-bucket-prefix")]
+    #[arg(
+        long = "keyvalue-nats-bucket-prefix",
+        env = "WASH_KEYVALUE_NATS_BUCKET_PREFIX"
+    )]
     pub keyvalue_nats_bucket_prefix: Option<String>,
 
     /// Replicas for a keyvalue bucket this host creates.
-    #[arg(long = "keyvalue-nats-replicas")]
+    #[arg(long = "keyvalue-nats-replicas", env = "WASH_KEYVALUE_NATS_REPLICAS")]
     pub keyvalue_nats_replicas: Option<usize>,
 
     /// Storage for a keyvalue bucket this host creates.
-    #[arg(long = "keyvalue-nats-storage", value_enum)]
+    #[arg(
+        long = "keyvalue-nats-storage",
+        env = "WASH_KEYVALUE_NATS_STORAGE",
+        value_enum
+    )]
     pub keyvalue_nats_storage: Option<KeyvalueStorageType>,
 
     /// Maximum age of an entry in a keyvalue bucket this host creates, e.g.
     /// `24h`.
-    #[arg(long = "keyvalue-nats-max-age", value_parser = humantime::parse_duration)]
+    #[arg(long = "keyvalue-nats-max-age", env = "WASH_KEYVALUE_NATS_MAX_AGE", value_parser = humantime::parse_duration)]
     pub keyvalue_nats_max_age: Option<Duration>,
 
     /// Historical entries kept per key in a keyvalue bucket this host creates.
-    #[arg(long = "keyvalue-nats-history")]
+    #[arg(long = "keyvalue-nats-history", env = "WASH_KEYVALUE_NATS_HISTORY")]
     pub keyvalue_nats_history: Option<i64>,
 
     /// Size ceiling, in bytes, for a keyvalue bucket this host creates. `-1`
     /// is JetStream's "unlimited"; negative values are accepted here so it can
     /// be passed as `--keyvalue-nats-max-bytes -1` rather than only with `=`.
-    #[arg(long = "keyvalue-nats-max-bytes", allow_negative_numbers = true)]
+    #[arg(
+        long = "keyvalue-nats-max-bytes",
+        env = "WASH_KEYVALUE_NATS_MAX_BYTES",
+        allow_negative_numbers = true
+    )]
     pub keyvalue_nats_max_bytes: Option<i64>,
 
     /// Enable additional wasm proposals on the engine. Accepts a comma-separated
