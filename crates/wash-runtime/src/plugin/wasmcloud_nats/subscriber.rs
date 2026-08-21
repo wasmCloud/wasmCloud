@@ -24,11 +24,30 @@ use super::{
     core_bindings, jetstream_bindings, kv_bindings,
 };
 
-/// Naks immediately so a failed setup does not stall the consumer for the
-/// full ack-wait before the message is redelivered.
-async fn nak_now(acker: &async_nats::jetstream::message::Acker) {
+/// Gives a fresh store fuel before anything runs in it.
+///
+/// With fuel metering enabled a store starts at zero, and instantiation runs
+/// guest code — so without this the component traps on instantiate, before
+/// `FuelConsumptionMeter::observe` gets a chance to set a budget. Errors when
+/// metering is off, which is not a failure.
+fn prime_fuel<T>(store: &mut crate::wasmtime::Store<T>) {
+    let _ = store.set_fuel(u64::MAX);
+}
+
+/// Backoff applied when delivery setup fails.
+///
+/// Long enough that a persistent failure — a component that trap-loops on
+/// instantiate, say — redelivers at a survivable rate rather than spinning,
+/// and far shorter than letting the 30s ack-wait expire.
+const SETUP_FAILURE_BACKOFF: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Naks with a backoff so a failed setup neither stalls for the full ack-wait
+/// nor spins: an immediate nak on a persistent failure is a hot loop.
+async fn nak_with_backoff(acker: &async_nats::jetstream::message::Acker) {
     if let Err(e) = acker
-        .ack_with(async_nats::jetstream::AckKind::Nak(None))
+        .ack_with(async_nats::jetstream::AckKind::Nak(Some(
+            SETUP_FAILURE_BACKOFF,
+        )))
         .await
     {
         warn!("failed to nak after a delivery setup failure: {e}");
@@ -188,15 +207,16 @@ pub(super) async fn spawn_jetstream_subscriptions(
                         let mut store = match workload.new_store(&component_id).await {
                             Err(e) => {
                                 warn!("failed to create store for {component_id}: {e}");
-                                nak_now(&acker).await;
+                                nak_with_backoff(&acker).await;
                                 continue;
                             }
                             Ok(s) => s,
                         };
+                        prime_fuel(&mut store);
                         let proxy = match pre.instantiate_async(&mut store).await {
                             Err(e) => {
                                 warn!("failed to instantiate {component_id}: {e}");
-                                nak_now(&acker).await;
+                                nak_with_backoff(&acker).await;
                                 continue;
                             }
                             Ok(p) => p,
@@ -220,7 +240,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                 Err(e) => {
                                     warn!("failed to push message-handle for {component_id}: {e}");
                                     if let Some(acker) = host_acker {
-                                        nak_now(&acker).await;
+                                        nak_with_backoff(&acker).await;
                                     }
                                     continue;
                                 }
@@ -345,6 +365,7 @@ pub(super) async fn spawn_core_subscriptions(
                             }
                             Ok(s) => s,
                         };
+                        prime_fuel(&mut store);
                         let proxy = match pre.instantiate_async(&mut store).await {
                             Err(e) => {
                                 warn!("failed to instantiate {component_id}: {e}");
@@ -459,6 +480,7 @@ pub(super) async fn spawn_kv_watches(
                             }
                             Ok(s) => s,
                         };
+                        prime_fuel(&mut store);
                         let proxy = match pre.instantiate_async(&mut store).await {
                             Err(e) => {
                                 warn!("failed to instantiate {component_id}: {e}");
