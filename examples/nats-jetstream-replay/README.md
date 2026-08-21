@@ -13,10 +13,11 @@ NATS-native interface exists.
 
 | Behaviour | Where |
 | --- | --- |
-| At-least-once delivery, and why handlers must be idempotent | `handle_message` |
+| At-least-once delivery, and how to actually be idempotent | `accumulate` |
 | Auto-ack: returning `Ok` acks, `Err` naks and redelivers | `handle_message` |
-| Permanent rejection of a poison message with `term()` | the malformed-body branch |
+| Dropping a poison message instead of retrying it forever | the malformed-body branch |
 | CAS on a KV revision, with retry on conflict | `accumulate` |
+| Redelivery dedupe by stream sequence | `Total.last_sequence` |
 | Publish deduplication via `Nats-Msg-Id` | the notification publish |
 | Typed errors instead of string matching | `describe` |
 
@@ -98,7 +99,7 @@ resolved. An nkey seed is signed host-side and never crosses into the sandbox.
 nats pub orders.received "order-1:100"
 nats pub orders.received "order-1:50"
 
-nats kv get order-totals order-1     # -> 150
+nats kv get order-totals order-1     # -> 150@2   (total@last-applied-sequence)
 nats sub orders.processed            # -> order-1:100, then order-1:150
 ```
 
@@ -111,11 +112,13 @@ nats kv add order-totals --history 5
 nats consumer add ORDERS replay --deliver all --ack explicit --defaults
 ```
 
-A malformed body is rejected permanently rather than redelivered forever:
+A malformed body is acked and dropped rather than redelivered forever. Under
+`ack-mode: auto` the host owns the acknowledgement, so returning `Err` would nak
+and retry something that can never succeed; `term()` needs `ack-mode: manual`.
 
 ```bash
 nats pub orders.received "not-an-order"
-nats stream view ORDERS         # still stored; the consumer terminated it
+# -> "dropping malformed order at sequence N" in the host log, then acked
 ```
 
 ## Notes

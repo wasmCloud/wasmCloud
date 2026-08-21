@@ -43,23 +43,67 @@ fn describe(err: &NatsError) -> String {
     }
 }
 
-/// Adds an order's amount to the running total, retrying on a CAS conflict.
+/// A key's running total and the stream sequence that last contributed to it.
+///
+/// Storing the sequence alongside the total is what makes the update
+/// idempotent. Adding on every delivery is not: at-least-once means the same
+/// order arrives again after any failure downstream of the write, and a bare
+/// `total += amount` counts it twice.
+struct Total {
+    running: u64,
+    last_sequence: u64,
+}
+
+fn parse_total(raw: &[u8]) -> Option<Total> {
+    let text = std::str::from_utf8(raw).ok()?;
+    let (running, last_sequence) = text.trim().split_once('@')?;
+    Some(Total {
+        running: running.trim().parse().ok()?,
+        last_sequence: last_sequence.trim().parse().ok()?,
+    })
+}
+
+fn encode_total(total: &Total) -> Vec<u8> {
+    format!("{}@{}", total.running, total.last_sequence).into_bytes()
+}
+
+/// Adds an order's amount to the running total, exactly once per sequence.
 ///
 /// `update` is compare-and-swap on revision, and a mismatch carries the current
 /// revision, so a retry does not need a re-read. Two concurrent handlers on the
 /// same key therefore converge instead of silently losing a write, which is
 /// what a last-write-wins `put` would do here.
-fn accumulate(bucket: &kv::Bucket, key: &str, amount: u64) -> Result<u64, NatsError> {
+fn accumulate(
+    bucket: &kv::Bucket,
+    key: &str,
+    amount: u64,
+    sequence: u64,
+) -> Result<u64, NatsError> {
     let mut attempt = 0;
     loop {
         attempt += 1;
         let current = bucket.get(key)?;
-        let (running, revision) = match &current {
-            Some(entry) => (read_u64(&entry.value).unwrap_or(0), entry.revision),
-            None => (0, 0),
+        let (existing, revision) = match &current {
+            Some(entry) => (parse_total(&entry.value), entry.revision),
+            None => (None, 0),
         };
-        let next = running.saturating_add(amount);
-        let encoded = next.to_string().into_bytes();
+
+        // This sequence is already counted, so this is a redelivery. Report the
+        // total unchanged rather than adding again.
+        if let Some(total) = &existing
+            && sequence <= total.last_sequence
+        {
+            return Ok(total.running);
+        }
+
+        let next = Total {
+            running: existing
+                .as_ref()
+                .map_or(0, |t| t.running)
+                .saturating_add(amount),
+            last_sequence: sequence,
+        };
+        let encoded = encode_total(&next);
 
         let result = if current.is_some() {
             bucket.update(key, &encoded, revision)
@@ -68,17 +112,13 @@ fn accumulate(bucket: &kv::Bucket, key: &str, amount: u64) -> Result<u64, NatsEr
         };
 
         match result {
-            Ok(_) => return Ok(next),
+            Ok(_) => return Ok(next.running),
             // Someone else wrote between the read and the write. Re-read and
             // reapply rather than clobbering their value.
             Err(NatsError::RevisionMismatch(_)) if attempt < 5 => continue,
             Err(e) => return Err(e),
         }
     }
-}
-
-fn read_u64(raw: &[u8]) -> Option<u64> {
-    std::str::from_utf8(raw).ok()?.trim().parse().ok()
 }
 
 /// Reads `order-id:amount` out of a message body.
@@ -114,11 +154,12 @@ impl JetstreamHandler for Component {
         };
 
         if delivery > 1 {
-            println!("order {order_id} redelivered (attempt {delivery}), reapplying idempotently");
+            println!("order {order_id} redelivered (attempt {delivery})");
         }
 
         let bucket = kv::open(TOTALS_BUCKET).map_err(|e| describe(&e))?;
-        let running = accumulate(&bucket, &order_id, amount).map_err(|e| describe(&e))?;
+        let running =
+            accumulate(&bucket, &order_id, amount, sequence).map_err(|e| describe(&e))?;
 
         // `Nats-Msg-Id` deduplicates within the stream's duplicate window, so a
         // redelivered order does not publish a second notification. The window
