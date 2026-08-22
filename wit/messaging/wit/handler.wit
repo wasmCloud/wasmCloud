@@ -1,0 +1,18 @@
+package wasmcloud:messaging@0.3.0;
+
+/// The consuming side of a broker: implemented by components that subscribe.
+interface handler {
+  use types.{broker-message, handle-message-error};
+
+  /// Callback invoked when a message is received from a subscription.
+  ///
+  /// As an `async func` this may await other operations — including
+  /// `consumer.publish` to reply on `msg.reply-to` — while the host continues to
+  /// deliver further messages to the same instance concurrently. The message
+  /// body is a `stream<u8>` the handler drains, or drops to discard the payload.
+  ///
+  /// The error is a per-delivery disposition (`handle-message-error`), not the
+  /// broker `error` — a handler cannot raise transport failures about a message
+  /// it has already received; what it reports is whether redelivery could help.
+  handle-message: async func(msg: broker-message) -> result<_, handle-message-error>;
+}

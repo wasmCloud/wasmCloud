@@ -22,7 +22,7 @@ use std::{
     collections::{BTreeSet, HashMap},
     net::SocketAddr,
     path::Path,
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
@@ -249,12 +249,18 @@ impl DynamicRouter {
     /// Idempotent: re-registering the same workload (e.g. a service restart)
     /// leaves the tables unchanged.
     fn register_hostnames(&self, workload_id: &str, hosts: &[String]) {
+        // Keyed without the port, matching how a request's Host header is
+        // looked up (see [`Self::select_workload`]).
+        let hosts: Vec<String> = hosts
+            .iter()
+            .map(|host| split_host_port(host).0.to_string())
+            .collect();
         self.routes.rcu(|cur| {
             let mut routes = (**cur).clone();
             routes
                 .workload_to_host
-                .insert(workload_id.to_string(), hosts.to_vec());
-            for host in hosts {
+                .insert(workload_id.to_string(), hosts.clone());
+            for host in &hosts {
                 routes
                     .host_to_workload
                     .entry(host.clone())
@@ -273,6 +279,14 @@ impl DynamicRouter {
     /// the selection logic is unit-testable without constructing a
     /// [`hyper::body::Incoming`].
     fn select_workload(&self, host: &str) -> Result<String, RouteError> {
+        // A Host header may carry the port the client connected on
+        // (`example.com:8080`), and whether it does is up to the client: a
+        // browser omits it for the scheme's default port, an OCI client
+        // pushing to `127.0.0.1:5000` does not. The host serves one HTTP port,
+        // so the port carries no routing information; match on the name alone
+        // rather than making callers register every port they might be reached
+        // on. Registration is normalized the same way.
+        let host = split_host_port(host).0;
         // Lock-free read of a routing-table snapshot.
         let routes = self.routes.load();
         let Some(workload_set) = routes.host_to_workload.get(host) else {
@@ -410,6 +424,17 @@ impl Router for DynamicRouter {
 
 /// Trait for custom outgoing HTTP egress. gRPC requests (P2 and P3) are
 /// handled by the runtime before this trait is called.
+///
+/// # `workload_id` is a trust boundary
+///
+/// The `workload_id` passed to `send_request`/`send_request_p3` must be the
+/// host-assigned identifier of the workload instance making the request —
+/// never empty, never derived from guest-controllable data, and never shared
+/// between workloads. Implementations (the default one included) key
+/// per-workload state on it: connection pools, TLS session-resumption stores,
+/// and connection quotas. Two callers presenting the same `workload_id`
+/// collapse into one identity and inherit each other's keep-alive connections
+/// and TLS session tickets.
 pub trait OutgoingHandler: Send + Sync + 'static {
     /// Send a P2 outgoing HTTP request for the given `workload_id`.
     fn send_request(
@@ -435,29 +460,158 @@ pub trait OutgoingHandler: Send + Sync + 'static {
         options: Option<wasmtime_wasi_http::p3::RequestOptions>,
         fut: crate::host::http_p3::P3RequestErrorFuture,
     ) -> crate::host::http_p3::P3SendFuture;
+
+    /// TLS configuration used for host-mediated egress that bypasses
+    /// `send_request`/`send_request_p3` (currently the gRPC fast path).
+    /// `None` (the default) means the process-wide default trust roots.
+    fn client_tls_config(&self) -> Option<Arc<rustls::ClientConfig>> {
+        None
+    }
+
+    /// Pooled HTTP/2 transport for `workload_id`'s gRPC egress.
+    ///
+    /// gRPC requests never reach `send_request`/`send_request_p3` — the
+    /// runtime routes them itself, because the protocol requires HTTP/2 — but
+    /// a handler that pools can serve them here instead, so they reuse
+    /// connections and draw on the same quota as the workload's
+    /// ordinary egress. `None` (the default) leaves the runtime to open one
+    /// HTTP/2 connection per request.
+    fn grpc_transport(&self, _workload_id: &str) -> Option<crate::host::http_client::PooledClient> {
+        None
+    }
+
+    /// Called when a workload binds, before it serves anything, with the
+    /// guest calls it may run at once (`pool_size` × `max_concurrency` for a
+    /// component keeping instances warm, one otherwise).
+    ///
+    /// A workload's concurrent outbound requests scale with that, so an
+    /// implementation that pools can size itself for the burst instead of
+    /// guessing. The default is a no-op.
+    fn on_workload_bind(&self, _workload_id: &str, _call_concurrency: usize) {}
+
+    /// Called when a workload is stopped (unbound from the host).
+    ///
+    /// Implementations holding per-workload state — connection pools, TLS
+    /// session stores, quota slots — should release it now
+    /// rather than letting it linger until idle expiry: a stopped workload's
+    /// pooled connections would otherwise stay open (pinning host-wide
+    /// connection permits) for up to the pool idle timeout after the workload
+    /// is gone. The default is a no-op for stateless implementations.
+    fn on_workload_unbind(&self, _workload_id: &str) {}
 }
 
-/// Default [`OutgoingHandler`] — defers to `wasmtime_wasi_http::p2::default_send_request` (P2)
-/// and `wasmtime_wasi_http::p3::default_send_request` (P3).
-#[derive(Default)]
-pub struct DefaultOutgoingHandler;
+/// Default [`OutgoingHandler`] — sends requests through per-workload
+/// keep-alive connection pools ([`crate::host::http_client::WorkloadClients`])
+/// so a workload's repeated and concurrent requests to the same authority
+/// reuse connections instead of exhausting ephemeral ports, while components
+/// never share a TCP connection with each other. TLS trust roots are
+/// configurable (see [`crate::host::http_client::ClientTlsOptions`]).
+///
+/// Construction does no I/O: unless a configuration is supplied up front, the
+/// TLS configuration (and any trust-store read) is built lazily on first use.
+pub struct DefaultOutgoingHandler {
+    /// Set eagerly by [`Self::with_tls_config`]; populated lazily with the
+    /// process-wide default roots otherwise.
+    clients: OnceLock<crate::host::http_client::WorkloadClients>,
+    /// Where each workload's HTTP allowance comes from; applied when `clients`
+    /// is built. See [`Self::with_quotas`].
+    quotas: Arc<crate::host::quota::QuotaRegistry>,
+}
+
+impl Default for DefaultOutgoingHandler {
+    /// A handler with a private quota registry of default size.
+    ///
+    /// A host that wants a workload's HTTP pool bounded by the *same*
+    /// allowance as its raw sockets passes its own registry to
+    /// [`DefaultOutgoingHandler::with_quotas`].
+    fn default() -> Self {
+        Self {
+            clients: OnceLock::new(),
+            quotas: crate::host::quota::QuotaRegistry::new(Default::default(), None),
+        }
+    }
+}
+
+impl DefaultOutgoingHandler {
+    /// Create a handler that verifies outbound TLS against `tls` (see
+    /// [`crate::host::http_client::ClientTlsOptions`] for building one with
+    /// extra CA bundles).
+    pub fn with_tls_config(tls: Arc<rustls::ClientConfig>) -> Self {
+        let quotas = crate::host::quota::QuotaRegistry::new(Default::default(), None);
+        let cell = OnceLock::new();
+        let _ = cell.set(crate::host::http_client::WorkloadClients::with_quotas(
+            tls,
+            Arc::clone(&quotas),
+        ));
+        Self {
+            clients: cell,
+            quotas,
+        }
+    }
+
+    /// Build a handler from [`ClientTlsOptions`] — the shared wiring for CLI
+    /// call sites. Default options defer to the lazily built process-wide
+    /// configuration; anything else is built (and validated) eagerly so a bad
+    /// CA path fails at startup rather than on the first outbound request.
+    ///
+    /// [`ClientTlsOptions`]: crate::host::http_client::ClientTlsOptions
+    pub fn from_tls_options(
+        options: crate::host::http_client::ClientTlsOptions,
+    ) -> anyhow::Result<Self> {
+        if options == crate::host::http_client::ClientTlsOptions::default() {
+            Ok(Self::default())
+        } else {
+            Ok(Self::with_tls_config(options.build()?))
+        }
+    }
+
+    /// Draw connections from `quotas` rather than a private registry.
+    ///
+    /// Pass the host's one registry so a workload's HTTP pool, its raw
+    /// sockets, and its inbound published ports share the allowance an
+    /// operator configured. Call at construction time, before the handler
+    /// serves requests: a client cache that was already built eagerly is
+    /// rebuilt, dropping any pooled connections.
+    #[must_use]
+    pub fn with_quotas(self, quotas: Arc<crate::host::quota::QuotaRegistry>) -> Self {
+        let cell = OnceLock::new();
+        if let Some(clients) = self.clients.into_inner() {
+            let _ = cell.set(crate::host::http_client::WorkloadClients::with_quotas(
+                clients.tls_config(),
+                Arc::clone(&quotas),
+            ));
+        }
+        Self {
+            clients: cell,
+            quotas,
+        }
+    }
+
+    fn clients(&self) -> &crate::host::http_client::WorkloadClients {
+        self.clients.get_or_init(|| {
+            crate::host::http_client::WorkloadClients::with_quotas(
+                crate::host::http_client::default_client_tls_config(),
+                Arc::clone(&self.quotas),
+            )
+        })
+    }
+}
 
 impl OutgoingHandler for DefaultOutgoingHandler {
     fn send_request(
         &self,
-        _workload_id: &str,
+        workload_id: &str,
         request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
         config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
     ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
     {
-        // Spawn the default handler ourselves (rather than calling
-        // `default_send_request`) so the request can be wrapped in a client
+        // Spawn the send ourselves so the request can be wrapped in a client
         // span and the response status recorded once it arrives.
         let span = outbound_client_span(request.method(), request.uri());
+        let client = self.clients().client(workload_id);
         let handle = wasmtime_wasi::runtime::spawn(
             async move {
-                let result =
-                    wasmtime_wasi_http::p2::default_send_request_handler(request, config).await;
+                let result = client.send_request_p2(request, config).await;
                 match &result {
                     Ok(incoming) => record_outbound_status(incoming.resp.status()),
                     Err(_) => record_outbound_error(),
@@ -470,17 +624,37 @@ impl OutgoingHandler for DefaultOutgoingHandler {
     }
     fn send_request_p3(
         &self,
-        _workload_id: &str,
+        workload_id: &str,
         request: hyper::Request<crate::host::http_p3::P3Body>,
         options: Option<wasmtime_wasi_http::p3::RequestOptions>,
         _fut: crate::host::http_p3::P3RequestErrorFuture,
     ) -> crate::host::http_p3::P3SendFuture {
+        let client = self.clients().client(workload_id);
         Box::new(async move {
-            use http_body_util::BodyExt;
-            let (res, io) = wasmtime_wasi_http::p3::default_send_request(request, options).await?;
-            let io: crate::host::http_p3::P3RequestErrorFuture = Box::new(io);
-            Ok((res.map(BodyExt::boxed_unsync), io))
+            let (res, io) = client.send_request_p3(request, options).await?;
+            Ok((res, io))
         })
+    }
+
+    fn client_tls_config(&self) -> Option<Arc<rustls::ClientConfig>> {
+        Some(self.clients().tls_config())
+    }
+
+    fn grpc_transport(&self, workload_id: &str) -> Option<crate::host::http_client::PooledClient> {
+        Some(self.clients().client(workload_id))
+    }
+
+    fn on_workload_bind(&self, workload_id: &str, call_concurrency: usize) {
+        self.clients()
+            .set_call_concurrency(workload_id, call_concurrency);
+    }
+
+    fn on_workload_unbind(&self, workload_id: &str) {
+        // `get()`, not `clients()`: if no request ever ran there is no cache
+        // to clean and nothing to lazily build for the purpose.
+        if let Some(clients) = self.clients.get() {
+            clients.invalidate(workload_id);
+        }
     }
 }
 
@@ -798,6 +972,9 @@ pub struct Ingress<T: Router, O: OutgoingHandler = DefaultOutgoingHandler> {
     tls_acceptor: Option<TlsAcceptor>,
     listener: Arc<tokio::sync::Mutex<Option<TcpListener>>>,
     meters: RwLock<Meters>,
+    /// h2 (ALPN) variant of the outgoing handler's client TLS configuration,
+    /// derived once on the first gRPC request; see [`Ingress::grpc_tls`].
+    grpc_tls: OnceLock<Arc<rustls::ClientConfig>>,
 }
 
 impl<T: Router, O: OutgoingHandler> std::fmt::Debug for Ingress<T, O> {
@@ -866,7 +1043,7 @@ impl<T: Router> IngressBuilder<T, DefaultOutgoingHandler> {
     fn new(router: T, addr: SocketAddr) -> Self {
         Self {
             router,
-            outgoing_handler: DefaultOutgoingHandler,
+            outgoing_handler: DefaultOutgoingHandler::default(),
             addr,
             tls: None,
         }
@@ -917,6 +1094,7 @@ impl<T: Router, O: OutgoingHandler> IngressBuilder<T, O> {
             tls_acceptor,
             listener: Arc::new(tokio::sync::Mutex::new(Some(listener))),
             meters: Default::default(),
+            grpc_tls: OnceLock::new(),
         })
     }
 }
@@ -944,6 +1122,29 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
     pub fn addr(&self) -> SocketAddr {
         self.addr
     }
+
+    /// The h2 (ALPN) variant of the outgoing handler's client TLS
+    /// configuration, used by the gRPC egress fast path. Derived once on the
+    /// first gRPC request so the per-request `ClientConfig` clone is avoided
+    /// on both the P2 and P3 paths.
+    fn grpc_tls(&self) -> Arc<rustls::ClientConfig> {
+        self.grpc_tls
+            .get_or_init(|| {
+                let base = self
+                    .outgoing_handler
+                    .client_tls_config()
+                    .unwrap_or_else(crate::host::http_client::default_client_tls_config);
+                h2_client_config(&base)
+            })
+            .clone()
+    }
+}
+
+/// Derive the h2 (ALPN) variant of a client TLS configuration for gRPC egress.
+fn h2_client_config(base: &rustls::ClientConfig) -> Arc<rustls::ClientConfig> {
+    let mut config = base.clone();
+    config.alpn_protocols = vec![b"h2".to_vec()];
+    Arc::new(config)
 }
 
 #[async_trait::async_trait]
@@ -1020,6 +1221,15 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
             .await?;
         let instance_pre = resolved_handle.instantiate_pre(component_id).await?;
 
+        // Tell the egress transport how much concurrency this component
+        // declared, before it serves anything: its outbound connection burst
+        // scales with the calls it runs at once, and a pool built without
+        // that sizes itself for a component running one call at a time.
+        self.outgoing_handler.on_workload_bind(
+            resolved_handle.id(),
+            resolved_handle.call_concurrency(component_id).await,
+        );
+
         // Only components that export wasi:http are routable HTTP entrypoints.
         // Anything else stays unregistered and routes to a 404.
         if crate::engine::exports_wasi_http(instance_pre.component()) {
@@ -1042,6 +1252,10 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         self.workload_handles.write().await.remove(workload_id);
         self.service_handlers.write().await.remove(workload_id);
         self.messaging_handlers.write().await.remove(workload_id);
+        // Drop the stopped workload's egress state (pooled connections, TLS
+        // session store, pinned connection permits) instead of letting it
+        // linger until idle expiry.
+        self.outgoing_handler.on_workload_unbind(workload_id);
 
         Ok(())
     }
@@ -1146,8 +1360,17 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 wasmtime_wasi_http::p2::bindings::http::types::ErrorCode::HttpRequestDenied,
             ));
         }
+        // The gRPC path is selected by the guest via a
+        // `content-type: application/grpc` header, and needs HTTP/2 rather
+        // than the HTTP/1.1 the ordinary egress pool speaks. A pooling
+        // handler serves it from its own per-workload HTTP/2 pool, under the
+        // same quota; otherwise the runtime opens a connection
+        // per request.
         if is_grpc_request(&request) {
-            return Ok(send_grpc_request(request, config));
+            return Ok(match self.outgoing_handler.grpc_transport(workload_id) {
+                Some(client) => send_pooled_grpc_request(client, request, config),
+                None => send_grpc_request(request, config, self.grpc_tls()),
+            });
         }
         self.outgoing_handler
             .send_request(workload_id, request, config)
@@ -1174,7 +1397,15 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 ))
             })
         } else if is_grpc_request(&request) {
-            send_grpc_request_p3(request, options)
+            // Guest-selected HTTP/2 path — see the matching comment in
+            // `outgoing_request`.
+            match self.outgoing_handler.grpc_transport(workload_id) {
+                Some(client) => Box::new(async move {
+                    let (res, io) = client.send_grpc_request_p3(request, options).await?;
+                    Ok((res, io))
+                }),
+                None => send_grpc_request_p3(request, options, self.grpc_tls()),
+            }
         } else {
             self.outgoing_handler
                 .send_request_p3(workload_id, request, options, fut)
@@ -1603,9 +1834,14 @@ fn host_header<B>(req: &hyper::Request<B>) -> &str {
         .unwrap_or("unknown")
 }
 
-/// Split a `Host` header value into the OTel `server.address` (host without
-/// port) and an optional `server.port`. Handles bracketed IPv6 literals such as
-/// `[::1]:8080`, returning the address without brackets.
+/// Split a `Host` header value into the host without its port and an optional
+/// port. Handles bracketed IPv6 literals such as `[::1]:8080`, returning the
+/// address without brackets.
+///
+/// Feeds the OTel `server.address`/`server.port` attributes and
+/// [`DynamicRouter`]'s routing key. A suffix that is not a number is dropped
+/// rather than rejected, so `example.com:no-such-port` routes as
+/// `example.com`.
 fn split_host_port(host: &str) -> (&str, Option<u16>) {
     if let Some(rest) = host.strip_prefix('[') {
         // IPv6 literal: `[addr]` or `[addr]:port`.
@@ -1630,26 +1866,57 @@ async fn invoke_component_handler(
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
     if crate::engine::targets_wasip3_http(instance_pre.component()) {
-        // Reuse a warm instance when the component has opted in, otherwise
-        // build and instantiate a store for this request alone. A burst past
-        // `pool_size` is served cold rather than queued.
         let pool = workload_handle
             .instance_pool_for_component(component_id)
             .await;
-        let warm = match pool.as_ref().and_then(|pool| pool.checkout()) {
-            Some(warm) => warm,
-            None => {
-                let mut store = workload_handle.new_store(component_id).await?;
-                let instance = instance_pre.instantiate_async(&mut store).await?;
-                crate::engine::instance_pool::ComponentInstance {
-                    store,
-                    instance,
-                    invocations: 0,
+
+        // A component that keeps instances warm serves this on one of them,
+        // alongside whatever else that instance already has in flight. Only
+        // when every warm instance is full and the pool is at `pool_size` does
+        // the request fall through to a store of its own.
+        let req = if let Some(pool) = pool.as_ref() {
+            use crate::engine::instance_driver::InstanceJob;
+            use crate::engine::instance_pool::Dispatch;
+            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+            let outcome = match pool.offer(InstanceJob::Http(Box::new((req, resp_tx)))) {
+                Dispatch::Sent => Ok(()),
+                // The pool has room. Build and instantiate the store out here,
+                // where awaiting is allowed and where a component that fails
+                // to instantiate reports that failure to this request rather
+                // than only to the log.
+                Dispatch::NeedsInstance(job) => {
+                    let mut store = workload_handle.new_store(component_id).await?;
+                    let instance = instance_pre.instantiate_async(&mut store).await?;
+                    pool.install(
+                        crate::engine::instance_pool::ComponentInstance { store, instance },
+                        job,
+                    )
+                }
+                Dispatch::Saturated(job) => Err(job),
+            };
+            match outcome {
+                Ok(()) => {
+                    return resp_rx
+                        .await
+                        .map_err(|_| anyhow::anyhow!("pooled instance dropped the request"))?;
+                }
+                // Every warm instance was busy; serve it cold below.
+                Err(InstanceJob::Http(job)) => job.0,
+                // A job comes back as the variant it went in as, so this is
+                // unreachable — but not worth a panic on a request path.
+                Err(InstanceJob::Linked(_)) => {
+                    debug_assert!(false, "an HTTP job cannot come back as a linked one");
+                    anyhow::bail!("instance pool returned a linked job for an HTTP request");
                 }
             }
+        } else {
+            req
         };
-        let resp =
-            crate::host::http_p3::handle_component_request_p3(warm, pool, req, fuel_meter).await?;
+
+        let mut store = workload_handle.new_store(component_id).await?;
+        let instance = instance_pre.instantiate_async(&mut store).await?;
+        let cold = crate::engine::instance_pool::ComponentInstance { store, instance };
+        let resp = crate::host::http_p3::handle_component_request_p3(cold, req, fuel_meter).await?;
         let (parts, body) = resp.into_parts();
         let body = HyperOutgoingBody::new(
             body.map_err(|e| {
@@ -1873,14 +2140,18 @@ fn is_grpc_request<B>(req: &hyper::Request<B>) -> bool {
 }
 
 /// Send a gRPC request over HTTP/2.
-fn send_grpc_request(
+/// Send a P2 gRPC request through a handler's pooled HTTP/2 transport.
+/// Mirrors [`send_grpc_request`]'s span and status recording; the connection
+/// lifetime belongs to the pool rather than to this request.
+fn send_pooled_grpc_request(
+    client: crate::host::http_client::PooledClient,
     request: hyper::Request<HyperOutgoingBody>,
     config: OutgoingRequestConfig,
 ) -> HostFutureIncomingResponse {
     let span = outbound_client_span(request.method(), request.uri());
     let handle = wasmtime_wasi::runtime::spawn(
         async move {
-            let result = send_grpc_request_handler(request, config).await;
+            let result = client.send_grpc_request_p2(request, config).await;
             match &result {
                 Ok(incoming) => {
                     record_outbound_status(incoming.resp.status());
@@ -1895,7 +2166,31 @@ fn send_grpc_request(
     HostFutureIncomingResponse::pending(handle)
 }
 
-/// Async handler that sends a gRPC request using HTTP/2.
+fn send_grpc_request(
+    request: hyper::Request<HyperOutgoingBody>,
+    config: OutgoingRequestConfig,
+    tls: Arc<rustls::ClientConfig>,
+) -> HostFutureIncomingResponse {
+    let span = outbound_client_span(request.method(), request.uri());
+    let handle = wasmtime_wasi::runtime::spawn(
+        async move {
+            let result = send_grpc_request_handler(request, config, tls).await;
+            match &result {
+                Ok(incoming) => {
+                    record_outbound_status(incoming.resp.status());
+                    record_grpc_status(incoming.resp.headers());
+                }
+                Err(_) => record_outbound_error(),
+            }
+            Ok(result)
+        }
+        .instrument(span),
+    );
+    HostFutureIncomingResponse::pending(handle)
+}
+
+/// Async handler that sends a gRPC request using HTTP/2. `tls` must already
+/// carry the h2 ALPN (see [`h2_client_config`]).
 async fn send_grpc_request_handler(
     mut request: hyper::Request<HyperOutgoingBody>,
     OutgoingRequestConfig {
@@ -1904,105 +2199,44 @@ async fn send_grpc_request_handler(
         first_byte_timeout,
         between_bytes_timeout,
     }: OutgoingRequestConfig,
+    tls: Arc<rustls::ClientConfig>,
 ) -> Result<IncomingResponse, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> {
-    use tokio::net::TcpStream;
+    use crate::host::http_client::{
+        connect_tcp, connect_tls, request_authority, spawn_p2_conn_worker, to_origin_form,
+    };
     use tokio::time::timeout;
     use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
 
-    let authority = if let Some(authority) = request.uri().authority() {
-        if authority.port().is_some() {
-            authority.to_string()
-        } else {
-            let port = if use_tls { 443 } else { 80 };
-            format!("{authority}:{port}")
-        }
-    } else {
-        return Err(ErrorCode::HttpRequestUriInvalid);
-    };
-
-    let tcp_stream = timeout(connect_timeout, TcpStream::connect(&authority))
-        .await
-        .map_err(|_| ErrorCode::ConnectionTimeout)?
-        .map_err(|_| ErrorCode::ConnectionRefused)?;
+    let authority = request_authority(&request, use_tls).ok_or(ErrorCode::HttpRequestUriInvalid)?;
+    let tcp_stream = connect_tcp(&authority, connect_timeout).await?;
 
     let (mut sender, worker) = if use_tls {
-        use rustls::pki_types::ServerName;
-
-        let root_cert_store = rustls::RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.into(),
-        };
-        let mut config = rustls::ClientConfig::builder()
-            .with_root_certificates(root_cert_store)
-            .with_no_client_auth();
-        config.alpn_protocols = vec![b"h2".to_vec()];
-
-        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
-        let mut parts = authority.split(':');
-        let host = parts.next().unwrap_or(&authority);
-        if host.is_empty() {
-            return Err(ErrorCode::HttpRequestUriInvalid);
-        }
-        let domain = ServerName::try_from(host)
-            .map_err(|e| {
-                tracing::warn!("invalid server name '{host}': {e:?}");
-                ErrorCode::HttpRequestUriInvalid
-            })?
-            .to_owned();
-        let stream = connector.connect(domain, tcp_stream).await.map_err(|e| {
-            tracing::warn!("tls protocol error: {e:?}");
-            ErrorCode::TlsProtocolError
-        })?;
-        let stream = TokioIo::new(stream);
-
+        // The cached gRPC TLS configuration is shared across workloads; give
+        // this connection its own session store so TLS session tickets never
+        // resume across workloads.
+        let config = crate::host::http_client::isolated_resumption(&tls);
+        let stream = connect_tls(Arc::new(config), &authority, tcp_stream).await?;
         let (sender, conn) = timeout(
             connect_timeout,
-            http2::handshake(TokioExecutor::new(), stream),
+            http2::handshake(TokioExecutor::new(), TokioIo::new(stream)),
         )
         .await
         .map_err(|_| ErrorCode::ConnectionTimeout)?
         .map_err(hyper_request_error)?;
-
-        let worker = wasmtime_wasi::runtime::spawn(async move {
-            if let Err(e) = conn.await {
-                tracing::warn!("dropping error {e}");
-            }
-        });
-
-        (sender, worker)
+        (sender, spawn_p2_conn_worker(conn))
     } else {
         // h2c (HTTP/2 over cleartext)
-        let stream = TokioIo::new(tcp_stream);
         let (sender, conn) = timeout(
             connect_timeout,
-            http2::handshake(TokioExecutor::new(), stream),
+            http2::handshake(TokioExecutor::new(), TokioIo::new(tcp_stream)),
         )
         .await
         .map_err(|_| ErrorCode::ConnectionTimeout)?
         .map_err(hyper_request_error)?;
-
-        let worker = wasmtime_wasi::runtime::spawn(async move {
-            if let Err(e) = conn.await {
-                tracing::warn!("dropping error {e}");
-            }
-        });
-
-        (sender, worker)
+        (sender, spawn_p2_conn_worker(conn))
     };
 
-    // Strip scheme/authority from URI for the actual HTTP/2 request
-    // The URI was already validated, so rebuilding with just path+query is safe
-    if let Ok(uri) = hyper::Uri::builder()
-        .path_and_query(
-            request
-                .uri()
-                .path_and_query()
-                .map(|p| p.as_str())
-                .unwrap_or("/"),
-        )
-        .build()
-    {
-        *request.uri_mut() = uri;
-    }
+    to_origin_form(&mut request);
 
     let resp = timeout(first_byte_timeout, sender.send_request(request))
         .await
@@ -2021,8 +2255,9 @@ async fn send_grpc_request_handler(
 fn send_grpc_request_p3(
     request: hyper::Request<crate::host::http_p3::P3Body>,
     options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+    tls: Arc<rustls::ClientConfig>,
 ) -> crate::host::http_p3::P3SendFuture {
-    Box::new(send_grpc_request_p3_handler(request, options))
+    Box::new(send_grpc_request_p3_handler(request, options, tls))
 }
 
 /// Response-body wrapper enforcing a between-bytes read timeout on a streaming
@@ -2032,9 +2267,29 @@ fn send_grpc_request_p3(
 /// fires (or the stream ends / errors), releasing the underlying HTTP/2 stream
 /// and TCP connection eagerly instead of leaving it pinned until the guest
 /// drops its body handle.
-struct TimedBody<B> {
+pub(crate) struct TimedBody<B> {
     inner: Option<B>,
     interval: tokio::time::Interval,
+}
+
+impl<B> TimedBody<B> {
+    /// Wrap `inner`, erroring with `ConnectionReadTimeout` when more than
+    /// `between_bytes_timeout` passes between frames.
+    ///
+    /// The period is clamped to a non-zero minimum: the guest sets this value
+    /// through `wasi:http` request-options, which accepts zero, and
+    /// `tokio::time::interval` panics on a zero period. A clamped period keeps
+    /// the meaning a zero timeout asks for — the next frame must already be
+    /// ready or the body errors.
+    pub(crate) fn new(inner: B, between_bytes_timeout: Duration) -> Self {
+        let period = between_bytes_timeout.max(Duration::from_nanos(1));
+        let mut interval = tokio::time::interval(period);
+        interval.reset();
+        Self {
+            inner: Some(inner),
+            interval,
+        }
+    }
 }
 
 impl<B> hyper::body::Body for TimedBody<B>
@@ -2090,11 +2345,16 @@ where
     }
 }
 
+/// P3 sibling of [`send_grpc_request_handler`]. `tls` must already carry the
+/// h2 ALPN (see [`h2_client_config`]).
 async fn send_grpc_request_p3_handler(
     mut request: hyper::Request<crate::host::http_p3::P3Body>,
     options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+    tls: Arc<rustls::ClientConfig>,
 ) -> crate::host::http_p3::P3SendResult {
-    use tokio::net::TcpStream;
+    use crate::host::http_client::{
+        connect_tcp, connect_tls, request_authority, spawn_p3_conn_worker, to_origin_form,
+    };
     use tokio::time::timeout;
     use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
 
@@ -2110,107 +2370,52 @@ async fn send_grpc_request_p3_handler(
 
     let use_tls = request.uri().scheme() == Some(&hyper::http::uri::Scheme::HTTPS);
 
-    let authority = request
-        .uri()
-        .authority()
-        .ok_or(ErrorCode::HttpRequestUriInvalid)?;
-    let authority = if authority.port().is_some() {
-        authority.to_string()
-    } else {
-        let port = if use_tls { 443 } else { 80 };
-        format!("{authority}:{port}")
-    };
-
-    let tcp_stream = timeout(connect_timeout, TcpStream::connect(&authority))
+    let authority = request_authority(&request, use_tls).ok_or(ErrorCode::HttpRequestUriInvalid)?;
+    let tcp_stream = connect_tcp(&authority, connect_timeout)
         .await
-        .map_err(|_| ErrorCode::ConnectionTimeout)?
-        .map_err(|_| ErrorCode::ConnectionRefused)?;
+        .map_err(ErrorCode::from)?;
 
-    let (mut sender, _worker) = if use_tls {
-        use rustls::pki_types::ServerName;
-
-        let root_cert_store = rustls::RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.into(),
-        };
-        let mut config = rustls::ClientConfig::builder()
-            .with_root_certificates(root_cert_store)
-            .with_no_client_auth();
-        config.alpn_protocols = vec![b"h2".to_vec()];
-
-        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
-        let host = authority.split(':').next().unwrap_or(&authority);
-        if host.is_empty() {
-            return Err(ErrorCode::HttpRequestUriInvalid.into());
-        }
-        let domain = ServerName::try_from(host)
-            .map_err(|e| {
-                tracing::warn!("invalid server name '{host}': {e:?}");
-                ErrorCode::HttpRequestUriInvalid
-            })?
-            .to_owned();
-        let stream = connector.connect(domain, tcp_stream).await.map_err(|e| {
-            tracing::warn!("tls protocol error: {e:?}");
-            ErrorCode::TlsProtocolError
-        })?;
-        let stream = TokioIo::new(stream);
+    let (mut sender, conn_worker) = if use_tls {
+        // The cached gRPC TLS configuration is shared across workloads; give
+        // this connection its own session store so TLS session tickets never
+        // resume across workloads.
+        let config = crate::host::http_client::isolated_resumption(&tls);
+        let stream = connect_tls(Arc::new(config), &authority, tcp_stream)
+            .await
+            .map_err(ErrorCode::from)?;
         let (sender, conn) = timeout(
             connect_timeout,
-            http2::handshake(TokioExecutor::new(), stream),
+            http2::handshake(TokioExecutor::new(), TokioIo::new(stream)),
         )
         .await
         .map_err(|_| ErrorCode::ConnectionTimeout)?
         .map_err(ErrorCode::from_hyper_request_error)?;
-        let worker = wasmtime_wasi::runtime::spawn(async move {
-            if let Err(e) = conn.await {
-                tracing::warn!("dropping error {e}");
-            }
-        });
-        (sender, worker)
+        (sender, spawn_p3_conn_worker(conn))
     } else {
-        let stream = TokioIo::new(tcp_stream);
         let (sender, conn) = timeout(
             connect_timeout,
-            http2::handshake(TokioExecutor::new(), stream),
+            http2::handshake(TokioExecutor::new(), TokioIo::new(tcp_stream)),
         )
         .await
         .map_err(|_| ErrorCode::ConnectionTimeout)?
         .map_err(ErrorCode::from_hyper_request_error)?;
-        let worker = wasmtime_wasi::runtime::spawn(async move {
-            if let Err(e) = conn.await {
-                tracing::warn!("dropping error {e}");
-            }
-        });
-        (sender, worker)
+        (sender, spawn_p3_conn_worker(conn))
     };
 
-    if let Ok(uri) = hyper::Uri::builder()
-        .path_and_query(
-            request
-                .uri()
-                .path_and_query()
-                .map(|p| p.as_str())
-                .unwrap_or("/"),
-        )
-        .build()
-    {
-        *request.uri_mut() = uri;
-    }
+    to_origin_form(&mut request);
 
     let resp = timeout(first_byte_timeout, sender.send_request(request))
         .await
         .map_err(|_| ErrorCode::ConnectionReadTimeout)?
         .map_err(ErrorCode::from_hyper_request_error)?
-        .map(|body| {
-            let mut interval = tokio::time::interval(between_bytes_timeout);
-            interval.reset();
-            TimedBody {
-                inner: Some(body),
-                interval,
-            }
-            .boxed_unsync()
-        });
+        .map(|body| TimedBody::new(body, between_bytes_timeout).boxed_unsync());
 
-    let io: crate::host::http_p3::P3RequestErrorFuture = Box::new(async move { Ok(()) });
+    // The connection driver *is* the request-error future: it must stay
+    // pending while the guest reads the body (wasmtime keeps it alive for the
+    // body's lifetime only while it polls pending — see `p3::host::handler` —
+    // and the `AbortOnDropJoinHandle` aborts the connection when dropped), and
+    // a connection failure propagates to the guest instead of being dropped.
+    let io: crate::host::http_p3::P3RequestErrorFuture = Box::new(conn_worker);
     Ok((resp, io))
 }
 
@@ -2225,6 +2430,186 @@ mod tests {
             .uri(uri)
             .body(HyperOutgoingBody::default())
             .unwrap()
+    }
+
+    /// `with_quotas` rebuilds an eagerly-configured client cache and must
+    /// carry the TLS configuration over — losing it would silently revert a
+    /// host to the default trust roots.
+    #[test]
+    fn quota_builder_preserves_tls_config() {
+        let tls = crate::host::http_client::ClientTlsOptions::default()
+            .build()
+            .unwrap();
+        let handler = DefaultOutgoingHandler::with_tls_config(tls.clone()).with_quotas(
+            crate::host::quota::QuotaRegistry::new(
+                crate::host::quota::QuotaLimits {
+                    outbound_http: 1,
+                    ..Default::default()
+                },
+                Some(2),
+            ),
+        );
+        let got = handler
+            .client_tls_config()
+            .expect("handler should expose its TLS configuration");
+        assert!(
+            Arc::ptr_eq(&tls, &got),
+            "with_quotas must preserve the configured TLS roots"
+        );
+    }
+
+    fn build_request_p3(uri: &str) -> hyper::Request<crate::host::http_p3::P3Body> {
+        hyper::Request::builder()
+            .uri(uri)
+            .body(crate::host::http_p3::P3Body::new(
+                http_body_util::Empty::new().map_err(|_: std::convert::Infallible| unreachable!()),
+            ))
+            .unwrap()
+    }
+
+    /// Spawn an HTTP/2-over-TLS server (h2 ALPN) whose certificate chains to a
+    /// private CA (an IP SAN, so tests dial 127.0.0.1 directly), answering
+    /// every request with `200 ok`. Returns the bound port and the CA PEM.
+    async fn private_ca_h2_server() -> (u16, String) {
+        crate::init_crypto();
+        let certified_key =
+            rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
+        let ca_pem = certified_key.cert.pem();
+        let cert_der = certified_key.cert.der().clone();
+        let key_der =
+            rustls::pki_types::PrivateKeyDer::try_from(certified_key.signing_key.serialize_der())
+                .unwrap();
+
+        let mut server_config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert_der], key_der)
+            .unwrap();
+        server_config.alpn_protocols = vec![b"h2".to_vec()];
+        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let (stream, _) = match listener.accept().await {
+                    Ok(accepted) => accepted,
+                    Err(_) => return,
+                };
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    // Failed handshakes (the untrusted-CA case) just drop.
+                    let Ok(tls) = acceptor.accept(stream).await else {
+                        return;
+                    };
+                    let service = hyper::service::service_fn(
+                        |_req: hyper::Request<hyper::body::Incoming>| async {
+                            Ok::<_, std::convert::Infallible>(hyper::Response::new(
+                                http_body_util::Full::new(bytes::Bytes::from_static(b"ok")),
+                            ))
+                        },
+                    );
+                    let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                        .serve_connection(TokioIo::new(tls), service)
+                        .await;
+                });
+            }
+        });
+        (port, ca_pem)
+    }
+
+    fn grpc_config() -> OutgoingRequestConfig {
+        OutgoingRequestConfig {
+            use_tls: true,
+            connect_timeout: Duration::from_secs(5),
+            first_byte_timeout: Duration::from_secs(5),
+            between_bytes_timeout: Duration::from_secs(5),
+        }
+    }
+
+    /// The gRPC egress fast path must verify TLS against the roots configured
+    /// on the outgoing handler (with h2 ALPN layered on by
+    /// [`h2_client_config`]), not the compiled-in webpki bundle.
+    #[tokio::test]
+    async fn grpc_path_picks_up_configured_roots() {
+        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
+
+        let (port, ca_pem) = private_ca_h2_server().await;
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, ca_pem).unwrap();
+        let uri = format!("https://127.0.0.1:{port}/svc.Test/Call");
+
+        // Default roots: the handshake must fail with a TLS error.
+        let err = send_grpc_request_handler(
+            build_request(&uri),
+            grpc_config(),
+            h2_client_config(&crate::host::http_client::default_client_tls_config()),
+        )
+        .await
+        .expect_err("untrusted CA must fail");
+        assert!(
+            matches!(err, ErrorCode::TlsProtocolError),
+            "expected TlsProtocolError, got {err:?}"
+        );
+
+        // Configured roots: the same request must succeed.
+        let tls = crate::host::http_client::ClientTlsOptions {
+            roots: crate::host::http_client::TrustRoots::ExtraOnly,
+            extra_ca_paths: vec![ca_path],
+        }
+        .build()
+        .unwrap();
+        let response =
+            send_grpc_request_handler(build_request(&uri), grpc_config(), h2_client_config(&tls))
+                .await
+                .expect("request with the private CA trusted should succeed");
+        assert_eq!(response.resp.status(), 200);
+    }
+
+    /// P3 sibling of [`grpc_path_picks_up_configured_roots`]: the configured
+    /// roots must apply, and the returned request-error future must poll
+    /// pending so wasmtime keeps the connection alive while the guest reads
+    /// the body.
+    #[tokio::test]
+    async fn grpc_p3_path_picks_up_configured_roots_and_keeps_connection_alive() {
+        use core::task::{Context as TaskContext, Waker};
+
+        let (port, ca_pem) = private_ca_h2_server().await;
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, ca_pem).unwrap();
+        let uri = format!("https://127.0.0.1:{port}/svc.Test/Call");
+
+        let tls = crate::host::http_client::ClientTlsOptions {
+            roots: crate::host::http_client::TrustRoots::ExtraOnly,
+            extra_ca_paths: vec![ca_path],
+        }
+        .build()
+        .unwrap();
+        let (response, io) =
+            send_grpc_request_p3_handler(build_request_p3(&uri), None, h2_client_config(&tls))
+                .await
+                .expect("request with the private CA trusted should succeed");
+        assert_eq!(response.status(), 200);
+
+        let mut io = Box::into_pin(io);
+        assert!(
+            io.as_mut()
+                .poll(&mut TaskContext::from_waker(Waker::noop()))
+                .is_pending(),
+            "request-error future must stay pending so wasmtime ties it to the body"
+        );
+
+        // Drive it the way wasmtime does once it sees `Pending`.
+        let io = wasmtime_wasi::runtime::spawn(io);
+        let body = tokio::time::timeout(
+            Duration::from_secs(3),
+            BodyExt::collect(response.into_body()),
+        )
+        .await
+        .expect("body read timed out")
+        .expect("body read failed");
+        assert_eq!(body.to_bytes().as_ref(), b"ok");
+        drop(io);
     }
 
     /// Guards the P3 streaming regression fix: `run_http_server` must disable
@@ -2642,6 +3027,42 @@ mod tests {
             name: None,
         };
         assert!(http_ingress_hostnames(&[kv]).is_empty());
+    }
+
+    /// A client decides whether to put the port in the Host header, and the
+    /// host serves one HTTP port, so routing must not depend on that choice.
+    /// Without this an OCI client pushing to `127.0.0.1:5000` 404s against a
+    /// workload registered as `127.0.0.1`, which is what forced the e2e
+    /// registry onto port 80 (and onto sudo, to bind it).
+    #[tokio::test]
+    async fn dynamic_router_ignores_the_port_in_the_host_header() {
+        let router = DynamicRouter::default();
+        router
+            .on_service_http_resolved("w0", &["registry.local".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(router.select_workload("registry.local").unwrap(), "w0");
+        assert_eq!(router.select_workload("registry.local:5000").unwrap(), "w0");
+        assert!(
+            router.select_workload("other.local:5000").is_err(),
+            "stripping the port must not make unrelated hostnames match"
+        );
+    }
+
+    /// The two sides have to agree: a hostname registered *with* a port is
+    /// still reachable, rather than being keyed under a name no request can
+    /// produce.
+    #[tokio::test]
+    async fn dynamic_router_normalizes_a_registered_host_with_a_port() {
+        let router = DynamicRouter::default();
+        router
+            .on_service_http_resolved("w0", &["registry.local:5000".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(router.select_workload("registry.local").unwrap(), "w0");
+        assert_eq!(router.select_workload("registry.local:5000").unwrap(), "w0");
     }
 
     /// Regression guard for the "N replicas serve like one" defect: with several

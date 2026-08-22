@@ -1,10 +1,13 @@
-//! A p3 service co-driving `wasi:cli/run@0.3` (a p3 async tick loop), the p2
-//! `wasmcloud:messaging/handler@0.2.0`, and `wasi:http/handler@0.3` on one
+//! A p3 service co-driving `wasi:cli/run@0.3` (a p3 async tick loop), the async
+//! `wasmcloud:messaging/handler@0.3.0`, and `wasi:http/handler@0.3` on one
 //! long-lived instance.
 //!
 //! `handle-message` increments a process-global `MSG_COUNT` and echoes
-//! `"{count}:{subject}"` as its error result (observed directly by the trigger service
-//! spike). The http handler reports the live `MSG_COUNT` as `{"count":N}`, so an
+//! `"{count}:{subject}"` as its error result (observed directly by the trigger
+//! service spike). `@0.3.0`'s error is a variant, so the echo travels in
+//! `error::other` and the host renders it as `other: {count}:{subject}`.
+//!
+//! The http handler reports the live `MSG_COUNT` as `{"count":N}`, so an
 //! end-to-end test can publish a message through a messaging backend and read
 //! the count over HTTP — proving the message reached the handler on the SAME
 //! long-lived instance the trigger service co-drives, not a fresh one per message.
@@ -17,7 +20,7 @@ use bindings::exports::wasi::cli::run::Guest as RunGuest;
 use bindings::exports::wasi::http::handler::Guest as HttpGuest;
 use bindings::exports::wasmcloud::messaging::handler::Guest as MsgGuest;
 use bindings::wasi::http::types::{ErrorCode, Fields, Request, Response};
-use bindings::wasmcloud::messaging::types::BrokerMessage;
+use bindings::wasmcloud::messaging::types::{BrokerMessage, HandleMessageError};
 
 static MSG_COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -35,16 +38,23 @@ impl RunGuest for Component {
 }
 
 impl MsgGuest for Component {
-    fn handle_message(msg: BrokerMessage) -> Result<(), String> {
+    async fn handle_message(msg: BrokerMessage) -> Result<(), HandleMessageError> {
+        // The `stream<u8>` body is deliberately dropped unread: this fixture
+        // counts deliveries, and dropping the reader is the WIT-sanctioned way
+        // to discard a payload — which makes this the coverage for that path
+        // (messaging-echo-p3 covers the full drain).
+        drop(msg.body);
         // A `boom` subject traps the handler, faulting the co-driven instance —
         // the restart-behavior test uses this to force a supervised restart.
         if msg.subject == "boom" {
             panic!("msg-counter boom: deliberate handler trap for the restart test");
         }
         let n = MSG_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-        // Echo the running count + subject so the trigger service spike can observe
-        // delivery and that the instance is long-lived.
-        Err(format!("{n}:{}", msg.subject))
+        // Echo the running count + subject so the trigger service spike can
+        // observe delivery and that the instance is long-lived. The disposition
+        // `other` is the only `handle-message-error` case carrying a payload, so
+        // it is where an arbitrary echo string can travel.
+        Err(HandleMessageError::Other(format!("{n}:{}", msg.subject)))
     }
 }
 

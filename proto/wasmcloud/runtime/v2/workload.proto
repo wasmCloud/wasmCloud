@@ -87,12 +87,25 @@ message WitWorld {
 message Component {
   string image = 1;
   LocalResources local_resources = 2;
+  // The instance limits below are signed because they mirror the Kubernetes
+  // CRD fields a workload sets them through (WorkloadComponent in the
+  // runtime-operator), and the Kubernetes API convention is signed integers.
+  // Nothing reads a negative one as a distinct value: zero and negative alike
+  // mean "not configured", decoded in one place on the receiving side.
   sint32 pool_size = 3;
   sint32 max_invocations = 4;
   // Optional credentials for pulling the image from a private registry
   ImagePullSecret image_pull_secret = 5;
   string name = 6;
   ImagePullPolicy image_pull_policy = 7;
+  // How many calls one warm instance may serve at the same time.
+  //
+  // Unset or below 1 means one, which is what a component gets without
+  // asking: an instance serves a single call at a time. Raising it lets an
+  // instance overlap calls while it awaits I/O, and is only safe for a guest
+  // that yields rather than blocks -- a guest driving its own executor with a
+  // blocking call must stay at one. Only meaningful alongside pool_size.
+  sint32 max_concurrency = 8;
 }
 
 message LocalResources {
@@ -116,6 +129,16 @@ message LocalResources {
   // "*.wasmcloud.io", an exact name, or a literal IP address.
   // Empty or absent denies every lookup with permanent-resolver-failure.
   repeated string allowed_ip_name_lookups = 7;
+
+  // Ports on the machine's own loopback this component may reach through
+  // `host.wasmcloud.internal`. Each entry is a port with an optional
+  // protocol: "5432", "5432/tcp", "53/udp".
+  //
+  // An empty or absent list denies every host-loopback connection, and a
+  // non-empty one is inert unless the host was started with
+  // --allow-host-loopback: neither the workload author nor the operator can
+  // open this door alone.
+  repeated string allowed_host_loopback_ports = 8;
 }
 
 message Volume {

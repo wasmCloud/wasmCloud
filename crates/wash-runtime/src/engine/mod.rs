@@ -218,9 +218,10 @@ pub fn targets_wasip3_http(component: &Component) -> bool {
 }
 
 pub mod ctx;
+pub(crate) mod instance_driver;
 pub(crate) mod instance_pool;
 pub use instance_pool::InstancePolicy;
-mod linked_call;
+pub(crate) mod linked_call;
 pub(crate) mod store;
 mod value;
 mod volumes;
@@ -236,9 +237,24 @@ pub struct Engine {
     // wasmtime engine
     pub(crate) inner: wasmtime::Engine,
     pub(crate) cache: Cache<CacheKey, CacheValue>,
+    /// Host-level socket policy every workload on this engine inherits:
+    /// enforcement mode, address ranges, whether the host-loopback door is open,
+    /// the host's port table, and the connection budget. The workload-level half
+    /// (`allowedHosts`, `allowedHostLoopbackPorts`) is layered over it per component.
+    pub(crate) socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
+    /// Core instances the pooling allocator was configured to admit, captured
+    /// from the [`PoolingAllocationConfig`] actually installed — so it reflects
+    /// the `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` override and a
+    /// caller-supplied pooling config alike. `None` when pooling is off or
+    /// unsupported, i.e. when there is no pool budget to divide.
+    ///
+    /// Recorded rather than recomputed: re-deriving `max_instances.unwrap_or(…)`
+    /// somewhere else would miss the env override (applied inside
+    /// [`new_pooling_config`]) and drift the moment either side changed.
+    total_core_instances: Option<u32>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -291,6 +307,22 @@ impl std::error::Error for SharedError {
 }
 
 impl Engine {
+    /// Core instances the pooling allocator will admit, or `None` when pooling
+    /// is off or unsupported.
+    ///
+    /// This is the budget every component instantiation on this engine spends
+    /// from, and the number any secondary ceiling — the messaging admission
+    /// gate, say — should size itself against, so that raising the pool raises
+    /// what depends on it instead of leaving a second cap silently binding.
+    ///
+    /// Read from the [`PoolingAllocationConfig`] actually installed, so it
+    /// accounts for `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` and for a
+    /// caller-supplied pooling config, neither of which is visible from
+    /// [`EngineBuilder::with_max_instances`].
+    pub fn total_core_instances(&self) -> Option<u32> {
+        self.total_core_instances
+    }
+
     /// Creates a new [`EngineBuilder`] for configuring an engine.
     ///
     /// # Returns
@@ -471,7 +503,7 @@ impl Engine {
             }
         }
 
-        let service = WorkloadService::new(
+        let mut service = WorkloadService::new(
             workload_id.as_ref(),
             workload_name.as_ref(),
             workload_namespace.as_ref(),
@@ -482,6 +514,7 @@ impl Engine {
             service.max_restarts,
             loopback,
         );
+        service.metadata.socket_policy = Arc::clone(&self.socket_policy);
 
         let world = service.world();
 
@@ -580,7 +613,7 @@ impl Engine {
         }
 
         // Create the WorkloadComponent with volume mounts
-        Ok(WorkloadComponent::new(
+        let mut workload_component = WorkloadComponent::new(
             workload_id.as_ref(),
             workload_name.as_ref(),
             workload_namespace.as_ref(),
@@ -591,7 +624,9 @@ impl Engine {
             component.local_resources,
             loopback,
             instances,
-        ))
+        );
+        workload_component.metadata.socket_policy = Arc::clone(&self.socket_policy);
+        Ok(workload_component)
     }
 
     /// Compile a host component plugin and build a linker with WASI (and
@@ -652,11 +687,15 @@ pub enum WasmProposal {
     /// Component model `(implements ..)` named imports, letting a component
     /// import the same interface multiple times under distinct names so host
     /// plugins can route each independently. Enables
-    /// `wasm_component_model_implements`. Requires the backported wasmtime
-    /// support, so it is only available with the `wasm_component_model_implements`
-    /// crate feature.
+    /// `wasm_component_model_implements`. Available with the
+    /// `wasm_component_model_implements` crate feature, which is on by default
+    /// and carries the plugin-side routing this proposal is useful for.
     #[cfg(feature = "wasm_component_model_implements")]
     WasmComponentModelImplements,
+    /// Component model `map<k, v>` type. Enables `wasm_component_model_map`,
+    /// which is what lets a component whose WIT uses `map` types be validated
+    /// and instantiated. Enabled by default, like [`Self::ComponentModelAsync`].
+    ComponentModelMap,
     /// Garbage collection (with its `wasm_function_references` prerequisite).
     /// Enabled by default in wasmtime >= 47; accepted for compatibility.
     Gc,
@@ -682,6 +721,9 @@ impl WasmProposal {
             #[cfg(feature = "wasm_component_model_implements")]
             WasmProposal::WasmComponentModelImplements => {
                 cfg.wasm_component_model_implements(true);
+            }
+            WasmProposal::ComponentModelMap => {
+                cfg.wasm_component_model_map(true);
             }
             // GC (with its `wasm_function_references` prerequisite), exception
             // handling, and wide arithmetic are all enabled by default in
@@ -711,8 +753,9 @@ impl std::fmt::Display for ParseWasmProposalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "unknown wasm proposal {:?}; expected one of: component-model-async, gc, \
-             exception-handling, wide-arithmetic, threads, tail-call",
+            "unknown wasm proposal {:?}; expected one of: component-model-async, \
+             component-model-map, gc, exception-handling, wide-arithmetic, threads, \
+             tail-call",
             self.0
         )
     }
@@ -729,6 +772,7 @@ impl FromStr for WasmProposal {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim().to_ascii_lowercase().replace('_', "-").as_str() {
             "component-model-async" => Ok(Self::ComponentModelAsync),
+            "component-model-map" => Ok(Self::ComponentModelMap),
             "gc" => Ok(Self::Gc),
             "exception-handling" => Ok(Self::ExceptionHandling),
             "wide-arithmetic" => Ok(Self::WideArithmetic),
@@ -764,12 +808,25 @@ pub struct EngineBuilder {
     compilation_cache_size: Option<u64>,
     compilation_cache_ttl: Option<Duration>,
     fuel_consumption: Option<bool>,
+    socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
 }
 
 impl EngineBuilder {
+    /// Install the host-level socket policy every workload on this engine
+    /// inherits.
+    ///
+    /// The workload-level half (`allowedHosts`, `allowedHostLoopbackPorts`) comes
+    /// from each component's `LocalResources` and is layered over this, so a
+    /// workload can only ever narrow what the host permits.
+    #[must_use]
+    pub fn with_socket_policy(mut self, policy: Arc<crate::sockets::policy::SocketPolicy>) -> Self {
+        self.socket_policy = Some(policy);
+        self
+    }
+
     /// Creates a new `EngineBuilder` with default configuration.
     ///
     /// # Returns
@@ -916,12 +973,17 @@ impl EngineBuilder {
             .unwrap_or(!has_custom_config);
 
         // The pooling allocator can be more efficient for workloads with many short-lived instances
+        let mut total_core_instances = None;
         if use_pooling_allocator && let Ok(true) = is_pooling_allocator_supported() {
             tracing::debug!("using pooling allocator by default");
             let pooling = self
                 .pooling_config
                 .take()
                 .unwrap_or_else(|| new_pooling_config(self.max_instances.unwrap_or(1000)));
+            // Read back what was actually configured rather than what was asked
+            // for: `new_pooling_config` lets the environment override the count,
+            // and a caller-supplied config ignores `max_instances` entirely.
+            total_core_instances = Some(pooling.get_total_core_instances());
             config.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pooling));
         } else if use_pooling_allocator {
             tracing::warn!("pooling allocator requested but not supported");
@@ -936,12 +998,15 @@ impl EngineBuilder {
         // WASIP3's async ABI requires the component-model async proposal.
         self.proposals.insert(WasmProposal::ComponentModelAsync);
 
+        // Accept components whose WIT uses `map<k, v>` types.
+        self.proposals.insert(WasmProposal::ComponentModelMap);
+
         // Accept components that import an interface multiple times via the
         // component-model `(implements ..)` annotation, so host plugins can
         // route each named import (e.g. two `wasi:keyvalue/store` imports
-        // backed by redis vs NATS) independently. Only available with the
-        // backported wasmtime support behind the
-        // `wasm_component_model_implements` feature.
+        // backed by redis vs NATS) independently. Gated on the
+        // `wasm_component_model_implements` feature, which is on by default and
+        // also brings in the plugin-side routing.
         #[cfg(feature = "wasm_component_model_implements")]
         self.proposals
             .insert(WasmProposal::WasmComponentModelImplements);
@@ -961,8 +1026,10 @@ impl EngineBuilder {
         Ok(Engine {
             inner,
             cache,
+            socket_policy: self.socket_policy.unwrap_or_default(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
+            total_core_instances,
         })
     }
 }
@@ -1167,7 +1234,30 @@ mod tests {
             "component-model-async".parse(),
             Ok(WasmProposal::ComponentModelAsync)
         );
+        assert_eq!(
+            "component-model-map".parse(),
+            Ok(WasmProposal::ComponentModelMap)
+        );
         assert!("nonsense".parse::<WasmProposal>().is_err());
+    }
+
+    // A component whose type section uses `map<k, v>` fails validation unless
+    // the component-model map proposal is on, so compiling one on a
+    // default-built engine is what proves the proposal is enabled by default.
+    #[test]
+    fn default_engine_accepts_component_model_map() {
+        let bytes = wat::parse_str(
+            r#"(component
+                 (type $m (map string string))
+                 (import "test:map/iface" (instance
+                   (export "take" (func (param "m" $m)))
+                 ))
+               )"#,
+        )
+        .expect("map component should assemble");
+
+        let engine = Engine::builder().build().expect("engine should build");
+        Component::new(&engine.inner, &bytes).expect("map component should compile");
     }
 
     // A compile failure that goes through the cache reports everything the

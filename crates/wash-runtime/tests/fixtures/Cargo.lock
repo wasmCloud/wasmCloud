@@ -137,6 +137,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "events-caller"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "events-plugin"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "events-service"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "fastrand"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -333,14 +354,21 @@ name = "http-egress-plugin"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
 name = "http-egress-plugin-caller"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "http-egress-pool"
+version = "0.1.0"
+dependencies = [
+ "wstd",
 ]
 
 [[package]]
@@ -376,6 +404,13 @@ name = "http-loopback-gateway"
 version = "0.0.0"
 dependencies = [
  "futures",
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "http-sleeper"
+version = "0.0.0"
+dependencies = [
  "wit-bindgen 0.60.0",
 ]
 
@@ -548,7 +583,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
+name = "messaging-dual-handler"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "messaging-echo"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "messaging-echo-p3"
 version = "0.1.0"
 dependencies = [
  "wit-bindgen 0.60.0",
@@ -703,7 +752,7 @@ dependencies = [
 name = "secrets-consumer-plugin"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen 0.59.0",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]

@@ -13,7 +13,7 @@ members = [
 [workspace.package]
 authors = ["The wasmCloud Team"]
 edition = "2024"
-version = "2.6.1"
+version = "2.7.0"
 rust-version = "1.94.0"
 
 [workspace.lints.rust]
@@ -69,6 +69,7 @@ flate2 = { version = "1.0", default-features = false }
 http = { version = "1", default-features = false }
 humansize = { version = "2.1", default-features = false }
 hyper = { version = "1.6.0", default-features = false }
+hyper-rustls = { version = "0.27", default-features = false }
 hyper-util = { version = "0.1.18", default-features = false }
 humantime = { version = "2.3.0" }
 k8s-openapi = { version = "0.25", default-features = false }
@@ -92,6 +93,8 @@ prost = { version = "0.14", default-features = false }
 redis = { version = "0.27", default-features = false, features = ["tokio-comp"] }
 reqwest = { version = "0.12.20", default-features = false, features = ["json", "rustls-tls"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
+rustls-native-certs = { version = "0.8", default-features = false }
+tower-service = { version = "0.3", default-features = false }
 schemars = { version = "0.8", default-features = false }
 git2 = { version = "0.19", default-features = false }
 hostname = { version = "0.4", default-features = false }
@@ -153,11 +156,11 @@ rustix = "1.0.3"
 
 [workspace.metadata.cargo-machete]
 ignored = [
-    # Used in build.rs
+    # Used by the committed proto bindings (see `cargo xtask generate-protos`)
     "pbjson",
     "pbjson-types",
     "serde",
     # Used for protos
     "tonic",
-   "tonic-prost",
+    "tonic-prost",
 ]

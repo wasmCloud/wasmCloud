@@ -11,10 +11,13 @@ members = [
     "cpu-usage-service",
     "messaging-handler",
     "messaging-echo",
+    "messaging-echo-p3",
+    "messaging-dual-handler",
     "inter-component-call-caller",
     "inter-component-call-callee",
     "inter-component-call-middleware",
     "http-allowed-hosts",
+    "http-egress-pool",
     "http-ip-name-lookup",
     "keyvalue-counter",
     "keyvalue-implements",
@@ -46,6 +49,7 @@ members = [
     "svc-tcp-echo",
     "http-loopback-gateway",
     "svc-no-run",
+    "http-sleeper",
     "msg-counter",
     "bridge-backend",
     "bridge-service",
@@ -58,6 +62,8 @@ members = [
     "secrets-consumer-plugin-caller",
     "http-egress-plugin",
     "http-egress-plugin-caller",
+    "events-plugin",
+    "events-caller",
 ]
 
 [workspace.dependencies]

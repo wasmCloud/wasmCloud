@@ -20,7 +20,6 @@ publish = false
 include = [
     "src/**/*",
     "wit/**/*",
-    "build.rs",
     "wkg.lock",
     "README.md",
     "LICENSE",
@@ -33,7 +32,7 @@ path = "src/lib.rs"
 workspace = true
 
 [features]
-default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel", "wasi-webgpu"]
+default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel", "wasi-webgpu", "wasm_component_model_implements"]
 oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:sha2", "dep:wit-component"]
 wasi-otel = []
 washlet = ["oci"]
@@ -41,7 +40,9 @@ wasi-config = []
 wasi-logging = []
 wasi-blobstore = []
 wasi-keyvalue = []
-# Component-model `(implements ..)` / `named_imports` multiplexing
+# Component-model `(implements ..)` / `named_imports` multiplexing. On by
+# default; disable with `--no-default-features` for a build that neither
+# accepts nor routes named imports.
 wasm_component_model_implements = []
 # Host component plugins: a component providing a host capability from its own
 # long-lived, supervised store, serving cross-store capability calls.
@@ -71,14 +72,16 @@ futures = { workspace = true }
 hostname = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
+humantime = { workspace = true }
 hyper = { workspace = true, features = ["server", "http1", "http2"] }
+hyper-rustls = { workspace = true, features = ["http1", "http2", "tls12", "aws-lc-rs"] }
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio", "server-auto"] }
 moka = { workspace = true, features = ["sync"]}
 names = { workspace = true }
 redis = { workspace = true }
 semver = { workspace = true }
 sysinfo = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
+uuid = { workspace = true, features = ["v4", "v7"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["sync", "net", "macros"] }
 tracing = { workspace = true }
@@ -93,6 +96,8 @@ cap-std = { workspace = true }
 io-lifetimes = { workspace = true }
 rustix = { workspace = true }
 rustls = { workspace = true, features = ["std", "tls12"] }
+rustls-native-certs = { workspace = true }
+tower-service = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio-rustls = { workspace = true }
@@ -147,14 +152,6 @@ webpki-roots = { workspace = true }
 # `#[cfg]` on `plugin::wasi_webgpu`.
 [target.'cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))'.dependencies]
 wasi-webgpu-wasmtime = { version = "0.2", optional = true }
-
-# Proto codegen only. Wasm fixtures are built by `cargo xtask
-# build-fixtures` (see /xtask), which owns wit-component and the WASI
-# adapter provider.
-[build-dependencies]
-anyhow = { workspace = true, default-features = true }
-tonic-prost-build = { workspace = true, default-features = true }
-pbjson-build = { workspace = true, default-features = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

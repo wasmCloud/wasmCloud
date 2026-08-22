@@ -226,6 +226,7 @@ pub fn component_workload_request(
                 local_resources,
                 pool_size: 1,
                 max_invocations: 100,
+                max_concurrency: 1,
             }],
             host_interfaces,
             volumes: vec![],
@@ -245,6 +246,7 @@ pub fn default_counter_resources() -> LocalResources {
         volume_mounts: vec![],
         allowed_hosts: vec!["example.com".parse().unwrap()].into(),
         allowed_ip_name_lookups: Default::default(),
+        allowed_host_loopback_ports: Default::default(),
     }
 }
 

@@ -33,7 +33,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use wasmtime::Store;
-use wasmtime::component::{Accessor, AccessorTask, ComponentExportIndex, Instance, InstancePre};
+#[cfg(feature = "host-component-plugins")]
+use wasmtime::component::ComponentExportIndex;
+use wasmtime::component::{Accessor, AccessorTask, Instance, InstancePre};
 use wasmtime::error::Context as _;
 use wasmtime_wasi::p3::bindings::Command;
 use wasmtime_wasi_http::p3::bindings::Service;
@@ -57,8 +59,8 @@ pub(crate) use capability::decode_bind_reply;
 
 #[cfg(feature = "host-component-plugins")]
 use capability::{admit_and_spawn_call, drain_plugin_resources, flush_pending_resource_drops};
-use http::HttpTask;
-use messaging::{HANDLE_MESSAGE, MESSAGING_HANDLER, MessagingTask};
+pub(crate) use http::HttpTask;
+use messaging::MessagingTask;
 
 /// A host-invoked handler export the TriggerService serves, carrying the receiver end
 /// of its delivery channel. The paired sender is handed to the host-side ingress
@@ -68,8 +70,8 @@ use messaging::{HANDLE_MESSAGE, MESSAGING_HANDLER, MessagingTask};
 pub enum Ingress {
     /// `wasi:http/handler@0.3` — the HTTP server delivers requests here.
     Http(tokio::sync::mpsc::Receiver<ServiceHttpJob>),
-    /// `wasmcloud:messaging/handler@0.2.0` — the messaging subscriber delivers
-    /// received messages here.
+    /// `wasmcloud:messaging/handler@0.3.0` — the messaging subscriber delivers
+    /// received messages here. Trigger services are p3-only.
     Messaging(tokio::sync::mpsc::Receiver<MessagingJob>),
     /// Cross-store capability calls for a host component plugin. `funcs` lists
     /// every exported function to resolve up front; `rx` delivers the calls;
@@ -103,19 +105,12 @@ impl Ingress {
                 })
             }
             Ingress::Messaging(rx) => {
-                // Look up the p2 `handle-message` export up front; it's invoked
-                // dynamically (there is no accessor-driven p3 messaging binding).
-                let iface = instance
-                    .get_export(&mut *store, None, MESSAGING_HANDLER)
-                    .with_context(|| format!("service is missing {MESSAGING_HANDLER} export"))?
-                    .1;
-                let func_idx = instance
-                    .get_export(&mut *store, Some(&iface), HANDLE_MESSAGE)
-                    .with_context(|| format!("{MESSAGING_HANDLER} is missing {HANDLE_MESSAGE}"))?
-                    .1;
+                // Bind the typed `@0.3.0` handler view up front; trigger
+                // services are p3-only (see `messaging::MESSAGING_HANDLER` for
+                // the selection rationale and the dual-export behavior).
+                let handler = messaging::bind_handler(store, instance)?;
                 Ok(PreparedIngress::Messaging {
-                    instance: *instance,
-                    func_idx,
+                    handler: Arc::new(handler),
                     rx,
                 })
             }
@@ -168,8 +163,7 @@ enum PreparedIngress {
         rx: tokio::sync::mpsc::Receiver<ServiceHttpJob>,
     },
     Messaging {
-        instance: Instance,
-        func_idx: ComponentExportIndex,
+        handler: Arc<messaging::AsyncMessaging>,
         rx: tokio::sync::mpsc::Receiver<MessagingJob>,
     },
     #[cfg(feature = "host-component-plugins")]
@@ -211,21 +205,17 @@ impl PreparedIngress {
                         service: Arc::clone(service),
                         req,
                         resp_tx,
+                        pool_slot: None,
                     }) {
                         tracing::error!(err = %e, "failed to spawn HTTP invocation task");
                     }
                 }
                 ServeOutcome::Shutdown
             }
-            PreparedIngress::Messaging {
-                instance,
-                func_idx,
-                rx,
-            } => {
+            PreparedIngress::Messaging { handler, rx } => {
                 while let Some((msg, result_tx)) = rx.recv().await {
                     if let Err(e) = accessor.spawn(MessagingTask {
-                        instance: *instance,
-                        func_idx: *func_idx,
+                        handler: Arc::clone(handler),
                         msg,
                         result_tx,
                     }) {

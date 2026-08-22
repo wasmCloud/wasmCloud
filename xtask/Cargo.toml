@@ -13,3 +13,6 @@ publish = false
 anyhow = { workspace = true, default-features = true }
 # Workspace clap is default-features=false; xtask needs std on top.
 clap = { workspace = true, features = ["std"] }
+pbjson-build = { workspace = true, default-features = true }
+tempfile = { workspace = true, default-features = true }
+tonic-prost-build = { workspace = true, default-features = true }

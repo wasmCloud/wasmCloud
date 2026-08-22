@@ -51,15 +51,31 @@ runs:
         # with the previous dtolnay/rust-toolchain input format.
         COMPONENTS="${COMPONENTS// /}"
         TARGETS="${TARGETS// /}"
+        # Both inputs are optional, and rustup rejects an empty value rather
+        # than ignoring it ("some components are unavailable ... ''"), so the
+        # flags have to be omitted entirely when unset. dtolnay's action built
+        # them per-item, which had the same effect.
+        args=(--profile minimal --no-self-update)
+        if [ -n "${COMPONENTS}" ]; then
+          args+=(--component "${COMPONENTS}")
+        fi
+        if [ -n "${TARGETS}" ]; then
+          args+=(--target "${TARGETS}")
+        fi
+        # Nightly regularly ships without a given component (rustfmt most
+        # often). Without --allow-downgrade rustup hard-errors on those days
+        # and takes the job down; with it, rustup falls back to the most recent
+        # nightly that has the component. dtolnay's action passed the flag for
+        # exactly this case `toolchain == 'nightly' && components` which is
+        # how wash.yml calls this action.
+        if [ "${TOOLCHAIN}" = "nightly" ] && [ -n "${COMPONENTS}" ]; then
+          args+=(--allow-downgrade)
+        fi
         # Install targets onto the named channel itself. Builds that run
         # outside the repo (e.g. a template scaffolded into a temp dir) see no
         # rust-toolchain.toml, so they use this default toolchain and need the
         # targets here.
-        rustup toolchain install "${TOOLCHAIN}" \
-          --profile minimal \
-          --component "${COMPONENTS}" \
-          --target "${TARGETS}" \
-          --no-self-update
+        rustup toolchain install "${TOOLCHAIN}" "${args[@]}"
         rustup default "${TOOLCHAIN}"
         # Also add the targets to the toolchain rustup resolves *inside* this
         # repo. A checked-in rust-toolchain.toml pins a specific channel and
@@ -77,12 +93,16 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        # --allow-downgrade for the same reason as above: nightly regularly
+        # ships without rustfmt, and without the flag rustup hard-errors on
+        # those days and fails the job before `cargo +nightly fmt` runs.
         rustup toolchain install nightly \
           --profile minimal \
           --component rustfmt \
+          --allow-downgrade \
           --no-self-update
 
-    - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         # Only save the cache on main pushes; PR runs restore but never save.
         # Tar+zstd of `target/` over the GHA cache API runs a very long time on
@@ -110,7 +130,7 @@ runs:
 
     - name: Install cargo-zigbuild
       if: ${{ inputs.install-zigbuild == 'true' }}
-      uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
+      uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
       env:
         # Authenticate the action's GitHub API calls so they aren't throttled
         # by the 60/hr anonymous per-IP limit shared across hosted runners.
@@ -128,7 +148,7 @@ runs:
     # component fails with "decoding custom section ... invalid leading byte".
     # Drop once a Rust release bundles wasm-component-ld >= 0.5.23.
     - name: Install wasm-component-ld
-      uses: taiki-e/cache-cargo-install-action@417450f3c33ee20393705369577571770643d4c7 # v3.0.7
+      uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
       with:
         tool: wasm-component-ld@${{ inputs.wasm-component-ld-version }}
     - name: Override bundled wasm-component-ld

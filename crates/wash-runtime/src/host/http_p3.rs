@@ -9,9 +9,7 @@
 //! outgoing-request egress policy itself lives on the unified
 //! [`crate::host::http::OutgoingHandler`] trait via its `send_request_p3` method.
 
-use std::sync::Arc;
-
-use crate::engine::instance_pool::{ComponentInstance, InstancePool};
+use crate::engine::instance_pool::ComponentInstance;
 use crate::observability::FuelConsumptionMeter;
 use http_body_util::BodyExt;
 use tracing::Instrument;
@@ -73,7 +71,6 @@ impl hyper::body::Body for ChannelBody {
 /// memory.
 pub(crate) async fn handle_component_request_p3(
     warm: ComponentInstance,
-    pool: Option<Arc<InstancePool>>,
     req: hyper::Request<hyper::body::Incoming>,
     fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<hyper::Response<P3Body>> {
@@ -108,7 +105,6 @@ pub(crate) async fn handle_component_request_p3(
             let ComponentInstance {
                 mut store,
                 instance,
-                invocations,
             } = warm;
             // A binding view over the instance, rebuilt per request. Cheap
             // (export lookups); the expensive part -- the store and the
@@ -219,25 +215,16 @@ pub(crate) async fn handle_component_request_p3(
                     handler_result
                 })
                 .await;
-            // Park the instance only after a clean run, and only once the
-            // response body has been fully forwarded -- `run_concurrent` does
-            // not resolve until then, so reaching here means the guest is done
-            // with this request. A client that disconnects mid-body aborts
-            // this task instead, dropping the store with it, so a
-            // half-finished instance is never parked.
+            // This store served exactly this request: a component that keeps
+            // instances warm is served by a driver instead (see
+            // `engine::instance_driver`), and only reaches here when every warm
+            // instance was busy.
             match run {
-                Ok(Ok(())) => {
-                    if let Some(pool) = pool {
-                        pool.release(ComponentInstance {
-                            store,
-                            instance,
-                            invocations,
-                        });
-                    }
-                }
+                Ok(Ok(())) => {}
                 Ok(Err(e)) => tracing::error!(err = ?e, "P3 response streaming failed"),
                 Err(e) => tracing::error!(err = ?e, "P3 run_concurrent failed"),
             }
+            drop(store);
         }
         .in_current_span(),
     ));

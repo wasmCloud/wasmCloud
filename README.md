@@ -222,7 +222,8 @@ fixtures with the  `xtask` runner.
 > [!WARNING]
 > As the current version of `wasm-component-ld` that is in use in upstream Rust is
 > older and does not support certain Component Model features that wasmCloud does,
-> you may have to install `wasm-component-ld`:
+> `cargo xtask build-fixtures` can fail with `decoding custom section ... invalid
+> leading byte`. In that case, install `wasm-component-ld`:
 >
 > ```console
 > cargo install wasm-component-ld

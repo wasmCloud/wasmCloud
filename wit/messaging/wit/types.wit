@@ -1,0 +1,60 @@
+package wasmcloud:messaging@0.3.0;
+
+/// Types common to message broker interactions.
+///
+/// Unlike `wasmcloud:messaging@0.2.0`, every broker operation in this package is an `async func`,
+/// and message bodies are native `stream<u8>` values rather than `list<u8>`. A single component
+/// can keep many publishes and requests in flight at once, and a payload can flow incrementally
+/// instead of being held in memory in its totality.
+interface types {
+  /// A message sent to or received from a broker.
+  ///
+  /// The body is a `stream<u8>`: the payload flows incrementally on both the producing and the
+  /// consuming side, so neither end is required to hold it whole in memory. Hosts whose backend
+  /// cannot stream a message (e.g. core NATS, which sends a message as one bounded payload) MAY
+  /// buffer a body internally before forwarding it — the interface permits streaming without
+  /// requiring every backend to provide it, and a backend that can fan a stream out efficiently
+  /// pays no buffering cost.
+  record broker-message {
+    subject: string,
+    body: stream<u8>,
+    reply-to: option<string>,
+  }
+
+  /// The set of errors which may be raised by broker operations (the `consumer` interface).
+  variant error {
+    /// The subject is malformed, empty, or otherwise rejected by the broker.
+    subject-invalid,
+    /// The requesting component is not permitted to publish to this subject.
+    access-denied,
+    /// A `request` did not receive a reply within its `timeout-ms`.
+    timeout,
+    /// The broker is currently unreachable or otherwise unavailable. The operation
+    /// may succeed if retried later.
+    broker-unavailable,
+    /// The message body exceeded the broker's maximum payload size.
+    message-too-large,
+    /// The operation was rejected because a quota or rate limit was exceeded.
+    quota-exceeded,
+    /// Some other implementation-specific error has occurred (e.g. I/O). Used for
+    /// backend-specific failures that do not map to a named case above.
+    other(string),
+  }
+
+  /// The disposition a message handler reports for a delivery it could not process.
+  ///
+  /// Hosts currently record the disposition; backends with redelivery semantics
+  /// (e.g. NATS JetStream) can map `retry` to a negative acknowledgement and
+  /// `reject` to a terminal one.
+  variant handle-message-error {
+    /// The message cannot be processed, and redelivering the same message will
+    /// not help (malformed payload, unrecognized subject shape, ...).
+    reject,
+    /// Processing failed transiently; redelivering the message later may succeed
+    /// (e.g. a downstream dependency was briefly unavailable).
+    retry,
+    /// Some other handler-specific failure, with detail. Hosts treat it as
+    /// `reject` for redelivery purposes.
+    other(string),
+  }
+}

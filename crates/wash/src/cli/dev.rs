@@ -108,25 +108,46 @@ impl CliCommand for DevCommand {
         // `--data-nats-url`. When `dev.data_nats_url` is set it backs
         // blobstore, keyvalue, and messaging unless a per-plugin config overrides
         // it. Connected once and shared across the three plugins.
+        // Through `washlet::connect_nats` rather than `async_nats::connect`, so
+        // dev installs the same event callback `wash host` does. `SlowConsumer`
+        // is the only signal that a subscription buffer overflowed and dropped
+        // messages; without the callback dev is the one place that failure stays
+        // silent, which is exactly backwards for the command people reproduce
+        // messaging problems in.
         let data_nats_client = if let Some(url) = &dev_config.data_nats_url {
-            let client = async_nats::connect(url.as_str())
-                .await
-                .context("failed to connect to NATS for dev.data_nats_url")?;
+            let client = wash_runtime::washlet::connect_nats(
+                url.as_str(),
+                wash_runtime::washlet::NatsConnectionOptions::default(),
+            )
+            .await
+            .context("failed to connect to NATS for dev.data_nats_url")?;
             Some(Arc::new(client))
         } else {
             None
         };
 
+        // One set of messaging ceilings for the dev host, derived from the pool
+        // the engine above actually installed — same construction as `wash
+        // host`, so a limit reproduced in dev is the limit production applies.
+        // Dev takes no messaging flags, hence `None` for both knobs.
+        let messaging_limits =
+            crate::config::wasmcloud_messaging_limits(None, None, engine.total_core_instances())?;
+
         // Enable wasmcloud:messaging — NATS when data_nats_url is configured,
         // otherwise the in-memory backend.
         if let Some(client) = &data_nats_client {
             host_builder = host_builder.with_plugin(Arc::new(
-                plugin::wasmcloud_messaging::NatsMessaging::new(client.clone()),
+                plugin::wasmcloud_messaging::NatsMessaging::with_limits(
+                    client.clone(),
+                    messaging_limits.clone(),
+                ),
             ))?;
             debug!("wasmcloud:messaging plugin registered with NATS backend (data_nats_url)");
         } else {
             host_builder = host_builder.with_plugin(Arc::new(
-                plugin::wasmcloud_messaging::InMemoryMessaging::default(),
+                plugin::wasmcloud_messaging::InMemoryMessaging::with_limits(
+                    messaging_limits.clone(),
+                ),
             ))?;
             debug!("wasmcloud:messaging plugin registered with in-memory backend");
         }
@@ -161,8 +182,30 @@ impl CliCommand for DevCommand {
         );
 
         let http_handler = wash_runtime::host::http::DevRouter::default();
+
+        // One registry for every surface: HTTP pool, raw sockets, inbound
+        // published ports.
+        let quotas = dev_config.connection_quotas()?;
+
+        // Outbound (egress) trust roots for the component's outgoing HTTPS
+        // calls. Distinct from `tls_*_path` below, which configure the ingress
+        // HTTP server.
+        let outgoing_handler = wash_runtime::host::http::DefaultOutgoingHandler::from_tls_options(
+            wash_runtime::host::http_client::ClientTlsOptions {
+                roots: dev_config.http_client_trust_roots.into(),
+                extra_ca_paths: dev_config.http_client_ca_paths.clone(),
+            },
+        )
+        .context("failed to load dev.http_client_ca_paths CA certificates")?
+        // The same registry the socket policy uses, so a component's HTTP
+        // pool and its raw sockets share one configured allowance.
+        .with_quotas(Arc::clone(&quotas));
+
         // TODO(#19): Only spawn the server if the component exports wasi:http
         // Configure HTTP server with optional TLS, enable HTTP Server
+        let mut ingress_builder =
+            wash_runtime::host::http::Ingress::builder(http_handler, http_addr.parse()?)
+                .outgoing_handler(outgoing_handler);
         let protocol = if let (Some(cert_path), Some(key_path)) =
             (&dev_config.tls_cert_path, &dev_config.tls_key_path)
         {
@@ -189,24 +232,16 @@ impl CliCommand for DevCommand {
             if let Some(ca) = dev_config.tls_ca_path.as_deref() {
                 tls = tls.with_ca(ca);
             }
-            let ingress = wash_runtime::host::http::Ingress::new_with_tls(
-                http_handler,
-                http_addr.parse()?,
-                tls,
-            )
-            .await?;
-
-            host_builder = host_builder.with_http_handler(Arc::new(ingress));
+            ingress_builder = ingress_builder.tls(tls);
 
             debug!("TLS configured - server will use HTTPS");
             "https"
         } else {
             debug!("No TLS configuration provided - server will use HTTP");
-            let ingress =
-                wash_runtime::host::http::Ingress::new(http_handler, http_addr.parse()?).await?;
-            host_builder = host_builder.with_http_handler(Arc::new(ingress));
             "http"
         };
+        let ingress = ingress_builder.build().await?;
+        host_builder = host_builder.with_http_handler(Arc::new(ingress));
 
         // Add logging plugin
         host_builder =
@@ -311,6 +346,7 @@ impl CliCommand for DevCommand {
                     oci_config.clone(),
                     &native_plugins,
                     http_handler.clone(),
+                    None,
                 )
                 .await
                 .with_context(|| format!("failed to load host component plugin '{}'", spec.id))?;
@@ -421,6 +457,7 @@ struct SidecarComponent {
     /// `maxInvocations`, `None` where the config left them unset.
     pool_size: Option<i32>,
     max_invocations: Option<i32>,
+    max_concurrency: Option<i32>,
 }
 
 /// Thin wrapper around [`build_workload`]: extracts dev-component
@@ -468,6 +505,7 @@ async fn create_workload(
             workload,
             pool_size: dev_component.pool_size,
             max_invocations: dev_component.max_invocations,
+            max_concurrency: dev_component.max_concurrency,
         });
     }
 
@@ -564,6 +602,7 @@ fn build_workload(
         config: w.config.clone(),
         allowed_hosts: w.allowed_hosts.clone().into(),
         allowed_ip_name_lookups: w.allowed_ip_name_lookups.clone().into(),
+        allowed_host_loopback_ports: w.allowed_host_loopback_ports.clone().into(),
         ..Default::default()
     };
 
@@ -584,6 +623,7 @@ fn build_workload(
             local_resources: local_resources_for(resolved_workload),
             pool_size: UNSET_LIMIT,
             max_invocations: UNSET_LIMIT,
+            max_concurrency: UNSET_LIMIT,
         });
 
         if let Some(service_bytes) = service_bytes {
@@ -607,6 +647,7 @@ fn build_workload(
             // `InstancePolicy`.
             pool_size: sidecar.pool_size.unwrap_or(UNSET_LIMIT),
             max_invocations: sidecar.max_invocations.unwrap_or(UNSET_LIMIT),
+            max_concurrency: sidecar.max_concurrency.unwrap_or(UNSET_LIMIT),
         });
     }
 
@@ -793,6 +834,7 @@ mod tests {
             workload,
             pool_size: None,
             max_invocations: None,
+            max_concurrency: None,
         }
     }
 
@@ -811,6 +853,7 @@ mod tests {
             config: HashMap::from([("flag".into(), "on".into())]),
             allowed_hosts: vec!["https://api.example.com".parse().unwrap()],
             allowed_ip_name_lookups: vec!["*".parse().unwrap()],
+            allowed_host_loopback_ports: vec![],
         };
         let dev_cfg = DevConfig {
             components: vec![dev_component_named("sidecar-a")],
@@ -924,6 +967,7 @@ mod tests {
             config: HashMap::from([("flag".into(), "on".into())]),
             allowed_hosts: vec!["https://api.example.com".parse().unwrap()],
             allowed_ip_name_lookups: vec![],
+            allowed_host_loopback_ports: vec![],
         };
         let dev_cfg = DevConfig {
             components: vec![dev_component_named("sidecar-a")],
@@ -1091,6 +1135,7 @@ mod tests {
             workload: ResolvedWorkload::default(),
             pool_size: None,
             max_invocations: None,
+            max_concurrency: None,
         }];
 
         let workload = build_workload(

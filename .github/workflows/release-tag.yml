@@ -207,7 +207,7 @@ jobs:
           echo "all canary builds green on ${MERGE_SHA} — safe to promote"
 
       - name: Login to ghcr.io
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -262,21 +262,21 @@ jobs:
       # manifest digest to this workflow run (Sigstore-signed via Fulcio,
       # verifiable with `gh attestation verify oci://<image>:<tag>`).
       - name: Attest wash release manifest
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/wasmcloud/wash
           subject-digest: ${{ steps.promote.outputs.wash_digest }}
           push-to-registry: true
 
       - name: Attest runtime-gateway release manifest
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/wasmcloud/runtime-gateway
           subject-digest: ${{ steps.promote.outputs.gateway_digest }}
           push-to-registry: true
 
       - name: Attest runtime-operator release manifest
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/wasmcloud/runtime-operator
           subject-digest: ${{ steps.promote.outputs.operator_digest }}
@@ -337,7 +337,7 @@ jobs:
 
       - name: Attest binary build provenance
         id: attest_bins
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: "./artifacts/*/wash*"
 

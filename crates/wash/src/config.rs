@@ -17,6 +17,7 @@ use tracing::info;
 use wash_runtime::component_source::ComponentSource;
 use wash_runtime::host::allowed_hosts::AllowedHost;
 use wash_runtime::host::allowed_ip_name::AllowedIpName;
+use wash_runtime::host::allowed_loopback::AllowedLoopbackPort;
 use wash_runtime::oci::OciPullPolicy;
 use wash_runtime::wit::WitInterface;
 
@@ -261,6 +262,17 @@ pub struct WorkloadConfig {
     #[serde(default)]
     #[builder(default)]
     pub allowed_ip_name_lookups: Vec<AllowedIpName>,
+    /// Ports on the machine's own loopback components may reach through
+    /// `host.wasmcloud.internal`. Each entry is a port with an optional
+    /// protocol: `5432`, `5432/tcp`, `53/udp`.
+    ///
+    /// An omitted or empty list denies every host-loopback connection, and a
+    /// non-empty one is inert unless the host runs with
+    /// `--allow-host-loopback`. `127.0.0.1` keeps meaning the workload's own
+    /// virtual network either way.
+    #[serde(default)]
+    #[builder(default)]
+    pub allowed_host_loopback_ports: Vec<AllowedLoopbackPort>,
 }
 
 // The `configs:`/`secrets:` source model moved to wash-runtime so every
@@ -364,6 +376,11 @@ pub struct DevComponent {
     /// denies every lookup); when omitted the workload list applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_ip_name_lookups: Option<Vec<AllowedIpName>>,
+    /// Host-loopback ports this component may reach. When set it replaces
+    /// `workload.allowedHostLoopbackPorts` for this component; when omitted the
+    /// workload list applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_host_loopback_ports: Option<Vec<AllowedLoopbackPort>>,
     /// How many instances of this component to keep warm between calls.
     ///
     /// Unset (or `0`) keeps the default: every call runs in a fresh instance
@@ -379,6 +396,19 @@ pub struct DevComponent {
     /// alongside `poolSize`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_invocations: Option<i32>,
+    /// How many calls one warm instance may serve at the same time.
+    ///
+    /// Unset means one, which is what a component gets without asking: an
+    /// instance serves a single call at a time. Raising it lets an instance
+    /// overlap calls while it is awaiting I/O, which is where a pool of
+    /// instances would otherwise sit idle.
+    ///
+    /// Only safe for a guest that yields rather than blocks. A guest driving
+    /// its own executor — anything calling `block_on` — must stay at one, or a
+    /// second concurrent call will try to enter that executor from inside
+    /// itself. Only meaningful alongside `poolSize`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrency: Option<i32>,
 }
 
 impl DevComponent {
@@ -397,8 +427,10 @@ impl DevComponent {
             config: HashMap::new(),
             allowed_hosts: None,
             allowed_ip_name_lookups: None,
+            allowed_host_loopback_ports: None,
             pool_size: None,
             max_invocations: None,
+            max_concurrency: None,
         }
     }
 }
@@ -441,6 +473,22 @@ pub struct HostPluginConfig {
     /// resolve. An omitted or empty list denies every lookup.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_ip_name_lookups: Vec<AllowedIpName>,
+    /// Ports this plugin listens on. An omitted or empty list means it binds
+    /// nothing reachable, which is what every plugin got before ports existed.
+    ///
+    /// Each entry needs a `name` and the `port` the plugin's own code binds.
+    /// Optional: `protocol` (TCP or UDP, default TCP) and exactly one of
+    ///
+    ///   publish   real port the host binds, splicing accepted connections
+    ///             into the plugin's private virtual loopback. The plugin
+    ///             binds `127.0.0.1:<port>` and needs no change.
+    ///   bind      concrete address the plugin binds itself, skipping the
+    ///             splice. Rejected if unspecified (`0.0.0.0`) or loopback.
+    ///
+    /// Neither declares the port without exposing it. Requires the host to be
+    /// started with `--publish-ports`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<wash_runtime::host::declared_port::DeclaredPort>,
 }
 
 impl HostPluginConfig {
@@ -456,6 +504,9 @@ impl HostPluginConfig {
             bail!("host_plugins entry is missing a non-empty `id`");
         }
         let what = format!("host_plugins '{}'", self.id);
+        // Catch a bad port declaration here, where the error can name the
+        // config entry, rather than at plugin start.
+        wash_runtime::host::declared_port::validate_ports(&self.ports, &what)?;
         Ok(wash_runtime::plugin::ComponentPluginSpec {
             id: self.id.clone(),
             source: self.source.to_source(&what)?,
@@ -464,6 +515,7 @@ impl HostPluginConfig {
             config: self.environment.config.clone(),
             allowed_hosts: self.allowed_hosts.clone().into(),
             allowed_ip_name_lookups: self.allowed_ip_name_lookups.clone().into(),
+            ports: self.ports.clone().into(),
         })
     }
 
@@ -508,6 +560,205 @@ pub struct HostConfig {
     pub host_plugins: Vec<HostPluginConfig>,
 }
 
+/// Built-in trust roots for outbound HTTPS from components, before any extra
+/// CA bundles are layered on top. CLI/config mirror of
+/// [`wash_runtime::host::http_client::TrustRoots`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum HttpClientTrustRoots {
+    /// Compiled-in webpki roots plus the platform's native store.
+    /// The native store honours `SSL_CERT_FILE`/`SSL_CERT_DIR`.
+    WebpkiAndNative,
+    /// Compiled-in webpki roots only — reproducible, ignores the host
+    /// environment. The default, matching the behavior before this option
+    /// existed.
+    #[default]
+    Webpki,
+    /// Platform native store only.
+    Native,
+    /// No built-in roots: trust exactly the configured extra CA bundles.
+    ExtraOnly,
+}
+
+impl HttpClientTrustRoots {
+    // serde's `skip_serializing_if` hands the field by reference.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+impl From<HttpClientTrustRoots> for wash_runtime::host::http_client::TrustRoots {
+    fn from(roots: HttpClientTrustRoots) -> Self {
+        match roots {
+            HttpClientTrustRoots::WebpkiAndNative => Self::WebpkiAndNative,
+            HttpClientTrustRoots::Webpki => Self::Webpki,
+            HttpClientTrustRoots::Native => Self::Native,
+            HttpClientTrustRoots::ExtraOnly => Self::ExtraOnly,
+        }
+    }
+}
+
+/// Build the host's [`QuotaRegistry`] from optional config/CLI overrides.
+///
+/// One registry governs every surface a guest can hold a connection on, so
+/// these are the numbers an operator tunes. `None` keeps the built-in default
+/// for that setting.
+///
+/// # Errors
+///
+/// Rejects a zero for any ceiling or for the wait, which would silently mean
+/// "no connections" or "never wait" rather than what the operator meant.
+///
+/// [`QuotaRegistry`]: wash_runtime::host::quota::QuotaRegistry
+pub fn connection_quotas(
+    max_connections: Option<usize>,
+    max_http_per_workload: Option<usize>,
+    max_sockets_per_workload: Option<usize>,
+    max_inbound_per_workload: Option<usize>,
+    http_connection_wait: Option<std::time::Duration>,
+) -> anyhow::Result<std::sync::Arc<wash_runtime::host::quota::QuotaRegistry>> {
+    let defaults = wash_runtime::host::quota::QuotaLimits::default();
+    let resolve = |value: Option<usize>, default: usize, name: &str| -> anyhow::Result<usize> {
+        match value {
+            Some(0) => anyhow::bail!("{name} must be at least 1"),
+            Some(v) => Ok(v),
+            None => Ok(default),
+        }
+    };
+    let limits = wash_runtime::host::quota::QuotaLimits {
+        outbound_http: resolve(
+            max_http_per_workload,
+            defaults.outbound_http,
+            "max_outbound_http_connections_per_workload",
+        )?,
+        outbound_sockets: resolve(
+            max_sockets_per_workload,
+            defaults.outbound_sockets,
+            "max_outbound_socket_connections_per_workload",
+        )?,
+        inbound_sockets: resolve(
+            max_inbound_per_workload,
+            defaults.inbound_sockets,
+            "max_inbound_socket_connections_per_workload",
+        )?,
+    };
+    if max_connections == Some(0) {
+        anyhow::bail!("max_connections must be at least 1");
+    }
+    if let Some(total) = max_connections
+        && limits
+            .outbound_http
+            .max(limits.outbound_sockets)
+            .max(limits.inbound_sockets)
+            > total
+    {
+        // Harmless (the host-wide ceiling simply gates first), but almost
+        // certainly an operator mixing the two knobs up.
+        tracing::warn!(
+            ?limits,
+            max_connections = total,
+            "a per-workload ceiling exceeds max_connections; the host-wide cap will gate first"
+        );
+    }
+
+    // An unset flag means the built-in ceiling, not "unbounded": without one, a
+    // crowd of workloads each holding its per-guest allowance exhausts the
+    // host's file descriptors, and the failures land on ingress and OCI pulls
+    // rather than on whoever caused them.
+    let host_wide =
+        max_connections.or_else(|| Some(wash_runtime::host::quota::default_max_connections()));
+    let registry = wash_runtime::host::quota::QuotaRegistry::new(limits, host_wide);
+    match http_connection_wait {
+        Some(wait) if wait.is_zero() => {
+            anyhow::bail!("http_connection_wait must be greater than zero")
+        }
+        Some(wait) => Ok(std::sync::Arc::new(
+            registry.as_ref().clone().with_http_wait(wait),
+        )),
+        None => Ok(registry),
+    }
+}
+
+/// Resolve the messaging admission ceilings into the [`MessagingLimits`] every
+/// messaging backend on this host shares.
+///
+/// Mirrors [`connection_quotas`]: the same two-level host-wide/per-workload
+/// shape, and the same treatment of a zero.
+///
+/// `None` for either ceiling means the operator said nothing, and the number is
+/// derived from `total_core_instances` — the engine's actual pool budget — so a
+/// host told it is larger sizes its messaging ceiling to match instead of
+/// leaving a stock default silently binding. This is why the flags must not
+/// carry a `default_value_t`: a parse-time default is indistinguishable here
+/// from an operator typing the same number.
+///
+/// # Errors
+///
+/// Rejects a ceiling outside `1..=`[`MessagingLimits::MAX_IN_FLIGHT`]. Zero
+/// would silently mean "process no messages", which is never what an operator
+/// meant; a value above the maximum would panic inside the semaphore at
+/// startup. Better a startup error than a host that looks healthy and quietly
+/// consumes nothing, or one that aborts with a backtrace.
+///
+/// [`MessagingLimits`]: wash_runtime::plugin::wasmcloud_messaging::MessagingLimits
+/// [`MessagingLimits::MAX_IN_FLIGHT`]: wash_runtime::plugin::wasmcloud_messaging::MessagingLimits::MAX_IN_FLIGHT
+pub fn wasmcloud_messaging_limits(
+    max_in_flight: Option<usize>,
+    max_in_flight_per_component: Option<usize>,
+    total_core_instances: Option<u32>,
+) -> anyhow::Result<wash_runtime::plugin::wasmcloud_messaging::MessagingLimits> {
+    use wash_runtime::plugin::wasmcloud_messaging::MessagingLimits;
+
+    let checked = |value: Option<usize>, flag: &str| -> anyhow::Result<Option<usize>> {
+        match value {
+            Some(0) => anyhow::bail!("{flag} must be at least 1"),
+            Some(v) if v > MessagingLimits::MAX_IN_FLIGHT => anyhow::bail!(
+                "{flag} must be at most {} (the most a semaphore can hold), got {v}",
+                MessagingLimits::MAX_IN_FLIGHT
+            ),
+            other => Ok(other),
+        }
+    };
+
+    // A per-component ceiling above the host-wide total is harmless — the host
+    // semaphore gates first — but almost certainly an operator mixing the two
+    // knobs up, so `MessagingLimits::new` warns about it, exactly as
+    // `connection_quotas` does for its equivalent.
+    let limits = MessagingLimits::resolve(
+        checked(max_in_flight, "wasmcloud_messaging_max_in_flight")?,
+        checked(
+            max_in_flight_per_component,
+            "wasmcloud_messaging_max_in_flight_per_component",
+        )?,
+        total_core_instances,
+    );
+
+    // Both numbers vary by host — pooling on or off, the size of the pool, and
+    // which flags were given — so an operator cannot read them off the docs.
+    // They are also the numbers a shed warning tells them to go and raise, which
+    // makes this the one derived ceiling worth a line at startup.
+    tracing::info!(
+        host_total = limits.host_total(),
+        per_component_default = limits.per_component_default(),
+        host_total_source = if max_in_flight.is_some() {
+            "flag"
+        } else if total_core_instances.is_some() {
+            "derived from the instance pool"
+        } else {
+            "built-in default (pooling disabled)"
+        },
+        per_component_source = if max_in_flight_per_component.is_some() {
+            "flag"
+        } else {
+            "derived from the host total"
+        },
+        "wasmcloud:messaging admission ceilings resolved"
+    );
+
+    Ok(limits)
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DevConfig {
     /// Command to run the component in dev mode
@@ -539,6 +790,16 @@ pub struct DevConfig {
     /// Pull policy for `service_image`: `always`, `ifNotPresent`, or `never`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_pull_policy: Option<String>,
+    /// Ports the service listens on inside the workload's virtual loopback,
+    /// and which of them the host exposes on a real address.
+    ///
+    /// Each entry needs a `name` and the `port` the service binds on
+    /// `127.0.0.1`; add `publish: <hostPort>` to expose it. Omitting `publish`
+    /// declares the port without exposing it, which is exactly today's
+    /// behavior. `bind` is not accepted here — handing a guest a real listening
+    /// socket is an operator's call, and a workload's ports are not.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_ports: Vec<wash_runtime::host::declared_port::DeclaredPort>,
 
     /// Reach registries over HTTP instead of HTTPS. Applies to every image a
     /// dev session pulls components, the service, and host plugins.
@@ -578,6 +839,52 @@ pub struct DevConfig {
     pub tls_key_path: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_ca_path: Option<PathBuf>,
+
+    /// Extra CA certificate bundle files (PEM) trusted for *outbound* HTTPS
+    /// requests made by the component (`wasi:http` outgoing handler), layered
+    /// on top of `http_client_trust_roots`. Use this to reach hosts behind a
+    /// corporate or otherwise private CA. Unlike `tls_ca_path` (which
+    /// configures the ingress HTTP server), these apply to requests the
+    /// component sends out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub http_client_ca_paths: Vec<PathBuf>,
+
+    /// Built-in trust roots for the component's *outbound* HTTPS requests,
+    /// before `http_client_ca_paths` bundles are layered on top. Defaults to
+    /// `webpki`; set `webpki-and-native` to also trust the platform store
+    /// (which honours `SSL_CERT_FILE`/`SSL_CERT_DIR`).
+    #[serde(default, skip_serializing_if = "HttpClientTrustRoots::is_default")]
+    pub http_client_trust_roots: HttpClientTrustRoots,
+
+    /// Raw `wasi:sockets` connections one workload may hold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_outbound_socket_connections_per_workload: Option<usize>,
+
+    /// Inbound published-port connections one workload may serve at once.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_inbound_socket_connections_per_workload: Option<usize>,
+
+    /// Host-wide cap on live *outbound* HTTP connections across all
+    /// workloads combined (in-flight or idle in a keep-alive pool). Defaults
+    /// to the runtime's built-in limit; size it for the number of
+    /// concurrently busy workloads times their burst concurrency.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_connections: Option<usize>,
+
+    /// Cap on live *outbound* HTTP connections a single workload may hold,
+    /// across all authorities it talks to. Defaults to the runtime's
+    /// built-in limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_outbound_http_connections_per_workload: Option<usize>,
+
+    /// How long an outbound request waits for a connection slot once one of
+    /// the caps above is reached, before failing with a connect timeout.
+    /// A humantime duration such as `5s` or `500ms`; defaults to the
+    /// runtime's built-in wait. A component's own `connect-timeout` bounds
+    /// its request independently, so this only decides how long an attempt
+    /// nothing is waiting on may hold a slot reservation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_connection_wait: Option<String>,
 
     /// Enable WASI WebGPU support in the dev environment. Only supported on non-Windows platforms.
     #[serde(default)]
@@ -623,13 +930,42 @@ pub struct DevConfig {
     pub wasi_otel: bool,
 
     /// Additional wasm proposals to enable on the engine, by name. Accepted
-    /// names match `wash_runtime`'s `WasmProposal`: component-model-async, gc,
-    /// exception-handling, wide-arithmetic, threads, tail-call.
+    /// names match `wash_runtime`'s `WasmProposal`: component-model-async,
+    /// component-model-map, gc, exception-handling, wide-arithmetic, threads,
+    /// tail-call.
     #[serde(default)]
     pub wasm_proposals: Vec<String>,
 }
 
 impl DevConfig {
+    /// The connection quota registry this dev config asks for.
+    ///
+    /// Lives here rather than at the call site so the five knobs are read in
+    /// one place, next to the fields they come from — adding a surface means
+    /// touching this method, not every caller.
+    ///
+    /// # Errors
+    ///
+    /// Fails if `http_connection_wait` is not a duration, or if any ceiling is
+    /// zero.
+    pub fn connection_quotas(
+        &self,
+    ) -> Result<std::sync::Arc<wash_runtime::host::quota::QuotaRegistry>> {
+        let http_connection_wait = self
+            .http_connection_wait
+            .as_deref()
+            .map(humantime::parse_duration)
+            .transpose()
+            .context("dev.http_connection_wait is not a valid duration (e.g. `5s`)")?;
+        connection_quotas(
+            self.max_connections,
+            self.max_outbound_http_connections_per_workload,
+            self.max_outbound_socket_connections_per_workload,
+            self.max_inbound_socket_connections_per_workload,
+            http_connection_wait,
+        )
+    }
+
     /// Where the separately-configured service component comes from, or `None`
     /// when none is configured.
     ///
@@ -1034,11 +1370,176 @@ fn check_url_scheme(field: &str, value: &str, expected: &[&str], errors: &mut Ve
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     #[test]
     fn build_no_command_is_ok() {
         assert!(BuildConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn connection_quotas_default_when_unset() {
+        let quotas = connection_quotas(None, None, None, None, None).unwrap();
+        let defaults = wash_runtime::host::quota::QuotaLimits::default();
+        assert_eq!(quotas.limits(), defaults);
+    }
+
+    #[test]
+    fn connection_quotas_apply_overrides() {
+        let quotas = connection_quotas(
+            Some(64),
+            Some(8),
+            Some(16),
+            Some(32),
+            Some(Duration::from_millis(250)),
+        )
+        .unwrap();
+        assert_eq!(quotas.limits().outbound_http, 8);
+        assert_eq!(quotas.limits().outbound_sockets, 16);
+        assert_eq!(quotas.limits().inbound_sockets, 32);
+        assert_eq!(quotas.http_wait(), Duration::from_millis(250));
+    }
+
+    /// Each surface is its own ceiling, so filling one must leave the others
+    /// alone — the property the unified quota exists to provide.
+    #[test]
+    fn connection_quotas_are_per_surface_and_per_guest() {
+        let quotas = connection_quotas(None, Some(4), Some(1), Some(1), None).unwrap();
+        let guest = quotas.for_guest("w-1");
+        let _held = guest
+            .try_acquire_outbound_socket()
+            .expect("its one socket slot");
+        assert!(
+            guest.try_acquire_outbound_socket().is_none(),
+            "sockets are at ceiling"
+        );
+        assert!(
+            guest.try_acquire_inbound_socket().is_some(),
+            "inbound must not be affected"
+        );
+        assert_eq!(
+            guest.outbound_http_available(),
+            4,
+            "http must not be affected"
+        );
+        assert!(
+            quotas
+                .for_guest("w-2")
+                .try_acquire_outbound_socket()
+                .is_some(),
+            "another guest has its own allowance"
+        );
+    }
+
+    /// Every knob is a hard bound, so a zero would wedge that surface
+    /// entirely — reject it at startup rather than at the first request.
+    #[test]
+    fn connection_quotas_reject_zero() {
+        assert!(connection_quotas(Some(0), None, None, None, None).is_err());
+        assert!(connection_quotas(None, Some(0), None, None, None).is_err());
+        assert!(connection_quotas(None, None, Some(0), None, None).is_err());
+        assert!(connection_quotas(None, None, None, Some(0), None).is_err());
+        assert!(connection_quotas(None, None, None, None, Some(Duration::ZERO)).is_err());
+    }
+
+    #[test]
+    fn wasmcloud_messaging_limits_reject_zero() {
+        // Zero would silently mean "process no messages" — a host that looks
+        // healthy and quietly consumes nothing. Better a startup error.
+        assert!(wasmcloud_messaging_limits(Some(0), Some(32), None).is_err());
+        assert!(wasmcloud_messaging_limits(Some(128), Some(0), None).is_err());
+    }
+
+    #[test]
+    fn wasmcloud_messaging_limits_reject_more_than_a_semaphore_can_hold() {
+        // Above this the semaphore panics at startup, so an unchecked value is
+        // not a large ceiling but an abort with a backtrace. `usize::MAX` is
+        // what a fat-fingered "unlimited" looks like.
+        let too_big = wash_runtime::plugin::wasmcloud_messaging::MessagingLimits::MAX_IN_FLIGHT + 1;
+        assert!(wasmcloud_messaging_limits(Some(too_big), None, None).is_err());
+        assert!(wasmcloud_messaging_limits(None, Some(too_big), None).is_err());
+        assert!(wasmcloud_messaging_limits(Some(usize::MAX), None, None).is_err());
+    }
+
+    #[test]
+    fn wasmcloud_messaging_limits_apply_overrides() {
+        let limits = wasmcloud_messaging_limits(Some(64), Some(8), None).expect("valid ceilings");
+        assert_eq!(limits.host_total(), 64);
+        assert_eq!(limits.per_component_default(), 8);
+
+        // An explicit ceiling wins over what the pool would have derived —
+        // otherwise the flag would be advisory on a pooled host.
+        let limits =
+            wasmcloud_messaging_limits(Some(64), Some(8), Some(3000)).expect("valid ceilings");
+        assert_eq!(limits.host_total(), 64);
+        assert_eq!(limits.per_component_default(), 8);
+    }
+
+    #[test]
+    fn wasmcloud_messaging_limits_default_to_the_documented_pair() {
+        // No flags and no pool to derive from: the pinned defaults stand.
+        let limits =
+            wasmcloud_messaging_limits(None, None, None).expect("the built-in defaults are valid");
+        assert_eq!(limits.host_total(), 128);
+        assert_eq!(limits.per_component_default(), 32);
+    }
+
+    #[test]
+    fn setting_only_the_host_ceiling_still_moves_the_per_component_default() {
+        // The operator-visible symptom of deriving the two independently:
+        // `--wasmcloud-messaging-max-in-flight 1024` was accepted, the host
+        // ceiling rose, and every component stayed pinned at the pool-derived
+        // default — so on any host with fewer than ~31 messaging components the
+        // flag changed nothing at all.
+        let derived = wasmcloud_messaging_limits(None, None, Some(1000)).expect("valid");
+        let raised = wasmcloud_messaging_limits(Some(1024), None, Some(1000)).expect("valid");
+        assert_eq!(raised.host_total(), 1024);
+        assert!(
+            raised.per_component_default() > derived.per_component_default(),
+            "raising only the host ceiling left the per-component default at {}",
+            raised.per_component_default()
+        );
+
+        // Lowering it must not leave the per-component default stranded above
+        // the total the operator just set.
+        let lowered = wasmcloud_messaging_limits(Some(4), None, Some(1000)).expect("valid");
+        assert!(lowered.per_component_default() <= lowered.host_total());
+    }
+
+    #[test]
+    fn wasmcloud_messaging_limits_do_not_over_commit_a_small_pool() {
+        // A pool of 16 core instances holds 3 worst-case components. The
+        // derived ceiling must not exceed that: admitting 8 would need 40 core
+        // instances and fail at instantiation, which is the exhaustion these
+        // ceilings exist to prevent.
+        let limits = wasmcloud_messaging_limits(None, None, Some(16)).expect("valid");
+        assert!(
+            limits.host_total() <= 3,
+            "a 16-instance pool derived a ceiling of {} messages",
+            limits.host_total()
+        );
+    }
+
+    #[test]
+    fn wasmcloud_messaging_limits_scale_with_the_pool() {
+        // The point of deriving: a host told it is larger gets a larger
+        // messaging ceiling, instead of the stock default silently binding.
+        let stock = wasmcloud_messaging_limits(None, None, Some(1000)).expect("valid");
+        let big = wasmcloud_messaging_limits(None, None, Some(8000)).expect("valid");
+        assert!(
+            big.host_total() > stock.host_total(),
+            "raising WASMTIME_POOLING_TOTAL_CORE_INSTANCES must raise the messaging ceiling: \
+             {} vs {}",
+            big.host_total(),
+            stock.host_total()
+        );
+        // And the per-component ceiling never exceeds the host one, however the
+        // pool is sized.
+        for limits in [&stock, &big] {
+            assert!(limits.per_component_default() <= limits.host_total());
+        }
     }
 
     #[test]

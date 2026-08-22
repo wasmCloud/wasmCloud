@@ -93,9 +93,11 @@ async fn wasi_blobstore_handlers_emit_namespaced_spans() -> Result<()> {
                     volume_mounts: vec![],
                     allowed_hosts: Default::default(),
                     allowed_ip_name_lookups: Default::default(),
+                    allowed_host_loopback_ports: Default::default(),
                 },
                 pool_size: 1,
                 max_invocations: 100,
+                max_concurrency: 1,
             }],
             host_interfaces: vec![
                 WitInterface {

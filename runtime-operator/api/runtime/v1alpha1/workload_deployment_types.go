@@ -73,7 +73,7 @@ type WorkloadDeploymentStatus struct {
 // +kubebuilder:printcolumn:name="REPLICAS",type=integer,JSONPath=`.spec.replicas`
 // +kubebuilder:printcolumn:name="READY",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 
-// WorkloadDeployment is the Schema for the artifacts API.
+// WorkloadDeployment manages the deployment and scaling of a Workload across hosts, creating WorkloadReplicaSets to maintain the desired number of replicas.
 type WorkloadDeployment struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

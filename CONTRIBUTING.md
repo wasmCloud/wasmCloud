@@ -14,6 +14,7 @@ Pull requests are welcome! The [good first issue][1] label is a great way to fin
 - **Rust** (latest stable version)
 - **Git**
 - **WebAssembly targets**: `wasm32-wasip2` and `wasm32-wasip1` (installed via `rustup target add wasm32-wasip2 wasm32-wasip1`) are both needed to build the `wash-runtime` wasm test fixtures.
+- **wasm-component-ld** (0.5.23 or newer): needed to link the wasm test fixtures — see the [warning in the README](README.md#building-from-source) for the install and linker setup.
 
 ### Building from Source
 

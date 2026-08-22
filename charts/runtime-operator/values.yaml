@@ -256,6 +256,21 @@ gateway:
     annotations: {}
 
 runtime:
+  # -- Extra CA certificate bundles (paths inside the host container) trusted
+  # when pulling images, for a registry behind a private or in-cluster CA that
+  # the public roots do not cover. Applies to every host group; add
+  # `hostGroups[].ociCaPaths` for one group alone.
+  #
+  # A registry served from a host group in this cluster (`hostGroups[].http.tls`)
+  # presents a certificate from the chart's own CA, which is already mounted at
+  # /runtime-cert/ca.crt whenever `global.tls.enabled`, so trusting it needs
+  # only that path, with no bundle to distribute:
+  #   ociCaPaths: ["/runtime-cert/ca.crt"]
+  #
+  # Prefer this to `extraArgs: [--allow-insecure-registries]`, which does not
+  # relax verification but replaces it: every registry drops to plain HTTP, so
+  # nothing is verified and credentials travel in the clear.
+  ociCaPaths: []
   # -- Labels to add to runtime host pod templates
   podLabels: {}
   # -- Annotations to add to runtime host pod templates
@@ -427,7 +442,64 @@ runtime:
       #         - etcd-connection-settings
       #       secretFrom:
       #         - etcd-client-cert
+      #     - id: grpc-gateway
+      #       image: ghcr.io/example/grpc-gateway:1.0.0
+      #       ports:
+      #         - name: grpc
+      #           port: 50051        # the plugin binds 127.0.0.1:50051
+      #           protocol: TCP
+      #           publish: 31051     # the host binds :31051 and splices in
+      #         - name: bulk
+      #           port: 9000
+      #           bind: 10.0.0.5     # the plugin binds 10.0.0.5:9000 itself
       hostPlugins: []
+      # -- Networking policy for guests on this host group. Every value here is
+      # the *host's* half of a two-sided grant: a workload or plugin must also
+      # declare what it wants, so neither side can open a door alone.
+      networking:
+        # -- Let guests reach the machine's own loopback through the reserved
+        # name `host.wasmcloud.internal`. A guest also needs its own
+        # `allowedHostLoopbackPorts` entry naming the port. `127.0.0.1` keeps
+        # meaning the guest's own virtual network either way.
+        allowHostLoopback: false
+        # -- How the raw-socket egress policy is applied: `count` or `enforce`.
+        #
+        # Raw socket connect was never gated, so enforcing on upgrade would
+        # sever live traffic. `count` evaluates the policy, records what it
+        # would refuse, and allows the connection anyway. Watch the
+        # would-deny counters, then switch to `enforce`.
+        socketEgress: count
+        # -- Deny outbound connections to loopback, link-local (including the
+        # cloud metadata address), multicast, and documentation ranges —
+        # including whatever DNS returned for a permitted name.
+        denySpecialRanges: true
+        # -- Deny outbound connections to private ranges (RFC1918, ULA, CGNAT).
+        # Off by default: reaching a sibling service on a private address is
+        # the ordinary in-cluster case.
+        denyPrivateRanges: false
+        # -- Host-wide cap on live connections across every workload. Empty
+        # derives it from the process's file-descriptor limit.
+        maxConnections: ""
+        # -- Pooled HTTP and gRPC connections one workload may hold. Idle
+        # keep-alive connections count, so this is how large its pool may grow.
+        maxOutboundHttpConnectionsPerWorkload: 128
+        # -- Outbound raw `wasi:sockets` connections one workload may hold.
+        maxOutboundSocketConnectionsPerWorkload: 256
+        # -- Inbound published-port connections one workload serves at once.
+        # A separate surface, because a workload whose inbound traffic
+        # consumed its outbound allowance would deadlock serving requests that
+        # need to make outbound calls.
+        maxInboundSocketConnectionsPerWorkload: 256
+        # -- Let guests expose declared ports on a real address.
+        #
+        # Off by default. With it off, a workload or plugin declaring a
+        # published port fails to start rather than coming up silently
+        # unreachable. Publishing makes a service reachable by every co-tenant
+        # on the machine unless socketEgress is `enforce`.
+        publishPorts: false
+        # -- Restrict published ports to a range, e.g. "31000-32767". Empty
+        # allows any port the OS will grant.
+        publishPortRange: ""
       http:
         enabled: true
         port: 9191
@@ -449,6 +521,12 @@ runtime:
               # -- List of DNS Subject Alternative Names (SANs) for the generated TLS certificate.
               # Example: ["myapp.example.com", "myapp.default.svc.cluster.local"]
               domains: []
+              # -- List of IP Subject Alternative Names (SANs) for the generated TLS certificate.
+              # An address belongs here rather than under `domains`: a client
+              # connecting to a URL written as an IP matches it against the IP
+              # SANs only, so an address listed as a domain is never matched.
+              # Example: ["127.0.0.1"]
+              ipAddresses: []
       # -- Per-host-group compute resources. Omitted so this group inherits the
       # chart-wide `runtime.resources` above; uncomment to size one host group
       # differently (e.g. a webgpu group that needs more memory):
@@ -458,3 +536,7 @@ runtime:
       #     memory: "128Mi"
       #   limits:
       #     memory: "2Gi"
+      # -- Extra CA bundles trusted when this group pulls images, added to the
+      # chart-wide `runtime.ociCaPaths` rather than replacing it:
+      # ociCaPaths:
+      #   - "/runtime-cert/ca.crt"

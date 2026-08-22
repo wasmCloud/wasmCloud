@@ -1,4 +1,4 @@
-package wasmcloud:host@0.1.1;
+package wasmcloud:host@0.1.3;
 
 /// Optionally exported by a host component plugin. The host calls these as
 /// workloads that import the plugin's capabilities are bound and unbound,
@@ -27,14 +27,28 @@ package wasmcloud:host@0.1.1;
 /// bind still running past the host's timeout may also observe the same
 /// workload's unbind delivered concurrently; state it provisions after that
 /// is reclaimed only by a later unbind or a plugin restart.
+///
+/// Nor can a hook *call* the workload it is about, on an interface the
+/// workload exports and the plugin imports. A workload is callable only while
+/// it is running, and a hook is delivered either side of that: it is still
+/// deploying when `on-workload-bind` arrives, and already being torn down when
+/// `on-workload-unbind` does — its service is aborted and its warm instances
+/// dropped before the hook runs, so there is nothing left to answer.
+///
+/// This costs a hook nothing, because the cleanup a plugin owes is its own.
+/// Everything it provisioned for a workload it keyed by that workload's id, and
+/// the id is what `on-workload-unbind` is handed — so reclaiming it needs no
+/// cooperation from the workload, which by then has none to give. A plugin that
+/// wants a workload to know it is going away should tell it while it is still
+/// running, not at teardown.
+///
+/// Calls the plugin already had in flight when the unbind arrived are not
+/// interrupted, the same way an in-flight request finishes rather than failing
+/// halfway. A `wasmcloud:host/workload-call` target handle opened before the
+/// stop does not extend that to *new* calls: the workload it names is gone, so
+/// the next call through the handle comes back `not-running`.
 interface workload-lifecycle {
-    /// Identifier of a workload; matches `identity.get-workload-id` for
-    /// capability calls made by the same workload.
-    type workload-id = string;
-
-    /// Identifier of a single component within a workload; matches
-    /// `identity.get-component-id`.
-    type component-id = string;
+    use types.{workload-id, component-id};
 
     /// Semantic version of an interface instance (e.g. `0.2.0-draft`).
     record version {

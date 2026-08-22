@@ -16,12 +16,50 @@ mod bindings {
     });
 }
 
-use bindings::wasmcloud::messaging::consumer::Host;
-use bindings::wasmcloud::messaging::types;
+/// Bindings for the async `wasmcloud:messaging@0.3.0` surface, served off the
+/// same NATS client. A separate `bindgen!` (rather than one shared module)
+/// because each plugin implements the generated host traits for its own backend
+/// — the same arrangement the sync world already uses across the three plugins.
+mod async_bindings {
+    crate::wasmtime::component::bindgen!({
+        world: "async-messaging",
+        imports: { default: async | trappable | tracing },
+        exports: { default: async | tracing },
+    });
+}
+
+// The two messaging surfaces, imported symmetrically: `*P2` is the sync
+// `@0.2.0` binding, `*P3` the async `@0.3.0` one. Both are generated from the
+// same WIT package but by different `bindgen!` invocations, so they are
+// unrelated Rust types with identical names — aliasing both at the top keeps
+// every use site below reading as a straight p2/p3 pair.
+use bindings::wasmcloud::messaging0_2_0::consumer::{self as consumer_p2, Host as HostP2};
+use bindings::wasmcloud::messaging0_2_0::types::{self as types_p2, Host as TypesHostP2};
+
+use async_bindings::wasmcloud::messaging0_3_0::consumer::{
+    self as consumer_p3, Host as HostP3, HostWithStore as HostWithStoreP3,
+};
+use async_bindings::wasmcloud::messaging0_3_0::types::{
+    self as types_p3, BrokerMessage as AsyncBrokerMessage, Error as AsyncMsgError,
+    Host as TypesHostP3,
+};
+use wasmtime::component::Accessor;
+
+use super::MsgError;
+
+super::async_messaging_conversions! {
+    error: AsyncMsgError,
+}
+
+super::messaging_handler_dispatch! {
+    sync: bindings,
+    async: async_bindings,
+}
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::{ResolvedWorkload, WorkloadItem};
 use crate::observability::Meters;
+use crate::plugin::wasmcloud_messaging::Admitted;
 use crate::plugin::{HostPlugin, WitInterfaces, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
@@ -36,6 +74,9 @@ pub struct ComponentData {
     consumer_group: ConsumerGroup,
     cancel_token: tokio_util::sync::CancellationToken,
     task_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Bounds how many messages this component processes at once, and so how
+    /// many instances the subscription may create. See [`super::Admission`].
+    admission: super::Admission,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,26 +119,38 @@ pub struct NatsMessaging {
     tracker: Arc<RwLock<WorkloadTracker<(), ComponentData>>>,
     client: Arc<async_nats::Client>,
     meters: Arc<RwLock<Meters>>,
+    limits: super::MessagingLimits,
 }
 
 impl NatsMessaging {
+    /// Build the plugin with the default messaging ceilings
+    /// ([`super::DEFAULT_MAX_IN_FLIGHT_HOST`] /
+    /// [`super::DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT`]).
     pub fn new(client: Arc<async_nats::Client>) -> Self {
+        Self::with_limits(client, super::MessagingLimits::default())
+    }
+
+    /// Build the plugin with operator-configured ceilings. The `limits` carry
+    /// the host-wide semaphore, so pass the *same* value to every messaging
+    /// backend on a host or each gets its own host budget.
+    pub fn with_limits(client: Arc<async_nats::Client>, limits: super::MessagingLimits) -> Self {
         Self {
             client,
             tracker: Arc::new(RwLock::new(WorkloadTracker::default())),
             meters: Default::default(),
+            limits,
         }
     }
 }
 
-impl<'a> Host for ActiveCtx<'a> {
+impl<'a> HostP2 for ActiveCtx<'a> {
     #[instrument(name = "wasmcloud.messaging.request", skip_all, fields(subject = %subject, timeout_ms))]
     async fn request(
         &mut self,
         subject: String,
         body: Vec<u8>,
         timeout_ms: u32,
-    ) -> wasmtime::Result<Result<types::BrokerMessage, String>> {
+    ) -> wasmtime::Result<Result<types_p2::BrokerMessage, String>> {
         let plugin = self.try_get_plugin::<NatsMessaging>(PLUGIN_MESSAGING_ID)?;
 
         let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
@@ -115,7 +168,7 @@ impl<'a> Host for ActiveCtx<'a> {
             }
         };
         let reply_to = resp.reply.as_ref().map(|r| r.to_string());
-        Ok(Ok(types::BrokerMessage {
+        Ok(Ok(types_p2::BrokerMessage {
             subject: resp.subject.to_string(),
             reply_to,
             body: resp.payload.into(),
@@ -123,7 +176,10 @@ impl<'a> Host for ActiveCtx<'a> {
     }
 
     #[instrument(name = "wasmcloud.messaging.publish", skip_all, fields(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>")))]
-    async fn publish(&mut self, msg: types::BrokerMessage) -> wasmtime::Result<Result<(), String>> {
+    async fn publish(
+        &mut self,
+        msg: types_p2::BrokerMessage,
+    ) -> wasmtime::Result<Result<(), String>> {
         let plugin = self.try_get_plugin::<NatsMessaging>(PLUGIN_MESSAGING_ID)?;
 
         let subject = msg.subject;
@@ -146,7 +202,121 @@ impl<'a> Host for ActiveCtx<'a> {
     }
 }
 
-impl<'a> types::Host for ActiveCtx<'a> {}
+impl<'a> TypesHostP2 for ActiveCtx<'a> {}
+
+/// The async `@0.3.0` consumer, over the same NATS client as the sync one.
+///
+/// `async func`s bind through wasmtime's concurrent ABI, so these are `async
+/// fn`s on `SharedCtx` taking an [`Accessor`] rather than `&mut self` methods on
+/// `ActiveCtx`. Errors are classified into [`MsgError`] and lowered into the WIT
+/// `error` variant. Note this differs from the sync `publish` above, which
+/// *traps* the guest on a publish failure; the async surface reports it as an
+/// ordinary `result` error, which is what the WIT says it is.
+impl<T: 'static + Send> HostWithStoreP3<T> for SharedCtx {
+    async fn request(
+        accessor: &Accessor<T, Self>,
+        subject: String,
+        body: wasmtime::component::StreamReader<u8>,
+        timeout_ms: Option<u32>,
+    ) -> wasmtime::Result<Result<AsyncBrokerMessage, AsyncMsgError>> {
+        let plugin =
+            accessor.with(|mut a| a.get().try_get_plugin::<NatsMessaging>(PLUGIN_MESSAGING_ID))?;
+
+        // The client takes a complete payload, so the body is drained before the
+        // request goes out (see `collect_body`). `timeout-ms` therefore covers
+        // only the broker round-trip, not how fast the guest wrote the body.
+        let body = match super::collect_body(accessor, body).await? {
+            Ok(bytes) => bytes,
+            Err(e) => return Ok(Err(e.into())),
+        };
+
+        // `None` falls through to the NATS client's own request timeout
+        // (10s unless configured otherwise); `TimedOut` classifies below.
+        let request_future = plugin.client.request(subject, body.into());
+        let resp = match timeout_ms {
+            Some(ms) => {
+                let duration = std::time::Duration::from_millis(ms as u64);
+                match tokio::time::timeout(duration, request_future).await {
+                    Ok(Ok(msg)) => msg,
+                    Ok(Err(e)) => return Ok(Err(classify_request(&e).into())),
+                    Err(_) => {
+                        warn!("request timed out after {ms}ms");
+                        return Ok(Err(AsyncMsgError::Timeout));
+                    }
+                }
+            }
+            None => match request_future.await {
+                Ok(msg) => msg,
+                Err(e) => return Ok(Err(classify_request(&e).into())),
+            },
+        };
+        let body = super::mint_body(accessor, resp.payload.into())?;
+        Ok(Ok(AsyncBrokerMessage {
+            subject: resp.subject.to_string(),
+            reply_to: resp.reply.as_ref().map(|r| r.to_string()),
+            body,
+        }))
+    }
+
+    async fn publish(
+        accessor: &Accessor<T, Self>,
+        msg: AsyncBrokerMessage,
+    ) -> wasmtime::Result<Result<(), AsyncMsgError>> {
+        let plugin =
+            accessor.with(|mut a| a.get().try_get_plugin::<NatsMessaging>(PLUGIN_MESSAGING_ID))?;
+
+        let AsyncBrokerMessage {
+            subject,
+            body,
+            reply_to,
+        } = msg;
+        let body = match super::collect_body(accessor, body).await? {
+            Ok(bytes) => bytes,
+            Err(e) => return Ok(Err(e.into())),
+        };
+
+        let result = if let Some(reply_to) = reply_to {
+            plugin
+                .client
+                .publish_with_reply(subject, reply_to, body.into())
+                .await
+        } else {
+            plugin.client.publish(subject, body.into()).await
+        };
+        Ok(result.map_err(|e| classify_publish(&e).into()))
+    }
+}
+
+impl HostP3 for ActiveCtx<'_> {}
+impl TypesHostP3 for ActiveCtx<'_> {}
+
+/// Classify an `async_nats` request failure into a [`MsgError`].
+///
+/// `NoResponders` has no named WIT case — the broker is healthy and the subject
+/// is valid, there is simply nothing subscribed — so it stays `Other` rather
+/// than being misreported as a timeout or an unavailable broker.
+pub(super) fn classify_request(e: &async_nats::RequestError) -> MsgError {
+    use async_nats::RequestErrorKind::*;
+    let detail = format!("failed to send request: {e}");
+    match e.kind() {
+        TimedOut => MsgError::Timeout(detail),
+        InvalidSubject => MsgError::SubjectInvalid(detail),
+        MaxPayloadExceeded => MsgError::MessageTooLarge(detail),
+        Other => MsgError::BrokerUnavailable(detail),
+        NoResponders => MsgError::Other(detail),
+    }
+}
+
+/// Classify an `async_nats` publish failure into a [`MsgError`].
+pub(super) fn classify_publish(e: &async_nats::PublishError) -> MsgError {
+    use async_nats::PublishErrorKind::*;
+    let detail = format!("failed to send message: {e}");
+    match e.kind() {
+        InvalidSubject => MsgError::SubjectInvalid(detail),
+        MaxPayloadExceeded => MsgError::MessageTooLarge(detail),
+        Send => MsgError::BrokerUnavailable(detail),
+    }
+}
 
 #[async_trait::async_trait]
 impl HostPlugin for NatsMessaging {
@@ -154,13 +324,20 @@ impl HostPlugin for NatsMessaging {
         PLUGIN_MESSAGING_ID
     }
 
+    /// Serves both messaging revisions. A workload selects one by the version on
+    /// its `wasmcloud:messaging` host-interface entry; a versionless entry gets
+    /// the sync `@0.2.0` surface, preserving the behaviour of workloads written
+    /// before `@0.3.0` existed.
     fn world(&self) -> WitWorld {
         WitWorld {
-            imports: HashSet::from([WitInterface::from(
-                "wasmcloud:messaging/consumer,types@0.2.0",
-            )]),
-
-            exports: HashSet::from([WitInterface::from("wasmcloud:messaging/handler@0.2.0")]),
+            imports: HashSet::from([
+                WitInterface::from("wasmcloud:messaging/consumer,types@0.2.0"),
+                WitInterface::from("wasmcloud:messaging/consumer,types@0.3.0"),
+            ]),
+            exports: HashSet::from([
+                WitInterface::from("wasmcloud:messaging/handler@0.2.0"),
+                WitInterface::from("wasmcloud:messaging/handler@0.3.0"),
+            ]),
         }
     }
 
@@ -183,15 +360,25 @@ impl HostPlugin for NatsMessaging {
         // the host-interface fallback before borrowing the component.
         let interface_subscriptions = interface.config.get("subscriptions").cloned();
         let interface_consumer_group = interface.config.get(CONSUMER_GROUP_CONFIG).cloned();
+        let interface_max_in_flight = interface.config.get(super::MAX_IN_FLIGHT_CONFIG).cloned();
+        let interface_admission_wait = interface.config.get(super::ADMISSION_WAIT_CONFIG).cloned();
 
-        bindings::wasmcloud::messaging::types::add_to_linker::<_, SharedCtx>(
-            component_handle.linker(),
-            extract_active_ctx,
-        )?;
-        bindings::wasmcloud::messaging::consumer::add_to_linker::<_, SharedCtx>(
-            component_handle.linker(),
-            extract_active_ctx,
-        )?;
+        // Bind only the revision(s) the workload actually declared: the two
+        // surfaces are separate linker instances, and binding one a component
+        // never imports is harmless but binding the wrong one is not.
+        if super::declares_async_messaging(&interfaces) {
+            types_p3::add_to_linker::<_, SharedCtx>(component_handle.linker(), extract_active_ctx)?;
+            consumer_p3::add_to_linker::<_, SharedCtx>(
+                component_handle.linker(),
+                extract_active_ctx,
+            )?;
+        } else {
+            types_p2::add_to_linker::<_, SharedCtx>(component_handle.linker(), extract_active_ctx)?;
+            consumer_p2::add_to_linker::<_, SharedCtx>(
+                component_handle.linker(),
+                extract_active_ctx,
+            )?;
+        }
 
         let local_subscriptions = component_handle
             .local_resources()
@@ -202,6 +389,16 @@ impl HostPlugin for NatsMessaging {
             .local_resources()
             .config
             .get(CONSUMER_GROUP_CONFIG)
+            .cloned();
+        let local_max_in_flight = component_handle
+            .local_resources()
+            .config
+            .get(super::MAX_IN_FLIGHT_CONFIG)
+            .cloned();
+        let local_admission_wait = component_handle
+            .local_resources()
+            .config
+            .get(super::ADMISSION_WAIT_CONFIG)
             .cloned();
 
         // Track a handler component OR a long-lived handler service:
@@ -215,8 +412,15 @@ impl HostPlugin for NatsMessaging {
             let raw_subscriptions = super::parse_subscriptions(raw.as_deref());
             let component_name = match component_handle {
                 WorkloadItem::Component(component) => component.name().to_string(),
+                // A long-lived handler service has no per-message instance to
+                // bound; its delivery path is gated elsewhere.
                 WorkloadItem::Service(_) => "service".to_string(),
             };
+            let max_in_flight = super::parse_max_in_flight(
+                local_max_in_flight
+                    .as_deref()
+                    .or(interface_max_in_flight.as_deref()),
+            );
             let consumer_group = ConsumerGroup::resolve(
                 local_consumer_group
                     .as_deref()
@@ -226,10 +430,32 @@ impl HostPlugin for NatsMessaging {
                 &component_name,
             )?;
 
+            let admission_wait = super::parse_admission_wait(
+                local_admission_wait
+                    .as_deref()
+                    .or(interface_admission_wait.as_deref()),
+            );
+            // The same namespace/workload/component triple the consumer group
+            // is built from above. It both attributes a shed message to
+            // something a manifest author recognizes and selects the gate, so
+            // replicas of this deployment on this host share one ceiling
+            // rather than getting one apiece.
+            let identity = super::AdmissionIdentity::new(
+                component_handle.workload_namespace(),
+                component_handle.workload_name(),
+                &component_name,
+            );
+            let admission = self
+                .limits
+                .admission(&identity, max_in_flight)
+                .with_admission_wait(admission_wait)
+                .with_subscriptions(&raw_subscriptions);
+
             debug!(
                 component_id = component_handle.id(),
                 subscriptions = ?raw_subscriptions,
                 consumer_group = consumer_group.name().unwrap_or(BROADCAST_CONSUMER_GROUP),
+                max_in_flight = admission.limit(),
                 "tracking handler component for NATS messaging"
             );
             self.tracker.write().await.add_component(
@@ -239,6 +465,7 @@ impl HostPlugin for NatsMessaging {
                     subscriptions: raw_subscriptions,
                     consumer_group,
                     task_handle: None,
+                    admission,
                 },
             );
         }
@@ -254,13 +481,14 @@ impl HostPlugin for NatsMessaging {
     ) -> anyhow::Result<()> {
         debug!("on_workload_resolved entered for NATS messaging");
 
-        let (cancel_token, subjects, consumer_group) = {
+        let (cancel_token, subjects, consumer_group, admission) = {
             let lock = self.tracker.read().await;
             match lock.get_component_data(component_id) {
                 Some(data) => (
                     data.cancel_token.clone(),
                     data.subscriptions.clone(),
                     data.consumer_group.clone(),
+                    data.admission.clone(),
                 ),
                 None => {
                     debug!("no tracker entry for component, skipping subscription setup");
@@ -280,10 +508,9 @@ impl HostPlugin for NatsMessaging {
         // pre-instantiate; its receive loop delivers to the running service
         // instead. Only components get a `MessagingPre` for per-message work.
         let pre = match workload.instantiate_pre(component_id).await {
-            Ok(instance_pre) => Some(
-                bindings::MessagingPre::new(instance_pre)
-                    .context("failed to instantiate messaging pre")?,
-            ),
+            Ok(instance_pre) => {
+                Some(HandlerPre::new(instance_pre).context("failed to instantiate messaging pre")?)
+            }
             Err(e) => {
                 trace!(component_id, error = %e, "no per-message instance (long-lived service); messages delivered to the service");
                 None
@@ -412,6 +639,60 @@ impl HostPlugin for NatsMessaging {
                             );
                             continue;
                         };
+
+                        // Admission. Taken BEFORE the store and instance are
+                        // built and held until the handler returns, so permits
+                        // held and instances alive are the same number and the
+                        // ceiling is structural rather than advisory.
+                        //
+                        // Waiting here stops us draining the subscription.
+                        // That cannot back up the socket or endanger the shared
+                        // connection — async-nats' reader `try_send`s into a
+                        // per-subscription buffer and drops on overflow rather
+                        // than blocking — but the overflow it does cause is
+                        // silent, so the wait is bounded and we shed loudly at
+                        // the deadline instead of letting the buffer discard
+                        // messages nobody counted.
+                        //
+                        // Selecting on the cancel token keeps shutdown prompt
+                        // while parked on a saturated semaphore, and is
+                        // cancel-safe: dropping the future releases whichever
+                        // permit it had already taken.
+                        let permit = tokio::select! {
+                            admitted = admission.acquire_before_deadline(&component_id, &subject) => {
+                                match admitted {
+                                    Admitted::Slot(permit) => permit,
+                                    // Already logged and counted; drop this
+                                    // message and resume draining.
+                                    //
+                                    // A request/reply caller is NOT told, and
+                                    // waits out its own `timeout_ms`. Telling
+                                    // it would mean publishing to `reply_to`,
+                                    // and `request` resolves on the first
+                                    // message to reach its inbox — so where
+                                    // more than one component subscribes to a
+                                    // subject, the saturated one's instant
+                                    // notice would beat a healthy one's real
+                                    // reply and fail a request that was about
+                                    // to succeed. The in-memory backend can
+                                    // fast-fail precisely because it knows its
+                                    // own fan-out; here that is unknowable
+                                    // from inside a single subscriber.
+                                    Admitted::Shed => continue,
+                                    // Closed: the component is going away.
+                                    Admitted::Closed => break,
+                                }
+                            }
+                            _ = cancel_token.cancelled() => {
+                                debug!(
+                                    parent: &span,
+                                    component_id = %component_id,
+                                    "NATS subscriber loop cancelled while awaiting admission"
+                                );
+                                break;
+                            }
+                        };
+
                         let mut store = match workload.new_store(&component_id).await {
                             Err(e) => {
                                 warn!("failed to create store for component {component_id}: {e}");
@@ -419,14 +700,14 @@ impl HostPlugin for NatsMessaging {
                             }
                             Ok(s) => s,
                         };
-                        let proxy = match pre.instantiate_async(&mut store).await {
+                        let proxy = match pre.instantiate(&mut store).await {
                             Err(e) => {
                                 warn!("failed to instantiate component {component_id}: {e}");
                                 continue;
                             }
                             Ok(p) => p,
                         };
-                        let msg = types::BrokerMessage {
+                        let msg = types_p2::BrokerMessage {
                             subject,
                             reply_to,
                             body,
@@ -442,6 +723,9 @@ impl HostPlugin for NatsMessaging {
                         let fuel_meter = fuel_meter.clone();
 
                         tokio::spawn(async move {
+                            // Released on completion, trap or not — which is
+                            // what frees the instance slot this message holds.
+                            let _permit = permit;
                             let result = fuel_meter.observe(
                                 &[
                                     KeyValue::new("plugin", PLUGIN_MESSAGING_ID),
@@ -450,7 +734,6 @@ impl HostPlugin for NatsMessaging {
                                 &mut store,
                                 async move |store| {
                                     proxy
-                                        .wasmcloud_messaging_handler()
                                         .call_handle_message(store, &msg)
                                         .instrument(span)
                                         .await
@@ -503,6 +786,11 @@ impl HostPlugin for NatsMessaging {
         let workload_cleanup = |_| async {};
         let component_cleanup = |component_data: ComponentData| async move {
             component_data.cancel_token.cancel();
+            // Wakes a loop parked on a saturated gate with `Admitted::Closed`.
+            // The token above covers the same case; this makes the closed
+            // semaphore a real signal rather than a documented one that only
+            // tests ever produce.
+            component_data.admission.close();
             if let Some(handle) = component_data.task_handle {
                 handle.abort();
             }
@@ -646,6 +934,15 @@ mod tests {
                     subscriptions: vec!["tasks.x".to_string()],
                     consumer_group: ConsumerGroup::Grouped("workers".to_string()),
                     task_handle: None,
+                    admission: crate::plugin::wasmcloud_messaging::MessagingLimits::default()
+                        .admission(
+                            &crate::plugin::wasmcloud_messaging::AdmissionIdentity::new(
+                                "test-ns",
+                                "test-workload",
+                                "worker",
+                            ),
+                            None,
+                        ),
                 },
             );
         tracker

@@ -743,7 +743,11 @@ This information is used by the Runtime Operator to monitor the health of the Wa
                   <td>pool_size</td>
                   <td><a href="#sint32">sint32</a></td>
                   <td></td>
-                  <td><p> </p></td>
+                  <td><p>The instance limits below are signed because they mirror the Kubernetes
+CRD fields a workload sets them through (WorkloadComponent in the
+runtime-operator), and the Kubernetes API convention is signed integers.
+Nothing reads a negative one as a distinct value: zero and negative alike
+mean &#34;not configured&#34;, decoded in one place on the receiving side. </p></td>
                 </tr>
               
                 <tr>
@@ -772,6 +776,19 @@ This information is used by the Runtime Operator to monitor the health of the Wa
                   <td><a href="#wasmcloud.runtime.v2.ImagePullPolicy">ImagePullPolicy</a></td>
                   <td></td>
                   <td><p> </p></td>
+                </tr>
+              
+                <tr>
+                  <td>max_concurrency</td>
+                  <td><a href="#sint32">sint32</a></td>
+                  <td></td>
+                  <td><p>How many calls one warm instance may serve at the same time.
+
+Unset or below 1 means one, which is what a component gets without
+asking: an instance serves a single call at a time. Raising it lets an
+instance overlap calls while it awaits I/O, and is only safe for a guest
+that yields rather than blocks -- a guest driving its own executor with a
+blocking call must stay at one. Only meaningful alongside pool_size. </p></td>
                 </tr>
               
             </tbody>
@@ -906,6 +923,20 @@ Upon a successful lookup, the host will allow outbound connections to the specif
 (resolve-addresses). Accepts &#34;*&#34; for any name, a wildcard such as
 &#34;*.wasmcloud.io&#34;, an exact name, or a literal IP address.
 Empty or absent denies every lookup with permanent-resolver-failure. </p></td>
+                </tr>
+              
+                <tr>
+                  <td>allowed_host_loopback_ports</td>
+                  <td><a href="#string">string</a></td>
+                  <td>repeated</td>
+                  <td><p>Ports on the machine&#39;s own loopback this component may reach through
+`host.wasmcloud.internal`. Each entry is a port with an optional
+protocol: &#34;5432&#34;, &#34;5432/tcp&#34;, &#34;53/udp&#34;.
+
+An empty or absent list denies every host-loopback connection, and a
+non-empty one is inert unless the host was started with
+--allow-host-loopback: neither the workload author nor the operator can
+open this door alone. </p></td>
                 </tr>
               
             </tbody>

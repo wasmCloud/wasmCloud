@@ -44,8 +44,15 @@ pub struct TcpConn {
 }
 
 impl TcpConn {
-    // Returns a tuple of local side of the connection and the remote side of the connection
-    fn pair(local_address: SocketAddr, remote_address: SocketAddr) -> (Self, Self) {
+    /// Returns a tuple of local side of the connection and the remote side of
+    /// the connection.
+    ///
+    /// The second half is the one an accepting socket receives:
+    /// [`TcpSocket::accept`] requires its `local_address` to equal the
+    /// listener's, so a caller splicing an external connection in passes
+    /// `pair(external_peer, listen_addr)` and the guest sees the real peer as
+    /// its `remote_address`.
+    pub(crate) fn pair(local_address: SocketAddr, remote_address: SocketAddr) -> (Self, Self) {
         let (local_tx, remote_rx) = mpsc::unbounded_channel();
         let (remote_tx, local_rx) = mpsc::unbounded_channel();
         (
