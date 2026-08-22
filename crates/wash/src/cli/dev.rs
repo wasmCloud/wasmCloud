@@ -152,6 +152,19 @@ impl CliCommand for DevCommand {
             debug!("wasmcloud:messaging plugin registered with in-memory backend");
         }
 
+        // `wasmcloud:nats` — NATS-native core pub/sub, JetStream, and KV.
+        // Unlike the plugins above it borrows no connection from the dev host:
+        // it opens one per workload from that workload's own interface config,
+        // so there is no in-memory backend to fall back to and nothing to
+        // register conditionally.
+        host_builder = host_builder.with_plugin(Arc::new(
+            plugin::wasmcloud_nats::WasmcloudNats::new().with_lattice_prefixes(vec![
+                format!("{}.", wash_runtime::washlet::HOST_API_PREFIX),
+                format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),
+            ]),
+        ))?;
+        debug!("wasmcloud:nats plugin registered");
+
         // Per-plugin settings override the in-memory default. The order of precedence is:
         // use a filesystem backend if there is a path override,
         // otherwise it uses NATS if `data_nats_url` is set, otherwise it falls back to
