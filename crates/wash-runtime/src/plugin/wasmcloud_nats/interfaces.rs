@@ -9,19 +9,46 @@ use wasmtime::component::Resource;
 
 use crate::engine::ctx::ActiveCtx;
 
-use super::bindings::wasmcloud::nats::{core, jetstream as js, kv, types};
+use super::bindings::wasmcloud::nats0_1_0::{core, jetstream as js, kv, types};
 use super::conn::ConnHandle;
 use super::handles::{
     BucketHandle, MessageHandle, PullConsumerHandle, already_settled, jetstream_err,
 };
 use super::{PLUGIN_NATS_ID, WasmcloudNats};
 
-pub(super) fn wit_headers_to_nats(headers: &[types::HeaderEntry]) -> async_nats::HeaderMap {
+/// Converts guest headers, rejecting anything async-nats would assert on.
+///
+/// `HeaderName`/`HeaderValue`'s `From<&str>` impls panic on CRLF and on
+/// non-graphic-ASCII names, and guest input is untrusted, so the fallible
+/// `FromStr` path is the only safe one here.
+pub(super) fn wit_headers_to_nats(
+    headers: &[types::HeaderEntry],
+) -> Result<async_nats::HeaderMap, types::NatsError> {
+    use std::str::FromStr as _;
+
     let mut map = async_nats::HeaderMap::new();
     for h in headers {
-        map.append(h.name.as_str(), h.value.as_str());
+        let name = async_nats::HeaderName::from_str(&h.name).map_err(|e| {
+            types::NatsError::Unexpected(format!("invalid header name `{}`: {e}", h.name))
+        })?;
+        let value = async_nats::HeaderValue::from_str(&h.value).map_err(|e| {
+            types::NatsError::Unexpected(format!("invalid value for header `{}`: {e}", h.name))
+        })?;
+        map.append(name, value);
     }
-    map
+    Ok(map)
+}
+
+/// Serialized size of a header block, mirroring what async-nats puts on the
+/// wire. Its own `wire_len` is crate-private.
+fn headers_wire_len(headers: &async_nats::HeaderMap) -> usize {
+    let mut len = b"NATS/1.0\r\n".len() + b"\r\n".len();
+    for (name, values) in headers.iter() {
+        for value in values {
+            len += name.to_string().len() + b": ".len() + value.as_str().len() + b"\r\n".len();
+        }
+    }
+    len
 }
 
 pub(super) fn nats_headers_to_wit(headers: &async_nats::HeaderMap) -> Vec<types::HeaderEntry> {
@@ -70,9 +97,8 @@ macro_rules! conn_or_return {
             Ok((plugin, workload_id)) => match plugin.conn_for(&workload_id).await {
                 Some(conn) => conn,
                 None => {
-                    return Ok(Err(types::NatsError::Unexpected(format!(
-                        "no NATS connection bound for workload `{workload_id}`"
-                    ))));
+                    tracing::warn!(%workload_id, "no NATS connection bound for workload");
+                    return Ok(Err(types::NatsError::Disconnected));
                 }
             },
             Err(e) => return Ok(Err(e)),
@@ -91,8 +117,20 @@ fn denied(subject: &str) -> types::NatsError {
 }
 
 /// Rejects an oversized payload before it reaches the connection.
-fn check_payload(len: usize, conn: &ConnHandle) -> Result<(), types::NatsError> {
-    if conn.max_payload > 0 && len as u64 > conn.max_payload {
+///
+/// The server counts the serialized header block against `max_payload`, so a
+/// body-only check lets header-heavy messages near the cap fail deeper as a
+/// transport error instead of the typed variant.
+fn check_payload(
+    body_len: usize,
+    headers: Option<&async_nats::HeaderMap>,
+    conn: &ConnHandle,
+) -> Result<(), types::NatsError> {
+    let size = match headers {
+        Some(h) if !h.is_empty() => body_len.saturating_add(headers_wire_len(h)),
+        _ => body_len,
+    };
+    if conn.max_payload > 0 && size as u64 > conn.max_payload {
         return Err(types::NatsError::MaxPayloadExceeded(conn.max_payload));
     }
     Ok(())
@@ -135,31 +173,35 @@ impl<'a> core::Host for ActiveCtx<'a> {
         {
             return Ok(Err(denied(reply_to)));
         }
-        if let Err(e) = check_payload(msg.body.len(), &conn) {
+        let headers = match msg.headers.as_deref().filter(|h| !h.is_empty()) {
+            Some(h) => match wit_headers_to_nats(h) {
+                Ok(map) => Some(map),
+                Err(e) => return Ok(Err(e)),
+            },
+            None => None,
+        };
+        if let Err(e) = check_payload(msg.body.len(), headers.as_ref(), &conn) {
             return Ok(Err(e));
         }
         let payload: Bytes = msg.body.into();
-        let has_headers = msg.headers.as_ref().is_some_and(|h| !h.is_empty());
 
-        let result = match (msg.reply_to, has_headers) {
-            (Some(reply_to), true) => {
-                let headers = wit_headers_to_nats(msg.headers.as_deref().unwrap_or_default());
+        let result = match (msg.reply_to, headers) {
+            (Some(reply_to), Some(headers)) => {
                 conn.client
                     .publish_with_reply_and_headers(subject, reply_to, headers, payload)
                     .await
             }
-            (Some(reply_to), false) => {
+            (Some(reply_to), None) => {
                 conn.client
                     .publish_with_reply(subject, reply_to, payload)
                     .await
             }
-            (None, true) => {
-                let headers = wit_headers_to_nats(msg.headers.as_deref().unwrap_or_default());
+            (None, Some(headers)) => {
                 conn.client
                     .publish_with_headers(subject, headers, payload)
                     .await
             }
-            (None, false) => conn.client.publish(subject, payload).await,
+            (None, None) => conn.client.publish(subject, payload).await,
         };
 
         match result {
@@ -187,16 +229,23 @@ impl<'a> core::Host for ActiveCtx<'a> {
         if conn.policy.check_subject(&subject).is_err() {
             return Ok(Err(denied(&subject)));
         }
-        if let Err(e) = check_payload(body.len(), &conn) {
+        let headers = match headers.as_deref().filter(|h| !h.is_empty()) {
+            Some(h) => match wit_headers_to_nats(h) {
+                Ok(map) => Some(map),
+                Err(e) => return Ok(Err(e)),
+            },
+            None => None,
+        };
+        if let Err(e) = check_payload(body.len(), headers.as_ref(), &conn) {
             return Ok(Err(e));
         }
 
         let timeout_duration = Duration::from_millis(timeout_ms as u64);
         let request_future = async {
-            match headers.as_deref().filter(|h| !h.is_empty()) {
+            match headers {
                 Some(headers) => {
                     conn.client
-                        .request_with_headers(subject, wit_headers_to_nats(headers), body.into())
+                        .request_with_headers(subject, headers, body.into())
                         .await
                 }
                 None => conn.client.request(subject, body.into()).await,
@@ -206,13 +255,22 @@ impl<'a> core::Host for ActiveCtx<'a> {
         let resp = match tokio::time::timeout(timeout_duration, request_future).await {
             Ok(Ok(m)) => m,
             Ok(Err(e)) => {
-                if matches!(e.kind(), async_nats::RequestErrorKind::NoResponders) {
-                    return Ok(Err(types::NatsError::NoResponders));
-                }
-                warn!("failed to send request: {e}");
-                return Ok(Err(types::NatsError::Connection(format!(
-                    "failed to send request: {e}"
-                ))));
+                // The client's own `request-timeout-ms` fires below the guest
+                // timeout, and is still a timeout rather than a transport fault.
+                return Ok(Err(match e.kind() {
+                    async_nats::RequestErrorKind::NoResponders => types::NatsError::NoResponders,
+                    async_nats::RequestErrorKind::TimedOut => {
+                        warn!("request timed out in the client: {e}");
+                        types::NatsError::Timeout(format!("request timed out: {e}"))
+                    }
+                    async_nats::RequestErrorKind::MaxPayloadExceeded => {
+                        types::NatsError::MaxPayloadExceeded(conn.max_payload)
+                    }
+                    _ => {
+                        warn!("failed to send request: {e}");
+                        types::NatsError::Connection(format!("failed to send request: {e}"))
+                    }
+                }));
             }
             Err(_) => {
                 warn!("request timed out after {timeout_ms}ms");
@@ -242,12 +300,18 @@ impl<'a> js::Host for ActiveCtx<'a> {
         if conn.policy.check_subject(&msg.subject).is_err() {
             return Ok(Err(denied(&msg.subject)));
         }
-        if let Err(e) = check_payload(msg.body.len(), &conn) {
+        let header_map = match msg.headers.as_deref().filter(|h| !h.is_empty()) {
+            Some(h) => match wit_headers_to_nats(h) {
+                Ok(map) => Some(map),
+                Err(e) => return Ok(Err(e)),
+            },
+            None => None,
+        };
+        if let Err(e) = check_payload(msg.body.len(), header_map.as_ref(), &conn) {
             return Ok(Err(e));
         }
 
-        let ack_future = if let Some(headers) = msg.headers.as_ref().filter(|h| !h.is_empty()) {
-            let header_map = wit_headers_to_nats(headers);
+        let ack_future = if let Some(header_map) = header_map {
             match conn
                 .jetstream
                 .publish_with_headers(msg.subject, header_map, msg.body.into())
@@ -369,12 +433,12 @@ impl<'a> js::Host for ActiveCtx<'a> {
             }
             match tokio::time::timeout(Duration::from_millis(100), msg_stream.next()).await {
                 Ok(Some(Ok(msg))) => {
+                    // A malformed reply is the server's problem, not the
+                    // guest's — report it rather than trapping the instance.
                     let info = match msg.info() {
                         Ok(i) => i,
                         Err(e) => {
-                            return Err(wasmtime::Error::msg(format!(
-                                "failed to get message info: {e}"
-                            )));
+                            return Ok(Err(jetstream_err("failed to get message info", e)));
                         }
                     };
                     messages.push(js::StoredMessage {
@@ -575,7 +639,7 @@ impl<'a> js::HostPullConsumer for ActiveCtx<'a> {
                     // goes to the handle regardless of ack-mode.
                     let (message, acker) = msg.split();
                     handles.push(self.table.push(MessageHandle {
-                        acker: Some(acker),
+                        acker: Some(Arc::new(acker)),
                         message,
                         sequence,
                         delivery_count,
@@ -771,24 +835,73 @@ impl<'a> kv::HostBucket for ActiveCtx<'a> {
         &mut self,
         rep: Resource<BucketHandle>,
     ) -> wasmtime::Result<Result<kv::BucketStatus, types::NatsError>> {
-        let h = self.table.get(&rep)?;
-        match h.store.status().await {
-            Ok(s) => {
-                let ttl = s.max_age();
-                Ok(Ok(kv::BucketStatus {
-                    bucket: s.bucket().to_string(),
-                    values: s.values(),
-                    history: s.history().max(0) as u8,
-                    ttl_seconds: ttl.as_secs(),
-                    bytes: s.info.state.bytes,
-                }))
-            }
-            Err(e) => Ok(Err(jetstream_err("kv status failed", e))),
-        }
+        let h = self.table.get_mut(&rep)?;
+        // `Store::status` reports the stream info cached when the bucket was
+        // opened, so writes made through this same handle read back as zero.
+        let info = match h.store.stream.info().await {
+            Ok(info) => info.clone(),
+            Err(e) => return Ok(Err(jetstream_err("kv status failed", e))),
+        };
+        Ok(Ok(kv::BucketStatus {
+            bucket: h.store.name.clone(),
+            values: info.state.messages,
+            history: info
+                .config
+                .max_messages_per_subject
+                .clamp(0, u8::MAX as i64) as u8,
+            ttl_seconds: info.config.max_age.as_secs(),
+            bytes: info.state.bytes,
+        }))
     }
 
     async fn drop(&mut self, rep: Resource<BucketHandle>) -> wasmtime::Result<()> {
         self.table.delete(rep)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn header(name: &str, value: &str) -> types::HeaderEntry {
+        types::HeaderEntry {
+            name: name.to_string(),
+            value: value.to_string(),
+        }
+    }
+
+    #[test]
+    fn valid_headers_convert() {
+        let map = wit_headers_to_nats(&[header("Nats-Msg-Id", "abc-1")]).unwrap();
+        assert_eq!(map.get("Nats-Msg-Id").map(|v| v.as_str()), Some("abc-1"));
+    }
+
+    #[test]
+    fn guest_headers_cannot_panic_the_host() {
+        // async-nats' `From<&str>` conversions assert on these; guest input is
+        // untrusted, so they have to come back as a typed error instead.
+        for bad in [
+            header("X-Ok", "line1\r\nInjected: yes"),
+            header("X-Ok", "trailing\n"),
+            header("Bad Name", "v"),
+            header("Bad:Name", "v"),
+            header("Bad\u{7f}Name", "v"),
+            header("nøn-ascii", "v"),
+        ] {
+            let err = wit_headers_to_nats(std::slice::from_ref(&bad))
+                .expect_err("expected `{bad:?}` to be refused");
+            assert!(
+                matches!(err, types::NatsError::Unexpected(_)),
+                "unexpected error for {bad:?}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn header_bytes_count_toward_max_payload() {
+        let headers = wit_headers_to_nats(&[header("X-Pad", "0123456789")]).unwrap();
+        // "NATS/1.0\r\n" + "X-Pad: 0123456789\r\n" + "\r\n"
+        assert_eq!(headers_wire_len(&headers), 10 + 19 + 2);
     }
 }

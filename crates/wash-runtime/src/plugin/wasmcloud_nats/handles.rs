@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use async_nats::jetstream::consumer::{Consumer, pull};
 use async_nats::jetstream::kv::Store;
 use async_nats::jetstream::message::Acker;
 
-use super::bindings::wasmcloud::nats::types::NatsError;
+use super::bindings::wasmcloud::nats0_1_0::types::NatsError;
 
 /// Handle to a single JetStream-delivered message.
 ///
@@ -14,7 +16,10 @@ use super::bindings::wasmcloud::nats::types::NatsError;
 /// Under `ack-mode: auto` the host keeps the acker and this is `None`, so a
 /// guest ack reports that the host owns the acknowledgement.
 pub struct MessageHandle {
-    pub(super) acker: Option<Acker>,
+    /// Behind an `Arc` so `in-progress` can extend ack-wait without removing
+    /// the acker — `Acker` is not `Clone`, and under the async ABI a guest can
+    /// have two calls on the handle in flight at once.
+    pub(super) acker: Option<Arc<Acker>>,
     pub(super) message: async_nats::Message,
     pub(super) sequence: u64,
     pub(super) delivery_count: u32,

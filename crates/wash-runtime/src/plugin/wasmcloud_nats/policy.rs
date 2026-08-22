@@ -29,6 +29,9 @@ struct Pattern {
     tokens: Vec<Token>,
     /// True when the pattern ends in `>`.
     trailing: bool,
+    /// False when the raw pattern was malformed. A malformed pattern matches
+    /// and contains nothing, so a typo cannot widen a grant.
+    valid: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,20 +44,35 @@ impl Pattern {
     fn parse(raw: &str) -> Self {
         let mut tokens = Vec::new();
         let mut trailing = false;
-        for part in raw.split('.') {
-            match part {
+        let mut valid = !raw.is_empty();
+        let parts: Vec<&str> = raw.split('.').collect();
+        for (idx, part) in parts.iter().enumerate() {
+            match *part {
+                // `>` is only the tail. Anything after it made the pattern a
+                // typo, not a broader grant.
                 ">" => {
                     trailing = true;
+                    if idx + 1 != parts.len() {
+                        valid = false;
+                    }
                     break;
                 }
                 "*" => tokens.push(Token::Any),
+                "" => valid = false,
                 literal => tokens.push(Token::Literal(literal.to_string())),
             }
         }
-        Self { tokens, trailing }
+        Self {
+            tokens,
+            trailing,
+            valid,
+        }
     }
 
     fn matches(&self, subject: &str) -> bool {
+        if !self.valid {
+            return false;
+        }
         let parts: Vec<&str> = subject.split('.').collect();
         if self.trailing {
             // `>` matches one or more remaining tokens, never zero.
@@ -78,13 +96,24 @@ impl Pattern {
     /// This is set containment, not matching: a grant of `orders.*` does not
     /// contain a subscription to `orders.>`, because `>` reaches deeper.
     fn contains(&self, other: &Pattern) -> bool {
+        if !self.valid || !other.valid {
+            return false;
+        }
         // A non-trailing grant cannot cover a trailing request, and lengths
         // must line up exactly when neither side has a tail.
         if other.trailing && !self.trailing {
             return false;
         }
         if self.trailing {
-            if other.tokens.len() < self.tokens.len() {
+            // `>` needs at least one token beyond the grant's literals, so a
+            // request that stops at that length matches subjects the grant
+            // never reaches: `*.>` does not contain `a`.
+            let minimum = if other.trailing {
+                self.tokens.len()
+            } else {
+                self.tokens.len() + 1
+            };
+            if other.tokens.len() < minimum {
                 return false;
             }
         } else if self.tokens.len() != other.tokens.len() {
@@ -196,6 +225,22 @@ impl PolicyEngine {
             return Err(Denied::Reserved);
         }
         let requested = Pattern::parse(pattern);
+        if self.subject_allow.iter().any(|g| g.contains(&requested)) {
+            Ok(())
+        } else {
+            Err(Denied::NotGranted)
+        }
+    }
+
+    /// Checks a JetStream consumer's filter subject against the grant.
+    ///
+    /// Containment only, unlike [`PolicyEngine::check_subscription`]: a filter
+    /// selects within a stream the workload was separately granted, so it
+    /// cannot straddle into a reserved space the way a raw core subscription
+    /// can. Running it through the reserved check would make
+    /// `subscriptions: STREAM:>` undeployable under any grant.
+    pub fn check_filter(&self, filter: &str) -> Result<(), Denied> {
+        let requested = Pattern::parse(filter);
         if self.subject_allow.iter().any(|g| g.contains(&requested)) {
             Ok(())
         } else {
@@ -361,6 +406,66 @@ mod tests {
         assert_eq!(p.check_stream("SECRETS"), Err(Denied::NotGranted));
         assert!(p.check_bucket("config").is_ok());
         assert_eq!(p.check_bucket("credentials"), Err(Denied::NotGranted));
+    }
+
+    #[test]
+    fn trailing_grant_does_not_contain_a_shorter_subscription() {
+        // `*.>` matches 2-or-more-token subjects only, so a single-token
+        // subscription reaches outside it.
+        let p = engine(&["*.>"], &[], &[]);
+        assert_eq!(p.check_subject("a"), Err(Denied::NotGranted));
+        assert_eq!(p.check_subscription("a"), Err(Denied::NotGranted));
+        assert_eq!(p.check_subscription("*"), Err(Denied::Reserved));
+        assert!(p.check_subscription("a.b").is_ok());
+        assert!(p.check_subscription("a.>").is_ok());
+    }
+
+    #[test]
+    fn containment_agrees_with_matching_for_literal_subscriptions() {
+        // Every literal subscription a grant contains must also be a subject
+        // that grant matches.
+        let grants = ["orders.>", "*.>", "orders.*", ">", "a.*.c"];
+        let subjects = ["a", "a.b", "orders", "orders.new", "orders.new.eu", "a.b.c"];
+        for grant in grants {
+            let p = engine(&[grant], &[], &[]);
+            for subject in subjects {
+                assert_eq!(
+                    p.check_subscription(subject).is_ok(),
+                    p.check_subject(subject).is_ok(),
+                    "grant `{grant}` disagrees on `{subject}`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_grants_do_not_widen() {
+        // `>.foo` is a typo, not a grant-all.
+        let p = engine(&[">.foo"], &[], &[]);
+        assert_eq!(p.check_subject("anything"), Err(Denied::NotGranted));
+        assert_eq!(p.check_subscription("anything"), Err(Denied::NotGranted));
+
+        let p = engine(&["orders..new"], &[], &[]);
+        assert_eq!(p.check_subject("orders.new"), Err(Denied::NotGranted));
+    }
+
+    #[test]
+    fn a_filter_may_be_the_full_wildcard_under_a_full_grant() {
+        // The stream grant is what scopes a filter, so the reserved-space rule
+        // that governs raw subscriptions does not apply to it.
+        let p = engine(&[">"], &["ORDERS"], &[]);
+        assert!(p.check_filter(">").is_ok());
+        assert!(p.check_filter("*.new").is_ok());
+        assert_eq!(p.check_subscription(">"), Err(Denied::Reserved));
+    }
+
+    #[test]
+    fn a_filter_still_has_to_sit_inside_the_subject_grant() {
+        let p = engine(&["orders.>"], &["ORDERS"], &[]);
+        assert!(p.check_filter("orders.received").is_ok());
+        assert!(p.check_filter("orders.>").is_ok());
+        assert_eq!(p.check_filter(">"), Err(Denied::NotGranted));
+        assert_eq!(p.check_filter("payments.>"), Err(Denied::NotGranted));
     }
 
     #[test]

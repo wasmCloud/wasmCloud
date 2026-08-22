@@ -39,6 +39,8 @@ async fn expect_refused(host: &impl HostApi, request: WorkloadStartRequest) -> R
 }
 
 const NATS_HANDLER_WASM: &[u8] = include_bytes!("wasm/nats_jetstream_handler.wasm");
+/// The P3 counterpart, bound against the async `@0.2.0` package.
+const NATS_ASYNC_HANDLER_WASM: &[u8] = include_bytes!("wasm/nats_async_handler_p3.wasm");
 
 const STREAM: &str = "TESTS";
 const COUNTS_BUCKET: &str = "test-counts";
@@ -144,6 +146,31 @@ fn nats_interface(config: &[(&str, &str)]) -> WitInterface {
     }
 }
 
+/// A binding on the async `@0.2.0` package, with the core handler included so
+/// the P3 fixture's second export is served too.
+fn nats_async_interface(config: &[(&str, &str)]) -> WitInterface {
+    WitInterface {
+        namespace: "wasmcloud".to_string(),
+        package: "nats".to_string(),
+        interfaces: [
+            "types".to_string(),
+            "core".to_string(),
+            "jetstream".to_string(),
+            "kv".to_string(),
+            "jetstream-handler".to_string(),
+            "core-handler".to_string(),
+        ]
+        .into_iter()
+        .collect(),
+        version: Some(semver::Version::new(0, 2, 0)),
+        config: config
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+        name: None,
+    }
+}
+
 fn workload_request(workload_id: &str, interface: WitInterface) -> WorkloadStartRequest {
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
@@ -155,7 +182,10 @@ fn workload_request(workload_id: &str, interface: WitInterface) -> WorkloadStart
             components: vec![Component {
                 name: "nats-handler".to_string(),
                 digest: None,
-                bytes: bytes::Bytes::from_static(NATS_HANDLER_WASM),
+                bytes: bytes::Bytes::from_static(match interface.version {
+                    Some(semver::Version { minor: 2, .. }) => NATS_ASYNC_HANDLER_WASM,
+                    _ => NATS_HANDLER_WASM,
+                }),
                 local_resources: LocalResources {
                     memory_limit_mb: 256,
                     cpu_limit: 1,
@@ -579,5 +609,216 @@ async fn each_workload_is_held_to_its_own_grant() -> Result<()> {
         .await
         .with_context(|| format!("failed to stop {id}"))?;
     }
+    Ok(())
+}
+
+/// The async `@0.2.0` package delivers into a P3 component whose handler is an
+/// `async fn` awaiting imported NATS calls. This is what `@0.1.0` cannot do: a
+/// sync-signature export cannot be lifted with the async canonical ABI.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn async_p3_handler_delivers_and_auto_acks() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+
+    host.workload_start(workload_request(
+        "wl-async-deliver",
+        nats_async_interface(&[
+            ("servers", &h.nats_url),
+            ("subject-allow", "test.>"),
+            ("stream-allow", STREAM),
+            ("bucket-allow", COUNTS_BUCKET),
+            ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+        ]),
+    ))
+    .await
+    .context("failed to start the async workload")?;
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let results = tokio::spawn({
+        let client = h.client.clone();
+        async move { collect_results(&client, 2).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    h.js.publish("test.orders.new", "async-order-1".into())
+        .await
+        .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?
+        .await
+        .map_err(|e| anyhow::anyhow!("publish ack failed: {e}"))?;
+
+    let results = results.await??;
+    assert!(
+        results
+            .iter()
+            .any(|r| r.starts_with("handled:async-order-1")),
+        "expected the async handler to process async-order-1, got {results:?}"
+    );
+    assert!(
+        results.iter().any(|r| r == "count:async-order-1:1"),
+        "expected the async KV round trip to count one delivery, got {results:?}"
+    );
+    Ok(())
+}
+
+/// A denial reaches the async guest as the structured `denied` variant, naming
+/// both the reason and the kind of name refused.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn async_p3_denial_carries_reason_and_target() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+
+    host.workload_start(workload_request(
+        "wl-async-denied",
+        nats_async_interface(&[
+            ("servers", &h.nats_url),
+            ("subject-allow", "test.>"),
+            ("stream-allow", STREAM),
+            ("bucket-allow", COUNTS_BUCKET),
+            ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+        ]),
+    ))
+    .await
+    .context("failed to start the async workload")?;
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let results = tokio::spawn({
+        let client = h.client.clone();
+        async move { collect_results(&client, 1).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    h.js.publish("test.orders.new", "denied:other.subject".into())
+        .await
+        .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?
+        .await
+        .map_err(|e| anyhow::anyhow!("publish ack failed: {e}"))?;
+
+    let results = results.await??;
+    assert!(
+        results
+            .iter()
+            .any(|r| r == "denied-probe:denied:not-granted:subject:other.subject"),
+        "expected a structured denial naming the subject, got {results:?}"
+    );
+    Ok(())
+}
+
+/// A JetStream subscription whose filter subject sits outside `subject-allow`
+/// is refused at bind: a stream grant alone would deliver whatever that stream
+/// captures.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn jetstream_filter_outside_the_subject_grant_is_refused() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+
+    let message = expect_refused(
+        &host,
+        workload_request(
+            "wl-filter-denied",
+            nats_interface(&[
+                ("servers", &h.nats_url),
+                ("subject-allow", "test.payments.>"),
+                ("stream-allow", STREAM),
+                ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+            ]),
+        ),
+    )
+    .await?;
+    assert!(
+        message.contains("subject grant"),
+        "expected the filter subject to be refused, got {message}"
+    );
+    Ok(())
+}
+
+/// A JetStream push subscription rebuilds when its delivery path dies.
+///
+/// Deleting the consumer and its stream is what a server restart does to an
+/// ephemeral consumer: the client stays subscribed to a deliver subject
+/// nothing publishes to any more. Before the rebuild path the subscription
+/// parked forever — no error, no log, no recovery.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn jetstream_subscription_rebuilds_when_delivery_dies() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+
+    host.workload_start(workload_request(
+        "wl-rebuild",
+        nats_interface(&[
+            ("servers", &h.nats_url),
+            ("subject-allow", "test.>"),
+            ("stream-allow", STREAM),
+            ("bucket-allow", COUNTS_BUCKET),
+            ("subscriptions", &format!("{STREAM}:test.orders.>:new")),
+        ]),
+    ))
+    .await
+    .context("failed to start workload")?;
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Establish a delivery position first: a subscription that never consumed
+    // anything has nothing to resume from, and `deliver-policy: new` still
+    // means new.
+    let mut sub = h.client.subscribe("test.results").await?;
+    h.js.publish("test.orders.new", "before-the-outage".into())
+        .await
+        .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?
+        .await
+        .map_err(|e| anyhow::anyhow!("publish ack failed: {e}"))?;
+    timeout(Duration::from_secs(20), sub.next())
+        .await
+        .map_err(|_| anyhow::anyhow!("the first message was never handled"))?;
+
+    // Take the stream out from under the live subscription, then put it back
+    // as out-of-band provisioning would.
+    h.js.delete_stream(STREAM)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to delete stream: {e}"))?;
+    h.js.create_stream(async_nats::jetstream::stream::Config {
+        name: STREAM.to_string(),
+        subjects: vec![
+            "test.orders.>".to_string(),
+            "test.results".to_string(),
+            "other.>".to_string(),
+        ],
+        ..Default::default()
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("failed to recreate stream: {e}"))?;
+
+    // Published while there is no consumer at all. Under the configured
+    // `deliver-policy: new` a rebuilt consumer would never see this, so the
+    // rebuild has to resume from what the stream holds instead.
+    h.js.publish("test.orders.new", "during-the-outage".into())
+        .await
+        .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?
+        .await
+        .map_err(|e| anyhow::anyhow!("publish ack failed: {e}"))?;
+
+    // Recovery waits out the idle-heartbeat timeout, so wait for the delivery
+    // rather than guessing a single sleep.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    let mut seen = None;
+    while tokio::time::Instant::now() < deadline && seen.is_none() {
+        if let Ok(Some(msg)) = timeout(Duration::from_secs(5), sub.next()).await {
+            let body = String::from_utf8_lossy(&msg.payload).to_string();
+            if body.starts_with("handled:during-the-outage") {
+                seen = Some(body);
+            }
+        }
+    }
+
+    assert!(
+        seen.is_some(),
+        "expected the message published during the outage to be delivered once \
+         the subscription rebuilt"
+    );
     Ok(())
 }

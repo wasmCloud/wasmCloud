@@ -24,6 +24,15 @@ const DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_millis(2_500
 
 /// A live connection plus everything derived from the config that opened it.
 pub struct ConnHandle {
+    /// Bumped every time the client (re)connects.
+    ///
+    /// A JetStream push subscription cannot survive a server restart — an
+    /// ephemeral consumer is gone with the server's state, and the client
+    /// resubscribes to a deliver subject nothing publishes to any more. The
+    /// idle-heartbeat timeout catches a *deleted* consumer, but not this: the
+    /// subscription simply parks. Watching reconnects gives the subscription
+    /// loops a signal they can rebuild on.
+    pub reconnects: tokio::sync::watch::Sender<u64>,
     pub client: async_nats::Client,
     pub jetstream: async_nats::jetstream::Context,
     pub policy: Arc<PolicyEngine>,
@@ -93,7 +102,13 @@ fn apply_auth(
 }
 
 /// Builds connect options from a workload's config.
-fn build_options(config: &NatsConfig) -> anyhow::Result<async_nats::ConnectOptions> {
+///
+/// `reconnects` is bumped from the event callback, which is the only place the
+/// client reports having come back.
+fn build_options(
+    config: &NatsConfig,
+    reconnects: tokio::sync::watch::Sender<u64>,
+) -> anyhow::Result<async_nats::ConnectOptions> {
     let mut opts = apply_auth(async_nats::ConnectOptions::new(), &config.auth)?;
 
     if let Some(name) = &config.name {
@@ -118,16 +133,22 @@ fn build_options(config: &NatsConfig) -> anyhow::Result<async_nats::ConnectOptio
 
     // Without a callback these are raised and discarded. SlowConsumer is the
     // only signal that a subscription buffer overflowed and dropped messages.
-    Ok(opts.event_callback(|event| async move {
-        match event {
-            async_nats::Event::SlowConsumer(sid) => {
-                warn!(subscription = sid, "NATS slow consumer: messages dropped")
+    Ok(opts.event_callback(move |event| {
+        let reconnects = reconnects.clone();
+        async move {
+            match event {
+                async_nats::Event::SlowConsumer(sid) => {
+                    warn!(subscription = sid, "NATS slow consumer: messages dropped")
+                }
+                async_nats::Event::Disconnected => warn!("disconnected from NATS"),
+                async_nats::Event::Connected => {
+                    debug!("connected to NATS");
+                    reconnects.send_modify(|generation| *generation += 1);
+                }
+                async_nats::Event::ClientError(err) => warn!(%err, "NATS client error"),
+                async_nats::Event::ServerError(err) => warn!(%err, "NATS server error"),
+                other => debug!(event = %other, "NATS connection event"),
             }
-            async_nats::Event::Disconnected => warn!("disconnected from NATS"),
-            async_nats::Event::Connected => debug!("connected to NATS"),
-            async_nats::Event::ClientError(err) => warn!(%err, "NATS client error"),
-            async_nats::Event::ServerError(err) => warn!(%err, "NATS server error"),
-            other => debug!(event = %other, "NATS connection event"),
         }
     }))
 }
@@ -164,7 +185,8 @@ impl ConnectionRegistry {
             return Ok(existing.clone());
         }
 
-        let opts = build_options(config)?;
+        let (reconnects, _) = tokio::sync::watch::channel(0);
+        let opts = build_options(config, reconnects.clone())?;
         let client = opts
             .connect(config.servers.clone())
             .await
@@ -186,6 +208,7 @@ impl ConnectionRegistry {
         };
 
         let handle = Arc::new(ConnHandle {
+            reconnects,
             client,
             jetstream,
             policy: Arc::new(PolicyEngine::new(&config.policy, lattice_prefixes)),

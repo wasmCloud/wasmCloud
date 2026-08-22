@@ -72,8 +72,11 @@ spec:
       interfaces: [types, jetstream, kv, jetstream-handler]
       config:
         servers: nats://nats.default.svc:4222
-        # Deny-by-default: without these the component reaches nothing.
-        subject-allow: orders.processed
+        # Deny-by-default: without these the component reaches nothing. A
+        # subscription's filter subject is checked against this too, so
+        # `orders.received` has to be listed even though the grant on the
+        # ORDERS stream is what selects the stream.
+        subject-allow: orders.processed,orders.received
         stream-allow: ORDERS,PROCESSED
         bucket-allow: order-totals
         # STREAM:filter[:policy[:queue]]
