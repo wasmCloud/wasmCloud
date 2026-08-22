@@ -327,7 +327,9 @@ mod tests {
         store.create_bucket("b").await.ok().expect("bucket");
         store.set("b", "real-key", b"v").await.ok().expect("set");
         tokio::fs::write(
-            dir.path().join("b").join(format!("{TMP_PREFIX}123-0-real-key")),
+            dir.path()
+                .join("b")
+                .join(format!("{TMP_PREFIX}123-0-real-key")),
             b"partial",
         )
         .await
