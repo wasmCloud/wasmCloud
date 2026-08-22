@@ -362,7 +362,7 @@ impl InstanceDriver {
     /// gone. A plain compare-and-swap rather than a semaphore: admission has to
     /// be non-blocking so a saturated instance falls through to the next one
     /// instead of making the caller wait.
-    fn try_admit(&self) -> Option<InFlightGuard> {
+    pub(crate) fn try_admit(&self) -> Option<InFlightGuard> {
         if self.is_retired() || self.is_gone() {
             return None;
         }
@@ -410,7 +410,7 @@ impl InstanceDriver {
     /// receiver stands in for the run loop: kept alive so the channel is open,
     /// never drained.
     #[cfg(test)]
-    fn stub(
+    pub(crate) fn stub(
         max_concurrency: usize,
         max_invocations: Option<usize>,
     ) -> (
