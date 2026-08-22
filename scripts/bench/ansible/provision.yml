@@ -93,12 +93,6 @@
           - curl
           - jq
           - ca-certificates
-          # `protobuf-compiler` is the protoc binary, needed by
-          # wash-runtime/build.rs. `libprotobuf-dev` provides the
-          # well-known .proto includes (timestamp.proto etc.) — without
-          # it, protoc finds the binary but fails to import.
-          - protobuf-compiler
-          - libprotobuf-dev
           # Valgrind is the measurement engine for the gungraun bench.
           - valgrind
           # zstd for criterion.tar.zst archiving; AWS CLI installed
