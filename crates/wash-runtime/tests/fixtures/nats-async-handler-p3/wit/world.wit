@@ -1,0 +1,17 @@
+package wasmcloud:nats-async-handler-fixture;
+
+// The P3 counterpart of `nats-jetstream-handler`, against the async
+// `wasmcloud:nats@0.2.0` package. Its handler is an `async fn` that awaits
+// imported NATS calls — the shape the sync `@0.1.0` package cannot express,
+// because lifting a sync-signature function with the async canonical ABI
+// fails component validation.
+world nats-async-handler-fixture {
+    import wasmcloud:nats/types@0.2.0;
+    import wasmcloud:nats/core@0.2.0;
+    import wasmcloud:nats/jetstream@0.2.0;
+    import wasmcloud:nats/kv@0.2.0;
+    import wasi:clocks/monotonic-clock@0.3.0;
+
+    export wasmcloud:nats/jetstream-handler@0.2.0;
+    export wasmcloud:nats/core-handler@0.2.0;
+}

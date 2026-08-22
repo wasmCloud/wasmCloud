@@ -10,6 +10,7 @@ use crate::observability::Meters;
 use crate::plugin::{HostPlugin, WitInterfaces, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
+mod async_p3;
 pub(super) mod config;
 pub(super) mod conn;
 pub(super) mod handles;
@@ -68,9 +69,53 @@ pub(super) mod kv_bindings {
     });
 }
 
+/// Handler worlds for the async `@0.2.0` package. Same split as the sync
+/// worlds above, and for the same reason.
+pub(super) mod async_jetstream_bindings {
+    crate::wasmtime::component::bindgen!({
+        world: "nats-async-js-processor",
+        imports: { default: async | trappable | tracing },
+        exports: { default: async | tracing },
+        with: {
+            "wasmcloud:nats/jetstream@0.2.0.message-handle": super::handles::MessageHandle,
+            "wasmcloud:nats/jetstream@0.2.0.pull-consumer": super::handles::PullConsumerHandle,
+        },
+    });
+}
+
+pub(super) mod async_core_bindings {
+    crate::wasmtime::component::bindgen!({
+        world: "nats-async-subscriber",
+        imports: { default: async | trappable | tracing },
+        exports: { default: async | tracing },
+    });
+}
+
+pub(super) mod async_kv_bindings {
+    crate::wasmtime::component::bindgen!({
+        world: "nats-async-kv-watcher",
+        imports: { default: async | trappable | tracing },
+        exports: { default: async | tracing },
+        with: {
+            "wasmcloud:nats/kv@0.2.0.bucket": super::handles::BucketHandle,
+        },
+    });
+}
+
 pub(super) const PLUGIN_NATS_ID: &str = "wasmcloud-nats";
 
 const NATS_VERSION: &str = "0.1.0";
+/// The async (WASI P3) revision. A P3 component cannot bind `@0.1.0`: lifting
+/// a sync-signature function with the async canonical ABI fails validation.
+const NATS_ASYNC_VERSION: &str = "0.2.0";
+
+/// True when a bound interface asks for the async package.
+fn is_async(interface: &WitInterface) -> bool {
+    interface
+        .version
+        .as_ref()
+        .is_some_and(|v| (v.major, v.minor) >= (0, 2))
+}
 
 /// Per-component subscription state.
 pub struct ComponentData {
@@ -230,14 +275,17 @@ impl HostPlugin for WasmcloudNats {
     }
 
     fn world(&self) -> WitWorld {
+        const IMPORTS: &str = "wasmcloud:nats/types,core,jetstream,kv";
+        const EXPORTS: &str = "wasmcloud:nats/jetstream-handler,core-handler,kv-handler";
         WitWorld {
-            imports: HashSet::from([WitInterface::from(
-                format!("wasmcloud:nats/types,core,jetstream,kv@{NATS_VERSION}").as_str(),
-            )]),
-            exports: HashSet::from([WitInterface::from(
-                format!("wasmcloud:nats/jetstream-handler,core-handler,kv-handler@{NATS_VERSION}")
-                    .as_str(),
-            )]),
+            imports: HashSet::from([
+                WitInterface::from(format!("{IMPORTS}@{NATS_VERSION}").as_str()),
+                WitInterface::from(format!("{IMPORTS}@{NATS_ASYNC_VERSION}").as_str()),
+            ]),
+            exports: HashSet::from([
+                WitInterface::from(format!("{EXPORTS}@{NATS_VERSION}").as_str()),
+                WitInterface::from(format!("{EXPORTS}@{NATS_ASYNC_VERSION}").as_str()),
+            ]),
         }
     }
 
@@ -315,23 +363,56 @@ impl HostPlugin for WasmcloudNats {
             return Ok(());
         }
 
+        // Register the revisions this workload bound. A binding that names no
+        // version gets both, so an unversioned manifest entry works whichever
+        // revision the component was built against.
+        let (binds_sync, binds_async) =
+            bound.iter().fold((false, false), |(sync, async_), i| {
+                match (i.version.as_ref(), is_async(i)) {
+                    (None, _) => (true, true),
+                    (Some(_), true) => (sync, true),
+                    (Some(_), false) => (true, async_),
+                }
+            });
+
         let linker = item.linker();
-        bindings::wasmcloud::nats::types::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-            linker,
-            crate::engine::ctx::extract_active_ctx,
-        )?;
-        bindings::wasmcloud::nats::core::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-            linker,
-            crate::engine::ctx::extract_active_ctx,
-        )?;
-        bindings::wasmcloud::nats::jetstream::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-            linker,
-            crate::engine::ctx::extract_active_ctx,
-        )?;
-        bindings::wasmcloud::nats::kv::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-            linker,
-            crate::engine::ctx::extract_active_ctx,
-        )?;
+        if binds_sync {
+            bindings::wasmcloud::nats0_1_0::types::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
+                linker,
+                crate::engine::ctx::extract_active_ctx,
+            )?;
+            bindings::wasmcloud::nats0_1_0::core::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
+                linker,
+                crate::engine::ctx::extract_active_ctx,
+            )?;
+            bindings::wasmcloud::nats0_1_0::jetstream::add_to_linker::<
+                _,
+                crate::engine::ctx::SharedCtx,
+            >(linker, crate::engine::ctx::extract_active_ctx)?;
+            bindings::wasmcloud::nats0_1_0::kv::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
+                linker,
+                crate::engine::ctx::extract_active_ctx,
+            )?;
+        }
+        if binds_async {
+            use async_p3::bindings::wasmcloud::nats0_2_0 as async_nats_wit;
+            async_nats_wit::types::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
+                linker,
+                crate::engine::ctx::extract_active_ctx,
+            )?;
+            async_nats_wit::core::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
+                linker,
+                crate::engine::ctx::extract_active_ctx,
+            )?;
+            async_nats_wit::jetstream::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
+                linker,
+                crate::engine::ctx::extract_active_ctx,
+            )?;
+            async_nats_wit::kv::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
+                linker,
+                crate::engine::ctx::extract_active_ctx,
+            )?;
+        }
 
         let exports_handler = bound.iter().any(|i| {
             serves(
@@ -430,7 +511,22 @@ impl HostPlugin for WasmcloudNats {
                     sub.stream
                 )
             })?;
+            // A stream grant alone would deliver every subject that stream
+            // captures, so the filter has to sit inside the subject grant too.
+            handle
+                .policy
+                .check_filter(&sub.filter_subject)
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "jetstream subscription filter `{}` on stream `{}` is outside this \
+                         workload's subject grant; add it to `subject-allow`",
+                        sub.filter_subject,
+                        sub.stream
+                    )
+                })?;
         }
+        // A KV watch filter matches keys within a bucket, not NATS subjects,
+        // so `bucket-allow` is the grant that governs it.
         for watch in &kv_watches {
             handle.policy.check_bucket(&watch.bucket).map_err(|_| {
                 anyhow::anyhow!(
@@ -560,6 +656,33 @@ mod tests {
         assert_eq!(watches[0].filter, "*");
         assert_eq!(watches[1].bucket, "secrets");
         assert_eq!(watches[1].filter, "prod.>");
+    }
+
+    #[test]
+    fn world_advertises_both_revisions() {
+        let world = WasmcloudNats::new().world();
+        let versions = |set: &HashSet<WitInterface>| {
+            let mut v: Vec<String> = set
+                .iter()
+                .map(|i| {
+                    i.version
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_default()
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(versions(&world.imports), vec!["0.1.0", "0.2.0"]);
+        assert_eq!(versions(&world.exports), vec!["0.1.0", "0.2.0"]);
+        for iface in world.exports.iter() {
+            assert!(
+                iface.interfaces.contains("kv-handler"),
+                "export entry lost an interface: {:?}",
+                iface.interfaces
+            );
+        }
     }
 
     #[test]
