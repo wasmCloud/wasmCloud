@@ -44,12 +44,6 @@ jobs:
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
 
-      - name: Setup protoc
-        # wash-runtime's build.rs invokes prost-build / tonic-build, which
-        # needs protoc plus the well-known .proto includes on PATH. The
-        # version is pinned inside the composite action.
-        uses: ./.github/actions/setup-protoc
-
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
 
