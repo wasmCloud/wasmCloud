@@ -375,6 +375,34 @@ impl WasmcloudNats {
         opened: &mut bool,
     ) -> anyhow::Result<()> {
         for (binding, merged) in bindings {
+            // A binding is described by the manifest as a whole, and only the
+            // entries a component actually matched are folded into `merged`. So
+            // the connection settings going missing while other keys survive
+            // means they were written on an entry nothing matched — most often
+            // an entry naming an *imported* interface, in a workload whose only
+            // component receives. Such a component exports the handler and
+            // never calls out, so it does not cover that entry, and the entry
+            // is dropped along with the servers on it. The bare "requires
+            // `servers`" this would otherwise fail with sends authors looking
+            // at config they can see is present.
+            if !merged.contains_key("servers") && !merged.is_empty() {
+                // Sorted: the same manifest has to be refused with the same
+                // message every time, and `merged` is a `HashMap`.
+                let mut present: Vec<String> =
+                    merged.keys().map(|key| format!("`{key}`")).collect();
+                present.sort();
+                anyhow::bail!(
+                    "wasmcloud:nats binding `{}` of workload `{workload_id}` has no `servers`, \
+                     but does set {}. Connection settings only reach the host from an entry one \
+                     of the workload's components matches: a component that exports a handler \
+                     and imports nothing does not match an entry naming an imported interface. \
+                     Move `servers` (and the credentials and grants beside it) onto the entry \
+                     that names the handler this workload exports",
+                    describe_binding(binding),
+                    present.join(", ")
+                )
+            }
+
             let mut config = NatsConfig::from_map(&merged).with_context(|| {
                 format!(
                     "invalid wasmcloud:nats configuration for workload `{workload_id}` \
@@ -1376,5 +1404,33 @@ mod tests {
         let hub = NatsConfig::from_map(&merged[0].1).unwrap();
         let leaf = NatsConfig::from_map(&merged[1].1).unwrap();
         assert_ne!(hub.connection_key(), leaf.connection_key());
+    }
+
+    /// The receive-only trap: a component that exports the handler and imports
+    /// nothing does not match an entry naming an imported interface, so the
+    /// connection settings written there are dropped before the plugin ever
+    /// sees them. Failing with a bare "requires `servers`" would send the
+    /// author looking at config they can see is present in the manifest.
+    #[tokio::test]
+    async fn connection_config_on_an_unmatched_entry_says_so() {
+        let plugin = WasmcloudNats::new();
+        let mut opened = false;
+        let merged = HashMap::from([("core-subscriptions".to_string(), "orders.new".to_string())]);
+
+        let err = plugin
+            .open_bindings("wl", vec![(conn::UNNAMED_BINDING, merged)], &mut opened)
+            .await
+            .expect_err("no servers reached the plugin");
+        let msg = err.to_string();
+
+        assert!(
+            msg.contains("`core-subscriptions`"),
+            "the keys that did arrive are named: {msg}"
+        );
+        assert!(
+            msg.contains("exports a handler"),
+            "and the message points at the entry the settings belong on: {msg}"
+        );
+        assert!(!opened, "nothing was opened");
     }
 }
