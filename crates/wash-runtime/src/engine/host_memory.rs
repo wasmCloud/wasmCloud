@@ -6,9 +6,9 @@
 //!
 //! | Knob | What it bounds | Unset |
 //! | --- | --- | --- |
-//! | [`HostMemory::max_memory`] | Total guest memory this host may use | Derived from the cgroup limit that would OOM-kill this process |
-//! | [`HostMemory::default_heap_memory`] | How large any single linear memory may grow | wasmtime's own default (4 GiB) |
-//! | [`HostMemory::core_instances`] | Instance slots the pooling allocator keeps | wasmtime's own default (1000) |
+//! | [`HostMemoryBudgets::max_memory`] | Total guest memory this host may use | Derived from the cgroup limit that would OOM-kill this process |
+//! | [`HostMemoryBudgets::default_heap_memory`] | How large any single linear memory may grow | wasmtime's own default (4 GiB) |
+//! | [`HostMemoryBudgets::core_instances`] | Instance slots the pooling allocator keeps | wasmtime's own default (1000) |
 //!
 //! **Nothing here changes behaviour when the flags are unset.** Both pool knobs
 //! fall through to exactly the values wasmtime has always used, and the budget
@@ -119,7 +119,7 @@ pub fn render_bytes(bytes: u64) -> String {
     const TIB: u64 = 1024 * GIB;
     for (unit, suffix) in [(TIB, "TiB"), (GIB, "GiB"), (MIB, "MiB"), (1024, "KiB")] {
         if bytes >= unit {
-            return if bytes % unit == 0 {
+            return if bytes.is_multiple_of(unit) {
                 format!("{}{suffix}", bytes / unit)
             } else {
                 format!("{:.1}{suffix}", bytes as f64 / unit as f64)
@@ -129,9 +129,16 @@ pub fn render_bytes(bytes: u64) -> String {
     format!("{bytes}B")
 }
 
-/// The host's resolved memory shape.
+/// The host's resolved memory budgets.
+///
+/// Every field bounds memory: `core_instances` is a count of WebAssembly
+/// *core* instances (pool slots), each sized for `default_heap_memory`, not a
+/// CPU-side knob. Compute is metered separately via
+/// [`EngineBuilder::with_fuel_consumption`].
+///
+/// [`EngineBuilder::with_fuel_consumption`]: crate::engine::EngineBuilder::with_fuel_consumption
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HostMemory {
+pub struct HostMemoryBudgets {
     /// Total guest memory this host may use, in bytes.
     pub max_memory: u64,
     /// Ceiling on any single linear memory — `max_memory_size` on the pooling
@@ -139,23 +146,19 @@ pub struct HostMemory {
     pub default_heap_memory: u64,
     /// Instance slots the pooling allocator keeps.
     pub core_instances: u32,
-    /// Whether `max_memory` came from a flag or was derived, so the startup log
-    /// can say which without the caller re-deriving it.
-    pub max_memory_from_flag: bool,
 }
 
-impl Default for HostMemory {
+impl Default for HostMemoryBudgets {
     fn default() -> Self {
         Self {
             max_memory: derive_max_memory(),
             default_heap_memory: WASMTIME_DEFAULT_HEAP_MEMORY,
             core_instances: WASMTIME_DEFAULT_CORE_INSTANCES,
-            max_memory_from_flag: false,
         }
     }
 }
 
-impl HostMemory {
+impl HostMemoryBudgets {
     /// Resolve the three knobs, falling back to the derived budget and to
     /// wasmtime's own defaults.
     ///
@@ -182,7 +185,6 @@ impl HostMemory {
             max_memory: max_memory.unwrap_or_else(derive_max_memory),
             default_heap_memory: default_heap_memory.unwrap_or(WASMTIME_DEFAULT_HEAP_MEMORY),
             core_instances: core_instances.unwrap_or(WASMTIME_DEFAULT_CORE_INSTANCES),
-            max_memory_from_flag: max_memory.is_some(),
         })
     }
 
@@ -284,7 +286,7 @@ pub fn derive_max_memory() -> u64 {
         .clamp(MIN_DERIVED_MAX_MEMORY, MAX_DERIVED_MAX_MEMORY)
 }
 
-impl fmt::Display for HostMemory {
+impl fmt::Display for HostMemoryBudgets {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -333,10 +335,9 @@ mod tests {
     fn unset_knobs_resolve_to_wasmtimes_own_defaults() {
         // The whole safety property of this change: setting nothing must leave
         // the host exactly as it was.
-        let resolved = HostMemory::resolve(None, None, None).expect("defaults are valid");
+        let resolved = HostMemoryBudgets::resolve(None, None, None).expect("defaults are valid");
         assert_eq!(resolved.default_heap_memory, WASMTIME_DEFAULT_HEAP_MEMORY);
         assert_eq!(resolved.core_instances, WASMTIME_DEFAULT_CORE_INSTANCES);
-        assert!(!resolved.max_memory_from_flag);
         assert!(
             resolved.max_memory >= MIN_DERIVED_MAX_MEMORY,
             "an unset budget is derived, never zero or unbounded"
@@ -348,15 +349,15 @@ mod tests {
         // Zero means "this host runs nothing" in every case, which is never
         // what was meant — and two of the three would misbehave inside
         // wasmtime rather than saying so.
-        assert!(HostMemory::resolve(Some(0), None, None).is_err());
-        assert!(HostMemory::resolve(None, Some(0), None).is_err());
-        assert!(HostMemory::resolve(None, None, Some(0)).is_err());
+        assert!(HostMemoryBudgets::resolve(Some(0), None, None).is_err());
+        assert!(HostMemoryBudgets::resolve(None, Some(0), None).is_err());
+        assert!(HostMemoryBudgets::resolve(None, None, Some(0)).is_err());
     }
 
     #[test]
     fn the_pool_reservation_is_the_product_of_the_two_pool_knobs() {
         let resolved =
-            HostMemory::resolve(Some(8 * 1024 * MIB), Some(128 * MIB), Some(100)).unwrap();
+            HostMemoryBudgets::resolve(Some(8 * 1024 * MIB), Some(128 * MIB), Some(100)).unwrap();
         assert_eq!(resolved.pool_reservation(), 12800 * MIB);
         assert_eq!(resolved.advisory(), None, "a modest pool needs no advisory");
     }
@@ -367,7 +368,7 @@ mod tests {
         // per slot across 1000 slots is 3.9 TiB — close enough to the 4 TiB the
         // allocator is probed for that raising either knob crosses it, which is
         // exactly why both are worth naming.
-        let stock = HostMemory::resolve(None, None, None).unwrap();
+        let stock = HostMemoryBudgets::resolve(None, None, None).unwrap();
         assert_eq!(stock.pool_reservation(), 4000 * 1024 * MIB);
         assert!(stock.pool_reservation() < MAX_POOL_RESERVATION);
         assert_eq!(render_bytes(stock.pool_reservation()), "3.9TiB");
@@ -380,13 +381,16 @@ mod tests {
 
     #[test]
     fn an_unreservable_combination_is_reported_with_both_numbers() {
-        let resolved = HostMemory::resolve(None, Some(16 * 1024 * MIB), Some(1000)).unwrap();
+        let resolved = HostMemoryBudgets::resolve(None, Some(16 * 1024 * MIB), Some(1000)).unwrap();
         let advisory = resolved.advisory().expect("15.6TiB is past the probe");
         assert!(
             advisory.contains("15.6TiB"),
             "names the reservation, to one decimal because it is not a round unit: {advisory}"
         );
-        assert!(advisory.contains("1000"), "names the instance count: {advisory}");
+        assert!(
+            advisory.contains("1000"),
+            "names the instance count: {advisory}"
+        );
         assert!(
             advisory.contains("--default-heap-memory") && advisory.contains("--core-instances"),
             "names both knobs so it is actionable: {advisory}"
@@ -398,7 +402,7 @@ mod tests {
         // Not an error — reserving is not consuming — but an operator who has
         // done this has almost certainly mis-set one of the two.
         let resolved =
-            HostMemory::resolve(Some(512 * MIB), Some(2 * 1024 * MIB), Some(4)).unwrap();
+            HostMemoryBudgets::resolve(Some(512 * MIB), Some(2 * 1024 * MIB), Some(4)).unwrap();
         let advisory = resolved.advisory().expect("a guest can exhaust the host");
         assert!(advisory.contains("2GiB") && advisory.contains("512MiB"));
     }

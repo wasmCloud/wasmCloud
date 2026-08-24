@@ -13,6 +13,10 @@
        `--host-plugin` CLI-arg equivalent (deliberately: a secret must never
        land on the command line). See host-plugin-config.yaml, which renders
        the ConfigMap this deployment mounts. */}}
+{{- /* A host group's own `resources` replaces the chart-wide block wholesale
+       (no merge), and carries the wasmtime knobs `defaultHeapMemory` and
+       `coreInstances` alongside the Kubernetes requests/limits. */}}
+{{- $resources := .resources | default $top.Values.runtime.resources | default dict }}
 {{- $partition := include "runtime-operator.hostPluginPartition" . | fromJson }}
 {{- $fileBackedPlugins := $partition.fileBacked }}
 {{- $cliPlugins := $partition.cli }}
@@ -136,6 +140,34 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            {{- /* Host memory budgets, from the effective `resources`:
+                   `limits.memory` is the host's total guest memory budget, and
+                   defaultHeapMemory/coreInstances are wasmtime knobs parked
+                   alongside it (stripped back out of the `resources:` block
+                   below). Unset means unset — the host then derives its budget
+                   from its cgroup and leaves the pool knobs at wasmtime's
+                   defaults.
+
+                   These go through the flags' `WASH_*` env fallbacks rather
+                   than `args` on purpose. The chart is routinely paired with a
+                   host image it does not ship (`runtime.image.tag`), and an
+                   older host aborts on an argument it does not recognise —
+                   whereas it simply ignores an env var it has never heard of.
+                   Keep any new host knob on this side of that line. */}}
+            {{- with $resources.limits }}
+            {{- with .memory }}
+            - name: WASH_MAX_MEMORY
+              value: "{{ . }}"
+            {{- end }}
+            {{- end }}
+            {{- with $resources.defaultHeapMemory }}
+            - name: WASH_DEFAULT_HEAP_MEMORY
+              value: "{{ . }}"
+            {{- end }}
+            {{- with $resources.coreInstances }}
+            - name: WASH_CORE_INSTANCES
+              value: "{{ . }}"
+            {{- end }}
             {{- with $top.Values.runtime.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -206,23 +238,6 @@ spec:
             {{- if $fileBackedPlugins }}
             - "--user-config=/etc/wasmcloud/host-config/config.yaml"
             {{- end }}
-            {{- $memory := merge (deepCopy (.memory | default dict)) ($top.Values.runtime.memory | default dict) }}
-            {{- $podMemoryLimit := "" }}
-            {{- with .resources }}
-            {{- with .limits }}
-            {{- $podMemoryLimit = .memory | default "" }}
-            {{- end }}
-            {{- end }}
-            {{- $maxMemory := $memory.maxMemory | default $podMemoryLimit }}
-            {{- with $maxMemory }}
-            - "--max-memory={{ . }}"
-            {{- end }}
-            {{- with $memory.defaultHeapMemory }}
-            - "--default-heap-memory={{ . }}"
-            {{- end }}
-            {{- with $memory.coreInstances }}
-            - "--core-instances={{ . }}"
-            {{- end }}
             {{- /* Chart-wide runtime.extraArgs applies to every host group; per-host-group
                    .extraArgs is appended after it. */}}
             {{- with $top.Values.runtime.extraArgs }}
@@ -271,7 +286,7 @@ spec:
               readOnly: true
             {{- end }}
             {{- end }}
-          {{- with (.resources | default $top.Values.runtime.resources) }}
+          {{- with omit $resources "defaultHeapMemory" "coreInstances" }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}

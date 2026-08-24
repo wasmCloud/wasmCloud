@@ -243,7 +243,7 @@ pub struct Engine {
     /// the host's port table, and the connection budget. The workload-level half
     /// (`allowedHosts`, `allowedHostLoopbackPorts`) is layered over it per component.
     pub(crate) socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
-    pub(crate) host_memory: host_memory::HostMemory,
+    pub(crate) host_memory: host_memory::HostMemoryBudgets,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
@@ -326,7 +326,7 @@ impl Engine {
     /// Read back rather than recomputed, so what a caller reports is what the
     /// engine actually installed — including an embedder's `max_instances`
     /// winning over the flag-driven count.
-    pub fn host_memory(&self) -> host_memory::HostMemory {
+    pub fn host_memory(&self) -> host_memory::HostMemoryBudgets {
         self.host_memory
     }
 
@@ -820,7 +820,7 @@ pub struct EngineBuilder {
     compilation_cache_ttl: Option<Duration>,
     fuel_consumption: Option<bool>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
-    host_memory: Option<host_memory::HostMemory>,
+    host_memory: Option<host_memory::HostMemoryBudgets>,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -841,7 +841,7 @@ impl EngineBuilder {
 
     /// Set the host's memory budget, per-memory ceiling and instance count.
     /// Unset, the engine uses wasmtime's default memory limits.
-    pub fn with_host_memory(mut self, host_memory: host_memory::HostMemory) -> Self {
+    pub fn with_host_memory(mut self, host_memory: host_memory::HostMemoryBudgets) -> Self {
         self.host_memory = Some(host_memory);
         self
     }
@@ -1001,15 +1001,12 @@ impl EngineBuilder {
         let mut total_core_instances = None;
         if use_pooling_allocator && let Ok(true) = is_pooling_allocator_supported() {
             tracing::debug!("using pooling allocator by default");
-            let pooling = self
-                .pooling_config
-                .take()
-                .unwrap_or_else(|| {
-                    new_pooling_config(
-                        self.max_instances.unwrap_or(host_memory.core_instances),
-                        host_memory.default_heap_memory,
-                    )
-                });
+            let pooling = self.pooling_config.take().unwrap_or_else(|| {
+                new_pooling_config(
+                    self.max_instances.unwrap_or(host_memory.core_instances),
+                    host_memory.default_heap_memory,
+                )
+            });
             // Read back what was actually configured rather than what was asked
             // for: `new_pooling_config` lets the environment override the count,
             // and a caller-supplied config ignores `max_instances` entirely.

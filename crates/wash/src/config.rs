@@ -2192,8 +2192,8 @@ pub fn host_memory(
     max_memory: Option<&str>,
     default_heap_memory: Option<&str>,
     core_instances: Option<u32>,
-) -> anyhow::Result<wash_runtime::engine::host_memory::HostMemory> {
-    use wash_runtime::engine::host_memory::{HostMemory, parse_bytes, render_bytes};
+) -> anyhow::Result<wash_runtime::engine::host_memory::HostMemoryBudgets> {
+    use wash_runtime::engine::host_memory::{HostMemoryBudgets, parse_bytes, render_bytes};
 
     let max_memory = max_memory
         .map(|raw| parse_bytes(raw).map_err(|e| anyhow::anyhow!("invalid --max-memory: {e}")))
@@ -2204,7 +2204,7 @@ pub fn host_memory(
         })
         .transpose()?;
 
-    let resolved = HostMemory::resolve(max_memory, default_heap_memory, core_instances)
+    let resolved = HostMemoryBudgets::resolve(max_memory, default_heap_memory, core_instances)
         .map_err(|e| anyhow::anyhow!(e))?;
 
     // Every one of these varies by host — the cgroup it landed in, the flags it
@@ -2216,11 +2216,6 @@ pub fn host_memory(
         default_heap_memory = %render_bytes(resolved.default_heap_memory),
         core_instances = resolved.core_instances,
         pool_reservation = %render_bytes(resolved.pool_reservation()),
-        max_memory_source = if resolved.max_memory_from_flag {
-            "flag"
-        } else {
-            "derived from the cgroup limit"
-        },
         "host memory resolved"
     );
 
