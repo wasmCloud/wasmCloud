@@ -91,6 +91,7 @@ const P2_FIXTURES: &[&str] = &[
     "cpu-usage-service",
     "messaging-handler",
     "messaging-echo",
+    "nats-core-handler",
     "nats-jetstream-handler",
     "inter-component-call-caller",
     "inter-component-call-callee",
