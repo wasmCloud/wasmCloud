@@ -299,12 +299,7 @@ ansible-playbook provision.yml --check          # dry-run; no changes
 The playbook installs (as `root` on the bench host):
 
 - **apt:** `build-essential pkg-config libssl-dev clang cmake git curl jq
-  ca-certificates protobuf-compiler libprotobuf-dev valgrind`
-  - `protobuf-compiler` (the `protoc` binary) is needed by
-    `crates/wash-runtime/build.rs` for proto-generated bindings.
-  - `libprotobuf-dev` provides `/usr/include/google/protobuf/*.proto`
-    (the well-known types like `timestamp.proto`); without it,
-    `protoc` finds the binary but fails to import.
+  ca-certificates valgrind`
   - `valgrind` is the measurement engine for the `gungraun`
     instruction-count bench (see §9 and the `gungraun-runner`
     bullet below).
@@ -342,7 +337,6 @@ Verify after the script:
 nproc                              # 6
 uname -r                           # 6.8.0-* (Ubuntu Noble)
 cargo --version                    # rustup-pinned stable
-protoc --version                   # libprotoc 3.21.x or newer
 valgrind --version                 # valgrind-3.22.x or newer
 gungraun-runner --version          # 0.19.1
 node --version                     # the node_lts_major pinned in provision.yml
@@ -825,13 +819,6 @@ ssh -i ~/.ssh/hetzner_bench root@<WASMCLOUD_BENCH_HOST_IP> \
 If the service crashed: `journalctl -u actions.runner.* -n 100`.
 Common cause is GitHub revoked the registration; re-register with a
 fresh token.
-
-### `cargo bench` is missing `protoc` or proto includes
-
-Re-run the Ansible playbook (`cd scripts/bench/ansible && ansible-playbook
-provision.yml --tags toolchain,apt`); it installs `protobuf-compiler` +
-`libprotobuf-dev`. The build needs both — the binary alone fails when
-`.proto` files import `google/protobuf/timestamp.proto`.
 
 ### `nproc` returns 12 instead of 6
 
