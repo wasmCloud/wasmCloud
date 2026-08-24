@@ -329,6 +329,14 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// the workload. This can be called during binding failures (before resolution)
     /// or during normal workload shutdown (after resolution).
     ///
+    /// Implementations must be idempotent, and must tolerate a workload they
+    /// never finished binding: a failed [`HostPlugin::on_workload_bind`] or
+    /// [`HostPlugin::on_workload_item_bind`] is rolled back by unbinding the
+    /// plugin that failed, so this runs over whatever half of the bind managed
+    /// to execute — and it may run again when the workload stops. Release what
+    /// is there and treat what is not as already released, rather than
+    /// erroring.
+    ///
     /// The default implementation does nothing.
     ///
     /// # Arguments
