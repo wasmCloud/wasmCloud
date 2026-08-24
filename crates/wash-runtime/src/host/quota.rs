@@ -153,6 +153,8 @@ pub struct GuestConnectionQuota {
 
 #[derive(Debug, Default)]
 struct QuotaStats {
+    outbound_http_granted: AtomicU64,
+    outbound_http_refused: AtomicU64,
     outbound_sockets_granted: AtomicU64,
     outbound_sockets_refused: AtomicU64,
     inbound_sockets_granted: AtomicU64,
@@ -189,6 +191,22 @@ impl GuestConnectionQuota {
             &self.outbound_sockets,
             &self.stats.outbound_sockets_granted,
             &self.stats.outbound_sockets_refused,
+        )
+    }
+
+    /// Take a slot for an outbound HTTP call the host serves without opening a
+    /// connection — a same-host locally routed request.
+    ///
+    /// Never waits, for the same reason the socket surfaces do not: the only
+    /// thing that frees a slot here is another of this guest's calls finishing,
+    /// and a guest holds a call across yield points, so waiting would let it
+    /// deadlock against itself. A pooled network request *does* wait, because
+    /// there an idle connection returning to the pool can satisfy it.
+    pub fn try_acquire_outbound_http(&self) -> Option<ConnectionSlot> {
+        self.try_acquire(
+            &self.outbound_http,
+            &self.stats.outbound_http_granted,
+            &self.stats.outbound_http_refused,
         )
     }
 
@@ -259,6 +277,8 @@ impl GuestConnectionQuota {
     /// Grants and refusals per surface, for reporting.
     pub fn counts(&self) -> QuotaCounts {
         QuotaCounts {
+            outbound_http_granted: self.stats.outbound_http_granted.load(Ordering::Relaxed),
+            outbound_http_refused: self.stats.outbound_http_refused.load(Ordering::Relaxed),
             outbound_sockets_granted: self.stats.outbound_sockets_granted.load(Ordering::Relaxed),
             outbound_sockets_refused: self.stats.outbound_sockets_refused.load(Ordering::Relaxed),
             inbound_sockets_granted: self.stats.inbound_sockets_granted.load(Ordering::Relaxed),
@@ -270,6 +290,8 @@ impl GuestConnectionQuota {
 /// Snapshot of one quota's activity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuotaCounts {
+    pub outbound_http_granted: u64,
+    pub outbound_http_refused: u64,
     pub outbound_sockets_granted: u64,
     pub outbound_sockets_refused: u64,
     pub inbound_sockets_granted: u64,
@@ -406,6 +428,63 @@ impl PolicyMeters {
         .map(|r| (r, self.denied(r), self.would_deny(r)))
         .filter(|(_, d, w)| *d > 0 || *w > 0)
         .collect()
+    }
+}
+
+#[cfg(test)]
+mod outbound_http_tests {
+    use super::*;
+
+    /// Local dispatch takes its slot here, so the surface has to bound and then
+    /// recover: a guest at its ceiling is refused, and a finished call gives the
+    /// slot back rather than leaking it.
+    #[test]
+    fn outbound_http_slots_bound_and_recover() {
+        let quota = GuestConnectionQuota::new(
+            QuotaLimits {
+                outbound_http: 2,
+                ..Default::default()
+            },
+            None,
+        );
+
+        let a = quota.try_acquire_outbound_http().expect("first slot");
+        let b = quota.try_acquire_outbound_http().expect("second slot");
+        assert!(
+            quota.try_acquire_outbound_http().is_none(),
+            "a guest at its ceiling must be refused, not queued"
+        );
+
+        drop(a);
+        let c = quota
+            .try_acquire_outbound_http()
+            .expect("slot freed on drop");
+        drop((b, c));
+
+        let counts = quota.counts();
+        assert_eq!(counts.outbound_http_granted, 3);
+        assert_eq!(counts.outbound_http_refused, 1);
+    }
+
+    /// The host-wide ceiling binds too, so one busy guest cannot exhaust the
+    /// host through the local path any more than through the pooled one.
+    #[test]
+    fn outbound_http_slots_respect_the_host_wide_ceiling() {
+        let global = Arc::new(Semaphore::new(1));
+        let limits = QuotaLimits {
+            outbound_http: 8,
+            ..Default::default()
+        };
+        let one = GuestConnectionQuota::new(limits, Some(Arc::clone(&global)));
+        let two = GuestConnectionQuota::new(limits, Some(global));
+
+        let held = one.try_acquire_outbound_http().expect("host slot");
+        assert!(
+            two.try_acquire_outbound_http().is_none(),
+            "the host-wide ceiling is spent, even though this guest is idle"
+        );
+        drop(held);
+        assert!(two.try_acquire_outbound_http().is_some());
     }
 }
 
