@@ -90,7 +90,7 @@ impl Default for Limits {
 }
 
 /// Who acknowledges a JetStream delivery.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AckMode {
     /// Host acks on `ok`, naks on `error` or trap.
     #[default]
@@ -121,6 +121,18 @@ fn get<'a>(cfg: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
         .map(String::as_str)
         .map(str::trim)
         .filter(|v| !v.is_empty())
+}
+
+/// The single spelling a key is stored under once several entries are folded
+/// into one map.
+///
+/// [`get`] reads kebab-case and falls back to snake_case, so `subject-allow`
+/// and `subject_allow` are one setting with two spellings. Anything deciding
+/// whether two entries speak about the same key has to agree with that, or an
+/// entry writing the other spelling would look like it were setting a key
+/// nothing had claimed — and `get` would then quietly honour only one of them.
+pub fn canonical_key(key: &str) -> String {
+    key.replace('_', "-")
 }
 
 /// Splits a comma-separated list, dropping empties.
@@ -293,6 +305,13 @@ impl NatsConfig {
 
     /// Stable key for connection sharing within one workload.
     ///
+    /// Two bindings share a connection only when everything that governs a call
+    /// on it matches — not just where it points, but the grant it is checked
+    /// against and how deliveries are acknowledged. Named bindings made that
+    /// load-bearing: `hub` and `leaf` may name the same server with different
+    /// `subject-allow`, and sharing there would hand the second binding the
+    /// first one's grant.
+    ///
     /// Credentials are represented by a hash, never by value, so the key can be
     /// held in a map and logged without leaking material.
     pub fn connection_key(&self) -> ConnKey {
@@ -327,6 +346,28 @@ impl NatsConfig {
         self.tls.cert.hash(&mut hasher);
         self.tls.key.hash(&mut hasher);
         self.tls.first.hash(&mut hasher);
+
+        // Everything a shared connection would carry into a call: the grant,
+        // the ack ownership, the backpressure bounds, the request timeout.
+        //
+        // An allow-list is a set, not a sequence: two bindings naming the same
+        // subjects in a different order describe the same grant, and refusing
+        // that deploy would be a false alarm. Sorting a copy keeps ordering out
+        // of the identity while leaving the config itself — which the policy
+        // engine reads in declaration order — untouched.
+        for allow in [
+            &self.policy.subject_allow,
+            &self.policy.stream_allow,
+            &self.policy.bucket_allow,
+        ] {
+            let mut sorted = allow.clone();
+            sorted.sort_unstable();
+            sorted.hash(&mut hasher);
+        }
+        self.ack_mode.hash(&mut hasher);
+        self.limits.max_in_flight.hash(&mut hasher);
+        self.limits.subscription_capacity.hash(&mut hasher);
+        self.request_timeout.hash(&mut hasher);
 
         ConnKey {
             servers: self.servers.clone(),
@@ -475,6 +516,61 @@ mod tests {
         let pairs = [("servers", "nats://localhost:4222"), ("token", "same")];
         let a = NatsConfig::from_map(&map(&pairs)).unwrap().connection_key();
         let b = NatsConfig::from_map(&map(&pairs)).unwrap().connection_key();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn connection_key_separates_subject_grants() {
+        let a = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("subject-allow", "orders.>"),
+        ]))
+        .unwrap()
+        .connection_key();
+        let b = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("subject-allow", ">"),
+        ]))
+        .unwrap()
+        .connection_key();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn connection_key_separates_ack_modes() {
+        let a = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("ack-mode", "auto"),
+        ]))
+        .unwrap()
+        .connection_key();
+        let b = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("ack-mode", "manual"),
+        ]))
+        .unwrap()
+        .connection_key();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn connection_key_ignores_allow_list_order() {
+        let a = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("subject-allow", "orders.>,payments.>"),
+            ("stream-allow", "ORDERS,PAYMENTS"),
+            ("bucket-allow", "CONFIG,SECRETS"),
+        ]))
+        .unwrap()
+        .connection_key();
+        let b = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("subject-allow", "payments.>,orders.>"),
+            ("stream-allow", "PAYMENTS,ORDERS"),
+            ("bucket-allow", "SECRETS,CONFIG"),
+        ]))
+        .unwrap()
+        .connection_key();
         assert_eq!(a, b);
     }
 

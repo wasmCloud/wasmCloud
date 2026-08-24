@@ -2090,7 +2090,7 @@ impl UnresolvedWorkload {
             trace!(?world, "comparing service world to host interfaces");
             let required_interfaces: HashSet<WitInterface> = host_interfaces
                 .iter()
-                .filter(|wit_interface| world.includes_bidirectional(wit_interface))
+                .filter(|wit_interface| world_uses_entry(&world, wit_interface))
                 .filter(|wit_interface| {
                     !served_within_workload(wit_interface, service.id(), &world, &component_worlds)
                 })
@@ -2109,7 +2109,7 @@ impl UnresolvedWorkload {
             trace!(?world, "comparing component world to host interfaces");
             let required_interfaces: HashSet<WitInterface> = host_interfaces
                 .iter()
-                .filter(|wit_interface| world.includes_bidirectional(wit_interface))
+                .filter(|wit_interface| world_uses_entry(world, wit_interface))
                 .filter(|wit_interface| {
                     !served_within_workload(wit_interface, id, world, &component_worlds)
                 })
@@ -2651,6 +2651,37 @@ fn build_export_map(
     (interface_map, ambiguous)
 }
 
+/// Whether `world` uses `entry`, and so needs it bound to a host plugin.
+///
+/// Naming every one of the entry's interfaces somewhere in the world is the
+/// ordinary answer. A *configured* entry the component exports part of is the
+/// exception, because the export side is asymmetric: bindgen tree-shakes an
+/// import the guest never calls, so a component that only receives — it exports
+/// `wasmcloud:nats/core-handler` and acts on what arrives, never publishing —
+/// carries no `wasmcloud:nats/core` import for a package-wide entry to match
+/// against. Held to the whole entry it binds no plugin at all and reaches
+/// RUNNING with the subscriptions in its own configuration never wired up,
+/// which is worse than refusing it. An export is the host calling into the
+/// workload, and the interfaces the component dropped are ones it cannot call
+/// anyway.
+///
+/// The configuration is what separates that from an over-broad entry: settings
+/// on it are the operator saying this binding is meant to do something. An
+/// unconfigured entry the component only half covers has nothing to wire up, so
+/// it stays unbound rather than opening a plugin's connection for no one.
+fn world_uses_entry(world: &WitWorld, entry: &WitInterface) -> bool {
+    if world.includes_bidirectional(entry) {
+        return true;
+    }
+    !entry.config.is_empty()
+        && entry.interfaces.iter().any(|interface| {
+            world
+                .exports
+                .iter()
+                .any(|export| entry.same_package(export) && export.interfaces.contains(interface))
+        })
+}
+
 /// Whether the workload answers `entry` for `item_id` out of its own
 /// components, so the host is never asked for it: `item_id` imports every one of
 /// the entry's interfaces, and each is exported by exactly one *other* component
@@ -3160,6 +3191,103 @@ mod tests {
             bound_component_ids(&bound).contains(&importer_id),
             "an ambiguous sibling export is not a provider, so the plugin keeps the import"
         );
+    }
+
+    /// A binding entry naming both an interface a component calls and one it
+    /// only serves, where the component kept just the export.
+    fn marker_pair_entry(config: &[(&str, &str)]) -> WitInterface {
+        let mut entry = WitInterface::from("test:probe/marker,caller@0.1.0");
+        entry.config = config
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        entry
+    }
+
+    fn pair_workload(
+        components: Vec<WorkloadComponent>,
+        entry: WitInterface,
+    ) -> UnresolvedWorkload {
+        UnresolvedWorkload::new(
+            "export-only".to_string(),
+            "export-only".to_string(),
+            "test-namespace".to_string(),
+            None,
+            components,
+            vec![entry],
+        )
+    }
+
+    fn pair_plugin() -> (Arc<MockPlugin>, HashMap<&'static str, Arc<dyn HostPlugin>>) {
+        let plugin = Arc::new(MockPlugin::new(
+            "pair-plugin",
+            vec![],
+            vec![marker_pair_entry(&[])],
+        ));
+        let plugins = HashMap::from([(plugin.id(), plugin.clone() as Arc<dyn HostPlugin>)]);
+        (plugin, plugins)
+    }
+
+    /// Bindgen drops an import the guest never calls, so a component that only
+    /// receives — it exports the handler and acts on what arrives — carries no
+    /// import for the calling half of its binding entry. Held to the whole
+    /// entry it matches no plugin at all and reaches RUNNING with its
+    /// configured subscriptions wired to nothing, which is the one outcome
+    /// worse than refusing the deploy.
+    #[tokio::test]
+    async fn an_export_alone_carries_a_configured_entry() {
+        let exporter = marker_exporter("exporter");
+        let exporter_id = exporter.id().to_string();
+        let (plugin, plugins) = pair_plugin();
+
+        let mut workload = pair_workload(
+            vec![exporter],
+            marker_pair_entry(&[("subscriptions", "probe.run")]),
+        );
+        let bound = workload.bind_plugins(&plugins).await.unwrap();
+
+        assert!(
+            bound_component_ids(&bound).contains(&exporter_id),
+            "the exported half of a configured entry is enough to bind the plugin"
+        );
+        assert_eq!(
+            plugin.get_call_count("on_workload_item_bind"),
+            1,
+            "the plugin needs the item bind to wire delivery into the export"
+        );
+    }
+
+    /// The boundary: the same half-covered entry with nothing configured on it
+    /// is an over-broad manifest, not a binding waiting to be wired, and it
+    /// stays unbound rather than opening a plugin's connection for no one.
+    #[tokio::test]
+    async fn an_unconfigured_partial_entry_stays_unbound() {
+        let (plugin, plugins) = pair_plugin();
+
+        let mut workload = pair_workload(vec![marker_exporter("exporter")], marker_pair_entry(&[]));
+        let bound = workload.bind_plugins(&plugins).await.unwrap();
+
+        assert!(
+            bound.is_empty(),
+            "an unconfigured entry has nothing to wire"
+        );
+        assert_eq!(plugin.get_call_count("on_workload_bind"), 0);
+    }
+
+    /// The control: a component that touches nothing in the entry's package is
+    /// still none of the plugin's business, configured or not.
+    #[tokio::test]
+    async fn an_untouched_entry_binds_nothing() {
+        let (plugin, plugins) = pair_plugin();
+
+        let mut workload = pair_workload(
+            vec![component_from_wat("bystander", "(component)")],
+            marker_pair_entry(&[("subscriptions", "probe.run")]),
+        );
+        let bound = workload.bind_plugins(&plugins).await.unwrap();
+
+        assert!(bound.is_empty(), "nothing in the world asks for the entry");
+        assert_eq!(plugin.get_call_count("on_workload_bind"), 0);
     }
 
     /// Which half of the bind a [`RollbackPlugin`] refuses.

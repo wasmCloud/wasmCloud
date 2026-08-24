@@ -1,10 +1,12 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_nats::jetstream;
+use async_nats::jetstream::consumer::FromConsumer as _;
 use bytes::Bytes;
 use futures::StreamExt;
-use tracing::{instrument, warn};
+use tracing::{debug, instrument, warn};
 use wasmtime::component::Resource;
 
 use crate::engine::ctx::ActiveCtx;
@@ -12,8 +14,11 @@ use crate::engine::ctx::ActiveCtx;
 use super::bindings::wasmcloud::nats0_1_0::{core, jetstream as js, kv, types};
 use super::conn::ConnHandle;
 use super::handles::{
-    BucketHandle, MessageHandle, PullConsumerHandle, already_settled, jetstream_err,
+    BucketHandle, MessageHandle, PullConsumerHandle, already_settled, bucket_lookup_err,
+    chain_timed_out, consumer_lookup_err, core_publish_err, jetstream_err, js_publish_err, kv_err,
+    stream_lookup_err,
 };
+use super::policy::Denied;
 use super::{PLUGIN_NATS_ID, WasmcloudNats};
 
 /// Converts guest headers, rejecting anything async-nats would assert on.
@@ -110,6 +115,10 @@ macro_rules! conn_or_return {
 const MAX_SCAN_MESSAGES: usize = 1_000;
 /// Wall-clock bound on one `scan`, so a slow stream cannot pin the call open.
 const MAX_SCAN_DURATION: Duration = Duration::from_secs(10);
+/// Wall-clock bound on one `history` drain, for the same reason: the ordered
+/// consumer behind it only ends the stream once the server says nothing is
+/// pending, and a subject that empties underneath the call never gets there.
+const MAX_HISTORY_DURATION: Duration = Duration::from_secs(10);
 
 /// Maps a policy denial onto the wire error.
 fn denied(subject: &str) -> types::NatsError {
@@ -130,8 +139,11 @@ fn check_payload(
         Some(h) if !h.is_empty() => body_len.saturating_add(headers_wire_len(h)),
         _ => body_len,
     };
-    if conn.max_payload > 0 && size as u64 > conn.max_payload {
-        return Err(types::NatsError::MaxPayloadExceeded(conn.max_payload));
+    // Read once: the limit is live, so two reads could straddle a reconnect
+    // and report a limit the check did not use.
+    let max_payload = conn.max_payload();
+    if max_payload > 0 && size as u64 > max_payload {
+        return Err(types::NatsError::MaxPayloadExceeded(max_payload));
     }
     Ok(())
 }
@@ -165,8 +177,19 @@ impl<'a> core::Host for ActiveCtx<'a> {
         let conn = conn_or_return!(self);
 
         let subject = msg.subject;
-        if conn.policy.check_subject(&subject).is_err() {
-            return Ok(Err(denied(&subject)));
+        if let Err(denial) = conn.policy.check_subject(&subject) {
+            // Answering a request means publishing to a random `_INBOX` no
+            // grant can name in advance. The host handed that inbox to the
+            // guest itself, so it authorizes one reply to it here rather than
+            // making responders ask for `_INBOX.>` — a grant broad enough to
+            // read every other reply on the connection. Only the
+            // not-granted denial is waivable: a requester that could aim
+            // `reply-to` at `$JS.>` would otherwise have the guest for a
+            // deputy.
+            let replying = matches!(denial, Denied::NotGranted) && conn.take_reply_grant(&subject);
+            if !replying {
+                return Ok(Err(denied(&subject)));
+            }
         }
         if let Some(reply_to) = msg.reply_to.as_deref()
             && conn.policy.check_subject(reply_to).is_err()
@@ -206,9 +229,15 @@ impl<'a> core::Host for ActiveCtx<'a> {
 
         match result {
             Ok(_) => Ok(Ok(())),
-            Err(e) => Ok(Err(types::NatsError::Connection(format!(
-                "failed to publish: {e}"
-            )))),
+            // The client refuses an oversized publish on its own, against a
+            // limit that may have shrunk since the pre-check read it. Reporting
+            // that as a transport fault would have the guest retry a body that
+            // can never fit.
+            Err(e) => Ok(Err(core_publish_err(
+                "failed to publish",
+                e,
+                conn.max_payload(),
+            ))),
         }
     }
 
@@ -222,12 +251,21 @@ impl<'a> core::Host for ActiveCtx<'a> {
 
         let types::NatsMessage {
             subject,
+            reply_to,
             body,
             headers,
-            ..
         } = msg;
         if conn.policy.check_subject(&subject).is_err() {
             return Ok(Err(denied(&subject)));
+        }
+        // The reply subject is the host's to choose: replies land on the
+        // per-workload inbox so two workloads on one host cannot observe each
+        // other's responses. Forwarding a received message as a request is a
+        // legitimate pattern, so this is a diagnostic rather than a warning.
+        if reply_to.is_some() {
+            debug!(
+                "request: caller-supplied reply-to is ignored; replies use the per-workload inbox"
+            );
         }
         let headers = match headers.as_deref().filter(|h| !h.is_empty()) {
             Some(h) => match wit_headers_to_nats(h) {
@@ -264,7 +302,7 @@ impl<'a> core::Host for ActiveCtx<'a> {
                         types::NatsError::Timeout(format!("request timed out: {e}"))
                     }
                     async_nats::RequestErrorKind::MaxPayloadExceeded => {
-                        types::NatsError::MaxPayloadExceeded(conn.max_payload)
+                        types::NatsError::MaxPayloadExceeded(conn.max_payload())
                     }
                     _ => {
                         warn!("failed to send request: {e}");
@@ -300,6 +338,11 @@ impl<'a> js::Host for ActiveCtx<'a> {
         if conn.policy.check_subject(&msg.subject).is_err() {
             return Ok(Err(denied(&msg.subject)));
         }
+        // JetStream answers a publish on a reply subject the client owns, so a
+        // caller-supplied one has nowhere to go.
+        if msg.reply_to.is_some() {
+            debug!("jetstream publish: caller-supplied reply-to is ignored");
+        }
         let header_map = match msg.headers.as_deref().filter(|h| !h.is_empty()) {
             Some(h) => match wit_headers_to_nats(h) {
                 Ok(map) => Some(map),
@@ -311,6 +354,11 @@ impl<'a> js::Host for ActiveCtx<'a> {
             return Ok(Err(e));
         }
 
+        // Both stages share one error type, and three of its kinds — an ack
+        // that never arrived, a subject no stream captures, an oversize body —
+        // have WIT variants of their own. Flattened into `jetstream(string)`
+        // they read alike, so a guest cannot tell the retry-safe ack timeout
+        // from a stream it will never be able to publish to.
         let ack_future = if let Some(header_map) = header_map {
             match conn
                 .jetstream
@@ -318,18 +366,36 @@ impl<'a> js::Host for ActiveCtx<'a> {
                 .await
             {
                 Ok(f) => f,
-                Err(e) => return Ok(Err(jetstream_err("failed to publish", e))),
+                Err(e) => {
+                    return Ok(Err(js_publish_err(
+                        "failed to publish",
+                        e,
+                        conn.max_payload(),
+                    )));
+                }
             }
         } else {
             match conn.jetstream.publish(msg.subject, msg.body.into()).await {
                 Ok(f) => f,
-                Err(e) => return Ok(Err(jetstream_err("failed to publish", e))),
+                Err(e) => {
+                    return Ok(Err(js_publish_err(
+                        "failed to publish",
+                        e,
+                        conn.max_payload(),
+                    )));
+                }
             }
         };
 
         let ack = match ack_future.await {
             Ok(a) => a,
-            Err(e) => return Ok(Err(jetstream_err("failed to confirm publish", e))),
+            Err(e) => {
+                return Ok(Err(js_publish_err(
+                    "failed to confirm publish",
+                    e,
+                    conn.max_payload(),
+                )));
+            }
         };
 
         Ok(Ok(js::PublishAck {
@@ -351,28 +417,39 @@ impl<'a> js::Host for ActiveCtx<'a> {
             return Ok(Err(denied(&stream_name)));
         }
 
-        let stream = match conn.jetstream.get_stream(&stream_name).await {
-            Ok(s) => s,
-            Err(e) => {
-                return Ok(Err(types::NatsError::NotFound(format!(
-                    "stream '{stream_name}': {e}"
-                ))));
-            }
-        };
-
+        // Ahead of the lookup: a server that cannot serve direct get at all
+        // should say so rather than answer `not-found` for a stream it would
+        // never have read anyway, and the round-trip also leaks which streams
+        // exist. This is the order the `@0.2.0` twin already uses.
         if !conn.server_at_least(2, 9) {
             return Ok(Err(types::NatsError::UnsupportedByServer(
                 "direct get requires NATS server 2.9 or newer".to_string(),
             )));
         }
 
+        let stream = match conn.jetstream.get_stream(&stream_name).await {
+            Ok(s) => s,
+            Err(e) => return Ok(Err(stream_lookup_err(format!("stream '{stream_name}'"), e))),
+        };
+
         match stream.direct_get(sequence).await {
-            Ok(m) => Ok(Ok(js::StoredMessage {
-                subject: m.subject.to_string(),
-                sequence: m.sequence,
-                data: m.payload.to_vec(),
-                headers: Some(nats_headers_to_wit(&m.headers)),
-            })),
+            Ok(m) => {
+                // The stream grant got us this far; the subject grant decides
+                // whether this particular message is one the workload may
+                // read, the same boundary a consumer filter is held to. The
+                // refusal names the sequence rather than the subject it found
+                // there, so a caller cannot walk sequences to learn the names
+                // of the subjects it was not granted.
+                if conn.policy.check_stored_subject(&m.subject).is_err() {
+                    return Ok(Err(denied(&format!("{stream_name}#{sequence}"))));
+                }
+                Ok(Ok(js::StoredMessage {
+                    subject: m.subject.to_string(),
+                    sequence: m.sequence,
+                    data: m.payload.to_vec(),
+                    headers: Some(nats_headers_to_wit(&m.headers)),
+                }))
+            }
             Err(e) => Ok(Err(jetstream_err("get-by-sequence failed", e))),
         }
     }
@@ -392,11 +469,7 @@ impl<'a> js::Host for ActiveCtx<'a> {
 
         let stream = match conn.jetstream.get_stream(&stream_name).await {
             Ok(s) => s,
-            Err(e) => {
-                return Ok(Err(types::NatsError::NotFound(format!(
-                    "stream '{stream_name}': {e}"
-                ))));
-            }
+            Err(e) => return Ok(Err(stream_lookup_err(format!("stream '{stream_name}'"), e))),
         };
 
         let effective_start = if start_sequence == 0 {
@@ -410,6 +483,10 @@ impl<'a> js::Host for ActiveCtx<'a> {
                 deliver_policy: jetstream::consumer::DeliverPolicy::ByStartSequence {
                     start_sequence: effective_start,
                 },
+                // Comfortably past the scan bound, so anything that still
+                // escapes the explicit cleanup below is server-reaped on a
+                // known schedule instead of lingering against max-consumers.
+                inactive_threshold: Duration::from_secs(30),
                 ..Default::default()
             })
             .await
@@ -418,48 +495,61 @@ impl<'a> js::Host for ActiveCtx<'a> {
             Err(e) => return Ok(Err(jetstream_err("failed to create scan consumer", e))),
         };
 
-        let mut msg_stream = match pull_consumer.messages().await {
-            Ok(m) => m,
-            Err(e) => return Ok(Err(jetstream_err("failed to get messages", e))),
-        };
+        // Read inside a block so every exit — including the error ones — falls
+        // through to the cleanup below with the message stream already dropped.
+        let collected: Result<Vec<js::StoredMessage>, types::NatsError> = async {
+            let mut msg_stream = pull_consumer
+                .messages()
+                .await
+                .map_err(|e| jetstream_err("failed to get messages", e))?;
 
-        let mut messages = Vec::new();
-        let limit = (max_count as usize).min(MAX_SCAN_MESSAGES);
-        let deadline = tokio::time::Instant::now() + MAX_SCAN_DURATION;
+            let mut messages = Vec::new();
+            let limit = (max_count as usize).min(MAX_SCAN_MESSAGES);
+            let deadline = tokio::time::Instant::now() + MAX_SCAN_DURATION;
 
-        loop {
-            if messages.len() >= limit || tokio::time::Instant::now() >= deadline {
-                break;
-            }
-            match tokio::time::timeout(Duration::from_millis(100), msg_stream.next()).await {
-                Ok(Some(Ok(msg))) => {
-                    // A malformed reply is the server's problem, not the
-                    // guest's — report it rather than trapping the instance.
-                    let info = match msg.info() {
-                        Ok(i) => i,
-                        Err(e) => {
-                            return Ok(Err(jetstream_err("failed to get message info", e)));
-                        }
-                    };
-                    messages.push(js::StoredMessage {
-                        subject: msg.subject.to_string(),
-                        sequence: info.stream_sequence,
-                        data: msg.payload.to_vec(),
-                        headers: msg.headers.as_ref().map(nats_headers_to_wit),
-                    });
-                }
-                Ok(Some(Err(e))) => {
-                    warn!("error reading message: {e}");
+            loop {
+                if messages.len() >= limit || tokio::time::Instant::now() >= deadline {
                     break;
                 }
-                Ok(None) => break,
-                Err(_) => break,
+                match tokio::time::timeout(Duration::from_millis(100), msg_stream.next()).await {
+                    Ok(Some(Ok(msg))) => {
+                        // A stream grant is authority over the stream, not
+                        // over every subject stored in it: the declarative
+                        // path holds a consumer's filter to `subject-allow`,
+                        // and reading the same messages directly answers the
+                        // same way. Skipped messages are not counted against
+                        // the limit, so the result is what a server-side
+                        // filtered consumer would have delivered — a full
+                        // batch whose sequences may gap.
+                        if conn.policy.check_stored_subject(&msg.subject).is_err() {
+                            continue;
+                        }
+                        // A malformed reply is the server's problem, not the
+                        // guest's — report it rather than trapping the instance.
+                        let info = msg
+                            .info()
+                            .map_err(|e| jetstream_err("failed to get message info", e))?;
+                        messages.push(js::StoredMessage {
+                            subject: msg.subject.to_string(),
+                            sequence: info.stream_sequence,
+                            data: msg.payload.to_vec(),
+                            headers: msg.headers.as_ref().map(nats_headers_to_wit),
+                        });
+                    }
+                    Ok(Some(Err(e))) => {
+                        warn!("error reading message: {e}");
+                        break;
+                    }
+                    Ok(None) => break,
+                    Err(_) => break,
+                }
             }
+            Ok(messages)
         }
+        .await;
 
         // The consumer is ephemeral to this call; without this each scan leaves
         // one behind on the stream.
-        drop(msg_stream);
         if let Err(e) = stream
             .delete_consumer(&pull_consumer.cached_info().name)
             .await
@@ -467,6 +557,10 @@ impl<'a> js::Host for ActiveCtx<'a> {
             warn!("failed to clean up scan consumer: {e}");
         }
 
+        let mut messages = match collected {
+            Ok(m) => m,
+            Err(e) => return Ok(Err(e)),
+        };
         messages.sort_by_key(|m| m.sequence);
         Ok(Ok(messages))
     }
@@ -485,26 +579,38 @@ impl<'a> js::Host for ActiveCtx<'a> {
 
         let stream = match conn.jetstream.get_stream(&stream_name).await {
             Ok(s) => s,
-            Err(e) => {
-                return Ok(Err(types::NatsError::NotFound(format!(
-                    "stream '{stream_name}': {e}"
-                ))));
-            }
+            Err(e) => return Ok(Err(stream_lookup_err(format!("stream '{stream_name}'"), e))),
         };
 
         // Attach only: `create_consumer` is create-or-update and would rewrite
         // an existing durable's filter subject and deliver policy.
-        let opened_consumer = match stream.get_consumer(&consumer).await {
-            Ok(c) => c,
+        //
+        // Spelled out rather than using `get_consumer`, whose `crate::Error`
+        // return erases every kind: a timeout, an unreachable JetStream API and
+        // a consumer that exists but is push-based all come back the same, and
+        // reporting any of them as `not-found` invites the guest to recreate a
+        // consumer that is very much still there.
+        let info = match stream.consumer_info(&consumer).await {
+            Ok(info) => info,
+            Err(e) => return Ok(Err(consumer_lookup_err(&stream_name, &consumer, e))),
+        };
+        let config = match jetstream::consumer::pull::Config::try_from_consumer_config(
+            info.config.clone(),
+        ) {
+            Ok(config) => config,
             Err(e) => {
-                return Ok(Err(types::NatsError::NotFound(format!(
-                    "consumer '{consumer}' on stream '{stream_name}': {e}"
+                return Ok(Err(types::NatsError::Jetstream(format!(
+                    "consumer '{consumer}' on stream '{stream_name}' exists but is not a pull consumer: {e}"
                 ))));
             }
         };
 
         let handle = PullConsumerHandle {
-            consumer: Some(opened_consumer),
+            consumer: Some(jetstream::consumer::Consumer::new(
+                config,
+                info,
+                conn.jetstream.clone(),
+            )),
         };
         let resource = self.table.push(handle)?;
         Ok(Ok(resource))
@@ -539,12 +645,22 @@ impl<'a> js::HostMessageHandle for ActiveCtx<'a> {
         &mut self,
         rep: Resource<MessageHandle>,
     ) -> wasmtime::Result<Result<(), types::NatsError>> {
-        let h = self.table.get_mut(&rep)?;
-        let Some(acker) = h.acker.take() else {
+        // The acker is cloned out and the borrow dropped before the await, so a
+        // settle the wire rejected leaves the handle usable. Taking it up front
+        // would turn the natural response to a reconnect blip — retry — into
+        // "already settled", and the guest would conclude the ack landed while
+        // the message was in fact about to redeliver.
+        let h = self.table.get(&rep)?;
+        let Some(acker) = h.acker.clone() else {
             return Ok(Err(already_settled()));
         };
+        let settled = h.settled.clone();
         match acker.ack().await {
-            Ok(()) => Ok(Ok(())),
+            Ok(()) => {
+                settled.store(true, Ordering::Release);
+                self.table.get_mut(&rep)?.acker.take();
+                Ok(Ok(()))
+            }
             Err(e) => Ok(Err(jetstream_err("ack failed", e))),
         }
     }
@@ -554,13 +670,16 @@ impl<'a> js::HostMessageHandle for ActiveCtx<'a> {
         rep: Resource<MessageHandle>,
         delay_ms: Option<u32>,
     ) -> wasmtime::Result<Result<(), types::NatsError>> {
-        let h = self.table.get_mut(&rep)?;
-        let Some(acker) = h.acker.take() else {
+        let h = self.table.get(&rep)?;
+        let Some(acker) = h.acker.clone() else {
             return Ok(Err(already_settled()));
         };
         let kind = jetstream::AckKind::Nak(delay_ms.map(|ms| Duration::from_millis(ms as u64)));
         match acker.ack_with(kind).await {
-            Ok(()) => Ok(Ok(())),
+            Ok(()) => {
+                self.table.get_mut(&rep)?.acker.take();
+                Ok(Ok(()))
+            }
             Err(e) => Ok(Err(jetstream_err("nak failed", e))),
         }
     }
@@ -569,11 +688,16 @@ impl<'a> js::HostMessageHandle for ActiveCtx<'a> {
         &mut self,
         rep: Resource<MessageHandle>,
     ) -> wasmtime::Result<Result<(), types::NatsError>> {
+        // Extending ack-wait settles nothing, so it reads the acker that is
+        // present in both ack modes rather than the one that carries settlement
+        // ownership. Keyed off the latter, the WIT-sanctioned way for a slow
+        // handler to hold onto a message was unavailable under `ack-mode: auto`
+        // — the default — and the handler was redelivered underneath itself.
         let h = self.table.get(&rep)?;
-        let Some(acker) = h.acker.as_ref() else {
+        let Some(progress) = h.progress.as_ref() else {
             return Ok(Err(already_settled()));
         };
-        match acker.ack_with(jetstream::AckKind::Progress).await {
+        match progress.ack_with(jetstream::AckKind::Progress).await {
             Ok(()) => Ok(Ok(())),
             Err(e) => Ok(Err(jetstream_err("in-progress failed", e))),
         }
@@ -583,12 +707,21 @@ impl<'a> js::HostMessageHandle for ActiveCtx<'a> {
         &mut self,
         rep: Resource<MessageHandle>,
     ) -> wasmtime::Result<Result<(), types::NatsError>> {
-        let h = self.table.get_mut(&rep)?;
-        let Some(acker) = h.acker.take() else {
+        let h = self.table.get(&rep)?;
+        let Some(acker) = h.acker.clone() else {
             return Ok(Err(already_settled()));
         };
+        // A term is the guest saying the message must not come round again, so
+        // it retires the sequence just as an ack does. A term the server never
+        // took retires nothing, and has to stay retryable or a poison message
+        // redelivers forever with no way left to discard it.
+        let settled = h.settled.clone();
         match acker.ack_with(jetstream::AckKind::Term).await {
-            Ok(()) => Ok(Ok(())),
+            Ok(()) => {
+                settled.store(true, Ordering::Release);
+                self.table.get_mut(&rep)?.acker.take();
+                Ok(Ok(()))
+            }
             Err(e) => Ok(Err(jetstream_err("term failed", e))),
         }
     }
@@ -618,6 +751,16 @@ impl<'a> js::HostPullConsumer for ActiveCtx<'a> {
             }
         };
 
+        // Ahead of the builder, so no `batch: 0` pull request reaches the
+        // server. async-nats would end that stream empty, and the resulting
+        // `no-messages` reads as a drained queue — sending a guest whose batch
+        // size fell to zero home while its consumer is still backed up.
+        if batch == 0 {
+            return Ok(Err(types::NatsError::Unexpected(
+                "fetch batch must be >= 1 (got 0)".to_string(),
+            )));
+        }
+
         let fetch = consumer
             .fetch()
             .max_messages(batch as usize)
@@ -628,7 +771,22 @@ impl<'a> js::HostPullConsumer for ActiveCtx<'a> {
         };
 
         let mut handles = Vec::new();
+        // Messages that will not be handed to the guest because the resource
+        // table filled up. A full table is a guest leaking handles, which every
+        // sibling failure here reports as a typed error rather than killing the
+        // instance for — so the batch is given back instead, and the server
+        // redelivers it at once rather than holding it until ack-wait expires.
+        let mut orphans: Vec<Arc<jetstream::message::Acker>> = Vec::new();
+        let mut table_full = false;
         while let Some(next) = stream.next().await {
+            // Already rolling back: keep draining so the tail of the batch is
+            // handed back with the rest instead of sitting on the consumer.
+            if table_full {
+                if let Ok(msg) = next {
+                    orphans.push(Arc::new(msg.split().1));
+                }
+                continue;
+            }
             match next {
                 Ok(msg) => {
                     let (sequence, delivery_count) = match msg.info() {
@@ -638,18 +796,68 @@ impl<'a> js::HostPullConsumer for ActiveCtx<'a> {
                     // Pull consumers are always guest-driven, so the acker
                     // goes to the handle regardless of ack-mode.
                     let (message, acker) = msg.split();
-                    handles.push(self.table.push(MessageHandle {
-                        acker: Some(Arc::new(acker)),
+                    let acker = Arc::new(acker);
+                    let pushed = self.table.push(MessageHandle {
+                        acker: Some(acker.clone()),
+                        progress: Some(acker.clone()),
+                        settled: Arc::new(AtomicBool::new(false)),
                         message,
                         sequence,
                         delivery_count,
-                    })?);
+                    });
+                    match pushed {
+                        Ok(id) => handles.push(id),
+                        Err(_) => {
+                            table_full = true;
+                            orphans.push(acker);
+                            for id in std::mem::take(&mut handles) {
+                                if let Ok(h) = self.table.delete(id)
+                                    && let Some(a) = h.acker
+                                {
+                                    orphans.push(a);
+                                }
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
+                    // A request the server refused outright — a batch over the
+                    // consumer's `max-request-batch`, say — delivers nothing,
+                    // and reporting that as `no-messages` would read as an idle
+                    // consumer and send the guest into a retry loop it cannot
+                    // win. `@0.2.0` types this as `limit-exceeded`; here it is
+                    // at least an error with the server's own wording.
+                    let detail = e.to_string();
+                    match super::async_p3::classify_pull_end(&detail) {
+                        super::async_p3::PullEnd::Refused => {
+                            return Ok(Err(jetstream_err("fetch refused", detail)));
+                        }
+                        // What was already delivered is real and worth
+                        // returning; only an empty batch has to carry the
+                        // reason as an error, since nothing else can.
+                        super::async_p3::PullEnd::Gone if handles.is_empty() => {
+                            return Ok(Err(types::NatsError::NotFound(detail)));
+                        }
+                        super::async_p3::PullEnd::Interrupted if handles.is_empty() => {
+                            return Ok(Err(jetstream_err("pull request was stood down", detail)));
+                        }
+                        _ => {}
+                    }
                     warn!("pull-consumer fetch stream error: {e}");
                     break;
                 }
             }
+        }
+
+        if table_full {
+            for acker in orphans {
+                if let Err(e) = acker.ack_with(jetstream::AckKind::Nak(None)).await {
+                    warn!("failed to nak an unreturned fetched message: {e}");
+                }
+            }
+            return Ok(Err(types::NatsError::Unexpected(
+                "host resource table full".to_string(),
+            )));
         }
 
         if handles.is_empty() {
@@ -677,11 +885,7 @@ impl<'a> kv::Host for ActiveCtx<'a> {
 
         let store = match conn.jetstream.get_key_value(&bucket).await {
             Ok(store) => store,
-            Err(e) => {
-                return Ok(Err(types::NatsError::NotFound(format!(
-                    "bucket '{bucket}': {e}"
-                ))));
-            }
+            Err(e) => return Ok(Err(bucket_lookup_err(&bucket, e))),
         };
         let resource = self.table.push(BucketHandle { store })?;
         Ok(Ok(resource))
@@ -704,7 +908,10 @@ impl<'a> kv::HostBucket for ActiveCtx<'a> {
         match h.store.entry(&key).await {
             Ok(Some(e)) => Ok(Ok(Some(kv_entry_to_wit(&e)))),
             Ok(None) => Ok(Ok(None)),
-            Err(e) => Ok(Err(jetstream_err("kv get failed", e))),
+            Err(e) => {
+                let timed_out = matches!(e.kind(), jetstream::kv::EntryErrorKind::TimedOut);
+                Ok(Err(kv_err("kv get failed", timed_out, e)))
+            }
         }
     }
 
@@ -714,10 +921,20 @@ impl<'a> kv::HostBucket for ActiveCtx<'a> {
         key: String,
         value: Vec<u8>,
     ) -> wasmtime::Result<Result<u64, types::NatsError>> {
+        // The same oversize body is `max-payload-exceeded` on publish, so it
+        // has to be that here too — otherwise a guest that switches to chunked
+        // storage on the typed variant instead reads a transient JetStream
+        // fault and retries a write that can never land.
+        let conn = conn_or_return!(self);
+        if let Err(e) = check_payload(value.len(), None, &conn) {
+            return Ok(Err(e));
+        }
         let h = self.table.get(&rep)?;
         match h.store.put(&key, value.into()).await {
             Ok(rev) => Ok(Ok(rev)),
-            Err(e) => Ok(Err(jetstream_err("kv put failed", e))),
+            // `PutError` folds the timeout into an opaque publish stage, so the
+            // kind has to be walked to rather than read off the top.
+            Err(e) => Ok(Err(kv_err("kv put failed", chain_timed_out(&e), e))),
         }
     }
 
@@ -727,10 +944,14 @@ impl<'a> kv::HostBucket for ActiveCtx<'a> {
         key: String,
         value: Vec<u8>,
     ) -> wasmtime::Result<Result<u64, types::NatsError>> {
+        let conn = conn_or_return!(self);
+        if let Err(e) = check_payload(value.len(), None, &conn) {
+            return Ok(Err(e));
+        }
         let h = self.table.get(&rep)?;
         match h.store.create(&key, value.into()).await {
             Ok(rev) => Ok(Ok(rev)),
-            Err(e) => Ok(Err(jetstream_err("kv create failed", e))),
+            Err(e) => Ok(Err(kv_err("kv create failed", chain_timed_out(&e), e))),
         }
     }
 
@@ -741,23 +962,42 @@ impl<'a> kv::HostBucket for ActiveCtx<'a> {
         value: Vec<u8>,
         expected_revision: u64,
     ) -> wasmtime::Result<Result<u64, types::NatsError>> {
+        let conn = conn_or_return!(self);
+        if let Err(e) = check_payload(value.len(), None, &conn) {
+            return Ok(Err(e));
+        }
         let h = self.table.get(&rep)?;
         match h.store.update(&key, value.into(), expected_revision).await {
             Ok(rev) => Ok(Ok(rev)),
             Err(e) => {
                 let msg = e.to_string();
-                if msg.to_ascii_lowercase().contains("wrong last sequence") {
-                    let actual = h
-                        .store
-                        .entry(&key)
-                        .await
-                        .ok()
-                        .flatten()
-                        .map(|e| e.revision)
-                        .unwrap_or(0);
-                    return Ok(Err(types::NatsError::RevisionMismatch(actual)));
+                let mismatch =
+                    matches!(e.kind(), jetstream::kv::UpdateErrorKind::WrongLastRevision)
+                        || msg.to_ascii_lowercase().contains("wrong last sequence");
+                if mismatch {
+                    // The rejection already names the sequence the guest lost
+                    // to ("wrong last sequence: N"), so read it from there:
+                    // that keeps the promised revision available even on a
+                    // connection too degraded to answer a second round-trip.
+                    if let Some(actual) = msg
+                        .rsplit(':')
+                        .next()
+                        .and_then(|s| s.trim().parse::<u64>().ok())
+                    {
+                        return Ok(Err(types::NatsError::RevisionMismatch(actual)));
+                    }
+                    // Only when the wording changes: re-read the key. If that
+                    // fails too, report the original failure — `revision 0` is
+                    // not a neutral placeholder but an instruction to blind-
+                    // create, and a guest retrying against it loops forever.
+                    return Ok(Err(match h.store.entry(&key).await {
+                        Ok(Some(entry)) => types::NatsError::RevisionMismatch(entry.revision),
+                        Ok(None) => types::NatsError::RevisionMismatch(0),
+                        Err(_) => jetstream_err("kv update failed", e),
+                    }));
                 }
-                Ok(Err(jetstream_err("kv update failed", e)))
+                let timed_out = matches!(e.kind(), jetstream::kv::UpdateErrorKind::TimedOut);
+                Ok(Err(kv_err("kv update failed", timed_out, e)))
             }
         }
     }
@@ -770,7 +1010,10 @@ impl<'a> kv::HostBucket for ActiveCtx<'a> {
         let h = self.table.get(&rep)?;
         match h.store.delete(&key).await {
             Ok(()) => Ok(Ok(())),
-            Err(e) => Ok(Err(jetstream_err("kv delete failed", e))),
+            Err(e) => {
+                let timed_out = matches!(e.kind(), jetstream::kv::DeleteErrorKind::TimedOut);
+                Ok(Err(kv_err("kv delete failed", timed_out, e)))
+            }
         }
     }
 
@@ -782,7 +1025,10 @@ impl<'a> kv::HostBucket for ActiveCtx<'a> {
         let h = self.table.get(&rep)?;
         match h.store.purge(&key).await {
             Ok(()) => Ok(Ok(())),
-            Err(e) => Ok(Err(jetstream_err("kv purge failed", e))),
+            Err(e) => {
+                let timed_out = matches!(e.kind(), jetstream::kv::PurgeErrorKind::TimedOut);
+                Ok(Err(kv_err("kv purge failed", timed_out, e)))
+            }
         }
     }
 
@@ -793,7 +1039,10 @@ impl<'a> kv::HostBucket for ActiveCtx<'a> {
         let h = self.table.get(&rep)?;
         let mut iter = match h.store.keys().await {
             Ok(i) => i,
-            Err(e) => return Ok(Err(jetstream_err("kv keys failed", e))),
+            Err(e) => {
+                let timed_out = matches!(e.kind(), jetstream::kv::WatchErrorKind::TimedOut);
+                return Ok(Err(kv_err("kv keys failed", timed_out, e)));
+            }
         };
         let mut out = Vec::new();
         while let Some(next) = iter.next().await {
@@ -805,7 +1054,9 @@ impl<'a> kv::HostBucket for ActiveCtx<'a> {
                         break;
                     }
                 }
-                Err(e) => return Ok(Err(jetstream_err("kv keys iter failed", e))),
+                Err(e) => {
+                    return Ok(Err(kv_err("kv keys iter failed", chain_timed_out(&e), e)));
+                }
             }
         }
         Ok(Ok(out))
@@ -817,15 +1068,50 @@ impl<'a> kv::HostBucket for ActiveCtx<'a> {
         key: String,
     ) -> wasmtime::Result<Result<Vec<kv::Entry>, types::NatsError>> {
         let h = self.table.get(&rep)?;
+        // The history stream ends when the server reports nothing pending, and
+        // a subject holding zero messages never gets that far: the ordered
+        // consumer simply delivers nothing and the drain below would wedge the
+        // whole guest call. `entry` returns `Ok(None)` for exactly that case —
+        // tombstones still come back as `Some` and terminate normally.
+        match h.store.entry(&key).await {
+            Ok(Some(_)) => {}
+            // This revision has no key-not-found on history, and an empty list
+            // is the honest answer for a key with nothing recorded.
+            Ok(None) => return Ok(Ok(Vec::new())),
+            Err(e) => {
+                let timed_out = matches!(e.kind(), jetstream::kv::EntryErrorKind::TimedOut);
+                return Ok(Err(kv_err("kv history failed", timed_out, e)));
+            }
+        }
+
         let mut hist = match h.store.history(&key).await {
             Ok(h) => h,
-            Err(e) => return Ok(Err(jetstream_err("kv history failed", e))),
+            Err(e) => {
+                let timed_out = matches!(e.kind(), jetstream::kv::WatchErrorKind::TimedOut);
+                return Ok(Err(kv_err("kv history failed", timed_out, e)));
+            }
         };
         let mut out = Vec::new();
-        while let Some(next) = hist.next().await {
-            match next {
-                Ok(e) => out.push(kv_entry_to_wit(&e)),
-                Err(e) => return Ok(Err(jetstream_err("kv history iter failed", e))),
+        // The probe above closes the ordinary empty case; the deadline covers
+        // the history expiring in the gap between it and the consumer, and any
+        // server that simply stops answering.
+        let deadline = tokio::time::Instant::now() + MAX_HISTORY_DURATION;
+        loop {
+            match tokio::time::timeout_at(deadline, hist.next()).await {
+                Err(_) => {
+                    return Ok(Err(types::NatsError::Timeout(
+                        "kv history did not complete within 10s".to_string(),
+                    )));
+                }
+                Ok(None) => break,
+                Ok(Some(Ok(e))) => out.push(kv_entry_to_wit(&e)),
+                Ok(Some(Err(e))) => {
+                    return Ok(Err(kv_err(
+                        "kv history iter failed",
+                        chain_timed_out(&e),
+                        e,
+                    )));
+                }
             }
         }
         Ok(Ok(out))
@@ -840,7 +1126,10 @@ impl<'a> kv::HostBucket for ActiveCtx<'a> {
         // opened, so writes made through this same handle read back as zero.
         let info = match h.store.stream.info().await {
             Ok(info) => info.clone(),
-            Err(e) => return Ok(Err(jetstream_err("kv status failed", e))),
+            Err(e) => {
+                let timed_out = matches!(e.kind(), jetstream::context::RequestErrorKind::TimedOut);
+                return Ok(Err(kv_err("kv status failed", timed_out, e)));
+            }
         };
         Ok(Ok(kv::BucketStatus {
             bucket: h.store.name.clone(),

@@ -106,6 +106,7 @@ const P2_FIXTURES: &[&str] = &[
 const P3_FIXTURES: &[&str] = &[
     "messaging-echo-p3",
     "nats-async-handler-p3",
+    "nats-implements-p3",
     "messaging-dual-handler",
     "http-handler-p3",
     "http-ip-name-lookup-p3",

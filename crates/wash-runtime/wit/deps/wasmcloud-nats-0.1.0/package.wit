@@ -75,7 +75,9 @@ interface core {
   /// Send a request and wait for a single reply within timeout.
   ///
   /// Replies arrive on a per-workload inbox prefix, so two workloads sharing a
-  /// host cannot observe each other's responses.
+  /// host cannot observe each other's responses. The `reply-to` field of `msg`
+  /// is ignored: the host always substitutes the per-workload inbox as the
+  /// reply subject.
   @since(version = 0.1.0)
   request: func(msg: nats-message, timeout-ms: u32) -> result<nats-message, nats-error>;
 }
@@ -164,6 +166,9 @@ interface jetstream {
   /// Idempotency is available via the `Nats-Msg-Id` header, deduplicated within
   /// the stream's duplicate window. That window is stream configuration, not a
   /// guarantee this interface makes.
+  ///
+  /// The `reply-to` field of `msg` is ignored: JetStream acknowledgments use a
+  /// client-managed reply subject.
   @since(version = 0.1.0)
   publish: func(msg: nats-message) -> result<publish-ack, nats-error>;
 
@@ -173,6 +178,11 @@ interface jetstream {
 
   /// Sequential replay: read up to `max-count` messages starting from
   /// `start-sequence`. Stateless — does not create a durable consumer.
+  ///
+  /// Only messages whose stored subject falls inside the workload's subject
+  /// grant are returned, so the sequence numbers of a batch may gap. A skipped
+  /// message does not count against `max-count`: the result is what a
+  /// server-side filtered consumer would have delivered.
   @since(version = 0.1.0)
   scan: func(stream-name: string, start-sequence: u64, max-count: u32) -> result<list<stored-message>, nats-error>;
 
@@ -242,7 +252,9 @@ interface kv {
     @since(version = 0.1.0)
     purge: func(key: string) -> result<_, nats-error>;
 
-    /// List all keys in the bucket.
+    /// Lists keys in the bucket, up to a host-imposed cap of 1000. A bucket
+    /// holding more is truncated to that many with only a host-side warning:
+    /// this revision has no way to tell the guest the answer is partial.
     @since(version = 0.1.0)
     keys: func() -> result<list<string>, nats-error>;
     /// All historical entries for a key (put/update/delete/purge ops).
