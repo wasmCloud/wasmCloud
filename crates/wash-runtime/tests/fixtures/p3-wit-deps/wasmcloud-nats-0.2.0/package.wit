@@ -84,8 +84,16 @@ interface types {
     /// CAS `update` failed. Payload carries the actual current revision, so a
     /// retry does not need a re-read.
     revision-mismatch(u64),
-    /// A pull-consumer `fetch` returned empty within the timeout.
+    /// A pull-consumer `fetch` returned empty within the timeout: the
+    /// consumer had nothing to give. Compare `limit-exceeded`, where the
+    /// request never ran.
     no-messages,
+    /// The server refused the request outright because it exceeds a limit the
+    /// consumer was provisioned with — a batch over `max-request-batch`, a
+    /// byte bound over `max-request-max-bytes`, or too many waiting pulls.
+    /// Nothing was delivered, and retrying unchanged fails the same way;
+    /// `info` reports the limits to size the next request against.
+    limit-exceeded(string),
     /// Named resource (stream, bucket, consumer) doesn't exist.
     not-found(string),
     /// The connected server is too old for this operation. The string names
@@ -117,7 +125,9 @@ interface core {
   /// outstanding at once; awaiting one does not block the instance.
   ///
   /// Replies arrive on a per-workload inbox prefix, so two workloads sharing a
-  /// host cannot observe each other's responses.
+  /// host cannot observe each other's responses. The `reply-to` field of `msg`
+  /// is ignored: the host always substitutes the per-workload inbox as the
+  /// reply subject.
   request: async func(msg: nats-message, timeout-ms: u32) -> result<nats-message, nats-error>;
 }
 
@@ -179,12 +189,25 @@ interface jetstream {
   record consumer-info {
     name: string,
     stream-name: string,
-    /// Empty when the consumer captures the stream's whole subject space.
+    /// Singular filter; empty when unset. Consumers may instead use
+    /// `filter-subjects`; the consumer captures the stream's whole subject
+    /// space only when both are empty.
     filter-subject: string,
+    /// Multi-subject filter, as provisioned on servers 2.10 and newer. Empty
+    /// when the consumer uses the singular `filter-subject`, or no filter at
+    /// all.
+    filter-subjects: list<string>,
     /// Zero when unset on the consumer.
     max-ack-pending: u64,
     /// Zero when unset. Pull consumers only.
     max-waiting: u64,
+    /// Largest `batch` a single pull may ask for. Zero when unset. A `fetch`
+    /// above it is refused with `limit-exceeded`, not truncated.
+    max-request-batch: u64,
+    /// Largest byte bound a single pull may ask for. Zero when unset. Counts
+    /// subject, reply subject, and payload — roughly 63 bytes of overhead per
+    /// small message — so leave margin when sizing against it.
+    max-request-max-bytes: u64,
     /// Zero when unset.
     max-deliver: u64,
     ack-wait-ms: u64,
@@ -194,6 +217,25 @@ interface jetstream {
     num-pending: u64,
     /// Messages awaiting redelivery after a nak or ack-wait expiry.
     num-redelivered: u64,
+  }
+
+  /// Why a fetch stopped delivering.
+  enum fetch-stop {
+    /// The batch was filled: `batch` messages came back.
+    batch-filled,
+    /// The consumer had no more to give before the timeout elapsed. What came
+    /// back is everything that was there.
+    drained,
+    /// A byte bound ended the batch early — `max-bytes` on the call, or the
+    /// consumer's `max-request-max-bytes`. More messages are waiting, and the
+    /// next fetch picks up where this one stopped.
+    byte-limit,
+  }
+
+  /// A fetched batch, and why it ended.
+  record fetched-batch {
+    messages: list<message-handle>,
+    stop: fetch-stop,
   }
 
   /// Handle to a single JetStream-delivered message.
@@ -229,11 +271,19 @@ interface jetstream {
   /// consumer must already exist on the stream — attach via `open-pull-consumer`.
   resource pull-consumer {
     /// Fetch up to `batch` messages, waiting at most `timeout-ms` for the
-    /// first message. Returns `no-messages` if the timeout elapses empty.
-    fetch: async func(batch: u32, timeout-ms: u32) -> result<list<message-handle>, nats-error>;
+    /// first message. Returns `no-messages` if the timeout elapses empty, and
+    /// `limit-exceeded` if `batch` is over the consumer's `max-request-batch`.
+    ///
+    /// `batch` must be >= 1; a `batch` of 0 is refused with `unexpected`
+    /// rather than reported as a drained consumer.
+    fetch: async func(batch: u32, timeout-ms: u32) -> result<fetched-batch, nats-error>;
     /// Fetch bounded by bytes as well as count, for consumers provisioned
-    /// with a `max-bytes` limit. `max-bytes` of 0 means no byte bound.
-    fetch-with-limits: async func(batch: u32, max-bytes: u64, timeout-ms: u32) -> result<list<message-handle>, nats-error>;
+    /// with a `max-bytes` limit. `max-bytes` of 0 means no byte bound, and
+    /// `batch` must be >= 1 as it must for `fetch`.
+    ///
+    /// A batch cut short by either byte bound comes back with `stop:
+    /// byte-limit` rather than looking like a drained consumer.
+    fetch-with-limits: async func(batch: u32, max-bytes: u64, timeout-ms: u32) -> result<fetched-batch, nats-error>;
     /// The consumer's current configuration and state.
     info: async func() -> result<consumer-info, nats-error>;
   }
@@ -243,6 +293,9 @@ interface jetstream {
   /// Idempotency is available via the `Nats-Msg-Id` header, deduplicated within
   /// the stream's duplicate window. That window is stream configuration, not a
   /// guarantee this interface makes.
+  ///
+  /// The `reply-to` field of `msg` is ignored: JetStream acknowledgments use a
+  /// client-managed reply subject.
   publish: async func(msg: nats-message) -> result<publish-ack, nats-error>;
 
   /// Fetch a single message by its stream sequence number (direct-get).
@@ -250,6 +303,11 @@ interface jetstream {
 
   /// Sequential replay: read up to `max-count` messages starting from
   /// `start-sequence`. Stateless — does not create a durable consumer.
+  ///
+  /// Only messages whose stored subject falls inside the workload's subject
+  /// grant are returned, so the sequence numbers of a batch may gap. A skipped
+  /// message does not count against `max-count`: the result is what a
+  /// server-side filtered consumer would have delivered.
   scan: async func(stream-name: string, start-sequence: u64, max-count: u32) -> result<list<stored-message>, nats-error>;
 
   /// Attach to an existing pull consumer on a stream. The consumer must have
@@ -261,6 +319,14 @@ interface jetstream {
 
   /// The subjects a stream currently holds messages on, filtered by
   /// `subject-filter` (`>` for all), with per-subject message counts.
+  ///
+  /// Returns at most 1000 subjects: subject cardinality, not message count,
+  /// bounds what the host has to buffer, so pass a narrower `subject-filter`
+  /// to page through a stream that holds more than that.
+  ///
+  /// Requires NATS server 2.7.2 or newer — older servers ignore the filter and
+  /// answer with no subject map at all, so they report `unsupported-by-server`
+  /// rather than an empty list.
   list-stream-subjects: async func(stream-name: string, subject-filter: string) -> result<list<subject-count>, nats-error>;
 
   /// Read-only consumer configuration and state, without attaching.
@@ -288,6 +354,15 @@ interface kv {
     revision: u64,
     created-at-unix-nanos: u64,
     operation: kv-operation,
+  }
+
+  /// One page of a bucket's key listing.
+  record key-page {
+    keys: list<string>,
+    /// True when the bucket holds more keys than this page carries. The
+    /// listing is capped host-side, so a large bucket cannot be enumerated in
+    /// full through this call.
+    truncated: bool,
   }
 
   /// Status snapshot for a bucket.
@@ -320,8 +395,13 @@ interface kv {
     /// Purge a key (removes history as well).
     purge: async func(key: string) -> result<_, nats-error>;
 
-    /// List all keys in the bucket.
-    keys: async func() -> result<list<string>, nats-error>;
+    /// Lists keys in the bucket, up to a host-imposed cap of 1000.
+    ///
+    /// `truncated` is what tells a guest the bucket holds more than the page
+    /// carries — `@0.1.0` returned a bare list, where a partial answer was
+    /// indistinguishable from a complete one and the tail was unreachable on
+    /// retry.
+    keys: async func() -> result<key-page, nats-error>;
     /// All historical entries for a key (put/update/delete/purge ops).
     /// `key-not-found` when the key has no history at all.
     history: async func(key: string) -> result<list<entry>, nats-error>;

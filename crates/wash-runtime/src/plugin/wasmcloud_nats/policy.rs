@@ -10,8 +10,27 @@ use super::config::PolicySpec;
 ///
 /// `$JS.API` would bypass every stream and consumer check by driving the
 /// JetStream API directly; `$KV`/`$OBJ` would bypass bucket checks the same
-/// way; `$SYS` is the system account.
-const RESERVED: &[&str] = &["$JS.", "$SYS.", "$KV.", "$OBJ."];
+/// way; `$SYS` is the system account. `_nats_push.` is the plugin's own
+/// JetStream delivery plane: a workload that could publish there would inject
+/// forged deliveries into another workload's handler, and one that could
+/// subscribe there would steal them.
+const RESERVED: &[&str] = &["$JS.", "$SYS.", "$KV.", "$OBJ.", "_nats_push."];
+
+/// The head token of every NATS inbox, shared or per-workload.
+///
+/// Reserved on the *subscription* path only. Publishing to an inbox is what a
+/// responder does with a `reply-to`, so [`PolicyEngine::is_reserved`] must not
+/// see this; subscribing to one is reading someone else's replies.
+///
+/// [`super::conn::workload_inbox_prefix`] builds its per-workload prefixes from
+/// this same token so the two cannot drift.
+pub const INBOX_TOKEN_PREFIX: &str = "_INBOX";
+
+/// Stream-name prefixes that back a KV or object-store bucket.
+///
+/// These streams hold the bucket's values as ordinary messages, so reaching one
+/// through the stream surface reads the bucket without passing `bucket-allow`.
+const BUCKET_BACKING_STREAM_PREFIXES: &[&str] = &["KV_", "OBJ_"];
 
 /// Compiled per-workload grant.
 #[derive(Debug, Clone)]
@@ -134,6 +153,37 @@ impl Pattern {
     }
 }
 
+impl Pattern {
+    /// True when some concrete subject is matched by both patterns.
+    ///
+    /// Containment asks whether one grant swallows another; this asks only
+    /// whether they touch, which is the right question for a deny list: a
+    /// subscription must be refused if *any* subject it could receive lies in
+    /// reserved space, even when most of what it covers is fine.
+    fn overlaps(&self, other: &Pattern) -> bool {
+        if !self.valid || !other.valid {
+            return false;
+        }
+        // Every position both sides name must admit a common token.
+        let shared = self.tokens.len().min(other.tokens.len());
+        for (mine, theirs) in self.tokens.iter().zip(other.tokens.iter()).take(shared) {
+            match (mine, theirs) {
+                (Token::Any, _) | (_, Token::Any) => {}
+                (Token::Literal(a), Token::Literal(b)) if a == b => {}
+                _ => return false,
+            }
+        }
+        // Past the shorter pattern's last token, only a `>` can keep reaching.
+        match self.tokens.len().cmp(&other.tokens.len()) {
+            // Same length: both admit a subject of exactly that length, or both
+            // demand a longer one. One of each never meets.
+            std::cmp::Ordering::Equal => self.trailing == other.trailing,
+            std::cmp::Ordering::Less => self.trailing,
+            std::cmp::Ordering::Greater => other.trailing,
+        }
+    }
+}
+
 /// Why a subject was refused.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Denied {
@@ -147,17 +197,30 @@ pub enum Denied {
 
 /// True when a subscription pattern could expand into a reserved space.
 ///
-/// A leading wildcard makes the whole reserved set reachable, and a wildcard
-/// anywhere ahead of a reserved-looking token does the same for that branch.
+/// Comparing only the head token against a whole prefix is too coarse once a
+/// prefix spans more than one token: `runtime.>` and `runtime.*.>` both reach
+/// into `runtime.host.` while sharing no head with it. The test is instead
+/// whether the requested pattern and the reserved space have any concrete
+/// subject in common — see [`Pattern::overlaps`].
 fn reaches_reserved(pattern: &str, lattice_prefixes: &[String]) -> bool {
     let first = pattern.split('.').next().unwrap_or_default();
+    // A leading wildcard reaches every reserved space at once.
     if first == "*" || first == ">" {
         return true;
     }
-    RESERVED.iter().any(|p| first == p.trim_end_matches('.'))
-        || lattice_prefixes
-            .iter()
-            .any(|p| first == p.trim_end_matches('.'))
+    // Inbox space is reserved against subscription, never against publish, so
+    // it is tested here rather than in `is_reserved`. The per-workload prefixes
+    // join with `_` rather than `.`, so `_INBOX_orders` is one token and a
+    // head-token prefix test catches every form.
+    if first.starts_with(INBOX_TOKEN_PREFIX) {
+        return true;
+    }
+    let requested = Pattern::parse(pattern);
+    RESERVED
+        .iter()
+        .copied()
+        .chain(lattice_prefixes.iter().map(String::as_str))
+        .any(|prefix| requested.overlaps(&Pattern::parse(&format!("{prefix}>"))))
 }
 
 impl PolicyEngine {
@@ -199,6 +262,13 @@ impl PolicyEngine {
     /// or `>` against the grant patterns would let `orders.>` satisfy a grant
     /// of `orders.*`, and let `wash.*.>` slip past a literal reserved prefix.
     pub fn check_subject(&self, subject: &str) -> Result<(), Denied> {
+        // An empty token — a leading, trailing, or doubled `.` — is not a
+        // subject any grant can cover, so refusing it here is the same answer
+        // the grant walk would give, just without the round-trip to a server
+        // that would answer with a protocol error.
+        if subject.is_empty() || subject.split('.').any(str::is_empty) {
+            return Err(Denied::NotGranted);
+        }
         if subject.split('.').any(|token| token == "*" || token == ">") {
             return Err(Denied::WildcardNotAllowed);
         }
@@ -248,8 +318,45 @@ impl PolicyEngine {
         }
     }
 
+    /// Checks the subject a stored message was published on.
+    ///
+    /// Pattern-match only, and for the same reason
+    /// [`PolicyEngine::check_filter`] skips it: the message came out of a
+    /// stream the workload was separately granted, so its subject is already
+    /// stream-scoped and cannot straddle into a reserved space the way a raw
+    /// subscription can. What this does add is the subject boundary the
+    /// declarative path enforces on consumer filters — without it a narrow
+    /// `subject-allow` beside a wide `stream-allow` would bound what a
+    /// workload may subscribe to but not what it may read back directly.
+    pub fn check_stored_subject(&self, subject: &str) -> Result<(), Denied> {
+        if self.subject_allow.iter().any(|p| p.matches(subject)) {
+            Ok(())
+        } else {
+            Err(Denied::NotGranted)
+        }
+    }
+
     /// Checks a stream name for read or management access.
+    ///
+    /// A bucket's backing stream is reachable here only when the bucket itself
+    /// was granted: `KV_secrets` holds every value in the `secrets` bucket as
+    /// ordinary messages, so a `stream-allow: >` that reached it would read the
+    /// bucket straight past `bucket-allow`.
     pub fn check_stream(&self, stream: &str) -> Result<(), Denied> {
+        // `$`-headed names are the server's own internal streams.
+        if stream.starts_with('$') {
+            return Err(Denied::Reserved);
+        }
+        if let Some(bucket) = BUCKET_BACKING_STREAM_PREFIXES
+            .iter()
+            .find_map(|prefix| stream.strip_prefix(prefix))
+        {
+            return if self.bucket_allow.iter().any(|p| p.matches(bucket)) {
+                Ok(())
+            } else {
+                Err(Denied::Reserved)
+            };
+        }
         if self.stream_allow.iter().any(|p| p.matches(stream)) {
             Ok(())
         } else {
@@ -399,6 +506,89 @@ mod tests {
         assert!(p.check_subject("orders.new").is_ok());
     }
 
+    /// The lattice prefix spans two tokens, so a subscription that stops
+    /// short of it — or wildcards its way through — still lands inside it.
+    #[test]
+    fn a_shorter_wildcard_head_cannot_straddle_a_multi_token_prefix() {
+        let p = PolicyEngine::new(
+            &PolicySpec {
+                subject_allow: vec![">".to_string()],
+                ..Default::default()
+            },
+            vec!["runtime.host.".to_string()],
+        );
+        assert_eq!(p.check_subscription("runtime.>"), Err(Denied::Reserved));
+        assert_eq!(p.check_subscription("runtime.*.>"), Err(Denied::Reserved));
+        assert_eq!(
+            p.check_subscription("runtime.host.>"),
+            Err(Denied::Reserved)
+        );
+        // A sibling that shares the head but never reaches the prefix is fine.
+        assert!(p.check_subscription("runtime.app.>").is_ok());
+    }
+
+    /// Replies have to be publishable — that is what a responder does with a
+    /// `reply-to` — but nobody gets to listen to somebody else's.
+    #[test]
+    fn inbox_space_is_reserved_against_subscription_but_not_publish() {
+        let p = engine(&[">"], &[], &[]);
+        assert_eq!(p.check_subscription("_INBOX.>"), Err(Denied::Reserved));
+        assert_eq!(
+            p.check_subscription("_INBOX_payments.>"),
+            Err(Denied::Reserved)
+        );
+        assert_eq!(
+            p.check_subscription("_INBOX_orders.reply"),
+            Err(Denied::Reserved)
+        );
+        assert!(p.check_subject("_INBOX.abc123").is_ok());
+        assert!(p.check_subject("_INBOX_payments.abc").is_ok());
+    }
+
+    /// The plugin's own push-delivery plane: forging a delivery into it, or
+    /// stealing one out of it, is denied however broad the grant.
+    #[test]
+    fn the_push_delivery_plane_is_reserved() {
+        let p = engine(&[">"], &[], &[]);
+        assert_eq!(
+            p.check_subject("_nats_push.ORDERS.workers"),
+            Err(Denied::Reserved)
+        );
+        assert_eq!(p.check_subscription("_nats_push.>"), Err(Denied::Reserved));
+    }
+
+    /// A subject with an empty token is not a subject at all.
+    #[test]
+    fn empty_tokens_are_refused_before_the_server_sees_them() {
+        let p = engine(&[">"], &[], &[]);
+        assert_eq!(p.check_subject(""), Err(Denied::NotGranted));
+        assert_eq!(p.check_subject(".foo"), Err(Denied::NotGranted));
+        assert_eq!(p.check_subject("a..b"), Err(Denied::NotGranted));
+        assert_eq!(
+            engine(&["orders.*"], &[], &[]).check_subject("orders."),
+            Err(Denied::NotGranted)
+        );
+        assert!(p.check_subject("orders.new").is_ok());
+    }
+
+    /// A bucket's backing stream reads the bucket, so it answers to
+    /// `bucket-allow` rather than to `stream-allow`.
+    #[test]
+    fn bucket_backing_streams_are_routed_through_bucket_allow() {
+        let wide = engine(&[], &[">"], &[]);
+        assert_eq!(wide.check_stream("KV_secrets"), Err(Denied::Reserved));
+        assert_eq!(wide.check_stream("OBJ_media"), Err(Denied::Reserved));
+        assert!(wide.check_stream("ORDERS").is_ok());
+
+        let granted = engine(&[], &[">"], &["config"]);
+        assert!(granted.check_stream("KV_config").is_ok());
+        assert_eq!(granted.check_stream("KV_secrets"), Err(Denied::Reserved));
+        assert_eq!(granted.check_stream("OBJ_media"), Err(Denied::Reserved));
+
+        // The server's own internal streams are never reachable.
+        assert_eq!(wide.check_stream("$MQTT_msgs"), Err(Denied::Reserved));
+    }
+
     #[test]
     fn streams_and_buckets_use_their_own_grants() {
         let p = engine(&["orders.>"], &["ORDERS"], &["config"]);
@@ -466,6 +656,32 @@ mod tests {
         assert!(p.check_filter("orders.>").is_ok());
         assert_eq!(p.check_filter(">"), Err(Denied::NotGranted));
         assert_eq!(p.check_filter("payments.>"), Err(Denied::NotGranted));
+    }
+
+    #[test]
+    fn a_stored_subject_is_matched_not_contained() {
+        // A stored message carries one literal subject, so the point-match
+        // rule applies rather than the containment rule filters go through.
+        let p = engine(&["orders.eu.>"], &["ORDERS"], &[]);
+        assert!(p.check_stored_subject("orders.eu.new").is_ok());
+        assert_eq!(
+            p.check_stored_subject("orders.us.new"),
+            Err(Denied::NotGranted)
+        );
+        assert_eq!(
+            p.check_stored_subject("orders.internal.audit"),
+            Err(Denied::NotGranted)
+        );
+    }
+
+    #[test]
+    fn a_stored_subject_may_sit_in_reserved_space() {
+        // A bucket's own `$KV.` messages are reachable only through a bucket
+        // grant, so running them through the reserved walk would make a
+        // granted bucket unreadable.
+        let p = engine(&[">"], &[], &["config"]);
+        assert!(p.check_stored_subject("$KV.config.key").is_ok());
+        assert_eq!(p.check_subject("$KV.config.key"), Err(Denied::Reserved));
     }
 
     #[test]

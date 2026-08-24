@@ -41,6 +41,8 @@ async fn expect_refused(host: &impl HostApi, request: WorkloadStartRequest) -> R
 const NATS_HANDLER_WASM: &[u8] = include_bytes!("wasm/nats_jetstream_handler.wasm");
 /// The P3 counterpart, bound against the async `@0.2.0` package.
 const NATS_ASYNC_HANDLER_WASM: &[u8] = include_bytes!("wasm/nats_async_handler_p3.wasm");
+/// Imports `wasmcloud:nats/core@0.2.0` twice, under `hub` and `leaf`.
+const NATS_BRIDGE_WASM: &[u8] = include_bytes!("wasm/nats_implements_p3.wasm");
 
 const STREAM: &str = "TESTS";
 const COUNTS_BUCKET: &str = "test-counts";
@@ -819,6 +821,406 @@ async fn jetstream_subscription_rebuilds_when_delivery_dies() -> Result<()> {
         seen.is_some(),
         "expected the message published during the outage to be delivered once \
          the subscription rebuilt"
+    );
+    Ok(())
+}
+
+/// Reads result lines until one starts with `prefix`, or the budget runs out.
+async fn wait_for_result(
+    sub: &mut async_nats::Subscriber,
+    prefix: &str,
+    budget: Duration,
+) -> Option<String> {
+    let deadline = tokio::time::Instant::now() + budget;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        match timeout(remaining, sub.next()).await {
+            Ok(Some(msg)) => {
+                let body = String::from_utf8_lossy(&msg.payload).to_string();
+                if body.starts_with(prefix) {
+                    return Some(body);
+                }
+            }
+            Ok(None) | Err(_) => return None,
+        }
+    }
+}
+
+/// The delivery number the fixture reported in a `count:<body>:<n>` line.
+fn reported_count(line: &str) -> u32 {
+    line.rsplit(':')
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Takes the highest `count:<body>:<n>` already queued on the subscription,
+/// leaving nothing buffered that a later wait could mistake for fresh traffic.
+async fn drain_counts(sub: &mut async_nats::Subscriber, prefix: &str, highest: u32) -> u32 {
+    let mut highest = highest;
+    while let Ok(Some(msg)) = timeout(Duration::from_millis(250), sub.next()).await {
+        let body = String::from_utf8_lossy(&msg.payload).to_string();
+        if body.starts_with(prefix) {
+            highest = highest.max(reported_count(&body));
+        }
+    }
+    highest
+}
+
+/// Publishes to the stream and waits for the publish ack.
+async fn publish_to_stream(h: &Harness, subject: &str, body: &str) -> Result<()> {
+    h.js.publish(subject.to_string(), body.to_owned().into())
+        .await
+        .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?
+        .await
+        .map_err(|e| anyhow::anyhow!("publish ack failed: {e}"))?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn a_nakd_message_survives_a_consumer_rebuild() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+
+    host.workload_start(workload_request(
+        "wl-nak-rebuild",
+        nats_interface(&[
+            ("servers", &h.nats_url),
+            ("subject-allow", "test.>"),
+            ("stream-allow", STREAM),
+            ("bucket-allow", COUNTS_BUCKET),
+            ("ack-mode", "auto"),
+            ("subscriptions", &format!("{STREAM}:test.orders.>:new")),
+        ]),
+    ))
+    .await
+    .context("failed to start workload")?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let mut sub = h.client.subscribe("test.results").await?;
+
+    // The fixture fails on every delivery of this body, so it is nak'd and
+    // never settled: the subscription has to keep resuming at it.
+    publish_to_stream(&h, "test.orders.bad", "fail:always").await?;
+    let first = wait_for_result(&mut sub, "count:fail:always:", Duration::from_secs(20))
+        .await
+        .context("the failing message was never delivered")?;
+
+    // A message the handler does settle, so the delivery position moves past
+    // the nak'd one — without that there is nothing for a rebuild to skip.
+    publish_to_stream(&h, "test.orders.new", "after-the-nak").await?;
+    wait_for_result(&mut sub, "handled:after-the-nak", Duration::from_secs(20))
+        .await
+        .context("the second message was never handled")?;
+
+    // Drop the consumer the way a server restart would: an ephemeral push
+    // consumer takes its ack state — including the pending redelivery of the
+    // nak'd message — with it, so only the host's own in-flight tracking can
+    // bring that message back.
+    // Baseline on everything already delivered, buffered redeliveries included:
+    // counted from a stale baseline, a backlog on a slow machine would satisfy
+    // the assertion without a rebuild ever happening.
+    let before = drain_counts(&mut sub, "count:fail:always:", reported_count(&first)).await;
+
+    let stream =
+        h.js.get_stream(STREAM)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to get stream: {e}"))?;
+    let mut names = stream.consumer_names();
+    let mut doomed = Vec::new();
+    while let Some(name) = names.next().await {
+        doomed.push(name.map_err(|e| anyhow::anyhow!("failed to list consumers: {e}"))?);
+    }
+    anyhow::ensure!(!doomed.is_empty(), "expected the subscription's consumer");
+    for name in doomed {
+        stream
+            .delete_consumer(&name)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to delete consumer '{name}': {e}"))?;
+    }
+
+    // Recovery waits out the idle-heartbeat timeout, and the redelivery backoff
+    // grows with the delivery count, so give it room. Two further deliveries,
+    // not one, so a redelivery already in flight when the consumer went away
+    // cannot pass for a rebuild that resumed correctly.
+    let target = before + 2;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+    let mut highest = before;
+    while tokio::time::Instant::now() < deadline && highest < target {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match wait_for_result(&mut sub, "count:fail:always:", remaining).await {
+            Some(line) => highest = highest.max(reported_count(&line)),
+            None => break,
+        }
+    }
+
+    assert!(
+        highest >= target,
+        "expected the nak'd message to come round again after the rebuild \
+         (saw delivery {highest}, wanted {target}); a sequence released before \
+         the server settled it is skipped by the rebuilt consumer"
+    );
+    Ok(())
+}
+
+/// A NATS container with nothing provisioned on it: the multi-cluster tests
+/// only need core pub/sub, and a second JetStream-enabled server would just be
+/// slower to start.
+async fn start_bare_nats() -> Result<(String, async_nats::Client, ContainerAsync<GenericImage>)> {
+    let container = GenericImage::new("nats", "2.12.8-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+        .start()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to start NATS container: {e}"))?;
+    let port = container
+        .get_host_port_ipv4(4222)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to get NATS port: {e}"))?;
+    let url = format!("nats://127.0.0.1:{port}");
+    let client = connect_with_retry(&url, Duration::from_secs(30)).await?;
+    Ok((url, client, container))
+}
+
+/// A binding of the async package under an `(implements ..)` name.
+fn named_nats_interface(name: &str, interfaces: &[&str], config: &[(&str, &str)]) -> WitInterface {
+    WitInterface {
+        namespace: "wasmcloud".to_string(),
+        package: "nats".to_string(),
+        interfaces: interfaces.iter().map(|i| (*i).to_string()).collect(),
+        version: Some(semver::Version::new(0, 2, 0)),
+        config: config
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+        name: Some(name.to_string()),
+    }
+}
+
+/// The bridge component: `wasmcloud:nats/core` imported twice, under `hub` and
+/// `leaf`, plus the `core-handler` export the leaf subscription dispatches into.
+fn bridge_workload_request(
+    workload_id: &str,
+    interfaces: Vec<WitInterface>,
+) -> WorkloadStartRequest {
+    WorkloadStartRequest {
+        workload_id: workload_id.to_string(),
+        workload: Workload {
+            namespace: "test".to_string(),
+            name: format!("nats-{workload_id}"),
+            annotations: HashMap::new(),
+            service: None,
+            components: vec![Component {
+                name: "nats-bridge".to_string(),
+                digest: None,
+                bytes: bytes::Bytes::from_static(NATS_BRIDGE_WASM),
+                local_resources: LocalResources {
+                    memory_limit_mb: 256,
+                    cpu_limit: 1,
+                    config: HashMap::new(),
+                    environment: HashMap::new(),
+                    volume_mounts: vec![],
+                    allowed_hosts: Default::default(),
+                    allowed_ip_name_lookups: Default::default(),
+                    allowed_host_loopback_ports: Default::default(),
+                },
+                pool_size: 1,
+                max_invocations: 100,
+                max_concurrency: 4,
+            }],
+            host_interfaces: interfaces,
+            volumes: vec![],
+        },
+    }
+}
+
+/// Waits for one message on `subject`, or gives up at `budget`.
+async fn await_one(client: &async_nats::Client, subject: &str, budget: Duration) -> Option<String> {
+    let mut sub = client.subscribe(subject.to_string()).await.ok()?;
+    match timeout(budget, sub.next()).await {
+        Ok(Some(msg)) => Some(String::from_utf8_lossy(&msg.payload).to_string()),
+        _ => None,
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn two_named_bindings_reach_two_clusters() -> Result<()> {
+    let (hub_url, hub_client, _hub) = start_bare_nats().await?;
+    let (leaf_url, leaf_client, _leaf) = start_bare_nats().await?;
+    let host = start_host().await?;
+
+    // One component, two `wasmcloud:nats` bindings: `hub` publishes to one
+    // server, `leaf` subscribes on and publishes to the other.
+    host.workload_start(bridge_workload_request(
+        "wl-bridge",
+        vec![
+            named_nats_interface(
+                "hub",
+                &["types", "core"],
+                &[("servers", &hub_url), ("subject-allow", "bridge.>")],
+            ),
+            named_nats_interface(
+                "leaf",
+                &["types", "core", "core-handler"],
+                &[
+                    ("servers", &leaf_url),
+                    ("subject-allow", "bridge.>,trigger.go"),
+                    ("core-subscriptions", "trigger.go"),
+                ],
+            ),
+        ],
+    ))
+    .await
+    .context("failed to start the bridge workload")?;
+
+    // Subscribe before triggering, then re-trigger on a timer: core NATS drops
+    // a message published before the workload's subscription has attached, and
+    // how long that takes depends on what else the machine is doing.
+    let mut hub_sub = hub_client.subscribe("bridge.hub".to_string()).await?;
+    let mut leaf_sub = leaf_client.subscribe("bridge.leaf".to_string()).await?;
+    let triggering = tokio::spawn({
+        let client = leaf_client.clone();
+        async move {
+            loop {
+                let _ = client
+                    .publish("trigger.go".to_string(), "over-the-leafnode".into())
+                    .await;
+                let _ = client.flush().await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    });
+
+    let budget = Duration::from_secs(45);
+    let hub_seen = timeout(budget, hub_sub.next())
+        .await
+        .ok()
+        .flatten()
+        .map(|msg| String::from_utf8_lossy(&msg.payload).to_string());
+    let leaf_seen = timeout(budget, leaf_sub.next())
+        .await
+        .ok()
+        .flatten()
+        .map(|msg| String::from_utf8_lossy(&msg.payload).to_string());
+    triggering.abort();
+
+    assert_eq!(
+        hub_seen.as_deref(),
+        Some("hub:over-the-leafnode"),
+        "the `hub` label should publish to the hub server"
+    );
+    assert_eq!(
+        leaf_seen.as_deref(),
+        Some("leaf:over-the-leafnode"),
+        "the `leaf` label should publish to the leaf server"
+    );
+
+    // Each label really is its own cluster: neither subject exists on the other
+    // server, so a single shared connection would have failed one of the two
+    // assertions above.
+    assert!(
+        await_one(&hub_client, "bridge.leaf", Duration::from_secs(1))
+            .await
+            .is_none(),
+        "the leaf publish must not appear on the hub server"
+    );
+    Ok(())
+}
+
+/// Drives the async fixture's pull probe and returns the line it reports.
+async fn pull_probe(client: &async_nats::Client, spec: &str) -> Result<String> {
+    let mut results = client.subscribe("test.results".to_string()).await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    client
+        .publish("probe.pull".to_string(), format!("pull:{spec}").into())
+        .await?;
+    client.flush().await?;
+    wait_for_result(&mut results, "pull:", Duration::from_secs(20))
+        .await
+        .context("the fixture never reported a pull outcome")
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn a_fetch_over_the_consumer_limit_is_refused_not_reported_empty() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+
+    // A consumer that refuses any pull asking for more than 5 messages. The
+    // server answers those with `409 Exceeded MaxRequestBatch`, which used to
+    // reach the guest as `no-messages` — indistinguishable from an idle
+    // consumer, and unfixable from the guest side.
+    let stream =
+        h.js.get_stream(STREAM)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to get stream: {e}"))?;
+    stream
+        .create_consumer(async_nats::jetstream::consumer::pull::Config {
+            durable_name: Some("limited".to_string()),
+            filter_subject: "test.orders.>".to_string(),
+            max_batch: 5,
+            max_bytes: 4096,
+            ..Default::default()
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to create consumer: {e}"))?;
+
+    for n in 0..8 {
+        h.js.publish("test.orders.pull".to_string(), format!("order-{n}").into())
+            .await
+            .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?
+            .await
+            .map_err(|e| anyhow::anyhow!("publish ack failed: {e}"))?;
+    }
+
+    host.workload_start(workload_request(
+        "wl-pull-limits",
+        nats_async_interface(&[
+            ("servers", &h.nats_url),
+            ("subject-allow", "test.>,probe.>"),
+            ("stream-allow", STREAM),
+            ("bucket-allow", COUNTS_BUCKET),
+            ("core-subscriptions", "probe.pull"),
+        ]),
+    ))
+    .await
+    .context("failed to start workload")?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Over `max-request-batch`: a typed refusal, carrying the server's wording.
+    let refused = pull_probe(&h.client, &format!("{STREAM}:limited:10")).await?;
+    assert!(
+        refused.starts_with("pull:err:limit-exceeded:"),
+        "an over-limit fetch should be refused, got {refused:?}"
+    );
+    assert!(
+        refused.contains("MaxRequestBatch"),
+        "the refusal should carry the server's reason, got {refused:?}"
+    );
+    // And `info` reports the limits the guest needs to size the next request.
+    assert!(
+        refused.contains("max-request-batch=5") && refused.contains("max-request-max-bytes=4096"),
+        "consumer-info should report both request limits, got {refused:?}"
+    );
+
+    // Within the limits: messages come back, and the batch says why it ended.
+    let ok = pull_probe(&h.client, &format!("{STREAM}:limited:5")).await?;
+    assert!(
+        ok.starts_with("pull:ok:5:batch-filled:"),
+        "a fetch inside the limits should fill the batch, got {ok:?}"
+    );
+
+    // Byte-bounded: the server closes the batch early, and that is now visible
+    // rather than looking like a drained consumer.
+    let capped = pull_probe(&h.client, &format!("{STREAM}:limited:5:100")).await?;
+    assert!(
+        capped.starts_with("pull:ok:") && capped.contains(":byte-limit:"),
+        "a byte-capped batch should report `byte-limit`, got {capped:?}"
     );
     Ok(())
 }

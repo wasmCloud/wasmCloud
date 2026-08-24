@@ -12,6 +12,7 @@ members = [
     "messaging-handler",
     "nats-jetstream-handler",
     "nats-async-handler-p3",
+    "nats-implements-p3",
     "messaging-echo",
     "messaging-echo-p3",
     "messaging-dual-handler",

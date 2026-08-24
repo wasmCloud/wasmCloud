@@ -31,6 +31,11 @@ const DENIED_MARKER: &str = "denied:";
 const YIELD_NANOS: u64 = 1_000_000;
 /// KV bucket the delivery counter lives in.
 const COUNTS_BUCKET: &str = "test-counts";
+/// Bodies starting with this drive a pull-consumer fetch:
+/// `pull:<stream>:<consumer>:<batch>[:<max-bytes>]`.
+const PULL_MARKER: &str = "pull:";
+/// How long a probe fetch waits for its first message.
+const PULL_TIMEOUT_MS: u32 = 1_000;
 
 struct Component;
 
@@ -63,6 +68,7 @@ fn label(err: &NatsError) -> String {
         NatsError::KeyNotFound => "key-not-found".to_string(),
         NatsError::RevisionMismatch(rev) => format!("revision-mismatch:{rev}"),
         NatsError::NoMessages => "no-messages".to_string(),
+        NatsError::LimitExceeded(detail) => format!("limit-exceeded:{detail}"),
         NatsError::Disconnected => "disconnected".to_string(),
         NatsError::Timeout(d) => format!("timeout:{d}"),
         NatsError::Connection(d) => format!("connection:{d}"),
@@ -142,12 +148,64 @@ impl JsGuest for Component {
     }
 }
 
+/// Runs one `fetch` against a pull consumer and reports what came back, so a
+/// test can see the difference between an idle consumer, a refused request,
+/// and a batch cut short by a byte bound.
+async fn pull_probe(spec: &str) -> String {
+    let parts: Vec<&str> = spec.split(':').collect();
+    let [stream, consumer, batch] = parts[..3] else {
+        return "pull:bad-spec".to_string();
+    };
+    let batch: u32 = batch.parse().unwrap_or(1);
+    let max_bytes: u64 = parts.get(3).and_then(|b| b.parse().ok()).unwrap_or(0);
+
+    let handle = match jetstream::open_pull_consumer(stream.to_string(), consumer.to_string()).await
+    {
+        Ok(h) => h,
+        Err(e) => return format!("pull:open-failed:{}", label(&e)),
+    };
+
+    // The limits the consumer was provisioned with, which is what a guest
+    // needs to size a request that will not be refused.
+    let limits = match handle.info().await {
+        Ok(info) => format!(
+            "max-request-batch={},max-request-max-bytes={}",
+            info.max_request_batch, info.max_request_max_bytes
+        ),
+        Err(e) => format!("info-failed:{}", label(&e)),
+    };
+
+    let fetched = handle
+        .fetch_with_limits(batch, max_bytes, PULL_TIMEOUT_MS)
+        .await;
+    match fetched {
+        Ok(batch) => {
+            let stop = match batch.stop {
+                jetstream::FetchStop::BatchFilled => "batch-filled",
+                jetstream::FetchStop::Drained => "drained",
+                jetstream::FetchStop::ByteLimit => "byte-limit",
+            };
+            for message in &batch.messages {
+                let _ = message.ack().await;
+            }
+            format!("pull:ok:{}:{stop}:{limits}", batch.messages.len())
+        }
+        Err(e) => format!("pull:err:{}:{limits}", label(&e)),
+    }
+}
+
 impl CoreGuest for Component {
     /// Echoes onto `reply-to` when there is one — a request/reply round trip
     /// driven entirely from inside an async export.
     async fn handle_message(msg: NatsMessage) -> Result<(), String> {
         monotonic_clock::wait_for(YIELD_NANOS).await;
         let body = String::from_utf8_lossy(&msg.body).to_string();
+        if let Some(spec) = body.strip_prefix(PULL_MARKER) {
+            let outcome = pull_probe(spec).await;
+            return js_publish("test.results", outcome)
+                .await
+                .map_err(|e| label(&e));
+        }
         if body.starts_with(FAIL_MARKER) {
             return Err(format!("core handler failed on `{body}`"));
         }
