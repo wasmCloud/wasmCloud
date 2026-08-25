@@ -6,6 +6,7 @@ mod multiplexed;
 #[cfg(feature = "wasm_component_model_implements")]
 mod multiplexed_async;
 mod nats;
+mod nats_bucket;
 mod redis;
 
 pub use filesystem::FilesystemKeyValue;
@@ -19,4 +20,5 @@ pub use multiplexed::{
 #[cfg(feature = "wasm_component_model_implements")]
 pub use multiplexed_async::MultiplexedAsyncKeyValue;
 pub use nats::NatsKeyValue;
+pub use nats_bucket::{BucketPolicy, CreatePolicy, OpenError, OpenOutcome};
 pub use redis::RedisKeyValue;

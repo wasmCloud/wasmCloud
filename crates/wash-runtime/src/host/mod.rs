@@ -1278,8 +1278,20 @@ impl HostBuilder {
     /// registered plugin reports `supports_named_instances() == false` and a
     /// workload needing named multiplexing fails to bind.
     #[cfg(feature = "wasm_component_model_implements")]
-    pub fn with_multiplexed_plugins(mut self) -> anyhow::Result<Self> {
-        for plugin in crate::plugin::multiplexed_plugins() {
+    pub fn with_multiplexed_plugins(self) -> anyhow::Result<Self> {
+        self.with_multiplexed_plugins_with(&crate::plugin::MultiplexedDefaults::default())
+    }
+
+    /// [`Self::with_multiplexed_plugins`], with the settings a named interface
+    /// inherits unless its own `config` overrides them. Pass the embedder's
+    /// configuration here so it reaches `(implements ..)` imports and not only
+    /// the standard plugins.
+    #[cfg(feature = "wasm_component_model_implements")]
+    pub fn with_multiplexed_plugins_with(
+        mut self,
+        defaults: &crate::plugin::MultiplexedDefaults,
+    ) -> anyhow::Result<Self> {
+        for plugin in crate::plugin::multiplexed_plugins_with(defaults) {
             self = self.with_plugin(plugin)?;
         }
         Ok(self)

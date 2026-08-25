@@ -330,6 +330,74 @@ pub struct HostCommand {
     #[arg(long = "deny-private-ranges", default_value_t = false)]
     pub deny_private_ranges: bool,
 
+    /// Whether a `wasi:keyvalue` bucket a workload opens may be created in
+    /// JetStream.
+    ///
+    /// `never` (the default) opens only buckets that already exist, so the
+    /// buckets an operator declares are the whole allowlist. It is a ceiling,
+    /// not a default: a workload's `(implements ..)` interface may tighten it
+    /// to `never`, but cannot grant itself creation this host withheld.
+    /// `missing` creates a bucket on first open, using the settings below.
+    #[arg(
+        long = "keyvalue-nats-create",
+        env = "WASH_KEYVALUE_NATS_CREATE",
+        value_enum,
+        default_value = "never"
+    )]
+    pub keyvalue_nats_create: KeyvalueCreateMode,
+
+    /// Pin the plain (unlabeled) `wasi:keyvalue` import to this one JetStream
+    /// bucket, ignoring the name the workload passes.
+    ///
+    /// A pin names a single store, so it reaches only the standard NATS
+    /// keyvalue plugin — not an import a workload routes through a configured
+    /// backend, whether it is `(implements ..)`-named or an unnamed interface
+    /// declaring `backend: nats`. Those state their own `bucket`, or resolve
+    /// each identifier by name. The operator's controls that *do* reach them
+    /// are `--keyvalue-nats-bucket-prefix`, which bounds the names they can
+    /// reach, and `--keyvalue-nats-create`, which they cannot loosen.
+    #[arg(long = "keyvalue-nats-bucket", env = "WASH_KEYVALUE_NATS_BUCKET")]
+    pub keyvalue_nats_bucket: Option<String>,
+
+    /// Prefix prepended to every JetStream bucket name, to namespace this
+    /// host's buckets away from another's on a shared NATS cluster.
+    #[arg(
+        long = "keyvalue-nats-bucket-prefix",
+        env = "WASH_KEYVALUE_NATS_BUCKET_PREFIX"
+    )]
+    pub keyvalue_nats_bucket_prefix: Option<String>,
+
+    /// Replicas for a keyvalue bucket this host creates.
+    #[arg(long = "keyvalue-nats-replicas", env = "WASH_KEYVALUE_NATS_REPLICAS")]
+    pub keyvalue_nats_replicas: Option<usize>,
+
+    /// Storage for a keyvalue bucket this host creates.
+    #[arg(
+        long = "keyvalue-nats-storage",
+        env = "WASH_KEYVALUE_NATS_STORAGE",
+        value_enum
+    )]
+    pub keyvalue_nats_storage: Option<KeyvalueStorageType>,
+
+    /// Maximum age of an entry in a keyvalue bucket this host creates, e.g.
+    /// `24h`.
+    #[arg(long = "keyvalue-nats-max-age", env = "WASH_KEYVALUE_NATS_MAX_AGE", value_parser = humantime::parse_duration)]
+    pub keyvalue_nats_max_age: Option<Duration>,
+
+    /// Historical entries kept per key in a keyvalue bucket this host creates.
+    #[arg(long = "keyvalue-nats-history", env = "WASH_KEYVALUE_NATS_HISTORY")]
+    pub keyvalue_nats_history: Option<i64>,
+
+    /// Size ceiling, in bytes, for a keyvalue bucket this host creates. `-1`
+    /// is JetStream's "unlimited"; negative values are accepted here so it can
+    /// be passed as `--keyvalue-nats-max-bytes -1` rather than only with `=`.
+    #[arg(
+        long = "keyvalue-nats-max-bytes",
+        env = "WASH_KEYVALUE_NATS_MAX_BYTES",
+        allow_negative_numbers = true
+    )]
+    pub keyvalue_nats_max_bytes: Option<i64>,
+
     /// Enable additional wasm proposals on the engine. Accepts a comma-separated
     /// list and/or repeated flags, e.g. `--wasm-proposal gc,threads`. Accepted
     /// names: component-model-async, component-model-map, gc,
@@ -407,6 +475,29 @@ fn host_plugin_registry_credentials(
         (Some(user), Some(password)) => Some((user.to_string(), password.to_string())),
         (None, None) => None,
         (Some(_), None) | (None, Some(_)) => None,
+    }
+}
+
+impl HostCommand {
+    /// The NATS keyvalue bucket policy these flags ask for.
+    ///
+    /// A host defaults to `create = never`: the buckets an operator declared
+    /// are the only ones reachable, so a workload's `open` identifier cannot
+    /// create JetStream streams and the host's NATS credentials need no
+    /// stream-create permission.
+    fn keyvalue_bucket_policy(&self) -> anyhow::Result<plugin::wasi_keyvalue::BucketPolicy> {
+        plugin::wasi_keyvalue::BucketPolicy {
+            prefix: self.keyvalue_nats_bucket_prefix.clone().unwrap_or_default(),
+            bucket: self.keyvalue_nats_bucket.clone(),
+            create: self.keyvalue_nats_create.into(),
+            replicas: self.keyvalue_nats_replicas,
+            storage: self.keyvalue_nats_storage.map(Into::into),
+            max_age: self.keyvalue_nats_max_age,
+            history: self.keyvalue_nats_history,
+            max_bytes: self.keyvalue_nats_max_bytes,
+        }
+        .validated()
+        .context("invalid --keyvalue-nats-* value")
     }
 }
 
@@ -524,6 +615,18 @@ impl CliCommand for HostCommand {
             engine.total_core_instances(),
         )?;
 
+        // Resolved once: the standard keyvalue plugin and the multiplexed ones
+        // must agree on how a bucket identifier resolves.
+        let keyvalue_bucket_policy = self.keyvalue_bucket_policy()?;
+        // Stated at startup because it decides whether a workload's `open` can
+        // succeed at all, and the default declines to create buckets.
+        info!(
+            create = keyvalue_bucket_policy.create.as_str(),
+            bucket_prefix = %keyvalue_bucket_policy.prefix,
+            bucket = keyvalue_bucket_policy.bucket.as_deref().unwrap_or("<per identifier>"),
+            "keyvalue bucket policy resolved (see --keyvalue-nats-*)"
+        );
+
         let mut cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default()
             .with_engine(engine.clone())
             .with_host_config(host_config)
@@ -545,14 +648,23 @@ impl CliCommand for HostCommand {
                     messaging_limits.clone(),
                 ),
             ))?
-            .with_plugin(Arc::new(plugin::wasi_keyvalue::NatsKeyValue::new(
-                &data_nats_client,
-            )))?
+            .with_plugin(Arc::new(
+                plugin::wasi_keyvalue::NatsKeyValue::with_bucket_policy(
+                    &data_nats_client,
+                    keyvalue_bucket_policy.clone(),
+                ),
+            ))?
             .with_meters(Meters::new(ctx.enable_meters()));
 
         #[cfg(feature = "wasm_component_model_implements")]
         {
-            cluster_host_builder = cluster_host_builder.with_multiplexed_plugins()?;
+            // The same policy the standard keyvalue plugin got, so the
+            // `--keyvalue-nats-*` flags govern `(implements ..)` imports of
+            // `wasi:keyvalue` and `wasmcloud:keyvalue` too.
+            cluster_host_builder = cluster_host_builder.with_multiplexed_plugins_with(
+                &plugin::MultiplexedDefaults::default()
+                    .with_keyvalue_nats_bucket(keyvalue_bucket_policy),
+            )?;
         }
 
         if let Some(postgres_url) = &self.postgres_url {
@@ -717,7 +829,114 @@ impl CliCommand for HostCommand {
 
 #[cfg(all(test, feature = "host-component-plugins"))]
 mod tests {
-    use super::host_plugin_registry_credentials;
+    use clap::Parser;
+
+    use super::{HostCommand, host_plugin_registry_credentials};
+
+    /// `HostCommand` is an `Args` group, so give it a `Parser` to parse under.
+    #[derive(Debug, Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        host: HostCommand,
+    }
+
+    fn parse(args: &[&str]) -> HostCommand {
+        TestCli::parse_from(std::iter::once("wash-host").chain(args.iter().copied())).host
+    }
+
+    /// With no flags a host opens only buckets that already exist and rewrites
+    /// no names — the conservative default a deployment inherits.
+    #[test]
+    fn keyvalue_policy_defaults_to_create_never() {
+        let policy = parse(&[])
+            .keyvalue_bucket_policy()
+            .expect("the default flags must be a valid policy");
+        assert_eq!(
+            policy.create,
+            wash_runtime::plugin::wasi_keyvalue::CreatePolicy::Never
+        );
+        assert_eq!(policy.physical_name("counters"), "counters");
+    }
+
+    /// Every `--keyvalue-nats-*` flag reaches the policy.
+    #[test]
+    fn keyvalue_policy_reads_every_flag() {
+        let policy = parse(&[
+            "--keyvalue-nats-create",
+            "missing",
+            "--keyvalue-nats-bucket-prefix",
+            "team-a_",
+            "--keyvalue-nats-bucket",
+            "APP_STORE",
+            "--keyvalue-nats-replicas",
+            "3",
+            "--keyvalue-nats-storage",
+            "memory",
+            "--keyvalue-nats-max-age",
+            "24h",
+            "--keyvalue-nats-history",
+            "5",
+            "--keyvalue-nats-max-bytes",
+            "1048576",
+        ])
+        .keyvalue_bucket_policy()
+        .expect("must be a valid policy");
+
+        assert_eq!(
+            policy.create,
+            wash_runtime::plugin::wasi_keyvalue::CreatePolicy::Missing
+        );
+        assert_eq!(policy.physical_name("counters"), "team-a_APP_STORE");
+        assert_eq!(policy.replicas, Some(3));
+        assert!(matches!(
+            policy.storage,
+            Some(async_nats::jetstream::stream::StorageType::Memory)
+        ));
+        assert_eq!(policy.max_age, Some(std::time::Duration::from_secs(86400)));
+        assert_eq!(policy.history, Some(5));
+        assert_eq!(policy.max_bytes, Some(1_048_576));
+    }
+
+    /// A value JetStream would refuse fails while resolving the flags, so the
+    /// host does not start and then break at some guest's first `open`.
+    #[test]
+    fn keyvalue_policy_rejects_invalid_flags() {
+        for args in [
+            vec!["--keyvalue-nats-replicas", "0"],
+            vec!["--keyvalue-nats-history", "0"],
+            vec!["--keyvalue-nats-history", "65"],
+            vec!["--keyvalue-nats-max-bytes", "-2"],
+            vec!["--keyvalue-nats-bucket-prefix", "my.app_"],
+            vec!["--keyvalue-nats-bucket", "my bucket"],
+        ] {
+            parse(&args)
+                .keyvalue_bucket_policy()
+                .expect_err(&format!("{args:?} must be rejected"));
+        }
+    }
+
+    /// `-1` — JetStream's "unlimited" — must reach the policy rather than
+    /// being read as another flag.
+    #[test]
+    fn keyvalue_max_bytes_accepts_unlimited() {
+        let policy = parse(&["--keyvalue-nats-max-bytes", "-1"])
+            .keyvalue_bucket_policy()
+            .expect("-1 must be a valid max_bytes");
+        assert_eq!(policy.max_bytes, Some(-1));
+    }
+
+    /// An unparseable flag value is a clap error, not a policy error.
+    #[test]
+    fn keyvalue_flag_values_are_typed() {
+        for args in [
+            vec!["--keyvalue-nats-create", "sometimes"],
+            vec!["--keyvalue-nats-storage", "tape"],
+            vec!["--keyvalue-nats-max-age", "many moons"],
+        ] {
+            TestCli::try_parse_from(std::iter::once("wash-host").chain(args.iter().copied()))
+                .expect_err(&format!("{args:?} must not parse"));
+        }
+    }
 
     #[test]
     fn both_halves_yield_credentials() {
@@ -738,6 +957,41 @@ mod tests {
         // credentials — never a basic auth with an empty half.
         assert_eq!(host_plugin_registry_credentials(Some("user"), None), None);
         assert_eq!(host_plugin_registry_credentials(None, Some("pass")), None);
+    }
+}
+
+/// CLI spelling of [`wash_runtime::plugin::wasi_keyvalue::CreatePolicy`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum KeyvalueCreateMode {
+    /// Open only buckets that already exist; anything else is `no-such-store`.
+    #[default]
+    Never,
+    /// Create a bucket on first open when it is missing.
+    Missing,
+}
+
+impl From<KeyvalueCreateMode> for wash_runtime::plugin::wasi_keyvalue::CreatePolicy {
+    fn from(mode: KeyvalueCreateMode) -> Self {
+        match mode {
+            KeyvalueCreateMode::Never => Self::Never,
+            KeyvalueCreateMode::Missing => Self::Missing,
+        }
+    }
+}
+
+/// CLI spelling of JetStream's storage backing for a created bucket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum KeyvalueStorageType {
+    File,
+    Memory,
+}
+
+impl From<KeyvalueStorageType> for async_nats::jetstream::stream::StorageType {
+    fn from(storage: KeyvalueStorageType) -> Self {
+        match storage {
+            KeyvalueStorageType::File => Self::File,
+            KeyvalueStorageType::Memory => Self::Memory,
+        }
     }
 }
 

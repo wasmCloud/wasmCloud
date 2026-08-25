@@ -261,8 +261,9 @@ impl CliCommand for DevCommand {
             let nats_client = async_nats::connect(nats_url.as_str())
                 .await
                 .context("failed to connect to NATS for keyvalue plugin")?;
+            let policy = dev_config.keyvalue_bucket_policy()?;
             host_builder = host_builder.with_plugin(Arc::new(
-                plugin::wasi_keyvalue::NatsKeyValue::new(&nats_client),
+                plugin::wasi_keyvalue::NatsKeyValue::with_bucket_policy(&nats_client, policy),
             ))?;
             debug!(url = %nats_url, "WASI KeyValue plugin registered with NATS backend");
         } else if let Some(keyvalue_path) = &dev_config.wasi_keyvalue_path {
@@ -274,8 +275,10 @@ impl CliCommand for DevCommand {
                 "WASI KeyValue plugin registered with filesystem backend"
             );
         } else if let Some(client) = &data_nats_client {
-            host_builder = host_builder
-                .with_plugin(Arc::new(plugin::wasi_keyvalue::NatsKeyValue::new(client)))?;
+            let policy = dev_config.keyvalue_bucket_policy()?;
+            host_builder = host_builder.with_plugin(Arc::new(
+                plugin::wasi_keyvalue::NatsKeyValue::with_bucket_policy(client, policy),
+            ))?;
             debug!("WASI KeyValue plugin registered with NATS backend (data_nats_url)");
         } else {
             host_builder = host_builder
@@ -285,7 +288,13 @@ impl CliCommand for DevCommand {
 
         #[cfg(feature = "wasm_component_model_implements")]
         {
-            host_builder = host_builder.with_multiplexed_plugins()?;
+            // The same bucket policy the standard keyvalue plugin got, so a
+            // `(implements ..)` import — `wasi:keyvalue` or `wasmcloud:keyvalue`
+            // — resolves NATS buckets the way this project configured.
+            host_builder = host_builder.with_multiplexed_plugins_with(
+                &wash_runtime::plugin::MultiplexedDefaults::default()
+                    .with_keyvalue_nats_bucket(dev_config.keyvalue_bucket_policy()?),
+            )?;
             debug!("multiplexed plugins registered (implements)");
         }
 

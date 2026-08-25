@@ -101,6 +101,17 @@ impl ClusterHostBuilder {
         Ok(self)
     }
 
+    /// Registers the multiplexed plugin set with embedder defaults. See
+    /// [`crate::host::HostBuilder::with_multiplexed_plugins_with`].
+    #[cfg(feature = "wasm_component_model_implements")]
+    pub fn with_multiplexed_plugins_with(
+        mut self,
+        defaults: &crate::plugin::MultiplexedDefaults,
+    ) -> anyhow::Result<Self> {
+        self.host_builder = self.host_builder.with_multiplexed_plugins_with(defaults)?;
+        Ok(self)
+    }
+
     pub fn with_artifact_cleaner(mut self, frequency: Duration, max_age: Duration) -> Self {
         self.cleanup_interval = Some(frequency);
         self.cleanup_age = Some(max_age);

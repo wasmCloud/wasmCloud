@@ -25,8 +25,13 @@ curl 'http://localhost:8000/?name=Bailey'
 # Hello x2, Bailey!
 ```
 
-The counter is persisted via `wasi:keyvalue/store` and `wasi:keyvalue/atomics` —
-`wash dev` provides an in-memory implementation automatically.
+The counter is persisted via `wasi:keyvalue/store` and `wasi:keyvalue/atomics` in
+a bucket named `counters` — `wash dev` provides an in-memory implementation
+automatically.
+
+Deploying to a `wash host` backed by NATS JetStream: a host does not create
+buckets a workload names. Either create the `counters` bucket in JetStream
+first, or start the host with `--keyvalue-nats-create missing`.
 
 ## Build
 

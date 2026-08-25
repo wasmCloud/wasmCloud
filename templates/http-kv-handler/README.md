@@ -113,6 +113,40 @@ dev:
   wasi_keyvalue_nats_url: nats://127.0.0.1:4222
 ```
 
+The name passed to `open()` is a *logical* name: `dev.wasi_keyvalue_nats`
+decides which JetStream bucket it resolves to and whether wash may create that
+bucket.
+
+```yaml
+# .wash/config.yaml
+dev:
+  wasi_keyvalue_nats_url: nats://127.0.0.1:4222
+  wasi_keyvalue_nats:
+    create: missing      # `missing` (the `wash dev` default) or `never`
+    bucket_prefix: my-app_
+    # bucket: MY_APP_STORE   # pin every identifier to one bucket
+    # replicas / storage / max_age / history / max_bytes apply to buckets wash creates
+```
+
+`wash host` defaults to `create: never` (`--keyvalue-nats-create`), so in a
+deployment only buckets an operator declared are reachable and a workload
+cannot create JetStream streams by naming them. An identifier with no bucket
+behind it returns `no-such-store`.
+
+These settings apply to `wasmcloud:keyvalue` as well as `wasi:keyvalue`: both
+resolve NATS buckets through the same policy, including for an
+`(implements ..)` import, which can override any key in its own interface
+config.
+
+JetStream buckets are shared by every workload on the host, so two workloads
+that open the same identifier see the same data. `bucket_prefix` is a
+host-wide setting, so it separates one host or deployment from another sharing
+a NATS cluster — it does not separate two workloads on the same host. To keep
+those apart, give them different identifiers, or bind each to its own
+`(implements ..)` interface with its own `bucket`. (The in-memory backend
+isolates buckets per workload, so a component that looks isolated under a bare
+`wash dev` shares state once it is pointed at NATS or Redis.)
+
 Start a local NATS server with JetStream:
 
 ```shell

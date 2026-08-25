@@ -5,6 +5,10 @@
 //! storage lives in the shared [`FsKvStore`](super::fs_store::FsKvStore) — this
 //! module is the host-binding adapter (the unnamed/default `wasi:keyvalue`
 //! instance); the multiplexed `FilesystemBackend` is the other adapter.
+//!
+//! An identifier is a subdirectory of the store root, shared by every workload
+//! on the host: two workloads that open the same identifier share the store.
+//! Give a deployment its own root to separate them.
 
 use std::collections::HashSet;
 use std::path::Path;

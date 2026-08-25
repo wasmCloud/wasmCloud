@@ -514,6 +514,41 @@ pub(crate) fn lock_root(root: impl AsRef<Path>, untrusted: &str) -> Result<PathB
 /// as `multiplex_only`, depends on the host's own configuration.
 #[cfg(feature = "wasm_component_model_implements")]
 pub fn multiplexed_plugins() -> Vec<std::sync::Arc<dyn HostPlugin>> {
+    multiplexed_plugins_with(&MultiplexedDefaults::default())
+}
+
+/// Settings an embedder chose that the multiplexed plugin set is built with.
+///
+/// A named interface's own `config` still wins key by key; these fill in the
+/// rest, which is how a host's flags reach an `(implements ..)` import instead
+/// of stopping at the standard plugins.
+#[cfg(feature = "wasm_component_model_implements")]
+#[derive(Clone, Debug, Default)]
+pub struct MultiplexedDefaults {
+    /// Bucket naming and creation policy for NATS-backed keyvalue interfaces.
+    /// Applies to `wasi:keyvalue` and `wasmcloud:keyvalue` alike — both
+    /// register the same backend providers.
+    #[cfg(feature = "wasi-keyvalue")]
+    pub keyvalue_nats_bucket: wasi_keyvalue::BucketPolicy,
+}
+
+#[cfg(feature = "wasm_component_model_implements")]
+impl MultiplexedDefaults {
+    /// Set the NATS keyvalue bucket policy. A setter rather than a struct
+    /// literal so an embedder keeps compiling as fields are added here, and so
+    /// one that builds without `wasi-keyvalue` is unaffected.
+    #[cfg(feature = "wasi-keyvalue")]
+    pub fn with_keyvalue_nats_bucket(mut self, policy: wasi_keyvalue::BucketPolicy) -> Self {
+        self.keyvalue_nats_bucket = policy;
+        self
+    }
+}
+
+/// [`multiplexed_plugins`], built with the embedder's `defaults`.
+#[cfg(feature = "wasm_component_model_implements")]
+pub fn multiplexed_plugins_with(
+    #[allow(unused_variables)] defaults: &MultiplexedDefaults,
+) -> Vec<std::sync::Arc<dyn HostPlugin>> {
     #[allow(unused_mut)]
     let mut plugins: Vec<std::sync::Arc<dyn HostPlugin>> = Vec::new();
     #[allow(unused_imports)]
@@ -521,18 +556,26 @@ pub fn multiplexed_plugins() -> Vec<std::sync::Arc<dyn HostPlugin>> {
 
     #[cfg(feature = "wasi-keyvalue")]
     {
+        // One provider instance per plugin, both carrying the same bucket
+        // policy, so `wasi:keyvalue` and `wasmcloud:keyvalue` resolve NATS
+        // buckets identically.
+        let nats = || {
+            Arc::new(wasi_keyvalue::NatsProvider::with_defaults(
+                defaults.keyvalue_nats_bucket.clone(),
+            ))
+        };
         plugins.push(Arc::new(
             wasi_keyvalue::MultiplexedKeyValue::new()
                 .with_provider(Arc::new(wasi_keyvalue::InMemoryProvider))
                 .with_provider(Arc::new(wasi_keyvalue::RedisProvider))
-                .with_provider(Arc::new(wasi_keyvalue::NatsProvider))
+                .with_provider(nats())
                 .with_provider(Arc::new(wasi_keyvalue::FilesystemProvider)),
         ));
         plugins.push(Arc::new(
             wasi_keyvalue::MultiplexedAsyncKeyValue::new()
                 .with_provider(Arc::new(wasi_keyvalue::InMemoryProvider))
                 .with_provider(Arc::new(wasi_keyvalue::RedisProvider))
-                .with_provider(Arc::new(wasi_keyvalue::NatsProvider))
+                .with_provider(nats())
                 .with_provider(Arc::new(wasi_keyvalue::FilesystemProvider)),
         ));
     }
