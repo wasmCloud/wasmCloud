@@ -151,7 +151,7 @@ async fn test_update_selective_and_full() -> Result<()> {
 
 world example {
     import wasi:logging/logging@0.1.0-draft;
-    import wasi:config/store@0.2.0-draft;
+    import wasi:config/runtime@0.2.0-draft;
 }
 "#,
     )
@@ -209,7 +209,7 @@ async fn test_remove_workflow() -> Result<()> {
 
 world example {
     import wasi:logging/logging@0.1.0-draft;
-    import wasi:config/store@0.2.0-draft;
+    import wasi:config/runtime@0.2.0-draft;
 }
 "#,
     )
@@ -243,7 +243,7 @@ world example {
         "wasi:logging should be removed from world.wit"
     );
     assert!(
-        content.contains("import wasi:config/store"),
+        content.contains("import wasi:config/runtime"),
         "wasi:config should remain in world.wit"
     );
 

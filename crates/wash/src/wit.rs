@@ -5,7 +5,7 @@
 //! fetching dependencies from registries and manages lock files for reproducible builds.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
 };
 
@@ -472,15 +472,20 @@ impl WkgFetcher {
         Ok(())
     }
 
+    /// A caching client for this fetcher's registry configuration
+    fn client(&self) -> CachingClient<FileCache> {
+        CachingClient::new(
+            Some(wasm_pkg_client::Client::new(self.wkg_client_config.clone())),
+            self.cache.clone(),
+        )
+    }
+
     pub async fn fetch_wit_dependencies(
-        self,
+        &self,
         wit_dir: impl AsRef<Path>,
         lock: &mut LockFile,
     ) -> Result<()> {
-        let client = CachingClient::new(
-            Some(wasm_pkg_client::Client::new(self.wkg_client_config)),
-            self.cache,
-        );
+        let client = self.client();
 
         wasm_pkg_core::wit::fetch_dependencies(
             &self.wkg_config,
@@ -496,7 +501,7 @@ impl WkgFetcher {
 
     /// Build a WIT package into a Wasm binary
     pub async fn build_wit_package(
-        self,
+        &self,
         wit_dir: impl AsRef<Path>,
         lock: &mut LockFile,
     ) -> Result<(
@@ -504,13 +509,385 @@ impl WkgFetcher {
         Option<semver::Version>,
         Vec<u8>,
     )> {
-        let client = CachingClient::new(
-            Some(wasm_pkg_client::Client::new(self.wkg_client_config)),
-            self.cache,
-        );
+        let client = self.client();
 
         wasm_pkg_core::wit::build_package(&self.wkg_config, wit_dir.as_ref(), lock, client).await
     }
+
+    /// Work out what is wrong with a WIT directory that failed to fetch. Resolution reports only
+    /// that it failed, so this turns that into the two things it usually is: a package or version
+    /// the sources do not have, or one package named at two versions.
+    ///
+    /// Returns an empty list when nothing is found, which means the fetch failed for a reason its
+    /// own error already describes.
+    pub async fn diagnose_wit(&self, wit_dir: impl AsRef<Path>) -> Result<Vec<String>> {
+        let (_, packages) = wasm_pkg_core::wit::get_packages(wit_dir.as_ref())?;
+
+        // A HashSet has no order of its own, and the report should read the same every time
+        let mut required: BTreeMap<PackageRef, Vec<semver::VersionReq>> = BTreeMap::new();
+        for (package, requirement) in packages {
+            required.entry(package).or_default().push(requirement);
+        }
+        for requirements in required.values_mut() {
+            requirements.sort_by_key(ToString::to_string);
+        }
+
+        let overrides = self.wkg_config.overrides.clone().unwrap_or_default();
+        let client = self.client();
+
+        let mut problems = Vec::new();
+        for (package, requirements) in required {
+            // A fetch resolves one version per package name, so a package named at more than one
+            // version has no single version to ask the registry about either
+            if requirements.len() > 1 {
+                problems.push(multiple_versions_message(&package, &requirements));
+                continue;
+            }
+
+            // An overridden package does not come from the registry, so the registry has nothing
+            // to say about it
+            if overrides.contains_key(&package.to_string())
+                || overrides.contains_key(&package.namespace().to_string())
+            {
+                continue;
+            }
+
+            let Some(requirement) = requirements.first() else {
+                continue;
+            };
+            let version = requested_version(requirement);
+            match missing_from_registry(&client, &package, version.as_deref(), requirement).await {
+                Ok(Some(message)) => problems.push(message),
+                Ok(None) => {}
+                // A package that cannot be looked up is not a package that is known to be absent,
+                // and a registry that cannot answer for one will not answer for the rest either
+                Err(e) => {
+                    debug!("could not check [{package}] against its registry: {e:#}");
+                    break;
+                }
+            }
+        }
+
+        Ok(problems)
+    }
+
+    /// Load a single package from its source and report the interfaces and worlds it defines. A
+    /// world imports interfaces rather than whole packages, so this is what turns
+    /// `wasmcloud:messaging` into the set of names that can actually appear in a world.
+    ///
+    /// A package that the registry does not have comes back as [`PackageLookup::Missing`] with a
+    /// message naming what was searched; a lookup that could not be completed at all comes back
+    /// as [`PackageLookup::Failed`], so a caller can tell "there is no such package" apart from
+    /// "the registry could not be reached".
+    pub async fn load_package(
+        &self,
+        package: &PackageRef,
+        version: Option<&str>,
+        lock: Option<&LockFile>,
+    ) -> PackageLookup {
+        match self.try_load_package(package, version, lock).await {
+            Ok(lookup) => lookup,
+            Err(e) => PackageLookup::Failed(e),
+        }
+    }
+
+    async fn try_load_package(
+        &self,
+        package: &PackageRef,
+        version: Option<&str>,
+        lock: Option<&LockFile>,
+    ) -> Result<PackageLookup> {
+        let requirement = match version {
+            Some(version) => semver::VersionReq::parse(&format!("={version}"))
+                .map_err(|e| anyhow::anyhow!("invalid version [{version}]: {e}"))?,
+            None => semver::VersionReq::STAR,
+        };
+
+        // A `wkg.toml` override (which is also where a `wit.sources` local path lands) replaces
+        // the registry for this package, so the registry is only searched when there is none.
+        // Overrides are keyed by `namespace:package`, or by `namespace` alone for a whole
+        // namespace.
+        let package_override = self
+            .wkg_config
+            .overrides
+            .as_ref()
+            .and_then(|overrides| {
+                overrides
+                    .get(&package.to_string())
+                    .or_else(|| overrides.get(&package.namespace().to_string()))
+            })
+            .cloned();
+
+        let client = self.client();
+
+        // The lock file goes in so that a version it already pins is the one selected here, the
+        // same way the fetch that follows selects it
+        let mut resolver =
+            wasm_pkg_core::resolver::DependencyResolver::new_with_client(client.clone(), lock)
+                .context("failed to create dependency resolver")?;
+
+        match package_override {
+            Some(package_override) => {
+                // An override that pins a different version than the one asked for wins, the same
+                // way it does during a fetch, so say so rather than quietly resolving the other one
+                if let Some(pinned) = package_override.version.as_ref()
+                    && let Some(version) = version
+                    && semver::Version::parse(version)
+                        .is_ok_and(|requested| !pinned.matches(&requested))
+                {
+                    return Ok(PackageLookup::Missing(format!(
+                        "[{package}] is pinned to [{pinned}] by a source override, which does not \
+                         provide the requested version [{version}].\n\
+                         \n\
+                         Change the override under `wit.sources` in .wash/config.yaml (or in \
+                         wkg.toml), or ask for the pinned version."
+                    )));
+                }
+                let dependency = override_dependency(package, package_override, &requirement)
+                    .await
+                    .with_context(|| format!("failed to apply the override for [{package}]"))?;
+                resolver
+                    .add_dependency(package, &dependency)
+                    .await
+                    .with_context(|| format!("failed to load package [{package}]"))?;
+            }
+            None => {
+                if let Some(missing) =
+                    missing_from_registry(&client, package, version, &requirement).await?
+                {
+                    return Ok(PackageLookup::Missing(missing));
+                }
+                resolver
+                    .add_packages([(package.clone(), requirement)])
+                    .await
+                    .with_context(|| format!("failed to look up package [{package}]"))?;
+            }
+        }
+
+        let resolutions = resolver
+            .resolve()
+            .await
+            .with_context(|| format!("failed to resolve package [{package}]"))?;
+
+        let resolution = resolutions
+            .get(package)
+            .with_context(|| format!("package [{package}] resolved to nothing"))?;
+        let decoded = resolution
+            .decode()
+            .await
+            .with_context(|| format!("failed to decode package [{package}]"))?;
+        let (resolve, package_id, _) = decoded
+            .resolve()
+            .with_context(|| format!("failed to parse the WIT of package [{package}]"))?;
+        let resolved = resolve
+            .packages
+            .get(package_id)
+            .with_context(|| format!("package [{package}] is missing from its own WIT"))?;
+
+        Ok(PackageLookup::Found(PackageContents {
+            version: resolved.name.version.clone(),
+            interfaces: resolved.interfaces.keys().cloned().collect(),
+            worlds: resolved.worlds.keys().cloned().collect(),
+        }))
+    }
+}
+
+/// The outcome of loading one package, which separates a package the source does not have from a
+/// lookup that could not be completed
+pub enum PackageLookup {
+    /// The package was loaded, and this is what it defines
+    Found(PackageContents),
+    /// The source answered, and the package or the requested version is not in it. The message
+    /// says what was searched and, where the registry knows them, which versions do exist.
+    Missing(String),
+    /// The lookup could not be completed: the registry was unreachable, the credentials were
+    /// rejected, or the package was there but could not be read
+    Failed(anyhow::Error),
+}
+
+/// Turn a `wkg.toml` override into the dependency the resolver should load the package from
+async fn override_dependency(
+    package: &PackageRef,
+    package_override: wasm_pkg_core::manifest::Override,
+    requirement: &semver::VersionReq,
+) -> Result<wasm_pkg_core::resolver::Dependency> {
+    match (package_override.path, package_override.version) {
+        (Some(path), _) => {
+            let path = tokio::fs::canonicalize(&path)
+                .await
+                .with_context(|| format!("local path [{}] does not exist", path.display()))?;
+            Ok(wasm_pkg_core::resolver::Dependency::Local(path))
+        }
+        (None, version) => Ok(wasm_pkg_core::resolver::Dependency::Package(
+            wasm_pkg_core::resolver::RegistryPackage {
+                name: Some(package.clone()),
+                version: version.unwrap_or_else(|| requirement.clone()),
+                registry: None,
+            },
+        )),
+    }
+}
+
+/// The message for a package the WIT names at more than one version.
+///
+/// Versions in different major.minor lines are separate packages that WIT is happy to resolve
+/// side by side, but a fetch only resolves one version per package name, so `wit/deps` ends up
+/// with one of them and the imports of the other have nothing to resolve against. Two versions
+/// within one major.minor line cannot coexist at all.
+fn multiple_versions_message(package: &PackageRef, requirements: &[semver::VersionReq]) -> String {
+    let versions: Vec<String> = requirements
+        .iter()
+        .map(|requirement| requested_version(requirement).unwrap_or_else(|| NO_VERSION.to_string()))
+        .collect();
+    let listed = versions.join(", ");
+
+    let parsed: Vec<semver::Version> = requirements
+        .iter()
+        .filter_map(|requirement| semver::Version::parse(&requested_version(requirement)?).ok())
+        .collect();
+    let same_line = parsed.iter().enumerate().any(|(i, version)| {
+        parsed
+            .iter()
+            .skip(i + 1)
+            .any(|other| (version.major, version.minor) == (other.major, other.minor))
+    });
+
+    // An unversioned reference asks for `*`, which no versioned package satisfies
+    if let Some(named) = versions.iter().find(|version| *version != NO_VERSION)
+        && versions.iter().any(|version| version == NO_VERSION)
+    {
+        return format!(
+            "The WIT names [{package}] both with and without a version: {listed}.\n\
+             \n\
+             An unversioned statement does not resolve against a versioned package. Give the \
+             unversioned one a version — [{named}] is what the rest of the WIT uses."
+        );
+    }
+
+    match same_line {
+        true => format!(
+            "The WIT names [{package}] at more than one version in the same major.minor line: \
+             {listed}.\n\
+             \n\
+             Those cannot coexist; the imports have to agree on one of them."
+        ),
+        false => format!(
+            "The WIT names [{package}] at more than one version: {listed}.\n\
+             \n\
+             A fetch resolves one version per package name, so only one of those reaches \
+             wit/deps and the imports of the others have nothing to resolve against. The imports \
+             have to agree on one version."
+        ),
+    }
+}
+
+/// What the report calls a statement that names no version
+const NO_VERSION: &str = "no version";
+
+/// The version a requirement asks for, when it asks for exactly one. WIT carries a whole version
+/// or none, and that is what wkg turns into `=<version>` or `*`.
+fn requested_version(requirement: &semver::VersionReq) -> Option<String> {
+    let requirement = requirement.to_string();
+    requirement.strip_prefix('=').map(ToString::to_string)
+}
+
+/// Check the registry for a package before it is resolved, so that a package or version the
+/// registry does not have is reported as such rather than as a resolution failure. Returns the
+/// message to show, or `None` when the requirement can be satisfied.
+async fn missing_from_registry(
+    client: &CachingClient<FileCache>,
+    package: &PackageRef,
+    version: Option<&str>,
+    requirement: &semver::VersionReq,
+) -> Result<Option<String>> {
+    let registry = client
+        .client()
+        .ok()
+        .and_then(|client| client.config().resolve_registry(package))
+        .map(|registry| format!(" in registry [{registry}]"))
+        .unwrap_or_default();
+
+    let versions = match client.list_all_versions(package).await {
+        Ok(versions) => versions,
+        Err(wasm_pkg_client::Error::PackageNotFound) => {
+            return Ok(Some(format!(
+                "Package [{package}] was not found{registry}.\n\
+                 \n\
+                 Check the package name, and that the registry serving it is configured under \
+                 `wit.sources` in .wash/config.yaml."
+            )));
+        }
+        Err(wasm_pkg_client::Error::NoRegistryForNamespace(namespace)) => {
+            return Ok(Some(format!(
+                "No registry is configured for the [{namespace}] namespace, so [{package}] cannot be looked up.\n\
+                 \n\
+                 Map the namespace to a registry under `wit.sources` in .wash/config.yaml."
+            )));
+        }
+        Err(e) => bail!("failed to list versions of [{package}]{registry}: {e}"),
+    };
+
+    let mut published: Vec<semver::Version> = versions
+        .into_iter()
+        .filter(|version| !version.yanked)
+        .map(|version| version.version)
+        .collect();
+    published.sort();
+
+    if published.iter().any(|v| requirement.matches(v)) {
+        return Ok(None);
+    }
+
+    if published.is_empty() {
+        return Ok(Some(format!(
+            "Package [{package}] has no published versions{registry}."
+        )));
+    }
+
+    let listed = published
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(Some(match version {
+        Some(version) => format!(
+            "Package [{package}] has no version [{version}]{registry}.\n\
+             \n\
+             Published versions: {listed}"
+        ),
+        // Every version being a pre-release is the one case where a package with published
+        // versions still selects none of them, and naming one is the way out
+        None if published.iter().all(|version| !version.pre.is_empty()) => {
+            let newest = published
+                .last()
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            format!(
+                "Every published version of [{package}]{registry} is a pre-release, and a \
+                 pre-release is only selected when it is named.\n\
+                 \n\
+                 Published versions: {listed}\n\
+                 \n\
+                 Name one, for example [{package}@{newest}]."
+            )
+        }
+        None => format!(
+            "No version of [{package}] could be selected{registry}.\n\
+             \n\
+             Published versions: {listed}"
+        ),
+    }))
+}
+
+/// What a WIT package defines, as resolved from a registry
+#[derive(Debug, Clone)]
+pub struct PackageContents {
+    /// The resolved version of the package, if it is versioned
+    pub version: Option<semver::Version>,
+    /// Names of the interfaces the package defines
+    pub interfaces: Vec<String>,
+    /// Names of the worlds the package defines
+    pub worlds: Vec<String>,
 }
 
 /// Detect source type from string format
@@ -519,8 +896,12 @@ fn detect_source_type(source: &str) -> RegistryPullSource {
         RegistryPullSource::RemoteGit(source.to_string())
     } else if source.starts_with("http://") || source.starts_with("https://") {
         RegistryPullSource::RemoteHttp(source.to_string())
-    } else if source.contains('/') && !source.starts_with('.') && !source.starts_with("file://") {
-        // Likely OCI reference (contains slash but not relative path)
+    } else if source.contains('/')
+        && !source.starts_with('.')
+        && !source.starts_with('/')
+        && !source.starts_with("file://")
+    {
+        // Likely OCI reference (contains slash but not a filesystem path)
         RegistryPullSource::RemoteOci(source.to_string())
     } else {
         // Default to local path
@@ -788,7 +1169,6 @@ pub async fn load_wkg_config(
     if tokio::fs::try_exists(&config_path).await.unwrap_or(false) {
         debug!(path = %config_path.display(), "loading wkg.toml overrides");
         wasm_pkg_core::manifest::Manifest::load_from_path(&config_path)
-            .await
             .with_context(|| format!("failed to load {}", config_path.display()))
     } else {
         Ok(wasm_pkg_core::manifest::Manifest::default())
@@ -820,6 +1200,10 @@ mod tests {
         ));
         assert!(matches!(
             detect_source_type("./local/path"),
+            RegistryPullSource::LocalPath(_)
+        ));
+        assert!(matches!(
+            detect_source_type("/absolute/path/wit"),
             RegistryPullSource::LocalPath(_)
         ));
         assert!(matches!(
