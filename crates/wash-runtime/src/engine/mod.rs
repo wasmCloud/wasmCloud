@@ -321,11 +321,11 @@ impl Engine {
     /// accounts for `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` and for a
     /// caller-supplied pooling config, neither of which is visible from
     /// [`EngineBuilder::with_max_instances`].
-    /// The memory shape this engine was built with.
     ///
-    /// Read back rather than recomputed, so what a caller reports is what the
-    /// engine actually installed — including an embedder's `max_instances`
-    /// winning over the flag-driven count.
+    /// host_memory has the memory budgets this engine was built with including max host
+    /// memory available, default component heap limit, and number of core instances available.
+    /// Read back rather than recomputed, so what a caller reports is what the engine actually
+    /// installed — including an embedder's `max_instances` winning over the flag-driven count.
     pub fn host_memory(&self) -> host_memory::HostMemoryBudgets {
         self.host_memory
     }
