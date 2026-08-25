@@ -2180,14 +2180,14 @@ secrets:
 /// mean "this host runs nothing", which is never what an operator meant, and
 /// two of the three would misbehave inside wasmtime rather than saying so.
 pub fn host_memory(
-    max_memory: Option<&str>,
+    max_guest_memory: Option<&str>,
     default_heap_memory: Option<&str>,
     core_instances: Option<u32>,
 ) -> anyhow::Result<wash_runtime::engine::host_memory::HostMemoryBudgets> {
     use wash_runtime::engine::host_memory::{HostMemoryBudgets, parse_bytes, render_bytes};
 
-    let max_memory = max_memory
-        .map(|raw| parse_bytes(raw).map_err(|e| anyhow::anyhow!("invalid --max-memory: {e}")))
+    let max_guest_memory = max_guest_memory
+        .map(|raw| parse_bytes(raw).map_err(|e| anyhow::anyhow!("invalid --max-guest-memory: {e}")))
         .transpose()?;
     let default_heap_memory = default_heap_memory
         .map(|raw| {
@@ -2195,15 +2195,16 @@ pub fn host_memory(
         })
         .transpose()?;
 
-    let resolved = HostMemoryBudgets::resolve(max_memory, default_heap_memory, core_instances)
-        .map_err(|e| anyhow::anyhow!(e))?;
+    let resolved =
+        HostMemoryBudgets::resolve(max_guest_memory, default_heap_memory, core_instances)
+            .map_err(|e| anyhow::anyhow!(e))?;
 
     // Every one of these varies by host — the cgroup it landed in, the flags it
     // was given — so an operator cannot read them off the docs. The reservation
     // in particular is a product of two knobs set independently, and is the
     // number behind an instantiation failure nobody can otherwise explain.
     tracing::info!(
-        max_memory = %render_bytes(resolved.max_memory),
+        max_guest_memory = %render_bytes(resolved.max_guest_memory),
         default_heap_memory = %render_bytes(resolved.default_heap_memory),
         core_instances = resolved.core_instances,
         pool_reservation = %render_bytes(resolved.pool_reservation()),

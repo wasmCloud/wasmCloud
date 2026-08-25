@@ -156,7 +156,7 @@ spec:
                    Keep any new host knob on this side of that line. */}}
             {{- with $resources.limits }}
             {{- with .memory }}
-            - name: WASH_MAX_MEMORY
+            - name: WASH_HOST_MAX_GUEST_MEMORY
               value: "{{ . }}"
             {{- end }}
             {{- end }}

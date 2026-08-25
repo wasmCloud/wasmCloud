@@ -6,7 +6,7 @@
 //!
 //! | Knob | What it bounds | Unset |
 //! | --- | --- | --- |
-//! | [`HostMemoryBudgets::max_memory`] | Total guest memory this host may use | Derived from the cgroup limit that would OOM-kill this process |
+//! | [`HostMemoryBudgets::max_guest_memory`] | Total guest memory this host may use | Derived from the cgroup limit that would OOM-kill this process |
 //! | [`HostMemoryBudgets::default_heap_memory`] | How large any single linear memory may grow | wasmtime's own default (4 GiB) |
 //! | [`HostMemoryBudgets::core_instances`] | Instance slots the pooling allocator keeps | wasmtime's own default (1000) |
 //!
@@ -50,8 +50,8 @@ const GUEST_MEMORY_DENOMINATOR: u64 = 4;
 
 /// Bounds on the derived budget. The floor keeps a tiny container usable; the
 /// cap stops an enormous one producing a number so large it stops being a bound.
-const MIN_DERIVED_MAX_MEMORY: u64 = 256 * MIB;
-const MAX_DERIVED_MAX_MEMORY: u64 = 1024 * 1024 * MIB;
+const MIN_DERIVED_MAX_GUEST_MEMORY: u64 = 256 * MIB;
+const MAX_DERIVED_MAX_GUEST_MEMORY: u64 = 1024 * 1024 * MIB;
 
 /// Parse a byte size, following Kubernetes' quantity suffixes exactly.
 ///
@@ -140,7 +140,7 @@ pub fn render_bytes(bytes: u64) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HostMemoryBudgets {
     /// Total guest memory this host may use, in bytes.
-    pub max_memory: u64,
+    pub max_guest_memory: u64,
     /// Ceiling on any single linear memory — `max_memory_size` on the pooling
     /// allocator.
     pub default_heap_memory: u64,
@@ -151,7 +151,7 @@ pub struct HostMemoryBudgets {
 impl Default for HostMemoryBudgets {
     fn default() -> Self {
         Self {
-            max_memory: derive_max_memory(),
+            max_guest_memory: derive_max_guest_memory(),
             default_heap_memory: WASMTIME_DEFAULT_HEAP_MEMORY,
             core_instances: WASMTIME_DEFAULT_CORE_INSTANCES,
         }
@@ -168,12 +168,12 @@ impl HostMemoryBudgets {
     /// nothing", which is never what an operator meant, and two of them would
     /// panic or misbehave inside wasmtime rather than saying so.
     pub fn resolve(
-        max_memory: Option<u64>,
+        max_guest_memory: Option<u64>,
         default_heap_memory: Option<u64>,
         core_instances: Option<u32>,
     ) -> Result<Self, String> {
-        if max_memory == Some(0) {
-            return Err("--max-memory must be greater than zero".to_string());
+        if max_guest_memory == Some(0) {
+            return Err("--max-guest-memory must be greater than zero".to_string());
         }
         if default_heap_memory == Some(0) {
             return Err("--default-heap-memory must be greater than zero".to_string());
@@ -182,7 +182,7 @@ impl HostMemoryBudgets {
             return Err("--core-instances must be at least 1".to_string());
         }
         Ok(Self {
-            max_memory: max_memory.unwrap_or_else(derive_max_memory),
+            max_guest_memory: max_guest_memory.unwrap_or_else(derive_max_guest_memory),
             default_heap_memory: default_heap_memory.unwrap_or(WASMTIME_DEFAULT_HEAP_MEMORY),
             core_instances: core_instances.unwrap_or(WASMTIME_DEFAULT_CORE_INSTANCES),
         })
@@ -221,12 +221,12 @@ impl HostMemoryBudgets {
                 render_bytes(MAX_POOL_RESERVATION),
             ));
         }
-        if self.default_heap_memory > self.max_memory {
+        if self.default_heap_memory > self.max_guest_memory {
             return Some(format!(
                 "--default-heap-memory {} is larger than this host's whole memory budget \
                  ({}), so a single guest could exhaust the host on its own",
                 render_bytes(self.default_heap_memory),
-                render_bytes(self.max_memory),
+                render_bytes(self.max_guest_memory),
             ));
         }
         None
@@ -276,22 +276,22 @@ fn system_total_memory() -> Option<u64> {
 /// [`crate::host::quota::default_max_connections`], which takes the same shape
 /// of a share of `RLIMIT_NOFILE`: an unset flag means the derived ceiling, never
 /// "unbounded".
-pub fn derive_max_memory() -> u64 {
+pub fn derive_max_guest_memory() -> u64 {
     let Some(limit) = detected_memory_limit() else {
-        return MIN_DERIVED_MAX_MEMORY;
+        return MIN_DERIVED_MAX_GUEST_MEMORY;
     };
     limit
         .saturating_mul(GUEST_MEMORY_NUMERATOR)
         .saturating_div(GUEST_MEMORY_DENOMINATOR)
-        .clamp(MIN_DERIVED_MAX_MEMORY, MAX_DERIVED_MAX_MEMORY)
+        .clamp(MIN_DERIVED_MAX_GUEST_MEMORY, MAX_DERIVED_MAX_GUEST_MEMORY)
 }
 
 impl fmt::Display for HostMemoryBudgets {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "max_memory={} default_heap_memory={} core_instances={} pool_reservation={}",
-            render_bytes(self.max_memory),
+            "max_guest_memory={} default_heap_memory={} core_instances={} pool_reservation={}",
+            render_bytes(self.max_guest_memory),
             render_bytes(self.default_heap_memory),
             self.core_instances,
             render_bytes(self.pool_reservation()),
@@ -339,7 +339,7 @@ mod tests {
         assert_eq!(resolved.default_heap_memory, WASMTIME_DEFAULT_HEAP_MEMORY);
         assert_eq!(resolved.core_instances, WASMTIME_DEFAULT_CORE_INSTANCES);
         assert!(
-            resolved.max_memory >= MIN_DERIVED_MAX_MEMORY,
+            resolved.max_guest_memory >= MIN_DERIVED_MAX_GUEST_MEMORY,
             "an unset budget is derived, never zero or unbounded"
         );
     }

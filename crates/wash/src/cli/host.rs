@@ -202,7 +202,7 @@ pub struct HostCommand {
     )]
     pub wasmcloud_messaging_max_in_flight_per_component: Option<usize>,
 
-    /// Total guest memory this host may use (e.g. `8GiB`).
+    /// Total memory on this host that all guests may use (e.g. `8GiB`).
     ///
     /// Unset, it is derived: three quarters of the cgroup limit that would
     /// actually OOM-kill this process, falling back to the machine's total
@@ -216,8 +216,8 @@ pub struct HostCommand {
     // Deliberately no `default_value_t`: a parse-time default is
     // indistinguishable downstream from an operator typing the same number, and
     // the derivation has to tell them apart.
-    #[arg(long = "max-memory", env = "WASH_MAX_MEMORY")]
-    pub max_memory: Option<String>,
+    #[arg(long = "max-guest-memory", env = "WASH_HOST_MAX_GUEST_MEMORY")]
+    pub max_guest_memory: Option<String>,
 
     /// Ceiling on how large any single guest linear memory may grow
     /// (e.g. `512MiB`).
@@ -416,7 +416,7 @@ impl CliCommand for HostCommand {
         // in a flag, and reporting it after a NATS dial has already failed
         // buries the actionable error under an unrelated one.
         let host_memory = crate::config::host_memory(
-            self.max_memory.as_deref(),
+            self.max_guest_memory.as_deref(),
             self.default_heap_memory.as_deref(),
             self.core_instances,
         )?;
