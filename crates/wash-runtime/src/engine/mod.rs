@@ -350,7 +350,7 @@ impl Engine {
     pub fn host_memory(&self) -> host_memory::HostMemoryBudgets {
         self.host_memory
     }
-    
+
     /// Core instances the pooling allocator was configured to admit, captured
     /// from the [`PoolingAllocationConfig`] actually installed — so it reflects
     /// the `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` override and a

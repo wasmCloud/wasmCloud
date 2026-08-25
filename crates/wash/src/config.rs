@@ -1368,6 +1368,48 @@ fn check_url_scheme(field: &str, value: &str, expected: &[&str], errors: &mut Ve
     }
 }
 
+/// Resolve the host's memory budget, per-memory ceiling and instance count.
+///
+/// # Errors
+///
+/// Rejects an unparseable size and a zero for any of the three. A zero would
+/// mean "this host runs nothing", which is never what an operator meant, and
+/// two of the three would misbehave inside wasmtime rather than saying so.
+pub fn host_memory(
+    max_guest_memory: Option<&str>,
+    default_heap_memory: Option<&str>,
+    core_instances: Option<u32>,
+) -> anyhow::Result<wash_runtime::engine::host_memory::HostMemoryBudgets> {
+    use wash_runtime::engine::host_memory::{HostMemoryBudgets, parse_bytes, render_bytes};
+
+    let max_guest_memory = max_guest_memory
+        .map(|raw| parse_bytes(raw).map_err(|e| anyhow::anyhow!("invalid --max-guest-memory: {e}")))
+        .transpose()?;
+    let default_heap_memory = default_heap_memory
+        .map(|raw| {
+            parse_bytes(raw).map_err(|e| anyhow::anyhow!("invalid --default-heap-memory: {e}"))
+        })
+        .transpose()?;
+
+    let resolved =
+        HostMemoryBudgets::resolve(max_guest_memory, default_heap_memory, core_instances)
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+    // Every one of these varies by host — the cgroup it landed in, the flags it
+    // was given — so an operator cannot read them off the docs. The reservation
+    // in particular is a product of two knobs set independently, and is the
+    // number behind an instantiation failure nobody can otherwise explain.
+    tracing::info!(
+        max_guest_memory = %render_bytes(resolved.max_guest_memory),
+        default_heap_memory = %render_bytes(resolved.default_heap_memory),
+        core_instances = resolved.core_instances,
+        pool_reservation = %render_bytes(resolved.pool_reservation()),
+        "host memory resolved"
+    );
+
+    Ok(resolved)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -2170,46 +2212,4 @@ secrets:
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
         assert!(config.dev().environment.is_empty());
     }
-}
-
-/// Resolve the host's memory budget, per-memory ceiling and instance count.
-///
-/// # Errors
-///
-/// Rejects an unparseable size and a zero for any of the three. A zero would
-/// mean "this host runs nothing", which is never what an operator meant, and
-/// two of the three would misbehave inside wasmtime rather than saying so.
-pub fn host_memory(
-    max_guest_memory: Option<&str>,
-    default_heap_memory: Option<&str>,
-    core_instances: Option<u32>,
-) -> anyhow::Result<wash_runtime::engine::host_memory::HostMemoryBudgets> {
-    use wash_runtime::engine::host_memory::{HostMemoryBudgets, parse_bytes, render_bytes};
-
-    let max_guest_memory = max_guest_memory
-        .map(|raw| parse_bytes(raw).map_err(|e| anyhow::anyhow!("invalid --max-guest-memory: {e}")))
-        .transpose()?;
-    let default_heap_memory = default_heap_memory
-        .map(|raw| {
-            parse_bytes(raw).map_err(|e| anyhow::anyhow!("invalid --default-heap-memory: {e}"))
-        })
-        .transpose()?;
-
-    let resolved =
-        HostMemoryBudgets::resolve(max_guest_memory, default_heap_memory, core_instances)
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-    // Every one of these varies by host — the cgroup it landed in, the flags it
-    // was given — so an operator cannot read them off the docs. The reservation
-    // in particular is a product of two knobs set independently, and is the
-    // number behind an instantiation failure nobody can otherwise explain.
-    tracing::info!(
-        max_guest_memory = %render_bytes(resolved.max_guest_memory),
-        default_heap_memory = %render_bytes(resolved.default_heap_memory),
-        core_instances = resolved.core_instances,
-        pool_reservation = %render_bytes(resolved.pool_reservation()),
-        "host memory resolved"
-    );
-
-    Ok(resolved)
 }
