@@ -2253,11 +2253,7 @@ impl UnresolvedWorkload {
                         err = ?e,
                         "failed to bind plugin to workload"
                     );
-                    // The plugin that just failed goes first: a bind can get
-                    // partway through before it errors, and wasmcloud:nats for
-                    // one has a live connection registered by then. Nothing
-                    // else ever unbinds it, so the connection outlives the
-                    // failed deploy and wedges the next one under the same id.
+                    // Clean up plugin that just failed first.
                     if let Err(cleanup_err) = p
                         .on_workload_unbind(
                             self.id(),
@@ -2337,11 +2333,8 @@ impl UnresolvedWorkload {
                             err = ?e,
                             "failed to bind workload item to plugin"
                         );
-                        // This plugin's own on_workload_bind succeeded, so it
-                        // holds state nobody else will release — it is not in
-                        // `bound_plugins_with_interfaces` until every one of
-                        // its items binds. Unbind it before the plugins that
-                        // completed.
+                        // This plugin's own on_workload_bind succeeded, so it can hold a state until unbind.
+                        // Go ahead and unbind immediately before the completed plugins.
                         if let Err(cleanup_err) = p
                             .on_workload_unbind(
                                 self.id(),
@@ -3176,11 +3169,8 @@ mod tests {
         ItemBind,
     }
 
-    /// A plugin that counts its own `on_workload_unbind` and can refuse either
-    /// half of the bind. Whatever a real plugin opened on the way in — for
-    /// wasmcloud:nats, a live connection registered under the workload id — is
-    /// released through that callback and nowhere else, so the count is what
-    /// says whether a failure rolled itself back.
+    /// A plugin that counts its own `on_workload_unbind` and can refuse either half of the bind. Whatever
+    /// a real plugin opened on the way in is released through that callback, so the count is what says whether a failure rolled itself back.
     struct RollbackPlugin {
         fail_at: Option<FailAt>,
         unbinds: Arc<AtomicUsize>,
