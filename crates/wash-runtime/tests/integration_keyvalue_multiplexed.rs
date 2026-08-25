@@ -277,6 +277,86 @@ async fn nats_bucket_policy_governs_creation_and_naming() -> Result<()> {
     Ok(())
 }
 
+/// A bucket deleted out of band reports as `no-such-store`, not as a transport
+/// error, and one recreated under the same name is simply an empty bucket.
+///
+/// A cached handle is a snapshot, so without classification an operation
+/// against a deleted stream surfaces as an opaque `Other` and the guest cannot
+/// tell an absent store from a broken connection.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn a_deleted_bucket_reports_as_absent_and_a_recreated_one_is_empty() -> Result<()> {
+    let nats = GenericImage::new("nats", "2.12.8-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+        .with_cmd(["-js"])
+        .start()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to start nats: {e}"))?;
+    let nats_port = nats.get_host_port_ipv4(4222).await?;
+    let nats_url = format!("nats://127.0.0.1:{nats_port}");
+    let js = async_nats::jetstream::new(async_nats::connect(&nats_url).await?);
+
+    let backend = MultiplexedKeyValue::new()
+        .with_provider(Arc::new(NatsProvider::with_defaults(
+            BucketPolicy::create_missing(),
+        )))
+        .build_registry(&HashSet::from([kv_iface("kv", "nats", &nats_url)]))
+        .await?
+        .get("kv")
+        .expect("kv routed")
+        .clone();
+
+    backend.open("counters").await.map_err(err)?;
+    backend
+        .set("counters", "k", b"v".to_vec())
+        .await
+        .map_err(err)?;
+
+    // The handle is now cached. Delete the bucket underneath it.
+    js.delete_key_value("counters")
+        .await
+        .context("failed to delete the bucket")?;
+
+    let e = backend
+        .get("counters", "k")
+        .await
+        .expect_err("an operation against a deleted bucket must fail");
+    assert!(
+        matches!(
+            e,
+            wash_runtime::plugin::wasi_keyvalue::StoreError::NoSuchStore
+        ),
+        "a deleted bucket must report as absent, got {e:?}"
+    );
+
+    // The stale handle is dropped with it, so a later open re-resolves rather
+    // than reporting a bucket that is gone as present.
+    backend
+        .open("counters")
+        .await
+        .map_err(err)
+        .context("create = missing must recreate the bucket on the next open")?;
+
+    // Recreated under the same name: an empty bucket, not an error and not the
+    // old contents.
+    assert_eq!(
+        backend.get("counters", "k").await.map_err(err)?,
+        None,
+        "a recreated bucket must be empty"
+    );
+    backend
+        .set("counters", "k", b"again".to_vec())
+        .await
+        .map_err(err)?;
+    assert_eq!(
+        backend.get("counters", "k").await.map_err(err)?,
+        Some(b"again".to_vec())
+    );
+
+    Ok(())
+}
+
 /// A bucket is created by `open` and by nothing else: an operation on an
 /// identifier that was never opened must not bring a stream into existence,
 /// however permissive the policy is.

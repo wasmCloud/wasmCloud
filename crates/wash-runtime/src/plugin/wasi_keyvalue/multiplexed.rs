@@ -71,6 +71,14 @@ impl KvBucket {
 /// (NATS revision, a per-bucket counter, ...). Never a hash of the value, or a
 /// value that returns to identical bytes (A → B → A) would reuse a version and
 /// defeat the ABA check.
+///
+/// The guarantee is per bucket lifetime, not eternal: deleting a bucket and
+/// recreating it under the same name restarts NATS revisions at 1, so a token
+/// taken before the recreate is not comparable to one taken after. A guard
+/// carried across that boundary can in principle match a different
+/// generation's entry at the same revision. Deleting a bucket already destroys
+/// the data such a guard protects, so this is a documented edge rather than
+/// something the backends defend against.
 #[derive(Clone, Debug)]
 pub struct Versioned {
     pub value: Vec<u8>,

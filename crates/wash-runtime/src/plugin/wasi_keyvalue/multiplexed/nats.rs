@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use bytes::{Buf, Bytes};
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -14,14 +15,104 @@ use super::{
     CasGuard, CasOutcome, KeyResponse, KvBackend, KvId, LIST_KEYS_BATCH_SIZE, StoreError, Versioned,
 };
 
+/// How long a resolved bucket handle is reused before being looked up again.
+///
+/// A handle is a snapshot, not a session: `async_nats`'s `Store` carries the
+/// stream's config from resolve time and reads `allow_direct` off it, so one
+/// kept forever can route reads by a config the bucket no longer has.
+/// Re-resolving also means a bucket deleted out of band stops looking present.
+const STORE_TTL: Duration = Duration::from_secs(300);
+
+/// Ceiling on cached handles. Bucket names come from guest identifiers, so the
+/// map must not grow with them; past this the least recently resolved entries
+/// are dropped and simply re-resolve on next use.
+const STORE_CACHE_CAP: usize = 512;
+
+/// A resolved handle and when it was resolved.
+struct CachedStore<V> {
+    store: V,
+    resolved: Instant,
+}
+
+/// Bucket handles by physical name, with a TTL and a ceiling.
+///
+/// Generic over the handle so the expiry and ceiling can be tested without a
+/// NATS connection; the backend instantiates it with `kv::Store`.
+struct StoreCache<V = async_nats::jetstream::kv::Store> {
+    entries: HashMap<String, CachedStore<V>>,
+    ttl: Duration,
+    cap: usize,
+}
+
+impl<V> Default for StoreCache<V> {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            ttl: STORE_TTL,
+            cap: STORE_CACHE_CAP,
+        }
+    }
+}
+
+impl<V: Clone> StoreCache<V> {
+    /// The handle for `physical`, if one was resolved recently enough.
+    fn get(&self, physical: &str, now: Instant) -> Option<V> {
+        self.entries
+            .get(physical)
+            .filter(|entry| now.duration_since(entry.resolved) < self.ttl)
+            .map(|entry| entry.store.clone())
+    }
+
+    fn insert(&mut self, physical: String, store: V, now: Instant) {
+        if self.entries.len() >= self.cap {
+            let ttl = self.ttl;
+            self.entries
+                .retain(|_, entry| now.duration_since(entry.resolved) < ttl);
+        }
+        // Nothing expired, so make room by dropping the oldest resolves.
+        while self.entries.len() >= self.cap {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.resolved)
+                .map(|(name, _)| name.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+        self.entries.insert(
+            physical,
+            CachedStore {
+                store,
+                resolved: now,
+            },
+        );
+    }
+
+    fn remove(&mut self, physical: &str) {
+        self.entries.remove(physical);
+    }
+}
+
 /// A NATS JetStream KV-backed [`KvBackend`]. A [`BucketPolicy`] maps the
 /// identifier a guest opens onto the physical JetStream bucket and decides
-/// whether a missing one may be created; store handles are cached by physical
-/// name.
+/// whether a missing one may be created; resolved handles are cached by
+/// physical name for [`STORE_TTL`].
+///
+/// A bucket deleted out of band is reported to the guest as `no-such-store`,
+/// not as a transport error: an operation failure is checked against the
+/// bucket before being classified. A bucket deleted and *recreated* under the
+/// same name is simply an empty bucket — neither `wasi:keyvalue` nor
+/// `wasmcloud:keyvalue` has a store generation to signal, and the other
+/// backends (a redis prefix, a filesystem directory) behave the same way. The
+/// one sharp edge is that JetStream revisions restart at 1, so a CAS version
+/// token taken before a recreate is not comparable to one taken after; see
+/// [`Versioned`].
 pub struct NatsBackend {
     context: Arc<async_nats::jetstream::Context>,
     policy: BucketPolicy,
-    stores: RwLock<HashMap<String, async_nats::jetstream::kv::Store>>,
+    stores: RwLock<StoreCache>,
 }
 
 impl NatsBackend {
@@ -41,8 +132,8 @@ impl NatsBackend {
     /// identifier that was never opened cannot mint a stream.
     async fn store(&self, bucket: &str) -> Result<async_nats::jetstream::kv::Store, StoreError> {
         let physical = self.policy.physical_name(bucket);
-        if let Some(s) = self.stores.read().await.get(&physical) {
-            return Ok(s.clone());
+        if let Some(s) = self.stores.read().await.get(&physical, Instant::now()) {
+            return Ok(s);
         }
         let kv = self
             .policy
@@ -54,7 +145,41 @@ impl NatsBackend {
     }
 
     async fn cache(&self, physical: String, kv: async_nats::jetstream::kv::Store) {
-        self.stores.write().await.insert(physical, kv);
+        self.stores
+            .write()
+            .await
+            .insert(physical, kv, Instant::now());
+    }
+
+    /// Classify an operation failure.
+    ///
+    /// A JetStream operation against a deleted stream fails in a
+    /// transport-shaped way rather than saying "no such store", so ask the
+    /// bucket before deciding: if it is gone, drop the cached handle and
+    /// answer `no-such-store` — the case a guest can actually act on — and
+    /// otherwise keep the original error. The extra round trip is on the error
+    /// path only.
+    async fn classify(&self, bucket: &str, e: impl std::fmt::Display) -> StoreError {
+        let physical = self.policy.physical_name(bucket);
+        match self.policy.get(&self.context, &physical).await {
+            Err(OpenError::NoSuchStore) => {
+                self.stores.write().await.remove(&physical);
+                StoreError::NoSuchStore
+            }
+            _ => Self::err(e),
+        }
+    }
+
+    /// [`NatsBackend::classify`] applied to one operation's result.
+    async fn check<T, E: std::fmt::Display>(
+        &self,
+        bucket: &str,
+        result: Result<T, E>,
+    ) -> Result<T, StoreError> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(e) => Err(self.classify(bucket, e).await),
+        }
     }
 }
 
@@ -62,7 +187,13 @@ impl NatsBackend {
 impl KvBackend for NatsBackend {
     async fn open(&self, identifier: &str) -> Result<(), StoreError> {
         let physical = self.policy.physical_name(identifier);
-        if self.stores.read().await.contains_key(&physical) {
+        if self
+            .stores
+            .read()
+            .await
+            .get(&physical, Instant::now())
+            .is_some()
+        {
             return Ok(());
         }
         let (kv, _outcome) = self
@@ -76,26 +207,28 @@ impl KvBackend for NatsBackend {
 
     async fn get(&self, bucket: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
         let s = self.store(bucket).await?;
-        Ok(s.get(key).await.map_err(Self::err)?.map(|b| b.to_vec()))
+        Ok(self
+            .check(bucket, s.get(key).await)
+            .await?
+            .map(|b| b.to_vec()))
     }
 
     async fn set(&self, bucket: &str, key: &str, value: Vec<u8>) -> Result<(), StoreError> {
         let s = self.store(bucket).await?;
-        s.put(key.to_string(), value.into())
-            .await
-            .map_err(Self::err)?;
+        self.check(bucket, s.put(key.to_string(), value.into()).await)
+            .await?;
         Ok(())
     }
 
     async fn delete(&self, bucket: &str, key: &str) -> Result<(), StoreError> {
         let s = self.store(bucket).await?;
-        s.delete(key).await.map_err(Self::err)?;
+        self.check(bucket, s.delete(key).await).await?;
         Ok(())
     }
 
     async fn exists(&self, bucket: &str, key: &str) -> Result<bool, StoreError> {
         let s = self.store(bucket).await?;
-        Ok(s.get(key).await.map_err(Self::err)?.is_some())
+        Ok(self.check(bucket, s.get(key).await).await?.is_some())
     }
 
     async fn list_keys(
@@ -105,10 +238,9 @@ impl KvBackend for NatsBackend {
     ) -> Result<KeyResponse, StoreError> {
         let s = self.store(bucket).await?;
         let skip = cursor.unwrap_or(0) as usize;
-        let mut stream = s
-            .keys()
-            .await
-            .map_err(Self::err)?
+        let mut stream = self
+            .check(bucket, s.keys().await)
+            .await?
             .skip(skip)
             .take(LIST_KEYS_BATCH_SIZE + 1)
             .boxed();
@@ -135,7 +267,7 @@ impl KvBackend for NatsBackend {
         // erroring. `atomics.increment` is defined to be atomic, so contention
         // must serialize, not fail.
         loop {
-            let (revision, current) = match s.entry(key).await.map_err(Self::err)? {
+            let (revision, current) = match self.check(bucket, s.entry(key).await).await? {
                 // Read the counter as a big-endian i64, tolerating a malformed
                 // (non-8-byte) value as 0 rather than panicking: `Buf::get_i64`
                 // traps if the value has fewer than 8 bytes.
@@ -160,14 +292,14 @@ impl KvBackend for NatsBackend {
                 Some(rev) => match s.update(key, bytes, rev).await {
                     Ok(_) => return Ok(next),
                     Err(e) if e.kind() == UpdateErrorKind::WrongLastRevision => continue,
-                    Err(e) => return Err(Self::err(e)),
+                    Err(e) => return Err(self.classify(bucket, e).await),
                 },
                 // `create` (not `put`) so a concurrent create is detected and
                 // retried instead of clobbered.
                 None => match s.create(key, bytes).await {
                     Ok(_) => return Ok(next),
                     Err(e) if e.kind() == CreateErrorKind::AlreadyExists => continue,
-                    Err(e) => return Err(Self::err(e)),
+                    Err(e) => return Err(self.classify(bucket, e).await),
                 },
             }
         }
@@ -319,6 +451,86 @@ async fn present_entry(
         }))
 }
 
+#[cfg(test)]
+mod tests {
+    //! The cache's expiry and ceiling, which need no NATS connection. How a
+    //! deleted bucket is reported to a guest is covered against a real server
+    //! in `tests/integration_keyvalue_multiplexed.rs`.
+
+    use super::*;
+
+    fn cache(ttl: Duration, cap: usize) -> StoreCache<String> {
+        StoreCache {
+            entries: HashMap::new(),
+            ttl,
+            cap,
+        }
+    }
+
+    /// A handle is reused inside its TTL and re-resolved after it, so it
+    /// cannot carry a stream config — or a deleted bucket's existence —
+    /// indefinitely.
+    #[test]
+    fn a_handle_expires() {
+        let start = Instant::now();
+        let mut cache = cache(Duration::from_secs(300), 8);
+        cache.insert("counters".to_string(), "handle".to_string(), start);
+
+        assert_eq!(
+            cache.get("counters", start + Duration::from_secs(299)),
+            Some("handle".to_string())
+        );
+        assert_eq!(
+            cache.get("counters", start + Duration::from_secs(300)),
+            None
+        );
+    }
+
+    /// An evicted handle is gone immediately — this is what a failed operation
+    /// does once it learns the bucket is missing.
+    #[test]
+    fn remove_drops_a_handle() {
+        let now = Instant::now();
+        let mut cache = cache(Duration::from_secs(300), 8);
+        cache.insert("counters".to_string(), "handle".to_string(), now);
+        cache.remove("counters");
+        assert_eq!(cache.get("counters", now), None);
+    }
+
+    /// Guest identifiers name the buckets, so the map is capped however many
+    /// distinct ones arrive.
+    #[test]
+    fn the_cache_is_bounded() {
+        let now = Instant::now();
+        let mut cache = cache(Duration::from_secs(300), 4);
+        for i in 0..100 {
+            cache.insert(format!("bucket-{i}"), i.to_string(), now);
+        }
+        assert!(
+            cache.entries.len() <= 4,
+            "held {} entries, cap is 4",
+            cache.entries.len()
+        );
+    }
+
+    /// Expired entries are what a full cache drops first; a live handle
+    /// survives.
+    #[test]
+    fn expiry_makes_room_before_live_handles_are_dropped() {
+        let start = Instant::now();
+        let mut cache = cache(Duration::from_secs(60), 2);
+        cache.insert("old".to_string(), "old".to_string(), start);
+
+        let later = start + Duration::from_secs(61);
+        cache.insert("fresh".to_string(), "fresh".to_string(), later);
+        cache.insert("newest".to_string(), "newest".to_string(), later);
+
+        assert_eq!(cache.get("old", later), None, "the expired entry made room");
+        assert_eq!(cache.get("fresh", later), Some("fresh".to_string()));
+        assert_eq!(cache.get("newest", later), Some("newest".to_string()));
+    }
+}
+
 /// Provider for [`NatsBackend`], selected by `config.backend = "nats"`. Requires
 /// `config.url` (e.g. `nats://127.0.0.1:4222`).
 ///
@@ -375,7 +587,7 @@ impl BackendProvider<KvId> for NatsProvider {
         Ok(Arc::new(NatsBackend {
             context: Arc::new(context),
             policy,
-            stores: RwLock::new(HashMap::new()),
+            stores: RwLock::default(),
         }))
     }
 }
