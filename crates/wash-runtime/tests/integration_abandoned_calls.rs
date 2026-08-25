@@ -43,6 +43,11 @@
 // the environment, which is the soundness condition it needs.
 #![allow(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+// Every test holds `abandonment_env`'s serial guard across its awaits by
+// design: they pin CPUs and assert on timing, so they must not overlap. An
+// async mutex cannot serialise whole `#[tokio::test]` bodies, each on its own
+// runtime. Nothing contends the lock from inside an await.
+#![allow(clippy::await_holding_lock)]
 
 use std::collections::HashMap;
 use std::sync::Once;
@@ -95,7 +100,7 @@ fn abandonment_env() -> std::sync::MutexGuard<'static, ()> {
         std::env::set_var("WASH_EPHEMERAL_CALL_TIMEOUT_SECS", &deadline);
         std::env::set_var("WASH_MESSAGING_DELIVER_TIMEOUT_SECS", &deadline);
         std::env::set_var("WASH_PLUGIN_CAPABILITY_CALL_TIMEOUT_SECS", &deadline);
-        std::env::set_var("WASH_ABANDONED_CALL_GRACE_SECS", &GRACE_SECS.to_string());
+        std::env::set_var("WASH_ABANDONED_CALL_GRACE_SECS", GRACE_SECS.to_string());
         std::env::set_var("WASH_ABANDONED_CALL_ESCALATION_SECS", "3");
     });
     SERIAL
@@ -404,13 +409,13 @@ async fn a_component_wedged_by_its_input_is_trapped_and_replaced() -> Result<()>
         elapsed < SPIN_BOUND,
         "the wedged requests must be ended by abandonment, took {elapsed:?}"
     );
-    for outcome in &outcomes {
-        if let Ok(status) = outcome {
-            assert!(
-                (500..600).contains(status),
-                "a request wedged by its input must fail, got {status}"
-            );
-        }
+    // A transport error is a pass; the assertion is that the request failed.
+    // Only a request that came back has a status to check.
+    for status in outcomes.iter().flatten() {
+        assert!(
+            (500..600).contains(status),
+            "a request wedged by its input must fail, got {status}"
+        );
     }
 
     // The instance was reaped, so the component still serves: a fresh instance
@@ -606,6 +611,94 @@ async fn an_abandoned_message_delivery_traps_and_restarts_the_service() -> Resul
     Ok(())
 }
 
+/// A **healthy** handler that outruns its delivery deadline must keep its
+/// service, however long it goes on.
+///
+/// The counterweight to the test above. What separates the two is whether the
+/// guest yields.
+///
+/// The `chatter` subject spends all its time awaiting, in hops short enough that
+/// each wakes onto an expired epoch deadline, so its fires land exactly as a
+/// pinned guest's do and bank the same credit. It is also the only call on the
+/// store, so the wanted-call gate does not apply. `watch_until_abandoned`
+/// deregisters it because the handler yields; the `spin` subject can never let
+/// that happen.
+///
+/// A delivery runs unbounded from inside the store, on the service singleton
+/// every other subject shares, so without deregistration a slow handler stays
+/// visible to the epoch callback for as long as it runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_chatty_messaging_handler_survives_being_abandoned() -> Result<()> {
+    let _serial = abandonment_env();
+    let (_addr, host, ingress) = common::start_host_with_p3_handler("127.0.0.1:0").await?;
+    let workload_id = uuid::Uuid::new_v4().to_string();
+    host.workload_start(WorkloadStartRequest {
+        workload_id: workload_id.clone(),
+        workload: Workload {
+            namespace: "test".to_string(),
+            name: "msg-chatter".to_string(),
+            annotations: HashMap::new(),
+            service: Some(Service {
+                digest: None,
+                bytes: bytes::Bytes::from_static(MSG_COUNTER_WASM),
+                local_resources: LocalResources::default(),
+                max_restarts: 2,
+            }),
+            components: vec![],
+            host_interfaces: vec![],
+            volumes: vec![],
+        },
+    })
+    .await
+    .context("msg-counter service should start")?;
+
+    assert_eq!(
+        deliver(&ingress, &workload_id, "first").await?,
+        Err("other: 1:first".to_string())
+    );
+
+    // Abandoned at its deadline: the handler is slower than any caller will
+    // wait, which is not itself an offence. All that matters here is that the
+    // delivery does not succeed.
+    let outcome = deliver(&ingress, &workload_id, "chatter").await;
+    assert!(
+        !matches!(outcome, Ok(Ok(()))),
+        "a delivery slower than its deadline must not report success, got {outcome:?}"
+    );
+
+    // Stay quiet while the handler hops: a delivery in this window would re-arm
+    // the epoch deadline and shield the hops from firing at all, and an
+    // otherwise-idle store is precisely the scenario. `CHATTER` covers the
+    // fixture's hops with room to spare.
+    // The fixture hops for ~6.4s (16 x 400ms), and a trap needs only the
+    // deadline plus the grace, so waiting ~2x the hop budget leaves the count
+    // below unambiguous.
+    //
+    // One delivery and one exact assertion rather than a poll: every delivery
+    // increments the counter, so a retry loop would walk a restarted handler up
+    // to the expected count and pass on the failure it exists to catch.
+    tokio::time::sleep(Duration::from_secs(12)).await;
+
+    // Untouched, the handler counted its own delivery, making this the third on
+    // the same instance.
+    let echoed = deliver(&ingress, &workload_id, "after")
+        .await?
+        .err()
+        .context("handler echoes via the err arm")?;
+    anyhow::ensure!(
+        echoed != "other: 1:after",
+        "a healthy chatty handler was trapped over its abandoned delivery: the \
+         service restarted and is counting from one"
+    );
+    anyhow::ensure!(
+        echoed == "other: 3:after",
+        "expected the third delivery on an undisturbed instance, got {echoed}; \
+         if this is `2:after` the chatter had not finished yet and the wait \
+         above is too short for this runner"
+    );
+    Ok(())
+}
+
 /// A capability call wedged in a host component plugin is warned about at the
 /// grace and **escalated to a trap**: a non-yielding activation holds the
 /// store's guest execution, so no other tenant's call can enter and the
@@ -682,6 +775,81 @@ async fn an_abandoned_capability_call_escalates_to_a_plugin_restart() -> Result<
         404,
         "the seeded state must be gone after the supervised restart"
     );
+    Ok(())
+}
+
+/// A healthy plugin activation that outruns its deadline must not cost every
+/// tenant the shared store.
+///
+/// `__chatter__` is as slow as `__spin__` and just as invisible to the sampling:
+/// same fire pattern, same execution credit, and the only call on the store, so
+/// the wanted-call gate does not apply. It survives because it yields, which
+/// lets `watch_until_abandoned` deregister it a grace after the dispatcher gives
+/// up.
+///
+/// The seeded key is the assertion. It lives in the plugin's in-memory store, so
+/// it survives only if there was no supervised restart.
+#[cfg(feature = "host-component-plugins")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_chatty_capability_call_does_not_restart_the_plugin() -> Result<()> {
+    use common::{
+        component_workload_request, kv_plugin_caller_host_interfaces,
+        start_host_with_component_plugin,
+    };
+
+    let _serial = abandonment_env();
+    let (addr, host) =
+        start_host_with_component_plugin("127.0.0.1:0", "kv-plugin", KV_PLUGIN_WASM).await?;
+    host.workload_start(component_workload_request(
+        "kv-caller",
+        "kv-caller",
+        KV_PLUGIN_CALLER_WASM,
+        LocalResources::default(),
+        kv_plugin_caller_host_interfaces("kv-caller"),
+    ))
+    .await
+    .context("kv caller workload should start")?;
+    let client = client()?;
+
+    // State in the plugin's singleton store, which a restart would destroy.
+    let (status, _) = get(&client, addr, "kv-caller", "/set?key=a&value=before").await?;
+    assert!(status.is_success(), "seed set failed: {status}");
+
+    // The caller gives up at its deadline. Being slower than any caller will
+    // wait is not itself an offence.
+    let outcome = client
+        .get(format!("http://{addr}/get?key=__chatter__"))
+        .header("HOST", "kv-caller")
+        .send()
+        .await;
+    if let Ok(resp) = outcome {
+        assert!(
+            !resp.status().is_success(),
+            "a call slower than its deadline must not report success, got {}",
+            resp.status()
+        );
+    }
+
+    // The fixture hops for ~12s, outlasting the deadline (2s), grace (1s) and
+    // escalation (3s) combined, so a trap has every opportunity to land. Wait
+    // it out so the plugin is idle again before asking.
+    tokio::time::sleep(Duration::from_secs(16)).await;
+
+    // Untouched: the same incarnation still serves, and still remembers.
+    let (status, body) = get(&client, addr, "kv-caller", "/get?key=a").await?;
+    anyhow::ensure!(
+        status.is_success() && body == "before",
+        "a healthy chatty activation restarted the shared plugin: /get?key=a returned \
+         {status} {body:?}, wanted 200 \"before\"; the seeded state only survives if the \
+         store was never trapped"
+    );
+
+    // Still usable for new work, not merely alive.
+    let (status, _) = get(&client, addr, "kv-caller", "/set?key=b&value=after").await?;
+    assert!(status.is_success(), "post-chatter set failed: {status}");
+    let (status, body) = get(&client, addr, "kv-caller", "/get?key=b").await?;
+    assert!(status.is_success(), "post-chatter get failed: {status}");
+    assert_eq!(body, "after", "the plugin must keep serving new calls");
     Ok(())
 }
 
@@ -861,11 +1029,11 @@ async fn an_abandoned_co_tenant_does_not_trap_a_chatty_healthy_stream() -> Resul
 ///
 /// Each hop wakes onto an expired epoch deadline, so the store's fires land
 /// one hop apart — a wake pattern that wall-clock sampling cannot tell from a
-/// pinned guest inside any single window. What protects it is the per-fire
-/// credit cap: its only call is abandoned (so the wanted-call gate does not
-/// apply), but each fire can only prove one sampling window of execution, so
-/// the credit stays far below the grace for as long as the guest actually
-/// spends its time awaiting.
+/// pinned guest inside any single window.
+///
+/// The guest yields, so `watch_until_abandoned` deregisters the call a grace
+/// after the client disconnects, and a store with nothing registered is never
+/// acted on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_guest_awaiting_in_short_hops_survives_being_abandoned() -> Result<()> {
     let _serial = abandonment_env();
