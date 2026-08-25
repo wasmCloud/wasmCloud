@@ -2174,15 +2174,6 @@ secrets:
 
 /// Resolve the host's memory budget, per-memory ceiling and instance count.
 ///
-/// Mirrors [`wasmcloud_messaging_limits`]: the flags are parsed and validated
-/// here, once, so the runtime is handed a value that is already correct rather
-/// than a bag of strings to interpret later.
-///
-/// Nothing is gated on the result. Both pool knobs fall through to wasmtime's
-/// own defaults when unset, so a host that sets none of these behaves exactly
-/// as it always has — the point of this pass is that the three numbers are
-/// *reachable* and *reported*, not that anything new is enforced.
-///
 /// # Errors
 ///
 /// Rejects an unparseable size and a zero for any of the three. A zero would
