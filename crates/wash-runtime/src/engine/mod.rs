@@ -343,19 +343,6 @@ impl std::error::Error for SharedError {
 }
 
 impl Engine {
-    /// Core instances the pooling allocator will admit, or `None` when pooling
-    /// is off or unsupported.
-    ///
-    /// This is the budget every component instantiation on this engine spends
-    /// from, and the number any secondary ceiling — the messaging admission
-    /// gate, say — should size itself against, so that raising the pool raises
-    /// what depends on it instead of leaving a second cap silently binding.
-    ///
-    /// Read from the [`PoolingAllocationConfig`] actually installed, so it
-    /// accounts for `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` and for a
-    /// caller-supplied pooling config, neither of which is visible from
-    /// [`EngineBuilder::with_max_instances`].
-    ///
     /// host_memory has the memory budgets this engine was built with including max host
     /// memory available, default component heap limit, and number of core instances available.
     /// Read back rather than recomputed, so what a caller reports is what the engine actually
@@ -363,7 +350,16 @@ impl Engine {
     pub fn host_memory(&self) -> host_memory::HostMemoryBudgets {
         self.host_memory
     }
-
+    
+    /// Core instances the pooling allocator was configured to admit, captured
+    /// from the [`PoolingAllocationConfig`] actually installed — so it reflects
+    /// the `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` override and a
+    /// caller-supplied pooling config alike. `None` when pooling is off or
+    /// unsupported, i.e. when there is no pool budget to divide.
+    ///
+    /// Recorded rather than recomputed: re-deriving `max_instances.unwrap_or(…)`
+    /// somewhere else would miss the env override (applied inside
+    /// [`new_pooling_config`]) and drift the moment either side changed.
     pub fn total_core_instances(&self) -> Option<u32> {
         self.total_core_instances
     }
