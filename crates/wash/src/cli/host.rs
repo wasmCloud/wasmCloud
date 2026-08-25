@@ -551,12 +551,18 @@ impl CliCommand for HostCommand {
                 &data_nats_client,
             )))?
             // Opens its own per-workload connections rather than borrowing the
-            // host's, and denies the host's control subjects to every workload.
+            // host's client, and denies the host's control subjects to every
+            // workload. It does take the host's data-plane *address* as the
+            // default a binding falls back to, so a workload on the cluster's
+            // own NATS needs no `servers` of its own; one that sets `servers`
+            // reaches a different cluster entirely.
             .with_plugin(Arc::new(
-                plugin::wasmcloud_nats::WasmcloudNats::new().with_lattice_prefixes(vec![
-                    format!("{}.", wash_runtime::washlet::HOST_API_PREFIX),
-                    format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),
-                ]),
+                plugin::wasmcloud_nats::WasmcloudNats::new()
+                    .with_default_servers(vec![self.data_nats_url.clone()])
+                    .with_lattice_prefixes(vec![
+                        format!("{}.", wash_runtime::washlet::HOST_API_PREFIX),
+                        format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),
+                    ]),
             ))?
             .with_meters(Meters::new(ctx.enable_meters()));
 

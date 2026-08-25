@@ -153,17 +153,24 @@ impl CliCommand for DevCommand {
         }
 
         // `wasmcloud:nats` — NATS-native core pub/sub, JetStream, and KV.
-        // Unlike the plugins above it borrows no connection from the dev host:
-        // it opens one per workload from that workload's own interface config,
-        // so there is no in-memory backend to fall back to and nothing to
-        // register conditionally.
-        host_builder = host_builder.with_plugin(Arc::new(
+        // Unlike the plugins above it borrows no *client* from the dev host: it
+        // opens one per workload, under that workload's own credentials and
+        // grant. It does take `dev.data_nats_url` as the address a binding
+        // falls back to when it names no `servers`, which is what lets the same
+        // manifest run in dev and on a cluster. With no `dev.data_nats_url`
+        // there is no default, and a binding must name its own servers.
+        let mut nats_plugin =
             plugin::wasmcloud_nats::WasmcloudNats::new().with_lattice_prefixes(vec![
                 format!("{}.", wash_runtime::washlet::HOST_API_PREFIX),
                 format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),
-            ]),
-        ))?;
-        debug!("wasmcloud:nats plugin registered");
+            ]);
+        if let Some(url) = &dev_config.data_nats_url {
+            nats_plugin = nats_plugin.with_default_servers(vec![url.clone()]);
+            debug!("wasmcloud:nats plugin registered (default servers from data_nats_url)");
+        } else {
+            debug!("wasmcloud:nats plugin registered (no default servers)");
+        }
+        host_builder = host_builder.with_plugin(Arc::new(nats_plugin))?;
 
         // Per-plugin settings override the in-memory default. The order of precedence is:
         // use a filesystem backend if there is a path override,

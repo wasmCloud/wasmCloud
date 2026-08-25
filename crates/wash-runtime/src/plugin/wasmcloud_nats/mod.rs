@@ -328,6 +328,11 @@ pub struct WasmcloudNats {
     pub(super) meters: Arc<RwLock<Meters>>,
     /// Subjects the host itself uses, denied to every workload.
     lattice_prefixes: Vec<String>,
+    /// The host's data-plane servers, used by any binding that names none of
+    /// its own. Address only: credentials and grants stay per workload, so a
+    /// workload that inherits the address still reaches nothing until it is
+    /// granted something.
+    default_servers: Vec<String>,
     /// How a subscriber loop tells the host its workload has died out of band —
     /// a server-side permission denial parks a subscription that deployed
     /// cleanly, and nothing else would ever move the workload off running.
@@ -347,6 +352,7 @@ impl WasmcloudNats {
             connections: Arc::new(ConnectionRegistry::default()),
             meters: Default::default(),
             lattice_prefixes: Vec::new(),
+            default_servers: Vec::new(),
             failure_sink: arc_swap::ArcSwapOption::empty(),
         }
     }
@@ -354,6 +360,22 @@ impl WasmcloudNats {
     /// Denies the host's own lattice subject space to every workload.
     pub fn with_lattice_prefixes(mut self, prefixes: Vec<String>) -> Self {
         self.lattice_prefixes = prefixes;
+        self
+    }
+
+    /// Sets the servers a binding falls back to when it names none.
+    ///
+    /// This is the host's own data-plane NATS (`--data-nats-url`, `dataNatsUrl`
+    /// in the chart), so the common case — a workload on the cluster's NATS —
+    /// needs no `servers` in its manifest. A binding that sets `servers`
+    /// overrides this outright rather than merging with it: a workload pointed
+    /// at a different cluster means a different cluster, not both.
+    ///
+    /// Deliberately address-only. Inheriting the host's credentials or grants
+    /// would make every workload's reach depend on how the host was launched,
+    /// which is the opposite of deny-by-default.
+    pub fn with_default_servers(mut self, servers: Vec<String>) -> Self {
+        self.default_servers = servers;
         self
     }
 
@@ -374,7 +396,16 @@ impl WasmcloudNats {
         bindings: Vec<(&str, HashMap<String, String>)>,
         opened: &mut bool,
     ) -> anyhow::Result<()> {
-        for (binding, merged) in bindings {
+        for (binding, mut merged) in bindings {
+            // The host's data plane backs any binding that names no servers of
+            // its own. Injected before parsing rather than after, so the
+            // resolved address is what `connection_key` identifies the
+            // connection by — two bindings that both fall back to the host must
+            // read as the same connection, not as two.
+            if !merged.contains_key("servers") && !self.default_servers.is_empty() {
+                merged.insert("servers".to_string(), self.default_servers.join(","));
+            }
+
             // A binding is described by the manifest as a whole, and only the
             // entries a component actually matched are folded into `merged`. So
             // the connection settings going missing while other keys survive
@@ -1432,5 +1463,77 @@ mod tests {
             "and the message points at the entry the settings belong on: {msg}"
         );
         assert!(!opened, "nothing was opened");
+    }
+
+    /// The common case: a workload on the cluster's own NATS names no servers,
+    /// and inherits the host's data-plane address.
+    #[tokio::test]
+    async fn a_binding_without_servers_falls_back_to_the_host() {
+        let plugin =
+            WasmcloudNats::new().with_default_servers(vec!["nats://host:4222".to_string()]);
+        let mut opened = false;
+        let merged = HashMap::from([("subject-allow".to_string(), "orders.>".to_string())]);
+
+        // Reaches a real connect attempt rather than the missing-`servers`
+        // refusal, which is what says the default was applied.
+        let err = plugin
+            .open_bindings("wl", vec![(conn::UNNAMED_BINDING, merged)], &mut opened)
+            .await
+            .expect_err("nothing is listening on nats://host:4222");
+        let msg = err.to_string();
+
+        assert!(
+            !msg.contains("has no `servers`"),
+            "the host default satisfied the binding: {msg}"
+        );
+    }
+
+    /// A binding that names its own servers means a different cluster, so the
+    /// host default is replaced rather than merged into.
+    #[tokio::test]
+    async fn a_binding_with_servers_overrides_the_host_default() {
+        let plugin =
+            WasmcloudNats::new().with_default_servers(vec!["nats://host:4222".to_string()]);
+        let mut opened = false;
+        let merged = HashMap::from([
+            ("servers".to_string(), "nats://elsewhere:4222".to_string()),
+            ("subject-allow".to_string(), "orders.>".to_string()),
+        ]);
+
+        let err = plugin
+            .open_bindings("wl", vec![(conn::UNNAMED_BINDING, merged)], &mut opened)
+            .await
+            .expect_err("nothing is listening on nats://elsewhere:4222");
+
+        assert!(
+            err.chain().any(|e| e.to_string().contains("elsewhere")),
+            "the binding's own server is the one dialed: {err:#}"
+        );
+        assert!(
+            !err.chain().any(|e| e.to_string().contains("host:4222")),
+            "the host default is replaced, not merged: {err:#}"
+        );
+    }
+
+    /// Inheriting the address must not inherit reach. A workload that names no
+    /// servers and no grant still reaches nothing.
+    #[test]
+    fn the_host_default_carries_no_grant() {
+        let plugin =
+            WasmcloudNats::new().with_default_servers(vec!["nats://host:4222".to_string()]);
+        assert!(
+            plugin.default_servers.len() == 1,
+            "only the address is defaulted"
+        );
+
+        let cfg = config::NatsConfig::from_map(&HashMap::from([(
+            "servers".to_string(),
+            "nats://host:4222".to_string(),
+        )]))
+        .expect("servers alone is a valid config");
+        assert!(
+            cfg.policy.subject_allow.is_empty(),
+            "no grant comes with the address"
+        );
     }
 }
