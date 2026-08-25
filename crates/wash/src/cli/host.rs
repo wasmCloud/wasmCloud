@@ -202,6 +202,43 @@ pub struct HostCommand {
     )]
     pub wasmcloud_messaging_max_in_flight_per_component: Option<usize>,
 
+    /// Total memory on this host that all guests may use (e.g. `8GiB`).
+    ///
+    /// Unset, it is derived: three quarters of the cgroup limit that would
+    /// actually OOM-kill this process, falling back to the machine's total
+    /// where there is no cgroup, clamped to 256 MiB..1 TiB. An unset flag means
+    /// the derived number, never "unbounded".
+    ///
+    /// Nothing is gated on this yet — it is reported at startup and checked
+    /// against the two pool knobs below, so a host says whether the pool it is
+    /// about to build is one the machine could back.
+    //
+    // Deliberately no `default_value_t`: a parse-time default is
+    // indistinguishable downstream from an operator typing the same number, and
+    // the derivation has to tell them apart.
+    #[arg(long = "max-guest-memory", env = "WASH_HOST_MAX_GUEST_MEMORY")]
+    pub max_guest_memory: Option<String>,
+
+    /// Ceiling on how large any single guest linear memory may grow
+    /// (e.g. `512MiB`).
+    ///
+    /// This is the pooling allocator's `max_memory_size`. Unset, it stays
+    /// wasmtime's own default of 4 GiB — which is what every host has run to
+    /// date, and why an instance count has never implied a byte count.
+    ///
+    /// Every slot is sized for this whether or not anything grows into it, so
+    /// raising it raises the pool's whole address-space reservation.
+    #[arg(long = "default-heap-memory", env = "WASH_DEFAULT_HEAP_MEMORY")]
+    pub default_heap_memory: Option<String>,
+
+    /// Instance slots the pooling allocator keeps.
+    ///
+    /// Unset, this stays wasmtime's default of 1000. Multiplied by
+    /// `--default-heap-memory` it is the pool's address-space reservation, so
+    /// the two are worth setting together.
+    #[arg(long = "core-instances", env = "WASH_CORE_INSTANCES")]
+    pub core_instances: Option<u32>,
+
     /// How long a pooled HTTP connect waits for a slot before failing with a
     /// connect timeout (e.g. `5s`, `500ms`).
     ///
@@ -375,6 +412,15 @@ fn host_plugin_registry_credentials(
 
 impl CliCommand for HostCommand {
     async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
+        // Resolved before anything is connected or built. A bad size is a typo
+        // in a flag, and reporting it after a NATS dial has already failed
+        // buries the actionable error under an unrelated one.
+        let host_memory = crate::config::host_memory(
+            self.max_guest_memory.as_deref(),
+            self.default_heap_memory.as_deref(),
+            self.core_instances,
+        )?;
+
         // Installed before connect_nats so TLS-enabled NATS clusters have a
         // crypto provider available. Idempotent; also called by Ingress::new.
         wash_runtime::init_crypto();
@@ -460,6 +506,7 @@ impl CliCommand for HostCommand {
             ..Default::default()
         });
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
+        engine_builder = engine_builder.with_host_memory(host_memory);
 
         let engine = engine_builder.build()?;
 

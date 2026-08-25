@@ -313,6 +313,12 @@ runtime:
   # host: size `limits.memory` for your expected per-host workload density, or
   # remove it to leave host memory uncapped.
   #
+  # `defaultHeapMemory` and `coreInstances` are wasmtime knobs rather than
+  # Kubernetes resource fields; the chart strips them out of the container's
+  # `resources` block and sets them as `WASH_DEFAULT_HEAP_MEMORY` /
+  # `WASH_CORE_INSTANCES` for the host.
+  # Leaving both empty uses the default wasmtime values.
+  #
   # The simplest way to change host sizing for the whole release:
   #   --set runtime.resources.limits.memory=2Gi
   #   --set runtime.resources.requests.cpu=500m
@@ -322,6 +328,12 @@ runtime:
       memory: "64Mi"
     limits:
       memory: "512Mi"
+    # -- Ceiling on any single guest linear memory. Empty leaves wasmtime's
+    # default of 4GiB.
+    defaultHeapMemory: ""
+    # -- Instance slots the pooling allocator keeps. Empty leaves wasmtime's
+    # default of 1000.
+    coreInstances: ""
   # -- Additional environment variables applied to every host group container,
   # appended after the chart-managed vars and before any per-host-group `env`.
   # Standard Kubernetes env shape (supports `valueFrom`).
@@ -529,13 +541,17 @@ runtime:
               ipAddresses: []
       # -- Per-host-group compute resources. Omitted so this group inherits the
       # chart-wide `runtime.resources` above; uncomment to size one host group
-      # differently (e.g. a webgpu group that needs more memory):
+      # differently (e.g. a webgpu group that needs more memory). Setting this
+      # replaces `runtime.resources` wholesale rather than merging with it, so
+      # repeat the wasmtime knobs here too if the group needs them:
       # resources:
       #   requests:
       #     cpu: "500m"
       #     memory: "128Mi"
       #   limits:
       #     memory: "2Gi"
+      #   defaultHeapMemory: "512MiB"
+      #   coreInstances: "200"
       # -- Extra CA bundles trusted when this group pulls images, added to the
       # chart-wide `runtime.ociCaPaths` rather than replacing it:
       # ociCaPaths:

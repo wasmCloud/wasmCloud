@@ -222,6 +222,7 @@ pub mod ctx;
 pub(crate) mod instance_driver;
 pub(crate) mod instance_pool;
 pub use instance_pool::InstancePolicy;
+pub mod host_memory;
 pub(crate) mod linked_call;
 pub(crate) mod store;
 mod value;
@@ -276,6 +277,7 @@ pub struct Engine {
     /// the host's port table, and the connection budget. The workload-level half
     /// (`allowedHosts`, `allowedHostLoopbackPorts`) is layered over it per component.
     pub(crate) socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
+    pub(crate) host_memory: host_memory::HostMemoryBudgets,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
@@ -341,18 +343,23 @@ impl std::error::Error for SharedError {
 }
 
 impl Engine {
-    /// Core instances the pooling allocator will admit, or `None` when pooling
-    /// is off or unsupported.
+    /// host_memory has the memory budgets this engine was built with including max host
+    /// memory available, default component heap limit, and number of core instances available.
+    /// Read back rather than recomputed, so what a caller reports is what the engine actually
+    /// installed — including an embedder's `max_instances` winning over the flag-driven count.
+    pub fn host_memory(&self) -> host_memory::HostMemoryBudgets {
+        self.host_memory
+    }
+    
+    /// Core instances the pooling allocator was configured to admit, captured
+    /// from the [`PoolingAllocationConfig`] actually installed — so it reflects
+    /// the `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` override and a
+    /// caller-supplied pooling config alike. `None` when pooling is off or
+    /// unsupported, i.e. when there is no pool budget to divide.
     ///
-    /// This is the budget every component instantiation on this engine spends
-    /// from, and the number any secondary ceiling — the messaging admission
-    /// gate, say — should size itself against, so that raising the pool raises
-    /// what depends on it instead of leaving a second cap silently binding.
-    ///
-    /// Read from the [`PoolingAllocationConfig`] actually installed, so it
-    /// accounts for `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` and for a
-    /// caller-supplied pooling config, neither of which is visible from
-    /// [`EngineBuilder::with_max_instances`].
+    /// Recorded rather than recomputed: re-deriving `max_instances.unwrap_or(…)`
+    /// somewhere else would miss the env override (applied inside
+    /// [`new_pooling_config`]) and drift the moment either side changed.
     pub fn total_core_instances(&self) -> Option<u32> {
         self.total_core_instances
     }
@@ -843,6 +850,7 @@ pub struct EngineBuilder {
     compilation_cache_ttl: Option<Duration>,
     fuel_consumption: Option<bool>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
+    host_memory: Option<host_memory::HostMemoryBudgets>,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -858,6 +866,13 @@ impl EngineBuilder {
     #[must_use]
     pub fn with_socket_policy(mut self, policy: Arc<crate::sockets::policy::SocketPolicy>) -> Self {
         self.socket_policy = Some(policy);
+        self
+    }
+
+    /// Set the host's memory budget, per-memory ceiling and instance count.
+    /// Unset, the engine uses wasmtime's default memory limits.
+    pub fn with_host_memory(mut self, host_memory: host_memory::HostMemoryBudgets) -> Self {
+        self.host_memory = Some(host_memory);
         self
     }
 
@@ -1006,14 +1021,22 @@ impl EngineBuilder {
             .or_else(|| getenv::<bool>("WASMTIME_POOLING"))
             .unwrap_or(!has_custom_config);
 
+        // Resolved before the pooling config, which both of its knobs feed.
+        let host_memory = self.host_memory.unwrap_or_default();
+        if let Some(advisory) = host_memory.advisory() {
+            tracing::warn!("{advisory}");
+        }
+
         // The pooling allocator can be more efficient for workloads with many short-lived instances
         let mut total_core_instances = None;
         if use_pooling_allocator && let Ok(true) = is_pooling_allocator_supported() {
             tracing::debug!("using pooling allocator by default");
-            let pooling = self
-                .pooling_config
-                .take()
-                .unwrap_or_else(|| new_pooling_config(self.max_instances.unwrap_or(1000)));
+            let pooling = self.pooling_config.take().unwrap_or_else(|| {
+                new_pooling_config(
+                    self.max_instances.unwrap_or(host_memory.core_instances),
+                    host_memory.default_heap_memory,
+                )
+            });
             // Read back what was actually configured rather than what was asked
             // for: `new_pooling_config` lets the environment override the count,
             // and a caller-supplied config ignores `max_instances` entirely.
@@ -1068,6 +1091,7 @@ impl EngineBuilder {
             inner,
             cache,
             socket_policy: self.socket_policy.unwrap_or_default(),
+            host_memory,
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
             total_core_instances,
@@ -1140,7 +1164,7 @@ where
     }
 }
 
-fn new_pooling_config(instances: u32) -> PoolingAllocationConfig {
+fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAllocationConfig {
     let mut config = PoolingAllocationConfig::default();
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_UNUSED_WASM_SLOTS") {
         config.max_unused_warm_slots(v);
@@ -1206,8 +1230,14 @@ fn new_pooling_config(instances: u32) -> PoolingAllocationConfig {
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_MEMORIES_PER_MODULE") {
         config.max_memories_per_module(v);
     }
+    // Unlike every other knob in this function this one had no `else` branch,
+    // so wasmtime's default stood on every host and nothing named it. The
+    // fallback is that same default unless an operator set the flag, so this
+    // changes no behaviour by itself — it only makes the number reachable.
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_MEMORY_SIZE") {
         config.max_memory_size(v);
+    } else {
+        config.max_memory_size(usize::try_from(default_heap_memory).unwrap_or(usize::MAX));
     }
     #[cfg(not(windows))]
     if let Some(v) = getenv("WASMTIME_POOLING_TOTAL_GC_HEAPS") {
