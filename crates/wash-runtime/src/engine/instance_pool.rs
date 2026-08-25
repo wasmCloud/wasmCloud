@@ -45,7 +45,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use wasmtime::component::Instance;
 
@@ -220,6 +220,29 @@ impl InstancePool {
         }
     }
 
+    /// Lock the driver list, recovering it if a panic poisoned the lock.
+    ///
+    /// Treating a poisoned lock as "no pool" would disable pooling for the
+    /// rest of the workload's life: every later lock would fail, and every
+    /// call would quietly fall through to the cold path — still serving 200s,
+    /// at unpooled throughput, with nothing surfaced to the operator. An
+    /// unwind cannot leave the list logically inconsistent — a panicking sort
+    /// still leaves a valid permutation, and the other critical sections only
+    /// push, retain or take the `Vec` — so the state is safe to keep using:
+    /// clear the poison and keep serving warm instances.
+    fn lock_drivers(&self) -> MutexGuard<'_, Vec<Arc<InstanceDriver>>> {
+        match self.drivers.lock() {
+            Ok(drivers) => drivers,
+            Err(poisoned) => {
+                self.drivers.clear_poison();
+                tracing::warn!(
+                    "a panic poisoned the instance pool's lock; recovering the warm pool"
+                );
+                poisoned.into_inner()
+            }
+        }
+    }
+
     /// Guest calls this component may have in flight at once. See
     /// [`InstancePolicy::call_concurrency`].
     pub(crate) fn call_concurrency(&self) -> usize {
@@ -253,9 +276,7 @@ impl InstancePool {
         let Some((pool_size, _, _)) = self.limits() else {
             return Dispatch::Saturated(job);
         };
-        let Ok(mut drivers) = self.drivers.lock() else {
-            return Dispatch::Saturated(job);
-        };
+        let mut drivers = self.lock_drivers();
 
         // Reap instances that have drained or whose store faulted, so a
         // retired one frees its place in the pool.
@@ -265,7 +286,7 @@ impl InstancePool {
         // a trap takes down as little as possible. Sorted in place, since the
         // pool's order carries no meaning and leaving it sorted is what keeps
         // the next offer's sort near-linear.
-        drivers.sort_by_key(|d| d.in_flight());
+        sort_least_busy(&mut drivers);
 
         let mut job = job;
         for driver in drivers.iter() {
@@ -293,9 +314,7 @@ impl InstancePool {
         let Some((pool_size, max_invocations, max_concurrency)) = self.limits() else {
             return Err(job);
         };
-        let Ok(mut drivers) = self.drivers.lock() else {
-            return Err(job);
-        };
+        let mut drivers = self.lock_drivers();
         if drivers.len() >= pool_size {
             drop(drivers);
             return match self.offer(job) {
@@ -323,15 +342,33 @@ impl InstancePool {
     /// run loop. This does not wait for a drain: calls still in flight on
     /// those instances end with the store they were running on.
     pub(crate) fn clear(&self) {
-        if let Ok(mut drivers) = self.drivers.lock() {
-            drop(std::mem::take(&mut *drivers));
-        }
+        let mut drivers = self.lock_drivers();
+        drop(std::mem::take(&mut *drivers));
     }
+}
+
+/// Order drivers least-busy first, comparing a snapshot of each driver's
+/// in-flight count rather than the live counter.
+///
+/// Calls start and finish on other threads throughout the sort, so a
+/// comparator that re-read [`InstanceDriver::in_flight`] per comparison can
+/// observe the same driver under different keys within one pass. That violates
+/// the strict weak ordering the sort requires, which Rust's sort detects by
+/// panicking ("user-provided comparison function does not correctly implement
+/// a total order") — and the unwind then poisons the pool's lock.
+/// `sort_by_cached_key` computes every key exactly once, up front, so the
+/// ordering it compares cannot shift mid-sort.
+fn sort_least_busy(drivers: &mut [Arc<InstanceDriver>]) {
+    drivers.sort_by_cached_key(|d| d.in_flight());
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{InstancePolicy, NonZeroUsize};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::{InstancePolicy, InstancePool, NonZeroUsize, sort_least_busy};
+    use crate::engine::instance_driver::InstanceDriver;
 
     /// Zero, and the `-1` that `wash dev` and the operator send for "not
     /// configured", both mean instances are not kept.
@@ -373,6 +410,97 @@ mod tests {
                 max_invocations: NonZeroUsize::new(50),
                 max_concurrency: NonZeroUsize::MIN,
             }
+        );
+    }
+
+    /// Ordering the pool least-busy first must tolerate in-flight counts
+    /// moving under it: calls start and finish on other threads for the whole
+    /// time `offer` sorts. When the comparator re-read the live counter per
+    /// comparison, that churn made the ordering inconsistent within a single
+    /// pass, and Rust's sort raised "user-provided comparison function does
+    /// not correctly implement a total order" — poisoning the pool's lock and
+    /// silently disabling pooling. The keys are snapshotted now; this drives
+    /// the old race, which panicked here before the fix.
+    #[test]
+    fn sorting_survives_concurrent_in_flight_churn() {
+        let mut drivers = Vec::new();
+        let mut channels = Vec::new();
+        for _ in 0..32 {
+            let (driver, rx) = InstanceDriver::stub(64, None);
+            drivers.push(Arc::new(driver));
+            // Keep the receivers so the drivers stay live for the whole test.
+            channels.push(rx);
+        }
+
+        // Ends the churn threads however the sorting ends: a panicking sort
+        // must fail the test, not leave the threads spinning on a flag the
+        // unwound closure can no longer set.
+        struct StopOnDrop<'a>(&'a AtomicBool);
+        impl Drop for StopOnDrop<'_> {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let stop = &stop;
+            for chunk in drivers.chunks(8) {
+                scope.spawn(move || {
+                    let mut guards = Vec::new();
+                    while !stop.load(Ordering::Relaxed) {
+                        for driver in chunk {
+                            guards.extend(driver.try_admit());
+                        }
+                        guards.clear();
+                    }
+                });
+            }
+
+            let _stop = StopOnDrop(stop);
+            let mut pool: Vec<_> = drivers.iter().map(Arc::clone).collect();
+            for _ in 0..50_000 {
+                sort_least_busy(&mut pool);
+            }
+        });
+    }
+
+    /// A panic while the pool's lock is held must not disable pooling. It
+    /// used to: the poisoned lock made every later offer and install fall
+    /// through to the cold path — still serving 200s, at unpooled throughput,
+    /// until the workload was restarted.
+    #[test]
+    fn a_panic_under_the_lock_does_not_disable_the_pool() {
+        let pool = InstancePool::new(InstancePolicy::from_limits(4, 0, 0));
+
+        // Panic while holding the lock, as the key-rereading sort in `offer`
+        // did. The hook is silenced so the intended panic does not land in
+        // the test output as a failure's would.
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _drivers = pool.drivers.lock().expect("lock is not yet poisoned");
+            panic!("simulated panic while holding the pool's lock");
+        }));
+        std::panic::set_hook(hook);
+        assert!(
+            pool.drivers.is_poisoned(),
+            "the panic must have poisoned the lock for this test to mean anything"
+        );
+
+        // The pool must recover the lock and keep working, not fall through
+        // to the cold path forever.
+        let (driver, _rx) = InstanceDriver::stub(1, None);
+        pool.lock_drivers().push(Arc::new(driver));
+        assert_eq!(
+            pool.lock_drivers().len(),
+            1,
+            "a recovered pool must still hold and serve its warm instances"
+        );
+        pool.clear();
+        assert!(
+            pool.lock_drivers().is_empty(),
+            "a recovered pool must still clear"
         );
     }
 }
