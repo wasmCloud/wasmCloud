@@ -56,6 +56,13 @@ struct WarmHost {
 }
 
 async fn start_warm_host(flavor: Flavor) -> anyhow::Result<WarmHost> {
+    // No instance reuse: a store is built, instantiated and dropped per
+    // request. That is the default, and it is the baseline the pooled groups
+    // below are measured against.
+    start_warm_host_with_pool(flavor, 0).await
+}
+
+async fn start_warm_host_with_pool(flavor: Flavor, pool_size: i32) -> anyhow::Result<WarmHost> {
     let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
     let addr = ingress.addr();
 
@@ -78,10 +85,7 @@ async fn start_warm_host(flavor: Flavor) -> anyhow::Result<WarmHost> {
                 digest: None,
                 bytes: bytes::Bytes::from_static(flavor.wasm()),
                 local_resources: LocalResources::default(),
-                // No instance reuse: a store is built, instantiated and
-                // dropped per request. That is the default, and it is the
-                // baseline the pooled groups below are measured against.
-                pool_size: 0,
+                pool_size,
                 max_invocations: 0,
                 max_concurrency: 1,
             }],
@@ -146,6 +150,52 @@ async fn hot_invocation(warm: &WarmHost) -> anyhow::Result<()> {
     // Consume body so the server-side stream completes before timing stops.
     let _ = resp.bytes().await?;
     Ok(())
+}
+
+/// Paced invocation: request latency on a **pooled** instance whose store sat
+/// idle since the previous request, so the engine's epoch advanced while
+/// nothing ran on it.
+///
+/// This is the low-rps shape [`hot_invocation`] cannot produce: back-to-back
+/// requests never leave the store idle, and an unpooled host builds a fresh
+/// store per request, so neither ever holds a store whose epoch state has
+/// gone stale. P3 only — the pool path is p3-only, and p2 has no persistent
+/// request store for the idle gap to age.
+///
+/// The gap is slept **off the clock** (`iter_custom`); only the request is
+/// timed, so a per-request entry cost is not buried under the gap.
+fn bench_paced_latency(c: &mut Criterion) {
+    /// Longer than the epoch deadline a store arms, so each request finds the
+    /// idle store's deadline already expired.
+    const IDLE_GAP: Duration = Duration::from_millis(200);
+
+    let rt = Runtime::new().expect("tokio runtime");
+    let mut group = c.benchmark_group("paced_invocation");
+    group.throughput(Throughput::Elements(1));
+    // Each iteration costs the idle gap before the timed request starts.
+    group.sample_size(20);
+    group.measurement_time(Duration::from_secs(30));
+
+    let warm = rt
+        .block_on(start_warm_host_with_pool(Flavor::P3, 1))
+        .expect("warm pooled host");
+    group.bench_function(BenchmarkId::from_parameter("p3_pooled"), |b| {
+        b.to_async(&rt).iter_custom(|iters| {
+            let warm = &warm;
+            async move {
+                let mut total = Duration::ZERO;
+                for _ in 0..iters {
+                    tokio::time::sleep(IDLE_GAP).await;
+                    let started = Instant::now();
+                    hot_invocation(warm).await.unwrap();
+                    total += started.elapsed();
+                }
+                total
+            }
+        });
+    });
+    drop(warm);
+    group.finish();
 }
 
 fn bench_cold(c: &mut Criterion) {
@@ -384,6 +434,7 @@ criterion_group!(
     benches,
     bench_cold,
     bench_hot_latency,
+    bench_paced_latency,
     bench_throughput,
     bench_pooled_throughput
 );

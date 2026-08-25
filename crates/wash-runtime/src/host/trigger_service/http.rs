@@ -34,6 +34,18 @@ impl hyper::body::Body for ChannelBody {
     ) -> Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
         self.rx.poll_recv(cx)
     }
+
+    fn is_end_stream(&self) -> bool {
+        self.rx.is_closed() && self.rx.is_empty()
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        if self.is_end_stream() {
+            hyper::body::SizeHint::with_exact(0)
+        } else {
+            hyper::body::SizeHint::default()
+        }
+    }
 }
 
 /// Handles one inbound HTTP request on a shared instance: the workload's
@@ -50,6 +62,10 @@ pub(crate) struct HttpTask {
     pub(crate) req: hyper::Request<hyper::body::Incoming>,
     pub(crate) resp_tx:
         tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
+    /// Armed by the dispatcher once it has stopped waiting for this response.
+    /// It is registered on the store for the life of the call so the epoch
+    /// callback can see it — the only way to end a guest that never yields.
+    pub(crate) abandoned: std::sync::Arc<crate::engine::abandon::AbandonFlag>,
     /// This call's tether to a pooled instance: holds its in-flight slot and
     /// can retire the instance. `None` for a service, whose singleton instance
     /// is not the pool's to retire.
@@ -62,8 +78,17 @@ impl AccessorTask<SharedCtx> for HttpTask {
             service,
             req,
             resp_tx,
+            abandoned,
             pool_slot,
         } = self;
+
+        // Watch this call for the rest of its life. The guard deregisters on
+        // drop, however the call ends; the deadline is re-armed for it here.
+        let _abandoned = accessor.with(|mut access| {
+            crate::engine::abandon::rearm_for_call(&mut access);
+            let calls = std::sync::Arc::clone(&access.get().abandoned);
+            calls.watch(abandoned)
+        });
 
         let (parts, body) = req.into_parts();
         let body = body
@@ -196,6 +221,35 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use hyper::body::Frame;
+
+    /// [`ChannelBody`] must report end-of-stream **at rest** — closed sender,
+    /// drained buffer — not only through a terminal poll: hyper stops polling
+    /// a fixed-length body early, and `WatchedBody` reads this to tell a
+    /// delivered response from an abandoned one.
+    #[tokio::test]
+    async fn channel_body_reports_end_of_stream_at_rest() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, P2ErrorCode>>(4);
+        let mut body = ChannelBody { rx };
+        assert!(!hyper::body::Body::is_end_stream(&body));
+
+        tx.send(Ok(Frame::data(Bytes::from_static(b"data"))))
+            .await
+            .expect("send");
+        drop(tx);
+        // Closed but not yet drained: the last frame is still deliverable.
+        assert!(!hyper::body::Body::is_end_stream(&body));
+
+        let frame = std::future::poll_fn(|cx| {
+            hyper::body::Body::poll_frame(std::pin::Pin::new(&mut body), cx)
+        })
+        .await
+        .expect("a frame")
+        .expect("not an error");
+        assert!(frame.is_data());
+        // Closed and drained: ended, with an exact size of zero.
+        assert!(hyper::body::Body::is_end_stream(&body));
+        assert_eq!(hyper::body::Body::size_hint(&body).exact(), Some(0));
+    }
 
     /// [`ChannelBody`] must forward frames **incrementally** — a consumer
     /// receives a frame while the producer is still parked — so a service

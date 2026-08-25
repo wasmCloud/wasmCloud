@@ -31,6 +31,7 @@ use wasmtime::error::Context as _;
 use wasmtime::{AsContext, AsContextMut, StoreContextMut};
 use wasmtime_wasi::WasiCtxBuilder;
 
+use crate::engine::abandon::{AbandonedCallPolicy, arm_epoch_deadline};
 #[cfg(feature = "wasi-tls")]
 use crate::engine::ctx::SharedTlsProvider;
 use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx, StoreActiveCtxGuard};
@@ -352,6 +353,9 @@ pub(crate) async fn new_store_from_templates(
     }
 
     let mut store = wasmtime::Store::new(engine, shared_ctx);
+    // Trap for every store built here, services included: trapping a service
+    // means a supervisor restart, which beats carrying a wedged call forever.
+    arm_epoch_deadline(&mut store, AbandonedCallPolicy::Trap);
 
     let active_id = active.component_id.clone();
     for (linked_id, linked_pre) in linked_instances {
@@ -560,6 +564,14 @@ async fn invoke_ephemeral_relocated(
     let import_name = inv.import_name.clone();
     let export_name = inv.export_name.clone();
 
+    // Deadline enforced from out here (see `crate::engine::abandon`); the flag
+    // travels into the task, which registers it once the store exists.
+    let call = crate::engine::abandon::DispatchedCall::new(
+        "linked (relocated ephemeral store)",
+        crate::timeouts::ephemeral_call(),
+    );
+    let call_flag = call.flag();
+
     trace!(
         name = %inv.import_name,
         fn_name = %inv.export_name,
@@ -579,6 +591,10 @@ async fn invoke_ephemeral_relocated(
                 return;
             }
         };
+        // Watched for the store's whole run, the post-reply stream drain
+        // included.
+        let drain_flag = Arc::clone(&call_flag);
+        let _abandoned = store.data().abandoned.watch(call_flag);
         let instance = match callee_pre.instantiate_async(&mut store).await {
             Ok(i) => i,
             Err(e) => {
@@ -640,6 +656,12 @@ async fn invoke_ephemeral_relocated(
                         // stream would otherwise pin this ephemeral store — and its
                         // core-instance slots — indefinitely. A transfer still making
                         // progress past this bound is truncated when the store drops.
+                        // The `timeout` below is a future on this store, so it
+                        // cannot fire if the guest stops yielding mid-drain.
+                        // This timer runs off-store, and is cancelled when the
+                        // drain ends.
+                        let _drain_timer =
+                            Arc::clone(&drain_flag).arm_after(crate::timeouts::stream_drain());
                         let drain = async {
                             for done in dones {
                                 let _ = done.await;
@@ -661,13 +683,16 @@ async fn invoke_ephemeral_relocated(
             .await;
     }));
 
-    let relocated = ready_rx
+    let relocated = call
+        .await_reply(ready_rx)
         .await
+        .ok_or_else(|| wasmtime::format_err!("ephemeral store produced no results in time"))?
         .map_err(|_| wasmtime::format_err!("ephemeral store dropped before producing results"))??;
 
     // Results are in hand; the task must keep running to feed any result streams,
     // so detach it (cancellation past this point is handled by the result-stream
-    // consumers closing their pump channels).
+    // consumers closing their pump channels). The drain is bounded from inside
+    // that task.
     std::mem::forget(task);
 
     // Inject results into the caller store; result-stream producers pull from
@@ -719,6 +744,13 @@ async fn invoke_ephemeral_plain(
 
     if let Some(pool) = pool.as_ref() {
         let (reply, reply_rx) = tokio::sync::oneshot::channel();
+        // Deadline enforced here, in the caller's task, outside the callee's
+        // store — where a non-yielding callee cannot block it (see
+        // `crate::engine::abandon`).
+        let call = crate::engine::abandon::DispatchedCall::new(
+            "linked (pooled)",
+            crate::timeouts::ephemeral_call(),
+        );
         let job = InstanceJob::Linked(Box::new(LinkedJob {
             func_idx: inv.func_idx,
             params: params.to_vec(),
@@ -726,6 +758,7 @@ async fn invoke_ephemeral_plain(
             import_name: inv.import_name.clone(),
             export_name: inv.export_name.clone(),
             reply,
+            abandoned: call.flag(),
         }));
         let outcome = match pool.offer(job) {
             Dispatch::Sent => Ok(()),
@@ -744,8 +777,12 @@ async fn invoke_ephemeral_plain(
         };
         match outcome {
             Ok(()) => {
-                let vals = reply_rx
+                let vals = call
+                    .await_reply(reply_rx)
                     .await
+                    .ok_or_else(|| {
+                        wasmtime::format_err!("pooled instance produced no reply in time")
+                    })?
                     .map_err(|_| wasmtime::format_err!("pooled instance dropped the call"))??;
                 write_results(vals, results)?;
                 trace!(
@@ -781,9 +818,18 @@ async fn invoke_ephemeral_plain(
     let call_export_name = inv.export_name.clone();
     let func_idx = inv.func_idx;
 
+    // Deadline enforced from out here (see `crate::engine::abandon`); the
+    // watch guard travels into the task to cover the call for its whole run.
+    let call = crate::engine::abandon::DispatchedCall::new(
+        "linked (ephemeral store)",
+        crate::timeouts::ephemeral_call(),
+    );
+    let watch_guard = store.data().abandoned.watch(call.flag());
+
     // The store travels into the task, so a caller cancelled mid-call drops it
     // with the task rather than leaving it running.
     let mut task = AbortOnDrop(tokio::task::spawn(async move {
+        let _abandoned = watch_guard;
         store
             .run_concurrent(async move |accessor| {
                 let func = accessor.with(|mut access| -> wasmtime::Result<_> {
@@ -808,8 +854,10 @@ async fn invoke_ephemeral_plain(
             .map_err(|e| wasmtime::format_err!("{e:#}"))
             .and_then(|inner| inner)
     }));
-    let vals = (&mut task.0)
+    let vals = call
+        .await_reply(&mut task.0)
         .await
+        .ok_or_else(|| wasmtime::format_err!("ephemeral linked call produced no result in time"))?
         .map_err(|e| wasmtime::format_err!("ephemeral linked call task failed: {e}"))??;
     write_results(vals, results)?;
 

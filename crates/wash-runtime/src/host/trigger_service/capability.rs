@@ -64,6 +64,11 @@ pub struct CapabilityCall {
     /// Carries the call's relocated results (or a trap/routing error) back to
     /// the shim.
     pub reply: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<Relocated>>>,
+    /// The abandonment flag of the dispatched call enforcing this job's
+    /// deadline (see [`crate::engine::abandon`]). The plugin store is
+    /// `WarnThenTrap`, so an abandoned call here is logged at the grace and
+    /// only traps the shared store at the escalation.
+    pub abandoned: Arc<crate::engine::abandon::AbandonFlag>,
 }
 
 /// A `wasmcloud:host/workload-lifecycle` bind a fresh plugin incarnation must
@@ -274,7 +279,16 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
             args,
             result_tys,
             reply,
+            abandoned,
         } = call;
+
+        // Watch this call for the rest of its life. The guard deregisters on
+        // drop, however the call ends; the deadline is re-armed for it here.
+        let _abandoned = accessor.with(|mut access| {
+            crate::engine::abandon::rearm_for_call(&mut access);
+            let calls = Arc::clone(&access.get().abandoned);
+            calls.watch(abandoned)
+        });
 
         // Look up the export and inject the relocated arguments — in one discrete
         // sync block, never holding the borrow across the await below.

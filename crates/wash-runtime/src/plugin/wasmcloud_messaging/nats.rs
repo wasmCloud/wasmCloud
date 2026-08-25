@@ -722,10 +722,24 @@ impl HostPlugin for NatsMessaging {
 
                         let fuel_meter = fuel_meter.clone();
 
+                        // Nothing awaits this call, so its deadline is a timer
+                        // outliving the store's own task; without it a guest
+                        // pinned on a poison message holds this store, and its
+                        // instance slot, for the life of the host.
+                        let call = crate::engine::abandon::DispatchedCall::new(
+                            "messaging (per-message store)",
+                            crate::timeouts::messaging_deliver(),
+                        );
+                        let abandoned = store.data().abandoned.watch(call.flag());
+                        let deadline = call.arm_on_timer();
+
                         tokio::spawn(async move {
                             // Released on completion, trap or not — which is
                             // what frees the instance slot this message holds.
                             let _permit = permit;
+                            // Dropped when the call ends, however it ends.
+                            let _abandoned = abandoned;
+                            let _deadline = deadline;
                             let result = fuel_meter.observe(
                                 &[
                                     KeyValue::new("plugin", PLUGIN_MESSAGING_ID),

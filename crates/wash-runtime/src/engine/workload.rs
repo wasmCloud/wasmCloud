@@ -2253,6 +2253,20 @@ impl UnresolvedWorkload {
                         err = ?e,
                         "failed to bind plugin to workload"
                     );
+                    // Clean up plugin that just failed first.
+                    if let Err(cleanup_err) = p
+                        .on_workload_unbind(
+                            self.id(),
+                            WitInterfaces::new(&plugin_matched_interfaces),
+                        )
+                        .await
+                    {
+                        warn!(
+                            plugin_id = plugin_id,
+                            error = ?cleanup_err,
+                            "failed to cleanup partially bound plugin after bind failure"
+                        );
+                    }
                     // Clean up all previously bound plugins in reverse order
                     for (bound_plugin, bound_interfaces, _) in
                         bound_plugins_with_interfaces.iter().rev()
@@ -2319,6 +2333,21 @@ impl UnresolvedWorkload {
                             err = ?e,
                             "failed to bind workload item to plugin"
                         );
+                        // This plugin's own on_workload_bind succeeded, so it can hold a state until unbind.
+                        // Go ahead and unbind immediately before the completed plugins.
+                        if let Err(cleanup_err) = p
+                            .on_workload_unbind(
+                                self.id(),
+                                WitInterfaces::new(&plugin_matched_interfaces),
+                            )
+                            .await
+                        {
+                            warn!(
+                                plugin_id = plugin_id,
+                                error = ?cleanup_err,
+                                "failed to cleanup partially bound plugin after item bind failure"
+                            );
+                        }
                         // Clean up all previously bound plugins in reverse order
                         for (bound_plugin, bound_interfaces, _) in
                             bound_plugins_with_interfaces.iter().rev()
@@ -2490,9 +2519,21 @@ impl UnresolvedWorkload {
             .keys()
             .cloned()
             .collect();
-        resolved_workload
+        if let Err(e) = resolved_workload
             .resolve_component_volume_mounts(&all_component_ids)
-            .await?;
+            .await
+        {
+            // Same rollback as the linking failure above: plugins are already
+            // bound at this point, so a bad hostPath would otherwise leave
+            // their state — a live NATS connection among it — registered
+            // against a workload that never deploys.
+            warn!(
+                error = ?e,
+                "failed to resolve component volume mounts, unbinding all plugins"
+            );
+            let _ = resolved_workload.unbind_all_plugins().await;
+            bail!(e);
+        }
 
         // Notify plugins of the resolved workload
         for (plugin, component_ids) in bound_plugins.iter() {
@@ -3118,6 +3159,156 @@ mod tests {
         assert!(
             bound_component_ids(&bound).contains(&importer_id),
             "an ambiguous sibling export is not a provider, so the plugin keeps the import"
+        );
+    }
+
+    /// Which half of the bind a [`RollbackPlugin`] refuses.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum FailAt {
+        WorkloadBind,
+        ItemBind,
+    }
+
+    /// A plugin that counts its own `on_workload_unbind` and can refuse either half of the bind. Whatever
+    /// a real plugin opened on the way in is released through that callback, so the count is what says whether a failure rolled itself back.
+    struct RollbackPlugin {
+        fail_at: Option<FailAt>,
+        unbinds: Arc<AtomicUsize>,
+    }
+
+    impl RollbackPlugin {
+        fn new(fail_at: Option<FailAt>) -> Self {
+            Self {
+                fail_at,
+                unbinds: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn unbind_count(&self) -> usize {
+            self.unbinds.load(Ordering::SeqCst)
+        }
+
+        fn registered(self: &Arc<Self>) -> HashMap<&'static str, Arc<dyn HostPlugin>> {
+            HashMap::from([(self.id(), self.clone() as Arc<dyn HostPlugin>)])
+        }
+    }
+
+    #[async_trait]
+    impl HostPlugin for RollbackPlugin {
+        fn id(&self) -> &'static str {
+            "rollback-plugin"
+        }
+
+        fn world(&self) -> WitWorld {
+            WitWorld {
+                imports: HashSet::new(),
+                exports: HashSet::from([WitInterface::from(MARKER)]),
+            }
+        }
+
+        async fn on_workload_bind(
+            &self,
+            _workload: &UnresolvedWorkload,
+            _interfaces: WitInterfaces<'_>,
+        ) -> anyhow::Result<()> {
+            match self.fail_at {
+                Some(FailAt::WorkloadBind) => bail!("refusing the workload bind"),
+                _ => Ok(()),
+            }
+        }
+
+        async fn on_workload_item_bind<'a>(
+            &self,
+            _item: &mut WorkloadItem<'a>,
+            _interfaces: WitInterfaces<'_>,
+        ) -> anyhow::Result<()> {
+            match self.fail_at {
+                Some(FailAt::ItemBind) => bail!("refusing the item bind"),
+                _ => Ok(()),
+            }
+        }
+
+        async fn on_workload_unbind(
+            &self,
+            _workload_id: &str,
+            _interfaces: WitInterfaces<'_>,
+        ) -> anyhow::Result<()> {
+            self.unbinds.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// A bind can get partway through before it errors, and the plugin that
+    /// failed is in no rollback list — it is added only once every one of its
+    /// items is bound. So the failure path unbinds it itself, or a connection
+    /// opened on the way in outlives the deploy that never happened.
+    #[tokio::test]
+    async fn a_failed_workload_bind_rolls_itself_back() {
+        let plugin = Arc::new(RollbackPlugin::new(Some(FailAt::WorkloadBind)));
+        let mut workload = marker_workload(vec![marker_importer("importer")]);
+
+        assert!(
+            workload.bind_plugins(&plugin.registered()).await.is_err(),
+            "the plugin refused its bind"
+        );
+
+        assert_eq!(
+            plugin.unbind_count(),
+            1,
+            "the plugin that failed its bind must be unbound exactly once"
+        );
+    }
+
+    /// The item bind is worse still: `on_workload_bind` already succeeded, so
+    /// the plugin is certainly holding state by the time an item is refused.
+    #[tokio::test]
+    async fn a_failed_item_bind_rolls_itself_back() {
+        let plugin = Arc::new(RollbackPlugin::new(Some(FailAt::ItemBind)));
+        let mut workload = marker_workload(vec![marker_importer("importer")]);
+
+        assert!(
+            workload.bind_plugins(&plugin.registered()).await.is_err(),
+            "the plugin refused its item bind"
+        );
+
+        assert_eq!(
+            plugin.unbind_count(),
+            1,
+            "the plugin that failed its item bind must be unbound exactly once"
+        );
+    }
+
+    /// Every step of `resolve` after the plugins are bound owes them a
+    /// rollback, volume-mount canonicalization included: a hostPath that does
+    /// not exist is a deploy-time failure like any other, and the plugins it
+    /// leaves behind keep tracking a workload that never runs.
+    #[tokio::test]
+    async fn a_bad_volume_mount_unbinds_the_plugins() {
+        let mut importer = marker_importer("importer");
+        importer.metadata.volume_mounts = vec![(
+            PathBuf::from("/definitely/not/a/directory/on/this/host"),
+            VolumeMount {
+                name: "data".to_string(),
+                mount_path: "/data".to_string(),
+                read_only: true,
+            },
+        )];
+
+        let plugin = Arc::new(RollbackPlugin::new(None));
+        let workload = marker_workload(vec![importer]);
+
+        workload
+            .resolve(
+                Some(&plugin.registered()),
+                Arc::new(crate::host::http::NullServer::default()),
+            )
+            .await
+            .expect_err("the volume mount cannot be canonicalized");
+
+        assert_eq!(
+            plugin.unbind_count(),
+            1,
+            "a plugin bound before the failing step must be unbound"
         );
     }
 
