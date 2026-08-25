@@ -104,6 +104,10 @@ pub struct BucketPolicy {
     /// Prefix prepended to every physical bucket name. The namespacing knob:
     /// two hosts (or tenants) pointed at one NATS cluster can use distinct
     /// prefixes so identical guest identifiers do not collide.
+    ///
+    /// An embedder's prefix bounds what the interfaces under it can name —
+    /// [`BucketPolicy::from_config`] nests an interface's prefix inside it
+    /// rather than letting it be replaced.
     pub prefix: String,
     /// Pins this policy to one physical bucket: when set, every identifier a
     /// guest opens resolves to this bucket and the identifier is ignored. Use
@@ -130,21 +134,34 @@ pub struct BucketPolicy {
 /// bookkeeping. Capped because the names are guest-supplied — past the cap the
 /// set is cleared, which starts a fresh window rather than growing without
 /// bound or going permanently quiet.
-static REFUSED_BUCKETS: std::sync::LazyLock<Mutex<HashSet<String>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
+static REFUSED_BUCKETS: std::sync::LazyLock<Mutex<RefusedBuckets>> =
+    std::sync::LazyLock::new(|| Mutex::new(RefusedBuckets::default()));
 
 /// How many distinct refused buckets are remembered before the set resets.
 const REFUSED_BUCKETS_CAP: usize = 256;
 
 /// Whether this is the first refusal for `physical`, and so the one that warns.
 fn first_refusal(physical: &str) -> bool {
-    let mut refused = REFUSED_BUCKETS
+    REFUSED_BUCKETS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if refused.len() >= REFUSED_BUCKETS_CAP {
-        refused.clear();
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .first_refusal(physical, REFUSED_BUCKETS_CAP)
+}
+
+/// The set behind [`first_refusal`], as a type so tests can drive their own
+/// rather than race each other through the process-global one.
+#[derive(Default)]
+struct RefusedBuckets {
+    seen: HashSet<String>,
+}
+
+impl RefusedBuckets {
+    fn first_refusal(&mut self, physical: &str, cap: usize) -> bool {
+        if self.seen.len() >= cap {
+            self.seen.clear();
+        }
+        self.seen.insert(physical.to_string())
     }
-    refused.insert(physical.to_string())
 }
 
 /// What an [`BucketPolicy::open`] did, for the caller to record. The physical
@@ -218,6 +235,13 @@ impl BucketPolicy {
     ///   inheriting it would silently collapse every named interface — a
     ///   `sessions` and a `cache` import alike — onto the embedder's single
     ///   bucket. An interface that wants a pin states it.
+    /// - `bucket_prefix` nests rather than replaces: an interface's prefix is
+    ///   appended to the embedder's. The embedder's prefix is what keeps one
+    ///   host's (or tenant's) buckets separate from another's, so an interface
+    ///   able to replace it could name a bucket outside its namespace — and
+    ///   `create = never` would not stop that, since the interesting buckets
+    ///   already exist. An interface can subdivide its namespace; it cannot
+    ///   leave it.
     pub fn from_config(config: &HashMap<String, String>, defaults: &Self) -> anyhow::Result<Self> {
         let create = match config.get(CREATE_KEY) {
             Some(v) => CreatePolicy::parse(v)?.clamped_to(defaults.create),
@@ -236,10 +260,17 @@ impl BucketPolicy {
         };
 
         Self {
-            prefix: config
-                .get(BUCKET_PREFIX_KEY)
-                .cloned()
-                .unwrap_or_else(|| defaults.prefix.clone()),
+            // Nested, not overridden: the embedder's prefix is the boundary an
+            // interface names within. An interface that replaced it could
+            // reach outside the namespace the host put it in.
+            prefix: format!(
+                "{}{}",
+                defaults.prefix,
+                config
+                    .get(BUCKET_PREFIX_KEY)
+                    .map(String::as_str)
+                    .unwrap_or("")
+            ),
             bucket: config.get(BUCKET_KEY).cloned(),
             create,
             replicas: parse_number(config, REPLICAS_KEY)?.or(defaults.replicas),
@@ -646,7 +677,8 @@ mod tests {
             &defaults,
         )
         .expect("must parse");
-        assert_eq!(overridden.prefix, "iface_");
+        // The prefix is the one key that nests instead of replacing.
+        assert_eq!(overridden.prefix, "host_iface_");
         assert_eq!(overridden.replicas, Some(1));
         // Untouched keys still come from the defaults.
         assert_eq!(overridden.create, CreatePolicy::Missing);
@@ -683,21 +715,30 @@ mod tests {
         );
 
         // Inheriting a value and spelling it out are the same policy, so they
-        // share a backend...
+        // share a backend. (The prefix is the exception — it nests, so
+        // restating it is a *different* namespace; see below.)
         let inherited = BucketPolicy {
             prefix: "host_".to_string(),
+            replicas: Some(3),
             ..BucketPolicy::default()
         };
         assert_eq!(
             fingerprint(&[], &inherited),
-            fingerprint(&[("bucket_prefix", "host_")], &inherited)
+            fingerprint(&[("replicas", "3")], &inherited)
         );
 
-        // ...while opting out of an inherited prefix with an empty value is a
-        // different policy, and must not be pooled with one that inherits it.
-        assert_ne!(
+        // An empty interface prefix nests to the same place as none at all,
+        // so those two *are* the same policy.
+        assert_eq!(
             fingerprint(&[], &inherited),
             fingerprint(&[("bucket_prefix", "")], &inherited)
+        );
+
+        // Subdividing the embedder's namespace is a different policy, and must
+        // not share a backend with one that does not.
+        assert_ne!(
+            fingerprint(&[], &inherited),
+            fingerprint(&[("bucket_prefix", "cache_")], &inherited)
         );
     }
 
@@ -716,6 +757,41 @@ mod tests {
             BucketPolicy::from_config(&config(&[("create", "missing")]), &host_withholds)
                 .expect("must parse");
         assert_eq!(attempted_escalation.create, CreatePolicy::Never);
+    }
+
+    /// An interface may subdivide the embedder's namespace but never leave it:
+    /// its prefix nests inside, and an empty one changes nothing.
+    #[test]
+    fn an_interface_prefix_nests_inside_the_embedder_s() {
+        let host = BucketPolicy {
+            prefix: "tenant-a_".to_string(),
+            ..BucketPolicy::default()
+        };
+
+        let nested = BucketPolicy::from_config(&config(&[("bucket_prefix", "cache_")]), &host)
+            .expect("must parse");
+        assert_eq!(nested.physical_name("counters"), "tenant-a_cache_counters");
+
+        // The escape attempts: an empty prefix, and another tenant's.
+        let emptied = BucketPolicy::from_config(&config(&[("bucket_prefix", "")]), &host)
+            .expect("must parse");
+        assert_eq!(emptied.physical_name("secrets"), "tenant-a_secrets");
+
+        let other = BucketPolicy::from_config(&config(&[("bucket_prefix", "tenant-b_")]), &host)
+            .expect("must parse");
+        assert_eq!(
+            other.physical_name("secrets"),
+            "tenant-a_tenant-b_secrets",
+            "an interface must not be able to name a bucket outside the embedder's prefix"
+        );
+
+        // A pin is bounded the same way: it names a bucket inside the prefix.
+        let pinned = BucketPolicy::from_config(&config(&[("bucket", "tenant-b_secrets")]), &host)
+            .expect("must parse");
+        assert_eq!(
+            pinned.physical_name("anything"),
+            "tenant-a_tenant-b_secrets"
+        );
     }
 
     /// A pin names one store, so it is never inherited: only the interface
@@ -748,30 +824,33 @@ mod tests {
     /// A refusal warns once per bucket, however many times a guest opens it.
     #[test]
     fn refusals_warn_once_per_bucket() {
-        // Unique names: the bookkeeping is process-wide, so a fixed name would
-        // couple this to whatever else has run.
-        let a = format!("bucket-a-{}", uuid::Uuid::new_v4());
-        let b = format!("bucket-b-{}", uuid::Uuid::new_v4());
-
-        assert!(first_refusal(&a), "the first refusal warns");
-        assert!(!first_refusal(&a), "a repeat does not");
-        assert!(first_refusal(&b), "a different bucket warns");
+        let mut refused = RefusedBuckets::default();
+        assert!(
+            refused.first_refusal("counters", REFUSED_BUCKETS_CAP),
+            "the first refusal warns"
+        );
+        assert!(
+            !refused.first_refusal("counters", REFUSED_BUCKETS_CAP),
+            "a repeat does not"
+        );
+        assert!(
+            refused.first_refusal("sessions", REFUSED_BUCKETS_CAP),
+            "a different bucket warns"
+        );
     }
 
     /// The set of remembered buckets is bounded: guests choose those names, so
     /// it must not grow forever.
     #[test]
     fn refusal_bookkeeping_is_bounded() {
-        for _ in 0..(REFUSED_BUCKETS_CAP + 10) {
-            first_refusal(&format!("bucket-{}", uuid::Uuid::new_v4()));
+        let mut refused = RefusedBuckets::default();
+        for i in 0..1_000 {
+            refused.first_refusal(&format!("bucket-{i}"), 8);
         }
-        let remembered = REFUSED_BUCKETS
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .len();
         assert!(
-            remembered <= REFUSED_BUCKETS_CAP,
-            "remembered {remembered} buckets, cap is {REFUSED_BUCKETS_CAP}"
+            refused.seen.len() <= 8,
+            "remembered {} buckets, cap is 8",
+            refused.seen.len()
         );
     }
 

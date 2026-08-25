@@ -185,24 +185,27 @@ impl NatsBackend {
 
 #[async_trait::async_trait]
 impl KvBackend for NatsBackend {
+    /// Resolve the bucket, creating it if the policy allows.
+    ///
+    /// Always asks the policy rather than trusting a cached handle: `open` is
+    /// where a guest learns whether its store exists, so answering from a
+    /// handle cached before the bucket was deleted would report a bucket that
+    /// is gone as present, and leave the guest to discover it on the next
+    /// operation instead.
     async fn open(&self, identifier: &str) -> Result<(), StoreError> {
         let physical = self.policy.physical_name(identifier);
-        if self
-            .stores
-            .read()
-            .await
-            .get(&physical, Instant::now())
-            .is_some()
-        {
-            return Ok(());
+        let opened = self.policy.open(&self.context, identifier).await;
+        match opened {
+            Ok((kv, _outcome)) => {
+                self.cache(physical, kv).await;
+                Ok(())
+            }
+            Err(e) => {
+                // Whatever was cached for this name is no longer trustworthy.
+                self.stores.write().await.remove(&physical);
+                Err(Self::open_err(e))
+            }
         }
-        let (kv, _outcome) = self
-            .policy
-            .open(&self.context, identifier)
-            .await
-            .map_err(Self::open_err)?;
-        self.cache(physical, kv).await;
-        Ok(())
     }
 
     async fn get(&self, bucket: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
@@ -311,19 +314,19 @@ impl KvBackend for NatsBackend {
         keys: Vec<String>,
     ) -> Result<Vec<Option<(String, Vec<u8>)>>, StoreError> {
         let s = self.store(bucket).await?;
-        FuturesUnordered::from_iter(keys.into_iter().map(|key| {
-            let s = s.clone();
-            async move {
-                Ok(s.get(&key)
-                    .await
-                    .map_err(Self::err)?
-                    .map(|b| (key, b.to_vec())))
-            }
-        }))
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect()
+        let results: Vec<Result<Option<(String, Vec<u8>)>, _>> =
+            FuturesUnordered::from_iter(keys.into_iter().map(|key| {
+                let s = s.clone();
+                async move {
+                    s.get(&key)
+                        .await
+                        .map(|value| value.map(|b| (key, b.to_vec())))
+                }
+            }))
+            .collect()
+            .await;
+        self.check(bucket, results.into_iter().collect::<Result<Vec<_>, _>>())
+            .await
     }
 
     async fn set_many(
@@ -332,31 +335,30 @@ impl KvBackend for NatsBackend {
         key_values: Vec<(String, Vec<u8>)>,
     ) -> Result<(), StoreError> {
         let s = self.store(bucket).await?;
-        FuturesUnordered::from_iter(key_values.into_iter().map(|(key, value)| {
-            let s = s.clone();
-            async move {
-                s.put(key, value.into())
-                    .await
-                    .map(|_| ())
-                    .map_err(Self::err)
-            }
-        }))
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect()
+        let results: Vec<Result<(), _>> =
+            FuturesUnordered::from_iter(key_values.into_iter().map(|(key, value)| {
+                let s = s.clone();
+                async move { s.put(key, value.into()).await.map(|_| ()) }
+            }))
+            .collect()
+            .await;
+        self.check(bucket, results.into_iter().collect::<Result<Vec<_>, _>>())
+            .await?;
+        Ok(())
     }
 
     async fn delete_many(&self, bucket: &str, keys: Vec<String>) -> Result<(), StoreError> {
         let s = self.store(bucket).await?;
-        FuturesUnordered::from_iter(keys.into_iter().map(|key| {
-            let s = s.clone();
-            async move { s.delete(&key).await.map(|_| ()).map_err(Self::err) }
-        }))
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect()
+        let results: Vec<Result<(), _>> =
+            FuturesUnordered::from_iter(keys.into_iter().map(|key| {
+                let s = s.clone();
+                async move { s.delete(&key).await.map(|_| ()) }
+            }))
+            .collect()
+            .await;
+        self.check(bucket, results.into_iter().collect::<Result<Vec<_>, _>>())
+            .await?;
+        Ok(())
     }
 
     async fn put_if_absent(
@@ -371,13 +373,14 @@ impl KvBackend for NatsBackend {
         match s.create(key, Bytes::from(value)).await {
             Ok(_) => Ok(true),
             Err(e) if e.kind() == CreateErrorKind::AlreadyExists => Ok(false),
-            Err(e) => Err(Self::err(e)),
+            Err(e) => Err(self.classify(bucket, e).await),
         }
     }
 
     async fn current(&self, bucket: &str, key: &str) -> Result<Option<Versioned>, StoreError> {
         let s = self.store(bucket).await?;
-        Ok(present_entry(&s, key).await?)
+        let entry = self.check(bucket, s.entry(key).await).await?;
+        Ok(present(entry))
     }
 
     async fn swap(
@@ -391,7 +394,7 @@ impl KvBackend for NatsBackend {
         let s = self.store(bucket).await?;
 
         // Read the current entry (with its revision) to evaluate preconditions.
-        let entry = s.entry(key).await.map_err(Self::err)?;
+        let entry = self.check(bucket, s.entry(key).await).await?;
         let revision = entry.as_ref().map(|e| e.revision);
         let current = entry
             .filter(|e| matches!(e.operation, Operation::Put))
@@ -426,29 +429,25 @@ impl KvBackend for NatsBackend {
         match s.update(key, Bytes::from(value), rev).await {
             Ok(_) => Ok(CasOutcome::Swapped),
             Err(e) if e.kind() == UpdateErrorKind::WrongLastRevision => {
-                Ok(CasOutcome::Stale(present_entry(&s, key).await?))
+                let entry = self.check(bucket, s.entry(key).await).await?;
+                Ok(CasOutcome::Stale(present(entry)))
             }
-            Err(e) => Err(Self::err(e)),
+            Err(e) => Err(self.classify(bucket, e).await),
         }
     }
 }
 
-/// Read a key's current value + revision, treating a delete/purge tombstone as
-/// absent.
-async fn present_entry(
-    store: &async_nats::jetstream::kv::Store,
-    key: &str,
-) -> Result<Option<Versioned>, StoreError> {
+/// A read entry as a [`Versioned`] value, treating a delete/purge tombstone as
+/// absent. Takes the entry rather than reading it so the caller classifies the
+/// read's failure against the bucket.
+fn present(entry: Option<async_nats::jetstream::kv::Entry>) -> Option<Versioned> {
     use async_nats::jetstream::kv::Operation;
-    Ok(store
-        .entry(key)
-        .await
-        .map_err(NatsBackend::err)?
+    entry
         .filter(|e| matches!(e.operation, Operation::Put))
         .map(|e| Versioned {
             value: e.value.to_vec(),
             version: e.revision.to_string(),
-        }))
+        })
 }
 
 #[cfg(test)]

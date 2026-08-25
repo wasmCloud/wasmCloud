@@ -330,6 +330,36 @@ async fn a_deleted_bucket_reports_as_absent_and_a_recreated_one_is_empty() -> Re
         "a deleted bucket must report as absent, got {e:?}"
     );
 
+    // The batch and CAS surfaces classify the same way — a guest that only
+    // ever calls `get-many` must not be told a deleted bucket is a transport
+    // fault.
+    for e in [
+        backend
+            .get_many("counters", vec!["k".to_string()])
+            .await
+            .expect_err("get_many against a deleted bucket must fail"),
+        backend
+            .set_many("counters", vec![("k".to_string(), b"v".to_vec())])
+            .await
+            .expect_err("set_many against a deleted bucket must fail"),
+        backend
+            .delete_many("counters", vec!["k".to_string()])
+            .await
+            .expect_err("delete_many against a deleted bucket must fail"),
+        backend
+            .current("counters", "k")
+            .await
+            .expect_err("current against a deleted bucket must fail"),
+    ] {
+        assert!(
+            matches!(
+                e,
+                wash_runtime::plugin::wasi_keyvalue::StoreError::NoSuchStore
+            ),
+            "every operation must report a deleted bucket as absent, got {e:?}"
+        );
+    }
+
     // The stale handle is dropped with it, so a later open re-resolves rather
     // than reporting a bucket that is gone as present.
     backend
@@ -352,6 +382,61 @@ async fn a_deleted_bucket_reports_as_absent_and_a_recreated_one_is_empty() -> Re
     assert_eq!(
         backend.get("counters", "k").await.map_err(err)?,
         Some(b"again".to_vec())
+    );
+
+    Ok(())
+}
+
+/// `open` re-resolves rather than answering from a cached handle: a bucket
+/// deleted after it was opened must not keep reporting as present, whichever
+/// call the guest makes first.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn open_does_not_report_a_deleted_bucket_as_present() -> Result<()> {
+    let nats = GenericImage::new("nats", "2.12.8-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+        .with_cmd(["-js"])
+        .start()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to start nats: {e}"))?;
+    let nats_port = nats.get_host_port_ipv4(4222).await?;
+    let nats_url = format!("nats://127.0.0.1:{nats_port}");
+    let js = async_nats::jetstream::new(async_nats::connect(&nats_url).await?);
+
+    // `create = never`, so a re-open cannot paper over the deletion by
+    // recreating the bucket.
+    js.create_key_value(async_nats::jetstream::kv::Config {
+        bucket: "counters".to_string(),
+        ..Default::default()
+    })
+    .await
+    .context("failed to create the bucket")?;
+
+    let backend = MultiplexedKeyValue::new()
+        .with_provider(Arc::new(NatsProvider::default()))
+        .build_registry(&HashSet::from([kv_iface("kv", "nats", &nats_url)]))
+        .await?
+        .get("kv")
+        .expect("kv routed")
+        .clone();
+
+    backend.open("counters").await.map_err(err)?;
+    js.delete_key_value("counters")
+        .await
+        .context("failed to delete the bucket")?;
+
+    // No operation in between to evict the handle: `open` itself must notice.
+    let e = backend
+        .open("counters")
+        .await
+        .expect_err("re-opening a deleted bucket must fail");
+    assert!(
+        matches!(
+            e,
+            wash_runtime::plugin::wasi_keyvalue::StoreError::NoSuchStore
+        ),
+        "expected no-such-store, got {e:?}"
     );
 
     Ok(())
@@ -483,7 +568,8 @@ async fn embedder_defaults_reach_both_keyvalue_packages() -> Result<()> {
         .await
         .context("the prefixed bucket must exist")?;
 
-    // An interface that sets a key overrides the embedder for itself alone.
+    // An interface that sets a prefix subdivides the embedder's namespace for
+    // itself alone — and stays inside it.
     let mut own = wasmcloud_kv_iface("own", &nats_url);
     own.config
         .insert("bucket_prefix".to_string(), "iface_".to_string());
@@ -497,11 +583,14 @@ async fn embedder_defaults_reach_both_keyvalue_packages() -> Result<()> {
     assert_eq!(
         own_be.get("counters", "k").await.map_err(err)?,
         None,
-        "the overridden prefix must select a different bucket"
+        "the interface's own prefix must select a different bucket"
     );
+    js.get_key_value("host_iface_counters")
+        .await
+        .context("the interface's bucket must nest inside the embedder's prefix")?;
     js.get_key_value("iface_counters")
         .await
-        .context("the overriding interface's bucket must exist")?;
+        .expect_err("an interface must not name a bucket outside the embedder's prefix");
 
     Ok(())
 }
