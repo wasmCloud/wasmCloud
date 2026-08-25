@@ -29,6 +29,27 @@ fn env_secs(var: &str, default_secs: u64) -> Duration {
     Duration::from_secs(secs)
 }
 
+/// Parse `var` as whole milliseconds, falling back to `default_millis` if it is
+/// unset. Unparseable values fall back with a warning, as in [`env_secs`].
+fn env_millis(var: &str, default_millis: u64) -> Duration {
+    let millis = match std::env::var(var) {
+        Ok(v) => match v.parse::<u64>() {
+            Ok(millis) => millis,
+            Err(_) => {
+                tracing::warn!(
+                    var,
+                    value = %v,
+                    default_millis,
+                    "ignoring unparseable timeout override (want whole milliseconds)"
+                );
+                default_millis
+            }
+        },
+        Err(_) => default_millis,
+    };
+    Duration::from_millis(millis)
+}
+
 /// Declare the runtime-tunable timeouts, one `name = ("ENV_VAR", default_secs)`
 /// entry per line (separated by `;`). Each entry generates a
 /// `pub(crate) fn name() -> Duration` accessor: on first call it reads the named
@@ -96,4 +117,16 @@ declare_timeouts! {
     /// Max wall-clock for one capability call into a host component plugin.
     #[cfg(feature = "host-component-plugins")]
     plugin_capability_call = ("WASH_PLUGIN_CAPABILITY_CALL_TIMEOUT_SECS", 600);
+}
+
+/// The gap between epoch fires past which a store's guest counts as having
+/// paused rather than having been held up (see [`crate::engine::abandon`]).
+///
+/// Raise it on a host loaded enough that a pinned guest's fires land further
+/// apart than the default, where the gaps read as pauses, execution never
+/// accumulates and a wedged store is never trapped.
+pub(crate) fn abandoned_call_pause_threshold() -> Duration {
+    static VALUE: LazyLock<Duration> =
+        LazyLock::new(|| env_millis("WASH_ABANDONED_CALL_PAUSE_THRESHOLD_MS", 3_000));
+    *VALUE
 }

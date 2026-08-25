@@ -82,12 +82,11 @@ impl AccessorTask<SharedCtx> for HttpTask {
             pool_slot,
         } = self;
 
-        // Watch this call for the rest of its life. The guard deregisters on
-        // drop, however the call ends; the deadline is re-armed for it here.
-        let _abandoned = accessor.with(|mut access| {
+        // The epoch deadline measures this call's own execution, so re-arm it
+        // here. `watch_until_abandoned` below owns the registration.
+        let calls = accessor.with(|mut access| {
             crate::engine::abandon::rearm_for_call(&mut access);
-            let calls = std::sync::Arc::clone(&access.get().abandoned);
-            calls.watch(abandoned)
+            std::sync::Arc::clone(&access.get().abandoned)
         });
 
         let (parts, body) = req.into_parts();
@@ -179,9 +178,17 @@ impl AccessorTask<SharedCtx> for HttpTask {
         // Bound the whole exchange so a stalled client (connected but not reading)
         // can't park this task on `frame_tx.send` for the life of the connection.
         // A response still streaming past this bound is truncated.
+        //
+        // That bound is far longer than the abandonment grace, so keeping a
+        // slow guest away from the epoch callback is `watch_until_abandoned`'s
+        // job, not this one's.
         match tokio::time::timeout(
             crate::timeouts::http_response(),
-            futures::future::join(handler_fut, io_fut),
+            crate::engine::abandon::watch_until_abandoned(
+                &calls,
+                abandoned,
+                futures::future::join(handler_fut, io_fut),
+            ),
         )
         .await
         {

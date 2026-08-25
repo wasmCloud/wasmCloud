@@ -22,12 +22,21 @@
 //! and the guest has since run through a grace's worth of execution.
 //! Execution is credited from the callback's own fires (`ExecutionCredit`):
 //! each fire proves the guest was running and is worth at most one sampling
-//! window, and only a pause too long to be scheduler delay clears the credit
-//! — so a guest waiting in a host call accrues nothing, while a pinned one
-//! keeps accruing even when a loaded scheduler spreads its fires out.
+//! window, and only a pause too long to be scheduler delay clears the credit.
 //! Abandonment alone would not do: dropping the dispatcher arms the flag, so
 //! an ordinary client disconnect would condemn a store whose guest is healthy
 //! and merely slow.
+//!
+//! Registration, not the sampling above, is what keeps a healthy guest out of
+//! this. Every ingress onto a store that outlives its call (a service
+//! singleton, a pooled instance, a plugin) runs it through
+//! [`watch_until_abandoned`], which deregisters the call once it has been
+//! abandoned for the grace and the guest has yielded. A new ingress onto such a
+//! store must go through it, or a merely slow guest there will be trapped.
+//!
+//! A store built to serve one call and be discarded (a cold one-shot HTTP
+//! store, an ephemeral linked call, a per-message store) does not need it:
+//! trapping it ends only the call that was already abandoned.
 //!
 //! The all-abandoned condition is what keeps the per-store blast radius safe:
 //! inside one sampling window a burst-then-await guest (frames, tokens, short
@@ -61,18 +70,51 @@ fn now_millis() -> u64 {
 /// When a call's dispatcher stopped wanting its result, or nothing if it still
 /// does. Minted only by [`DispatchedCall`], which is what makes a job type's
 /// `abandoned` field proof that its dispatcher actually enforces a deadline.
-pub struct AbandonFlag(AtomicU64);
+pub struct AbandonFlag {
+    armed_at: AtomicU64,
+    /// Wakes [`Self::abandoned_for`] when arming happens.
+    armed: tokio::sync::Notify,
+}
 
 impl AbandonFlag {
     fn new() -> Arc<Self> {
-        Arc::new(Self(AtomicU64::new(0)))
+        Arc::new(Self {
+            armed_at: AtomicU64::new(0),
+            armed: tokio::sync::Notify::new(),
+        })
     }
 
     /// Record the abandonment instant; only the first arming counts.
     pub(crate) fn arm(&self) {
-        let _ = self
-            .0
-            .compare_exchange(0, now_millis(), Ordering::Relaxed, Ordering::Relaxed);
+        if self
+            .armed_at
+            .compare_exchange(0, now_millis(), Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            self.armed.notify_waiters();
+        }
+    }
+
+    /// Resolves once this call has been abandoned for `grace`.
+    ///
+    /// Awaited from inside the store the call runs in, where it shares a task
+    /// with the guest call and so resolves only if the guest yields. See
+    /// [`watch_until_abandoned`].
+    async fn abandoned_for(&self, grace: Duration) {
+        loop {
+            // Registered before the check. `notify_waiters` stores no permit,
+            // so an arming in between would otherwise be missed.
+            let armed = self.armed.notified();
+            let Some(at) = self.armed_at() else {
+                armed.await;
+                continue;
+            };
+            let elapsed = Duration::from_millis(now_millis().saturating_sub(at));
+            if let Some(left) = grace.checked_sub(elapsed) {
+                tokio::time::sleep(left).await;
+            }
+            return;
+        }
     }
 
     /// Arm this flag when `deadline` elapses. For re-bounding a call that
@@ -93,7 +135,7 @@ impl AbandonFlag {
     }
 
     fn armed_at(&self) -> Option<u64> {
-        match self.0.load(Ordering::Relaxed) {
+        match self.armed_at.load(Ordering::Relaxed) {
             0 => None,
             at => Some(at),
         }
@@ -102,6 +144,44 @@ impl AbandonFlag {
 
 /// Cancels a pending [`AbandonFlag::arm_after`] timer when dropped.
 pub(crate) struct ArmTimer(#[expect(dead_code)] tokio_util::task::AbortOnDropHandle<()>);
+
+/// Run `call`, keeping it registered on its store's [`AbandonedCalls`] only
+/// while the epoch callback could usefully act on it.
+///
+/// The call is deregistered once it has been abandoned for `grace` and the
+/// guest has yielded. The grace timer shares a task with the guest call, so a
+/// guest awaiting anything lets it run and a guest pinned in compiled code
+/// cannot: reaching the timer is itself proof the guest is not wedged.
+///
+/// The call keeps running either way, and its result is still delivered. A
+/// `wasmcloud:host/workload-lifecycle` bind is uncancellable, and the host
+/// defers a rollback unbind until it completes so that whatever it provisioned
+/// late is still reclaimed.
+///
+/// A guest that yields once after being abandoned and only then starts spinning
+/// is no longer visible here, the same blind spot as a guest that spins after
+/// delivering its response.
+pub(crate) async fn watch_until_abandoned<F: Future>(
+    calls: &Arc<AbandonedCalls>,
+    flag: Arc<AbandonFlag>,
+    call: F,
+) -> F::Output {
+    let grace = crate::timeouts::abandoned_call_grace();
+    let mut registration = Some(calls.watch(Arc::clone(&flag)));
+    let mut call = std::pin::pin!(call);
+    let deregister = flag.abandoned_for(grace);
+    let mut deregister = std::pin::pin!(deregister);
+    loop {
+        tokio::select! {
+            output = &mut call => return output,
+            // Disabled once it has fired; a completed future must not be
+            // polled again.
+            () = &mut deregister, if registration.is_some() => {
+                registration = None;
+            }
+        }
+    }
+}
 
 /// The in-flight calls on one store, so the store's epoch callback can see
 /// which of them have been abandoned. One per store, on [`SharedCtx`].
@@ -119,35 +199,51 @@ impl AbandonedCalls {
         }
     }
 
-    /// Whether any watched call has been abandoned for longer than `grace`.
-    fn any_abandoned_longer_than(&self, grace: Duration) -> bool {
+    /// What the epoch callback needs to know about this store's calls.
+    ///
+    /// Answers every question under one lock, so the callback always acts on a
+    /// state that held at a single instant. Reading them separately lets a call
+    /// deregister in between, which can leave an empty list looking like
+    /// "everything is abandoned" and trap a store with nothing outstanding.
+    fn survey(&self, grace: Duration) -> CallSurvey {
         let list = self.lock();
+        let grace = u64::try_from(grace.as_millis()).unwrap_or(u64::MAX);
         // `now` is only worth computing once a flag is actually armed; the
         // common case (none are) stays free of clock reads.
         let mut now = None;
-        let grace = u64::try_from(grace.as_millis()).unwrap_or(u64::MAX);
-        list.iter().any(|f| match f.armed_at() {
-            None => false,
-            Some(at) => {
-                let now = *now.get_or_insert_with(now_millis);
-                now.saturating_sub(at) >= grace
-            }
-        })
-    }
-
-    /// Whether nothing watched is abandoned, which re-arms the warning.
-    fn none_abandoned(&self) -> bool {
-        self.lock().iter().all(|f| f.armed_at().is_none())
-    }
-
-    /// Whether every watched call has been abandoned, so trapping the store
-    /// would end nothing still wanted.
-    fn all_abandoned(&self) -> bool {
-        self.lock().iter().all(|f| f.armed_at().is_some())
+        let mut survey = CallSurvey {
+            watched: list.len(),
+            armed: 0,
+            any_past_grace: false,
+        };
+        for flag in list.iter() {
+            let Some(at) = flag.armed_at() else { continue };
+            survey.armed += 1;
+            let now = *now.get_or_insert_with(now_millis);
+            survey.any_past_grace |= now.saturating_sub(at) >= grace;
+        }
+        survey
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Arc<AbandonFlag>>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// One consistent look at a store's registered calls.
+#[derive(Clone, Copy)]
+struct CallSurvey {
+    watched: usize,
+    armed: usize,
+    /// Whether any armed call has been abandoned for longer than the grace.
+    any_past_grace: bool,
+}
+
+impl CallSurvey {
+    /// There is at least one registered call and every one of them is
+    /// abandoned, so trapping the store would end nothing still wanted.
+    fn all_abandoned(self) -> bool {
+        self.watched > 0 && self.armed == self.watched
     }
 }
 
@@ -157,12 +253,17 @@ impl AbandonedCalls {
 /// The callback runs only while guest code does, so each fire proves the
 /// guest was executing at that instant — and is worth at most one sampling
 /// window ([`EXECUTION_WINDOW_MS`]) of credit, however wide the gap before it.
-/// The per-fire cap is what keeps both failure directions out: a brief await
-/// between fires donates one window rather than its whole off-CPU length, and
-/// a pinned guest whose fires land late under scheduler load keeps
-/// accumulating instead of having its record wiped by the delay. Only a gap
-/// no scheduler could plausibly cause ([`RESET_THRESHOLD_MS`]) proves a real
-/// pause and clears the credit.
+/// The per-fire cap keeps a long await from donating its whole off-CPU length,
+/// and crediting the gap rather than resetting on it keeps a pinned guest whose
+/// fires land late under scheduler load accumulating instead of having its
+/// record wiped. Only a gap no scheduler could plausibly cause
+/// ([`reset_threshold_millis`]) proves a real pause and clears the credit.
+///
+/// This is not a measure of CPU. A gap under one window is credited whole, and
+/// the gap between fires never falls below one window however idle the store
+/// is, so a guest awaiting in sub-window hops banks credit as fast as a pinned
+/// one. [`watch_until_abandoned`] is what separates the two; this is only a
+/// backstop for a call still registered after it.
 ///
 /// Measured here rather than from the host side because the callback forces a
 /// yield on every fire, which would refresh any host-side liveness signal and
@@ -179,7 +280,7 @@ impl ExecutionCredit {
     /// milliseconds.
     fn observe(&mut self, now: u64) -> u64 {
         let gap = self.last_fire.map_or(0, |last| now.saturating_sub(last));
-        if gap > RESET_THRESHOLD_MS {
+        if gap > reset_threshold_millis() {
             self.credited_millis = 0;
         } else {
             self.credited_millis = self
@@ -204,9 +305,12 @@ const EXECUTION_WINDOW_MS: u64 =
 
 /// A gap between fires that only a real pause can explain — the guest waiting
 /// on host I/O measured in seconds, or going idle — never scheduler delay or
-/// a brief await. A fixed order-of-seconds invariant on purpose, not derived
-/// from the window: it models what schedulers do, not how often we sample.
-const RESET_THRESHOLD_MS: u64 = 3_000;
+/// a brief await. Not derived from the window: it models what schedulers do,
+/// not how often we sample, which is why it is tunable on its own
+/// ([`crate::timeouts::abandoned_call_pause_threshold`]).
+fn reset_threshold_millis() -> u64 {
+    u64::try_from(crate::timeouts::abandoned_call_pause_threshold().as_millis()).unwrap_or(u64::MAX)
+}
 
 /// Stops watching a call's flag when dropped, so a completed call leaves
 /// nothing behind — and so an abandoned flag whose call has ended is invisible
@@ -420,7 +524,8 @@ pub(crate) fn arm_epoch_deadline(
     let grace_millis = u64::try_from(grace.as_millis()).unwrap_or(u64::MAX);
     let escalation_millis = u64::try_from(escalation.as_millis()).unwrap_or(u64::MAX);
     let mut credit = ExecutionCredit::default();
-    // Reset below once nothing is abandoned, so a later wedge warns again.
+    // Reset below whenever the warned-about condition stops holding, so every
+    // episode is logged.
     let mut warned = false;
 
     store.set_epoch_deadline(EPOCH_DEADLINE_TICKS);
@@ -434,9 +539,11 @@ pub(crate) fn arm_epoch_deadline(
         // tokio's time driver, *no timer on the runtime fires*, including the
         // very deadline whose expiry would abandon this call.
         let keep_running = |warned: &mut bool, credit: &mut ExecutionCredit| {
-            if abandoned.none_abandoned() {
-                *warned = false;
-            }
+            // Every path through here means the warned-about condition no
+            // longer holds, so the next episode warns again. Waiting for zero
+            // armed calls instead would rarely fire on a busy plugin store,
+            // where every dispatcher drop arms one.
+            *warned = false;
             // Execution only counts against a store the host wants back:
             // otherwise a service's own background wakes (a run loop ticking
             // faster than the reset threshold) would bank credit for the
@@ -446,13 +553,16 @@ pub(crate) fn arm_epoch_deadline(
             Ok(wasmtime::UpdateDeadline::Yield(EPOCH_DEADLINE_TICKS))
         };
 
-        if !abandoned.any_abandoned_longer_than(grace) {
+        // The conditions below must all hold at the same instant to justify
+        // trapping, so read them once.
+        let survey = abandoned.survey(grace);
+        if !survey.any_past_grace {
             return keep_running(&mut warned, &mut credit);
         }
         // A call is still wanted: trapping the store would take it too — and
         // this is what keeps a yielding guest's store alive however its wakes
         // land relative to the sampling window.
-        if !abandoned.all_abandoned() {
+        if !survey.all_abandoned() {
             return keep_running(&mut warned, &mut credit);
         }
         // Wanted back, but the guest has not yet run through a grace's worth
@@ -496,11 +606,11 @@ mod tests {
         // Keep `call` alive: dropping it would arm the flag itself.
         let guard = calls.watch(Arc::clone(&flag));
 
-        assert!(!calls.any_abandoned_longer_than(Duration::ZERO));
+        assert!(!calls.survey(Duration::ZERO).any_past_grace);
         flag.arm();
-        assert!(calls.any_abandoned_longer_than(Duration::ZERO));
+        assert!(calls.survey(Duration::ZERO).any_past_grace);
         drop(guard);
-        assert!(!calls.any_abandoned_longer_than(Duration::ZERO));
+        assert!(!calls.survey(Duration::ZERO).any_past_grace);
     }
 
     #[test]
@@ -512,12 +622,12 @@ mod tests {
         let wanted_guard = calls.watch(wanted.flag());
 
         given_up.flag().arm();
-        assert!(calls.any_abandoned_longer_than(Duration::ZERO));
-        assert!(!calls.all_abandoned());
+        assert!(calls.survey(Duration::ZERO).any_past_grace);
+        assert!(!calls.survey(Duration::ZERO).all_abandoned());
         // The wanted call ends (or is abandoned in turn); nothing on the
         // store is wanted any more.
         drop(wanted_guard);
-        assert!(calls.all_abandoned());
+        assert!(calls.survey(Duration::ZERO).all_abandoned());
     }
 
     /// The grace holds the callback off a freshly abandoned call, and only the
@@ -530,10 +640,10 @@ mod tests {
         let _guard = calls.watch(Arc::clone(&flag));
 
         flag.arm();
-        assert!(!calls.any_abandoned_longer_than(Duration::from_secs(3600)));
+        assert!(!calls.survey(Duration::from_secs(3600)).any_past_grace);
         // Re-arming must not push the abandonment instant forward.
         flag.arm();
-        assert!(calls.any_abandoned_longer_than(Duration::ZERO));
+        assert!(calls.survey(Duration::ZERO).any_past_grace);
     }
 
     /// One fire proves at most one window of execution however wide the gap
@@ -552,12 +662,59 @@ mod tests {
         assert_eq!(c.observe(1_000 + W + 900), 2 * W);
         assert_eq!(c.observe(1_000 + W + 900 + W), 3 * W);
         // A gap past the reset threshold is a real pause: credit cleared.
-        let after_pause = 1_000 + W + 900 + W + RESET_THRESHOLD_MS + 1;
+        let after_pause = 1_000 + W + 900 + W + reset_threshold_millis() + 1;
         assert_eq!(c.observe(after_pause), 0);
         assert_eq!(c.observe(after_pause + W), W);
         // And the callback clears it whenever the store is not wanted back.
         c.reset();
         assert_eq!(c.observe(after_pause + 2 * W), W);
+    }
+
+    /// A call is deregistered a grace after being abandoned, but only because
+    /// the future measuring that grace got to run, which is the whole test.
+    #[tokio::test(start_paused = true)]
+    async fn a_yielding_call_is_deregistered_a_grace_after_abandonment() {
+        let calls = Arc::new(AbandonedCalls::default());
+        let call = DispatchedCall::new("test", Duration::from_secs(1));
+        let flag = call.flag();
+        let grace = crate::timeouts::abandoned_call_grace();
+
+        // A guest that yields: it awaits, so the deregistration timer runs.
+        let yielding = watch_until_abandoned(&calls, Arc::clone(&flag), async {
+            tokio::time::sleep(grace * 10).await;
+            7u32
+        });
+        let mut yielding = std::pin::pin!(yielding);
+
+        // Registered while the call is wanted, however long it runs.
+        tokio::time::timeout(grace * 2, &mut yielding)
+            .await
+            .unwrap_err();
+        assert_eq!(calls.survey(Duration::ZERO).watched, 1);
+
+        // Abandoned: still registered until the grace is out...
+        drop(call);
+        assert!(flag.armed_at().is_some());
+        tokio::time::timeout(grace / 2, &mut yielding)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            calls.survey(Duration::ZERO).watched,
+            1,
+            "deregistered before the grace was out"
+        );
+
+        // ...and gone once it is, with the call still running and still
+        // delivering its result afterwards.
+        tokio::time::timeout(grace, &mut yielding)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            calls.survey(Duration::ZERO).watched,
+            0,
+            "a yielding call must stop being visible to the epoch callback"
+        );
+        assert_eq!(yielding.await, 7, "the call must still run to completion");
     }
 
     /// `await_reply` disarms on delivery and arms on deadline or drop.
