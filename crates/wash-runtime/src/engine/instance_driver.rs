@@ -156,12 +156,11 @@ impl AccessorTask<SharedCtx> for LinkedTask {
         } = *self.job;
         let instance = self.instance;
 
-        // Watch this call for the rest of its life. The guard deregisters on
-        // drop, however the call ends; the deadline is re-armed for it here.
-        let _abandoned = accessor.with(|mut access| {
+        // The epoch deadline measures this call's own execution, so re-arm it
+        // here. `watch_until_abandoned` below owns the registration.
+        let calls = accessor.with(|mut access| {
             crate::engine::abandon::rearm_for_call(&mut access);
-            let calls = Arc::clone(&access.get().abandoned);
-            calls.watch(abandoned)
+            Arc::clone(&access.get().abandoned)
         });
 
         let func = accessor.with(|mut access| {
@@ -179,9 +178,15 @@ impl AccessorTask<SharedCtx> for LinkedTask {
 
         let mut results = vec![Val::Bool(false); results_len];
         let call_timeout = crate::timeouts::ephemeral_call();
+        // This bound ends the caller's wait. Keeping a slow guest out of the
+        // epoch callback's reach is `watch_until_abandoned`'s job.
         let outcome = match tokio::time::timeout(
             call_timeout,
-            func.call_concurrent(accessor, &params, &mut results),
+            crate::engine::abandon::watch_until_abandoned(
+                &calls,
+                abandoned,
+                func.call_concurrent(accessor, &params, &mut results),
+            ),
         )
         .await
         {

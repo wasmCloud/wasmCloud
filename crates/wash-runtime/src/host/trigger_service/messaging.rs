@@ -134,15 +134,14 @@ impl AccessorTask<SharedCtx> for MessagingTask {
             abandoned,
         } = self;
 
-        // Watch this call for the rest of its life. The guard deregisters on
-        // drop, however the call ends; the deadline is re-armed for it here.
-        let _abandoned = accessor.with(|mut access| {
+        // The epoch deadline measures this call's own execution, so re-arm it
+        // here. `watch_until_abandoned` below owns the registration.
+        let calls = accessor.with(|mut access| {
             crate::engine::abandon::rearm_for_call(&mut access);
-            let calls = Arc::clone(&access.get().abandoned);
-            calls.watch(abandoned)
+            Arc::clone(&access.get().abandoned)
         });
 
-        let outcome = async {
+        let deliver = async {
             // The `@0.3.0` body is a native `stream<u8>`; mint one carrying the
             // delivered bytes for the guest to drain.
             let body = accessor.with(|mut a| StreamReader::new(&mut a, msg.body))?;
@@ -155,8 +154,15 @@ impl AccessorTask<SharedCtx> for MessagingTask {
                 .wasmcloud_messaging0_3_0_handler()
                 .call_handle_message(accessor, wit_msg)
                 .await
-        }
-        .await;
+        };
+
+        // Unbounded from in here: the dispatcher enforces the deadline the
+        // caller waits out, and a handler that overruns it is slow rather than
+        // wedged. This bounds only how long an overrunning delivery stays
+        // visible to the epoch callback, whose trap would take the service
+        // singleton every other subject shares.
+        let outcome =
+            crate::engine::abandon::watch_until_abandoned(&calls, abandoned, deliver).await;
 
         match outcome {
             Ok(result) => {

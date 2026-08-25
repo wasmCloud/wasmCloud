@@ -24,6 +24,12 @@ use bindings::wasmcloud::messaging::types::{BrokerMessage, HandleMessageError};
 
 static MSG_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// How the `chatter` subject spends its time: long enough to outlive a test's
+/// delivery deadline and grace several times over, in hops short enough that a
+/// detector reading only the gaps between wakes cannot see them.
+const CHATTER_HOPS: u32 = 16;
+const CHATTER_HOP_MS: u64 = 400;
+
 struct Component;
 
 impl RunGuest for Component {
@@ -56,6 +62,17 @@ impl MsgGuest for Component {
             let mut x: u64 = 0;
             loop {
                 x = std::hint::black_box(x.wrapping_add(1));
+            }
+        }
+        // A `chatter` subject is the opposite of `spin`: healthy, but slower
+        // than any delivery deadline and spending all of it awaiting. Each hop
+        // wakes onto an expired epoch deadline, so its fires land exactly as a
+        // pinned guest's do. Only the fact that it yields tells them apart.
+        // Nothing here may be trapped.
+        if msg.subject == "chatter" {
+            use bindings::wasi::clocks::monotonic_clock;
+            for _ in 0..CHATTER_HOPS {
+                monotonic_clock::wait_for(CHATTER_HOP_MS * 1_000_000).await;
             }
         }
         let n = MSG_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
