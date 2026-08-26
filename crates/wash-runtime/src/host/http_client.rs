@@ -1953,10 +1953,21 @@ mod tests {
         let client = PooledClient::new(default_client_tls_config());
 
         // RFC 6761 reserves `.invalid`: resolution always fails.
+        //
+        // The generous `connect_timeout` is load-bearing. [`send_head`] races
+        // the send against that deadline, so a resolver slow to answer — a
+        // GitHub macOS runner walking its search domains has needed more than
+        // the 5s [`p2_config`] hands out — lets the timeout arm win and the
+        // assertion below reads `ConnectionTimeout`. What is pinned here is how
+        // a resolver failure classifies, not how fast the ambient resolver
+        // reports one.
         let err = client
             .send_request_p2(
                 p2_request("http://definitely-not-a-real-host.invalid/"),
-                p2_config(false),
+                OutgoingRequestConfig {
+                    connect_timeout: Duration::from_secs(60),
+                    ..p2_config(false)
+                },
             )
             .await
             .expect_err("resolution must fail");
