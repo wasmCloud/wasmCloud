@@ -259,8 +259,15 @@ fn handle_nats_event(
     initial_connect_seen: &AtomicBool,
 ) {
     match event {
+        // Only JetStream deliver subjects and the request-reply inbox reach
+        // here; core subscriptions count their own shedding in a host-side
+        // backlog. These notices are themselves dropped on overflow, so treat
+        // one as "lost an unknown amount", never as a tally.
         async_nats::Event::SlowConsumer(sid) => {
-            warn!(subscription = sid, "NATS slow consumer: messages dropped")
+            warn!(
+                subscription = sid,
+                "NATS slow consumer: at least one message was dropped before reaching the host"
+            )
         }
         async_nats::Event::Disconnected => warn!("disconnected from NATS"),
         async_nats::Event::Connected => {
