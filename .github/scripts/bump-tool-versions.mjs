@@ -42,6 +42,11 @@ const TOOLS = [
     repo: 'protocolbuffers/protobuf',
     name: 'protoc',
   },
+  {
+    var: 'CRDIFY_VERSION',
+    repo: 'kubernetes-sigs/crdify',
+    name: 'crdify',
+  },
 ];
 
 // `releases/latest` returns the most recent non-prerelease, non-draft
