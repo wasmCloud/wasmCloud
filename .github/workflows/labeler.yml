@@ -1,0 +1,80 @@
+name: labeler
+
+# Applies the path labels declared in .github/labels.yml to open PRs.
+#
+# Runs on a schedule rather than on PR activity. `pull_request` cannot label
+# fork PRs (their token is read-only) and both privileged alternatives --
+# `pull_request_target` and `workflow_run` -- give a fork-triggered run write
+# access and secrets, which this repo does not accept. A sweep is triggered by
+# the clock, never by a PR, so nothing a contributor controls starts it.
+#
+# The cost is latency: a PR is labeled within one interval rather than
+# immediately.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  # Re-evaluate every open PR as soon as the rules themselves change.
+  push:
+    branches:
+      - main
+    paths:
+      - .github/labels.yml
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Label only this PR number, instead of every open PR
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: labeler
+  cancel-in-progress: true
+
+jobs:
+  label:
+    name: apply path labels
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required: the action adds and removes labels on the PRs it is given.
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github
+      - name: Render actions/labeler config from labels.yml
+        run: |
+          node .github/scripts/labels.mjs render-labeler \
+            | yq -p=json -P '.' > .github/labeler.generated.yml
+      - name: Collect the PRs to label
+        id: prs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ONLY_PR: ${{ inputs.pr }}
+        run: |
+          if [ -n "${ONLY_PR}" ]; then
+            numbers="${ONLY_PR}"
+          else
+            numbers="$(gh pr list --repo "${REPO}" --state open --limit 200 \
+              --json number --jq '.[].number')"
+          fi
+          count="$(printf '%s' "${numbers}" | grep -c . || true)"
+          echo "count=${count}" >> "${GITHUB_OUTPUT}"
+          {
+            echo 'numbers<<PR_NUMBERS_EOF'
+            printf '%s\n' "${numbers}"
+            echo 'PR_NUMBERS_EOF'
+          } >> "${GITHUB_OUTPUT}"
+          echo "labeling ${count} PR(s)"
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        if: steps.prs.outputs.count != '0'
+        with:
+          configuration-path: .github/labeler.generated.yml
+          pr-number: ${{ steps.prs.outputs.numbers }}
+          # Keeps labels tracking the current diff. Only labels in the rendered
+          # config are touched; hand-applied ones are left alone.
+          sync-labels: true

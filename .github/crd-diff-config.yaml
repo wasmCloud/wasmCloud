@@ -1,0 +1,10 @@
+# Checks for `crdify`, run by the crd-diff job in .github/workflows/runtime-operator.yml.
+# crdify defaults every validation to Error, so this only records departures.
+# https://github.com/kubernetes-sigs/crdify/blob/main/docs/validations.md
+
+validations:
+  # controller-gen generates CRD descriptions from the Go doc comments, so at
+  # Error a documentation-only PR fails the gate -- which would teach people to
+  # reach for crd-diff-override reflexively and hollow out the check.
+  - name: description
+    enforcement: None
