@@ -2518,7 +2518,7 @@ world example
 
 world example
 {
-    import wasi:config/store@0.2.0-draft;
+    import wasi:config/store@0.2.0-rc.1;
 }
 "#;
 
@@ -2526,7 +2526,7 @@ world example
             .expect("insert should succeed");
 
         assert!(updated.contains(
-            "    import wasi:config/store@0.2.0-draft;\n    import wasi:http/types@0.2.0;\n}"
+            "    import wasi:config/store@0.2.0-rc.1;\n    import wasi:http/types@0.2.0;\n}"
         ));
     }
 
