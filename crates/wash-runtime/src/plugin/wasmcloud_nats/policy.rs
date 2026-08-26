@@ -44,7 +44,7 @@ pub struct PolicyEngine {
 
 /// A NATS subject pattern: literal tokens, `*` for one token, `>` for the tail.
 #[derive(Debug, Clone)]
-struct Pattern {
+struct NatsSubjectPattern {
     tokens: Vec<Token>,
     /// True when the pattern ends in `>`.
     trailing: bool,
