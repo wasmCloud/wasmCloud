@@ -618,21 +618,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nats-core-handler"
-version = "0.1.0"
-dependencies = [
- "wit-bindgen 0.60.0",
-]
-
-[[package]]
 name = "nats-implements-p3"
-version = "0.1.0"
-dependencies = [
- "wit-bindgen 0.60.0",
-]
-
-[[package]]
-name = "nats-jetstream-handler"
 version = "0.1.0"
 dependencies = [
  "wit-bindgen 0.60.0",

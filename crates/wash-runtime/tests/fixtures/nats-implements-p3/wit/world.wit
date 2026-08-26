@@ -6,13 +6,13 @@ package wasmcloud:nats-implements-p3;
 // dispatches into. This is the leaf-node shape — a component bridging a leaf
 // cluster to a hub — and the reason the plugin routes per binding name.
 //
-// P3/wasip1 against the async `@0.2.0` package: the sync `@0.1.0` (wasip2)
-// shape of this same world fails componentization in wit-bindgen.
+// P3/wasip1: `wasmcloud:nats@0.1.0` is async throughout, and a labeled import
+// of a sync-signature interface fails componentization in wit-bindgen anyway.
 world nats-implements-p3 {
-    import hub: wasmcloud:nats/core@0.2.0;
-    import leaf: wasmcloud:nats/core@0.2.0;
-    import wasmcloud:nats/types@0.2.0;
+    import hub: wasmcloud:nats/core@0.1.0;
+    import leaf: wasmcloud:nats/core@0.1.0;
+    import wasmcloud:nats/types@0.1.0;
     import wasi:clocks/monotonic-clock@0.3.0;
 
-    export wasmcloud:nats/core-handler@0.2.0;
+    export wasmcloud:nats/core-handler@0.1.0;
 }

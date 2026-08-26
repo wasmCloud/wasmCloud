@@ -10,42 +10,30 @@ use crate::observability::Meters;
 use crate::plugin::{HostPlugin, WitInterfaces, WorkloadFailureSink, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
-mod async_p3;
 pub(super) mod config;
 pub(super) mod conn;
+pub mod defaults;
 pub(super) mod handles;
-mod interfaces;
+pub(super) mod interfaces;
 pub(super) mod policy;
 mod subscriber;
 
 use config::NatsConfig;
 use conn::{ConnHandle, ConnectionRegistry};
+pub use defaults::{NatsDefaults, WorkloadConfig};
 
-pub(super) mod bindings {
-    // Imports-only world: installs host imports into the linker and is the
-    // canonical source for the shared types.
-    crate::wasmtime::component::bindgen!({
-        world: "nats-imports",
-        imports: { default: async | trappable | tracing },
-        with: {
-            "wasmcloud:nats/jetstream.message-handle": super::handles::MessageHandle,
-            "wasmcloud:nats/jetstream.pull-consumer": super::handles::PullConsumerHandle,
-            "wasmcloud:nats/kv.bucket": super::handles::BucketHandle,
-        },
-    });
-}
-
-// Each handler world lives in its own module so their duplicate import types
+// Handler worlds. Each lives in its own module so their duplicate import types
 // don't collide, and so a component exporting only one handler still
-// pre-instantiates.
+// pre-instantiates. Every export is an `async func`, so each is driven inside
+// `store.run_concurrent(..)` — see [`subscriber`].
 pub(super) mod jetstream_bindings {
     crate::wasmtime::component::bindgen!({
         world: "nats-js-processor",
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
         with: {
-            "wasmcloud:nats/jetstream.message-handle": super::handles::MessageHandle,
-            "wasmcloud:nats/jetstream.pull-consumer": super::handles::PullConsumerHandle,
+            "wasmcloud:nats/jetstream@0.1.0.message-handle": super::handles::MessageHandle,
+            "wasmcloud:nats/jetstream@0.1.0.pull-consumer": super::handles::PullConsumerHandle,
         },
     });
 }
@@ -64,40 +52,7 @@ pub(super) mod kv_bindings {
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
         with: {
-            "wasmcloud:nats/kv.bucket": super::handles::BucketHandle,
-        },
-    });
-}
-
-/// Handler worlds for the async `@0.2.0` package. Same split as the sync
-/// worlds above, and for the same reason.
-pub(super) mod async_jetstream_bindings {
-    crate::wasmtime::component::bindgen!({
-        world: "nats-async-js-processor",
-        imports: { default: async | trappable | tracing },
-        exports: { default: async | tracing },
-        with: {
-            "wasmcloud:nats/jetstream@0.2.0.message-handle": super::handles::MessageHandle,
-            "wasmcloud:nats/jetstream@0.2.0.pull-consumer": super::handles::PullConsumerHandle,
-        },
-    });
-}
-
-pub(super) mod async_core_bindings {
-    crate::wasmtime::component::bindgen!({
-        world: "nats-async-subscriber",
-        imports: { default: async | trappable | tracing },
-        exports: { default: async | tracing },
-    });
-}
-
-pub(super) mod async_kv_bindings {
-    crate::wasmtime::component::bindgen!({
-        world: "nats-async-kv-watcher",
-        imports: { default: async | trappable | tracing },
-        exports: { default: async | tracing },
-        with: {
-            "wasmcloud:nats/kv@0.2.0.bucket": super::handles::BucketHandle,
+            "wasmcloud:nats/kv@0.1.0.bucket": super::handles::BucketHandle,
         },
     });
 }
@@ -105,17 +60,6 @@ pub(super) mod async_kv_bindings {
 pub(super) const PLUGIN_NATS_ID: &str = "wasmcloud-nats";
 
 const NATS_VERSION: &str = "0.1.0";
-/// The async (WASI P3) revision. A P3 component cannot bind `@0.1.0`: lifting
-/// a sync-signature function with the async canonical ABI fails validation.
-const NATS_ASYNC_VERSION: &str = "0.2.0";
-
-/// True when a bound interface asks for the async package.
-fn is_async(interface: &WitInterface) -> bool {
-    interface
-        .version
-        .as_ref()
-        .is_some_and(|v| (v.major, v.minor) >= (0, 2))
-}
 
 /// Per-component subscription state.
 pub struct ComponentData {
@@ -328,11 +272,9 @@ pub struct WasmcloudNats {
     pub(super) meters: Arc<RwLock<Meters>>,
     /// Subjects the host itself uses, denied to every workload.
     lattice_prefixes: Vec<String>,
-    /// The host's data-plane servers, used by any binding that names none of
-    /// its own. Address only: credentials and grants stay per workload, so a
-    /// workload that inherits the address still reaches nothing until it is
-    /// granted something.
-    default_servers: Vec<String>,
+    /// The bindings this host declares, and whether a workload may describe
+    /// its own. See [`defaults`].
+    defaults: NatsDefaults,
     /// How a subscriber loop tells the host its workload has died out of band —
     /// a server-side permission denial parks a subscription that deployed
     /// cleanly, and nothing else would ever move the workload off running.
@@ -352,7 +294,7 @@ impl WasmcloudNats {
             connections: Arc::new(ConnectionRegistry::default()),
             meters: Default::default(),
             lattice_prefixes: Vec::new(),
-            default_servers: Vec::new(),
+            defaults: NatsDefaults::default(),
             failure_sink: arc_swap::ArcSwapOption::empty(),
         }
     }
@@ -363,19 +305,14 @@ impl WasmcloudNats {
         self
     }
 
-    /// Sets the servers a binding falls back to when it names none.
+    /// Sets the bindings this host declares.
     ///
-    /// This is the host's own data-plane NATS (`--data-nats-url`, `dataNatsUrl`
-    /// in the chart), so the common case — a workload on the cluster's NATS —
-    /// needs no `servers` in its manifest. A binding that sets `servers`
-    /// overrides this outright rather than merging with it: a workload pointed
-    /// at a different cluster means a different cluster, not both.
-    ///
-    /// Deliberately address-only. Inheriting the host's credentials or grants
-    /// would make every workload's reach depend on how the host was launched,
-    /// which is the opposite of deny-by-default.
-    pub fn with_default_servers(mut self, servers: Vec<String>) -> Self {
-        self.default_servers = servers;
+    /// A workload asks for a binding by name and the host decides what it is:
+    /// which servers it dials, as whom, and what it is granted. Under
+    /// [`WorkloadConfig::Deny`] a manifest that describes any of that is
+    /// refused at bind — see [`defaults`] for the key classes and why.
+    pub fn with_defaults(mut self, defaults: NatsDefaults) -> Self {
+        self.defaults = defaults;
         self
     }
 
@@ -396,15 +333,18 @@ impl WasmcloudNats {
         bindings: Vec<(&str, HashMap<String, String>)>,
         opened: &mut bool,
     ) -> anyhow::Result<()> {
-        for (binding, mut merged) in bindings {
-            // The host's data plane backs any binding that names no servers of
-            // its own. Injected before parsing rather than after, so the
-            // resolved address is what `connection_key` identifies the
-            // connection by — two bindings that both fall back to the host must
-            // read as the same connection, not as two.
-            if !merged.contains_key("servers") && !self.default_servers.is_empty() {
-                merged.insert("servers".to_string(), self.default_servers.join(","));
-            }
+        for (binding, merged) in bindings {
+            // The host's own declaration for this binding, with whatever the
+            // manifest is still allowed to say layered on top. Resolved before
+            // parsing rather than after, so the resolved address is what
+            // `connection_key` identifies the connection by — two bindings that
+            // both fall back to the host must read as one connection, not two.
+            let merged = self.defaults.resolve(binding, merged).with_context(|| {
+                format!(
+                    "wasmcloud:nats binding `{}` of workload `{workload_id}` cannot be opened",
+                    describe_binding(binding)
+                )
+            })?;
 
             // A binding is described by the manifest as a whole, and only the
             // entries a component actually matched are folded into `merged`. So
@@ -441,6 +381,24 @@ impl WasmcloudNats {
                     describe_binding(binding)
                 )
             })?;
+
+            // A stream grant alone reaches nothing: every read of a stored
+            // message is checked against the *subject* grant, so a binding
+            // granted streams and no subjects returns empty from `scan` and
+            // `get-by-sequence` — indistinguishable from an empty stream, and
+            // silent. The config can never return a message, so say so once at
+            // bind rather than leaving it to be debugged from the outside.
+            if !config.policy.stream_allow.is_empty() && config.policy.subject_allow.is_empty() {
+                tracing::warn!(
+                    workload_id,
+                    binding = describe_binding(binding),
+                    streams = config.policy.stream_allow.join(","),
+                    "wasmcloud:nats binding grants streams but no subjects, so every JetStream \
+                     read returns empty: a stored message is checked against `subject-allow` \
+                     before it is handed over. Add the subjects those streams store to \
+                     `subject-allow`"
+                );
+            }
 
             // Scope request-reply to this workload so two workloads on one
             // server cannot observe each other's responses. Named bindings get
@@ -626,26 +584,6 @@ fn binding_name(interface: &WitInterface) -> &str {
     interface.name.as_deref().unwrap_or(conn::UNNAMED_BINDING)
 }
 
-/// Refuses a labeled binding on the sync `@0.1.0` package.
-///
-/// Label routing is implemented for the async `@0.2.0` interfaces only, and a
-/// sync-P2 component cannot carry labeled imports anyway: `wit-bindgen` fails
-/// componentization on that shape. Refusing at bind gives that a name, rather
-/// than deploying a workload whose component then fails to instantiate against
-/// imports nothing linked.
-fn labeled_revision(interface: &WitInterface) -> anyhow::Result<()> {
-    if interface.name.is_some() && !is_async(interface) {
-        anyhow::bail!(
-            "wasmcloud:nats interface `{}` is bound under the name `{}`, but named bindings \
-             are served only by the async `@{NATS_ASYNC_VERSION}` package; bind it as \
-             `@{NATS_ASYNC_VERSION}`, or drop the name to use the single unnamed binding",
-            interface.instance(),
-            interface.name.as_deref().unwrap_or_default()
-        )
-    }
-    Ok(())
-}
-
 /// A binding name for a log line or an error message.
 fn describe_binding(binding: &str) -> &str {
     if binding.is_empty() {
@@ -679,7 +617,6 @@ fn merge_binding_configs<'a>(
 
     let mut merged: BTreeMap<&str, HashMap<String, String>> = BTreeMap::new();
     for interface in ordered {
-        labeled_revision(interface)?;
         let binding = binding_name(interface);
         let mut pairs: Vec<(&String, &String)> = interface.config.iter().collect();
         pairs.sort_by_key(|(key, _)| *key);
@@ -728,14 +665,12 @@ impl HostPlugin for WasmcloudNats {
         const IMPORTS: &str = "wasmcloud:nats/types,core,jetstream,kv";
         const EXPORTS: &str = "wasmcloud:nats/jetstream-handler,core-handler,kv-handler";
         WitWorld {
-            imports: HashSet::from([
-                WitInterface::from(format!("{IMPORTS}@{NATS_VERSION}").as_str()),
-                WitInterface::from(format!("{IMPORTS}@{NATS_ASYNC_VERSION}").as_str()),
-            ]),
-            exports: HashSet::from([
-                WitInterface::from(format!("{EXPORTS}@{NATS_VERSION}").as_str()),
-                WitInterface::from(format!("{EXPORTS}@{NATS_ASYNC_VERSION}").as_str()),
-            ]),
+            imports: HashSet::from([WitInterface::from(
+                format!("{IMPORTS}@{NATS_VERSION}").as_str(),
+            )]),
+            exports: HashSet::from([WitInterface::from(
+                format!("{EXPORTS}@{NATS_VERSION}").as_str(),
+            )]),
         }
     }
 
@@ -743,7 +678,6 @@ impl HostPlugin for WasmcloudNats {
     /// grant, and one set of subscriptions each, so a component can bridge two
     /// clusters by importing `wasmcloud:nats` twice under different names.
     ///
-    /// Only the async `@0.2.0` package is routable — see [`labeled_revision`].
     fn supports_named_instances(&self) -> bool {
         true
     }
@@ -801,18 +735,6 @@ impl HostPlugin for WasmcloudNats {
             return Ok(());
         }
 
-        // Register the revisions this workload bound. A binding that names no
-        // version gets both, so an unversioned manifest entry works whichever
-        // revision the component was built against.
-        let (binds_sync, binds_async) =
-            bound.iter().fold((false, false), |(sync, async_), i| {
-                match (i.version.as_ref(), is_async(i)) {
-                    (None, _) => (true, true),
-                    (Some(_), true) => (sync, true),
-                    (Some(_), false) => (true, async_),
-                }
-            });
-
         // Labeled (`(implements ..)`) imports route per binding name; a plain
         // import routes to the workload's unnamed binding. A component can do
         // either, and a workload can hold both, so bind only what is asked for:
@@ -831,49 +753,31 @@ impl HostPlugin for WasmcloudNats {
         let component = item.component().clone();
 
         let linker = item.linker();
-        if binds_sync {
-            bindings::wasmcloud::nats0_1_0::types::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-                linker,
-                crate::engine::ctx::extract_active_ctx,
-            )?;
-            bindings::wasmcloud::nats0_1_0::core::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-                linker,
-                crate::engine::ctx::extract_active_ctx,
-            )?;
-            bindings::wasmcloud::nats0_1_0::jetstream::add_to_linker::<
-                _,
-                crate::engine::ctx::SharedCtx,
-            >(linker, crate::engine::ctx::extract_active_ctx)?;
-            bindings::wasmcloud::nats0_1_0::kv::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-                linker,
-                crate::engine::ctx::extract_active_ctx,
-            )?;
-        }
-        if binds_async {
-            use async_p3::bindings::wasmcloud::nats0_2_0 as async_nats_wit;
+        {
+            use interfaces::bindings::wasmcloud::nats as nats_wit;
             // `types` carries record and error definitions only: nothing to
             // route, so it is bound once either way.
-            async_nats_wit::types::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
+            nats_wit::types::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
                 linker,
                 crate::engine::ctx::extract_active_ctx,
             )?;
             if has_plain {
-                async_nats_wit::core::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
+                nats_wit::core::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
                     linker,
                     crate::engine::ctx::extract_active_ctx,
                 )?;
-                async_nats_wit::jetstream::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
+                nats_wit::jetstream::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
                     linker,
                     crate::engine::ctx::extract_active_ctx,
                 )?;
-                async_nats_wit::kv::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
+                nats_wit::kv::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
                     linker,
                     crate::engine::ctx::extract_active_ctx,
                 )?;
             }
             if has_labeled {
-                use async_p3::bindings::named_imports::wasmcloud::nats0_2_0 as labeled_nats_wit;
-                let route = |label: &str| -> wasmtime::Result<async_p3::NatsId> {
+                use interfaces::bindings::named_imports::wasmcloud::nats as labeled_nats_wit;
+                let route = |label: &str| -> wasmtime::Result<interfaces::NatsId> {
                     bindings.get(label).cloned().ok_or_else(|| {
                         wasmtime::format_err!(
                             "component imports wasmcloud:nats as `{label}`, but the workload \
@@ -1266,7 +1170,7 @@ mod tests {
     }
 
     #[test]
-    fn world_advertises_both_revisions() {
+    fn world_advertises_the_package() {
         let world = WasmcloudNats::new().world();
         let versions = |set: &HashSet<WitInterface>| {
             let mut v: Vec<String> = set
@@ -1281,8 +1185,8 @@ mod tests {
             v.sort();
             v
         };
-        assert_eq!(versions(&world.imports), vec!["0.1.0", "0.2.0"]);
-        assert_eq!(versions(&world.exports), vec!["0.1.0", "0.2.0"]);
+        assert_eq!(versions(&world.imports), vec!["0.1.0"]);
+        assert_eq!(versions(&world.exports), vec!["0.1.0"]);
         for iface in world.exports.iter() {
             assert!(
                 iface.interfaces.contains("kv-handler"),
@@ -1465,17 +1369,17 @@ mod tests {
         assert!(!opened, "nothing was opened");
     }
 
-    /// The common case: a workload on the cluster's own NATS names no servers,
-    /// and inherits the host's data-plane address.
+    /// The host's declaration reaches `open_bindings`: a binding that names no
+    /// servers of its own gets the host's address and reaches a real connect
+    /// attempt rather than the missing-`servers` refusal.
     #[tokio::test]
-    async fn a_binding_without_servers_falls_back_to_the_host() {
-        let plugin =
-            WasmcloudNats::new().with_default_servers(vec!["nats://host:4222".to_string()]);
+    async fn the_host_declaration_reaches_open_bindings() {
+        let plugin = WasmcloudNats::new().with_defaults(
+            NatsDefaults::new().with_default_servers(vec!["nats://host:4222".to_string()]),
+        );
         let mut opened = false;
         let merged = HashMap::from([("subject-allow".to_string(), "orders.>".to_string())]);
 
-        // Reaches a real connect attempt rather than the missing-`servers`
-        // refusal, which is what says the default was applied.
         let err = plugin
             .open_bindings("wl", vec![(conn::UNNAMED_BINDING, merged)], &mut opened)
             .await
@@ -1488,52 +1392,32 @@ mod tests {
         );
     }
 
-    /// A binding that names its own servers means a different cluster, so the
-    /// host default is replaced rather than merged into.
+    /// A refusal from the host's declaration fails the bind, and names the
+    /// binding it came from.
     #[tokio::test]
-    async fn a_binding_with_servers_overrides_the_host_default() {
-        let plugin =
-            WasmcloudNats::new().with_default_servers(vec!["nats://host:4222".to_string()]);
+    async fn a_refused_workload_key_fails_the_bind() {
+        let plugin = WasmcloudNats::new().with_defaults(
+            NatsDefaults::new()
+                .with_workload_config(WorkloadConfig::Deny)
+                .with_default_servers(vec!["nats://host:4222".to_string()])
+                .with_binding(
+                    "orders",
+                    HashMap::from([("subject-allow".to_string(), "orders.processed".to_string())]),
+                ),
+        );
         let mut opened = false;
-        let merged = HashMap::from([
-            ("servers".to_string(), "nats://elsewhere:4222".to_string()),
-            ("subject-allow".to_string(), "orders.>".to_string()),
-        ]);
+        let merged = HashMap::from([("subject-allow".to_string(), "orders.>".to_string())]);
 
         let err = plugin
-            .open_bindings("wl", vec![(conn::UNNAMED_BINDING, merged)], &mut opened)
+            .open_bindings("wl", vec![("orders", merged)], &mut opened)
             .await
-            .expect_err("nothing is listening on nats://elsewhere:4222");
+            .expect_err("a manifest may not grant itself subjects");
 
         assert!(
-            err.chain().any(|e| e.to_string().contains("elsewhere")),
-            "the binding's own server is the one dialed: {err:#}"
+            err.chain()
+                .any(|e| e.to_string().contains("`subject-allow`")),
+            "names the refused key: {err:#}"
         );
-        assert!(
-            !err.chain().any(|e| e.to_string().contains("host:4222")),
-            "the host default is replaced, not merged: {err:#}"
-        );
-    }
-
-    /// Inheriting the address must not inherit reach. A workload that names no
-    /// servers and no grant still reaches nothing.
-    #[test]
-    fn the_host_default_carries_no_grant() {
-        let plugin =
-            WasmcloudNats::new().with_default_servers(vec!["nats://host:4222".to_string()]);
-        assert!(
-            plugin.default_servers.len() == 1,
-            "only the address is defaulted"
-        );
-
-        let cfg = config::NatsConfig::from_map(&HashMap::from([(
-            "servers".to_string(),
-            "nats://host:4222".to_string(),
-        )]))
-        .expect("servers alone is a valid config");
-        assert!(
-            cfg.policy.subject_allow.is_empty(),
-            "no grant comes with the address"
-        );
+        assert!(!opened, "nothing was opened");
     }
 }

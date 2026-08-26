@@ -10,8 +10,6 @@ members = [
     "http-webgpu",
     "cpu-usage-service",
     "messaging-handler",
-    "nats-core-handler",
-    "nats-jetstream-handler",
     "nats-async-handler-p3",
     "nats-implements-p3",
     "messaging-echo",

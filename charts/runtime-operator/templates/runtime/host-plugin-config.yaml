@@ -2,7 +2,9 @@
 Per-hostgroup ConfigMap holding a `wash host` config file (--config) for
 hostPlugins entries that declare config/configFrom/secretFrom/allowedHosts/
 allowedIpNameLookups — fields with no `--host-plugin` CLI equivalent (deliberately:
-a secret must never appear on the command line / in `kubectl describe pod`).
+a secret must never appear on the command line / in `kubectl describe pod`) —
+and for the host group's `wasmcloudNats` bindings, which carry NATS credentials
+for the same reason.
 
 Rendered only when at least one such entry exists for the hostgroup; entries
 with none of those fields keep rendering as a plain `--host-plugin=...` arg in
@@ -16,7 +18,7 @@ pod annotation — see that helper for what the file declares and why.
 {{- range .Values.runtime.hostGroups }}
 {{- $ns := default $top.Release.Namespace .namespace }}
 {{- $partition := include "runtime-operator.hostPluginPartition" . | fromJson }}
-{{- if $partition.fileBacked }}
+{{- if $partition.needsConfigFile }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

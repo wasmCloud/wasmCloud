@@ -18,8 +18,8 @@
        `coreInstances` alongside the Kubernetes requests/limits. */}}
 {{- $resources := .resources | default $top.Values.runtime.resources | default dict }}
 {{- $partition := include "runtime-operator.hostPluginPartition" . | fromJson }}
-{{- $fileBackedPlugins := $partition.fileBacked }}
 {{- $cliPlugins := $partition.cli }}
+{{- $needsConfigFile := $partition.needsConfigFile }}
 {{- $configFromNames := $partition.configFromNames }}
 {{- $secretFromNames := $partition.secretFromNames }}
 apiVersion: apps/v1
@@ -59,7 +59,7 @@ spec:
              cannot — the contents of the ConfigMaps/Secrets this file only
              references by name. See the helper. */}}
       {{- $annotations := dict }}
-      {{- if $fileBackedPlugins }}
+      {{- if $needsConfigFile }}
       {{- $configFile := include "runtime-operator.hostPluginConfigFile" $partition }}
       {{- $_ := set $annotations "checksum/host-plugin-config" ($configFile | sha256sum) }}
       {{- $reloader := include "runtime-operator.hostPluginReloaderAnnotations" $partition | fromYaml }}
@@ -103,7 +103,7 @@ spec:
         {{- with .volumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-        {{- if $fileBackedPlugins }}
+        {{- if $needsConfigFile }}
         - name: host-plugin-config
           configMap:
             name: hostgroup-{{ .name }}-host-config
@@ -204,6 +204,18 @@ spec:
             - "--data-nats-tls-cert=/data-cert/tls.crt"
             - "--data-nats-tls-key=/data-cert/tls.key"
             {{- end }}
+            {{- /* The `wasmcloud:nats` plugin's own address. Defaults to the
+                   host's data plane, so a workload on the cluster's NATS needs
+                   no address in its manifest; set `wasmcloudNatsUrl` when the
+                   NATS workloads talk to is not the one backing the data
+                   plane. `wasmcloudNatsWorkloadConfig` decides whether a
+                   manifest may describe a binding at all — see values.yaml. */}}
+            {{- with .wasmcloudNatsUrl }}
+            - "--wasmcloud-nats-url={{ . }}"
+            {{- end }}
+            {{- with .wasmcloudNatsWorkloadConfig }}
+            - "--wasmcloud-nats-workload-config={{ . }}"
+            {{- end }}
             - "--oci-cache-dir=/oci-cache"
             {{- if and (.http) (.http.enabled) }}
             - "--http-addr=0.0.0.0:{{ .http.port }}"
@@ -231,11 +243,11 @@ spec:
                    one --host-plugin flag per entry, rendered into the CLI's
                    `key=value` grammar (unchanged). Entries that DO set any of
                    those render into the mounted config file instead — see
-                   $fileBackedPlugins / --config below. */}}
+                   $needsConfigFile / --config below. */}}
             {{- range $cliPlugins }}
             - "--host-plugin=id={{ .id }}{{ if .image }},image={{ .image }}{{ if .pullPolicy }},pull={{ .pullPolicy }}{{ end }}{{ if .digest }},digest={{ .digest }}{{ end }}{{ else if .file }},file={{ .file }}{{ end }}{{ if .maxRestarts }},max-restarts={{ .maxRestarts }}{{ end }}"
             {{- end }}
-            {{- if $fileBackedPlugins }}
+            {{- if $needsConfigFile }}
             - "--user-config=/etc/wasmcloud/host-config/config.yaml"
             {{- end }}
             {{- /* Chart-wide runtime.extraArgs applies to every host group; per-host-group
@@ -271,7 +283,7 @@ spec:
             {{- with .volumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-            {{- if $fileBackedPlugins }}
+            {{- if $needsConfigFile }}
             - name: host-plugin-config
               mountPath: /etc/wasmcloud/host-config
               readOnly: true

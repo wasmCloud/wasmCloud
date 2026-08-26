@@ -1,9 +1,9 @@
-//! # Async `wasmcloud:nats@0.2.0` (WASI P3)
+//! # `wasmcloud:nats@0.1.0` host implementations
 //!
-//! The async-native counterpart of [`super::interfaces`]. Every function in
-//! `@0.2.0` is an `async func`, so a component targeting WASI P3 can bind NATS
-//! at all: lifting a sync-signature function with the async canonical ABI fails
-//! component validation, which is what made `@0.1.0` unusable from a P3 guest.
+//! Every function in the package is an `async func`, so this is the only
+//! implementation: a sync-signature function cannot be lifted with the async
+//! canonical ABI, so one package cannot serve both a P2 and a P3 guest, and
+//! this interface is a P3 interface.
 //!
 //! Because the WIT functions are `async func`s the generated host traits use
 //! wasmtime's *concurrent* ABI: methods are `async fn`s on `SharedCtx` taking
@@ -11,8 +11,8 @@
 //! that means a `request` no longer blocks the instance, and a handler can
 //! await a KV read while the host keeps delivering.
 //!
-//! Both revisions run off one [`ConnHandle`] per workload: the same connection,
-//! grant, and limits back the sync and async surfaces.
+//! Every binding of a workload runs off its own [`ConnHandle`]: one connection,
+//! one grant, and one set of limits per `(implements ..)` name.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,27 +34,27 @@ use super::{PLUGIN_NATS_ID, WasmcloudNats};
 
 pub(super) mod bindings {
     crate::wasmtime::component::bindgen!({
-        world: "nats-async-imports",
+        world: "nats-imports",
         imports: { default: async | trappable | tracing },
         named_imports: {
-            "wasmcloud:nats/core@0.2.0": super::NatsId,
-            "wasmcloud:nats/jetstream@0.2.0": super::NatsId,
-            "wasmcloud:nats/kv@0.2.0": super::NatsId,
+            "wasmcloud:nats/core@0.1.0": super::NatsId,
+            "wasmcloud:nats/jetstream@0.1.0": super::NatsId,
+            "wasmcloud:nats/kv@0.1.0": super::NatsId,
         },
         with: {
-            "wasmcloud:nats/jetstream@0.2.0.message-handle": super::super::handles::MessageHandle,
-            "wasmcloud:nats/jetstream@0.2.0.pull-consumer": super::super::handles::PullConsumerHandle,
-            "wasmcloud:nats/kv@0.2.0.bucket": super::super::handles::BucketHandle,
+            "wasmcloud:nats/jetstream@0.1.0.message-handle": super::super::handles::MessageHandle,
+            "wasmcloud:nats/jetstream@0.1.0.pull-consumer": super::super::handles::PullConsumerHandle,
+            "wasmcloud:nats/kv@0.1.0.bucket": super::super::handles::BucketHandle,
         },
     });
 }
 
-use bindings::wasmcloud::nats0_2_0::{core, jetstream as js, kv, types};
+use bindings::wasmcloud::nats::{core, jetstream as js, kv, types};
 // The label-routed twins of the three routable interfaces. Every method takes
 // the NatsId its `(implements ..)` label resolved to, so a component can import
 // `wasmcloud:nats` twice — one label per cluster — and have each call leave on
 // that binding's connection, under that binding's grant.
-use bindings::named_imports::wasmcloud::nats0_2_0::{
+use bindings::named_imports::wasmcloud::nats::{
     core as labeled_core, jetstream as labeled_js, kv as labeled_kv,
 };
 
@@ -635,7 +635,7 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
                 if conn.policy.check_stored_subject(&m.subject).is_err() {
                     return Ok(Err(denied(
                         Denied::NotGranted,
-                        types::DeniedResource::Stream,
+                        types::DeniedResource::Message,
                         &format!("{stream_name}#{sequence}"),
                     )));
                 }

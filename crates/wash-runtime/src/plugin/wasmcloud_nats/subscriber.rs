@@ -22,35 +22,27 @@ use super::conn::ConnHandle;
 use super::handles::{BucketHandle, MessageHandle};
 use super::{
     CoreSubscriptionConfig, JetStreamSubscriptionConfig, KvWatchConfig, PLUGIN_NATS_ID,
-    async_core_bindings, async_jetstream_bindings, async_kv_bindings, core_bindings,
-    jetstream_bindings, kv_bindings,
+    core_bindings, jetstream_bindings, kv_bindings,
 };
 
 use crate::engine::ctx::SharedCtx;
 
-/// Which revision of a handler export a component serves.
+/// The pre-instantiated handler a component exports, and the instantiated
+/// proxy a delivery is driven through.
 ///
-/// A component exports either the sync `@0.1.0` handler or the async `@0.2.0`
-/// one; the pre-instantiation is what type-checks that, so the async revision
-/// is tried first and the sync one is the fallback.
+/// Every `wasmcloud:nats` export is an `async func`, so a proxy binds through
+/// wasmtime's concurrent ABI: its call takes an `Accessor` and must be driven
+/// inside `run_concurrent`, which is also what lets the guest await its own
+/// imports while the host keeps the store pumping.
 macro_rules! handler_pre {
-    ($name:ident, $proxy:ident, $sync:ty, $async:ty, $sync_proxy:ty, $async_proxy:ty) => {
-        enum $name {
-            Sync($sync),
-            Async($async),
-        }
+    ($name:ident, $proxy:ident, $pre:ty, $instance:ty) => {
+        struct $name($pre);
 
-        enum $proxy {
-            Sync($sync_proxy),
-            Async($async_proxy),
-        }
+        struct $proxy($instance);
 
         impl Clone for $name {
             fn clone(&self) -> Self {
-                match self {
-                    Self::Sync(p) => Self::Sync(p.clone()),
-                    Self::Async(p) => Self::Async(p.clone()),
-                }
+                Self(self.0.clone())
             }
         }
 
@@ -58,26 +50,16 @@ macro_rules! handler_pre {
             fn new(
                 instance_pre: crate::wasmtime::component::InstancePre<SharedCtx>,
             ) -> anyhow::Result<Self> {
-                match <$async>::new(instance_pre.clone()) {
-                    Ok(p) => Ok(Self::Async(p)),
-                    Err(async_err) => match <$sync>::new(instance_pre) {
-                        Ok(p) => Ok(Self::Sync(p)),
-                        Err(sync_err) => Err(anyhow::anyhow!(
-                            "component exports neither the async (@0.2.0) nor the sync (@0.1.0) \
-                             handler: {async_err}; {sync_err}"
-                        )),
-                    },
-                }
+                <$pre>::new(instance_pre).map(Self).map_err(|e| {
+                    anyhow::anyhow!("component exports no wasmcloud:nats handler: {e}")
+                })
             }
 
             async fn instantiate(
                 &self,
                 store: &mut crate::wasmtime::Store<SharedCtx>,
             ) -> anyhow::Result<$proxy> {
-                Ok(match self {
-                    Self::Sync(p) => $proxy::Sync(p.instantiate_async(store).await?),
-                    Self::Async(p) => $proxy::Async(p.instantiate_async(store).await?),
-                })
+                Ok($proxy(self.0.instantiate_async(store).await?))
             }
         }
     };
@@ -87,25 +69,19 @@ handler_pre!(
     JsHandlerPre,
     JsProxy,
     jetstream_bindings::NatsJsProcessorPre<SharedCtx>,
-    async_jetstream_bindings::NatsAsyncJsProcessorPre<SharedCtx>,
-    jetstream_bindings::NatsJsProcessor,
-    async_jetstream_bindings::NatsAsyncJsProcessor
+    jetstream_bindings::NatsJsProcessor
 );
 handler_pre!(
     CoreHandlerPre,
     CoreProxy,
     core_bindings::NatsSubscriberPre<SharedCtx>,
-    async_core_bindings::NatsAsyncSubscriberPre<SharedCtx>,
-    core_bindings::NatsSubscriber,
-    async_core_bindings::NatsAsyncSubscriber
+    core_bindings::NatsSubscriber
 );
 handler_pre!(
     KvHandlerPre,
     KvProxy,
     kv_bindings::NatsKvWatcherPre<SharedCtx>,
-    async_kv_bindings::NatsAsyncKvWatcherPre<SharedCtx>,
-    kv_bindings::NatsKvWatcher,
-    async_kv_bindings::NatsAsyncKvWatcher
+    kv_bindings::NatsKvWatcher
 );
 
 impl JsProxy {
@@ -114,65 +90,37 @@ impl JsProxy {
         store: &mut crate::wasmtime::Store<SharedCtx>,
         handle: Resource<MessageHandle>,
     ) -> wasmtime::Result<Result<(), String>> {
-        match self {
-            Self::Sync(p) => {
-                p.wasmcloud_nats0_1_0_jetstream_handler()
-                    .call_handle_message(store, handle)
+        let p = &self.0;
+        store
+            .run_concurrent(async move |accessor| {
+                p.wasmcloud_nats_jetstream_handler()
+                    .call_handle_message(accessor, handle)
                     .await
-            }
-            // An `async func` export binds through the concurrent ABI, so it
-            // takes an `Accessor` and must be driven inside `run_concurrent` —
-            // which is also what lets the guest await its own imports while the
-            // host keeps the store pumping.
-            Self::Async(p) => {
-                store
-                    .run_concurrent(async move |accessor| {
-                        p.wasmcloud_nats0_2_0_jetstream_handler()
-                            .call_handle_message(accessor, handle)
-                            .await
-                    })
-                    .await?
-            }
-        }
+            })
+            .await?
     }
 }
 
 impl CoreProxy {
-    /// Builds the message in whichever revision's types the component serves —
-    /// the two records are structurally identical but distinct Rust types.
     async fn call(
         &self,
         store: &mut crate::wasmtime::Store<SharedCtx>,
         raw: &async_nats::Message,
     ) -> wasmtime::Result<Result<(), String>> {
-        match self {
-            Self::Sync(p) => {
-                let msg = core_bindings::wasmcloud::nats0_1_0::types::NatsMessage {
-                    subject: raw.subject.to_string(),
-                    reply_to: raw.reply.as_ref().map(|r| r.to_string()),
-                    body: raw.payload.to_vec(),
-                    headers: raw.headers.as_ref().map(nats_headers_to_core_wit),
-                };
-                p.wasmcloud_nats0_1_0_core_handler()
-                    .call_handle_message(store, &msg)
+        let msg = core_bindings::wasmcloud::nats::types::NatsMessage {
+            subject: raw.subject.to_string(),
+            reply_to: raw.reply.as_ref().map(|r| r.to_string()),
+            body: raw.payload.to_vec(),
+            headers: raw.headers.as_ref().map(nats_headers_to_core_wit),
+        };
+        let p = &self.0;
+        store
+            .run_concurrent(async move |accessor| {
+                p.wasmcloud_nats_core_handler()
+                    .call_handle_message(accessor, msg)
                     .await
-            }
-            Self::Async(p) => {
-                let msg = async_core_bindings::wasmcloud::nats0_2_0::types::NatsMessage {
-                    subject: raw.subject.to_string(),
-                    reply_to: raw.reply.as_ref().map(|r| r.to_string()),
-                    body: raw.payload.to_vec(),
-                    headers: raw.headers.as_ref().map(nats_headers_to_async_core_wit),
-                };
-                store
-                    .run_concurrent(async move |accessor| {
-                        p.wasmcloud_nats0_2_0_core_handler()
-                            .call_handle_message(accessor, msg)
-                            .await
-                    })
-                    .await?
-            }
-        }
+            })
+            .await?
     }
 }
 
@@ -183,23 +131,15 @@ impl KvProxy {
         bucket: &str,
         entry: &jetstream::kv::Entry,
     ) -> wasmtime::Result<Result<(), String>> {
-        match self {
-            Self::Sync(p) => {
-                p.wasmcloud_nats0_1_0_kv_handler()
-                    .call_handle_event(store, bucket, &kv_entry_to_kv_handler_wit(entry))
+        let (bucket, entry) = (bucket.to_string(), kv_entry_to_kv_handler_wit(entry));
+        let p = &self.0;
+        store
+            .run_concurrent(async move |accessor| {
+                p.wasmcloud_nats_kv_handler()
+                    .call_handle_event(accessor, bucket, entry)
                     .await
-            }
-            Self::Async(p) => {
-                let (bucket, entry) = (bucket.to_string(), kv_entry_to_async_kv_handler_wit(entry));
-                store
-                    .run_concurrent(async move |accessor| {
-                        p.wasmcloud_nats0_2_0_kv_handler()
-                            .call_handle_event(accessor, bucket, entry)
-                            .await
-                    })
-                    .await?
-            }
-        }
+            })
+            .await?
     }
 }
 
@@ -365,11 +305,11 @@ fn short_hash(parts: &[&str]) -> String {
 
 fn nats_headers_to_core_wit(
     headers: &async_nats::HeaderMap,
-) -> Vec<core_bindings::wasmcloud::nats0_1_0::types::HeaderEntry> {
+) -> Vec<core_bindings::wasmcloud::nats::types::HeaderEntry> {
     let mut out = Vec::new();
     for (name, values) in headers.iter() {
         for value in values {
-            out.push(core_bindings::wasmcloud::nats0_1_0::types::HeaderEntry {
+            out.push(core_bindings::wasmcloud::nats::types::HeaderEntry {
                 name: name.to_string(),
                 value: value.as_str().to_string(),
             });
@@ -378,61 +318,14 @@ fn nats_headers_to_core_wit(
     out
 }
 
-fn nats_headers_to_async_core_wit(
-    headers: &async_nats::HeaderMap,
-) -> Vec<async_core_bindings::wasmcloud::nats0_2_0::types::HeaderEntry> {
-    let mut out = Vec::new();
-    for (name, values) in headers.iter() {
-        for value in values {
-            out.push(
-                async_core_bindings::wasmcloud::nats0_2_0::types::HeaderEntry {
-                    name: name.to_string(),
-                    value: value.as_str().to_string(),
-                },
-            );
-        }
-    }
-    out
-}
-
-fn kv_entry_to_async_kv_handler_wit(
-    e: &jetstream::kv::Entry,
-) -> async_kv_bindings::wasmcloud::nats0_2_0::kv::Entry {
+fn kv_entry_to_kv_handler_wit(e: &jetstream::kv::Entry) -> kv_bindings::wasmcloud::nats::kv::Entry {
     let operation = match e.operation {
-        jetstream::kv::Operation::Put => {
-            async_kv_bindings::wasmcloud::nats0_2_0::kv::KvOperation::Put
-        }
-        jetstream::kv::Operation::Delete => {
-            async_kv_bindings::wasmcloud::nats0_2_0::kv::KvOperation::Delete
-        }
-        jetstream::kv::Operation::Purge => {
-            async_kv_bindings::wasmcloud::nats0_2_0::kv::KvOperation::Purge
-        }
+        jetstream::kv::Operation::Put => kv_bindings::wasmcloud::nats::kv::KvOperation::Put,
+        jetstream::kv::Operation::Delete => kv_bindings::wasmcloud::nats::kv::KvOperation::Delete,
+        jetstream::kv::Operation::Purge => kv_bindings::wasmcloud::nats::kv::KvOperation::Purge,
     };
 
-    async_kv_bindings::wasmcloud::nats0_2_0::kv::Entry {
-        key: e.key.clone(),
-        value: e.value.to_vec(),
-        revision: e.revision,
-        created_at_unix_nanos: e.created.unix_timestamp_nanos().max(0) as u64,
-        operation,
-    }
-}
-
-fn kv_entry_to_kv_handler_wit(
-    e: &jetstream::kv::Entry,
-) -> kv_bindings::wasmcloud::nats0_1_0::kv::Entry {
-    let operation = match e.operation {
-        jetstream::kv::Operation::Put => kv_bindings::wasmcloud::nats0_1_0::kv::KvOperation::Put,
-        jetstream::kv::Operation::Delete => {
-            kv_bindings::wasmcloud::nats0_1_0::kv::KvOperation::Delete
-        }
-        jetstream::kv::Operation::Purge => {
-            kv_bindings::wasmcloud::nats0_1_0::kv::KvOperation::Purge
-        }
-    };
-
-    kv_bindings::wasmcloud::nats0_1_0::kv::Entry {
+    kv_bindings::wasmcloud::nats::kv::Entry {
         key: e.key.clone(),
         value: e.value.to_vec(),
         revision: e.revision,
@@ -1425,18 +1318,42 @@ pub(super) async fn spawn_kv_watches(
             // and the watch would deliver nothing ever again.
             let mut last_revision: Option<u64> = None;
             let mut bucket_created: Option<i128> = None;
+            // A bucket that is briefly absent — a server restart, provisioning
+            // that has not caught up — comes back within seconds. A bucket that
+            // was never created never does, and a flat 2s retry there is a
+            // permanent `STREAM.INFO` loop that logs a WARN every 2s for as
+            // long as the workload runs, drowning every other line. So the
+            // wait doubles to a cap, and only the first failure of a run is a
+            // WARN: the repeats say nothing new.
+            let mut consecutive_failures: u32 = 0;
 
             'watch: loop {
                 let store_kv = match conn.jetstream.get_key_value(&watch.bucket).await {
                     Ok(s) => s,
                     Err(e) => {
-                        warn!("kv watch: bucket '{}' not available: {e}", watch.bucket);
-                        if wait_or_cancel(&cancel_token, RESUBSCRIBE_BACKOFF).await {
+                        let wait = resubscribe_backoff(consecutive_failures);
+                        if consecutive_failures == 0 {
+                            warn!(
+                                bucket = %watch.bucket,
+                                retry_in_ms = wait.as_millis() as u64,
+                                "kv watch: bucket not available, retrying with backoff: {e}"
+                            );
+                        } else {
+                            debug!(
+                                bucket = %watch.bucket,
+                                attempts = consecutive_failures + 1,
+                                retry_in_ms = wait.as_millis() as u64,
+                                "kv watch: bucket still not available: {e}"
+                            );
+                        }
+                        consecutive_failures = consecutive_failures.saturating_add(1);
+                        if wait_or_cancel(&cancel_token, wait).await {
                             break 'watch;
                         }
                         continue 'watch;
                     }
                 };
+                consecutive_failures = 0;
 
                 // Already fetched by `get_key_value`, so this costs no round
                 // trip.
@@ -1465,11 +1382,13 @@ pub(super) async fn spawn_kv_watches(
                 let mut stream = match watching {
                     Ok(s) => s,
                     Err(e) => {
+                        let wait = resubscribe_backoff(consecutive_failures);
+                        consecutive_failures = consecutive_failures.saturating_add(1);
                         warn!(
-                            "kv watch: failed to watch '{}:{}': {e}",
-                            watch.bucket, watch.filter
+                            retry_in_ms = wait.as_millis() as u64,
+                            "kv watch: failed to watch '{}:{}': {e}", watch.bucket, watch.filter
                         );
-                        if wait_or_cancel(&cancel_token, RESUBSCRIBE_BACKOFF).await {
+                        if wait_or_cancel(&cancel_token, wait).await {
                             break 'watch;
                         }
                         continue 'watch;
