@@ -50,11 +50,17 @@ jobs:
           {"key": "grpc-hello-world-client",  "filter": "grpc-hello-world",   "workdir": "examples/grpc-hello-world/component-client", "image": "ghcr.io/wasmcloud/components/grpc-hello-world-client", "needs_protoc": true},
           {"key": "grpc-hello-world-server",  "filter": "grpc-hello-world",   "workdir": "examples/grpc-hello-world/component-server", "image": "ghcr.io/wasmcloud/components/grpc-hello-world-server", "needs_protoc": true},
           {"key": "http-hello-world-persistent-storage", "workdir": "examples/http-hello-world-persistent-storage", "image": "ghcr.io/wasmcloud/components/http-hello-world-persistent-storage"},
+          {"key": "nats-jetstream-replay",    "workdir": "examples/nats-jetstream-replay",               "image": "ghcr.io/wasmcloud/components/nats-jetstream-replay"},
           {"key": "oci-registry",            "workdir": "examples/oci-registry",                       "image": "ghcr.io/wasmcloud/components/oci-registry"},
           {"key": "otel-config",              "workdir": "examples/otel-config",                         "image": "ghcr.io/wasmcloud/components/otel-config"},
           {"key": "qrcode",                   "workdir": "examples/qrcode",                              "image": "ghcr.io/wasmcloud/components/qrcode"}
         ]
-      # When these change, every example rebuilds.
+      # When these change, every example rebuilds. The last entry is not a
+      # CI path: `wasmcloud:nats` is unpublished, so nats-jetstream-replay
+      # resolves it from the host's own copy via a wkg.toml override rather
+      # than vendoring it. paths-filter gates each example on its own
+      # directory, so without this a change to that interface would not
+      # rebuild the example that binds it.
       shared-paths: |
         [
           ".github/actions/build-rust-component/**",
@@ -63,7 +69,8 @@ jobs:
           ".github/scripts/plan-matrix.mjs",
           ".github/scripts/coverage-matrix.mjs",
           ".github/scripts/gen-filters.mjs",
-          ".github/workflows/examples.yml"
+          ".github/workflows/examples.yml",
+          "crates/wash-runtime/wit/deps/wasmcloud-nats-0.1.0/**"
         ]
       discovery-root: examples
       # Scoped to Rust because this workflow is Rust-only — a non-Rust

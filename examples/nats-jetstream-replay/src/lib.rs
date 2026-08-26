@@ -122,7 +122,9 @@ async fn accumulate(
         let encoded = encode_total(&next);
 
         let result = if current.is_some() {
-            bucket.update(key.to_string(), encoded.clone(), revision).await
+            bucket
+                .update(key.to_string(), encoded.clone(), revision)
+                .await
         } else {
             bucket.create(key.to_string(), encoded.clone()).await
         };
@@ -173,7 +175,9 @@ impl JetstreamHandler for Component {
             println!("order {order_id} redelivered (attempt {delivery})");
         }
 
-        let bucket = kv::open(TOTALS_BUCKET.to_string()).await.map_err(|e| describe(&e))?;
+        let bucket = kv::open(TOTALS_BUCKET.to_string())
+            .await
+            .map_err(|e| describe(&e))?;
         let running = accumulate(&bucket, &order_id, amount, sequence)
             .await
             .map_err(|e| describe(&e))?;

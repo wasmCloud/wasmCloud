@@ -1,0 +1,6 @@
+# `wasmcloud:nats` is defined in-repo and not published to a registry, so
+# resolve it from the host's own copy (rather than a registry) — the example
+# then tracks the exact interface the host serves, and `wash wit fetch` works
+# from a fresh checkout with no network access to it.
+[overrides]
+"wasmcloud:nats" = { path = "../../crates/wash-runtime/wit/deps/wasmcloud-nats-0.1.0" }
