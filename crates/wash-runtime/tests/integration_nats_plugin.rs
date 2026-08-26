@@ -22,7 +22,7 @@ use tokio::time::timeout;
 use wash_runtime::{
     engine::Engine,
     host::{HostApi, HostBuilder},
-    plugin::wasmcloud_nats::{NatsDefaults, WasmcloudNats, WorkloadConfig},
+    plugin::wasmcloud_nats::{NatsBindings, WasmcloudNats, WorkloadConfig},
     types::{Component, LocalResources, Workload, WorkloadStartRequest, WorkloadState},
     wit::WitInterface,
 };
@@ -205,17 +205,17 @@ fn workload_request(workload_id: &str, interface: WitInterface) -> WorkloadStart
 }
 
 async fn start_host() -> Result<impl HostApi> {
-    start_host_with(NatsDefaults::new()).await
+    start_host_with(NatsBindings::new()).await
 }
 
 /// A host that declares its own bindings, the way `wash host` does.
-async fn start_host_with(defaults: NatsDefaults) -> Result<impl HostApi> {
+async fn start_host_with(defaults: NatsBindings) -> Result<impl HostApi> {
     let engine = Engine::builder().build()?;
     let host = HostBuilder::new()
         .with_engine(engine)
         .with_plugin(Arc::new(
             WasmcloudNats::new()
-                .with_defaults(defaults)
+                .with_bindings(defaults)
                 .with_lattice_prefixes(vec![
                     "runtime.host.".to_string(),
                     "runtime.operator.".to_string(),
@@ -1345,7 +1345,7 @@ async fn declared_bindings_serve_a_manifest_that_only_asks() -> Result<()> {
     let (leaf_url, leaf_client, _leaf) = start_bare_nats().await?;
 
     let host = start_host_with(
-        NatsDefaults::new()
+        NatsBindings::new()
             .with_workload_config(WorkloadConfig::Deny)
             .with_binding(
                 "hub",
@@ -1425,7 +1425,7 @@ async fn declared_bindings_serve_a_manifest_that_only_asks() -> Result<()> {
 async fn a_manifest_cannot_widen_a_declared_grant() -> Result<()> {
     let h = start_nats().await?;
     let host = start_host_with(
-        NatsDefaults::new()
+        NatsBindings::new()
             .with_workload_config(WorkloadConfig::Deny)
             .with_default_servers(vec![h.nats_url.clone()])
             .with_base(declared(&[("subject-allow", "test.orders.>")])),
@@ -1455,7 +1455,7 @@ async fn a_manifest_cannot_widen_a_declared_grant() -> Result<()> {
 async fn asking_for_an_undeclared_binding_fails_the_deployment() -> Result<()> {
     let (hub_url, _hub_client, _hub) = start_bare_nats().await?;
     let host = start_host_with(
-        NatsDefaults::new()
+        NatsBindings::new()
             .with_workload_config(WorkloadConfig::Deny)
             .with_binding("hub", declared(&[("servers", &hub_url)])),
     )

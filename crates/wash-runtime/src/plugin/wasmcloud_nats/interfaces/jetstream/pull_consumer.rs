@@ -13,8 +13,8 @@ use wasmtime::component::{Accessor, Resource};
 use crate::engine::ctx::{ActiveCtx, SharedCtx};
 
 use super::consumer_info_to_wit;
-use crate::plugin::wasmcloud_nats::handles::{MessageHandle, PullConsumerHandle};
 use crate::plugin::wasmcloud_nats::interfaces::{consumer_lookup_err, jetstream_err, js, types};
+use crate::plugin::wasmcloud_nats::jetstream::{MessageHandle, PullConsumerHandle};
 
 /// Clones the consumer out of its resource, so the table borrow is not held
 /// across an await — `ActiveCtx` is not `Send`.

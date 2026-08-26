@@ -9,19 +9,19 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::engine::workload::{ResolvedWorkload, UnresolvedWorkload, WorkloadItem};
 use crate::observability::Meters;
 use crate::plugin::{HostPlugin, WitInterfaces, WorkloadFailureSink, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
+use super::bindings::NatsBindings;
 use super::config::{
     self, CoreSubscriptionConfig, JetStreamSubscriptionConfig, KvWatchConfig, NatsConfig,
     parse_core_subscriptions, parse_jetstream_subscriptions, parse_kv_watches, subscription_spec,
 };
 use super::conn::{self, ConnHandle, ConnectionRegistry};
-use super::defaults::NatsDefaults;
 use super::{NATS_VERSION, PLUGIN_NATS_ID, interfaces, subscriber};
 
 /// Per-component subscription state.
@@ -44,8 +44,8 @@ pub struct WasmcloudNats {
     /// Subjects the host itself uses, denied to every workload.
     lattice_prefixes: Vec<String>,
     /// The bindings this host declares, and whether a workload may describe
-    /// its own. See [`super::defaults`].
-    defaults: NatsDefaults,
+    /// its own. See [`super::bindings`].
+    bindings: NatsBindings,
     /// How a subscriber loop tells the host its workload has died out of band —
     /// a server-side permission denial parks a subscription that deployed
     /// cleanly, and nothing else would ever move the workload off running.
@@ -65,7 +65,7 @@ impl WasmcloudNats {
             connections: Arc::new(ConnectionRegistry::default()),
             meters: Default::default(),
             lattice_prefixes: Vec::new(),
-            defaults: NatsDefaults::default(),
+            bindings: NatsBindings::default(),
             failure_sink: arc_swap::ArcSwapOption::empty(),
         }
     }
@@ -80,10 +80,10 @@ impl WasmcloudNats {
     ///
     /// A workload asks for a binding by name and the host decides what it is:
     /// which servers it dials, as whom, and what it is granted. Under
-    /// [`super::defaults::WorkloadConfig::Deny`] a manifest that describes any of that is
-    /// refused at bind — see [`super::defaults`] for the key classes and why.
-    pub fn with_defaults(mut self, defaults: NatsDefaults) -> Self {
-        self.defaults = defaults;
+    /// [`super::bindings::WorkloadConfig::Deny`] a manifest that describes any of that is
+    /// refused at bind — see [`super::bindings`] for the key classes and why.
+    pub fn with_bindings(mut self, bindings: NatsBindings) -> Self {
+        self.bindings = bindings;
         self
     }
 
@@ -110,7 +110,7 @@ impl WasmcloudNats {
             // parsing rather than after, so the resolved address is what
             // `connection_key` identifies the connection by — two bindings that
             // both fall back to the host must read as one connection, not two.
-            let merged = self.defaults.resolve(binding, merged).with_context(|| {
+            let merged = self.bindings.resolve(binding, merged).with_context(|| {
                 format!(
                     "wasmcloud:nats binding `{}` of workload `{workload_id}` cannot be opened",
                     describe_binding(binding)
@@ -213,6 +213,17 @@ impl WasmcloudNats {
                 server_version = handle.server_version(),
                 "opened NATS connection"
             );
+            // The grant, which decides every later denial. Never the merged
+            // map itself: it carries creds, tokens and passwords.
+            debug!(
+                workload_id,
+                binding = describe_binding(binding),
+                subject_allow = config.policy.subject_allow.join(","),
+                stream_allow = config.policy.stream_allow.join(","),
+                bucket_allow = config.policy.bucket_allow.join(","),
+                inbox_prefix = config.inbox_prefix.as_deref().unwrap_or_default(),
+                "wasmcloud:nats binding grant"
+            );
         }
 
         Ok(())
@@ -233,7 +244,7 @@ impl WasmcloudNats {
         core_subs: Vec<CoreSubscriptionConfig>,
         kv_watches: Vec<KvWatchConfig>,
         cancel_token: tokio_util::sync::CancellationToken,
-        fuel_meter: crate::observability::FuelConsumptionMeter,
+        execution_meter: crate::observability::ExecutionTimeMeter,
     ) -> anyhow::Result<()> {
         let workload_id = workload.id();
         let Some(handle) = self.connections.get_named(workload_id, binding).await else {
@@ -297,6 +308,16 @@ impl WasmcloudNats {
             .load_full()
             .map(|sink| sink.as_ref().clone());
 
+        debug!(
+            workload_id,
+            component_id,
+            binding = describe_binding(binding),
+            jetstream_subscriptions = jetstream_subs.len(),
+            core_subscriptions = core_subs.len(),
+            kv_watches = kv_watches.len(),
+            "starting wasmcloud:nats subscriptions"
+        );
+
         if !jetstream_subs.is_empty() {
             subscriber::spawn_jetstream_subscriptions(
                 workload,
@@ -304,7 +325,7 @@ impl WasmcloudNats {
                 handle.clone(),
                 jetstream_subs,
                 cancel_token.clone(),
-                fuel_meter.clone(),
+                execution_meter.clone(),
                 failure_sink.clone(),
                 workload_id,
             )
@@ -317,7 +338,7 @@ impl WasmcloudNats {
                 handle.clone(),
                 core_subs,
                 cancel_token.clone(),
-                fuel_meter.clone(),
+                execution_meter.clone(),
                 failure_sink.clone(),
                 workload_id,
             )
@@ -330,7 +351,7 @@ impl WasmcloudNats {
                 handle,
                 kv_watches,
                 cancel_token,
-                fuel_meter,
+                execution_meter,
                 failure_sink,
                 workload_id,
             )
@@ -488,6 +509,15 @@ impl HostPlugin for WasmcloudNats {
         // task alive until the host restarts, and the next deploy under the
         // same workload id is then refused for conflicting with a connection
         // nothing is using.
+        debug!(
+            workload_id,
+            bindings = bindings
+                .iter()
+                .map(|(binding, _)| describe_binding(binding))
+                .collect::<Vec<_>>()
+                .join(","),
+            "opening wasmcloud:nats bindings"
+        );
         let mut opened = false;
         let result = self.open_bindings(workload_id, bindings, &mut opened).await;
         if result.is_err() && opened {
@@ -725,7 +755,7 @@ impl HostPlugin for WasmcloudNats {
             return Ok(());
         }
 
-        let fuel_meter = self.meters.read().await.fuel_consumption.clone();
+        let execution_meter = self.meters.read().await.execution_time.clone();
 
         // Subscriptions run on the binding they were declared on: two named
         // bindings mean two connections, two grants, and two sets of loops
@@ -763,7 +793,7 @@ impl HostPlugin for WasmcloudNats {
                 core_subs,
                 kv_watches,
                 cancel_token.clone(),
-                fuel_meter.clone(),
+                execution_meter.clone(),
             )
             .await?;
         }
@@ -787,6 +817,10 @@ impl HostPlugin for WasmcloudNats {
             .await;
 
         self.connections.release(workload_id).await;
+        debug!(
+            workload_id,
+            "released every wasmcloud:nats connection and cancelled its subscriptions"
+        );
         Ok(())
     }
 
@@ -1018,8 +1052,8 @@ mod tests {
     /// attempt rather than the missing-`servers` refusal.
     #[tokio::test]
     async fn the_host_declaration_reaches_open_bindings() {
-        let plugin = WasmcloudNats::new().with_defaults(
-            NatsDefaults::new().with_default_servers(vec!["nats://host:4222".to_string()]),
+        let plugin = WasmcloudNats::new().with_bindings(
+            NatsBindings::new().with_default_servers(vec!["nats://host:4222".to_string()]),
         );
         let mut opened = false;
         let merged = HashMap::from([("subject-allow".to_string(), "orders.>".to_string())]);
@@ -1040,8 +1074,8 @@ mod tests {
     /// binding it came from.
     #[tokio::test]
     async fn a_refused_workload_key_fails_the_bind() {
-        let plugin = WasmcloudNats::new().with_defaults(
-            NatsDefaults::new()
+        let plugin = WasmcloudNats::new().with_bindings(
+            NatsBindings::new()
                 .with_workload_config(WorkloadConfig::Deny)
                 .with_default_servers(vec!["nats://host:4222".to_string()])
                 .with_binding(

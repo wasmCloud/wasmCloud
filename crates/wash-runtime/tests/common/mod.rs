@@ -283,15 +283,14 @@ pub async fn start_host_with_dev_router(
 
 /// Start a host with a "DynamicRouter" backed HTTP server and the standard
 /// plugin set.
-/// Start a host with fuel metering on, the way `wash host --enable-meters`
-/// does: the engine consumes fuel and the plugins carry a real
-/// `FuelConsumptionMeter`.
+/// Start a host with metering on, the way `wash host --enable-meters` does:
+/// the plugins carry a real `ExecutionTimeMeter`, which samples the epoch
+/// callback rather than consuming fuel.
 ///
-/// A store on a fuel-enabled engine starts at **zero** fuel, and instantiation
-/// runs guest code — so this configuration is what catches a path that never
-/// gives a store a budget.
+/// Every call then runs inside `ExecutionTimeMeter::observe`, so this is the
+/// configuration that catches a dispatch path the metering wrapper breaks.
 pub async fn start_host_with_meters(addr: &str) -> Result<(std::net::SocketAddr, impl HostApi)> {
-    let engine = Engine::builder().with_fuel_consumption(true).build()?;
+    let engine = Engine::builder().build()?;
     let ingress = Ingress::new(DevRouter::default(), addr.parse()?).await?;
     let bound_addr = ingress.addr();
     let host = with_standard_plugins(
@@ -300,6 +299,26 @@ pub async fn start_host_with_meters(addr: &str) -> Result<(std::net::SocketAddr,
             .with_http_handler(Arc::new(ingress)),
     )?
     .with_meters(wash_runtime::observability::Meters::new(true))
+    .build()?;
+    let host = host.start().await.context("Failed to start host")?;
+    Ok((bound_addr, host))
+}
+
+/// Start a host on a fuel-enabled engine. Nothing in the host asks for fuel any
+/// more, but `EngineBuilder::with_fuel_consumption` is still public.
+///
+/// A store on such an engine starts at **zero** fuel and instantiation runs
+/// guest code, so this configuration is what catches a store-building path that
+/// never primes one.
+pub async fn start_host_with_fuel(addr: &str) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    let engine = Engine::builder().with_fuel_consumption(true).build()?;
+    let ingress = Ingress::new(DevRouter::default(), addr.parse()?).await?;
+    let bound_addr = ingress.addr();
+    let host = with_standard_plugins(
+        HostBuilder::new()
+            .with_engine(engine)
+            .with_http_handler(Arc::new(ingress)),
+    )?
     .build()?;
     let host = host.start().await.context("Failed to start host")?;
     Ok((bound_addr, host))

@@ -10,8 +10,8 @@ use wasmtime::component::{Accessor, Resource};
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx};
 
-use crate::plugin::wasmcloud_nats::handles::MessageHandle;
 use crate::plugin::wasmcloud_nats::interfaces::{build_nats_message, jetstream_err, js, types};
+use crate::plugin::wasmcloud_nats::jetstream::MessageHandle;
 
 /// Reported when a guest settles a message the host already owns.
 fn already_settled() -> types::NatsError {

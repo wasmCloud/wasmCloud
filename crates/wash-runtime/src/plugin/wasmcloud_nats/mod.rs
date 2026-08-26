@@ -5,16 +5,17 @@
 //! in `config`, and the long-lived subscription loops it spawns are in
 //! `subscriber`.
 
+pub mod bindings;
 pub(super) mod config;
 pub(super) mod conn;
-pub mod defaults;
-pub(super) mod handles;
 pub(super) mod interfaces;
+pub(super) mod jetstream;
+pub(super) mod macros;
 mod plugin;
 pub(super) mod policy;
 mod subscriber;
 
-pub use defaults::{NatsDefaults, WorkloadConfig};
+pub use bindings::{NatsBindings, WorkloadConfig};
 pub use plugin::{ComponentData, WasmcloudNats};
 
 // Handler worlds. Each lives in its own module so their duplicate import types
@@ -27,8 +28,8 @@ pub(super) mod jetstream_bindings {
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
         with: {
-            "wasmcloud:nats/jetstream@0.1.0.message-handle": super::handles::MessageHandle,
-            "wasmcloud:nats/jetstream@0.1.0.pull-consumer": super::handles::PullConsumerHandle,
+            "wasmcloud:nats/jetstream@0.1.0.message-handle": super::jetstream::MessageHandle,
+            "wasmcloud:nats/jetstream@0.1.0.pull-consumer": super::jetstream::PullConsumerHandle,
         },
     });
 }
@@ -47,7 +48,7 @@ pub(super) mod kv_bindings {
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
         with: {
-            "wasmcloud:nats/kv@0.1.0.bucket": super::handles::BucketHandle,
+            "wasmcloud:nats/kv@0.1.0.bucket": super::jetstream::BucketHandle,
         },
     });
 }

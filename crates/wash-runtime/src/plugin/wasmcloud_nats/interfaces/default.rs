@@ -11,7 +11,7 @@ use wasmtime::component::{Accessor, Resource};
 use crate::engine::ctx::SharedCtx;
 
 use super::{conn_or_return, core, js, kv, labeled_core, labeled_js, labeled_kv, types};
-use crate::plugin::wasmcloud_nats::handles::{BucketHandle, PullConsumerHandle};
+use crate::plugin::wasmcloud_nats::jetstream::{BucketHandle, PullConsumerHandle};
 
 impl<T: 'static + Send> core::HostWithStore<T> for SharedCtx {
     async fn publish(

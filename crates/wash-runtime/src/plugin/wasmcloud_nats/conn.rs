@@ -163,6 +163,11 @@ pub const UNNAMED_BINDING: &str = "";
 /// All connections the plugin holds, partitioned by workload.
 #[derive(Default)]
 pub struct ConnectionRegistry {
+    /// Keyed by the host's workload id — the opaque string
+    /// `WorkloadStartRequest::workload_id` carries, such as
+    /// `"3f2b1c4e-9a7d-4f10-8b55-0c1d2e3f4a5b"` under `wash dev` or
+    /// `"default/orders-api"` for an operator-managed workload. Never a
+    /// component id: every component of a workload shares its connections.
     workloads: RwLock<HashMap<String, WorkloadConns>>,
 }
 
@@ -290,7 +295,7 @@ fn handle_nats_event(
                     subject = %subject,
                     "NATS server denied SUB permission; this subscription will never deliver"
                 );
-                let _ = denials.send(subject);
+                let _ = denials.send(subject.to_string());
                 return;
             }
             warn!(%err, "NATS server error")
@@ -304,14 +309,17 @@ fn handle_nats_event(
 /// nats-server sends `Permissions Violation for Subscription to "orders.new"`,
 /// optionally followed by ` using queue "workers"`. Anything else — including
 /// the publish-side violation, which is a different failure — returns `None`.
-fn denied_subscription_subject(text: &str) -> Option<String> {
+///
+/// Borrowed from `text`, so a caller that only logs the subject never allocates
+/// one.
+fn denied_subscription_subject(text: &str) -> Option<&str> {
     let lower = text.to_ascii_lowercase();
     if !lower.contains("permissions violation for subscription") {
         return None;
     }
     let mut quoted = text.split('"');
     quoted.next()?;
-    quoted.next().map(str::to_string)
+    quoted.next()
 }
 
 /// Derives the per-workload inbox prefix.
@@ -599,15 +607,13 @@ mod tests {
         assert_eq!(
             denied_subscription_subject(
                 r#"Permissions Violation for Subscription to "internal.events""#
-            )
-            .as_deref(),
+            ),
             Some("internal.events")
         );
         assert_eq!(
             denied_subscription_subject(
                 r#"Permissions Violation for Subscription to "_nats_push.>" using queue "workers""#
-            )
-            .as_deref(),
+            ),
             Some("_nats_push.>")
         );
         // The publish-side violation is a different failure and is not routed here.

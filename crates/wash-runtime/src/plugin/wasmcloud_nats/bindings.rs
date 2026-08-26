@@ -104,7 +104,7 @@ impl WorkloadConfig {
 /// same code, so an operator cannot write a value the manifest parser would
 /// have rejected.
 #[derive(Debug, Clone, Default)]
-pub struct NatsDefaults {
+pub struct NatsBindings {
     base: HashMap<String, String>,
     bindings: BTreeMap<String, HashMap<String, String>>,
     workload_config: WorkloadConfig,
@@ -119,7 +119,7 @@ fn canonicalize(config: HashMap<String, String>) -> HashMap<String, String> {
         .collect()
 }
 
-impl NatsDefaults {
+impl NatsBindings {
     /// Host configuration that describes nothing and denies nothing: every
     /// binding is exactly what its workload's manifest says.
     pub fn new() -> Self {
@@ -313,8 +313,8 @@ mod tests {
     /// and inherits the host's address.
     #[test]
     fn a_binding_without_servers_falls_back_to_the_host() {
-        let defaults = NatsDefaults::new().with_default_servers(vec!["nats://host:4222".into()]);
-        let resolved = defaults
+        let bindings = NatsBindings::new().with_default_servers(vec!["nats://host:4222".into()]);
+        let resolved = bindings
             .resolve(UNNAMED_BINDING, map(&[("subject-allow", "orders.>")]))
             .expect("the host default satisfies the binding");
         assert_eq!(
@@ -327,8 +327,8 @@ mod tests {
     /// that runs under `wash dev` keeps working.
     #[test]
     fn allow_lets_a_workload_override_the_host() {
-        let defaults = NatsDefaults::new().with_default_servers(vec!["nats://host:4222".into()]);
-        let resolved = defaults
+        let bindings = NatsBindings::new().with_default_servers(vec!["nats://host:4222".into()]);
+        let resolved = bindings
             .resolve(
                 UNNAMED_BINDING,
                 map(&[("servers", "nats://elsewhere:4222")]),
@@ -345,8 +345,8 @@ mod tests {
     /// nothing on its own.
     #[test]
     fn the_host_default_carries_no_grant() {
-        let defaults = NatsDefaults::new().with_default_servers(vec!["nats://host:4222".into()]);
-        let resolved = defaults.resolve(UNNAMED_BINDING, HashMap::new()).unwrap();
+        let bindings = NatsBindings::new().with_default_servers(vec!["nats://host:4222".into()]);
+        let resolved = bindings.resolve(UNNAMED_BINDING, HashMap::new()).unwrap();
         for key in GRANT_KEYS {
             assert!(
                 !resolved.contains_key(*key),
@@ -359,7 +359,7 @@ mod tests {
     /// workload supplies none.
     #[test]
     fn deny_serves_the_hosts_declaration() {
-        let defaults = NatsDefaults::new()
+        let bindings = NatsBindings::new()
             .with_workload_config(WorkloadConfig::Deny)
             .with_default_servers(vec!["nats://host:4222".into()])
             .with_binding(
@@ -371,7 +371,7 @@ mod tests {
                 ]),
             );
 
-        let resolved = defaults
+        let resolved = bindings
             .resolve(
                 "orders",
                 map(&[("subscriptions", "ORDERS:orders.received:all")]),
@@ -397,10 +397,10 @@ mod tests {
     /// host's own configuration meant that address.
     #[test]
     fn the_default_address_does_not_clobber_the_operators() {
-        let defaults = NatsDefaults::new()
+        let bindings = NatsBindings::new()
             .with_base(map(&[("servers", "nats://declared:4222")]))
             .with_default_servers(vec!["nats://flag:4222".into()]);
-        let resolved = defaults.resolve(UNNAMED_BINDING, HashMap::new()).unwrap();
+        let resolved = bindings.resolve(UNNAMED_BINDING, HashMap::new()).unwrap();
         assert_eq!(
             resolved.get("servers").map(String::as_str),
             Some("nats://declared:4222")
@@ -410,7 +410,7 @@ mod tests {
     /// A named binding layers over the base rather than replacing it.
     #[test]
     fn a_named_binding_layers_over_the_base() {
-        let defaults = NatsDefaults::new()
+        let bindings = NatsBindings::new()
             .with_workload_config(WorkloadConfig::Deny)
             .with_base(map(&[
                 ("servers", "nats://host:4222"),
@@ -418,7 +418,7 @@ mod tests {
             ]))
             .with_binding("orders", map(&[("creds", "/etc/orders.creds")]));
 
-        let resolved = defaults.resolve("orders", HashMap::new()).unwrap();
+        let resolved = bindings.resolve("orders", HashMap::new()).unwrap();
         assert_eq!(
             resolved.get("servers").map(String::as_str),
             Some("nats://host:4222")
@@ -433,12 +433,12 @@ mod tests {
     /// A workload cannot widen its own grant.
     #[test]
     fn deny_refuses_a_workloads_grant() {
-        let defaults = NatsDefaults::new()
+        let bindings = NatsBindings::new()
             .with_workload_config(WorkloadConfig::Deny)
             .with_default_servers(vec!["nats://host:4222".into()])
             .with_binding("orders", map(&[("subject-allow", "orders.processed")]));
 
-        let err = defaults
+        let err = bindings
             .resolve("orders", map(&[("subject-allow", "orders.>")]))
             .expect_err("a manifest may not grant itself subjects");
         let msg = err.to_string();
@@ -451,7 +451,7 @@ mod tests {
     /// Nor point itself at another cluster, nor connect as someone else.
     #[test]
     fn deny_refuses_a_workloads_connection_settings() {
-        let defaults = NatsDefaults::new()
+        let bindings = NatsBindings::new()
             .with_workload_config(WorkloadConfig::Deny)
             .with_default_servers(vec!["nats://host:4222".into()]);
 
@@ -463,7 +463,7 @@ mod tests {
             "tls-ca",
             "inbox-prefix",
         ] {
-            defaults
+            bindings
                 .resolve(UNNAMED_BINDING, map(&[(key, "value")]))
                 .unwrap_err();
         }
@@ -473,12 +473,12 @@ mod tests {
     /// empty grant discovered one denied call at a time.
     #[test]
     fn deny_refuses_an_undeclared_binding() {
-        let defaults = NatsDefaults::new()
+        let bindings = NatsBindings::new()
             .with_workload_config(WorkloadConfig::Deny)
             .with_default_servers(vec!["nats://host:4222".into()])
             .with_binding("orders", map(&[("subject-allow", "orders.>")]));
 
-        let err = defaults
+        let err = bindings
             .resolve("shipments", HashMap::new())
             .expect_err("the host serves no `shipments`");
         let msg = err.to_string();
@@ -493,11 +493,11 @@ mod tests {
     /// `subject_allow` too.
     #[test]
     fn deny_reads_both_spellings() {
-        let defaults = NatsDefaults::new()
+        let bindings = NatsBindings::new()
             .with_workload_config(WorkloadConfig::Deny)
             .with_default_servers(vec!["nats://host:4222".into()]);
 
-        defaults
+        bindings
             .resolve(UNNAMED_BINDING, map(&[("subject_allow", "orders.>")]))
             .expect_err("the snake_case spelling is the same grant");
     }
@@ -506,7 +506,7 @@ mod tests {
     /// it is refused where it is written.
     #[test]
     fn validate_refuses_a_host_wide_inbox_prefix() {
-        let err = NatsDefaults::new()
+        let err = NatsBindings::new()
             .with_base(map(&[
                 ("servers", "nats://host:4222"),
                 ("inbox-prefix", "_INBOX_shared"),
@@ -519,7 +519,7 @@ mod tests {
         );
 
         // Per binding it is safe: a binding belongs to one workload.
-        NatsDefaults::new()
+        NatsBindings::new()
             .with_base(map(&[("servers", "nats://host:4222")]))
             .with_binding("orders", map(&[("inbox-prefix", "_INBOX_orders")]))
             .validate()
@@ -530,7 +530,7 @@ mod tests {
     /// first workload that asks for it.
     #[test]
     fn validate_rejects_a_bad_declaration() {
-        let err = NatsDefaults::new()
+        let err = NatsBindings::new()
             .with_default_servers(vec!["nats://host:4222".into()])
             .with_binding("orders", map(&[("ack-mode", "sometimes")]))
             .validate()
@@ -545,7 +545,7 @@ mod tests {
     /// the same reason.
     #[test]
     fn validate_rejects_a_binding_with_no_servers() {
-        NatsDefaults::new()
+        NatsBindings::new()
             .with_binding("orders", map(&[("subject-allow", "orders.>")]))
             .validate()
             .expect_err("a declared binding needs an address");

@@ -11,6 +11,8 @@ use tracing_subscriber::{
     EnvFilter, Layer, Registry, filter::Directive, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
+use crate::engine::ctx::SharedCtx;
+
 /// Initialize observability, setting up console & OpenTelemetry layers.
 ///
 /// Returns a shutdown function that should be called on process exit to flush any remaining spans/logs
@@ -153,7 +155,7 @@ fn directive(directive: impl AsRef<str>) -> anyhow::Result<Directive> {
 
 #[derive(Clone, Default)]
 pub struct Meters {
-    pub fuel_consumption: FuelConsumptionMeter,
+    pub execution_time: ExecutionTimeMeter,
     /// User-defined meters
     pub meters: HashMap<String, Arc<dyn Any + Send + Sync + 'static>>,
 }
@@ -161,63 +163,80 @@ pub struct Meters {
 impl Meters {
     pub fn new(enabled: bool) -> Self {
         Self {
-            fuel_consumption: FuelConsumptionMeter::new(enabled),
+            execution_time: ExecutionTimeMeter::new(enabled),
             meters: Default::default(),
         }
     }
 }
 
+/// Reports how long a call ran guest code, in milliseconds.
+///
+/// Sampled by the epoch callback every store arms anyway
+/// ([`crate::engine::abandon::GuestExecution`]), so metering costs nothing at
+/// runtime. This replaced a fuel meter, whose per-block counters are compiled
+/// into the guest and slow it down whether or not anyone is watching.
+///
+/// The trade is resolution, and it only ever undercounts: a call whose guest
+/// runs for less than one sampling window is never sampled and records **0**.
+/// Read the histogram as "calls that burned at least a window of guest
+/// execution", not as a CPU total — a host serving nothing but short calls
+/// reports zero and is not idle. `GuestExecution`'s docs have the rest,
+/// including why a store serving concurrent calls attributes their execution
+/// to each other.
 #[derive(Clone, Default)]
-pub struct FuelConsumptionMeter {
+pub struct ExecutionTimeMeter {
     hist: Option<opentelemetry::metrics::Histogram<u64>>,
 }
 
-impl FuelConsumptionMeter {
+impl ExecutionTimeMeter {
     pub(crate) fn new(enabled: bool) -> Self {
         let hist = enabled.then(|| {
             opentelemetry::global::meter("wash-runtime")
-                .u64_histogram("fuel.consumption")
+                .u64_histogram("guest.execution.time")
                 .with_description(
-                    "Measure fuel consumption for components that export host plugin interfaces",
+                    "Guest execution time for components that export host plugin interfaces, \
+                     sampled from the engine's epoch callback",
                 )
-                .with_boundaries(fuel_histogram_boundaries())
+                .with_unit("ms")
+                .with_boundaries(execution_time_histogram_boundaries())
                 .build()
         });
         Self { hist }
     }
 
-    pub async fn observe<T, F, R>(
+    pub async fn observe<F, R>(
         &self,
         attributes: &[KeyValue],
-        store: &mut wasmtime::Store<T>,
+        store: &mut wasmtime::Store<SharedCtx>,
         func: F,
     ) -> anyhow::Result<R>
     where
-        F: AsyncFnOnce(&mut wasmtime::Store<T>) -> anyhow::Result<R>,
+        F: AsyncFnOnce(&mut wasmtime::Store<SharedCtx>) -> anyhow::Result<R>,
     {
-        if let Some(fuel_meter) = &self.hist {
-            store.set_fuel(u64::MAX)?;
-            let result = func(store).await?;
-            let consumed_fuel = u64::MAX - store.get_fuel()?;
-            fuel_meter.record(consumed_fuel, attributes);
-
-            Ok(result)
-        } else {
-            func(store).await
-        }
+        let Some(hist) = &self.hist else {
+            return func(store).await;
+        };
+        // Cloned out rather than re-read after the call: `func` takes the
+        // store, and the counter is shared with the callback either way.
+        let executed = Arc::clone(&store.data().executed);
+        let before = executed.millis();
+        let result = func(store).await?;
+        hist.record(executed.millis().saturating_sub(before), attributes);
+        Ok(result)
     }
 }
 
-/// Generate histogram boundaries for fuel consumption metrics.
+/// Generate histogram boundaries for guest execution time, in milliseconds.
 ///
 /// Produces boundaries following multipliers [1, 2.5, 5, 7.5] per decade,
-/// starting at 50,000 up to a u64::MAX
-fn fuel_histogram_boundaries() -> Vec<f64> {
-    const MAX: f64 = u64::MAX as f64;
+/// starting at one sampling window — below which every call records zero, so
+/// finer buckets would only split the zero bucket — up to an hour.
+fn execution_time_histogram_boundaries() -> Vec<f64> {
+    const MAX: f64 = 3_600_000.0;
     const MULTIPLIERS: [f64; 4] = [1.0, 2.5, 5.0, 7.5];
 
     let mut boundaries = vec![0.0];
-    let mut base = 50_000.0;
+    let mut base = crate::engine::abandon::sampling_window().as_millis() as f64;
     loop {
         for &m in &MULTIPLIERS {
             let value = base * m;
