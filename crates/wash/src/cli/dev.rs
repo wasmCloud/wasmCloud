@@ -74,9 +74,10 @@ impl CliCommand for DevCommand {
             .clone()
             .unwrap_or_else(|| "0.0.0.0:8000".to_string());
 
-        let mut engine_builder = Engine::builder()
-            .with_pooling_allocator(true)
-            .with_fuel_consumption(ctx.enable_meters());
+        // No fuel: `--enable-meters` reports guest execution time, sampled
+        // from the epoch callback the engine arms anyway, so metering costs
+        // the guest nothing. See `observability::ExecutionTimeMeter`.
+        let mut engine_builder = Engine::builder().with_pooling_allocator(true);
         for name in &dev_config.wasm_proposals {
             let proposal: WasmProposal = name
                 .parse()
@@ -164,10 +165,10 @@ impl CliCommand for DevCommand {
         // to stay runnable on its own, and the operator boundary `wash host`
         // enforces has no one to enforce it for here. With no URL configured
         // there is no default, and a binding must name its own servers.
-        let nats_defaults = {
+        let nats_bindings = {
             let declared = match &dev_config.wasmcloud_nats {
-                Some(nats) => nats.to_defaults(&config, project_dir, Some(project_dir))?,
-                None => plugin::wasmcloud_nats::NatsDefaults::new(),
+                Some(nats) => nats.to_bindings(&config, project_dir, Some(project_dir))?,
+                None => plugin::wasmcloud_nats::NatsBindings::new(),
             };
             let url = dev_config
                 .wasmcloud_nats_url
@@ -181,12 +182,12 @@ impl CliCommand for DevCommand {
             declared
         };
         debug!(
-            bindings = nats_defaults.binding_names().join(","),
+            bindings = nats_bindings.binding_names().join(","),
             "wasmcloud:nats plugin registered"
         );
         host_builder = host_builder.with_plugin(Arc::new(
             plugin::wasmcloud_nats::WasmcloudNats::new()
-                .with_defaults(nats_defaults)
+                .with_bindings(nats_bindings)
                 .with_lattice_prefixes(vec![
                     format!("{}.", wash_runtime::washlet::HOST_API_PREFIX),
                     format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),

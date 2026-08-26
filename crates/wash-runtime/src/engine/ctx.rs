@@ -80,6 +80,10 @@ pub struct SharedCtx {
     /// The in-flight calls on this store whose dispatchers may abandon them;
     /// read by the store's epoch callback. See [`crate::engine::abandon`].
     pub abandoned: Arc<crate::engine::abandon::AbandonedCalls>,
+    /// Guest execution on this store, sampled by the same epoch callback and
+    /// reported by [`crate::observability::ExecutionTimeMeter`]. Read its docs
+    /// before reading the number: it is a floor, not a total.
+    pub executed: Arc<crate::engine::abandon::GuestExecution>,
 }
 
 /// The identity of whoever is invoking a host component plugin, used to
@@ -105,6 +109,7 @@ impl SharedCtx {
             exporter_instances: Default::default(),
             resource_registry: None,
             abandoned: Arc::default(),
+            executed: Arc::default(),
         }
     }
 

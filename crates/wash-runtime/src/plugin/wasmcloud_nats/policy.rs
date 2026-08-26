@@ -35,9 +35,9 @@ const BUCKET_BACKING_STREAM_PREFIXES: &[&str] = &["KV_", "OBJ_"];
 /// Compiled per-workload grant.
 #[derive(Debug, Clone)]
 pub struct PolicyEngine {
-    subject_allow: Vec<Pattern>,
-    stream_allow: Vec<Pattern>,
-    bucket_allow: Vec<Pattern>,
+    subject_allow: Vec<NatsSubjectPattern>,
+    stream_allow: Vec<NatsSubjectPattern>,
+    bucket_allow: Vec<NatsSubjectPattern>,
     /// Lattice subjects to deny when the host is lattice-connected.
     lattice_prefixes: Vec<String>,
 }
@@ -59,7 +59,7 @@ enum Token {
     Any,
 }
 
-impl Pattern {
+impl NatsSubjectPattern {
     fn parse(raw: &str) -> Self {
         let mut tokens = Vec::new();
         let mut trailing = false;
@@ -114,7 +114,7 @@ impl Pattern {
     ///
     /// This is set containment, not matching: a grant of `orders.*` does not
     /// contain a subscription to `orders.>`, because `>` reaches deeper.
-    fn contains(&self, other: &Pattern) -> bool {
+    fn contains(&self, other: &NatsSubjectPattern) -> bool {
         if !self.valid || !other.valid {
             return false;
         }
@@ -153,14 +153,14 @@ impl Pattern {
     }
 }
 
-impl Pattern {
+impl NatsSubjectPattern {
     /// True when some concrete subject is matched by both patterns.
     ///
     /// Containment asks whether one grant swallows another; this asks only
     /// whether they touch, which is the right question for a deny list: a
     /// subscription must be refused if *any* subject it could receive lies in
     /// reserved space, even when most of what it covers is fine.
-    fn overlaps(&self, other: &Pattern) -> bool {
+    fn overlaps(&self, other: &NatsSubjectPattern) -> bool {
         if !self.valid || !other.valid {
             return false;
         }
@@ -201,7 +201,7 @@ pub enum Denied {
 /// prefix spans more than one token: `runtime.>` and `runtime.*.>` both reach
 /// into `runtime.host.` while sharing no head with it. The test is instead
 /// whether the requested pattern and the reserved space have any concrete
-/// subject in common — see [`Pattern::overlaps`].
+/// subject in common — see [`NatsSubjectPattern::overlaps`].
 fn reaches_reserved(pattern: &str, lattice_prefixes: &[String]) -> bool {
     let first = pattern.split('.').next().unwrap_or_default();
     // A leading wildcard reaches every reserved space at once.
@@ -215,12 +215,12 @@ fn reaches_reserved(pattern: &str, lattice_prefixes: &[String]) -> bool {
     if first.starts_with(INBOX_TOKEN_PREFIX) {
         return true;
     }
-    let requested = Pattern::parse(pattern);
-    RESERVED
+    let requested = NatsSubjectPattern::parse(pattern);
+    RESERVED_SUBJECT_PREFIXES
         .iter()
         .copied()
         .chain(lattice_prefixes.iter().map(String::as_str))
-        .any(|prefix| requested.overlaps(&Pattern::parse(&format!("{prefix}>"))))
+        .any(|prefix| requested.overlaps(&NatsSubjectPattern::parse(&format!("{prefix}>"))))
 }
 
 impl PolicyEngine {
@@ -229,17 +229,17 @@ impl PolicyEngine {
             subject_allow: spec
                 .subject_allow
                 .iter()
-                .map(|s| Pattern::parse(s))
+                .map(|s| NatsSubjectPattern::parse(s))
                 .collect(),
             stream_allow: spec
                 .stream_allow
                 .iter()
-                .map(|s| Pattern::parse(s))
+                .map(|s| NatsSubjectPattern::parse(s))
                 .collect(),
             bucket_allow: spec
                 .bucket_allow
                 .iter()
-                .map(|s| Pattern::parse(s))
+                .map(|s| NatsSubjectPattern::parse(s))
                 .collect(),
             lattice_prefixes,
         }
@@ -247,7 +247,7 @@ impl PolicyEngine {
 
     /// True when the subject is reserved or belongs to the host itself.
     fn is_reserved(&self, subject: &str) -> bool {
-        RESERVED
+        RESERVED_SUBJECT_PREFIXES
             .iter()
             .any(|prefix| subject.starts_with(prefix) || subject == prefix.trim_end_matches('.'))
             || self
@@ -294,7 +294,7 @@ impl PolicyEngine {
         if self.is_reserved(pattern) || reaches_reserved(pattern, &self.lattice_prefixes) {
             return Err(Denied::Reserved);
         }
-        let requested = Pattern::parse(pattern);
+        let requested = NatsSubjectPattern::parse(pattern);
         if self.subject_allow.iter().any(|g| g.contains(&requested)) {
             Ok(())
         } else {
@@ -310,7 +310,7 @@ impl PolicyEngine {
     /// can. Running it through the reserved check would make
     /// `subscriptions: STREAM:>` undeployable under any grant.
     pub fn check_filter(&self, filter: &str) -> Result<(), Denied> {
-        let requested = Pattern::parse(filter);
+        let requested = NatsSubjectPattern::parse(filter);
         if self.subject_allow.iter().any(|g| g.contains(&requested)) {
             Ok(())
         } else {

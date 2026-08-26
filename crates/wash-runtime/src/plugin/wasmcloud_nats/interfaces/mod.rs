@@ -58,9 +58,9 @@ pub(super) mod bindings {
             "wasmcloud:nats/kv@0.1.0": super::NatsId,
         },
         with: {
-            "wasmcloud:nats/jetstream@0.1.0.message-handle": super::super::handles::MessageHandle,
-            "wasmcloud:nats/jetstream@0.1.0.pull-consumer": super::super::handles::PullConsumerHandle,
-            "wasmcloud:nats/kv@0.1.0.bucket": super::super::handles::BucketHandle,
+            "wasmcloud:nats/jetstream@0.1.0.message-handle": super::super::jetstream::MessageHandle,
+            "wasmcloud:nats/jetstream@0.1.0.pull-consumer": super::super::jetstream::PullConsumerHandle,
+            "wasmcloud:nats/kv@0.1.0.bucket": super::super::jetstream::BucketHandle,
         },
     });
 }
@@ -173,7 +173,7 @@ fn jetstream_err(ctx: impl std::fmt::Display, e: impl std::fmt::Display) -> type
 
 // The 0.2.0 twins of the shared error classifiers, over this revision's
 // generated `types`. One body, two revisions — see the macro's own docs.
-super::handles::nats_error_classifiers!();
+super::macros::nats_error_classifiers!();
 
 /// Converts guest headers, rejecting anything async-nats would assert on.
 fn wit_headers_to_nats(

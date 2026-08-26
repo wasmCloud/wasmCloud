@@ -275,20 +275,36 @@ struct ExecutionCredit {
     last_fire: Option<u64>,
 }
 
+/// What one fire of the epoch callback proved, seen by the two things that
+/// read it.
+struct Fire {
+    /// Execution this fire alone proves, capped at one sampling window: what
+    /// [`GuestExecution`] adds to its running total.
+    executed_millis: u64,
+    /// Execution credited since the store was last not wanted back: what the
+    /// abandonment check tests against its grace.
+    credited_millis: u64,
+}
+
 impl ExecutionCredit {
-    /// Record a fire and return the credit accumulated so far, in
-    /// milliseconds.
-    fn observe(&mut self, now: u64) -> u64 {
+    /// Record a fire, in milliseconds.
+    fn observe(&mut self, now: u64) -> Fire {
         let gap = self.last_fire.map_or(0, |last| now.saturating_sub(last));
-        if gap > reset_threshold_millis() {
+        // A gap only a real pause explains proves nothing about execution, so
+        // it neither meters nor keeps what came before it.
+        let executed_millis = if gap > reset_threshold_millis() {
             self.credited_millis = 0;
+            0
         } else {
-            self.credited_millis = self
-                .credited_millis
-                .saturating_add(gap.min(EXECUTION_WINDOW_MS));
-        }
+            let executed = gap.min(EXECUTION_WINDOW_MS);
+            self.credited_millis = self.credited_millis.saturating_add(executed);
+            executed
+        };
         self.last_fire = Some(now);
-        self.credited_millis
+        Fire {
+            executed_millis,
+            credited_millis: self.credited_millis,
+        }
     }
 
     /// Clear the credit: the store is not wanted back right now, so whatever
@@ -298,10 +314,55 @@ impl ExecutionCredit {
     }
 }
 
+/// Guest execution on one store since it was built, in milliseconds, sampled
+/// by the store's epoch callback.
+///
+/// Read as a delta across a call, this is what
+/// [`crate::observability::ExecutionTimeMeter`] reports — it replaced fuel,
+/// whose per-block counters are compiled into the guest and cost throughput
+/// even when nothing is metered. This is free: the callback the samples come
+/// from is armed on every store anyway, for the teardown this module exists
+/// for.
+///
+/// What it costs instead is resolution, and the shortfall is one-directional.
+/// The callback fires at the first back-edge past a deadline of
+/// [`EPOCH_DEADLINE_TICKS`] ticks, and [`rearm_for_call`] restarts that
+/// countdown per call, so **a call whose guest runs for less than one sampling
+/// window ([`EXECUTION_WINDOW_MS`]) never fires it and meters as zero**. Read
+/// the histogram as "calls that burned at least a window of guest execution",
+/// never as a total: a host serving nothing but short calls reports zero, and
+/// is not idle.
+///
+/// The count is per *store*, not per call, so a delta taken across one call on
+/// a store serving several at once — a pooled instance, a plugin store, any
+/// component under the concurrent ABI — includes its neighbours' execution.
+/// Fuel was per-store in exactly the same way.
+#[derive(Default, Debug)]
+pub struct GuestExecution(AtomicU64);
+
+impl GuestExecution {
+    /// Guest execution credited to this store so far, in milliseconds.
+    pub fn millis(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    fn add(&self, millis: u64) {
+        if millis > 0 {
+            self.0.fetch_add(millis, Ordering::Relaxed);
+        }
+    }
+}
+
 /// The most execution one fire-to-fire gap can prove: fires land one sampling
 /// window apart while a guest runs straight through.
 const EXECUTION_WINDOW_MS: u64 =
     crate::engine::EPOCH_TICK.as_millis() as u64 * EPOCH_DEADLINE_TICKS;
+
+/// The finest execution a call can be metered at: below one window the epoch
+/// callback never fires, so the call records zero. See [`GuestExecution`].
+pub fn sampling_window() -> Duration {
+    Duration::from_millis(EXECUTION_WINDOW_MS)
+}
 
 /// A gap between fires that only a real pause can explain — the guest waiting
 /// on host I/O measured in seconds, or going idle — never scheduler delay or
@@ -518,6 +579,7 @@ pub(crate) fn arm_epoch_deadline(
     policy: AbandonedCallPolicy,
 ) {
     let abandoned = Arc::clone(&store.data().abandoned);
+    let executed = Arc::clone(&store.data().executed);
     let store_id = Arc::clone(&store.data().active_ctx.store_id);
     let grace = crate::timeouts::abandoned_call_grace();
     let escalation = crate::timeouts::abandoned_call_escalation();
@@ -531,7 +593,11 @@ pub(crate) fn arm_epoch_deadline(
     store.set_epoch_deadline(EPOCH_DEADLINE_TICKS);
     store.epoch_deadline_callback(move |_| {
         // Every fire counts, or the credit means nothing.
-        let executed_for = credit.observe(now_millis());
+        let fire = credit.observe(now_millis());
+        // Metering reads the running total, so it accrues on every fire —
+        // including the ones `keep_running` clears the abandonment credit on.
+        executed.add(fire.executed_millis);
+        let executed_for = fire.credited_millis;
 
         // Yield, never merely continue: this callback is the only point at
         // which a pinned guest hands the host back its thread. Ridden straight
@@ -654,20 +720,43 @@ mod tests {
         const W: u64 = EXECUTION_WINDOW_MS;
         let mut c = ExecutionCredit::default();
         // First fire: nothing before it to credit.
-        assert_eq!(c.observe(1_000), 0);
+        assert_eq!(c.observe(1_000).credited_millis, 0);
         // Straight-through execution: every window fully credited.
-        assert_eq!(c.observe(1_000 + W), W);
+        assert_eq!(c.observe(1_000 + W).credited_millis, W);
         // A wide-but-sub-reset gap — a brief await, or a slow requeue under
         // load — donates one window, and does not wipe the accrual.
-        assert_eq!(c.observe(1_000 + W + 900), 2 * W);
-        assert_eq!(c.observe(1_000 + W + 900 + W), 3 * W);
+        assert_eq!(c.observe(1_000 + W + 900).credited_millis, 2 * W);
+        assert_eq!(c.observe(1_000 + W + 900 + W).credited_millis, 3 * W);
         // A gap past the reset threshold is a real pause: credit cleared.
         let after_pause = 1_000 + W + 900 + W + reset_threshold_millis() + 1;
-        assert_eq!(c.observe(after_pause), 0);
-        assert_eq!(c.observe(after_pause + W), W);
+        assert_eq!(c.observe(after_pause).credited_millis, 0);
+        assert_eq!(c.observe(after_pause + W).credited_millis, W);
         // And the callback clears it whenever the store is not wanted back.
         c.reset();
-        assert_eq!(c.observe(after_pause + 2 * W), W);
+        assert_eq!(c.observe(after_pause + 2 * W).credited_millis, W);
+    }
+
+    /// The metered total accrues per fire and survives the resets the
+    /// abandonment credit takes — a store the host is not waiting on is still
+    /// running its guest, and that execution is what the meter reports.
+    #[test]
+    fn metered_execution_accrues_across_every_reset() {
+        const W: u64 = EXECUTION_WINDOW_MS;
+        let mut c = ExecutionCredit::default();
+        let total = GuestExecution::default();
+
+        for now in [1_000, 1_000 + W, 1_000 + W + 900] {
+            total.add(c.observe(now).executed_millis);
+            // Whatever the abandonment credit does, the meter keeps counting.
+            c.reset();
+        }
+        // The first fire proves nothing; the two after it a window each.
+        assert_eq!(total.millis(), 2 * W);
+
+        // A pause is not execution, so it adds nothing at all.
+        let after_pause = 1_000 + W + 900 + reset_threshold_millis() + 1;
+        total.add(c.observe(after_pause).executed_millis);
+        assert_eq!(total.millis(), 2 * W);
     }
 
     /// A call is deregistered a grace after being abandoned, but only because

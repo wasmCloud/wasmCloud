@@ -466,16 +466,16 @@ impl HostCommand {
     /// `configFrom`/`secretFrom` already resolved) plus the address every
     /// binding falls back to, under the flag that decides whether a workload
     /// may describe a binding of its own.
-    fn wasmcloud_nats_defaults(
+    fn wasmcloud_nats_bindings(
         &self,
         config: &crate::config::Config,
         project_dir: &std::path::Path,
-    ) -> anyhow::Result<wash_runtime::plugin::wasmcloud_nats::NatsDefaults> {
+    ) -> anyhow::Result<wash_runtime::plugin::wasmcloud_nats::NatsBindings> {
         let declared = match &config.host().wasmcloud_nats {
             Some(nats) => nats
-                .to_defaults(config, project_dir, Some(project_dir))
+                .to_bindings(config, project_dir, Some(project_dir))
                 .context("failed to resolve host.wasmcloudNats")?,
-            None => wash_runtime::plugin::wasmcloud_nats::NatsDefaults::new(),
+            None => wash_runtime::plugin::wasmcloud_nats::NatsBindings::new(),
         };
         let defaults = declared
             .with_default_servers(vec![
@@ -570,9 +570,10 @@ impl CliCommand for HostCommand {
         wash_runtime::oci::set_extra_ca_certificates(&host_config.oci_ca_paths)
             .context("failed to load --oci-ca-path CA certificates")?;
 
-        let mut engine_builder = Engine::builder()
-            .with_pooling_allocator(true)
-            .with_fuel_consumption(ctx.enable_meters());
+        // No fuel: `--enable-meters` reports guest execution time, sampled
+        // from the epoch callback the engine arms anyway, so metering costs
+        // the guest nothing. See `observability::ExecutionTimeMeter`.
+        let mut engine_builder = Engine::builder().with_pooling_allocator(true);
         for proposal in &self.wasm_proposals {
             engine_builder = engine_builder.with_wasm_proposal(*proposal);
         }
@@ -621,13 +622,13 @@ impl CliCommand for HostCommand {
         // Resolved before anything is built: a binding an operator declared
         // wrong is a typo in the host's config file, and the workload that
         // later asks for it is not the thing at fault.
-        let wasmcloud_nats_defaults = self.wasmcloud_nats_defaults(&config, project_dir)?;
+        let wasmcloud_nats_bindings = self.wasmcloud_nats_bindings(&config, project_dir)?;
         // Stated at startup because it decides what every `wasmcloud:nats`
         // workload can reach, and the default declines to take a manifest's
         // word for it.
         info!(
-            workload_config = wasmcloud_nats_defaults.workload_config().as_str(),
-            bindings = wasmcloud_nats_defaults.binding_names().join(","),
+            workload_config = wasmcloud_nats_bindings.workload_config().as_str(),
+            bindings = wasmcloud_nats_bindings.binding_names().join(","),
             "wasmcloud:nats bindings resolved (see host.wasmcloudNats and --wasmcloud-nats-*)"
         );
 
@@ -662,7 +663,7 @@ impl CliCommand for HostCommand {
             // workload asks for a capability by name and cannot widen one.
             .with_plugin(Arc::new(
                 plugin::wasmcloud_nats::WasmcloudNats::new()
-                    .with_defaults(wasmcloud_nats_defaults)
+                    .with_bindings(wasmcloud_nats_bindings)
                     .with_lattice_prefixes(vec![
                         format!("{}.", wash_runtime::washlet::HOST_API_PREFIX),
                         format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),
@@ -873,7 +874,7 @@ mod nats_tests {
     fn the_address_falls_back_to_the_data_plane() {
         let host = parse(&["--data-nats-url", "nats://data:4222"]);
         let defaults = host
-            .wasmcloud_nats_defaults(&config_from("{}"), std::path::Path::new("."))
+            .wasmcloud_nats_bindings(&config_from("{}"), std::path::Path::new("."))
             .expect("the default flags must resolve");
         let resolved = defaults
             .resolve("", std::collections::HashMap::new())
@@ -895,7 +896,7 @@ mod nats_tests {
             "nats://workloads:4222",
         ]);
         let defaults = host
-            .wasmcloud_nats_defaults(&config_from("{}"), std::path::Path::new("."))
+            .wasmcloud_nats_bindings(&config_from("{}"), std::path::Path::new("."))
             .unwrap();
         let resolved = defaults
             .resolve("", std::collections::HashMap::new())
@@ -923,7 +924,7 @@ host:
 "#,
         );
         let defaults = parse(&["--data-nats-url", "nats://data:4222"])
-            .wasmcloud_nats_defaults(&config, std::path::Path::new("."))
+            .wasmcloud_nats_bindings(&config, std::path::Path::new("."))
             .expect("the declaration must resolve");
 
         let resolved = defaults
@@ -970,7 +971,7 @@ host:
             "--wasmcloud-nats-workload-config",
             "allow",
         ])
-        .wasmcloud_nats_defaults(&config_from("{}"), std::path::Path::new("."))
+        .wasmcloud_nats_bindings(&config_from("{}"), std::path::Path::new("."))
         .unwrap();
 
         let resolved = defaults
@@ -1004,7 +1005,7 @@ host:
 "#,
         );
         let err = parse(&["--data-nats-url", "nats://data:4222"])
-            .wasmcloud_nats_defaults(&config, std::path::Path::new("."))
+            .wasmcloud_nats_bindings(&config, std::path::Path::new("."))
             .expect_err("`sometimes` is not an ack mode");
         assert!(
             format!("{err:#}").contains("orders"),

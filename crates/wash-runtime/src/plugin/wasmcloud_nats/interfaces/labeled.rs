@@ -10,7 +10,7 @@ use wasmtime::component::{Accessor, Resource};
 use crate::engine::ctx::{ActiveCtx, SharedCtx};
 
 use super::{NatsId, js, kv, labeled_core, labeled_js, labeled_kv, types};
-use crate::plugin::wasmcloud_nats::handles::{BucketHandle, MessageHandle, PullConsumerHandle};
+use crate::plugin::wasmcloud_nats::jetstream::{BucketHandle, MessageHandle, PullConsumerHandle};
 
 impl<T: 'static + Send> labeled_js::HostMessageHandleWithStore<T> for SharedCtx {
     async fn ack(

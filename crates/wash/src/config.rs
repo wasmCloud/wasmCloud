@@ -19,7 +19,7 @@ use wash_runtime::host::allowed_hosts::AllowedHost;
 use wash_runtime::host::allowed_ip_name::AllowedIpName;
 use wash_runtime::host::allowed_loopback::AllowedLoopbackPort;
 use wash_runtime::oci::OciPullPolicy;
-use wash_runtime::plugin::wasmcloud_nats::NatsDefaults;
+use wash_runtime::plugin::wasmcloud_nats::NatsBindings;
 use wash_runtime::wit::WitInterface;
 
 use crate::{
@@ -600,12 +600,12 @@ impl WasmcloudNatsConfig {
     ///
     /// Same failure modes as [`crate::workload::resolve_workload`], for each
     /// block's `configFrom`/`secretFrom` references.
-    pub fn to_defaults(
+    pub fn to_bindings(
         &self,
         config: &Config,
         project_dir: &Path,
         repo_root: Option<&Path>,
-    ) -> Result<NatsDefaults> {
+    ) -> Result<NatsBindings> {
         let resolve = |env: &EnvironmentLayer, owner: &str| -> Result<HashMap<String, String>> {
             wash_runtime::config_source::resolve_environment_layer(
                 Some(env),
@@ -617,7 +617,7 @@ impl WasmcloudNatsConfig {
             )
         };
 
-        let mut defaults = NatsDefaults::new().with_base(
+        let mut bindings = NatsBindings::new().with_base(
             resolve(&self.environment, "host.wasmcloudNats")
                 .context("failed to resolve host.wasmcloudNats")?,
         );
@@ -628,13 +628,13 @@ impl WasmcloudNatsConfig {
                 );
             }
             let owner = format!("host.wasmcloudNats.bindings.{name}");
-            defaults = defaults.with_binding(
+            bindings = bindings.with_binding(
                 name.clone(),
                 resolve(&binding.environment, &owner)
                     .with_context(|| format!("failed to resolve {owner}"))?,
             );
         }
-        Ok(defaults)
+        Ok(bindings)
     }
 }
 
@@ -2146,7 +2146,7 @@ host:
         assert_eq!(nats.bindings.len(), 1);
 
         let defaults = nats
-            .to_defaults(&config, Path::new("."), None)
+            .to_bindings(&config, Path::new("."), None)
             .expect("the declaration must resolve");
         assert_eq!(defaults.binding_names(), vec!["orders"]);
 
@@ -2197,7 +2197,7 @@ host:
             .host()
             .wasmcloud_nats
             .unwrap()
-            .to_defaults(&config, Path::new("."), None)
+            .to_bindings(&config, Path::new("."), None)
             .expect_err("an empty binding name must be refused");
     }
 
@@ -2225,7 +2225,7 @@ dev:
             .wasmcloud_nats
             .as_ref()
             .expect("the block must deserialize")
-            .to_defaults(&config, Path::new("."), None)
+            .to_bindings(&config, Path::new("."), None)
             .expect("the declaration must resolve");
         assert_eq!(defaults.binding_names(), vec!["orders"]);
     }

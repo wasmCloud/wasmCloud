@@ -10,11 +10,11 @@ use wasmtime::component::{Accessor, Resource};
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx};
 
-use crate::plugin::wasmcloud_nats::handles::BucketHandle;
 use crate::plugin::wasmcloud_nats::interfaces::{
     NatsId, bucket_lookup_err, chain_timed_out, check_bucket, check_payload, conn_or_return, kv,
     kv_err, labeled_kv, types,
 };
+use crate::plugin::wasmcloud_nats::jetstream::BucketHandle;
 
 /// Wall-clock bound on one `history` drain, for the same reason `scan` has one.
 const MAX_HISTORY_DURATION: Duration = Duration::from_secs(10);

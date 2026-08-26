@@ -20,7 +20,7 @@ use super::{
     types,
 };
 use crate::plugin::wasmcloud_nats::conn::server_at_least;
-use crate::plugin::wasmcloud_nats::handles::PullConsumerHandle;
+use crate::plugin::wasmcloud_nats::jetstream::PullConsumerHandle;
 use crate::plugin::wasmcloud_nats::policy::Denied;
 
 pub(super) mod kv;

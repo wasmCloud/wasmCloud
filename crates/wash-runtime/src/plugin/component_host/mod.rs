@@ -1855,7 +1855,7 @@ fn build_plugin_store(
     let mut store = Store::new(engine.inner(), SharedCtx::new(ctx).with_resource_registry());
     // Same reason as `engine::linked_call::new_store_from_templates`: a store
     // on a fuel-enabled engine starts at zero fuel, and instantiation runs
-    // guest code. Fuel is metering here, never the limit.
+    // guest code. Nothing in the host enables fuel; a caller still can.
     let _ = store.set_fuel(u64::MAX);
     // Required, not optional: the engine enables `epoch_interruption`, and a
     // store that never sets a deadline traps the moment it runs any guest code.
