@@ -14,7 +14,7 @@ use super::config::PolicySpec;
 /// JetStream delivery plane: a workload that could publish there would inject
 /// forged deliveries into another workload's handler, and one that could
 /// subscribe there would steal them.
-const RESERVED: &[&str] = &["$JS.", "$SYS.", "$KV.", "$OBJ.", "_nats_push."];
+const RESERVED_SUBJECT_PREFIXES: &[&str] = &["$JS.", "$SYS.", "$KV.", "$OBJ.", "_nats_push."];
 
 /// The head token of every NATS inbox, shared or per-workload.
 ///
