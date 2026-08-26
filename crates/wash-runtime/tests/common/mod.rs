@@ -283,6 +283,28 @@ pub async fn start_host_with_dev_router(
 
 /// Start a host with a "DynamicRouter" backed HTTP server and the standard
 /// plugin set.
+/// Start a host with fuel metering on, the way `wash host --enable-meters`
+/// does: the engine consumes fuel and the plugins carry a real
+/// `FuelConsumptionMeter`.
+///
+/// A store on a fuel-enabled engine starts at **zero** fuel, and instantiation
+/// runs guest code — so this configuration is what catches a path that never
+/// gives a store a budget.
+pub async fn start_host_with_meters(addr: &str) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    let engine = Engine::builder().with_fuel_consumption(true).build()?;
+    let ingress = Ingress::new(DevRouter::default(), addr.parse()?).await?;
+    let bound_addr = ingress.addr();
+    let host = with_standard_plugins(
+        HostBuilder::new()
+            .with_engine(engine)
+            .with_http_handler(Arc::new(ingress)),
+    )?
+    .with_meters(wash_runtime::observability::Meters::new(true))
+    .build()?;
+    let host = host.start().await.context("Failed to start host")?;
+    Ok((bound_addr, host))
+}
+
 pub async fn start_host_with_dynamic_router(
     addr: &str,
 ) -> Result<(std::net::SocketAddr, impl HostApi)> {
