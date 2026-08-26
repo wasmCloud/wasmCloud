@@ -1,2 +1,0 @@
-[overrides]
-"wasmcloud:nats" = { path = "../p2-wit-deps/wasmcloud-nats-0.1.0" }
