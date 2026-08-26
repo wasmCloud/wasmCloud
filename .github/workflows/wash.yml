@@ -22,6 +22,10 @@ concurrency:
 permissions: {}
 
 env:
+  # The non-default features every `cargo test` and `cargo clippy` here runs
+  # with. Spelled per-package: bare names apply to every selected package, so
+  # the two would drift apart.
+  OPTIONAL_FEATURES: wash-runtime/wasi-tls,wash/host-component-plugins
   # Drop most DWARF; keep enough for usable backtraces. Shrinks target/ by
   # several GB on this workspace (wasmtime, OTel, oci-client).
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -117,42 +121,33 @@ jobs:
         run: cargo xtask build-fixtures
       - name: Build
         run: cargo build
+      # One pass with the optional features on. A default-feature pass would
+      # recompile the tree to re-run the ~58 targets neither feature gates, so
+      # nothing here runs in the configuration the released image ships.
       - name: Test
+        shell: bash
         env:
           RUST_BACKTRACE: "1"
         run: |
-          cargo test --workspace
-      - name: Test with wasi-tls + host-component-plugins
-        env:
-          RUST_BACKTRACE: "1"
-        run: |
-          cargo test -p wash-runtime --features wasi-tls,host-component-plugins
-          cargo test -p wash --lib --features host-component-plugins
-      # Docker/registry-backed `#[ignore]` integration tests, Linux only: the
-      # macOS/Windows hosted runners have no Docker daemon (and macOS can't get
-      # one — no nested virtualization). `-- --ignored` runs ONLY the ignored
-      # tests, once. Scoped to the crates we gate this way (wash-runtime + wash's
-      # OCI suite) so it doesn't pull in the pre-existing network-only wit tests
-      # in `crates/wash/tests/integration_wit.rs`.
+          cargo test --workspace --features "${OPTIONAL_FEATURES}"
+      # Linux only: the hosted macOS/Windows runners have no Docker. `#[ignore]`
+      # is what opts a suite INTO this step. Not all are containers --
+      # `test_pull_and_validate_ghcr_component` pulls from ghcr.io.
       - name: Integration tests (Docker/registry, Linux only)
         if: matrix.os == 'ubuntu-latest'
+        shell: bash
         env:
           RUST_BACKTRACE: "1"
         run: |
-          cargo test -p wash-runtime --features wasi-tls,host-component-plugins -- --ignored
-          cargo test -p wash --test integration_oci -- --ignored
-      # Bitrot guard: the benches must still compile. Built via `cargo test
-      # --benches` rather than `cargo bench --no-run` because the `bench`
-      # profile inherits `release`, which shares no artifacts with the dev/test
-      # builds above and so rebuilds the whole tree (wasmtime included) just to
-      # compile-check four targets; the test profile reuses them. wash-runtime
-      # gates no code on `debug_assertions`, so both profiles compile the same
-      # source. Optimized bench builds happen only in bench.yml (manual
-      # dispatch), so an opt-level-only break surfaces there, not here.
+          cargo test --workspace --features "${OPTIONAL_FEATURES}" -- --ignored
+      # Bitrot guard. `cargo test --benches`, not `cargo bench --no-run`: the
+      # bench profile shares no artifacts with the builds above. Same features
+      # as Test, so `gungraun_plugin` is built rather than its stub.
       - name: Build benchmarks
         if: matrix.os == 'ubuntu-latest'
+        shell: bash
         run: |
-          cargo test -p wash-runtime --benches --no-run
+          cargo test --workspace --features "${OPTIONAL_FEATURES}" --benches --no-run
 
   lint:
     needs:
@@ -187,7 +182,7 @@ jobs:
           cargo +nightly fmt -- --check
       - name: Lint
         run: |
-          cargo clippy --workspace --features wasi-tls,host-component-plugins
+          cargo clippy --workspace --features "${OPTIONAL_FEATURES}"
       - name: Lint anyhow context message casing
         run: |
           # anyhow `.context()` / `.with_context()` strings are error messages,
