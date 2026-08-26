@@ -3,6 +3,11 @@
 //! Two paths share one component. The host pushes new deliveries into
 //! `handle-message`, and the same component can replay history from an
 //! arbitrary stream sequence with `scan`.
+//!
+//! Every `wasmcloud:nats` function is an `async func`, so this is a WASI P3
+//! component: the handler is an `async fn` that awaits its imports from inside
+//! the delivery, and the host keeps delivering to the same instance while it
+//! does.
 
 wit_bindgen::generate!({
     path: "wit",
@@ -28,9 +33,11 @@ fn describe(err: &NatsError) -> String {
         NatsError::Connection(detail) => format!("connection: {detail}"),
         NatsError::Timeout(detail) => format!("timeout: {detail}"),
         NatsError::NoResponders => "no responders on subject".to_string(),
-        NatsError::SubjectDenied(subject) => {
-            format!("subject `{subject}` is outside this workload's grant")
-        }
+        NatsError::Denied(denial) => format!(
+            "{:?} `{}` is outside this workload's grant ({:?}); the host declares the grants, \
+             so widening one is the operator's call",
+            denial.target, denial.name, denial.reason
+        ),
         NatsError::MaxPayloadExceeded(limit) => format!("payload exceeds server limit {limit}"),
         NatsError::Jetstream(detail) => format!("jetstream: {detail}"),
         NatsError::KeyNotFound => "key not found".to_string(),
@@ -39,6 +46,8 @@ fn describe(err: &NatsError) -> String {
         NatsError::NotFound(what) => format!("not found: {what}"),
         NatsError::UnsupportedByServer(detail) => format!("unsupported by server: {detail}"),
         NatsError::Disconnected => "disconnected".to_string(),
+        NatsError::InvalidHeader(detail) => format!("invalid header: {detail}"),
+        NatsError::LimitExceeded(detail) => format!("limit exceeded: {detail}"),
         NatsError::Unexpected(detail) => format!("unexpected: {detail}"),
     }
 }
@@ -73,7 +82,7 @@ fn encode_total(total: &Total) -> Vec<u8> {
 /// revision, so a retry does not need a re-read. Two concurrent handlers on the
 /// same key therefore converge instead of silently losing a write, which is
 /// what a last-write-wins `put` would do here.
-fn accumulate(
+async fn accumulate(
     bucket: &kv::Bucket,
     key: &str,
     amount: u64,
@@ -82,7 +91,14 @@ fn accumulate(
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let current = bucket.get(key)?;
+        // A key that was never written is `key-not-found`, not an
+        // absent-but-ok result: the first order for an id takes the `create`
+        // path below, every later one takes `update`.
+        let current = match bucket.get(key.to_string()).await {
+            Ok(entry) => Some(entry),
+            Err(NatsError::KeyNotFound) => None,
+            Err(e) => return Err(e),
+        };
         let (existing, revision) = match &current {
             Some(entry) => (parse_total(&entry.value), entry.revision),
             None => (None, 0),
@@ -106,9 +122,9 @@ fn accumulate(
         let encoded = encode_total(&next);
 
         let result = if current.is_some() {
-            bucket.update(key, &encoded, revision)
+            bucket.update(key.to_string(), encoded.clone(), revision).await
         } else {
-            bucket.create(key, &encoded)
+            bucket.create(key.to_string(), encoded.clone()).await
         };
 
         match result {
@@ -138,7 +154,7 @@ impl JetstreamHandler for Component {
     /// this again with the same body, so the work must be idempotent. The
     /// `delivery-count` check below is what makes the retry visible rather
     /// than silent.
-    fn handle_message(handle: MessageHandle) -> Result<(), String> {
+    async fn handle_message(handle: MessageHandle) -> Result<(), String> {
         let message = handle.message();
         let sequence = handle.sequence();
         let delivery = handle.delivery_count();
@@ -157,9 +173,10 @@ impl JetstreamHandler for Component {
             println!("order {order_id} redelivered (attempt {delivery})");
         }
 
-        let bucket = kv::open(TOTALS_BUCKET).map_err(|e| describe(&e))?;
-        let running =
-            accumulate(&bucket, &order_id, amount, sequence).map_err(|e| describe(&e))?;
+        let bucket = kv::open(TOTALS_BUCKET.to_string()).await.map_err(|e| describe(&e))?;
+        let running = accumulate(&bucket, &order_id, amount, sequence)
+            .await
+            .map_err(|e| describe(&e))?;
 
         // `Nats-Msg-Id` deduplicates within the stream's duplicate window, so a
         // redelivered order does not publish a second notification. The window
@@ -173,7 +190,9 @@ impl JetstreamHandler for Component {
                 value: format!("processed-{order_id}-{sequence}"),
             }]),
         };
-        let ack = jetstream::publish(&notification).map_err(|e| describe(&e))?;
+        let ack = jetstream::publish(notification)
+            .await
+            .map_err(|e| describe(&e))?;
 
         println!(
             "order {order_id} +{amount} -> {running} (stream seq {}, duplicate: {})",
