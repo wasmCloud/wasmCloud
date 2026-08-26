@@ -389,6 +389,196 @@ pub struct ConnKey {
     pub credential_fingerprint: u64,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct JetStreamSubscriptionConfig {
+    /// The binding this subscription was declared on, and whose connection and
+    /// grant it runs under. Empty for a plain, unlabeled binding.
+    pub binding: String,
+    pub stream: String,
+    pub filter_subject: String,
+    pub deliver_policy: String,
+    pub queue_group: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct CoreSubscriptionConfig {
+    pub binding: String,
+    pub subject: String,
+    pub queue_group: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct KvWatchConfig {
+    pub binding: String,
+    pub bucket: String,
+    pub filter: String,
+}
+
+/// Refuses a queue group no NATS server would accept.
+///
+/// Nothing downstream can recover from an illegal group: the core client
+/// rejects the subscribe outright, and JetStream fails the create-consumer call
+/// on every attempt, which the delivery loop can only keep retrying while the
+/// workload reports running and receives nothing. The deploy is the last moment
+/// the author is still watching, so the group is checked here.
+fn validate_queue_group(entry: &str, group: &str, jetstream: bool) -> anyhow::Result<()> {
+    if group.is_empty() {
+        anyhow::bail!(
+            "subscription `{entry}` has an empty queue group; drop the trailing `:` to \
+             subscribe without one"
+        )
+    }
+    if group.chars().any(|c| c.is_ascii_whitespace()) {
+        anyhow::bail!("subscription `{entry}` has a queue group containing whitespace")
+    }
+    // A JetStream group is carried into a durable name and into one token of
+    // the push deliver subject, neither of which admits subject syntax or a
+    // path separator.
+    if jetstream
+        && let Some(bad) = group
+            .chars()
+            .find(|c| matches!(c, '.' | '*' | '>' | '/' | '\\'))
+    {
+        anyhow::bail!(
+            "jetstream subscription `{entry}` has a queue group containing `{bad}`; the group \
+             names a durable consumer, so it cannot contain `.`, `*`, `>`, `/` or `\\`"
+        )
+    }
+    Ok(())
+}
+
+/// Parses `STREAM:filter[:policy[:queue]]`, comma separated.
+pub(super) fn parse_jetstream_subscriptions(
+    binding: &str,
+    raw: &str,
+) -> anyhow::Result<Vec<JetStreamSubscriptionConfig>> {
+    let subs: Vec<JetStreamSubscriptionConfig> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let parts: Vec<&str> = entry.splitn(4, ':').collect();
+            let (Some(stream), Some(filter_subject)) = (parts.first(), parts.get(1)) else {
+                anyhow::bail!(
+                    "invalid jetstream subscription `{entry}`, expected STREAM:filter[:policy[:queue]]"
+                )
+            };
+            if stream.is_empty() || filter_subject.is_empty() {
+                anyhow::bail!("jetstream subscription `{entry}` has an empty stream or filter")
+            }
+            let deliver_policy = parts.get(2).copied().unwrap_or("new");
+            if !matches!(deliver_policy, "all" | "last" | "last-per-subject" | "new") {
+                anyhow::bail!(
+                    "jetstream subscription `{entry}` has an unknown deliver policy \
+                     `{deliver_policy}`; expected all, last, last-per-subject, or new"
+                )
+            }
+            let queue_group = parts.get(3).copied();
+            if let Some(group) = queue_group {
+                validate_queue_group(entry, group, true)?;
+            }
+            Ok(JetStreamSubscriptionConfig {
+                binding: binding.to_string(),
+                stream: (*stream).to_string(),
+                filter_subject: (*filter_subject).to_string(),
+                deliver_policy: deliver_policy.to_string(),
+                queue_group: queue_group.map(str::to_string),
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    // A queue group on a stream names one shared consumer, and the filter and
+    // deliver policy belong to that consumer rather than to the entry that
+    // declared it. Two entries that disagree about either can never both get
+    // the consumer they asked for — whichever is created second either fails or
+    // rewrites the first — so the pair is refused rather than left to a
+    // retry loop under a workload that reports running.
+    for (position, sub) in subs.iter().enumerate() {
+        let Some(group) = sub.queue_group.as_deref() else {
+            continue;
+        };
+        for earlier in subs.iter().take(position) {
+            if earlier.stream != sub.stream || earlier.queue_group.as_deref() != Some(group) {
+                continue;
+            }
+            if earlier.filter_subject != sub.filter_subject
+                || earlier.deliver_policy != sub.deliver_policy
+            {
+                anyhow::bail!(
+                    "jetstream subscriptions on stream `{}` share the queue group `{group}` but \
+                     ask for different deliveries (`{}:{}` and `{}:{}`); one group is one \
+                     consumer, so give each delivery its own group",
+                    sub.stream,
+                    earlier.filter_subject,
+                    earlier.deliver_policy,
+                    sub.filter_subject,
+                    sub.deliver_policy
+                )
+            }
+        }
+    }
+
+    Ok(subs)
+}
+
+/// Parses `subject[:queue]`, comma separated.
+pub(super) fn parse_core_subscriptions(
+    binding: &str,
+    raw: &str,
+) -> anyhow::Result<Vec<CoreSubscriptionConfig>> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let mut parts = entry.splitn(2, ':');
+            let subject = parts.next().unwrap_or_default();
+            if subject.is_empty() {
+                anyhow::bail!("core subscription `{entry}` has an empty subject")
+            }
+            let queue_group = parts.next();
+            if let Some(group) = queue_group {
+                validate_queue_group(entry, group, false)?;
+            }
+            Ok(CoreSubscriptionConfig {
+                binding: binding.to_string(),
+                subject: subject.to_string(),
+                queue_group: queue_group.map(str::to_string),
+            })
+        })
+        .collect()
+}
+
+/// Parses `bucket:filter`, comma separated.
+pub(super) fn parse_kv_watches(binding: &str, raw: &str) -> anyhow::Result<Vec<KvWatchConfig>> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let Some((bucket, filter)) = entry.split_once(':') else {
+                anyhow::bail!("invalid kv watch `{entry}`, expected bucket:filter")
+            };
+            if bucket.is_empty() || filter.is_empty() {
+                anyhow::bail!("kv watch `{entry}` has an empty bucket or filter")
+            }
+            Ok(KvWatchConfig {
+                binding: binding.to_string(),
+                bucket: bucket.to_string(),
+                filter: filter.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// One declared subscription as the author wrote it, used both to recognise the
+/// same subscription arriving on a second component and to name it in the error
+/// that refuses the pair.
+pub(super) fn subscription_spec(key: &str, binding: &str, value: String) -> String {
+    if binding.is_empty() {
+        format!("`{key}: {value}`")
+    } else {
+        format!("`{key}: {value}` on binding `{binding}`")
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -584,5 +774,132 @@ mod tests {
         let rendered = format!("{cfg:?}");
         assert!(!rendered.contains("super-secret"));
         assert!(rendered.contains("token"));
+    }
+    #[test]
+    fn jetstream_subs_basic() {
+        let subs = parse_jetstream_subscriptions("", "ORDERS:orders.*:new").unwrap();
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].stream, "ORDERS");
+        assert_eq!(subs[0].filter_subject, "orders.*");
+        assert_eq!(subs[0].deliver_policy, "new");
+        assert_eq!(subs[0].queue_group, None);
+    }
+
+    #[test]
+    fn jetstream_subs_with_queue() {
+        let subs = parse_jetstream_subscriptions(
+            "",
+            "ORDERS:orders.*:new:workers,EVENTS:evt.>:all:group-a",
+        )
+        .unwrap();
+        assert_eq!(subs.len(), 2);
+        assert_eq!(subs[0].queue_group.as_deref(), Some("workers"));
+        assert_eq!(subs[1].stream, "EVENTS");
+        assert_eq!(subs[1].queue_group.as_deref(), Some("group-a"));
+    }
+
+    #[test]
+    fn jetstream_subs_reject_illegal_queue_groups() {
+        for entry in [
+            "S:f:new:team.a",
+            "S:f:new:has space",
+            "S:f:new:a>b",
+            "S:f:new:a/b",
+        ] {
+            let err = parse_jetstream_subscriptions("", entry)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("queue group"), "{entry}: {err}");
+        }
+    }
+
+    #[test]
+    fn subs_reject_trailing_colon_queue_group() {
+        let err = parse_jetstream_subscriptions("", "STREAM:filter:new:")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("empty queue group"), "{err}");
+
+        let err = parse_core_subscriptions("", "subject:")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("empty queue group"), "{err}");
+
+        assert!(parse_core_subscriptions("", "subject:workers").is_ok());
+    }
+
+    #[test]
+    fn core_subs_reject_queue_group_with_whitespace() {
+        let err = parse_core_subscriptions("", "subj:bad group")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("whitespace"), "{err}");
+    }
+
+    #[test]
+    fn jetstream_subs_reject_conflicting_queue_group() {
+        let err = parse_jetstream_subscriptions(
+            "",
+            "ORDERS:orders.us.*:new:workers,ORDERS:orders.eu.*:new:workers",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("share the queue group `workers`"), "{err}");
+
+        let err = parse_jetstream_subscriptions(
+            "",
+            "ORDERS:orders.*:new:workers,ORDERS:orders.*:all:workers",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("share the queue group `workers`"), "{err}");
+
+        // The same delivery declared twice is a duplicate, not a conflict, and
+        // a group on another stream is a different consumer entirely.
+        assert!(
+            parse_jetstream_subscriptions(
+                "",
+                "ORDERS:orders.*:new:workers,ORDERS:orders.*:new:workers,EVENTS:evt.>:new:workers"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn jetstream_subs_reject_malformed() {
+        assert!(parse_jetstream_subscriptions("", "ORDERS").is_err());
+        assert!(parse_jetstream_subscriptions("", ":orders.*").is_err());
+    }
+
+    #[test]
+    fn jetstream_subs_reject_unknown_deliver_policy() {
+        let err = parse_jetstream_subscriptions("", "ORDERS:orders.*:evrything").unwrap_err();
+        assert!(err.to_string().contains("unknown deliver policy"));
+    }
+
+    #[test]
+    fn core_subs_basic() {
+        let subs = parse_core_subscriptions("", "events.*,metrics.>:stats").unwrap();
+        assert_eq!(subs.len(), 2);
+        assert_eq!(subs[0].subject, "events.*");
+        assert_eq!(subs[0].queue_group, None);
+        assert_eq!(subs[1].subject, "metrics.>");
+        assert_eq!(subs[1].queue_group.as_deref(), Some("stats"));
+    }
+
+    #[test]
+    fn kv_watches_basic() {
+        let watches = parse_kv_watches("", "config:*,secrets:prod.>").unwrap();
+        assert_eq!(watches.len(), 2);
+        assert_eq!(watches[0].bucket, "config");
+        assert_eq!(watches[0].filter, "*");
+        assert_eq!(watches[1].bucket, "secrets");
+        assert_eq!(watches[1].filter, "prod.>");
+    }
+
+    #[test]
+    fn kv_watches_reject_malformed() {
+        assert!(parse_kv_watches("", "configonly").is_err());
+        assert!(parse_kv_watches("", "config:").is_err());
     }
 }
