@@ -360,6 +360,83 @@ runtime:
       # -- Per-host-group override of the data NATS URL. Empty falls back to
       # `global.nats.dataUrl`, then the in-cluster NATS service.
       dataNatsUrl: ""
+      # -- Per-host-group address for the `wasmcloud:nats` plugin's bindings.
+      # Empty falls back to this group's data NATS URL, so a workload on the
+      # cluster's own NATS needs no `servers` in its manifest and the same
+      # manifest runs under `wash dev` and here. Set it when the NATS your
+      # workloads talk to is not the one backing the host's data plane.
+      #
+      # Address only: it carries no credentials and no grant, so a binding that
+      # inherits it still reaches nothing until `wasmcloudNats` grants it
+      # something.
+      wasmcloudNatsUrl: ""
+      # -- Whether a workload's own manifest may describe a `wasmcloud:nats`
+      # binding. Empty takes the host default, `deny`.
+      #
+      #   deny    the bindings declared under `wasmcloudNats` below are the
+      #           whole allowlist. A workload asks for one by
+      #           `(implements <name>)` and receives what this chart declared;
+      #           a manifest that sets `servers`, credentials, TLS, or a
+      #           `subject-allow`/`stream-allow`/`bucket-allow` grant is
+      #           refused at deploy, and one that names a binding this host
+      #           does not serve is refused too.
+      #   allow   the declaration below becomes a default a manifest may
+      #           override — how `wash dev` runs, so a project stays
+      #           self-contained. Do not use it on a cluster whose manifests
+      #           are written by whoever can create a WorkloadDeployment: it
+      #           lets a manifest point itself at another NATS cluster and
+      #           grant itself any subject on it.
+      wasmcloudNatsWorkloadConfig: ""
+      # -- The `wasmcloud:nats` bindings this host group serves. A workload
+      # asks for one by name and this is where what it *is* gets declared: the
+      # servers it dials, the credentials it dials them with, and the subject,
+      # stream, and bucket grants it carries.
+      #
+      # Setting this renders the block into the same `wash host` config file
+      # (`--user-config`) the `hostPlugins` entries use — never a CLI arg, so a
+      # NATS credential never appears on the command line. `config`/
+      # `configFrom`/`secretFrom` merge last-source-wins and resolve against
+      # ConfigMaps/Secrets in this release's namespace exactly as they do for
+      # `hostPlugins`, including the same Reloader annotations for rotation.
+      #
+      # Keys are `wasmcloud:nats` config keys — `servers`, `subject-allow`,
+      # `stream-allow`, `bucket-allow`, `creds`, `jwt`/`nkey-seed`,
+      # `username`/`password`, `token`, `tls-*`, `jetstream-domain`. The
+      # top-level block applies to every binding; each entry under `bindings`
+      # layers over it and is reached by `(implements <name>)`. Leave `servers`
+      # out to take `wasmcloudNatsUrl` above.
+      #
+      # The three grants are separate and all deny-by-default. `stream-allow`
+      # on its own reaches nothing readable: every stored message a workload
+      # reads — `scan`, `get-by-sequence`, a consumer filter — is checked
+      # against `subject-allow` as well, so a binding granted streams and no
+      # subjects gets empty results rather than an error. Grant the subjects
+      # those streams store alongside the stream itself. (The host warns at
+      # bind when a binding has streams and no subjects.)
+      #
+      # `inbox-prefix` is refused on the top-level block: it would give every
+      # workload on the group the same inbox, and two workloads sharing an
+      # inbox consume each other's replies. Per named binding it is fine, and
+      # unset is better still — the per-workload default already isolates
+      # replies, and the host's one-shot reply grant authorizes a responder's
+      # reply without any `_INBOX` grant at all.
+      #
+      # What stays in the workload's manifest: `subscriptions`,
+      # `core-subscriptions`, `kv-watches`, and `ack-mode` — what it wants
+      # delivered, within the grant declared here.
+      #
+      # Example:
+      #
+      #   wasmcloudNats:
+      #     bindings:
+      #       orders:
+      #         config:
+      #           subject-allow: orders.processed,orders.received
+      #           stream-allow: ORDERS,PROCESSED
+      #           bucket-allow: order-totals
+      #         secretFrom:
+      #           - orders-nats-creds
+      wasmcloudNats: {}
       # -- Per-host-group environment variables, appended after `runtime.env`.
       # Standard Kubernetes env shape (supports `valueFrom`).
       env: []

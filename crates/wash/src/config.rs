@@ -19,6 +19,7 @@ use wash_runtime::host::allowed_hosts::AllowedHost;
 use wash_runtime::host::allowed_ip_name::AllowedIpName;
 use wash_runtime::host::allowed_loopback::AllowedLoopbackPort;
 use wash_runtime::oci::OciPullPolicy;
+use wash_runtime::plugin::wasmcloud_nats::NatsDefaults;
 use wash_runtime::wit::WitInterface;
 
 use crate::{
@@ -548,6 +549,95 @@ impl HostPluginConfig {
     }
 }
 
+/// Operator-owned `wasmcloud:nats` configuration.
+///
+/// A workload asks for a binding by name — `(implements orders)` on its import,
+/// or a plain import for the unnamed binding — and this is where the host says
+/// what that binding *is*: the servers it dials, the credentials it dials them
+/// with, and the subject, stream, and bucket grants it carries. Under the
+/// default `--wasmcloud-nats-workload-config=deny` a manifest that sets any of
+/// those is refused at bind, so a workload can ask for a capability but never
+/// widen one.
+///
+/// `config`/`configFrom`/`secretFrom` merge exactly like a `hostPlugins` entry
+/// (inline → configFrom → secretFrom, last source wins), resolved against the
+/// same top-level `configs:`/`secrets:` catalogs. That is how NATS credentials
+/// reach the host without appearing in a workload manifest or on a command
+/// line.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmcloudNatsConfig {
+    /// Configuration applied to every binding, named or not. `servers` here
+    /// overrides `--wasmcloud-nats-url`; leave it out to take the flag.
+    #[serde(flatten)]
+    pub environment: EnvironmentLayer,
+
+    /// Per-`(implements ..)` name, layered over the block above. A workload
+    /// that names a binding absent from here is refused, rather than started
+    /// against the right cluster with an empty grant.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bindings: BTreeMap<String, WasmcloudNatsBinding>,
+}
+
+/// One named `wasmcloud:nats` binding a host serves.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmcloudNatsBinding {
+    /// This binding's own keys, layered over [`WasmcloudNatsConfig`]'s.
+    #[serde(flatten)]
+    pub environment: EnvironmentLayer,
+}
+
+impl WasmcloudNatsConfig {
+    /// The bindings this configuration declares, with `configFrom`/`secretFrom`
+    /// resolved against the top-level `configs:`/`secrets:` catalogs.
+    ///
+    /// The caller layers on the address (`--wasmcloud-nats-url`) and decides
+    /// who may configure a binding, so this is only the operator's own
+    /// declaration.
+    ///
+    /// # Errors
+    ///
+    /// Same failure modes as [`crate::workload::resolve_workload`], for each
+    /// block's `configFrom`/`secretFrom` references.
+    pub fn to_defaults(
+        &self,
+        config: &Config,
+        project_dir: &Path,
+        repo_root: Option<&Path>,
+    ) -> Result<NatsDefaults> {
+        let resolve = |env: &EnvironmentLayer, owner: &str| -> Result<HashMap<String, String>> {
+            wash_runtime::config_source::resolve_environment_layer(
+                Some(env),
+                owner,
+                &config.config_sources,
+                &config.secret_sources,
+                project_dir,
+                repo_root,
+            )
+        };
+
+        let mut defaults = NatsDefaults::new().with_base(
+            resolve(&self.environment, "host.wasmcloudNats")
+                .context("failed to resolve host.wasmcloudNats")?,
+        );
+        for (name, binding) in &self.bindings {
+            if name.is_empty() {
+                bail!(
+                    "host.wasmcloudNats.bindings has an entry with an empty name; the unnamed                      binding is configured by `host.wasmcloudNats` itself"
+                );
+            }
+            let owner = format!("host.wasmcloudNats.bindings.{name}");
+            defaults = defaults.with_binding(
+                name.clone(),
+                resolve(&binding.environment, &owner)
+                    .with_context(|| format!("failed to resolve {owner}"))?,
+            );
+        }
+        Ok(defaults)
+    }
+}
+
 /// `wash host` configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -558,6 +648,13 @@ pub struct HostConfig {
     /// plugins declared via repeated `--host-plugin` flags.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_plugins: Vec<HostPluginConfig>,
+
+    /// The `wasmcloud:nats` bindings this host serves. See
+    /// [`WasmcloudNatsConfig`]: a workload asks for one by name, and this is
+    /// where the servers, the credentials, and the grants behind that name are
+    /// declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasmcloud_nats: Option<WasmcloudNatsConfig>,
 }
 
 /// Built-in trust roots for outbound HTTPS from components, before any extra
@@ -916,6 +1013,25 @@ pub struct DevConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasi_keyvalue_nats_url: Option<String>,
 
+    /// Optional NATS connection URL for the `wasmcloud:nats` plugin. Overrides
+    /// `data_nats_url` for it, so a project can develop against a NATS cluster
+    /// that is not the one backing keyvalue, blobstore, and messaging.
+    /// Example: nats://127.0.0.1:4222
+    ///
+    /// The address a `wasmcloud:nats` binding falls back to when it names no
+    /// `servers` of its own. With neither this nor `data_nats_url` set there is
+    /// no default, and a binding must name its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wasmcloud_nats_url: Option<String>,
+
+    /// Bindings the dev host serves for `wasmcloud:nats`, in the same shape as
+    /// `host.wasmcloudNats`. Unlike `wash host`, `wash dev` leaves a workload
+    /// free to describe its own binding — a project's manifest stays
+    /// self-contained — so this is a set of defaults beneath it rather than a
+    /// boundary around it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wasmcloud_nats: Option<WasmcloudNatsConfig>,
+
     /// Optional path for WASI blobstore filesystem storage. If not set, an in-memory store is used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasi_blobstore_path: Option<PathBuf>,
@@ -1023,6 +1139,9 @@ impl DevConfig {
                 &["nats", "tls"],
                 &mut errors,
             );
+        }
+        if let Some(url) = &self.wasmcloud_nats_url {
+            check_url_scheme("dev.wasmcloud_nats_url", url, &["nats", "tls"], &mut errors);
         }
         if let Some(url) = &self.postgres_url {
             check_url_scheme(
@@ -2034,6 +2153,137 @@ dev:
         assert_eq!(
             widgets.source,
             ComponentSource::image("ghcr.io/acme/widgets:1.2.0")
+        );
+    }
+
+    /// Locks in the YAML contract an operator writes in the host's config
+    /// file. A renamed or moved field would leave the block silently ignored,
+    /// and every workload would fall back to the bare data-plane address with
+    /// no grant — visible only as denied calls.
+    #[test]
+    fn host_wasmcloud_nats_deserializes_from_yaml() {
+        let yaml = r#"
+secrets:
+  orders-nats-creds:
+    inline:
+      creds: /etc/nats/orders.creds
+host:
+  wasmcloudNats:
+    config:
+      servers: nats://nats.default.svc:4222
+    bindings:
+      orders:
+        config:
+          subject-allow: orders.processed,orders.received
+          stream-allow: ORDERS,PROCESSED
+          bucket-allow: order-totals
+        secretFrom:
+          - orders-nats-creds
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let nats = config
+            .host()
+            .wasmcloud_nats
+            .expect("the block must deserialize");
+        assert_eq!(nats.bindings.len(), 1);
+
+        let defaults = nats
+            .to_defaults(&config, Path::new("."), None)
+            .expect("the declaration must resolve");
+        assert_eq!(defaults.binding_names(), vec!["orders"]);
+
+        let resolved = defaults
+            .with_workload_config(wash_runtime::plugin::wasmcloud_nats::WorkloadConfig::Deny)
+            .resolve("orders", HashMap::new())
+            .expect("a workload that asks for `orders` is served");
+
+        // The base reaches the named binding, the grants come with it, and the
+        // credential arrives from the secrets catalog rather than a manifest.
+        assert_eq!(
+            resolved.get("servers").map(String::as_str),
+            Some("nats://nats.default.svc:4222")
+        );
+        assert_eq!(
+            resolved.get("subject-allow").map(String::as_str),
+            Some("orders.processed,orders.received")
+        );
+        assert_eq!(
+            resolved.get("creds").map(String::as_str),
+            Some("/etc/nats/orders.creds")
+        );
+    }
+
+    /// The block is optional: a host that declares nothing serves the unnamed
+    /// binding at its data-plane address, with no grant.
+    #[test]
+    fn host_wasmcloud_nats_block_is_optional() {
+        let config: Config = serde_yaml_ng::from_str("host: {}").unwrap();
+        assert!(config.host().wasmcloud_nats.is_none());
+    }
+
+    /// A binding under an empty name is refused: the unnamed binding is
+    /// configured by the block itself, so an empty key is a typo that would
+    /// otherwise be silently unreachable.
+    #[test]
+    fn host_wasmcloud_nats_refuses_an_empty_binding_name() {
+        let yaml = r#"
+host:
+  wasmcloudNats:
+    bindings:
+      "":
+        config:
+          subject-allow: orders.>
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        config
+            .host()
+            .wasmcloud_nats
+            .unwrap()
+            .to_defaults(&config, Path::new("."), None)
+            .expect_err("an empty binding name must be refused");
+    }
+
+    /// `wash dev` reads the same shape under its own snake_case key, and its
+    /// own URL overrides the shared data-plane one.
+    #[test]
+    fn dev_wasmcloud_nats_deserializes_from_yaml() {
+        let yaml = r#"
+dev:
+  data_nats_url: nats://127.0.0.1:4222
+  wasmcloud_nats_url: nats://127.0.0.1:4322
+  wasmcloud_nats:
+    bindings:
+      orders:
+        config:
+          subject-allow: orders.>
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let dev = config.dev();
+        assert_eq!(
+            dev.wasmcloud_nats_url.as_deref(),
+            Some("nats://127.0.0.1:4322")
+        );
+        let defaults = dev
+            .wasmcloud_nats
+            .as_ref()
+            .expect("the block must deserialize")
+            .to_defaults(&config, Path::new("."), None)
+            .expect("the declaration must resolve");
+        assert_eq!(defaults.binding_names(), vec!["orders"]);
+    }
+
+    /// A URL with the wrong scheme is a typo, caught by validation rather than
+    /// by a connect that fails much later.
+    #[test]
+    fn dev_wasmcloud_nats_url_scheme_is_checked() {
+        let cfg = DevConfig {
+            wasmcloud_nats_url: Some("http://localhost:4222".to_string()),
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("wasmcloud_nats_url"),
+            "unexpected error: {err}"
         );
     }
 

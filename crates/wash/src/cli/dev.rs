@@ -155,22 +155,43 @@ impl CliCommand for DevCommand {
         // `wasmcloud:nats` — NATS-native core pub/sub, JetStream, and KV.
         // Unlike the plugins above it borrows no *client* from the dev host: it
         // opens one per workload, under that workload's own credentials and
-        // grant. It does take `dev.data_nats_url` as the address a binding
-        // falls back to when it names no `servers`, which is what lets the same
-        // manifest run in dev and on a cluster. With no `dev.data_nats_url`
+        // grant.
+        //
+        // A dev host declares bindings the same way `wash host` does
+        // (`dev.wasmcloud_nats`, with `dev.wasmcloud_nats_url` — or
+        // `dev.data_nats_url` — as the address a binding falls back to), but
+        // leaves a workload free to describe its own: a project's manifest has
+        // to stay runnable on its own, and the operator boundary `wash host`
+        // enforces has no one to enforce it for here. With no URL configured
         // there is no default, and a binding must name its own servers.
-        let mut nats_plugin =
-            plugin::wasmcloud_nats::WasmcloudNats::new().with_lattice_prefixes(vec![
-                format!("{}.", wash_runtime::washlet::HOST_API_PREFIX),
-                format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),
-            ]);
-        if let Some(url) = &dev_config.data_nats_url {
-            nats_plugin = nats_plugin.with_default_servers(vec![url.clone()]);
-            debug!("wasmcloud:nats plugin registered (default servers from data_nats_url)");
-        } else {
-            debug!("wasmcloud:nats plugin registered (no default servers)");
-        }
-        host_builder = host_builder.with_plugin(Arc::new(nats_plugin))?;
+        let nats_defaults = {
+            let declared = match &dev_config.wasmcloud_nats {
+                Some(nats) => nats.to_defaults(&config, project_dir, Some(project_dir))?,
+                None => plugin::wasmcloud_nats::NatsDefaults::new(),
+            };
+            let url = dev_config
+                .wasmcloud_nats_url
+                .clone()
+                .or_else(|| dev_config.data_nats_url.clone());
+            let declared = match url {
+                Some(url) => declared.with_default_servers(vec![url]),
+                None => declared,
+            };
+            declared.validate()?;
+            declared
+        };
+        debug!(
+            bindings = nats_defaults.binding_names().join(","),
+            "wasmcloud:nats plugin registered"
+        );
+        host_builder = host_builder.with_plugin(Arc::new(
+            plugin::wasmcloud_nats::WasmcloudNats::new()
+                .with_defaults(nats_defaults)
+                .with_lattice_prefixes(vec![
+                    format!("{}.", wash_runtime::washlet::HOST_API_PREFIX),
+                    format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),
+                ]),
+        ))?;
 
         // Per-plugin settings override the in-memory default. The order of precedence is:
         // use a filesystem backend if there is a path override,

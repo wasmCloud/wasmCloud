@@ -1,9 +1,9 @@
-//! Real-guest fixture for the async `wasmcloud:nats@0.2.0` surface.
+//! Real-guest fixture for the `wasmcloud:nats@0.1.0` surface.
 //!
-//! The P3 counterpart of `nats-jetstream-handler`. Both handlers are `async
-//! fn`s that await imported NATS calls from inside the delivery, which is the
-//! shape `@0.1.0` cannot express: a sync-signature export cannot be lifted with
-//! the async canonical ABI, and a sync export cannot await a P3 import.
+//! Both handlers are `async fn`s that await imported NATS calls from inside
+//! the delivery — the shape a sync-signature package cannot express, since a
+//! sync export cannot be lifted with the async canonical ABI and cannot await
+//! a P3 import.
 //!
 //! A `wasi:clocks@0.3.0` sleep is awaited before the echo so the component is
 //! genuinely P3 — a handler that never awaits a `@0.3` import lets that import
@@ -52,6 +52,7 @@ fn target(t: DeniedResource) -> &'static str {
         DeniedResource::Subject => "subject",
         DeniedResource::Stream => "stream",
         DeniedResource::Bucket => "bucket",
+        DeniedResource::Message => "message",
     }
 }
 

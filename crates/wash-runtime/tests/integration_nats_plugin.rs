@@ -22,7 +22,7 @@ use tokio::time::timeout;
 use wash_runtime::{
     engine::Engine,
     host::{HostApi, HostBuilder},
-    plugin::wasmcloud_nats::WasmcloudNats,
+    plugin::wasmcloud_nats::{NatsDefaults, WasmcloudNats, WorkloadConfig},
     types::{Component, LocalResources, Workload, WorkloadStartRequest, WorkloadState},
     wit::WitInterface,
 };
@@ -38,10 +38,9 @@ async fn expect_refused(host: &impl HostApi, request: WorkloadStartRequest) -> R
     Ok(response.workload_status.message)
 }
 
-const NATS_HANDLER_WASM: &[u8] = include_bytes!("wasm/nats_jetstream_handler.wasm");
-/// The P3 counterpart, bound against the async `@0.2.0` package.
-const NATS_ASYNC_HANDLER_WASM: &[u8] = include_bytes!("wasm/nats_async_handler_p3.wasm");
-/// Imports `wasmcloud:nats/core@0.2.0` twice, under `hub` and `leaf`.
+/// A P3 guest exporting the JetStream and core handlers.
+const NATS_HANDLER_WASM: &[u8] = include_bytes!("wasm/nats_async_handler_p3.wasm");
+/// Imports `wasmcloud:nats/core@0.1.0` twice, under `hub` and `leaf`.
 const NATS_BRIDGE_WASM: &[u8] = include_bytes!("wasm/nats_implements_p3.wasm");
 
 const STREAM: &str = "TESTS";
@@ -148,7 +147,7 @@ fn nats_interface(config: &[(&str, &str)]) -> WitInterface {
     }
 }
 
-/// A binding on the async `@0.2.0` package, with the core handler included so
+/// A binding with the core handler included so
 /// the P3 fixture's second export is served too.
 fn nats_async_interface(config: &[(&str, &str)]) -> WitInterface {
     WitInterface {
@@ -164,7 +163,7 @@ fn nats_async_interface(config: &[(&str, &str)]) -> WitInterface {
         ]
         .into_iter()
         .collect(),
-        version: Some(semver::Version::new(0, 2, 0)),
+        version: Some(semver::Version::new(0, 1, 0)),
         config: config
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -184,10 +183,7 @@ fn workload_request(workload_id: &str, interface: WitInterface) -> WorkloadStart
             components: vec![Component {
                 name: "nats-handler".to_string(),
                 digest: None,
-                bytes: bytes::Bytes::from_static(match interface.version {
-                    Some(semver::Version { minor: 2, .. }) => NATS_ASYNC_HANDLER_WASM,
-                    _ => NATS_HANDLER_WASM,
-                }),
+                bytes: bytes::Bytes::from_static(NATS_HANDLER_WASM),
                 local_resources: LocalResources {
                     memory_limit_mb: 256,
                     cpu_limit: 1,
@@ -209,15 +205,32 @@ fn workload_request(workload_id: &str, interface: WitInterface) -> WorkloadStart
 }
 
 async fn start_host() -> Result<impl HostApi> {
+    start_host_with(NatsDefaults::new()).await
+}
+
+/// A host that declares its own bindings, the way `wash host` does.
+async fn start_host_with(defaults: NatsDefaults) -> Result<impl HostApi> {
     let engine = Engine::builder().build()?;
     let host = HostBuilder::new()
         .with_engine(engine)
-        .with_plugin(Arc::new(WasmcloudNats::new().with_lattice_prefixes(vec![
-            "runtime.host.".to_string(),
-            "runtime.operator.".to_string(),
-        ])))?
+        .with_plugin(Arc::new(
+            WasmcloudNats::new()
+                .with_defaults(defaults)
+                .with_lattice_prefixes(vec![
+                    "runtime.host.".to_string(),
+                    "runtime.operator.".to_string(),
+                ]),
+        ))?
         .build()?;
     host.start().await.context("failed to start host")
+}
+
+/// The config map an operator writes for one declared binding.
+fn declared(config: &[(&str, &str)]) -> HashMap<String, String> {
+    config
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect()
 }
 
 /// Collects result lines the fixture publishes, up to `count` or the deadline.
@@ -366,7 +379,7 @@ async fn subject_outside_grant_is_denied() -> Result<()> {
     assert!(
         results
             .iter()
-            .any(|r| r == "denied-probe:subject-denied:other.subject"),
+            .any(|r| r == "denied-probe:denied:not-granted:subject:other.subject"),
         "expected the ungranted subject to be refused by name, got {results:?}"
     );
     Ok(())
@@ -408,7 +421,7 @@ async fn reserved_subjects_are_denied_even_with_a_broad_grant() -> Result<()> {
     assert!(
         results
             .iter()
-            .any(|r| r.starts_with("denied-probe:subject-denied:$JS.API")),
+            .any(|r| r.starts_with("denied-probe:denied:reserved:subject:$JS.API")),
         "a `>` grant must not reach $JS.API, got {results:?}"
     );
     Ok(())
@@ -451,7 +464,7 @@ async fn wildcard_publish_cannot_widen_a_grant() -> Result<()> {
     assert!(
         results
             .iter()
-            .any(|r| r == "denied-probe:subject-denied:other.>"),
+            .any(|r| r == "denied-probe:denied:wildcard-not-allowed:subject:other.>"),
         "a wildcard publish must not be matched against the grant, got {results:?}"
     );
     Ok(())
@@ -600,7 +613,7 @@ async fn each_workload_is_held_to_its_own_grant() -> Result<()> {
     assert!(
         probes
             .iter()
-            .any(|r| r.as_str() == "denied-probe:subject-denied:other.thing"),
+            .any(|r| r.as_str() == "denied-probe:denied:not-granted:subject:other.thing"),
         "the narrow grant must not inherit the broad one, got {results:?}"
     );
 
@@ -614,7 +627,7 @@ async fn each_workload_is_held_to_its_own_grant() -> Result<()> {
     Ok(())
 }
 
-/// The async `@0.2.0` package delivers into a P3 component whose handler is an
+/// The package delivers into a P3 component whose handler is an
 /// `async fn` awaiting imported NATS calls. This is what `@0.1.0` cannot do: a
 /// sync-signature export cannot be lifted with the async canonical ABI.
 #[tokio::test]
@@ -992,7 +1005,7 @@ fn named_nats_interface(name: &str, interfaces: &[&str], config: &[(&str, &str)]
         namespace: "wasmcloud".to_string(),
         package: "nats".to_string(),
         interfaces: interfaces.iter().map(|i| (*i).to_string()).collect(),
-        version: Some(semver::Version::new(0, 2, 0)),
+        version: Some(semver::Version::new(0, 1, 0)),
         config: config
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -1221,6 +1234,152 @@ async fn a_fetch_over_the_consumer_limit_is_refused_not_reported_empty() -> Resu
     assert!(
         capped.starts_with("pull:ok:") && capped.contains(":byte-limit:"),
         "a byte-capped batch should report `byte-limit`, got {capped:?}"
+    );
+    Ok(())
+}
+
+/// The shape this plugin is meant to be operated in: the host declares what
+/// each binding is — where it points and what it may reach — and the workload's
+/// manifest only names the binding and says which subject it wants delivered.
+/// Nothing in the manifest could have widened its own reach.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn declared_bindings_serve_a_manifest_that_only_asks() -> Result<()> {
+    let (hub_url, hub_client, _hub) = start_bare_nats().await?;
+    let (leaf_url, leaf_client, _leaf) = start_bare_nats().await?;
+
+    let host = start_host_with(
+        NatsDefaults::new()
+            .with_workload_config(WorkloadConfig::Deny)
+            .with_binding(
+                "hub",
+                declared(&[("servers", &hub_url), ("subject-allow", "bridge.>")]),
+            )
+            .with_binding(
+                "leaf",
+                declared(&[
+                    ("servers", &leaf_url),
+                    ("subject-allow", "bridge.>,trigger.go"),
+                ]),
+            ),
+    )
+    .await?;
+
+    host.workload_start(bridge_workload_request(
+        "wl-declared-bridge",
+        vec![
+            named_nats_interface("hub", &["types", "core"], &[]),
+            named_nats_interface(
+                "leaf",
+                &["types", "core", "core-handler"],
+                // All the manifest still says: which subject this handler wants.
+                &[("core-subscriptions", "trigger.go")],
+            ),
+        ],
+    ))
+    .await
+    .context("failed to start the bridge workload")?;
+
+    let mut hub_sub = hub_client.subscribe("bridge.hub".to_string()).await?;
+    let mut leaf_sub = leaf_client.subscribe("bridge.leaf".to_string()).await?;
+    let triggering = tokio::spawn({
+        let client = leaf_client.clone();
+        async move {
+            loop {
+                let _ = client
+                    .publish("trigger.go".to_string(), "over-the-leafnode".into())
+                    .await;
+                let _ = client.flush().await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    });
+
+    let budget = Duration::from_secs(45);
+    let hub_seen = timeout(budget, hub_sub.next())
+        .await
+        .ok()
+        .flatten()
+        .map(|msg| String::from_utf8_lossy(&msg.payload).to_string());
+    let leaf_seen = timeout(budget, leaf_sub.next())
+        .await
+        .ok()
+        .flatten()
+        .map(|msg| String::from_utf8_lossy(&msg.payload).to_string());
+    triggering.abort();
+
+    assert_eq!(
+        hub_seen.as_deref(),
+        Some("hub:over-the-leafnode"),
+        "the host's `hub` declaration should carry the workload to the hub server"
+    );
+    assert_eq!(
+        leaf_seen.as_deref(),
+        Some("leaf:over-the-leafnode"),
+        "and its `leaf` declaration to the leaf server"
+    );
+    Ok(())
+}
+
+/// A manifest cannot hand itself a grant the operator withheld. The refusal is
+/// at deploy, naming the key, rather than a workload that starts and then has
+/// every call denied one at a time.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn a_manifest_cannot_widen_a_declared_grant() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host_with(
+        NatsDefaults::new()
+            .with_workload_config(WorkloadConfig::Deny)
+            .with_default_servers(vec![h.nats_url.clone()])
+            .with_base(declared(&[("subject-allow", "test.orders.>")])),
+    )
+    .await?;
+
+    let message = expect_refused(
+        &host,
+        workload_request(
+            "wl-selfgrant",
+            nats_interface(&[("subject-allow", "test.>"), ("stream-allow", STREAM)]),
+        ),
+    )
+    .await?;
+
+    assert!(
+        message.contains("`subject-allow`") && message.contains("`stream-allow`"),
+        "expected the refusal to name the keys the host does not accept, got {message}"
+    );
+    Ok(())
+}
+
+/// Asking for a binding the host does not serve is a deployment error, not a
+/// workload started against the right cluster with an empty grant.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn asking_for_an_undeclared_binding_fails_the_deployment() -> Result<()> {
+    let (hub_url, _hub_client, _hub) = start_bare_nats().await?;
+    let host = start_host_with(
+        NatsDefaults::new()
+            .with_workload_config(WorkloadConfig::Deny)
+            .with_binding("hub", declared(&[("servers", &hub_url)])),
+    )
+    .await?;
+
+    let message = expect_refused(
+        &host,
+        bridge_workload_request(
+            "wl-undeclared",
+            vec![
+                named_nats_interface("hub", &["types", "core"], &[]),
+                named_nats_interface("leaf", &["types", "core", "core-handler"], &[]),
+            ],
+        ),
+    )
+    .await?;
+
+    assert!(
+        message.contains("leaf"),
+        "expected the refusal to name the binding asked for, got {message}"
     );
     Ok(())
 }

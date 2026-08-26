@@ -5,8 +5,6 @@ use async_nats::jetstream::consumer::{Consumer, pull};
 use async_nats::jetstream::kv::Store;
 use async_nats::jetstream::message::Acker;
 
-use super::bindings::wasmcloud::nats0_1_0::types::{self, NatsError};
-
 /// Handle to a single JetStream-delivered message.
 ///
 /// Holds an `Acker` rather than the whole message: `Message::split` separates
@@ -64,23 +62,11 @@ pub struct BucketHandle {
     pub(super) store: Store,
 }
 
-pub(super) fn jetstream_err(ctx: impl std::fmt::Display, e: impl std::fmt::Display) -> NatsError {
-    NatsError::Jetstream(format!("{ctx}: {e}"))
-}
-
-/// Reported when a guest settles a message the host already owns.
-pub(super) fn already_settled() -> NatsError {
-    NatsError::Unexpected(
-        "message already settled, or acknowledgement is owned by the host under ack-mode: auto"
-            .to_string(),
-    )
-}
-
-/// Generates the error classifiers shared by the two host implementations.
+/// Generates the error classifiers over the generated `types` module.
 ///
-/// The 0.1.0 and 0.2.0 WIT revisions produce separate generated `types`
-/// modules with the same variant names, so one body serves both and the twins
-/// cannot drift. Expand at a site that has `types` in scope.
+/// A macro rather than plain functions because the handler worlds and the
+/// imports world each generate their own `types`, so the classifiers are
+/// expanded per module with `types` in scope rather than shared by import.
 macro_rules! nats_error_classifiers {
     () => {
         /// Classifies a stream lookup, which must only claim `not-found` when
@@ -301,5 +287,3 @@ macro_rules! nats_error_classifiers {
 }
 
 pub(super) use nats_error_classifiers;
-
-nats_error_classifiers!();

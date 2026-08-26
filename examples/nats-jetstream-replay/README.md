@@ -55,6 +55,37 @@ wash build
 
 ## Deploy
 
+Where a binding points, as whom, and what it may reach are the *host's* to
+declare — a workload asks for a binding and receives what the operator granted
+it. On a cluster that lives in the chart
+(`runtime.hostGroups[].wasmcloudNats`), which renders into the host's config
+file:
+
+```yaml
+host:
+  wasmcloudNats:
+    config:
+      servers: nats://nats.default.svc:4222
+      # Deny-by-default: without these the workload reaches nothing. A
+      # subscription's filter subject is checked against this too, so
+      # `orders.received` has to be listed even though the grant on the
+      # ORDERS stream is what selects the stream.
+      subject-allow: orders.processed,orders.received
+      stream-allow: ORDERS,PROCESSED
+      bucket-allow: order-totals
+    # Credentials never appear in a manifest, and never on a command line.
+    secretFrom:
+      - nats-credentials
+```
+
+This component imports `wasmcloud:nats` plainly, so it gets the *unnamed*
+binding — the block above. A workload that wants two bindings labels its
+imports (`(implements orders)`) and the host declares each under
+`wasmcloudNats.bindings.<name>`; label routing is served by the async
+`@0.2.0` package only.
+
+The manifest then says only what it wants delivered:
+
 ```yaml
 apiVersion: runtime.wasmcloud.dev/v1alpha1
 kind: WorkloadDeployment
@@ -71,30 +102,31 @@ spec:
       version: "0.1.0"
       interfaces: [types, jetstream, kv, jetstream-handler]
       config:
-        servers: nats://nats.default.svc:4222
-        # Deny-by-default: without these the component reaches nothing. A
-        # subscription's filter subject is checked against this too, so
-        # `orders.received` has to be listed even though the grant on the
-        # ORDERS stream is what selects the stream.
-        subject-allow: orders.processed,orders.received
-        stream-allow: ORDERS,PROCESSED
-        bucket-allow: order-totals
         # STREAM:filter[:policy[:queue]]
         subscriptions: ORDERS:orders.received:all
         ack-mode: auto
         max-in-flight: "32"
-      secretFrom:
-        - nats-credentials
 ```
 
 `subject-allow`, `stream-allow`, and `bucket-allow` are the capability boundary.
 They are separate on purpose: permission to publish to `orders.processed` does
-not carry permission to read or delete the `ORDERS` stream.
+not carry permission to read or delete the `ORDERS` stream. A `wash host`
+refuses a manifest that sets any of them, or one that names a binding it does
+not serve — a workload can ask for a capability, never widen one.
 
 Credentials never appear in `config`. The host merges
 `config` → `configFrom` → `secretFrom` (later wins) before the plugin sees them,
 so a creds file, JWT + nkey seed, username/password, or token arrives already
 resolved. An nkey seed is signed host-side and never crosses into the sandbox.
+
+### Under `wash dev`
+
+`wash dev` leaves the manifest free to describe its own binding, so a project
+stays runnable on its own: put the same keys — `servers` and the three grants —
+straight in the interface's `config`, or declare them once under
+`dev.wasmcloud_nats` in `.wash/config.yaml`. `dev.wasmcloud_nats_url` (falling
+back to `dev.data_nats_url`) is the address a binding that names no `servers`
+falls back to.
 
 ## Try it
 
