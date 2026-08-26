@@ -49,12 +49,16 @@ async fn setup_test_project_with_world(content: &str) -> Result<(TempDir, std::p
     tokio::fs::write(wit_dir.join("world.wit"), content)
         .await
         .context("failed to write world.wit")?;
+    // TOML reads `\` in a basic string as an escape, and `CARGO_MANIFEST_DIR` is
+    // backslash-separated on Windows; forward slashes work on every platform.
+    let logging = VENDORED_WASI_LOGGING.replace('\\', "/");
+    let config = VENDORED_WASI_CONFIG.replace('\\', "/");
     tokio::fs::write(
         temp.path().join("wkg.toml"),
         format!(
             "[overrides]\n\
-             \"wasi:logging\" = {{ path = \"{VENDORED_WASI_LOGGING}\" }}\n\
-             \"wasi:config\" = {{ path = \"{VENDORED_WASI_CONFIG}\" }}\n"
+             \"wasi:logging\" = {{ path = \"{logging}\" }}\n\
+             \"wasi:config\" = {{ path = \"{config}\" }}\n"
         ),
     )
     .await
