@@ -53,6 +53,12 @@ anything. Without it, a redelivered order publishes a second notification.
 wash build
 ```
 
+Every `wasmcloud:nats` function is an `async func`, so this is a **WASI P3**
+component: `wash build` compiles it to a `wasm32-wasip1` core module and wraps
+that into a component. The handler is an `async fn` that awaits its imports
+from inside the delivery, and the host keeps delivering to the same instance
+while it does.
+
 ## Deploy
 
 Where a binding points, as whom, and what it may reach are the *host's* to
@@ -95,7 +101,7 @@ spec:
   replicas: 1
   components:
     - name: processor
-      image: file://./target/wasm32-wasip2/release/nats_jetstream_replay.wasm
+      image: file://./target/wasm32-wasip1/release/nats_jetstream_replay.wasm
   hostInterfaces:
     - namespace: wasmcloud
       package: nats

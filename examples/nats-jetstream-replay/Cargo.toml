@@ -42,7 +42,7 @@ uninit_vec = 'deny'
 unnecessary_box_returns = 'deny'
 
 [dependencies]
-wit-bindgen = "0.60"
+wit-bindgen = { version = "0.60", features = ["async-spawn", "inter-task-wakeup"] }
 
 [profile.release]
 lto = true
