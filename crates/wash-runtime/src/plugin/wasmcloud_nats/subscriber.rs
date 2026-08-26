@@ -17,13 +17,10 @@ use crate::engine::workload::ResolvedWorkload;
 use crate::observability::FuelConsumptionMeter;
 use crate::wasmtime::component::Resource;
 
-use super::config::AckMode;
+use super::config::{AckMode, CoreSubscriptionConfig, JetStreamSubscriptionConfig, KvWatchConfig};
 use super::conn::ConnHandle;
 use super::handles::{BucketHandle, MessageHandle};
-use super::{
-    CoreSubscriptionConfig, JetStreamSubscriptionConfig, KvWatchConfig, PLUGIN_NATS_ID,
-    core_bindings, jetstream_bindings, kv_bindings,
-};
+use super::{PLUGIN_NATS_ID, core_bindings, jetstream_bindings, kv_bindings};
 
 use crate::engine::ctx::SharedCtx;
 
