@@ -24,4 +24,15 @@ RUN cargo build --release --bin wash ${CARGO_FEATURES:+--features ${CARGO_FEATUR
 FROM cgr.dev/chainguard/wolfi-base
 RUN apk add --no-cache git
 COPY --from=builder /src/target/release/wash /usr/local/bin/wash
+
+# Smoke test the binary against THIS stage's libc. The builder and the runtime
+# base are independently-rolling `:latest` Chainguard images, so they can sit on
+# different glibc majors for a window (e.g. rust:latest-dev on 2.44 while
+# wolfi-base is still on 2.43, which Wolfi ships as separate, mutually
+# conflicting `glibc-2.43`/`glibc-2.44` packages — apk cannot reconcile them
+# here). Without this the image builds green and only fails much later, as an
+# unreadable `libm.so.6: version GLIBC_x.y not found` CrashLoopBackOff in the
+# operator e2e cluster. Fail here instead, where the error points at the cause.
+RUN ["/usr/local/bin/wash", "--version"]
+
 ENTRYPOINT ["/usr/local/bin/wash"]
