@@ -55,12 +55,8 @@ jobs:
           {"key": "otel-config",              "workdir": "examples/otel-config",                         "image": "ghcr.io/wasmcloud/components/otel-config"},
           {"key": "qrcode",                   "workdir": "examples/qrcode",                              "image": "ghcr.io/wasmcloud/components/qrcode"}
         ]
-      # When these change, every example rebuilds. The last entry is not a
-      # CI path: `wasmcloud:nats` is unpublished, so nats-jetstream-replay
-      # resolves it from the host's own copy via a wkg.toml override rather
-      # than vendoring it. paths-filter gates each example on its own
-      # directory, so without this a change to that interface would not
-      # rebuild the example that binds it.
+      # When these change, every example rebuilds. The last entry is a TODO:
+      # drop it once wasmcloud:nats is published to crates.io.
       shared-paths: |
         [
           ".github/actions/build-rust-component/**",
