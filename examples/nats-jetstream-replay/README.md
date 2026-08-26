@@ -168,5 +168,19 @@ nats pub orders.received "not-an-order"
   `manual` to take over, and call `handle.ack()` / `nak()` / `term()` yourself.
 - `max-in-flight` bounds concurrent handler invocations per consumer. Without a
   bound, a backlog spike fans out into the component pool all at once.
+- `max-ack-pending` is what the host asks the *server* for, and it is the only
+  bound in the chain the server enforces: past that many unsettled deliveries
+  JetStream stops sending. Unset, it is `max-in-flight` doubled, capped at
+  `subscription-capacity` — enough that a handler always has the next message
+  waiting, never so much that the buffer they wait in overflows. Set `0` to
+  defer to the server's own default. A queue group shares one durable, so the
+  value is the budget for the whole group and replicas divide it.
+- `subscription-capacity` bounds a subscription's backlog in *messages* and
+  `subscription-capacity-bytes` (32 MiB by default) bounds the same backlog in
+  bytes. Large payloads exhaust the second long before the first. Core NATS has
+  no flow control, so a core subscription whose publisher outruns it sheds at
+  whichever bound it reaches — the host logs the running count and the subject.
+  A fan-out that must not lose messages belongs on JetStream, where
+  `max-ack-pending` makes the server wait instead.
 - The component is per-request. It holds no consumer and no stream, so it scales
   down to nothing between bursts — the host owns the subscription.
