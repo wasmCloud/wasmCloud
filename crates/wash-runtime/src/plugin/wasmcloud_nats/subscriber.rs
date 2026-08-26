@@ -538,6 +538,11 @@ pub(super) async fn spawn_jetstream_subscriptions(
                     ack_policy: jetstream::consumer::AckPolicy::Explicit,
                     ack_wait: std::time::Duration::from_secs(30),
                     deliver_policy,
+                    // Server-enforced ceiling on unacked deliveries: it
+                    // stops sending past this, pacing the stream to how fast
+                    // the component drains. A queue group shares one durable,
+                    // so replicas divide this budget.
+                    max_ack_pending: conn.limits.effective_max_ack_pending(),
                     // A queue group is deliberately left without one; see
                     // `IDLE_HEARTBEAT`. `QUEUE_LIVENESS_PROBE` covers what the
                     // heartbeat would have caught there.
@@ -1102,6 +1107,122 @@ async fn wait_or_cancel(cancel_token: &CancellationToken, delay: std::time::Dura
     }
 }
 
+/// How often a core subscription that is shedding reports its running totals.
+///
+/// Rate-limited rather than per-dropped-message: shedding happens at rates
+/// that would otherwise flood the log with identical lines.
+const SHED_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// What a core subscription has queued and what it has had to shed.
+///
+/// Bytes are tracked because `subscription-capacity` counts messages, and a
+/// large-payload burst exhausts memory. The reader only adds and the delivery
+/// loop only subtracts, so the count runs slightly conservative at worst.
+#[derive(Default)]
+struct CoreBacklog {
+    /// Bytes sitting between the reader and the delivery loop.
+    queued_bytes: std::sync::atomic::AtomicUsize,
+    /// Deliveries shed since the subscription started, and their total size.
+    shed: std::sync::atomic::AtomicU64,
+    shed_bytes: std::sync::atomic::AtomicU64,
+}
+
+/// Whether a delivery of `len` bytes may join a backlog already holding
+/// `queued`.
+///
+/// An empty backlog always admits, so a byte budget smaller than a single
+/// message shrinks throughput rather than shedding everything forever.
+fn admits(queued: usize, len: usize, max_bytes: usize) -> bool {
+    queued == 0 || queued.saturating_add(len) <= max_bytes
+}
+
+/// Records one shed delivery, reporting no more than once per interval.
+fn record_shed(
+    backlog: &CoreBacklog,
+    subject: &str,
+    len: usize,
+    last_report: &mut Option<tokio::time::Instant>,
+    reason: &'static str,
+) {
+    let total = backlog.shed.fetch_add(1, Ordering::Relaxed) + 1;
+    let total_bytes = backlog.shed_bytes.fetch_add(len as u64, Ordering::Relaxed) + len as u64;
+    let now = tokio::time::Instant::now();
+    if last_report.is_none_or(|at| now.duration_since(at) >= SHED_REPORT_INTERVAL) {
+        *last_report = Some(now);
+        warn!(
+            subject = %subject,
+            reason,
+            shed_total = total,
+            shed_bytes = total_bytes,
+            queued_bytes = backlog.queued_bytes.load(Ordering::Relaxed),
+            "core subscription is shedding: deliveries are arriving faster than \
+             the component drains them"
+        );
+    }
+}
+
+/// Moves deliveries off the NATS subscription and into the host's own backlog.
+///
+/// `async_nats::Subscriber` silently discards messages when its channel fills,
+/// so a delivery loop that stops reading while waiting for a handler permit
+/// loses messages it cannot count. A task that does nothing but drain keeps
+/// that channel near empty and parks the backlog here, where shedding is
+/// counted, attributed to a subject, and bounded in bytes.
+fn spawn_core_reader(
+    subject: String,
+    mut messages: async_nats::Subscriber,
+    deliveries: tokio::sync::mpsc::Sender<async_nats::Message>,
+    backlog: Arc<CoreBacklog>,
+    max_bytes: usize,
+    cancel_token: CancellationToken,
+) {
+    tokio::spawn(async move {
+        let mut last_report = None;
+        loop {
+            // Without the cancellation arm a torn-down workload leaves this
+            // task parked on a subscription that may never deliver again: the
+            // closed channel is only noticed on the next message to arrive.
+            let message = tokio::select! {
+                next = messages.next() => match next {
+                    Some(m) => m,
+                    None => break,
+                },
+                _ = cancel_token.cancelled() => break,
+            };
+
+            let len = message.length;
+            let queued = backlog.queued_bytes.load(Ordering::Relaxed);
+            if !admits(queued, len, max_bytes) {
+                record_shed(&backlog, &subject, len, &mut last_report, "byte budget");
+                continue;
+            }
+
+            match deliveries.try_send(message) {
+                Ok(()) => {
+                    backlog.queued_bytes.fetch_add(len, Ordering::Relaxed);
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    record_shed(&backlog, &subject, len, &mut last_report, "backlog full");
+                }
+                // The delivery loop is gone; so is the reason to read.
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
+            }
+        }
+
+        // Dropping the subscriber closes its channel, which is what the client
+        // turns into an UNSUB.
+        let shed = backlog.shed.load(Ordering::Relaxed);
+        if shed > 0 {
+            warn!(
+                subject = %subject,
+                shed_total = shed,
+                shed_bytes = backlog.shed_bytes.load(Ordering::Relaxed),
+                "core subscription ended having shed deliveries"
+            );
+        }
+    });
+}
+
 /// Spawn core NATS subscribers (no ack semantics, optional queue group).
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn spawn_core_subscriptions(
@@ -1144,7 +1265,7 @@ pub(super) async fn spawn_core_subscriptions(
                 }
                 None => conn.client.subscribe(sub.subject.clone()).await,
             };
-            let mut messages = match subscriber {
+            let messages = match subscriber {
                 Ok(s) => s,
                 Err(e) => {
                     warn!("failed to subscribe to core subject '{}': {e}", sub.subject);
@@ -1152,10 +1273,28 @@ pub(super) async fn spawn_core_subscriptions(
                 }
             };
 
+            // The subscription is read by its own task and this loop takes
+            // from the backlog it fills, so that waiting for a handler permit
+            // never means leaving the client's channel unread. See
+            // `spawn_core_reader` for what that costs when it is not done.
+            let backlog = Arc::new(CoreBacklog::default());
+            let (deliveries, mut inbound) =
+                tokio::sync::mpsc::channel(conn.limits.subscription_capacity);
+            spawn_core_reader(
+                sub.subject.clone(),
+                messages,
+                deliveries,
+                backlog.clone(),
+                conn.limits.subscription_capacity_bytes,
+                cancel_token.clone(),
+            );
+
             loop {
                 // Taken before a message is, so that waiting for capacity
                 // never blinds the loop to cancellation — see the same
-                // ordering in the JetStream loop.
+                // ordering in the JetStream loop. Unlike there, holding off
+                // here costs nothing beyond latency: the reader keeps the
+                // subscription drained either way.
                 let permit = tokio::select! {
                     acquired = in_flight.clone().acquire_owned() => match acquired {
                         Ok(p) => p,
@@ -1165,11 +1304,18 @@ pub(super) async fn spawn_core_subscriptions(
                 };
 
                 tokio::select! {
-                    maybe_msg = messages.next() => {
+                    maybe_msg = inbound.recv() => {
                         let raw = match maybe_msg {
                             None => break,
                             Some(m) => m,
                         };
+                        // Read before `raw` is handed on, and released here
+                        // rather than after the handler returns: the byte
+                        // budget bounds what is queued *ahead* of the handler
+                        // pool, which `max-in-flight` already bounds.
+                        backlog
+                            .queued_bytes
+                            .fetch_sub(raw.length, Ordering::Relaxed);
 
                         let mut store = tokio::select! {
                             created = workload.new_store(&component_id) => match created {
@@ -1531,4 +1677,59 @@ pub(super) async fn spawn_kv_watches(
     // future watchers want to pass a bucket resource into the handler.
     let _ = std::marker::PhantomData::<BucketHandle>;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering::Relaxed;
+
+    #[test]
+    fn a_backlog_under_budget_admits() {
+        assert!(admits(0, 512, 4096));
+        assert!(admits(3584, 512, 4096));
+    }
+
+    #[test]
+    fn a_backlog_that_would_exceed_the_budget_sheds() {
+        assert!(!admits(3585, 512, 4096));
+        assert!(!admits(4096, 1, 4096));
+    }
+
+    #[test]
+    fn an_empty_backlog_admits_a_message_larger_than_the_whole_budget() {
+        // Otherwise a budget set below one payload is not a tight bound, it is
+        // a subscription that delivers nothing and never says why.
+        assert!(admits(0, 1_048_576, 4096));
+    }
+
+    #[test]
+    fn shedding_is_counted_exactly() {
+        // The property the `SlowConsumer` event cannot offer: every shed
+        // delivery lands in the totals, whether or not it was reported. The
+        // interval throttles the log line, never the accounting.
+        let backlog = CoreBacklog::default();
+        let mut last_report = None;
+        for _ in 0..10_000 {
+            record_shed(&backlog, "fan.work", 64, &mut last_report, "backlog full");
+        }
+        assert_eq!(backlog.shed.load(Relaxed), 10_000);
+        assert_eq!(backlog.shed_bytes.load(Relaxed), 640_000);
+    }
+
+    #[test]
+    fn shedding_reports_at_most_once_per_interval() {
+        let backlog = CoreBacklog::default();
+        let mut last_report = None;
+        record_shed(&backlog, "fan.work", 64, &mut last_report, "backlog full");
+        let first = last_report.expect("the first shed always reports");
+        for _ in 0..1_000 {
+            record_shed(&backlog, "fan.work", 64, &mut last_report, "backlog full");
+        }
+        assert_eq!(
+            last_report,
+            Some(first),
+            "a burst inside one interval should not move the report mark"
+        );
+    }
 }

@@ -1145,6 +1145,102 @@ async fn two_named_bindings_reach_two_clusters() -> Result<()> {
     Ok(())
 }
 
+/// A burst that stays inside `subscription-capacity` must not lose anything.
+///
+/// The delivery loop cannot both wait for a handler permit and keep reading the
+/// subscription, so it does not try: a reader task drains the client's channel
+/// into a host-side backlog this loop takes from. That is a change to the path
+/// every core delivery travels, and the property it must not break is this one
+/// — under capacity, with the handler pool the bottleneck, nothing is shed.
+///
+/// The burst is deliberately wider than `max-in-flight`, so most of it is
+/// sitting in the backlog rather than in a handler when the next message
+/// arrives. A run that shed anything would come up short, and the count is
+/// exact rather than a threshold because that is the whole claim.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn a_burst_under_capacity_loses_nothing() -> Result<()> {
+    const BURST: usize = 100;
+
+    let (url, client, _nats) = start_bare_nats().await?;
+    let host = start_host().await?;
+
+    // Both labels point at the one server: this test is about the subscription
+    // path, not about which cluster a publish lands in.
+    host.workload_start(bridge_workload_request(
+        "wl-burst",
+        vec![
+            named_nats_interface(
+                "hub",
+                &["types", "core"],
+                &[("servers", &url), ("subject-allow", "bridge.>")],
+            ),
+            named_nats_interface(
+                "leaf",
+                &["types", "core", "core-handler"],
+                &[
+                    ("servers", &url),
+                    ("subject-allow", "bridge.>,trigger.go"),
+                    ("core-subscriptions", "trigger.go"),
+                ],
+            ),
+        ],
+    ))
+    .await
+    .context("failed to start the burst workload")?;
+
+    let mut leaf = client.subscribe("bridge.leaf".to_string()).await?;
+
+    // Core NATS drops what is published before a subscription attaches, so the
+    // burst cannot start until one round trip has actually completed. Retry
+    // until the workload answers, then take that answer off the wire.
+    let mut attached = false;
+    for _ in 0..45 {
+        client
+            .publish("trigger.go".to_string(), "warmup".into())
+            .await?;
+        client.flush().await?;
+        if timeout(Duration::from_secs(1), leaf.next()).await.is_ok() {
+            attached = true;
+            break;
+        }
+    }
+    assert!(attached, "the workload never attached its subscription");
+
+    // Warmups already in flight would otherwise be counted as burst messages.
+    while timeout(Duration::from_millis(500), leaf.next())
+        .await
+        .is_ok()
+    {}
+
+    for n in 0..BURST {
+        client
+            .publish("trigger.go".to_string(), format!("burst-{n}").into())
+            .await?;
+    }
+    client.flush().await?;
+
+    let mut seen = 0usize;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while seen < BURST {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match timeout(remaining, leaf.next()).await {
+            Ok(Some(_)) => seen += 1,
+            Ok(None) | Err(_) => break,
+        }
+    }
+
+    assert_eq!(
+        seen, BURST,
+        "a {BURST}-message burst is well inside the default 1024-message \
+         subscription capacity, so every one of them should have been delivered"
+    );
+    Ok(())
+}
+
 /// Drives the async fixture's pull probe and returns the line it reports.
 async fn pull_probe(client: &async_nats::Client, spec: &str) -> Result<String> {
     let mut results = client.subscribe("test.results".to_string()).await?;

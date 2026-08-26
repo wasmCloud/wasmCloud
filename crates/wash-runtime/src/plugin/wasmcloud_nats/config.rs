@@ -15,6 +15,12 @@ use zeroize::Zeroizing;
 const DEFAULT_MAX_IN_FLIGHT: usize = 64;
 /// Default subscription channel capacity.
 const DEFAULT_SUBSCRIPTION_CAPACITY: usize = 1024;
+/// Default byte ceiling on a core subscription's host-side backlog.
+///
+/// `subscription-capacity` counts messages, so it bounds memory only if
+/// payloads are small. This is the companion bound in bytes, and binds only
+/// when large payloads make the message count a poor proxy.
+const DEFAULT_SUBSCRIPTION_CAPACITY_BYTES: usize = 32 * 1024 * 1024;
 
 /// How a workload authenticates to NATS.
 ///
@@ -78,6 +84,10 @@ pub struct PolicySpec {
 pub struct Limits {
     pub max_in_flight: usize,
     pub subscription_capacity: usize,
+    pub subscription_capacity_bytes: usize,
+    /// What the JetStream push consumer asks the server for, or `None` to
+    /// derive it. See [`Limits::effective_max_ack_pending`].
+    pub max_ack_pending: Option<usize>,
 }
 
 impl Default for Limits {
@@ -85,7 +95,29 @@ impl Default for Limits {
         Self {
             max_in_flight: DEFAULT_MAX_IN_FLIGHT,
             subscription_capacity: DEFAULT_SUBSCRIPTION_CAPACITY,
+            subscription_capacity_bytes: DEFAULT_SUBSCRIPTION_CAPACITY_BYTES,
+            max_ack_pending: None,
         }
+    }
+}
+
+impl Limits {
+    /// How many deliveries a JetStream push consumer may leave unacked, as the
+    /// server's `max_ack_pending`.
+    ///
+    /// The only backpressure in the stack the server enforces: past this many
+    /// outstanding deliveries it stops sending until some settle.
+    ///
+    /// Unset, it is `max-in-flight` doubled (capped at
+    /// `subscription-capacity`), so the handler pool always has a message
+    /// queued behind every one it is running. `0` hands the decision back to
+    /// the server, whose default is far above either.
+    pub fn effective_max_ack_pending(&self) -> i64 {
+        let derived = self
+            .max_in_flight
+            .saturating_mul(2)
+            .min(self.subscription_capacity);
+        i64::try_from(self.max_ack_pending.unwrap_or(derived)).unwrap_or(i64::MAX)
     }
 }
 
@@ -267,12 +299,28 @@ impl NatsConfig {
                 "subscription-capacity",
                 DEFAULT_SUBSCRIPTION_CAPACITY,
             )?,
+            subscription_capacity_bytes: parse_usize(
+                cfg,
+                "subscription-capacity-bytes",
+                DEFAULT_SUBSCRIPTION_CAPACITY_BYTES,
+            )?,
+            // Zero is meaningful here -- it is how an operator says "server
+            // default" -- so unlike the other two it is not rejected.
+            max_ack_pending: match get(cfg, "max-ack-pending") {
+                Some(raw) => Some(raw.parse().with_context(|| {
+                    format!("`max-ack-pending` must be a non-negative integer, got `{raw}`")
+                })?),
+                None => None,
+            },
         };
         if limits.max_in_flight == 0 {
             bail!("`max-in-flight` must be greater than zero");
         }
         if limits.subscription_capacity == 0 {
             bail!("`subscription-capacity` must be greater than zero");
+        }
+        if limits.subscription_capacity_bytes == 0 {
+            bail!("`subscription-capacity-bytes` must be greater than zero");
         }
 
         let tls = TlsConfig {
@@ -367,6 +415,8 @@ impl NatsConfig {
         self.ack_mode.hash(&mut hasher);
         self.limits.max_in_flight.hash(&mut hasher);
         self.limits.subscription_capacity.hash(&mut hasher);
+        self.limits.subscription_capacity_bytes.hash(&mut hasher);
+        self.limits.max_ack_pending.hash(&mut hasher);
         self.request_timeout.hash(&mut hasher);
 
         ConnKey {
@@ -658,8 +708,64 @@ mod tests {
     }
 
     #[test]
+    fn max_ack_pending_defaults_to_twice_max_in_flight() {
+        let cfg = NatsConfig::from_map(&map(&[("servers", "nats://localhost:4222")])).unwrap();
+        assert_eq!(cfg.limits.effective_max_ack_pending(), 128);
+    }
+
+    #[test]
+    fn max_ack_pending_never_exceeds_the_buffer_it_lands_in() {
+        // Doubling 2000 would let the server keep 4000 deliveries outstanding
+        // for a subscription buffer that holds 1024, which is exactly the
+        // overflow this bound exists to prevent.
+        let cfg = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("max-in-flight", "2000"),
+            ("subscription-capacity", "1024"),
+        ]))
+        .unwrap();
+        assert_eq!(cfg.limits.effective_max_ack_pending(), 1024);
+    }
+
+    #[test]
+    fn max_ack_pending_is_overridable_and_zero_means_server_default() {
+        let explicit = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("max-ack-pending", "5000"),
+        ]))
+        .unwrap();
+        assert_eq!(explicit.limits.effective_max_ack_pending(), 5000);
+
+        let deferred = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("max-ack-pending", "0"),
+        ]))
+        .unwrap();
+        assert_eq!(deferred.limits.effective_max_ack_pending(), 0);
+    }
+
+    #[test]
+    fn backpressure_knobs_are_part_of_connection_identity() {
+        // Two bindings that buffer differently cannot share a connection:
+        // `subscription-capacity` is a connect option, and the byte budget and
+        // ack ceiling are read off the handle every subscription uses.
+        let base = &[("servers", "nats://localhost:4222")][..];
+        let key = |extra: &[(&str, &str)]| {
+            let mut all = base.to_vec();
+            all.extend_from_slice(extra);
+            NatsConfig::from_map(&map(&all)).unwrap().connection_key()
+        };
+        assert_ne!(key(&[]), key(&[("subscription-capacity-bytes", "1048576")]));
+        assert_ne!(key(&[]), key(&[("max-ack-pending", "128")]));
+    }
+
+    #[test]
     fn zero_limits_fail() {
-        for key in ["max-in-flight", "subscription-capacity"] {
+        for key in [
+            "max-in-flight",
+            "subscription-capacity",
+            "subscription-capacity-bytes",
+        ] {
             let err =
                 NatsConfig::from_map(&map(&[("servers", "nats://localhost:4222"), (key, "0")]))
                     .unwrap_err();
