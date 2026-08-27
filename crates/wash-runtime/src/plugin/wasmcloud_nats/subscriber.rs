@@ -501,6 +501,9 @@ pub(super) async fn spawn_jetstream_subscriptions(
             // would otherwise park another consumer for its inactive
             // threshold.
             let mut ephemeral = EphemeralConsumerGuard(None);
+            // The backpressure line below is worth saying once per
+            // subscription; a rebuild loop would otherwise repeat it forever.
+            let mut reported_ack_pending = false;
 
             // Rebuild the consumer whenever delivery stops. An ephemeral push
             // consumer does not survive a server restart, and without this the
@@ -641,6 +644,46 @@ pub(super) async fn spawn_jetstream_subscriptions(
                     },
                 };
 
+                // The denominator for the byte derivation of `max_ack_pending`.
+                //
+                // The server's `max_payload` is a limit, not a prediction: a
+                // host raising it to 64MiB for one XL workload made the
+                // 32MiB budget floor to zero, and every consumer on that host
+                // serialised. Where the stream states a `max_msg_size`, that
+                // *is* a statement about this stream's messages and is the
+                // honest denominator; otherwise there is nothing better than
+                // the connection's limit, and the floor in
+                // `effective_max_ack_pending` catches the rest.
+                let per_message_bytes = match stream.cached_info().config.max_message_size {
+                    limit if limit > 0 => (limit as u64).min(conn.max_payload()),
+                    _ => conn.max_payload(),
+                };
+                let max_ack_pending = conn.limits.effective_max_ack_pending(per_message_bytes);
+                // Said once per subscription, not once per rebuild: a
+                // consumer that quietly serialised was invisible short of
+                // reading it back off the server.
+                if !reported_ack_pending {
+                    reported_ack_pending = true;
+                    if let Some(advisory) = conn.limits.ack_pending_advisory(per_message_bytes) {
+                        warn!(
+                            stream = %sub.stream,
+                            filter = %sub.filter_subject,
+                            max_ack_pending,
+                            per_message_bytes,
+                            "wasmcloud:nats jetstream backpressure: {advisory}"
+                        );
+                    } else {
+                        debug!(
+                            stream = %sub.stream,
+                            filter = %sub.filter_subject,
+                            max_ack_pending,
+                            per_message_bytes,
+                            max_deliver,
+                            "jetstream consumer backpressure resolved"
+                        );
+                    }
+                }
+
                 let config = jetstream::consumer::push::Config {
                     durable_name: durable_name.clone(),
                     filter_subject: sub.filter_subject.clone(),
@@ -654,7 +697,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
                     // the component drains. A queue group shares one durable,
                     // so replicas divide this budget. Derived in bytes as well
                     // as in messages — see `effective_max_ack_pending`.
-                    max_ack_pending: conn.limits.effective_max_ack_pending(conn.max_payload()),
+                    max_ack_pending,
                     // Unset, the server retries a delivery forever, so a
                     // handler that traps on the same input every time never
                     // progresses and never stops. Past this the server gives
@@ -1269,6 +1312,81 @@ async fn wait_or_cancel(cancel_token: &CancellationToken, delay: std::time::Dura
 /// that would otherwise flood the log with identical lines.
 const SHED_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Growth in the running shed total that earns a report before the interval
+/// is up. See [`record_shed`].
+const SHED_REPORT_GROWTH_FACTOR: u64 = 10;
+
+/// The host-wide ceiling on core backlog, shared by every subscription on this
+/// host.
+///
+/// The first attempt at bounding the sum ([#3]) partitioned it statically at
+/// bind: each binding reserved `subscriptions x capacity_bytes` out of a share,
+/// and what was left was divided among the next binder's subscriptions and
+/// floored. That was wrong in three ways at once, and the floor was the worst
+/// of them — an operator who had tuned `subscription-capacity` to 65,536
+/// messages got a 1MiB buffer holding ~1.6% of it, chosen by bind order, and
+/// the log said only that it had "clamped".
+///
+/// A reservation is the wrong shape for this. A subscription that is keeping
+/// up holds nothing, so reserving its worst case permanently spends memory
+/// nobody is using and starves whoever binds last. This is the same ceiling
+/// enforced where it is actually knowable: at admission, against what the
+/// host is holding *now*. Each subscription still has its own
+/// `subscription-capacity-bytes` — honoured exactly as configured — and the
+/// host-wide total is a second bound on top.
+///
+/// [#3]: https://github.com/cosmonic-labs/nats-2.8-testing/issues/3
+#[derive(Debug)]
+pub(super) struct HostBacklogBudget {
+    queued_bytes: std::sync::atomic::AtomicU64,
+    ceiling: u64,
+}
+
+impl HostBacklogBudget {
+    pub(super) fn new(ceiling: u64) -> Self {
+        Self {
+            queued_bytes: std::sync::atomic::AtomicU64::new(0),
+            ceiling,
+        }
+    }
+
+    /// A budget that never binds, for a host that named no memory limit.
+    pub(super) fn unbounded() -> Self {
+        Self::new(u64::MAX)
+    }
+
+    pub(super) fn ceiling(&self) -> u64 {
+        self.ceiling
+    }
+
+    fn queued(&self) -> u64 {
+        self.queued_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Whether `len` more bytes may join what the host already holds.
+    ///
+    /// Deliberately *not* "reserve if it fits": the caller has a
+    /// per-subscription bound to satisfy as well, and doing both atomically
+    /// would need a lock on the hot path for a decision that is advisory
+    /// either way — a few bytes of overshoot between the check and the add is
+    /// not what OOM-kills a host.
+    fn admits(&self, len: usize) -> bool {
+        self.queued().saturating_add(len as u64) <= self.ceiling
+    }
+
+    fn add(&self, len: usize) {
+        self.queued_bytes.fetch_add(len as u64, Ordering::Relaxed);
+    }
+
+    fn release(&self, len: usize) {
+        let _ = self
+            .queued_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+                Some(held.saturating_sub(len as u64))
+            });
+    }
+}
+
 /// What a core subscription has queued and what it has had to shed.
 ///
 /// Bytes are tracked because `subscription-capacity` counts messages, and a
@@ -1290,10 +1408,13 @@ struct CoreBacklog {
     /// change, which is otherwise a manifest lookup away.
     capacity: usize,
     capacity_bytes: usize,
+    /// The host-wide ceiling this subscription's queued bytes also count
+    /// against. See [`HostBacklogBudget`].
+    host: Arc<HostBacklogBudget>,
 }
 
 impl CoreBacklog {
-    fn new(capacity: usize, capacity_bytes: usize) -> Self {
+    fn new(capacity: usize, capacity_bytes: usize, host: Arc<HostBacklogBudget>) -> Self {
         Self {
             queued_bytes: std::sync::atomic::AtomicUsize::new(0),
             shed: std::sync::atomic::AtomicU64::new(0),
@@ -1301,7 +1422,20 @@ impl CoreBacklog {
             reported: std::sync::atomic::AtomicU64::new(0),
             capacity,
             capacity_bytes,
+            host,
         }
+    }
+
+    /// Takes `len` bytes onto this subscription's backlog and the host's.
+    fn queue(&self, len: usize) {
+        self.queued_bytes.fetch_add(len, Ordering::Relaxed);
+        self.host.add(len);
+    }
+
+    /// Releases them from both, once the delivery loop has taken the message.
+    fn dequeue(&self, len: usize) {
+        self.queued_bytes.fetch_sub(len, Ordering::Relaxed);
+        self.host.release(len);
     }
 }
 
@@ -1312,6 +1446,28 @@ impl CoreBacklog {
 /// message shrinks throughput rather than shedding everything forever.
 fn admits(queued: usize, len: usize, max_bytes: usize) -> bool {
     queued == 0 || queued.saturating_add(len) <= max_bytes
+}
+
+/// Why a delivery could not be taken onto the backlog, or `None` if it can.
+///
+/// The two bounds are reported apart because the remedies are opposite: the
+/// per-subscription one says raise this workload's `subscription-capacity-bytes`,
+/// the host-wide one says this host is carrying more NATS backlog than its
+/// memory budget allows and the answer is fewer subscriptions or a bigger host.
+/// Reporting both as "byte budget" sent an operator to tune the knob that was
+/// not binding.
+fn refuses(backlog: &CoreBacklog, len: usize) -> Option<&'static str> {
+    let queued = backlog.queued_bytes.load(Ordering::Relaxed);
+    if !admits(queued, len, backlog.capacity_bytes) {
+        return Some("byte budget");
+    }
+    // An empty subscription backlog is admitted regardless, for the same
+    // reason as above: a host budget smaller than one message must not mean
+    // this subscription never delivers again.
+    if queued > 0 && !backlog.host.admits(len) {
+        return Some("host memory budget");
+    }
+    None
 }
 
 /// Records one shed delivery, reporting no more than once per interval.
@@ -1325,7 +1481,19 @@ fn record_shed(
     let total = backlog.shed.fetch_add(1, Ordering::Relaxed) + 1;
     let total_bytes = backlog.shed_bytes.fetch_add(len as u64, Ordering::Relaxed) + len as u64;
     let now = tokio::time::Instant::now();
-    if last_report.is_none_or(|at| now.duration_since(at) >= SHED_REPORT_INTERVAL) {
+    // Two triggers, because a clock alone reports a number that is already
+    // wrong. The first shed of a burst reports `shed_total=1` and the next
+    // report is an interval away — long enough that a cell finishing in
+    // seconds recorded 1 while it had actually lost 6,835, and the true figure
+    // only landed on the following report. Reporting again once the total has
+    // grown by an order of magnitude keeps a short burst honest without
+    // turning a sustained one into a log flood: each line needs ten times the
+    // shedding of the one before it.
+    let reported = backlog.reported.load(Ordering::Relaxed);
+    let grew_by_an_order = total >= reported.saturating_mul(SHED_REPORT_GROWTH_FACTOR).max(1);
+    if last_report.is_none_or(|at| now.duration_since(at) >= SHED_REPORT_INTERVAL)
+        || grew_by_an_order
+    {
         let window = last_report.map(|at| now.duration_since(at));
         let since_last = total - backlog.reported.swap(total, Ordering::Relaxed);
         *last_report = Some(now);
@@ -1367,7 +1535,6 @@ fn spawn_core_reader(
     mut messages: async_nats::Subscriber,
     deliveries: tokio::sync::mpsc::Sender<async_nats::Message>,
     backlog: Arc<CoreBacklog>,
-    max_bytes: usize,
     cancel_token: CancellationToken,
 ) {
     tokio::spawn(async move {
@@ -1385,15 +1552,14 @@ fn spawn_core_reader(
             };
 
             let len = message.length;
-            let queued = backlog.queued_bytes.load(Ordering::Relaxed);
-            if !admits(queued, len, max_bytes) {
-                record_shed(&backlog, &subject, len, &mut last_report, "byte budget");
+            if let Some(reason) = refuses(&backlog, len) {
+                record_shed(&backlog, &subject, len, &mut last_report, reason);
                 continue;
             }
 
             match deliveries.try_send(message) {
                 Ok(()) => {
-                    backlog.queued_bytes.fetch_add(len, Ordering::Relaxed);
+                    backlog.queue(len);
                 }
                 Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                     record_shed(&backlog, &subject, len, &mut last_report, "backlog full");
@@ -1428,11 +1594,11 @@ pub(super) async fn spawn_core_subscriptions(
     execution_meter: ExecutionTimeMeter,
     failure_sink: Option<crate::plugin::WorkloadFailureSink>,
     workload_id: impl Into<String>,
-    // The byte budget one of these subscriptions may hold, already clamped
-    // against the host's memory budget at bind (see `clamp_capacity_bytes`).
-    // Read from here rather than from `conn.limits` so the clamp cannot be
-    // bypassed by a later reader.
-    capacity_bytes: usize,
+    // The host-wide ceiling every core subscription on this host shares. The
+    // per-subscription bound stays exactly what the binding configured; this
+    // is the second one, and the only one that knows about the other
+    // workloads. See `HostBacklogBudget`.
+    host_budget: Arc<HostBacklogBudget>,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
     let pre = CoreHandlerPre::new(instance_pre)?;
@@ -1448,6 +1614,7 @@ pub(super) async fn spawn_core_subscriptions(
         let execution_meter = execution_meter.clone();
         let failure_sink = failure_sink.clone();
         let workload_id = workload_id.clone();
+        let host_budget = host_budget.clone();
 
         // Subscribed *here*, not inside the task below. The bind hook awaits
         // this function, and the workload is reported ready once it returns,
@@ -1483,7 +1650,8 @@ pub(super) async fn spawn_core_subscriptions(
             // `spawn_core_reader` for what that costs when it is not done.
             let backlog = Arc::new(CoreBacklog::new(
                 conn.limits.subscription_capacity,
-                capacity_bytes,
+                conn.limits.subscription_capacity_bytes,
+                host_budget,
             ));
             let (deliveries, mut inbound) =
                 tokio::sync::mpsc::channel(conn.limits.subscription_capacity);
@@ -1492,7 +1660,6 @@ pub(super) async fn spawn_core_subscriptions(
                 messages,
                 deliveries,
                 backlog.clone(),
-                capacity_bytes,
                 cancel_token.clone(),
             );
 
@@ -1519,10 +1686,9 @@ pub(super) async fn spawn_core_subscriptions(
                         // Read before `raw` is handed on, and released here
                         // rather than after the handler returns: the byte
                         // budget bounds what is queued *ahead* of the handler
-                        // pool, which `max-in-flight` already bounds.
-                        backlog
-                            .queued_bytes
-                            .fetch_sub(raw.length, Ordering::Relaxed);
+                        // pool, which `max-in-flight` already bounds. Releases
+                        // the host-wide total too.
+                        backlog.dequeue(raw.length);
 
                         let mut store = tokio::select! {
                             created = workload.new_store(&component_id) => match created {
@@ -2019,7 +2185,11 @@ mod tests {
         // The property the `SlowConsumer` event cannot offer: every shed
         // delivery lands in the totals, whether or not it was reported. The
         // interval throttles the log line, never the accounting.
-        let backlog = CoreBacklog::new(1024, 32 * 1024 * 1024);
+        let backlog = CoreBacklog::new(
+            1024,
+            32 * 1024 * 1024,
+            Arc::new(HostBacklogBudget::unbounded()),
+        );
         let mut last_report = None;
         for _ in 0..10_000 {
             record_shed(&backlog, "fan.work", 64, &mut last_report, "backlog full");
@@ -2028,19 +2198,99 @@ mod tests {
         assert_eq!(backlog.shed_bytes.load(Relaxed), 640_000);
     }
 
+    /// A burst inside one interval must neither flood the log nor leave the
+    /// last reported figure wildly stale — the failure that made a cell losing
+    /// 6,835 messages record `shed_total=1`, because the only other trigger
+    /// was a clock that never came round before the run ended.
     #[test]
-    fn shedding_reports_at_most_once_per_interval() {
-        let backlog = CoreBacklog::new(1024, 32 * 1024 * 1024);
-        let mut last_report = None;
-        record_shed(&backlog, "fan.work", 64, &mut last_report, "backlog full");
-        let first = last_report.expect("the first shed always reports");
-        for _ in 0..1_000 {
-            record_shed(&backlog, "fan.work", 64, &mut last_report, "backlog full");
-        }
-        assert_eq!(
-            last_report,
-            Some(first),
-            "a burst inside one interval should not move the report mark"
+    fn shedding_reports_are_rate_limited_but_never_badly_stale() {
+        let backlog = CoreBacklog::new(
+            1024,
+            32 * 1024 * 1024,
+            Arc::new(HostBacklogBudget::unbounded()),
         );
+        let mut last_report = None;
+        let mut reports = 0;
+        let mut previous = None;
+        for _ in 0..10_000 {
+            record_shed(&backlog, "fan.work", 64, &mut last_report, "backlog full");
+            if last_report != previous {
+                previous = last_report;
+                reports += 1;
+            }
+        }
+
+        // Order-of-magnitude growth, so 10,000 sheds inside one interval is a
+        // handful of lines rather than 10,000.
+        assert!(
+            (2..=6).contains(&reports),
+            "expected a few reports for a 10,000-message burst, got {reports}"
+        );
+        // And the last one is within an order of magnitude of the truth,
+        // rather than three of them behind it.
+        let reported = backlog.reported.load(Relaxed);
+        assert!(
+            reported * SHED_REPORT_GROWTH_FACTOR >= backlog.shed.load(Relaxed),
+            "last reported {reported} is more than {SHED_REPORT_GROWTH_FACTOR}x behind \
+             the true total {}",
+            backlog.shed.load(Relaxed)
+        );
+    }
+
+    /// The host-wide ceiling is a *second* bound; the per-subscription one is
+    /// what the operator configured and is never narrowed behind their back.
+    #[test]
+    fn the_host_ceiling_sheds_without_narrowing_the_subscription() {
+        let host = Arc::new(HostBacklogBudget::new(4096));
+        let backlog = CoreBacklog::new(65_536, 32 * 1024 * 1024, host.clone());
+
+        // Configured capacity reaches the subscription intact.
+        assert_eq!(backlog.capacity, 65_536);
+        assert_eq!(backlog.capacity_bytes, 32 * 1024 * 1024);
+
+        // Well under its own byte budget, so only the host bound can refuse.
+        backlog.queue(2048);
+        assert_eq!(refuses(&backlog, 1024), None);
+        backlog.queue(2048);
+        assert_eq!(
+            refuses(&backlog, 1024),
+            Some("host memory budget"),
+            "the host ceiling has to be reported apart from the per-subscription one, \
+             because the remedies are opposite"
+        );
+
+        // Draining releases both, so a subscription keeping up holds nothing
+        // against its neighbours — which a bind-time reservation could not do.
+        backlog.dequeue(2048);
+        backlog.dequeue(2048);
+        assert_eq!(refuses(&backlog, 1024), None);
+    }
+
+    /// A host ceiling smaller than one message must not mean a subscription
+    /// never delivers again.
+    #[test]
+    fn an_empty_subscription_is_admitted_past_an_exhausted_host_ceiling() {
+        let host = Arc::new(HostBacklogBudget::new(16));
+        let noisy = CoreBacklog::new(1024, 32 * 1024 * 1024, host.clone());
+        let quiet = CoreBacklog::new(1024, 32 * 1024 * 1024, host.clone());
+
+        noisy.queue(4096);
+        assert_eq!(refuses(&noisy, 1), Some("host memory budget"));
+        assert_eq!(
+            refuses(&quiet, 1024),
+            None,
+            "a subscription holding nothing must still make progress"
+        );
+    }
+
+    /// A double release cannot wrap the host counter into an unbounded budget.
+    #[test]
+    fn releasing_more_than_was_queued_cannot_unbound_the_host_ceiling() {
+        let host = HostBacklogBudget::new(4096);
+        host.add(1024);
+        host.release(1024);
+        host.release(1024);
+        assert!(host.admits(4096));
+        assert!(!host.admits(4097));
     }
 }

@@ -17,7 +17,7 @@ use crate::engine::ctx::{ActiveCtx, SharedCtx};
 use super::{
     NatsId, check_payload, check_stream, check_subject, consumer_lookup_err, denied, jetstream_err,
     js, js_publish_err, labeled_js, nats_headers_to_wit, outbound_headers, stream_lookup_err,
-    types,
+    types, with_deadline,
 };
 use crate::plugin::wasmcloud_nats::conn::server_at_least;
 use crate::plugin::wasmcloud_nats::jetstream::PullConsumerHandle;
@@ -240,6 +240,7 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
                 .map_err(|e| jetstream_err("failed to get messages", e))?;
 
             let mut messages = Vec::new();
+            let mut denied_subjects = 0usize;
             let limit = (max_count as usize).min(MAX_SCAN_MESSAGES);
             let deadline = tokio::time::Instant::now() + MAX_SCAN_DURATION;
 
@@ -255,6 +256,7 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
                         // filtered consumer would have delivered — a full
                         // batch whose sequences may gap.
                         if conn.policy.check_stored_subject(&msg.subject).is_err() {
+                            denied_subjects += 1;
                             continue;
                         }
                         let sequence = msg
@@ -274,6 +276,33 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
                     }
                     Ok(None) | Err(_) => break,
                 }
+            }
+            // Same hazard as `list-stream-subjects`: a scan that returns
+            // nothing *because of the grant* reads as an empty range of the
+            // stream, and neither the guest nor the operator can tell. Every
+            // other refusal on this path is typed; this one has to be too.
+            if messages.is_empty() && denied_subjects > 0 {
+                warn!(
+                    stream = %stream_name,
+                    denied = denied_subjects,
+                    subject_allow = %conn.policy.granted_subject_patterns().join(","),
+                    "scan read {denied_subjects} messages, every one of them on a subject \
+                     outside this workload's `subject-allow`; refusing rather than returning \
+                     an empty batch that reads as an empty range"
+                );
+                return Err(denied(
+                    Denied::NotGranted,
+                    types::DeniedResource::Subject,
+                    &stream_name,
+                ));
+            }
+            if denied_subjects > 0 {
+                debug!(
+                    stream = %stream_name,
+                    denied = denied_subjects,
+                    returned = messages.len(),
+                    "scan omitted messages on subjects outside the workload's grant"
+                );
             }
             Ok(messages)
         }
@@ -421,9 +450,23 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
             ))));
         }
 
-        let stream = match conn.jetstream.get_stream(&stream_name).await {
-            Ok(s) => s,
-            Err(e) => return Ok(Err(stream_lookup_err(format!("stream '{stream_name}'"), e))),
+        // Every await below is bounded and every outcome is logged. This call
+        // was reported as returning nothing, erroring nothing and logging
+        // nothing at three stream widths — indistinguishable from the guest
+        // never having called — and the first STREAM.INFO was the one await
+        // with no bound of its own. See `with_deadline`.
+        let stream = match with_deadline(
+            &conn,
+            "jetstream.list-stream-subjects lookup",
+            &stream_name,
+            MAX_SCAN_DURATION,
+            conn.jetstream.get_stream(&stream_name),
+        )
+        .await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => return Ok(Err(stream_lookup_err(format!("stream '{stream_name}'"), e))),
+            Err(timeout) => return Ok(Err(timeout)),
         };
 
         let filter = if subject_filter.is_empty() {
@@ -431,9 +474,21 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
         } else {
             subject_filter
         };
-        let mut info = match stream.info_with_subjects(&filter).await {
-            Ok(i) => i,
-            Err(e) => return Ok(Err(jetstream_err("stream info failed", e))),
+        // `info_with_subjects` issues the first STREAM.INFO eagerly, and a
+        // subject map over hundreds of thousands of subjects is the slowest
+        // request this interface makes.
+        let mut info = match with_deadline(
+            &conn,
+            "jetstream.list-stream-subjects info",
+            &stream_name,
+            MAX_SCAN_DURATION,
+            stream.info_with_subjects(&filter),
+        )
+        .await
+        {
+            Ok(Ok(i)) => i,
+            Ok(Err(e)) => return Ok(Err(jetstream_err("stream info failed", e))),
+            Err(timeout) => return Ok(Err(timeout)),
         };
 
         // Bounded on both axes, as every other collecting endpoint here is:
@@ -441,7 +496,10 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
         // pages, and the subject map is the one result whose size the guest's
         // arguments do not cap.
         let mut out = Vec::new();
-        let deadline = tokio::time::Instant::now() + MAX_SCAN_DURATION;
+        let mut denied_subjects = 0usize;
+        let mut truncated = None;
+        let deadline =
+            tokio::time::Instant::now() + conn.request_timeout.unwrap_or(MAX_SCAN_DURATION);
         loop {
             match tokio::time::timeout_at(deadline, info.next()).await {
                 Ok(Some(Ok((subject, count)))) => {
@@ -451,8 +509,11 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
                     // enumerating them is what the `denied-resource::message`
                     // refusal is careful not to do. Skipped rather than
                     // refused, so a wide stream still answers for the part of
-                    // it this workload was granted.
+                    // it this workload was granted — but counted, because an
+                    // empty result the grant produced must not read as an
+                    // empty stream. See below.
                     if conn.policy.check_stored_subject(&subject).is_err() {
+                        denied_subjects += 1;
                         continue;
                     }
                     out.push(js::SubjectCount {
@@ -460,24 +521,83 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
                         count: count as u64,
                     });
                     if out.len() >= MAX_STREAM_SUBJECTS {
-                        warn!(
-                            "list-stream-subjects truncated at {MAX_STREAM_SUBJECTS} entries — stream has more"
-                        );
+                        truncated = Some("entry limit");
                         break;
                     }
                 }
                 Ok(Some(Err(e))) => return Ok(Err(jetstream_err("stream subjects failed", e))),
                 Ok(None) => break,
                 Err(_) => {
-                    warn!(
-                        "list-stream-subjects timed out after {MAX_SCAN_DURATION:?} — result truncated"
-                    );
+                    truncated = Some("deadline");
                     break;
                 }
             }
         }
         out.sort_by(|a, b| a.subject.cmp(&b.subject));
-        Ok(Ok(out))
+
+        // A list that is empty *because of the grant* is the same failure the
+        // server-version floor above is careful to avoid: it reaches the guest
+        // as an authoritative "this stream holds nothing" when the truth is
+        // "you may not see what it holds". Both are silent, and this one is
+        // silent even in the host log.
+        if out.is_empty() && denied_subjects > 0 {
+            warn!(
+                stream = %stream_name,
+                filter = %filter,
+                denied = denied_subjects,
+                subject_allow = %conn.policy.granted_subject_patterns().join(","),
+                "list-stream-subjects matched {denied_subjects} subjects, every one of them \
+                 outside this workload's `subject-allow`; refusing rather than returning an \
+                 empty list that reads as an empty stream"
+            );
+            return Ok(Err(denied(
+                Denied::NotGranted,
+                types::DeniedResource::Subject,
+                &filter,
+            )));
+        }
+        if denied_subjects > 0 {
+            debug!(
+                stream = %stream_name,
+                filter = %filter,
+                denied = denied_subjects,
+                returned = out.len(),
+                "list-stream-subjects omitted subjects outside the workload's grant"
+            );
+        }
+
+        match truncated {
+            // A truncated list is not a list: a guest reading it as
+            // authoritative draws the wrong conclusion about what the stream
+            // holds and has no way to tell. An error it can see beats a WARN
+            // only the operator can.
+            Some(reason) => {
+                warn!(
+                    stream = %stream_name,
+                    filter = %filter,
+                    collected = out.len(),
+                    reason,
+                    "list-stream-subjects could not enumerate the whole subject map; \
+                     returning an error rather than a partial list the guest would read \
+                     as complete"
+                );
+                Ok(Err(types::NatsError::LimitExceeded(format!(
+                    "stream '{stream_name}' has more subjects matching '{filter}' than one \
+                     call can return ({} collected, stopped by the {reason}); narrow \
+                     `subject-filter`",
+                    out.len(),
+                ))))
+            }
+            None => {
+                debug!(
+                    stream = %stream_name,
+                    filter = %filter,
+                    subjects = out.len(),
+                    "list-stream-subjects returning"
+                );
+                Ok(Ok(out))
+            }
+        }
     }
 
     async fn get_consumer_info(

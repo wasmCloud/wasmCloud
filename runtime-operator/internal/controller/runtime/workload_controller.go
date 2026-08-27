@@ -417,6 +417,17 @@ func (r *WorkloadReconciler) reconcileSync(ctx context.Context, workload *runtim
 		return nil
 	}
 
+	// The host's own reason, not just the state name. `WORKLOAD_STATE_ERROR`
+	// on its own is what a `kubectl describe` used to show for a workload the
+	// host had already diagnosed precisely — a component whose minimum linear
+	// memory exceeds `--default-heap-memory`, say, where the host log names
+	// the requirement, the flag and the value to raise it to. This condition
+	// message is the only path that reason has to somebody who is not reading
+	// host logs, so it carries it.
+	if msg := resp.WorkloadStatus.Message; msg != "" {
+		return fmt.Errorf("workload is not operational: %s: %s",
+			resp.WorkloadStatus.WorkloadState.String(), msg)
+	}
 	return fmt.Errorf("workload is not operational: %s", resp.WorkloadStatus.WorkloadState.String())
 }
 

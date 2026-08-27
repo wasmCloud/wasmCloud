@@ -3,8 +3,9 @@
 //! conversion, and the error classifiers.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use tracing::warn;
+use tracing::{debug, warn};
 use wasmtime::component::Accessor;
 
 use crate::engine::ctx::SharedCtx;
@@ -201,5 +202,77 @@ pub(super) fn build_nats_message(
         reply_to: reply_to.map(|s| s.to_string()),
         body: body.to_vec(),
         headers: headers.map(nats_headers_to_wit),
+    }
+}
+
+/// How long a collecting JetStream call may run before it is reported as
+/// slow, when the binding names no `request-timeout-ms`.
+pub(super) const SLOW_CALL_THRESHOLD: Duration = Duration::from_secs(2);
+
+/// Runs a host call that opens a stream rather than making one request, and
+/// leaves a trace either way.
+///
+/// `client.request` is bounded by `request-timeout-ms` and JetStream's own API
+/// calls by the context timeout, but a call that *drains* something — a KV
+/// history, a paged subject walk — is a sequence of those with nothing
+/// bounding the sequence. Two of them were reported as producing no receipt,
+/// no error and no log line at all, which is the worst possible failure to
+/// diagnose: it is indistinguishable from the guest never having called.
+///
+/// So every such call now ends in one of three states, all of them visible:
+///
+/// - completed promptly — `debug`, with how long it took;
+/// - completed slowly — `warn`, because a call that takes seconds is a fault
+///   even when it eventually answers;
+/// - did not complete — `warn`, and a typed [`types::NatsError::Timeout`] the
+///   guest can act on rather than an await that never returns.
+///
+/// The deadline is the binding's `request-timeout-ms` where it has one, since
+/// that is the operator's own statement about how long a call may take, and
+/// `fallback` otherwise.
+pub(super) async fn with_deadline<T>(
+    conn: &ConnHandle,
+    call: &'static str,
+    detail: &str,
+    fallback: Duration,
+    fut: impl std::future::Future<Output = T>,
+) -> Result<T, types::NatsError> {
+    let limit = conn.request_timeout.unwrap_or(fallback);
+    let started = tokio::time::Instant::now();
+    match tokio::time::timeout(limit, fut).await {
+        Ok(value) => {
+            let elapsed = started.elapsed();
+            if elapsed >= SLOW_CALL_THRESHOLD.min(limit) {
+                tracing::warn!(
+                    call,
+                    detail,
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    limit_ms = limit.as_millis() as u64,
+                    "wasmcloud:nats call was slow to complete"
+                );
+            } else {
+                debug!(
+                    call,
+                    detail,
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    "wasmcloud:nats call completed"
+                );
+            }
+            Ok(value)
+        }
+        Err(_) => {
+            tracing::warn!(
+                call,
+                detail,
+                limit_ms = limit.as_millis() as u64,
+                "wasmcloud:nats call did not complete within its deadline; returning a timeout \
+                 rather than blocking the guest. Raise `request-timeout-ms` if the call is \
+                 legitimately this slow."
+            );
+            Err(types::NatsError::Timeout(format!(
+                "{call} on {detail} did not complete within {}ms",
+                limit.as_millis()
+            )))
+        }
     }
 }
