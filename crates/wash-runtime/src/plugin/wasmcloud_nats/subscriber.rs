@@ -214,6 +214,54 @@ const QUEUE_LIVENESS_PROBE: std::time::Duration = std::time::Duration::from_secs
 /// Bounds what a workload leaves behind when it goes away without unbinding.
 const EPHEMERAL_INACTIVE_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// Deletes the ephemeral push consumer a subscription created, whenever that
+/// subscription stops using it.
+///
+/// The in-line delete at the top of each rebuild only runs if another cycle
+/// starts. A workload that is unbound — and an ordinary config patch unbinds
+/// and re-binds it — leaves the loop instead, so the consumer it last created
+/// stayed on the stream. The server reaps it only once its deliver subject goes
+/// quiet and [`EPHEMERAL_INACTIVE_THRESHOLD`] then elapses, and until then the
+/// old consumer and the new one are both attached at `deliver=new`: every
+/// message is delivered twice for up to two minutes after any re-bind, as first
+/// deliveries on both, so nothing shows up as a redelivery.
+///
+/// Only ever holds an ephemeral. A queue group's durable is shared with the
+/// other replicas and is not this task's to delete.
+struct EphemeralConsumerGuard(Option<(jetstream::stream::Stream, String)>);
+
+impl EphemeralConsumerGuard {
+    /// Takes over responsibility for `name`, returning whatever it held before
+    /// so the caller can delete that in line.
+    fn replace(
+        &mut self,
+        stream: &jetstream::stream::Stream,
+        name: &str,
+    ) -> Option<(jetstream::stream::Stream, String)> {
+        self.0.replace((stream.clone(), name.to_string()))
+    }
+
+    fn take(&mut self) -> Option<(jetstream::stream::Stream, String)> {
+        self.0.take()
+    }
+}
+
+impl Drop for EphemeralConsumerGuard {
+    fn drop(&mut self) {
+        let Some((stream, name)) = self.0.take() else {
+            return;
+        };
+        // Drop is synchronous and the delete is a round trip, so it has to
+        // outlive this frame. Best effort: after a server restart the consumer
+        // is already gone, which is not worth a warn.
+        tokio::spawn(async move {
+            if let Err(e) = stream.delete_consumer(&name).await {
+                debug!("could not delete the ephemeral push consumer on teardown: {e}");
+            }
+        });
+    }
+}
+
 /// Delay before rebuilding a push consumer whose delivery stream ended.
 const RESUBSCRIBE_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -426,7 +474,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
             // that can never deliver rebuilds indefinitely, and each cycle
             // would otherwise park another consumer for its inactive
             // threshold.
-            let mut previous_ephemeral: Option<String> = None;
+            let mut ephemeral = EphemeralConsumerGuard(None);
 
             // Rebuild the consumer whenever delivery stops. An ephemeral push
             // consumer does not survive a server restart, and without this the
@@ -454,8 +502,8 @@ pub(super) async fn spawn_jetstream_subscriptions(
                 // waiting on it, so it goes now rather than lingering for its
                 // inactive threshold. Best effort: after a server restart it
                 // is already gone, which is not worth a warn.
-                if let Some(name) = previous_ephemeral.take()
-                    && let Err(e) = stream.delete_consumer(&name).await
+                if let Some((prev_stream, name)) = ephemeral.take()
+                    && let Err(e) = prev_stream.delete_consumer(&name).await
                 {
                     debug!(stream = %sub.stream, "could not delete the previous ephemeral consumer: {e}");
                 }
@@ -670,7 +718,11 @@ pub(super) async fn spawn_jetstream_subscriptions(
                 };
 
                 if durable_name.is_none() {
-                    previous_ephemeral = Some(consumer.cached_info().name.clone());
+                    // Held by the guard from here on, so leaving the loop —
+                    // cancellation, an unbind, a re-bind — deletes it instead of
+                    // leaving it to double-deliver against its inactive
+                    // threshold.
+                    ephemeral.replace(&stream, &consumer.cached_info().name);
                 }
 
                 let mut messages = match consumer.messages().await {
