@@ -283,6 +283,20 @@ fn sanitize_name_component(name: &str) -> String {
 /// `DefaultHasher`'s output is explicitly not stable across Rust releases —
 /// two hosts built with different toolchains would silently stop sharing a
 /// queue group's durable.
+/// The durable/deliver-plane scope for a workload's JetStream subscriptions.
+///
+/// Keyed by *manifest* identity — namespace and name — never by workload id.
+/// Every replica of a deployment is a separate workload with its own
+/// `uuid::Uuid::new_v4()` id (see
+/// [`crate::plugin::wasmcloud_messaging::AdmissionIdentity`], keyed this way for
+/// the same reason), so scoping by id gave each replica its own durable: a
+/// queue group of N replicas processed every message N times, and departed
+/// replicas' durables were never reclaimed. The namespace is in the key because
+/// workload names are only unique within one.
+fn durable_scope(namespace: &str, name: &str) -> String {
+    short_hash(&[namespace, name])
+}
+
 fn short_hash(parts: &[&str]) -> String {
     const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -347,11 +361,9 @@ pub(super) async fn spawn_jetstream_subscriptions(
     let instance_pre = workload.instantiate_pre(component_id).await?;
     let pre = JsHandlerPre::new(instance_pre)?;
     let workload_id = workload_id.into();
-    // The durable and deliver plane is named per workload, not per host: N
-    // hosts running one workload have to converge on one durable for the queue
-    // group to mean anything, while a different workload with the same stream
-    // and group must not join it.
-    let scope = short_hash(&[workload_id.as_str()]);
+    // Manifest identity, not workload id: replicas must converge on one
+    // durable. See [`durable_scope`].
+    let scope = durable_scope(workload.namespace(), workload.name());
 
     for sub in subs {
         let conn = conn.clone();
@@ -1681,6 +1693,34 @@ pub(super) async fn spawn_kv_watches(
 
 #[cfg(test)]
 mod tests {
+
+    /// Replicas of one deployment must land on the same durable, or a queue
+    /// group of N replicas processes every message N times and each departed
+    /// replica leaves a durable behind. Every replica is a separate workload
+    /// with its own uuid, so the scope may not depend on the workload id.
+    #[test]
+    fn the_durable_scope_is_stable_across_replicas() {
+        // Two replicas: same manifest identity, different workload ids.
+        assert_eq!(
+            durable_scope("team-a", "ingester"),
+            durable_scope("team-a", "ingester"),
+            "replicas of one deployment must share a durable"
+        );
+
+        // A different workload must not join it, and names are only unique
+        // within a namespace.
+        assert_ne!(
+            durable_scope("team-a", "ingester"),
+            durable_scope("team-a", "other")
+        );
+        assert_ne!(
+            durable_scope("team-a", "ingester"),
+            durable_scope("team-b", "ingester")
+        );
+
+        // The separator must keep ("a","bc") and ("ab","c") apart.
+        assert_ne!(durable_scope("a", "bc"), durable_scope("ab", "c"));
+    }
     use super::*;
     use std::sync::atomic::Ordering::Relaxed;
 
