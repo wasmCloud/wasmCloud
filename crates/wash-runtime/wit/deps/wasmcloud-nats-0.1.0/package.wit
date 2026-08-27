@@ -408,9 +408,7 @@ interface kv {
     /// Lists keys in the bucket, up to a host-imposed cap of 1000.
     ///
     /// `truncated` is what tells a guest the bucket holds more than the page
-    /// carries — `@0.1.0` returned a bare list, where a partial answer was
-    /// indistinguishable from a complete one and the tail was unreachable on
-    /// retry.
+    /// carries, so a partial answer is never mistaken for a complete one.
     keys: async func() -> result<key-page, nats-error>;
     /// All historical entries for a key (put/update/delete/purge ops).
     /// `key-not-found` when the key has no history at all.
