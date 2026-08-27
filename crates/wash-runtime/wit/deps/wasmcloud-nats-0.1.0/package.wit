@@ -390,8 +390,7 @@ interface kv {
   /// Handle to an open KV bucket.
   resource bucket {
     /// Fetch the latest entry for a key. `key-not-found` when the key is
-    /// absent, deleted, or purged — `@0.1.0` returned `option<entry>` and so
-    /// never produced that variant.
+    /// absent, deleted, or purged.
     get: async func(key: string) -> result<entry, nats-error>;
     /// Put a value. Last-write-wins. Returns the new revision.
     put: async func(key: string, value: list<u8>) -> result<u64, nats-error>;
