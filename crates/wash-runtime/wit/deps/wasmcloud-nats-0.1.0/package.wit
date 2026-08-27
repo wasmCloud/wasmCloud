@@ -80,7 +80,7 @@ interface types {
     /// retrying immediately will fail the same way until a responder appears.
     no-responders,
     /// The name is outside the grant this workload was bound with, or in a
-    /// space the host reserves. Replaces `@0.1.0`'s `subject-denied(string)`.
+    /// space the host reserves.
     denied(denial),
     /// The payload exceeds the server's advertised `max_payload`. The value
     /// is that limit, in bytes. Header bytes count toward it.
