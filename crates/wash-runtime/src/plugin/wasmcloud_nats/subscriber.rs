@@ -141,6 +141,36 @@ impl KvProxy {
     }
 }
 
+/// The warm set one handler flavour of `component_id` serves its deliveries
+/// from, built from the instance policy the component declared.
+///
+/// The same `poolSize` / `maxInvocations` knobs that feed the engine's
+/// [`InstanceJob`] pool, honoured here because a NATS delivery cannot take
+/// that path — its call carries a typed resource that must live in the very
+/// store that runs it, and its ack ownership lives in the subscription loop.
+/// See [`super::warm`] for what is and is not honoured.
+///
+/// [`InstanceJob`]: crate::engine::instance_driver::InstanceJob
+async fn warm_set_for<H>(
+    workload: &ResolvedWorkload,
+    component_id: &str,
+    flavour: &'static str,
+) -> Arc<super::warm::WarmSet<H>> {
+    let policy = workload.warm_instance_policy(component_id).await;
+    let set = Arc::new(super::warm::WarmSet::new(policy));
+    if set.keeps_instances() {
+        debug!(
+            component_id,
+            flavour,
+            ?policy,
+            "wasmcloud:nats deliveries will reuse warm instances; note that \
+             `maxConcurrency` above 1 is served by additional one-shot stores on this \
+             path rather than by concurrent calls on one instance"
+        );
+    }
+    set
+}
+
 /// Gives a fresh store fuel before anything runs in it.
 ///
 /// This plugin meters guest execution by sampling the epoch callback
@@ -430,6 +460,12 @@ pub(super) async fn spawn_jetstream_subscriptions(
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
     let pre = JsHandlerPre::new(instance_pre)?;
+    let warm_set = warm_set_for::<(crate::wasmtime::Store<SharedCtx>, JsProxy)>(
+        workload,
+        component_id,
+        "jetstream",
+    )
+    .await;
     let workload_id = workload_id.into();
     // Namespace only: both the workload id and the workload *name* are
     // per-replica, and replicas must converge on one durable. See
@@ -449,6 +485,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
         let failure_sink = failure_sink.clone();
         let workload_id = workload_id.clone();
         let scope = scope.clone();
+        let warm_set = warm_set.clone();
 
         tokio::spawn(async move {
             // Mark the current generation as seen, so the connect that opened
@@ -976,47 +1013,61 @@ pub(super) async fn spawn_jetstream_subscriptions(
                             }
                             let settled_sequences = in_flight_sequences.clone();
 
-                            // Both of these run guest code — instantiation is
-                            // guest code, and a store that cannot be made is
-                            // usually a host under pressure — so both are
-                            // raced against cancellation. A message caught
-                            // mid-setup by an unbind goes back to the server
-                            // rather than burning its ack-wait against a
-                            // workload that no longer exists.
-                            let mut store = tokio::select! {
-                                created = workload.new_store(&component_id) => match created {
-                                    Err(e) => {
-                                        warn!("failed to create store for {component_id}: {e}");
-                                        // Nak'd, not settled: the sequence stays in
-                                        // the in-flight set so a rebuilt consumer
-                                        // resumes at it rather than past it.
-                                        nak_with_backoff(&acker).await;
-                                        continue;
-                                    }
-                                    Ok(s) => s,
-                                },
-                                _ = cancel_token.cancelled() => {
-                                    nak_with_backoff(&acker).await;
-                                    release_sequence(&in_flight_sequences, sequence);
-                                    break 'delivery;
+                            // A warm instance skips both the store build and
+                            // the instantiation — for a component that opted
+                            // in, this is where `poolSize` pays. Cold
+                            // otherwise, exactly as before: both steps run
+                            // guest code, so both are raced against
+                            // cancellation, and a message caught mid-setup by
+                            // an unbind goes back to the server rather than
+                            // burning its ack-wait against a workload that no
+                            // longer exists.
+                            let mut warmed = match warm_set.checkout() {
+                                Some(mut warmed) => {
+                                    // The epoch countdown measures this call's
+                                    // own execution, not the idle time since
+                                    // the last one.
+                                    crate::engine::abandon::rearm_for_call(&mut warmed.handler.0);
+                                    warmed
+                                }
+                                None => {
+                                    let mut store = tokio::select! {
+                                        created = workload.new_store(&component_id) => match created {
+                                            Err(e) => {
+                                                warn!("failed to create store for {component_id}: {e}");
+                                                // Nak'd, not settled: the sequence stays in
+                                                // the in-flight set so a rebuilt consumer
+                                                // resumes at it rather than past it.
+                                                nak_with_backoff(&acker).await;
+                                                continue;
+                                            }
+                                            Ok(s) => s,
+                                        },
+                                        _ = cancel_token.cancelled() => {
+                                            nak_with_backoff(&acker).await;
+                                            release_sequence(&in_flight_sequences, sequence);
+                                            break 'delivery;
+                                        }
+                                    };
+                                    let proxy = tokio::select! {
+                                        instantiated = pre.instantiate(&mut store) => match instantiated {
+                                            Err(e) => {
+                                                warn!("failed to instantiate {component_id}: {e}");
+                                                nak_with_backoff(&acker).await;
+                                                continue;
+                                            }
+                                            Ok(p) => p,
+                                        },
+                                        _ = cancel_token.cancelled() => {
+                                            nak_with_backoff(&acker).await;
+                                            release_sequence(&in_flight_sequences, sequence);
+                                            break 'delivery;
+                                        }
+                                    };
+                                    super::warm::Warmed::fresh((store, proxy))
                                 }
                             };
-                            prime_fuel(&mut store);
-                            let proxy = tokio::select! {
-                                instantiated = pre.instantiate(&mut store) => match instantiated {
-                                    Err(e) => {
-                                        warn!("failed to instantiate {component_id}: {e}");
-                                        nak_with_backoff(&acker).await;
-                                        continue;
-                                    }
-                                    Ok(p) => p,
-                                },
-                                _ = cancel_token.cancelled() => {
-                                    nak_with_backoff(&acker).await;
-                                    release_sequence(&in_flight_sequences, sequence);
-                                    break 'delivery;
-                                }
-                            };
+                            prime_fuel(&mut warmed.handler.0);
 
                             // One `Acker`, three uses: whoever settles keeps
                             // `acker`, and `progress` extends ack-wait without
@@ -1052,7 +1103,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                 charged: None,
                             };
                             let resource: Resource<MessageHandle> =
-                                match store.data_mut().table.push(handle) {
+                                match warmed.handler.0.data_mut().table.push(handle) {
                                     Ok(r) => r,
                                     Err(e) => {
                                         warn!("failed to push message-handle for {component_id}: {e}");
@@ -1078,13 +1129,18 @@ pub(super) async fn spawn_jetstream_subscriptions(
 
                             let execution_meter = execution_meter.clone();
                             let subject_label = subject_str.clone();
+                            let warm_set = warm_set.clone();
                             tokio::spawn(async move {
+                                // Split borrows: the call takes the store
+                                // mutably while the proxy that drives it is
+                                // read from the same struct.
+                                let (store, proxy) = (&mut warmed.handler.0, &warmed.handler.1);
                                 let result = execution_meter.observe(
                                     &[
                                         KeyValue::new("plugin", PLUGIN_NATS_ID),
                                         KeyValue::new("subject", subject_label),
                                     ],
-                                    &mut store,
+                                    store,
                                     async move |store| {
                                         proxy
                                             .call(store, resource)
@@ -1109,13 +1165,19 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                     ),
                                     Ok(Ok(())) => {}
                                 }
-                                // The component is done. Dropping the store frees
-                                // the instance and its memory before the slot, so
-                                // the next message cannot start while this one is
-                                // still resident; holding either across the ack
-                                // below would put a round trip between each
-                                // message and the next.
-                                drop(store);
+                                // The component is done. Parked or dropped
+                                // before the slot frees, so the next message
+                                // never starts while this one is still
+                                // resident, and never across the ack below —
+                                // that would put a round trip between each
+                                // message and the next. A trap poisons the
+                                // store — it can no longer enter any component
+                                // instance — so only a store whose call
+                                // completed is offered back.
+                                match &result {
+                                    Err(_) => drop(warmed),
+                                    Ok(_) => warm_set.park(warmed),
+                                }
                                 drop(permit);
 
                                 // Under `auto`, the handler's outcome decides the
@@ -1602,6 +1664,12 @@ pub(super) async fn spawn_core_subscriptions(
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
     let pre = CoreHandlerPre::new(instance_pre)?;
+    let warm_set = warm_set_for::<(crate::wasmtime::Store<SharedCtx>, CoreProxy)>(
+        workload,
+        component_id,
+        "core",
+    )
+    .await;
     let workload_id = workload_id.into();
 
     for sub in subs {
@@ -1615,6 +1683,7 @@ pub(super) async fn spawn_core_subscriptions(
         let failure_sink = failure_sink.clone();
         let workload_id = workload_id.clone();
         let host_budget = host_budget.clone();
+        let warm_set = warm_set.clone();
 
         // Subscribed *here*, not inside the task below. The bind hook awaits
         // this function, and the workload is reported ready once it returns,
@@ -1690,29 +1759,40 @@ pub(super) async fn spawn_core_subscriptions(
                         // the host-wide total too.
                         backlog.dequeue(raw.length);
 
-                        let mut store = tokio::select! {
-                            created = workload.new_store(&component_id) => match created {
-                                Err(e) => {
-                                    warn!("failed to create store for {component_id}: {e}");
-                                    continue;
-                                }
-                                Ok(s) => s,
-                            },
-                            // Instantiating into a workload that is being torn
-                            // down is work nobody will see the result of.
-                            _ = cancel_token.cancelled() => break,
+                        // Warm when the component opted in, cold otherwise —
+                        // see the JetStream loop for the shape.
+                        let mut warmed = match warm_set.checkout() {
+                            Some(mut warmed) => {
+                                crate::engine::abandon::rearm_for_call(&mut warmed.handler.0);
+                                warmed
+                            }
+                            None => {
+                                let mut store = tokio::select! {
+                                    created = workload.new_store(&component_id) => match created {
+                                        Err(e) => {
+                                            warn!("failed to create store for {component_id}: {e}");
+                                            continue;
+                                        }
+                                        Ok(s) => s,
+                                    },
+                                    // Instantiating into a workload that is being torn
+                                    // down is work nobody will see the result of.
+                                    _ = cancel_token.cancelled() => break,
+                                };
+                                let proxy = tokio::select! {
+                                    instantiated = pre.instantiate(&mut store) => match instantiated {
+                                        Err(e) => {
+                                            warn!("failed to instantiate {component_id}: {e}");
+                                            continue;
+                                        }
+                                        Ok(p) => p,
+                                    },
+                                    _ = cancel_token.cancelled() => break,
+                                };
+                                super::warm::Warmed::fresh((store, proxy))
+                            }
                         };
-                        prime_fuel(&mut store);
-                        let proxy = tokio::select! {
-                            instantiated = pre.instantiate(&mut store) => match instantiated {
-                                Err(e) => {
-                                    warn!("failed to instantiate {component_id}: {e}");
-                                    continue;
-                                }
-                                Ok(p) => p,
-                            },
-                            _ = cancel_token.cancelled() => break,
-                        };
+                        prime_fuel(&mut warmed.handler.0);
 
                         let subject_label = raw.subject.to_string();
                         let span = tracing::span!(
@@ -1728,14 +1808,16 @@ pub(super) async fn spawn_core_subscriptions(
                             conn.grant_reply(reply);
                         }
                         let execution_meter = execution_meter.clone();
+                        let warm_set = warm_set.clone();
                         tokio::spawn(async move {
                             let _permit = permit;
+                            let (store, proxy) = (&mut warmed.handler.0, &warmed.handler.1);
                             let result = execution_meter.observe(
                                 &[
                                     KeyValue::new("plugin", PLUGIN_NATS_ID),
                                     KeyValue::new("subject", subject_label.clone()),
                                 ],
-                                &mut store,
+                                store,
                                 async move |store| {
                                     proxy
                                         .call(store, &raw)
@@ -1746,7 +1828,7 @@ pub(super) async fn spawn_core_subscriptions(
                             ).await;
                             // The handler's own error is the useful one; the
                             // outer result only carries traps.
-                            match result {
+                            match &result {
                                 Ok(Err(handler_err)) => warn!(
                                     subject = %subject_label,
                                     "core handler returned an error: {handler_err}"
@@ -1756,6 +1838,12 @@ pub(super) async fn spawn_core_subscriptions(
                                     "core handler trapped: {e}"
                                 ),
                                 Ok(Ok(())) => {}
+                            }
+                            // A trap poisons the store; anything else may
+                            // serve the next delivery warm.
+                            match &result {
+                                Err(_) => drop(warmed),
+                                Ok(_) => warm_set.park(warmed),
                             }
                         });
                     }
@@ -1808,6 +1896,9 @@ pub(super) async fn spawn_kv_watches(
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
     let pre = KvHandlerPre::new(instance_pre)?;
+    let warm_set =
+        warm_set_for::<(crate::wasmtime::Store<SharedCtx>, KvProxy)>(workload, component_id, "kv")
+            .await;
 
     for watch in watches {
         let conn = conn.clone();
@@ -1817,6 +1908,7 @@ pub(super) async fn spawn_kv_watches(
         let pre = pre.clone();
         let cancel_token = cancel_token.clone();
         let execution_meter = execution_meter.clone();
+        let warm_set = warm_set.clone();
 
         tokio::spawn(async move {
             // A KV watch is an ordered consumer underneath, which recovers
@@ -1997,30 +2089,44 @@ pub(super) async fn spawn_kv_watches(
                             // task: this is where a rebuild resumes from.
                             last_revision = Some(entry.revision);
 
-                            let mut store = tokio::select! {
-                                created = workload.new_store(&component_id) => match created {
-                                    Err(e) => {
-                                        warn!("failed to create store for {component_id}: {e}");
-                                        continue;
-                                    }
-                                    Ok(s) => s,
-                                },
-                                // Instantiating into a workload that is being
-                                // torn down is work nobody will see the result
-                                // of.
-                                _ = cancel_token.cancelled() => break 'watch,
+                            // Warm when the component opted in, cold
+                            // otherwise — see the JetStream loop for the
+                            // shape.
+                            let mut warmed = match warm_set.checkout() {
+                                Some(mut warmed) => {
+                                    crate::engine::abandon::rearm_for_call(
+                                        &mut warmed.handler.0,
+                                    );
+                                    warmed
+                                }
+                                None => {
+                                    let mut store = tokio::select! {
+                                        created = workload.new_store(&component_id) => match created {
+                                            Err(e) => {
+                                                warn!("failed to create store for {component_id}: {e}");
+                                                continue;
+                                            }
+                                            Ok(s) => s,
+                                        },
+                                        // Instantiating into a workload that is being
+                                        // torn down is work nobody will see the result
+                                        // of.
+                                        _ = cancel_token.cancelled() => break 'watch,
+                                    };
+                                    let proxy = tokio::select! {
+                                        instantiated = pre.instantiate(&mut store) => match instantiated {
+                                            Err(e) => {
+                                                warn!("failed to instantiate {component_id}: {e}");
+                                                continue;
+                                            }
+                                            Ok(p) => p,
+                                        },
+                                        _ = cancel_token.cancelled() => break 'watch,
+                                    };
+                                    super::warm::Warmed::fresh((store, proxy))
+                                }
                             };
-                            prime_fuel(&mut store);
-                            let proxy = tokio::select! {
-                                instantiated = pre.instantiate(&mut store) => match instantiated {
-                                    Err(e) => {
-                                        warn!("failed to instantiate {component_id}: {e}");
-                                        continue;
-                                    }
-                                    Ok(p) => p,
-                                },
-                                _ = cancel_token.cancelled() => break 'watch,
-                            };
+                            prime_fuel(&mut warmed.handler.0);
 
                             let key_label = entry.key.clone();
                             let span = tracing::span!(
@@ -2031,15 +2137,18 @@ pub(super) async fn spawn_kv_watches(
                             );
 
                             let execution_meter = execution_meter.clone();
+                            let warm_set = warm_set.clone();
                             tokio::spawn(async move {
                                 let _permit = permit;
                                 let bucket_for_label = bucket_name.clone();
+                                let (store, proxy) =
+                                    (&mut warmed.handler.0, &warmed.handler.1);
                                 let result = execution_meter.observe(
                                     &[
                                         KeyValue::new("plugin", PLUGIN_NATS_ID),
                                         KeyValue::new("bucket", bucket_for_label.clone()),
                                     ],
-                                    &mut store,
+                                    store,
                                     async move |store| {
                                         proxy
                                             .call(store, &bucket_name, &entry)
@@ -2048,7 +2157,7 @@ pub(super) async fn spawn_kv_watches(
                                             .map_err(Into::into)
                                     },
                                 ).await;
-                                match result {
+                                match &result {
                                     Ok(Err(handler_err)) => warn!(
                                         bucket = %bucket_for_label,
                                         key = %key_label,
@@ -2060,6 +2169,12 @@ pub(super) async fn spawn_kv_watches(
                                         "KV handler trapped: {e}"
                                     ),
                                     Ok(Ok(())) => {}
+                                }
+                                // A trap poisons the store; anything else may
+                                // serve the next event warm.
+                                match &result {
+                                    Err(_) => drop(warmed),
+                                    Ok(_) => warm_set.park(warmed),
                                 }
                             });
                         }

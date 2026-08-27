@@ -1547,6 +1547,25 @@ impl ResolvedWorkload {
         )
     }
 
+    /// The instance policy that actually applies to `component_id`'s stores:
+    /// [`InstancePolicy::Ephemeral`] unless it *and every component linked
+    /// into its store* opted into pooling — the same rule
+    /// [`Self::instance_pool_for_component`] applies, for the same reason: a
+    /// store holds the whole linked set, so keeping it warm keeps all of them
+    /// warm.
+    ///
+    /// For a dispatch path that keeps its own warm set rather than going
+    /// through the shared [`InstancePool`] (the `wasmcloud:nats` subscriber,
+    /// whose calls carry typed resources no [`InstanceJob`] can).
+    ///
+    /// [`InstanceJob`]: crate::engine::instance_driver::InstanceJob
+    pub(crate) async fn warm_instance_policy(&self, component_id: &str) -> InstancePolicy {
+        match self.instance_pool_for_component(component_id).await {
+            Some(pool) => pool.policy(),
+            None => InstancePolicy::Ephemeral,
+        }
+    }
+
     /// Creates a new wasmtime Store for multiple components from the given workload metadata.
     async fn new_store_from_metadata(
         &self,

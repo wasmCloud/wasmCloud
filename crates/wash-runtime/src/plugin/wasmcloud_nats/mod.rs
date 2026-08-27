@@ -15,6 +15,7 @@ pub(super) mod macros;
 mod plugin;
 pub(super) mod policy;
 mod subscriber;
+pub(super) mod warm;
 
 pub use bindings::{NatsBindings, WorkloadConfig};
 pub use plugin::{ComponentData, WasmcloudNats};

@@ -36,6 +36,14 @@ const COUNTS_BUCKET: &str = "test-counts";
 const PULL_MARKER: &str = "pull:";
 /// How long a probe fetch waits for its first message.
 const PULL_TIMEOUT_MS: u32 = 1_000;
+/// Bodies starting with this make the core handler report its in-memory
+/// delivery counter, which only survives between messages when the host is
+/// reusing the instance (`poolSize`).
+const WARM_MARKER: &str = "warm:";
+
+/// Lives in this instance's linear memory and nowhere else: a fresh store per
+/// delivery reads 1 every time, a warm instance counts up.
+static WARM_DELIVERIES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 struct Component;
 
@@ -59,7 +67,12 @@ fn target(t: DeniedResource) -> &'static str {
 fn label(err: &NatsError) -> String {
     match err {
         NatsError::Denied(d) => {
-            format!("denied:{}:{}:{}", reason(d.reason), target(d.target), d.name)
+            format!(
+                "denied:{}:{}:{}",
+                reason(d.reason),
+                target(d.target),
+                d.name
+            )
         }
         NatsError::MaxPayloadExceeded(limit) => format!("max-payload-exceeded:{limit}"),
         NatsError::InvalidHeader(detail) => format!("invalid-header:{detail}"),
@@ -101,14 +114,22 @@ impl JsGuest for Component {
         // the async package; without it `wasi:clocks@0.3.0` tree-shakes away.
         monotonic_clock::wait_for(YIELD_NANOS).await;
 
+        // Report the in-memory delivery counter; see WARM_MARKER.
+        if let Some(run) = body.strip_prefix(WARM_MARKER) {
+            let seen = WARM_DELIVERIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            return core::publish(message("test.results", format!("warm:{run}:{seen}")))
+                .await
+                .map_err(|e| label(&e));
+        }
+
         // Reaching a name outside the grant must fail in the host, not at the
         // server, and must say which grant refused it.
         if let Some(subject) = body.strip_prefix(DENIED_MARKER) {
-            let outcome = match core::publish(message(subject, "should not arrive".to_string())).await
-            {
-                Ok(()) => "allowed".to_string(),
-                Err(e) => label(&e),
-            };
+            let outcome =
+                match core::publish(message(subject, "should not arrive".to_string())).await {
+                    Ok(()) => "allowed".to_string(),
+                    Err(e) => label(&e),
+                };
             let _ = js_publish("test.results", format!("denied-probe:{outcome}")).await;
             return Ok(());
         }
@@ -143,9 +164,12 @@ impl JsGuest for Component {
             return Err(format!("deliberate failure on delivery {delivery}"));
         }
 
-        js_publish("test.results", format!("handled:{body}:delivery={delivery}"))
-            .await
-            .map_err(|e| label(&e))
+        js_publish(
+            "test.results",
+            format!("handled:{body}:delivery={delivery}"),
+        )
+        .await
+        .map_err(|e| label(&e))
     }
 }
 
@@ -209,6 +233,12 @@ impl CoreGuest for Component {
         }
         if body.starts_with(FAIL_MARKER) {
             return Err(format!("core handler failed on `{body}`"));
+        }
+        if let Some(run) = body.strip_prefix(WARM_MARKER) {
+            let seen = WARM_DELIVERIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            return core::publish(message("test.results", format!("warm:{run}:{seen}")))
+                .await
+                .map_err(|e| label(&e));
         }
         let subject = msg.reply_to.unwrap_or_else(|| "test.results".to_string());
         core::publish(message(&subject, format!("echo:{body}")))
