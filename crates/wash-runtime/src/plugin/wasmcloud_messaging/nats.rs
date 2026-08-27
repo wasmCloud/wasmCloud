@@ -572,7 +572,7 @@ impl HostPlugin for NatsMessaging {
         }
 
         let mut messages = futures::stream::select_all(subscriptions);
-        let execution_meter = self.meters.read().await.execution_time.clone();
+        let fuel_meter = self.meters.read().await.fuel_consumption.clone();
 
         let span = tracing::Span::current();
         let handle = tokio::spawn(async move {
@@ -720,7 +720,7 @@ impl HostPlugin for NatsMessaging {
                             reply_to = %msg.reply_to.as_deref().unwrap_or("<none>"),
                         );
 
-                        let execution_meter = execution_meter.clone();
+                        let fuel_meter = fuel_meter.clone();
 
                         // Nothing awaits this call, so its deadline is a timer
                         // outliving the store's own task; without it a guest
@@ -740,7 +740,7 @@ impl HostPlugin for NatsMessaging {
                             // Dropped when the call ends, however it ends.
                             let _abandoned = abandoned;
                             let _deadline = deadline;
-                            let result = execution_meter.observe(
+                            let result = fuel_meter.observe(
                                 &[
                                     KeyValue::new("plugin", PLUGIN_MESSAGING_ID),
                                     KeyValue::new("subject", msg.subject.to_string()),

@@ -32,7 +32,7 @@ use crate::engine::abandon::{AbandonFlag, AbandonOnDrop, DispatchedCall};
 use crate::host::allowed_hosts::AllowedHost;
 use crate::host::trigger_service::{BrokerMessage, MessagingJob};
 use crate::{engine::ctx::SharedCtx, observability::Meters};
-use crate::{engine::workload::ResolvedWorkload, observability::ExecutionTimeMeter};
+use crate::{engine::workload::ResolvedWorkload, observability::FuelConsumptionMeter};
 use anyhow::{Context, ensure};
 use http_body_util::BodyExt;
 use hyper::client::conn::http2;
@@ -1305,7 +1305,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         // Start the HTTP server, any incoming requests call Host::handle and then it's routed
         // to the workload based on host header.
         let handler = self.router.clone();
-        let execution_meter = self.meters.read().await.execution_time.clone();
+        let fuel_meter = self.meters.read().await.fuel_consumption.clone();
         tokio::spawn(async move {
             if let Err(e) = run_http_server(
                 listener,
@@ -1314,7 +1314,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 service_handlers,
                 &mut shutdown_rx,
                 tls_acceptor,
-                execution_meter,
+                fuel_meter,
             )
             .await
             {
@@ -1587,7 +1587,7 @@ async fn run_http_server<T: Router>(
     service_handlers: ServiceHandlers,
     shutdown_rx: &mut mpsc::Receiver<()>,
     tls_acceptor: Option<TlsAcceptor>,
-    execution_meter: ExecutionTimeMeter,
+    fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<()> {
     loop {
         tokio::select! {
@@ -1608,19 +1608,19 @@ async fn run_http_server<T: Router>(
                         let service_handlers_clone = service_handlers.clone();
                         let tls_acceptor_clone = tls_acceptor.clone();
                         let handler_clone = handler.clone();
-                        let execution_meter = execution_meter.clone();
+                        let fuel_meter = fuel_meter.clone();
                         tokio::spawn(async move {
                             let service = hyper::service::service_fn(move |req| {
                                 let handles = handles_clone.clone();
                                 let service_handlers = service_handlers_clone.clone();
                                 let handler = handler_clone.clone();
-                                let execution_meter = execution_meter.clone();
+                                let fuel_meter = fuel_meter.clone();
                                 async move {
                                     let extractor = opentelemetry_http::HeaderExtractor(req.headers());
                                     let remote_context =
                                         opentelemetry::global::get_text_map_propagator(|propagator| propagator.extract(&extractor));
 
-                                    handle_http_request(handler, req, handles, service_handlers, execution_meter).with_context(remote_context).await
+                                    handle_http_request(handler, req, handles, service_handlers, fuel_meter).with_context(remote_context).await
                                 }
                             });
 
@@ -1713,7 +1713,7 @@ async fn handle_http_request<T: Router>(
     req: hyper::Request<hyper::body::Incoming>,
     workload_handles: WorkloadHandles,
     service_handlers: ServiceHandlers,
-    execution_meter: ExecutionTimeMeter,
+    fuel_meter: FuelConsumptionMeter,
 ) -> Result<hyper::Response<HyperOutgoingBody>, hyper::Error> {
     let method = req.method().clone();
     let uri = req.uri().clone();
@@ -1797,15 +1797,9 @@ async fn handle_http_request<T: Router>(
                 workload.namespace = handle.namespace(),
                 workload.id = handle.id(),
             );
-            match invoke_component_handler(
-                handle,
-                instance_pre,
-                &component_id,
-                req,
-                execution_meter,
-            )
-            .instrument(req_span)
-            .await
+            match invoke_component_handler(handle, instance_pre, &component_id, req, fuel_meter)
+                .instrument(req_span)
+                .await
             {
                 Ok(resp) => resp,
                 Err(e) => {
@@ -2017,7 +2011,7 @@ async fn invoke_component_handler(
     instance_pre: InstancePre<SharedCtx>,
     component_id: &str,
     req: hyper::Request<hyper::body::Incoming>,
-    execution_meter: ExecutionTimeMeter,
+    fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
     if crate::engine::targets_wasip3_http(instance_pre.component()) {
         let pool = workload_handle
@@ -2083,10 +2077,7 @@ async fn invoke_component_handler(
         let flag = call.flag();
         let (resp, watch) = call
             .await_head(crate::host::http_p3::handle_component_request_p3(
-                cold,
-                req,
-                flag,
-                execution_meter,
+                cold, req, flag, fuel_meter,
             ))
             .await
             .ok_or_else(|| anyhow::anyhow!("cold instance produced no response"))?;
@@ -2106,7 +2097,7 @@ async fn invoke_component_handler(
     // owned by a detached task that outlives the response head, so recovering
     // it for reuse needs a restructure the p3 path did not.
     let store = workload_handle.new_store(component_id).await?;
-    handle_component_request(store, instance_pre, req, execution_meter).await
+    handle_component_request(store, instance_pre, req, fuel_meter).await
 }
 
 /// Handle a component request using WASI HTTP (copied from wash/crates/src/cli/dev.rs)
@@ -2114,7 +2105,7 @@ pub async fn handle_component_request(
     mut store: Store<SharedCtx>,
     pre: InstancePre<SharedCtx>,
     req: hyper::Request<hyper::body::Incoming>,
-    execution_meter: ExecutionTimeMeter,
+    fuel_meter: FuelConsumptionMeter,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let scheme = match req.uri().scheme() {
@@ -2155,7 +2146,7 @@ pub async fn handle_component_request(
             // Run the http request itself by instantiating and calling the component
             let proxy = pre.instantiate_async(&mut store).await?;
 
-            execution_meter
+            fuel_meter
                 .observe(
                     &[
                         KeyValue::new("plugin", "wasi-http"),
