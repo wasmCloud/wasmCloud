@@ -89,7 +89,8 @@ pub(super) enum PullEnd {
     Failed,
 }
 
-/// The shared body of both `fetch` variants. `max_bytes` of 0 means no byte bound.
+/// The shared body of both `fetch` variants. `max_bytes` of 0 means the guest
+/// named no byte bound, and the binding's stands in for one.
 async fn fetch_batch<T: 'static + Send>(
     accessor: &Accessor<T, SharedCtx>,
     rep: Resource<PullConsumerHandle>,
@@ -115,6 +116,7 @@ async fn fetch_batch<T: 'static + Send>(
         )));
     };
     let budget = accessor.with(|mut a| fetch_budget(&mut a, &rep))?;
+    let binding_bound = accessor.with(|mut a| max_fetch_bytes(&mut a, &rep))?;
 
     // Bounding one call bounds one call. What OOM-killed the host is the
     // ordinary shape of a pull worker — loop `fetch` until drained — because a
@@ -133,7 +135,22 @@ async fn fetch_batch<T: 'static + Send>(
         ))));
     }
     let effective_bytes = match max_bytes {
-        0 => available,
+        // The guest named no bound, so the host's own stands in — and a bound
+        // the host chose must not push the request past one the consumer would
+        // have honoured. The server refuses an over-`max-request-max-bytes`
+        // pull outright rather than trimming it, so a binding whose ceiling
+        // sits above the consumer's would turn every plain `fetch` into a
+        // refusal the guest never asked for.
+        0 => {
+            let ours = binding_bound.min(available);
+            match consumer.cached_info().config.max_bytes {
+                limit if limit > 0 => ours.min(limit as u64),
+                _ => ours,
+            }
+        }
+        // The guest named one. Over the consumer's limit the server refuses,
+        // and that refusal is the guest's to see — the same answer an
+        // over-`max-request-batch` ask gets.
         asked => asked.min(available),
     };
 
@@ -281,8 +298,7 @@ impl<T: 'static + Send> js::HostPullConsumerWithStore<T> for SharedCtx {
         // whole batch in host memory and takes the host down with it. A batch
         // the bound cuts short reports `byte-limit`, which is already how the
         // guest learns there is more to come.
-        let max_bytes = accessor.with(|mut a| max_fetch_bytes(&mut a, &rep))?;
-        fetch_batch(accessor, rep, batch, max_bytes, timeout_ms).await
+        fetch_batch(accessor, rep, batch, 0, timeout_ms).await
     }
 
     async fn fetch_with_limits(
