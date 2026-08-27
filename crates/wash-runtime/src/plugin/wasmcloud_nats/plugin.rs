@@ -419,7 +419,7 @@ impl WasmcloudNats {
         core_subs: Vec<CoreSubscriptionConfig>,
         kv_watches: Vec<KvWatchConfig>,
         cancel_token: tokio_util::sync::CancellationToken,
-        fuel_meter: crate::observability::FuelConsumptionMeter,
+        execution_meter: crate::observability::ExecutionTimeMeter,
     ) -> anyhow::Result<()> {
         let workload_id = workload.id();
         let Some(handle) = self.connections.get_named(workload_id, binding).await else {
@@ -514,7 +514,7 @@ impl WasmcloudNats {
                 handle.clone(),
                 jetstream_subs,
                 cancel_token.clone(),
-                fuel_meter.clone(),
+                execution_meter.clone(),
                 failure_sink.clone(),
                 workload_id,
             )
@@ -527,7 +527,7 @@ impl WasmcloudNats {
                 handle.clone(),
                 core_subs,
                 cancel_token.clone(),
-                fuel_meter.clone(),
+                execution_meter.clone(),
                 failure_sink.clone(),
                 workload_id,
                 capacity_bytes,
@@ -541,7 +541,7 @@ impl WasmcloudNats {
                 handle,
                 kv_watches,
                 cancel_token,
-                fuel_meter,
+                execution_meter,
                 failure_sink,
                 workload_id,
             )
@@ -945,7 +945,7 @@ impl HostPlugin for WasmcloudNats {
             return Ok(());
         }
 
-        let fuel_meter = self.meters.read().await.fuel_consumption.clone();
+        let execution_meter = self.meters.read().await.execution_time.clone();
 
         // Subscriptions run on the binding they were declared on: two named
         // bindings mean two connections, two grants, and two sets of loops
@@ -983,7 +983,7 @@ impl HostPlugin for WasmcloudNats {
                 core_subs,
                 kv_watches,
                 cancel_token.clone(),
-                fuel_meter.clone(),
+                execution_meter.clone(),
             )
             .await?;
         }
