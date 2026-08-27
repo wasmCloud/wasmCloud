@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, warn};
 
 use crate::engine::workload::ResolvedWorkload;
-use crate::observability::FuelConsumptionMeter;
+use crate::observability::ExecutionTimeMeter;
 use crate::wasmtime::component::Resource;
 
 use super::config::{AckMode, CoreSubscriptionConfig, JetStreamSubscriptionConfig, KvWatchConfig};
@@ -143,10 +143,13 @@ impl KvProxy {
 
 /// Gives a fresh store fuel before anything runs in it.
 ///
-/// With fuel metering enabled a store starts at zero, and instantiation runs
-/// guest code — so without this the component traps on instantiate, before
-/// `FuelConsumptionMeter::observe` gets a chance to set a budget. Errors when
-/// metering is off, which is not a failure.
+/// This plugin meters guest execution by sampling the epoch callback
+/// ([`crate::observability::ExecutionTimeMeter`]) and never burns fuel, but the
+/// engine it runs on may still have fuel enabled — `--enable-meters` turns it
+/// on for the paths that do measure by it. A store on a fuel-enabled engine
+/// starts at **zero**, and instantiation runs guest code, so without this the
+/// component traps on instantiate. Errors when fuel is off, which is not a
+/// failure.
 fn prime_fuel<T>(store: &mut crate::wasmtime::Store<T>) {
     let _ = store.set_fuel(u64::MAX);
 }
@@ -421,7 +424,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
     conn: Arc<ConnHandle>,
     subs: Vec<JetStreamSubscriptionConfig>,
     cancel_token: CancellationToken,
-    fuel_meter: FuelConsumptionMeter,
+    execution_meter: ExecutionTimeMeter,
     failure_sink: Option<crate::plugin::WorkloadFailureSink>,
     workload_id: impl Into<String>,
 ) -> anyhow::Result<()> {
@@ -442,7 +445,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
         let component_id = component_id.to_string();
         let pre = pre.clone();
         let cancel_token = cancel_token.clone();
-        let fuel_meter = fuel_meter.clone();
+        let execution_meter = execution_meter.clone();
         let failure_sink = failure_sink.clone();
         let workload_id = workload_id.clone();
         let scope = scope.clone();
@@ -1030,10 +1033,10 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                 stream = %sub.stream,
                             );
 
-                            let fuel_meter = fuel_meter.clone();
+                            let execution_meter = execution_meter.clone();
                             let subject_label = subject_str.clone();
                             tokio::spawn(async move {
-                                let result = fuel_meter.observe(
+                                let result = execution_meter.observe(
                                     &[
                                         KeyValue::new("plugin", PLUGIN_NATS_ID),
                                         KeyValue::new("subject", subject_label),
@@ -1422,7 +1425,7 @@ pub(super) async fn spawn_core_subscriptions(
     conn: Arc<ConnHandle>,
     subs: Vec<CoreSubscriptionConfig>,
     cancel_token: CancellationToken,
-    fuel_meter: FuelConsumptionMeter,
+    execution_meter: ExecutionTimeMeter,
     failure_sink: Option<crate::plugin::WorkloadFailureSink>,
     workload_id: impl Into<String>,
     // The byte budget one of these subscriptions may hold, already clamped
@@ -1442,7 +1445,7 @@ pub(super) async fn spawn_core_subscriptions(
         let component_id = component_id.to_string();
         let pre = pre.clone();
         let cancel_token = cancel_token.clone();
-        let fuel_meter = fuel_meter.clone();
+        let execution_meter = execution_meter.clone();
         let failure_sink = failure_sink.clone();
         let workload_id = workload_id.clone();
 
@@ -1558,10 +1561,10 @@ pub(super) async fn spawn_core_subscriptions(
                         if let Some(reply) = raw.reply.as_deref() {
                             conn.grant_reply(reply);
                         }
-                        let fuel_meter = fuel_meter.clone();
+                        let execution_meter = execution_meter.clone();
                         tokio::spawn(async move {
                             let _permit = permit;
-                            let result = fuel_meter.observe(
+                            let result = execution_meter.observe(
                                 &[
                                     KeyValue::new("plugin", PLUGIN_NATS_ID),
                                     KeyValue::new("subject", subject_label.clone()),
@@ -1633,7 +1636,7 @@ pub(super) async fn spawn_kv_watches(
     conn: Arc<ConnHandle>,
     watches: Vec<KvWatchConfig>,
     cancel_token: CancellationToken,
-    fuel_meter: FuelConsumptionMeter,
+    execution_meter: ExecutionTimeMeter,
     _failure_sink: Option<crate::plugin::WorkloadFailureSink>,
     _workload_id: impl Into<String>,
 ) -> anyhow::Result<()> {
@@ -1647,7 +1650,7 @@ pub(super) async fn spawn_kv_watches(
         let component_id = component_id.to_string();
         let pre = pre.clone();
         let cancel_token = cancel_token.clone();
-        let fuel_meter = fuel_meter.clone();
+        let execution_meter = execution_meter.clone();
 
         tokio::spawn(async move {
             // A KV watch is an ordered consumer underneath, which recovers
@@ -1861,11 +1864,11 @@ pub(super) async fn spawn_kv_watches(
                                 key = %key_label,
                             );
 
-                            let fuel_meter = fuel_meter.clone();
+                            let execution_meter = execution_meter.clone();
                             tokio::spawn(async move {
                                 let _permit = permit;
                                 let bucket_for_label = bucket_name.clone();
-                                let result = fuel_meter.observe(
+                                let result = execution_meter.observe(
                                     &[
                                         KeyValue::new("plugin", PLUGIN_NATS_ID),
                                         KeyValue::new("bucket", bucket_for_label.clone()),

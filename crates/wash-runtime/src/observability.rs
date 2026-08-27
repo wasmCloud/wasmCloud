@@ -154,6 +154,9 @@ fn directive(directive: impl AsRef<str>) -> anyhow::Result<Directive> {
 #[derive(Clone, Default)]
 pub struct Meters {
     pub fuel_consumption: FuelConsumptionMeter,
+    /// Sampled rather than burned, for the plugins that ask for it. Both meters
+    /// are built: which one a call path uses is that path's choice.
+    pub execution_time: ExecutionTimeMeter,
     /// User-defined meters
     pub meters: HashMap<String, Arc<dyn Any + Send + Sync + 'static>>,
 }
@@ -162,6 +165,7 @@ impl Meters {
     pub fn new(enabled: bool) -> Self {
         Self {
             fuel_consumption: FuelConsumptionMeter::new(enabled),
+            execution_time: ExecutionTimeMeter::new(enabled),
             meters: Default::default(),
         }
     }
@@ -205,6 +209,88 @@ impl FuelConsumptionMeter {
         } else {
             func(store).await
         }
+    }
+}
+
+/// Reports how long a call ran guest code, in milliseconds.
+///
+/// The alternative to [`FuelConsumptionMeter`], and what the `wasmcloud:nats`
+/// plugin measures its handlers with. Sampled by the epoch callback every store
+/// arms anyway ([`crate::engine::abandon::GuestExecution`]), so it costs the
+/// guest nothing at run time, where fuel's per-block counters are compiled into
+/// the guest and slow it down whether or not anyone is watching. Fuel stays the
+/// default everywhere it already was.
+///
+/// The trade is resolution, and it only ever undercounts: a call whose guest
+/// runs for less than one sampling window is never sampled and records **0**.
+/// Read the histogram as "calls that burned at least a window of guest
+/// execution", not as a CPU total — a host serving nothing but short calls
+/// reports zero and is not idle. `GuestExecution`'s docs have the rest,
+/// including why a store serving concurrent calls attributes their execution
+/// to each other.
+#[derive(Clone, Default)]
+pub struct ExecutionTimeMeter {
+    hist: Option<opentelemetry::metrics::Histogram<u64>>,
+}
+
+impl ExecutionTimeMeter {
+    pub(crate) fn new(enabled: bool) -> Self {
+        let hist = enabled.then(|| {
+            opentelemetry::global::meter("wash-runtime")
+                .u64_histogram("guest.execution.time")
+                .with_description(
+                    "Guest execution time for components that export host plugin interfaces, \
+                     sampled from the engine's epoch callback",
+                )
+                .with_unit("ms")
+                .with_boundaries(execution_time_histogram_boundaries())
+                .build()
+        });
+        Self { hist }
+    }
+
+    pub async fn observe<F, R>(
+        &self,
+        attributes: &[KeyValue],
+        store: &mut wasmtime::Store<crate::engine::ctx::SharedCtx>,
+        func: F,
+    ) -> anyhow::Result<R>
+    where
+        F: AsyncFnOnce(&mut wasmtime::Store<crate::engine::ctx::SharedCtx>) -> anyhow::Result<R>,
+    {
+        let Some(hist) = &self.hist else {
+            return func(store).await;
+        };
+        // Cloned out rather than re-read after the call: `func` takes the
+        // store, and the counter is shared with the callback either way.
+        let executed = Arc::clone(&store.data().executed);
+        let before = executed.millis();
+        let result = func(store).await?;
+        hist.record(executed.millis().saturating_sub(before), attributes);
+        Ok(result)
+    }
+}
+
+/// Generate histogram boundaries for guest execution time, in milliseconds.
+///
+/// Produces boundaries following multipliers [1, 2.5, 5, 7.5] per decade,
+/// starting at one sampling window — below which every call records zero, so
+/// finer buckets would only split the zero bucket — up to an hour.
+fn execution_time_histogram_boundaries() -> Vec<f64> {
+    const MAX: f64 = 3_600_000.0;
+    const MULTIPLIERS: [f64; 4] = [1.0, 2.5, 5.0, 7.5];
+
+    let mut boundaries = vec![0.0];
+    let mut base = crate::engine::abandon::sampling_window().as_millis() as f64;
+    loop {
+        for &m in &MULTIPLIERS {
+            let value = base * m;
+            if value > MAX {
+                return boundaries;
+            }
+            boundaries.push(value);
+        }
+        base *= 10.0;
     }
 }
 
