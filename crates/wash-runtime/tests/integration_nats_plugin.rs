@@ -173,6 +173,16 @@ fn nats_async_interface(config: &[(&str, &str)]) -> WitInterface {
 }
 
 fn workload_request(workload_id: &str, interface: WitInterface) -> WorkloadStartRequest {
+    workload_request_with_pool(workload_id, interface, 1)
+}
+
+/// A workload whose component declares `pool_size` explicitly, so a test can
+/// compare pooled and ephemeral delivery. `0` is the ephemeral default.
+fn workload_request_with_pool(
+    workload_id: &str,
+    interface: WitInterface,
+    pool_size: i32,
+) -> WorkloadStartRequest {
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
@@ -194,7 +204,7 @@ fn workload_request(workload_id: &str, interface: WitInterface) -> WorkloadStart
                     allowed_ip_name_lookups: Default::default(),
                     allowed_host_loopback_ports: Default::default(),
                 },
-                pool_size: 1,
+                pool_size,
                 max_invocations: 100,
                 max_concurrency: 4,
             }],
@@ -1476,6 +1486,98 @@ async fn asking_for_an_undeclared_binding_fails_the_deployment() -> Result<()> {
     assert!(
         message.contains("leaf"),
         "expected the refusal to name the binding asked for, got {message}"
+    );
+    Ok(())
+}
+
+/// Drives the fixture's `warm:` marker over JetStream and returns what the
+/// guest reported for each run, in order.
+///
+/// JetStream rather than core, deliberately: a core trigger published before
+/// the workload's SUB has reached the server is dropped silently, which made
+/// the first delivery a race against machine load. A JetStream publish is
+/// stored and delivered whenever the consumer attaches, so the trigger cannot
+/// be lost — and the delivery counter the test asserts on stays exact.
+async fn warm_probe(h: &Harness, runs: &[&str]) -> Result<Vec<String>> {
+    let mut results = h.client.subscribe("test.results".to_string()).await?;
+    let mut out = Vec::new();
+    for run in runs {
+        h.js.publish("test.orders.warm".to_string(), format!("warm:{run}").into())
+            .await
+            .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?
+            .await
+            .map_err(|e| anyhow::anyhow!("publish ack failed: {e}"))?;
+        let got = timeout(Duration::from_secs(15), results.next())
+            .await
+            .context("no result before the deadline")?
+            .context("results subscription ended")?;
+        out.push(String::from_utf8_lossy(&got.payload).to_string());
+        // The guest publishes its result from *inside* the handler, so the
+        // result can arrive here before the host has parked the instance.
+        // Give the park a moment, or the next delivery races it for a cold
+        // store and the counter this test asserts on goes nondeterministic.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    Ok(out)
+}
+
+/// `poolSize` now applies to NATS deliveries: a component that opted in serves
+/// consecutive messages from one instance, so what it built in linear memory
+/// survives between them. The fixture counts deliveries in a `static`; only a
+/// reused instance can ever report 2.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn a_pooled_component_keeps_state_across_deliveries() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+
+    host.workload_start(workload_request(
+        "wl-warm",
+        nats_interface(&[
+            ("servers", &h.nats_url),
+            ("subject-allow", "test.>"),
+            ("stream-allow", STREAM),
+            ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+        ]),
+    ))
+    .await
+    .context("failed to start the pooled workload")?;
+
+    let got = warm_probe(&h, &["a", "b", "c"]).await?;
+    assert_eq!(
+        got,
+        vec!["warm:a:1", "warm:b:2", "warm:c:3"],
+        "each delivery should have found the previous delivery's linear memory"
+    );
+    Ok(())
+}
+
+/// The control for the test above: a component that did not opt in keeps
+/// nothing, exactly as before pooling existed on this path.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn an_ephemeral_component_starts_fresh_every_delivery() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+
+    host.workload_start(workload_request_with_pool(
+        "wl-cold",
+        nats_interface(&[
+            ("servers", &h.nats_url),
+            ("subject-allow", "test.>"),
+            ("stream-allow", STREAM),
+            ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+        ]),
+        0,
+    ))
+    .await
+    .context("failed to start the ephemeral workload")?;
+
+    let got = warm_probe(&h, &["a", "b"]).await?;
+    assert_eq!(
+        got,
+        vec!["warm:a:1", "warm:b:1"],
+        "an ephemeral component must never see a previous delivery's memory"
     );
     Ok(())
 }

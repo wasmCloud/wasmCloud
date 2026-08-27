@@ -337,6 +337,13 @@ impl InstancePool {
         self.policy.keeps_instances_warm()
     }
 
+    /// The policy this pool was built with, for a dispatch path that keeps its
+    /// own warm set (the `wasmcloud:nats` subscriber) but must honour the same
+    /// declaration.
+    pub(crate) fn policy(&self) -> InstancePolicy {
+        self.policy
+    }
+
     /// Drop every warm instance, e.g. when the component is being shut down.
     /// Dropping a driver's handle closes its channel, which ends its store's
     /// run loop. This does not wait for a drain: calls still in flight on
