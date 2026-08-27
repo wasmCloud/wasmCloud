@@ -10,6 +10,7 @@ pub(super) mod config;
 pub(super) mod conn;
 pub(super) mod interfaces;
 pub(super) mod jetstream;
+pub(super) mod ledger;
 pub(super) mod macros;
 mod plugin;
 pub(super) mod policy;

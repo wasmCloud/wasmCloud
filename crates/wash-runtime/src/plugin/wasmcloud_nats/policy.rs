@@ -250,19 +250,34 @@ impl PolicyEngine {
         }
     }
 
-    /// The wildcard-free subjects this grant permits a publish to.
+    /// The subject patterns this grant permits, as written.
     ///
-    /// A pattern containing `*` or `>` names a set, and a bind-time check
-    /// cannot ask a server about a set — `stream_by_subject` answers for one
-    /// subject. Those are skipped rather than expanded: the check is an
-    /// advisory, and a partial advisory beats a wrong one.
-    pub fn publishable_literal_subjects(&self) -> Vec<String> {
-        self.subject_allow_raw
+    /// The bind-time capture check needs the operator's own patterns —
+    /// `bench.>`, `fan.*` — not the concrete subjects they expand to. An
+    /// earlier version of the check asked the server `stream_by_subject` for
+    /// each *literal* grant entry, which answered nothing at all on a rig
+    /// where every workload grants a wildcard.
+    pub fn granted_subject_patterns(&self) -> &[String] {
+        &self.subject_allow_raw
+    }
+
+    /// Whether this grant and `pattern` can name a subject in common.
+    ///
+    /// Both sides are patterns, so this is set intersection rather than
+    /// matching: `fan.>` in the grant overlaps a stream capturing `fan.work`,
+    /// and `fan.work` in the grant overlaps a stream capturing `fan.>`. Either
+    /// way a publish this workload is allowed to make can land in that stream.
+    ///
+    /// Reserved subjects are excluded, because the workload cannot publish
+    /// there whatever its grant says.
+    pub fn overlaps_subject_pattern(&self, pattern: &str) -> bool {
+        if reaches_reserved(pattern, &self.lattice_prefixes) {
+            return false;
+        }
+        let other = NatsSubjectPattern::parse(pattern);
+        self.subject_allow
             .iter()
-            .filter(|raw| !raw.contains('*') && !raw.contains('>'))
-            .filter(|raw| self.check_subject(raw).is_ok())
-            .cloned()
-            .collect()
+            .any(|granted| granted.overlaps(&other))
     }
 
     /// True when the subject is reserved or belongs to the host itself.

@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use futures::StreamExt as _;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
@@ -69,12 +70,11 @@ pub struct WasmcloudNats {
     /// seven subscriptions at the 32MiB default is 224MiB of potential backlog
     /// on a 256Mi host, before a single guest instantiates.
     memory_budget: Option<u64>,
-    /// Backlog bytes this plugin has promised across every live workload, so
-    /// the clamp is host-wide rather than per bind. Keyed by
-    /// `(workload, binding, component)` — the granularity a claim is made at —
-    /// so a re-bind replaces its own claim instead of stacking another on top
-    /// of it. Released on unbind.
-    reserved_bytes: Arc<RwLock<HashMap<(String, String, String), u64>>>,
+    /// The ceiling on what every core subscription on this host may hold
+    /// between them, enforced at admission rather than partitioned at bind.
+    /// See [`subscriber::HostBacklogBudget`] for why a reservation was the
+    /// wrong shape.
+    host_backlog: Arc<subscriber::HostBacklogBudget>,
 }
 
 impl Default for WasmcloudNats {
@@ -93,18 +93,22 @@ impl WasmcloudNats {
             bindings: NatsBindings::default(),
             failure_sink: arc_swap::ArcSwapOption::empty(),
             memory_budget: None,
-            reserved_bytes: Arc::new(RwLock::new(HashMap::new())),
+            host_backlog: Arc::new(subscriber::HostBacklogBudget::unbounded()),
         }
     }
 
-    /// Tells the plugin what the host's guest-memory budget is, so a
-    /// subscription's byte budget can be clamped against it at bind.
+    /// Tells the plugin what the host's guest-memory budget is, so the total
+    /// core backlog every subscription holds between them can be bounded
+    /// against it.
     ///
     /// Without this the per-subscription default stands however many
     /// subscriptions a host ends up carrying, and the first sign of the
     /// mismatch is an OOMKill.
     pub fn with_memory_budget(mut self, max_guest_memory: u64) -> Self {
         self.memory_budget = Some(max_guest_memory);
+        self.host_backlog = Arc::new(subscriber::HostBacklogBudget::new(
+            max_guest_memory / NATS_BACKLOG_BUDGET_DIVISOR,
+        ));
         self
     }
 
@@ -270,80 +274,58 @@ impl WasmcloudNats {
         Ok(())
     }
 
-    /// The share of the host's memory budget these subscriptions may hold, as
-    /// a per-subscription byte ceiling.
+    /// Says when this host is carrying more core subscriptions than its
+    /// backlog ceiling can hold at once, without narrowing anything.
     ///
-    /// `subscription-capacity-bytes` bounds one subscription. Nothing bounded
-    /// the sum: a rig running eight workloads with seven core subscriptions
-    /// between them reserved `7 x 32MiB = 224MiB` of potential backlog on a
-    /// 256Mi host — 87% of the budget — and the first sign of it was an
-    /// OOMKill. The host knows its budget and the subscription count before a
-    /// single message is delivered, so the arithmetic is done here.
+    /// The first attempt at bounding the host-wide total *did* narrow it, and
+    /// that was the mistake: it partitioned the ceiling at bind, so an
+    /// operator who had tuned `subscription-capacity` to 65,536 messages got a
+    /// 1MiB buffer — 1.6% of what they asked for — chosen by the order the
+    /// bindings happened to resolve in, and the only trace was a line saying
+    /// it had "clamped". Configuration the operator wrote must not be
+    /// overridden silently; a ceiling that can actually be hit at run time
+    /// belongs at admission, where it can be reported with what was queued at
+    /// the time. See [`subscriber::HostBacklogBudget`].
     ///
-    /// Returns the configured value unchanged when the host named no budget,
-    /// or when the share is roomy enough to carry it.
-    async fn clamp_capacity_bytes(
+    /// So this is advisory only. It fires when the arithmetic says the
+    /// subscriptions *could* collectively exceed the ceiling — not that they
+    /// will, since a subscription keeping up holds nothing.
+    fn warn_on_oversubscribed_backlog(
         &self,
         workload_id: &str,
         binding: &str,
-        component_id: &str,
         handle: &ConnHandle,
         subscriptions: usize,
-    ) -> usize {
-        let configured = handle.limits.subscription_capacity_bytes;
+    ) {
         let Some(budget) = self.memory_budget else {
-            return configured;
+            return;
         };
         if subscriptions == 0 {
-            return configured;
+            return;
         }
-        // Host-side backlog is not guest memory, but it comes out of the same
-        // container. A minority share leaves the guests the budget is actually
-        // named for, and is still far more than a healthy subscription holds.
-        let share = budget / NATS_BACKLOG_BUDGET_DIVISOR;
-        // The write lock is held across the sum, the division and the claim:
-        // two workloads resolving concurrently would otherwise both read
-        // `already` before either wrote, and each reserve the whole share.
-        let (already, effective) = {
-            let mut reserved = self.reserved_bytes.write().await;
-            let key = (
-                workload_id.to_string(),
-                binding.to_string(),
-                component_id.to_string(),
-            );
-            // This key's own previous claim is being replaced, so it is not
-            // part of what is already spoken for.
-            let already: u64 = reserved
-                .iter()
-                .filter(|(k, _)| **k != key)
-                .map(|(_, bytes)| *bytes)
-                .sum();
-            let available = share.saturating_sub(already);
-            let per_subscription =
-                usize::try_from(available / subscriptions as u64).unwrap_or(usize::MAX);
-            let effective = handle.limits.clamp_capacity_bytes(per_subscription);
-            reserved.insert(key, effective as u64 * subscriptions as u64);
-            (already, effective)
-        };
-
-        if effective < configured {
-            tracing::warn!(
-                workload_id,
-                binding = describe_binding(binding),
-                subscriptions,
-                configured_bytes = configured,
-                effective_bytes = effective,
-                host_budget_bytes = budget,
-                plugin_share_bytes = share,
-                already_reserved_bytes = already,
-                "wasmcloud:nats clamped `subscription-capacity-bytes`: {subscriptions} \
-                 subscriptions at the configured size would reserve more host memory than \
-                 this host has left for NATS backlogs. Raise the host's memory budget, \
-                 lower `subscription-capacity-bytes`, or split the subscriptions across \
-                 hosts."
-            );
+        let ceiling = self.host_backlog.ceiling();
+        let worst_case =
+            (handle.limits.subscription_capacity_bytes as u64).saturating_mul(subscriptions as u64);
+        if worst_case <= ceiling {
+            return;
         }
-        effective
+        tracing::warn!(
+            workload_id,
+            binding = describe_binding(binding),
+            subscriptions,
+            capacity_bytes = handle.limits.subscription_capacity_bytes,
+            worst_case_bytes = worst_case,
+            host_backlog_ceiling_bytes = ceiling,
+            host_budget_bytes = budget,
+            "wasmcloud:nats: {subscriptions} core subscriptions at \
+             `subscription-capacity-bytes` could hold {worst_case} bytes between them, past \
+             the {ceiling} this host allows for NATS backlogs across every workload. Nothing \
+             is narrowed — each subscription still buffers what it was configured to — but \
+             once the host-wide total is reached, further deliveries shed with \
+             `reason=\"host memory budget\"` rather than `reason=\"byte budget\"`. Raise the \
+             host's memory budget, lower `subscription-capacity-bytes`, or split the \
+             subscriptions across hosts."
+        );
     }
 
     /// Says, once per bind, when a subject this binding may publish to is
@@ -365,41 +347,63 @@ impl WasmcloudNats {
         handle: &ConnHandle,
     ) {
         let max_payload = handle.max_payload();
-        // Two round trips per subject, on the bind path, so they go out
-        // together: run serially, a grant with `MAX_CAPTURE_CHECKS` literal
-        // subjects held the bind open for that many round trips against a
-        // cross-region NATS, for an advisory.
-        let checks = handle
-            .policy
-            .publishable_literal_subjects()
-            .into_iter()
-            .take(MAX_CAPTURE_CHECKS)
-            .map(|subject| async move {
-                let stream_name = handle.jetstream.stream_by_subject(&subject).await.ok()?;
-                let stream = handle.jetstream.get_stream(&stream_name).await.ok()?;
-                let limit = stream.cached_info().config.max_message_size;
-                // `-1` is the stream deferring to the server, which is the same
-                // limit the publish already honours: nothing to warn about.
-                (limit > 0 && (limit as u64) < max_payload).then_some((subject, stream_name, limit))
-            });
-
-        for (subject, stream_name, limit) in futures::future::join_all(checks)
-            .await
-            .into_iter()
-            .flatten()
-        {
+        // Enumerate the streams and ask which of *them* this grant can reach,
+        // rather than asking the server which stream captures each granted
+        // subject. `stream_by_subject` answers for one concrete subject, so
+        // the subject-driven version silently checked nothing at all on a
+        // deployment whose workloads grant `bench.>` or `fan.*` — which is
+        // every workload on the rig this was written for. A stream's
+        // `config.subjects` are patterns and the grant is patterns, so the
+        // question is whether the two sets intersect.
+        let mut streams = handle.jetstream.streams();
+        let mut examined = 0usize;
+        while let Some(info) = streams.next().await {
+            let Ok(info) = info else {
+                // No JetStream, no permission to list, a transport blip: none
+                // of these are a reason to refuse a bind over an advisory.
+                break;
+            };
+            examined += 1;
+            if examined > MAX_CAPTURE_CHECKS {
+                debug!(
+                    workload_id,
+                    binding = describe_binding(binding),
+                    examined = MAX_CAPTURE_CHECKS,
+                    "stopped checking for silently size-capped streams; this server has more \
+                     streams than one bind will enumerate"
+                );
+                break;
+            }
+            let limit = info.config.max_message_size;
+            // `-1` is the stream deferring to the server, which is the same
+            // limit the publish already honours: nothing to warn about.
+            if limit <= 0 || limit as u64 >= max_payload {
+                continue;
+            }
+            let Some(captured) = info
+                .config
+                .subjects
+                .iter()
+                .find(|subject| handle.policy.overlaps_subject_pattern(subject))
+            else {
+                continue;
+            };
+            let stream_name = &info.config.name;
+            let grant = handle.policy.granted_subject_patterns().join(",");
             tracing::warn!(
                 workload_id,
                 binding = describe_binding(binding),
-                subject = %subject,
                 stream = %stream_name,
+                captured_subject = %captured,
+                subject_allow = %grant,
                 stream_max_message_size = limit,
                 connection_max_payload = max_payload,
-                "a core (fire-and-forget) publish to '{subject}' is captured by stream \
-                 '{stream_name}', which refuses messages above {limit} bytes — below this \
-                 connection's {max_payload}-byte limit. JetStream drops those silently: \
-                 neither the publisher nor this host observes the loss. Use \
-                 `jetstream.publish` (acked) for JetStream-bound subjects."
+                "this workload may publish into '{captured}', which stream '{stream_name}' \
+                 captures and which refuses messages above {limit} bytes — below this \
+                 connection's {max_payload}-byte limit. A core (fire-and-forget) publish over \
+                 that size is dropped by JetStream silently: neither the publisher nor this \
+                 host observes the loss. Use `jetstream.publish` (acked) for JetStream-bound \
+                 subjects."
             );
         }
     }
@@ -493,12 +497,10 @@ impl WasmcloudNats {
             "starting wasmcloud:nats subscriptions"
         );
 
-        // The byte budget is per subscription and the host's is not, so this
-        // is where the two meet: what is left of the plugin's share, divided
-        // by the subscriptions about to claim it.
-        let capacity_bytes = self
-            .clamp_capacity_bytes(workload_id, binding, component_id, &handle, core_subs.len())
-            .await;
+        // The per-subscription byte budget is whatever the binding configured;
+        // the host-wide ceiling is a second bound applied at admission. This
+        // only says when the two are in tension, and never narrows the first.
+        self.warn_on_oversubscribed_backlog(workload_id, binding, &handle, core_subs.len());
 
         // A core publish into a subject a stream captures is refused by
         // JetStream above the stream's own per-message limit, and neither the
@@ -530,7 +532,7 @@ impl WasmcloudNats {
                 execution_meter.clone(),
                 failure_sink.clone(),
                 workload_id,
-                capacity_bytes,
+                self.host_backlog.clone(),
             )
             .await?;
         }
@@ -1007,10 +1009,6 @@ impl HostPlugin for WasmcloudNats {
             .await;
 
         self.connections.release(workload_id).await;
-        self.reserved_bytes
-            .write()
-            .await
-            .retain(|(workload, _, _), _| workload != workload_id);
         debug!(
             workload_id,
             "released every wasmcloud:nats connection and cancelled its subscriptions"

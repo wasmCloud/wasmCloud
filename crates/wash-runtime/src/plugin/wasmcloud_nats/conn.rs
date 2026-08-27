@@ -72,6 +72,15 @@ pub struct ConnHandle {
     /// by every consumer opened on it. See
     /// [`super::jetstream::FetchBudget`].
     pub fetch_budget: Arc<super::jetstream::FetchBudget>,
+    /// `request-timeout-ms`, as configured. The client applies it to every
+    /// `request`, but a JetStream call that opens a *stream* — a history
+    /// drain, a paged subject walk — is not one request and has to bound
+    /// itself. See [`super::interfaces::with_deadline`].
+    pub request_timeout: Option<std::time::Duration>,
+    /// What this binding has published and what the host dropped on the way.
+    /// The publish-side half of the shed accounting the delivery side has —
+    /// see [`super::ledger::PublishLedger`].
+    pub publishes: super::ledger::PublishLedger,
     /// Inboxes the host has handed to the guest as a `reply-to`, each good for
     /// one publish.
     ///
@@ -390,6 +399,10 @@ fn sanitize_subject_token(raw: &str) -> String {
 /// Drains one connection, logging exactly one outcome line for it.
 async fn drain_one(workload_id: &str, key: &ConnKey, handle: &Arc<ConnHandle>) {
     let servers = key.servers.join(",");
+    // Before the drain, not after: the lifetime totals are what a run that
+    // finished inside one report interval never got to see, and this is the
+    // last moment they exist.
+    handle.publishes.flush(workload_id, &servers);
     match tokio::time::timeout(drain_budget(), handle.client.drain()).await {
         Ok(Ok(())) => debug!(workload_id, servers, "drained NATS connection"),
         Ok(Err(err)) => warn!(workload_id, servers, %err, "NATS drain failed"),
@@ -453,6 +466,8 @@ impl ConnectionRegistry {
             policy: Arc::new(PolicyEngine::new(&config.policy, lattice_prefixes)),
             ack_mode: config.ack_mode,
             limits: config.limits.clone(),
+            request_timeout: config.request_timeout,
+            publishes: super::ledger::PublishLedger::default(),
             fetch_budget: Arc::new(super::jetstream::FetchBudget::new(
                 u64::try_from(config.limits.subscription_capacity_bytes).unwrap_or(u64::MAX),
             )),

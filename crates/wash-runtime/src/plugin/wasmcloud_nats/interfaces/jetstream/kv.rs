@@ -5,14 +5,14 @@ use std::time::Duration;
 
 use async_nats::jetstream;
 use futures::StreamExt as _;
-use tracing::warn;
+use tracing::{debug, warn};
 use wasmtime::component::{Accessor, Resource};
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx};
 
 use crate::plugin::wasmcloud_nats::interfaces::{
     NatsId, bucket_lookup_err, chain_timed_out, check_bucket, check_payload, kv, kv_err,
-    labeled_kv, types,
+    labeled_kv, types, with_deadline,
 };
 use crate::plugin::wasmcloud_nats::jetstream::BucketHandle;
 
@@ -279,7 +279,16 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
         rep: Resource<BucketHandle>,
         key: String,
     ) -> wasmtime::Result<Result<Vec<kv::Entry>, types::NatsError>> {
-        let store = accessor.with(|mut a| store_ref(&mut a, &rep))?;
+        let (store, conn) = accessor.with(|mut a| {
+            let handle = a.get().table.get(&rep)?;
+            Ok::<_, wasmtime::Error>((handle.store.clone(), handle.conn.clone()))
+        })?;
+        // Every await below is wrapped, and none of them were. This call was
+        // reported as producing no receipt, no error and no log line — a state
+        // indistinguishable from the guest never having called at all — so the
+        // point is as much that it now always leaves a trace as that it now
+        // always returns. See `with_deadline`.
+        //
         // Probe before opening the stream. `Store::history` builds an ordered
         // push consumer that only terminates once it sees an entry reporting
         // zero pending, so a key that holds no messages at all yields nothing
@@ -287,26 +296,44 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
         // lifetime, and a guest retry loop strands one task per attempt.
         // `entry` returns `Ok(None)` for exactly that case: a delete or purge
         // tombstone still comes back as `Some`, and its history still drains.
-        match store.entry(&key).await {
-            Ok(Some(_)) => {}
-            Ok(None) => return Ok(Err(types::NatsError::KeyNotFound)),
-            Err(e) => {
+        let probed = with_deadline(&conn, "kv.history probe", &key, MAX_HISTORY_DURATION, {
+            let store = store.clone();
+            let key = key.clone();
+            async move { store.entry(&key).await }
+        })
+        .await;
+        match probed {
+            Ok(Ok(Some(_))) => {}
+            Ok(Ok(None)) => {
+                debug!(key = %key, "kv history: key holds nothing, reporting not-found");
+                return Ok(Err(types::NatsError::KeyNotFound));
+            }
+            Ok(Err(e)) => {
                 let timed_out = matches!(e.kind(), jetstream::kv::EntryErrorKind::TimedOut);
                 return Ok(Err(kv_err("kv history failed", timed_out, e)));
             }
+            Err(timeout) => return Ok(Err(timeout)),
         }
 
-        let mut hist = match store.history(&key).await {
-            Ok(h) => h,
-            Err(e) => {
+        let opened = with_deadline(&conn, "kv.history open", &key, MAX_HISTORY_DURATION, {
+            let store = store.clone();
+            let key = key.clone();
+            async move { store.history(&key).await }
+        })
+        .await;
+        let mut hist = match opened {
+            Ok(Ok(h)) => h,
+            Ok(Err(e)) => {
                 let timed_out = matches!(e.kind(), jetstream::kv::WatchErrorKind::TimedOut);
                 return Ok(Err(kv_err("kv history failed", timed_out, e)));
             }
+            Err(timeout) => return Ok(Err(timeout)),
         };
         // The probe closes the common case, but history can expire between it
         // and the consumer, so the drain carries its own bound.
         let mut out = Vec::new();
-        let deadline = tokio::time::Instant::now() + MAX_HISTORY_DURATION;
+        let deadline =
+            tokio::time::Instant::now() + conn.request_timeout.unwrap_or(MAX_HISTORY_DURATION);
         loop {
             match tokio::time::timeout_at(deadline, hist.next()).await {
                 Ok(Some(Ok(e))) => out.push(kv_entry_to_wit(&e)),
@@ -316,15 +343,26 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
                 }
                 Ok(None) => break,
                 Err(_) => {
+                    warn!(
+                        key = %key,
+                        collected = out.len(),
+                        "kv history drain did not finish within its deadline; returning a \
+                         timeout rather than blocking the guest"
+                    );
                     return Ok(Err(types::NatsError::Timeout(format!(
-                        "kv history did not complete within {MAX_HISTORY_DURATION:?}"
+                        "kv history on '{key}' did not complete within {}ms",
+                        deadline
+                            .saturating_duration_since(tokio::time::Instant::now())
+                            .as_millis()
                     ))));
                 }
             }
         }
         if out.is_empty() {
+            debug!(key = %key, "kv history drained empty, reporting not-found");
             return Ok(Err(types::NatsError::KeyNotFound));
         }
+        debug!(key = %key, entries = out.len(), "kv history returning");
         Ok(Ok(out))
     }
 

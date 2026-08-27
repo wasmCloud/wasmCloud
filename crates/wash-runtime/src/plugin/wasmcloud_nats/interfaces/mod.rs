@@ -42,6 +42,7 @@ use wasmtime::component::Accessor;
 use crate::engine::ctx::{ActiveCtx, SharedCtx};
 
 use super::conn::ConnHandle;
+use super::ledger;
 
 mod default;
 mod helpers;
@@ -95,7 +96,14 @@ impl<T: 'static + Send> labeled_core::HostWithStore<T> for SharedCtx {
             reply_to,
             headers,
         } = msg;
+        // Every refusal below is counted, not only logged. A core publish is
+        // fire-and-forget, so a message that never reaches the wire is
+        // invisible to the guest, to the receiver, and — until this — to the
+        // operator comparing what a fan-out published against what arrived.
+        let size = body.len();
         if let Err(e) = check_publish_subject(&conn, &subject) {
+            conn.publishes
+                .dropped(&subject, size, ledger::PublishDrop::Refused);
             return Ok(Err(e));
         }
         // The reply-to the guest asks responses on is a subject it is inviting
@@ -103,17 +111,26 @@ impl<T: 'static + Send> labeled_core::HostWithStore<T> for SharedCtx {
         if let Some(reply_to) = reply_to.as_deref()
             && let Err(e) = check_subject(&conn, reply_to)
         {
+            conn.publishes
+                .dropped(&subject, size, ledger::PublishDrop::Refused);
             return Ok(Err(e));
         }
         let headers = match outbound_headers(headers.as_deref()) {
             Ok(h) => h,
-            Err(e) => return Ok(Err(e)),
+            Err(e) => {
+                conn.publishes
+                    .dropped(&subject, size, ledger::PublishDrop::Refused);
+                return Ok(Err(e));
+            }
         };
         if let Err(e) = check_payload(body.len(), headers.as_ref(), &conn) {
+            conn.publishes
+                .dropped(&subject, size, ledger::PublishDrop::Refused);
             return Ok(Err(e));
         }
 
         let payload: Bytes = body.into();
+        let subject_label = subject.clone();
         let result = match (reply_to, headers) {
             (Some(reply_to), Some(headers)) => {
                 conn.client
@@ -133,6 +150,17 @@ impl<T: 'static + Send> labeled_core::HostWithStore<T> for SharedCtx {
             (None, None) => conn.client.publish(subject, payload).await,
         };
 
+        match &result {
+            // The wire is as far as a core publish can be followed. What this
+            // counter buys is the *other* side of the comparison: a receiver
+            // that saw fewer than this published them and lost them
+            // downstream, which is a different problem from never having
+            // published them and was previously indistinguishable from it.
+            Ok(()) => conn.publishes.published(size),
+            Err(_) => conn
+                .publishes
+                .dropped(&subject_label, size, ledger::PublishDrop::Failed),
+        }
         Ok(result.map_err(|e| core_publish_err("failed to publish", e, conn.max_payload())))
     }
 

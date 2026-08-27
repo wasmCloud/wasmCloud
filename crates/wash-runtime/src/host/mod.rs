@@ -923,10 +923,21 @@ impl HostApi for Host {
     ) -> anyhow::Result<WorkloadStatusResponse> {
         if let Some(workload) = self.workloads.read().await.get(&request.workload_id) {
             let workload_state = workload.into();
+            // A failed workload reports the reason it failed, verbatim and
+            // unprefixed. This is the only field that crosses to the operator,
+            // and the operator puts it in the `Sync` condition — so it is the
+            // one place a `kubectl`-only operator can learn *why* a workload
+            // is in `WORKLOAD_STATE_ERROR`. Wrapping it in "Workload is
+            // Error: " spends the front of a truncated condition message on
+            // saying again what the state field already says.
+            let message = match workload {
+                HostWorkload::Error(reason) => reason.clone(),
+                other => format!("Workload is {other}"),
+            };
             Ok(WorkloadStatusResponse {
                 workload_status: WorkloadStatus {
                     workload_id: request.workload_id,
-                    message: format!("Workload is {workload}"),
+                    message,
                     workload_state,
                 },
             })
