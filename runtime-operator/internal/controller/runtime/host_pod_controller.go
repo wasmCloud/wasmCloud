@@ -5,6 +5,7 @@ package runtime
 
 import (
 	"context"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -78,10 +79,8 @@ func (r *HostPodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	if podIP := pod.Status.PodIP; podIP != "" {
-		if err := r.deleteHostForIP(ctx, podIP); err != nil {
-			return ctrl.Result{}, err
-		}
+	if err := r.deleteHostForPod(ctx, pod); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	base := pod.DeepCopy()
@@ -89,11 +88,23 @@ func (r *HostPodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, r.Patch(ctx, pod, client.MergeFrom(base))
 }
 
-// deleteHostForIP deletes the Host CRD whose Hostname matches podIP. The
-// list is always scoped to the operator's own namespace — that is the one
-// and only place Host objects live, regardless of where the underlying
-// host pod runs. Uses a field index so it does not scan every Host.
-func (r *HostPodReconciler) deleteHostForIP(ctx context.Context, podIP string) error {
+// deleteHostForPod deletes the Host CRD registered by the given terminating
+// Pod, identified by matching Host.Hostname to the Pod's IP. The list is always
+// scoped to the operator's own namespace — that is the one and only place Host
+// objects live, regardless of where the underlying host pod runs. Uses a field
+// index so it does not scan every Host.
+//
+// Kubernetes recycles Pod IPs, and this controller's finalizer holds the
+// terminating Pod in the API long after kubelet released its IP, so a
+// replacement Pod may already hold that IP and have registered a Host under it.
+// A Host created at or after this Pod was condemned is the replacement's, and
+// deleting it would take a live host's Workloads with it.
+func (r *HostPodReconciler) deleteHostForPod(ctx context.Context, pod *corev1.Pod) error {
+	podIP := pod.Status.PodIP
+	if podIP == "" {
+		return nil
+	}
+
 	var hosts runtimev1alpha1.HostList
 	if err := r.List(ctx, &hosts,
 		client.InNamespace(r.OperatorNamespace),
@@ -101,17 +112,49 @@ func (r *HostPodReconciler) deleteHostForIP(ctx context.Context, podIP string) e
 	); err != nil {
 		return err
 	}
+
+	log := ctrl.LoggerFrom(ctx)
+	condemnedAt := podCondemnedAt(pod)
 	for i := range hosts.Items {
-		if err := r.Delete(ctx, &hosts.Items[i]); client.IgnoreNotFound(err) != nil {
+		host := &hosts.Items[i]
+		if !host.CreationTimestamp.Time.Before(condemnedAt) {
+			log.Info("keeping Host registered at or after this pod was condemned; its pod IP was recycled",
+				"host", host.Name, "hostID", host.HostID, "podIP", podIP,
+				"hostCreated", host.CreationTimestamp.Time, "podCondemnedAt", condemnedAt)
+			continue
+		}
+		if err := r.Delete(ctx, host); client.IgnoreNotFound(err) != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// podCondemnedAt returns the instant the Pod was told to go away, the earliest
+// its IP could have been released to another Pod.
+//
+// DeletionTimestamp is the grace deadline, request time +
+// DeletionGracePeriodSeconds, so on the Kubernetes default it sits 30s in the
+// future and covers every Host a replacement registered during the grace window.
+//
+// Both timestamps carry one-second resolution, so a Host created in the same
+// second is kept — erring toward an orphan the unreachable-host path reaps a
+// window later, over deleting a live host's Workloads.
+// A Pod that is not terminating returns the zero time, which spares every Host.
+func podCondemnedAt(pod *corev1.Pod) time.Time {
+	if pod.DeletionTimestamp == nil {
+		return time.Time{}
+	}
+	condemned := pod.DeletionTimestamp.Time
+	if grace := pod.DeletionGracePeriodSeconds; grace != nil {
+		condemned = condemned.Add(-time.Duration(*grace) * time.Second)
+	}
+	return condemned
+}
+
 // SetupWithManager registers the controller and the Host field index it depends on.
 func (r *HostPodReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// Index Host objects by Hostname (= pod IP) so deleteHostForIP can do a
+	// Index Host objects by Hostname (= pod IP) so deleteHostForPod can do a
 	// direct lookup rather than listing every Host and filtering in memory.
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),

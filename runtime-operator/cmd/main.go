@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -169,7 +168,7 @@ func main() {
 	operatorCfg := runtime_operator.EmbeddedOperatorConfig{
 		DisableArtifactController: disableArtifactController,
 		NatsURL:                   natsUrl,
-		HeartbeatTTL:              60 * time.Second,
+		HeartbeatTTL:              runtime_operator.DefaultHeartbeatTTL,
 		HostCPUThreshold:          cpuBackpressureThreshold,
 		HostMemoryThreshold:       memoryBackpressureThreshold,
 		Namespace:                 operatorNamespace,
