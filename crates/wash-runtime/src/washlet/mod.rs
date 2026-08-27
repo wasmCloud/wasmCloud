@@ -3,17 +3,35 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::component_source::{ComponentSource, LoadedComponent};
-use crate::host::{Host, HostApi, HostConfig};
+use crate::host::{Host, HostApi, HostConfig, WorkloadReservation};
 use crate::oci::{self, OciConfig};
 use crate::plugin::HostPlugin;
 use anyhow::{Context as _, anyhow};
 use futures::StreamExt as _;
 use tokio::sync::oneshot;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 
 pub const HOST_API_PREFIX: &str = "runtime.host";
 pub const OPERATOR_API_PREFIX: &str = "runtime.operator";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+/// How many `workload.start` requests a host pulls and compiles at once.
+///
+/// This is not a tuning knob: it bounds how many images are held in memory and
+/// compiled at once. The compile is the half that sets it — each permitted
+/// start ends in a Cranelift compile on the blocking pool, and a host pod with
+/// a couple of cores oversubscribed several times over starves the runtime
+/// threads it shares that CPU with, which is the stall this path exists to
+/// avoid. Sized to what a small pod can compile at once, not to what its
+/// network could pull.
+const MAX_CONCURRENT_STARTS: usize = 4;
+/// How long shutdown waits for in-flight commands before abandoning them.
+///
+/// A start stalled on an unreachable registry runs to its own pull timeout, and
+/// waiting all of them out would hold shutdown for minutes — past the grace
+/// period a terminating pod gets, so it is killed before `host.stop()` unbinds
+/// anything. Better to abandon them and stop the host, which unbinds whatever
+/// they had bound anyway.
+const COMMAND_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub mod types {
     pub mod v2 {
@@ -37,6 +55,7 @@ pub struct ClusterHostBuilder {
     cleanup_interval: Option<Duration>,
     cleanup_age: Option<Duration>,
     host_config: Option<HostConfig>,
+    max_concurrent_starts: Option<usize>,
 }
 
 impl ClusterHostBuilder {
@@ -101,9 +120,31 @@ impl ClusterHostBuilder {
         Ok(self)
     }
 
+    /// A zero frequency is read as unset and takes the default. Passing it on
+    /// would panic `tokio::time::interval` inside the spawned task, where the
+    /// host reports itself started and then serves nothing; clamping it to some
+    /// tiny period instead trades that for the cleanup walking the OCI cache
+    /// thousands of times a second, inline in the loop that serves requests.
     pub fn with_artifact_cleaner(mut self, frequency: Duration, max_age: Duration) -> Self {
-        self.cleanup_interval = Some(frequency);
+        self.cleanup_interval = (!frequency.is_zero()).then_some(frequency);
         self.cleanup_age = Some(max_age);
+        self
+    }
+
+    /// Sets how often the host publishes to `runtime.operator.heartbeat.{id}`.
+    /// It has to stay well inside the operator's unreachable window, which
+    /// deletes a host it has not heard from along with its workloads.
+    /// Zero is read as unset and takes the default, for the same reason as
+    /// [`ClusterHostBuilder::with_artifact_cleaner`].
+    pub fn with_heartbeat_interval(mut self, interval: Duration) -> Self {
+        self.heartbeat_interval = (!interval.is_zero()).then_some(interval);
+        self
+    }
+
+    /// Caps how many `workload.start` requests this host serves at once.
+    /// Zero is raised to one: a host that cannot start anything is not a host.
+    pub fn with_max_concurrent_starts(mut self, starts: usize) -> Self {
+        self.max_concurrent_starts = Some(starts.max(1));
         self
     }
 
@@ -157,6 +198,7 @@ impl ClusterHostBuilder {
             heartbeat_interval,
             cleanup_interval: self.cleanup_interval.unwrap_or(Duration::from_secs(300)),
             cleanup_age: self.cleanup_age.unwrap_or(Duration::from_secs(3600)),
+            max_concurrent_starts: self.max_concurrent_starts.unwrap_or(MAX_CONCURRENT_STARTS),
         })
     }
 }
@@ -167,6 +209,7 @@ pub struct ClusterHost {
     heartbeat_interval: Duration,
     cleanup_interval: Duration,
     cleanup_age: Duration,
+    max_concurrent_starts: usize,
 }
 
 impl ClusterHost {
@@ -188,6 +231,7 @@ impl ClusterHost {
 
         let heartbeat_interval = self.heartbeat_interval;
         let cleanup_interval = self.cleanup_interval;
+        let max_concurrent_starts = self.max_concurrent_starts;
         let host_id = host.id().to_string();
         let host = host.clone();
 
@@ -214,14 +258,61 @@ impl ClusterHost {
                     .context("failed to subscribe for API requests")?;
                 let mut heartbeat_timer = tokio::time::interval(heartbeat_interval);
 
+                // Only `workload.start` waits on this permit; stops and status
+                // never do, so neither queues behind a pull.
+                let starts = Arc::new(tokio::sync::Semaphore::new(max_concurrent_starts));
+                // Commands run as their own tasks, so shutdown has to wait for
+                // them: `host.stop()` unbinds every plugin, and a start still
+                // running past it would bind against stopped plugins and leave
+                // a service nothing tears down.
+                let mut commands = tokio::task::JoinSet::new();
+
                 let mut oci_cleanup_timer = tokio::time::interval(cleanup_interval);
 
                 loop {
                     tokio::select! {
                         // Shutdown signal
                         _ = &mut one_shot_rx => {
-                            api_subscription.unsubscribe().await.context("failed to unsubscribe from API requests")?;
+                            if let Err(e) = api_subscription.unsubscribe().await {
+                                error!("failed to unsubscribe from API requests: {e}");
+                            }
+                            // Anything still queued gives its workload id back
+                            // and returns rather than starting something this
+                            // host is about to tear down.
+                            starts.close();
+                            let drained = tokio::time::timeout(COMMAND_DRAIN_TIMEOUT, async {
+                                while let Some(finished) = commands.join_next().await {
+                                    if let Err(e) = finished {
+                                        error!("command task failed during shutdown: {e}");
+                                    }
+                                }
+                            })
+                            .await;
+                            if drained.is_err() {
+                                warn!(
+                                    "commands still running after {COMMAND_DRAIN_TIMEOUT:?}; \
+                                     abandoning them to stop the host"
+                                );
+                                commands.abort_all();
+                                // `abort_all` only asks. Wait for the tasks to
+                                // reach their next await and unwind, or
+                                // `host.stop()` unbinds plugins underneath one
+                                // still binding them.
+                                while commands.join_next().await.is_some() {}
+                            }
                             return host.stop().await.context("failed to stop host");
+                        }
+                        // Reaps finished commands. A panicked one is fatal: it
+                        // may have died holding a workload id it claimed and
+                        // never committed or released, and no later stop can
+                        // free that slot — the id would be refused as "already
+                        // exists" for the life of the host. Taking the host
+                        // down is what a panic here did before commands ran as
+                        // their own tasks, and a restart is what clears it.
+                        Some(finished) = commands.join_next() => {
+                            if let Err(e) = finished {
+                                return Err(anyhow!("command task failed: {e}"));
+                            }
                         }
                         // OCI cache cleanup
                         _ = oci_cleanup_timer.tick() => {
@@ -232,24 +323,55 @@ impl ClusterHost {
                         }
                         // Send heartbeat
                         _ = heartbeat_timer.tick() => {
-                            let heartbeat = host_heartbeat(&host).await?;
-                            let heartbeat_bytes = serde_json::to_vec(&heartbeat)
-                                .context("failed to serialize heartbeat")?;
-                            nats_client.publish(heartbeat_subject.clone(), heartbeat_bytes.into()).await.context("failed to publish heartbeat")?;
+                            // Returning here would drop `commands`, aborting
+                            // in-flight starts after they have reserved their
+                            // ids, and skip the `host.stop()` that unbinds
+                            // their plugins. A missed heartbeat is worth none
+                            // of that; the next tick tries again.
+                            match host_heartbeat(&host).await.and_then(|heartbeat| {
+                                serde_json::to_vec(&heartbeat).context("failed to serialize heartbeat")
+                            }) {
+                                Ok(heartbeat_bytes) => {
+                                    if let Err(e) = nats_client
+                                        .publish(heartbeat_subject.clone(), heartbeat_bytes.into())
+                                        .await
+                                    {
+                                        error!("failed to publish heartbeat: {e}");
+                                    }
+                                }
+                                Err(e) => error!("failed to build heartbeat: {e}"),
+                            }
                         }
                         // Handle API requests
                         Some(msg) = api_subscription.next() => {
-                            let response = handle_command(host.as_ref(), &msg, host.config()).await;
-                            match response {
-                                Ok(resp_bytes) => {
-                                    if let Some(reply_to) = msg.reply {
-                                        nats_client.publish(reply_to, resp_bytes.into()).await.context("failed to publish API response")?;
+                            // `select!` runs one branch to completion, so a
+                            // command awaited here would hold up the heartbeat
+                            // above for as long as it takes to pull and compile.
+                            // A host whose heartbeats stop looks unreachable to
+                            // the operator, which deletes it and its workloads.
+                            //
+                            // Commands naming one workload are ordered by the
+                            // host's reservation on that id, not by this loop:
+                            // a start claims the id before it fetches anything,
+                            // and a stop that finds the claim hands the teardown
+                            // back to the start holding it.
+                            let host = host.clone();
+                            let nats_client = nats_client.clone();
+                            let starts = Arc::clone(&starts);
+                            commands.spawn(async move {
+                                match handle_command(host.as_ref(), &msg, host.config(), &starts).await {
+                                    Ok(resp_bytes) => {
+                                        if let Some(reply_to) = msg.reply
+                                            && let Err(e) = nats_client.publish(reply_to, resp_bytes.into()).await
+                                        {
+                                            error!("failed to publish API response: {e}");
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("error handling command: {e}");
                                     }
                                 }
-                                Err(e) => {
-                                    error!("error handling command: {e}");
-                                }
-                            }
+                            });
                         }
                     }
                 }
@@ -365,9 +487,10 @@ fn from_api<'de, T: serde::Deserialize<'de>>(bytes: &'de [u8]) -> Result<T, anyh
 
 #[instrument(level = "debug", skip_all, fields(subject = %msg.subject))]
 async fn handle_command(
-    host: &impl HostApi,
+    host: &(impl HostApi + WorkloadReservation),
     msg: &async_nats::Message,
     config: &HostConfig,
+    starts: &tokio::sync::Semaphore,
 ) -> Result<Vec<u8>, anyhow::Error> {
     let command = msg.subject.split('.').skip(3).collect::<Vec<_>>().join(".");
 
@@ -380,7 +503,7 @@ async fn handle_command(
         }
         "workload.start" => {
             let req: types::v2::WorkloadStartRequest = from_api(payload)?;
-            let res = workload_start(host, req, config).await?;
+            let res = workload_start(host, req, config, starts).await?;
             to_api(&res)
         }
         "workload.stop" => {
@@ -471,9 +594,10 @@ fn workload_start_error(workload_id: &str, message: String) -> types::v2::Worklo
     workload.namespace=?req.workload.as_ref().map(|w| &w.namespace).unwrap_or(&"<none>".to_string())),
     )]
 async fn workload_start(
-    host: &impl HostApi,
+    host: &impl WorkloadReservation,
     req: types::v2::WorkloadStartRequest,
     config: &HostConfig,
+    starts: &tokio::sync::Semaphore,
 ) -> anyhow::Result<types::v2::WorkloadStartResponse> {
     let Some(types::v2::Workload {
         namespace,
@@ -492,104 +616,145 @@ async fn workload_start(
         anyhow::bail!("workload_id is required");
     }
 
-    let (components, host_interfaces) = if let Some(wit_world) = wit_world {
-        let mut pulled_components = Vec::with_capacity(wit_world.components.len());
-        for component in &wit_world.components {
-            let oci_config = image_pull_secret_to_oci_config(config, &component.image_pull_secret);
-            let source = ComponentSource::Oci {
-                image: component.image.clone(),
-                pull_policy: component.image_pull_policy().into(),
-            };
-            // `load` already names the reference it failed on; this says which
-            // of the workload's components asked for it, so a multi-component
-            // start reports something the operator can act on.
-            let loaded =
-                match source.load(oci_config).await.with_context(|| {
+    // Claimed before any image is fetched. Until the host holds the id a
+    // status reports it missing and a stop reports it already gone, so a stop
+    // arriving here would tell the operator the teardown is done while this
+    // start goes on to run the workload.
+    let reservation = match host.workload_reserve(&workload_id).await {
+        Ok(reservation) => reservation,
+        // Reported, not logged again: the host logs this refusal at `warn`
+        // precisely because a scheduler replaying a start is not a malfunction,
+        // and `workload_start_error` would raise the same event to `error`.
+        Err(message) => {
+            return Ok(types::v2::WorkloadStartResponse {
+                workload_status: Some(types::v2::WorkloadStatus {
+                    workload_id,
+                    workload_state: types::v2::WorkloadState::Error.into(),
+                    message,
+                }),
+            });
+        }
+    };
+
+    // Queued with the id already claimed. Waiting for a permit is time like
+    // any other in which a stop or a status has to find this workload.
+    let _permit = match starts.acquire().await {
+        Ok(permit) => permit,
+        Err(e) => {
+            host.workload_release(&workload_id, reservation).await;
+            return Ok(workload_start_error(
+                &workload_id,
+                format!("host is no longer accepting starts: {e}"),
+            ));
+        }
+    };
+
+    // Every exit from here gives the id back, so a start that never began
+    // cannot leave it reserved against the next one.
+    let prepared = async {
+        let (components, host_interfaces) = if let Some(wit_world) = wit_world {
+            let mut pulled_components = Vec::with_capacity(wit_world.components.len());
+            for component in &wit_world.components {
+                let oci_config =
+                    image_pull_secret_to_oci_config(config, &component.image_pull_secret);
+                let source = ComponentSource::Oci {
+                    image: component.image.clone(),
+                    pull_policy: component.image_pull_policy().into(),
+                };
+                // `load` already names the reference it failed on; this says which
+                // of the workload's components asked for it, so a multi-component
+                // start reports something the operator can act on.
+                let loaded = match source.load(oci_config).await.with_context(|| {
                     format!("failed to pull image for component '{}'", component.name)
                 }) {
                     Ok(loaded) => loaded,
-                    Err(e) => return Ok(workload_start_error(&workload_id, format!("{e:#}"))),
+                    Err(e) => return Err(format!("{e:#}")),
                 };
-            let local_resources = match component.local_resources.clone() {
+                let local_resources = match component.local_resources.clone() {
+                    Some(lr) => match crate::types::LocalResources::try_from(lr) {
+                        Ok(lr) => lr,
+                        Err(e) => {
+                            return Err(format!(
+                                "invalid local_resources for component {}: {e:#}",
+                                component.name
+                            ));
+                        }
+                    },
+                    None => crate::types::LocalResources::default(),
+                };
+                pulled_components.push(component_from_wire(component, loaded, local_resources))
+            }
+            (
+                pulled_components,
+                wit_world
+                    .host_interfaces
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            )
+        } else {
+            (vec![], vec![])
+        };
+
+        let service = if let Some(service) = service {
+            let oci_config = image_pull_secret_to_oci_config(config, &service.image_pull_secret);
+            let source = ComponentSource::Oci {
+                image: service.image.clone(),
+                pull_policy: service.image_pull_policy().into(),
+            };
+            // Distinguishes a service pull failure from a component one; both
+            // otherwise report the same reference and cause.
+            let loaded = match source
+                .load(oci_config)
+                .await
+                .context("failed to pull image for the workload service")
+            {
+                Ok(loaded) => loaded,
+                Err(e) => return Err(format!("{e:#}")),
+            };
+            let local_resources = match service.local_resources.clone() {
                 Some(lr) => match crate::types::LocalResources::try_from(lr) {
                     Ok(lr) => lr,
                     Err(e) => {
-                        return Ok(workload_start_error(
-                            &workload_id,
-                            format!(
-                                "invalid local_resources for component {}: {e:#}",
-                                component.name
-                            ),
-                        ));
+                        return Err(format!("invalid local_resources for service: {e:#}"));
                     }
                 },
                 None => crate::types::LocalResources::default(),
             };
-            pulled_components.push(component_from_wire(component, loaded, local_resources))
-        }
-        (
-            pulled_components,
-            wit_world
-                .host_interfaces
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-        )
-    } else {
-        (vec![], vec![])
-    };
+            Some(crate::types::Service {
+                bytes: loaded.bytes,
+                digest: loaded.digest,
+                local_resources,
+                max_restarts: service.max_restarts,
+            })
+        } else {
+            None
+        };
 
-    let service = if let Some(service) = service {
-        let oci_config = image_pull_secret_to_oci_config(config, &service.image_pull_secret);
-        let source = ComponentSource::Oci {
-            image: service.image.clone(),
-            pull_policy: service.image_pull_policy().into(),
-        };
-        // Distinguishes a service pull failure from a component one; both
-        // otherwise report the same reference and cause.
-        let loaded = match source
-            .load(oci_config)
-            .await
-            .context("failed to pull image for the workload service")
-        {
-            Ok(loaded) => loaded,
-            Err(e) => return Ok(workload_start_error(&workload_id, format!("{e:#}"))),
-        };
-        let local_resources = match service.local_resources.clone() {
-            Some(lr) => match crate::types::LocalResources::try_from(lr) {
-                Ok(lr) => lr,
-                Err(e) => {
-                    return Ok(workload_start_error(
-                        &workload_id,
-                        format!("invalid local_resources for service: {e:#}"),
-                    ));
-                }
+        let volumes = volumes.into_iter().map(Into::into).collect();
+
+        let request = crate::types::WorkloadStartRequest {
+            workload_id: workload_id.clone(),
+            workload: crate::types::Workload {
+                namespace,
+                name,
+                annotations,
+                service,
+                components,
+                host_interfaces,
+                volumes,
             },
-            None => crate::types::LocalResources::default(),
         };
-        Some(crate::types::Service {
-            bytes: loaded.bytes,
-            digest: loaded.digest,
-            local_resources,
-            max_restarts: service.max_restarts,
-        })
-    } else {
-        None
-    };
+        Ok(request)
+    }
+    .await;
 
-    let volumes = volumes.into_iter().map(Into::into).collect();
-
-    let request = crate::types::WorkloadStartRequest {
-        workload_id: workload_id.clone(),
-        workload: crate::types::Workload {
-            namespace,
-            name,
-            annotations,
-            service,
-            components,
-            host_interfaces,
-            volumes,
-        },
+    let request = match prepared {
+        Ok(request) => request,
+        Err(message) => {
+            host.workload_release(&workload_id, reservation).await;
+            return Ok(workload_start_error(&workload_id, message));
+        }
     };
 
     info!(
@@ -598,7 +763,10 @@ async fn workload_start(
         name=?request.workload.name,
         "Starting workload");
 
-    Ok(host.workload_start(request).await?.into())
+    Ok(host
+        .workload_start_reserved(reservation, request)
+        .await?
+        .into())
 }
 
 #[instrument(skip_all, fields(workload_id = %req.workload_id))]

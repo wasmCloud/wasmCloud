@@ -159,6 +159,50 @@ impl<T: HostApi> HostApi for Arc<T> {
     }
 }
 
+/// The claim-then-start protocol a caller needs when it has work to do between
+/// deciding to start a workload and having something the host can run.
+///
+/// Kept off [`HostApi`] deliberately. Its three calls only make sense together,
+/// every reservation has to reach [`WorkloadReservation::workload_start_reserved`]
+/// or [`WorkloadReservation::workload_release`], or the id sits in `Starting`
+/// with nothing on the way to fill it — and that is bookkeeping to keep inside
+/// this crate rather than an obligation to hand to everyone who implements the
+/// host's API.
+pub(crate) trait WorkloadReservation {
+    /// Claim a workload id before doing the work a start needs.
+    ///
+    /// A caller that has to fetch images first would otherwise leave the id in
+    /// no map for as long as that takes: `workload_status` reports it missing
+    /// and `workload_stop` reports it already gone, so a stop arriving in that
+    /// window tells its caller the teardown is done while the start goes on to
+    /// run the workload. Reserving first puts the id in `Starting` for the
+    /// whole window, where both of those read it correctly and a stop hands the
+    /// teardown back to the start.
+    ///
+    /// `Err` carries the refusal to report, and reserves nothing.
+    fn workload_reserve(
+        &self,
+        workload_id: &str,
+    ) -> impl Future<Output = Result<Reservation, String>>;
+
+    /// Give back an id claimed by [`WorkloadReservation::workload_reserve`]
+    /// whose start never began. Does nothing if the id has moved on to another
+    /// owner.
+    fn workload_release(
+        &self,
+        workload_id: &str,
+        reservation: Reservation,
+    ) -> impl Future<Output = ()>;
+
+    /// Start a workload under an id already claimed by
+    /// [`WorkloadReservation::workload_reserve`].
+    fn workload_start_reserved(
+        &self,
+        reservation: Reservation,
+        request: WorkloadStartRequest,
+    ) -> impl Future<Output = anyhow::Result<WorkloadStartResponse>>;
+}
+
 /// A claim on one workload id, minted whenever a task takes responsibility for
 /// that id and never reused within a host.
 ///
@@ -737,10 +781,22 @@ impl Host {
         let service_present = request.workload.service.is_some();
         let workload_id = request.workload_id.clone();
 
-        // Initialize the workload using the engine, receiving the unresolved workload
-        let unresolved_workload = self
-            .engine
-            .initialize_workload(&request.workload_id, request.workload)?;
+        // Initialize the workload using the engine, receiving the unresolved workload.
+        //
+        // Cranelift compiles every component here, guarded by the moka cache.
+        // This occupies whichever thread runs it for as long as compilation takes.
+        // On a runtime thread, that may stall async-nats connection task alongside it
+        // and a host that stops draining its socket is disconnected as a slow consumer.
+        let engine = self.engine.clone();
+        let init_id = request.workload_id;
+        let workload = request.workload;
+        let span = tracing::Span::current();
+        let unresolved_workload = tokio::task::spawn_blocking(move || {
+            let _entered = span.enter();
+            engine.initialize_workload(&init_id, workload)
+        })
+        .await
+        .context("workload initialization task failed")??;
 
         // `resolve` binds the workload's plugins, and gives back whatever it
         // bound if any part of that fails.
@@ -847,127 +903,17 @@ impl HostApi for Host {
         &self,
         request: WorkloadStartRequest,
     ) -> anyhow::Result<WorkloadStartResponse> {
-        // Reserve the workload ID while holding the write lock so concurrent
-        // starts cannot both observe it as available. An ID remains reserved
-        // in every lifecycle state until workload_stop removes it. The
-        // reservation stamped on the slot is what lets the commit below tell
-        // this start's slot from one a later start claimed.
-        let reservation = self.reserve();
-        {
-            let mut workloads = self.workloads.write().await;
-            if workloads.contains_key(&request.workload_id) {
-                let message = format!(
-                    "Workload ID [{}] already exists (the exising workload must be stopped to reuse the ID)",
-                    request.workload_id
-                );
-                // Logged here rather than at the single site below, because
-                // this refusal returns before the start ever begins. At `warn`,
-                // not `error`: this is the guard that makes a replayed start
-                // request idempotent, and a scheduler retrying one is not a
-                // host malfunction.
-                tracing::warn!(
-                    workload_id = request.workload_id,
-                    reason = message,
-                    "refused to start workload"
-                );
-                return Ok(WorkloadStartResponse {
-                    workload_status: WorkloadStatus {
-                        workload_id: request.workload_id.clone(),
-                        workload_state: WorkloadState::Error,
-                        message,
-                    },
-                });
-            }
-            workloads.insert(
-                request.workload_id.clone(),
-                HostWorkload::Starting(reservation),
-            );
-        }
-
         let workload_id = request.workload_id.clone();
-        let started = self.workload_start_inner(request).await;
-
-        // Commit under the same lock the id was reserved under, and only into
-        // the slot this start reserved. Anything else in that slot means the
-        // workload was stopped or failed while this was still starting: writing
-        // `Running` over it would resurrect a workload nobody is tracking, and
-        // simply dropping the result — which is what an `and_modify` that finds
-        // no entry does — would leave its plugins bound and its service running
-        // detached.
-        let (workload_state, message, orphaned) = {
-            let mut workloads = self.workloads.write().await;
-            let slot = workloads.get(&workload_id);
-            let mine = matches!(slot, Some(HostWorkload::Starting(held)) if *held == reservation);
-            // A stop that arrived mid-start handed the teardown back by marking
-            // the slot `Stopping` under this start's own reservation.
-            let handed_back =
-                matches!(slot, Some(HostWorkload::Stopping(held)) if *held == reservation);
-            match started {
-                Ok(resolved) if mine => {
-                    workloads.insert(
-                        workload_id.clone(),
-                        HostWorkload::Running(Box::new(resolved)),
-                    );
-                    (
-                        WorkloadState::Running,
-                        "Workload started successfully".to_string(),
-                        None,
-                    )
-                }
-                // Stopped (or failed) while starting. The stop could not tear
-                // this down because it did not exist yet, so that falls to us.
-                // The `Stopping` marker is left in place for the whole teardown:
-                // it keeps the id reserved, so a new start cannot claim it and
-                // then be unbound by our teardown.
-                Ok(resolved) => (
-                    WorkloadState::Stopping,
-                    "Workload was stopped while starting".to_string(),
-                    Some(resolved),
-                ),
-                Err(err) => {
-                    // `{:#}` so the whole context chain reaches the caller and
-                    // the log below: the outer layer alone ("failed to pull
-                    // image for component 'x'") never names the cause.
-                    let message = format!("{err:#}");
-                    if mine {
-                        workloads.insert(workload_id.clone(), HostWorkload::Error(message.clone()));
-                    } else if handed_back {
-                        // A stop is waiting on this start to finish. Nothing is
-                        // bound — `workload_start_inner` released it before
-                        // returning — so the id can go now.
-                        workloads.remove(&workload_id);
-                    }
-                    (WorkloadState::Error, message, None)
-                }
-            }
-        };
-
-        // A start that failed is reported to whoever asked and nowhere else.
-        // Say so locally too: the operator diagnosing it — a pull against a
-        // registry this host does not trust, a plugin that would not bind — is
-        // reading the host's log, and without this the host has nothing to say.
-        if workload_state == WorkloadState::Error {
-            // `reason`, not `message`: `message` is the field tracing gives
-            // the event's own text, and a second one under that name displaces
-            // it.
-            tracing::error!(workload_id, reason = message, "failed to start workload");
+        match self.workload_reserve(&workload_id).await {
+            Ok(reservation) => self.workload_start_reserved(reservation, request).await,
+            Err(message) => Ok(WorkloadStartResponse {
+                workload_status: WorkloadStatus {
+                    workload_id,
+                    workload_state: WorkloadState::Error,
+                    message,
+                },
+            }),
         }
-
-        if let Some(resolved) = orphaned {
-            release(&workload_id, &resolved).await;
-            // Only if the `Stopping` marker is still this start's. It may not be
-            // — a failure reported mid-start writes `Error` over it — and then
-            // the slot is not ours to drop.
-            self.finish_teardown(&workload_id, reservation, None).await;
-        }
-
-        Ok(WorkloadStartResponse {
-            workload_status: WorkloadStatus {
-                workload_id,
-                workload_state,
-                message,
-            },
-        })
     }
 
     #[instrument(skip_all, fields(workload.id = request.workload_id))]
@@ -1099,6 +1045,140 @@ impl HostApi for Host {
         Ok(WorkloadStopResponse {
             workload_status: WorkloadStatus {
                 workload_id: request.workload_id,
+                workload_state,
+                message,
+            },
+        })
+    }
+}
+
+impl WorkloadReservation for Host {
+    #[instrument(skip_all, fields(workload.id = workload_id))]
+    async fn workload_reserve(&self, workload_id: &str) -> Result<Reservation, String> {
+        // Reserve the workload ID while holding the write lock so concurrent
+        // starts cannot both observe it as available. An ID remains reserved
+        // in every lifecycle state until workload_stop removes it. The
+        // reservation stamped on the slot is what lets the commit in
+        // `workload_start_reserved` tell this start's slot from one a later
+        // start claimed.
+        let reservation = self.reserve();
+        let mut workloads = self.workloads.write().await;
+        if workloads.contains_key(workload_id) {
+            let message = format!(
+                "Workload ID [{workload_id}] already exists (the exising workload must be stopped to reuse the ID)"
+            );
+            // Logged here rather than where the response is built, because this
+            // refusal returns before the start ever begins. At `warn`, not
+            // `error`: this is the guard that makes a replayed start request
+            // idempotent, and a scheduler retrying one is not a host
+            // malfunction.
+            tracing::warn!(workload_id, reason = message, "refused to start workload");
+            return Err(message);
+        }
+        workloads.insert(workload_id.to_string(), HostWorkload::Starting(reservation));
+        Ok(reservation)
+    }
+
+    #[instrument(skip_all, fields(workload.id = workload_id))]
+    async fn workload_release(&self, workload_id: &str, reservation: Reservation) {
+        let mut workloads = self.workloads.write().await;
+        // Either state this reservation can still be in holds nothing bound: a
+        // start that never began, or one a stop handed the teardown back to
+        // before it had built anything. Anything else belongs to someone else.
+        if matches!(
+            workloads.get(workload_id),
+            Some(HostWorkload::Starting(held) | HostWorkload::Stopping(held)) if *held == reservation
+        ) {
+            workloads.remove(workload_id);
+        }
+    }
+
+    #[instrument(skip_all)]
+    async fn workload_start_reserved(
+        &self,
+        reservation: Reservation,
+        request: WorkloadStartRequest,
+    ) -> anyhow::Result<WorkloadStartResponse> {
+        let workload_id = request.workload_id.clone();
+        let started = self.workload_start_inner(request).await;
+
+        // Commit under the same lock the id was reserved under, and only into
+        // the slot this start reserved. Anything else in that slot means the
+        // workload was stopped or failed while this was still starting: writing
+        // `Running` over it would resurrect a workload nobody is tracking, and
+        // simply dropping the result — which is what an `and_modify` that finds
+        // no entry does — would leave its plugins bound and its service running
+        // detached.
+        let (workload_state, message, orphaned) = {
+            let mut workloads = self.workloads.write().await;
+            let slot = workloads.get(&workload_id);
+            let mine = matches!(slot, Some(HostWorkload::Starting(held)) if *held == reservation);
+            // A stop that arrived mid-start handed the teardown back by marking
+            // the slot `Stopping` under this start's own reservation.
+            let handed_back =
+                matches!(slot, Some(HostWorkload::Stopping(held)) if *held == reservation);
+            match started {
+                Ok(resolved) if mine => {
+                    workloads.insert(
+                        workload_id.clone(),
+                        HostWorkload::Running(Box::new(resolved)),
+                    );
+                    (
+                        WorkloadState::Running,
+                        "Workload started successfully".to_string(),
+                        None,
+                    )
+                }
+                // Stopped (or failed) while starting. The stop could not tear
+                // this down because it did not exist yet, so that falls to us.
+                // The `Stopping` marker is left in place for the whole teardown:
+                // it keeps the id reserved, so a new start cannot claim it and
+                // then be unbound by our teardown.
+                Ok(resolved) => (
+                    WorkloadState::Stopping,
+                    "Workload was stopped while starting".to_string(),
+                    Some(resolved),
+                ),
+                Err(err) => {
+                    // `{:#}` so the whole context chain reaches the caller and
+                    // the log below: the outer layer alone ("failed to pull
+                    // image for component 'x'") never names the cause.
+                    let message = format!("{err:#}");
+                    if mine {
+                        workloads.insert(workload_id.clone(), HostWorkload::Error(message.clone()));
+                    } else if handed_back {
+                        // A stop is waiting on this start to finish. Nothing is
+                        // bound — `workload_start_inner` released it before
+                        // returning — so the id can go now.
+                        workloads.remove(&workload_id);
+                    }
+                    (WorkloadState::Error, message, None)
+                }
+            }
+        };
+
+        // A start that failed is reported to whoever asked and nowhere else.
+        // Say so locally too: the operator diagnosing it — a pull against a
+        // registry this host does not trust, a plugin that would not bind — is
+        // reading the host's log, and without this the host has nothing to say.
+        if workload_state == WorkloadState::Error {
+            // `reason`, not `message`: `message` is the field tracing gives
+            // the event's own text, and a second one under that name displaces
+            // it.
+            tracing::error!(workload_id, reason = message, "failed to start workload");
+        }
+
+        if let Some(resolved) = orphaned {
+            release(&workload_id, &resolved).await;
+            // Only if the `Stopping` marker is still this start's. It may not be
+            // — a failure reported mid-start writes `Error` over it — and then
+            // the slot is not ours to drop.
+            self.finish_teardown(&workload_id, reservation, None).await;
+        }
+
+        Ok(WorkloadStartResponse {
+            workload_status: WorkloadStatus {
+                workload_id,
                 workload_state,
                 message,
             },
