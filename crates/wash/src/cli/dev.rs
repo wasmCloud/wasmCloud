@@ -74,10 +74,9 @@ impl CliCommand for DevCommand {
             .clone()
             .unwrap_or_else(|| "0.0.0.0:8000".to_string());
 
-        // No fuel: `--enable-meters` reports guest execution time, sampled
-        // from the epoch callback the engine arms anyway, so metering costs
-        // the guest nothing. See `observability::ExecutionTimeMeter`.
-        let mut engine_builder = Engine::builder().with_pooling_allocator(true);
+        let mut engine_builder = Engine::builder()
+            .with_pooling_allocator(true)
+            .with_fuel_consumption(ctx.enable_meters());
         for name in &dev_config.wasm_proposals {
             let proposal: WasmProposal = name
                 .parse()

@@ -897,7 +897,7 @@ pub struct EngineBuilder {
     proposals: std::collections::BTreeSet<WasmProposal>,
     compilation_cache_size: Option<u64>,
     compilation_cache_ttl: Option<Duration>,
-    execution_time: Option<bool>,
+    fuel_consumption: Option<bool>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
     /// Optional TLS provider override for wasi:tls client connections.
@@ -980,7 +980,7 @@ impl EngineBuilder {
     /// [`with_config`](Self::with_config), or the wasmtime default of disabled)
     /// specifies, rather than being forced off.
     pub fn with_fuel_consumption(mut self, enable: bool) -> Self {
-        self.execution_time = Some(enable);
+        self.fuel_consumption = Some(enable);
         self
     }
 
@@ -1097,7 +1097,7 @@ impl EngineBuilder {
 
         // Only override fuel consumption when the caller explicitly set it, so a
         // custom base config's setting is otherwise preserved.
-        if let Some(fuel) = self.execution_time {
+        if let Some(fuel) = self.fuel_consumption {
             config.consume_fuel(fuel);
         }
 

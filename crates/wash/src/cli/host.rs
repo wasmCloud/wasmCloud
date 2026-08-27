@@ -568,10 +568,9 @@ impl CliCommand for HostCommand {
         wash_runtime::oci::set_extra_ca_certificates(&host_config.oci_ca_paths)
             .context("failed to load --oci-ca-path CA certificates")?;
 
-        // No fuel: `--enable-meters` reports guest execution time, sampled
-        // from the epoch callback the engine arms anyway, so metering costs
-        // the guest nothing. See `observability::ExecutionTimeMeter`.
-        let mut engine_builder = Engine::builder().with_pooling_allocator(true);
+        let mut engine_builder = Engine::builder()
+            .with_pooling_allocator(true)
+            .with_fuel_consumption(ctx.enable_meters());
         for proposal in &self.wasm_proposals {
             engine_builder = engine_builder.with_wasm_proposal(*proposal);
         }

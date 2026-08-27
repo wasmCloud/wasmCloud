@@ -353,11 +353,13 @@ pub(crate) async fn new_store_from_templates(
     }
 
     let mut store = wasmtime::Store::new(engine, shared_ctx);
-    // Nothing in the host asks for fuel — metering samples the epoch callback
-    // instead ([`crate::observability::ExecutionTimeMeter`]) — but a caller can
-    // still turn it on through `EngineBuilder::with_fuel_consumption` or a base
-    // config, and such a store starts at **zero** fuel and traps on the guest
-    // code instantiation runs. Errors when fuel is off, which is not a failure.
+    // Fuel here is *metering*, not a limit: `FuelConsumptionMeter::observe`
+    // measures a call by the fuel it burns, and the epoch deadline below — not
+    // fuel — is what ends a guest that will not stop. But a store built on a
+    // fuel-enabled engine starts at **zero** fuel, and instantiation runs guest
+    // code, so without a budget here every component on a host started with
+    // `--enable-meters` traps before any metering wrapper is reached. Errors
+    // when the engine has fuel off, which is not a failure.
     let _ = store.set_fuel(u64::MAX);
     // Trap for every store built here, services included: trapping a service
     // means a supervisor restart, which beats carrying a wedged call forever.
