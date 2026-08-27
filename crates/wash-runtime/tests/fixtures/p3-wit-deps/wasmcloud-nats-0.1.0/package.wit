@@ -80,7 +80,7 @@ interface types {
     /// retrying immediately will fail the same way until a responder appears.
     no-responders,
     /// The name is outside the grant this workload was bound with, or in a
-    /// space the host reserves. Replaces `@0.1.0`'s `subject-denied(string)`.
+    /// space the host reserves.
     denied(denial),
     /// The payload exceeds the server's advertised `max_payload`. The value
     /// is that limit, in bytes. Header bytes count toward it.
@@ -390,8 +390,7 @@ interface kv {
   /// Handle to an open KV bucket.
   resource bucket {
     /// Fetch the latest entry for a key. `key-not-found` when the key is
-    /// absent, deleted, or purged — `@0.1.0` returned `option<entry>` and so
-    /// never produced that variant.
+    /// absent, deleted, or purged.
     get: async func(key: string) -> result<entry, nats-error>;
     /// Put a value. Last-write-wins. Returns the new revision.
     put: async func(key: string, value: list<u8>) -> result<u64, nats-error>;
@@ -408,9 +407,7 @@ interface kv {
     /// Lists keys in the bucket, up to a host-imposed cap of 1000.
     ///
     /// `truncated` is what tells a guest the bucket holds more than the page
-    /// carries — `@0.1.0` returned a bare list, where a partial answer was
-    /// indistinguishable from a complete one and the tail was unreachable on
-    /// retry.
+    /// carries, so a partial answer is never mistaken for a complete one.
     keys: async func() -> result<key-page, nats-error>;
     /// All historical entries for a key (put/update/delete/purge ops).
     /// `key-not-found` when the key has no history at all.
