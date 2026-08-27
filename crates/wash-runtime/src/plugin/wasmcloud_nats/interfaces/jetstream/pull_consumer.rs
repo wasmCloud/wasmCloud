@@ -13,8 +13,11 @@ use wasmtime::component::{Accessor, Resource};
 use crate::engine::ctx::{ActiveCtx, SharedCtx};
 
 use super::consumer_info_to_wit;
-use crate::plugin::wasmcloud_nats::interfaces::{consumer_lookup_err, jetstream_err, js, types};
+use crate::plugin::wasmcloud_nats::interfaces::{
+    consumer_lookup_err, denied, jetstream_err, js, types,
+};
 use crate::plugin::wasmcloud_nats::jetstream::{FetchBudget, MessageHandle, PullConsumerHandle};
+use crate::plugin::wasmcloud_nats::policy::Denied;
 
 /// Clones the consumer out of its resource, so the table borrow is not held
 /// across an await — `ActiveCtx` is not `Send`.
@@ -31,6 +34,14 @@ fn max_fetch_bytes<T>(
     rep: &Resource<PullConsumerHandle>,
 ) -> wasmtime::Result<u64> {
     Ok(access.get().table.get(rep)?.max_fetch_bytes)
+}
+
+/// The grant this consumer's deliveries are checked against.
+fn policy<T>(
+    access: &mut wasmtime::component::Access<'_, T, SharedCtx>,
+    rep: &Resource<PullConsumerHandle>,
+) -> wasmtime::Result<Arc<crate::plugin::wasmcloud_nats::policy::PolicyEngine>> {
+    Ok(access.get().table.get(rep)?.policy.clone())
 }
 
 /// The binding-wide budget this consumer charges against.
@@ -117,6 +128,7 @@ async fn fetch_batch<T: 'static + Send>(
     };
     let budget = accessor.with(|mut a| fetch_budget(&mut a, &rep))?;
     let binding_bound = accessor.with(|mut a| max_fetch_bytes(&mut a, &rep))?;
+    let policy = accessor.with(|mut a| policy(&mut a, &rep))?;
 
     // Bounding one call bounds one call. What OOM-killed the host is the
     // ordinary shape of a pull worker — loop `fetch` until drained — because a
@@ -169,10 +181,26 @@ async fn fetch_batch<T: 'static + Send>(
     while let Some(next) = stream.next().await {
         match next {
             Ok(msg) => {
-                let (sequence, delivery_count) = match msg.info() {
-                    Ok(info) => (info.stream_sequence, info.delivered as u32),
-                    Err(_) => (0, 1),
+                let (sequence, delivery_count, stream) = match msg.info() {
+                    Ok(info) => (
+                        info.stream_sequence,
+                        info.delivered as u32,
+                        info.stream.to_string(),
+                    ),
+                    Err(_) => (0, 1, String::new()),
                 };
+                // `open` refused a consumer whose filter reaches outside the
+                // grant, so this only fires when the durable's filter was
+                // widened underneath an attached consumer. The batch stops
+                // rather than skipping: nothing is handed over, and nothing is
+                // acked, so the messages stay on the stream.
+                if policy.check_stored_subject(&msg.subject).is_err() {
+                    return Ok(Err(denied(
+                        Denied::NotGranted,
+                        types::DeniedResource::Message,
+                        &format!("{stream}#{sequence}"),
+                    )));
+                }
                 // Pull consumers are always guest-driven, so the acker goes to
                 // the handle regardless of ack-mode.
                 let (message, acker) = msg.split();

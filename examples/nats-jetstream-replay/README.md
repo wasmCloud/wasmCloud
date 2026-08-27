@@ -129,9 +129,8 @@ resolved. An nkey seed is signed host-side and never crosses into the sandbox.
 `wash dev` leaves the manifest free to describe its own binding, so a project
 stays runnable on its own: put the same keys — `servers` and the three grants —
 straight in the interface's `config`, or declare them once under
-`dev.wasmcloud_nats` in `.wash/config.yaml`. `dev.wasmcloud_nats_url` (falling
-back to `dev.data_nats_url`) is the address a binding that names no `servers`
-falls back to.
+`dev.wasmcloud_nats` in `.wash/config.yaml`. `dev.data_nats_url` is the address
+a binding that names no `servers` of its own falls back to.
 
 ## Try it
 

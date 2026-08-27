@@ -70,9 +70,11 @@ pub struct WasmcloudNats {
     /// on a 256Mi host, before a single guest instantiates.
     memory_budget: Option<u64>,
     /// Backlog bytes this plugin has promised across every live workload, so
-    /// the clamp is host-wide rather than per bind. Keyed by workload id and
-    /// released on unbind.
-    reserved_bytes: Arc<RwLock<HashMap<String, u64>>>,
+    /// the clamp is host-wide rather than per bind. Keyed by
+    /// `(workload, binding, component)` — the granularity a claim is made at —
+    /// so a re-bind replaces its own claim instead of stacking another on top
+    /// of it. Released on unbind.
+    reserved_bytes: Arc<RwLock<HashMap<(String, String, String), u64>>>,
 }
 
 impl Default for WasmcloudNats {
@@ -210,10 +212,13 @@ impl WasmcloudNats {
             // Scope request-reply to this workload so two workloads on one
             // server cannot observe each other's responses. Named bindings get
             // one prefix each: two connections sharing an inbox prefix would
-            // race for each other's replies.
-            if config.inbox_prefix.is_none() {
-                config.inbox_prefix = Some(conn::binding_inbox_prefix(workload_id, binding));
-            }
+            // race for each other's replies. A declared prefix is scoped too,
+            // never taken as-is — under `Deny` the host's named binding is
+            // served to *every* workload that asks for it.
+            config.inbox_prefix = Some(match config.inbox_prefix.take() {
+                Some(declared) => conn::scope_inbox_prefix(&declared, workload_id),
+                None => conn::binding_inbox_prefix(workload_id, binding),
+            });
 
             // One connection per binding *name*, and the entries of a name are
             // already folded into the configuration above, so what is left to
@@ -281,6 +286,7 @@ impl WasmcloudNats {
         &self,
         workload_id: &str,
         binding: &str,
+        component_id: &str,
         handle: &ConnHandle,
         subscriptions: usize,
     ) -> usize {
@@ -295,20 +301,30 @@ impl WasmcloudNats {
         // container. A minority share leaves the guests the budget is actually
         // named for, and is still far more than a healthy subscription holds.
         let share = budget / NATS_BACKLOG_BUDGET_DIVISOR;
-        let already = {
-            let reserved = self.reserved_bytes.read().await;
-            reserved.values().copied().sum::<u64>()
-        };
-        let available = share.saturating_sub(already);
-        let per_subscription =
-            usize::try_from(available / subscriptions as u64).unwrap_or(usize::MAX);
-        let effective = handle.limits.clamp_capacity_bytes(per_subscription);
-
-        let claimed = effective as u64 * subscriptions as u64;
-        {
+        // The write lock is held across the sum, the division and the claim:
+        // two workloads resolving concurrently would otherwise both read
+        // `already` before either wrote, and each reserve the whole share.
+        let (already, effective) = {
             let mut reserved = self.reserved_bytes.write().await;
-            *reserved.entry(workload_id.to_string()).or_default() += claimed;
-        }
+            let key = (
+                workload_id.to_string(),
+                binding.to_string(),
+                component_id.to_string(),
+            );
+            // This key's own previous claim is being replaced, so it is not
+            // part of what is already spoken for.
+            let already: u64 = reserved
+                .iter()
+                .filter(|(k, _)| **k != key)
+                .map(|(_, bytes)| *bytes)
+                .sum();
+            let available = share.saturating_sub(already);
+            let per_subscription =
+                usize::try_from(available / subscriptions as u64).unwrap_or(usize::MAX);
+            let effective = handle.limits.clamp_capacity_bytes(per_subscription);
+            reserved.insert(key, effective as u64 * subscriptions as u64);
+            (already, effective)
+        };
 
         if effective < configured {
             tracing::warn!(
@@ -349,27 +365,29 @@ impl WasmcloudNats {
         handle: &ConnHandle,
     ) {
         let max_payload = handle.max_payload();
-        // Two round trips per subject, on the bind path. A grant with hundreds
-        // of literal subjects is not what this is for, and a slow bind is a
-        // worse problem than a missing advisory.
-        for subject in handle
+        // Two round trips per subject, on the bind path, so they go out
+        // together: run serially, a grant with `MAX_CAPTURE_CHECKS` literal
+        // subjects held the bind open for that many round trips against a
+        // cross-region NATS, for an advisory.
+        let checks = handle
             .policy
             .publishable_literal_subjects()
             .into_iter()
             .take(MAX_CAPTURE_CHECKS)
+            .map(|subject| async move {
+                let stream_name = handle.jetstream.stream_by_subject(&subject).await.ok()?;
+                let stream = handle.jetstream.get_stream(&stream_name).await.ok()?;
+                let limit = stream.cached_info().config.max_message_size;
+                // `-1` is the stream deferring to the server, which is the same
+                // limit the publish already honours: nothing to warn about.
+                (limit > 0 && (limit as u64) < max_payload).then_some((subject, stream_name, limit))
+            });
+
+        for (subject, stream_name, limit) in futures::future::join_all(checks)
+            .await
+            .into_iter()
+            .flatten()
         {
-            let Ok(stream_name) = handle.jetstream.stream_by_subject(&subject).await else {
-                continue;
-            };
-            let Ok(stream) = handle.jetstream.get_stream(&stream_name).await else {
-                continue;
-            };
-            let limit = stream.cached_info().config.max_message_size;
-            // `-1` is the stream deferring to the server, which is the same
-            // limit the publish already honours: nothing to warn about.
-            if limit <= 0 || limit as u64 >= max_payload {
-                continue;
-            }
             tracing::warn!(
                 workload_id,
                 binding = describe_binding(binding),
@@ -479,7 +497,7 @@ impl WasmcloudNats {
         // is where the two meet: what is left of the plugin's share, divided
         // by the subscriptions about to claim it.
         let capacity_bytes = self
-            .clamp_capacity_bytes(workload_id, binding, &handle, core_subs.len())
+            .clamp_capacity_bytes(workload_id, binding, component_id, &handle, core_subs.len())
             .await;
 
         // A core publish into a subject a stream captures is refused by
@@ -989,7 +1007,10 @@ impl HostPlugin for WasmcloudNats {
             .await;
 
         self.connections.release(workload_id).await;
-        self.reserved_bytes.write().await.remove(workload_id);
+        self.reserved_bytes
+            .write()
+            .await
+            .retain(|(workload, _, _), _| workload != workload_id);
         debug!(
             workload_id,
             "released every wasmcloud:nats connection and cancelled its subscriptions"
@@ -1071,7 +1092,7 @@ mod tests {
     fn split_entries_fold_into_one_binding() {
         let entries = [
             entry(
-                "wasmcloud:nats/types,core,jetstream@0.2.0",
+                "wasmcloud:nats/types,core,jetstream@0.1.0",
                 None,
                 &[
                     ("servers", "nats://localhost:4222"),
@@ -1080,7 +1101,7 @@ mod tests {
                 ],
             ),
             entry(
-                "wasmcloud:nats/jetstream-handler@0.2.0",
+                "wasmcloud:nats/jetstream-handler@0.1.0",
                 None,
                 &[("subscriptions", "ORDERS:orders.eu.>")],
             ),
@@ -1105,12 +1126,12 @@ mod tests {
     fn entries_may_repeat_a_key_they_agree_on() {
         let entries = [
             entry(
-                "wasmcloud:nats/core@0.2.0",
+                "wasmcloud:nats/core@0.1.0",
                 None,
                 &[("servers", "nats://localhost:4222")],
             ),
             entry(
-                "wasmcloud:nats/core-handler@0.2.0",
+                "wasmcloud:nats/core-handler@0.1.0",
                 None,
                 &[
                     ("servers", "nats://localhost:4222"),
@@ -1124,7 +1145,7 @@ mod tests {
     #[test]
     fn conflicting_entries_are_refused_by_key_name() {
         let a = entry(
-            "wasmcloud:nats/core@0.2.0",
+            "wasmcloud:nats/core@0.1.0",
             None,
             &[
                 ("servers", "nats://localhost:4222"),
@@ -1132,7 +1153,7 @@ mod tests {
             ],
         );
         let b = entry(
-            "wasmcloud:nats/core-handler@0.2.0",
+            "wasmcloud:nats/core-handler@0.1.0",
             None,
             &[("subject_allow", "orders.>")],
         );
@@ -1152,7 +1173,7 @@ mod tests {
     #[test]
     fn a_binding_without_servers_is_still_refused() {
         let entries = [entry(
-            "wasmcloud:nats/jetstream-handler@0.2.0",
+            "wasmcloud:nats/jetstream-handler@0.1.0",
             None,
             &[("subscriptions", "ORDERS:orders.>")],
         )];
@@ -1165,7 +1186,7 @@ mod tests {
     fn named_bindings_fold_separately() {
         let entries = [
             entry(
-                "wasmcloud:nats/core@0.2.0",
+                "wasmcloud:nats/core@0.1.0",
                 Some("hub"),
                 &[
                     ("servers", "nats://hub:4222"),
@@ -1173,7 +1194,7 @@ mod tests {
                 ],
             ),
             entry(
-                "wasmcloud:nats/core@0.2.0",
+                "wasmcloud:nats/core@0.1.0",
                 Some("leaf"),
                 &[
                     ("servers", "nats://leaf:4222"),

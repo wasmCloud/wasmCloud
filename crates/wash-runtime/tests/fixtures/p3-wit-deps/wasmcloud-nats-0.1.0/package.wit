@@ -450,3 +450,53 @@ interface kv-handler {
 
   handle-event: async func(bucket: string, entry: entry) -> result<_, string>;
 }
+
+/// A workload that publishes, or does request/reply. No subscriptions.
+world publisher {
+  import types;
+  import core;
+}
+
+/// A workload the host pushes core NATS messages into.
+world subscriber {
+  import types;
+  import core;
+  export core-handler;
+}
+
+/// A workload that publishes into JetStream.
+world js-publisher {
+  import types;
+  import jetstream;
+}
+
+/// A workload the host pushes JetStream deliveries into. Per-request: it holds
+/// no consumer and no stream, so it scales down between bursts.
+world js-processor {
+  import types;
+  import jetstream;
+  export jetstream-handler;
+}
+
+/// A workload that reads and writes KV directly.
+world kv-client {
+  import types;
+  import kv;
+}
+
+/// A workload the host pushes KV change events into.
+world kv-watcher {
+  import types;
+  import kv;
+  export kv-handler;
+}
+
+/// Every interface a workload can import, for a component that wants the whole
+/// surface. Also the host's own bindgen input, so the linker is populated from
+/// one generated module.
+world imports {
+  import types;
+  import core;
+  import jetstream;
+  import kv;
+}

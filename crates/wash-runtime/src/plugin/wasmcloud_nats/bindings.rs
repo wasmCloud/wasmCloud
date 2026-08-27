@@ -264,11 +264,11 @@ impl NatsBindings {
     /// Fails if any declared binding is not a valid configuration.
     pub fn validate(&self) -> anyhow::Result<()> {
         // `inbox-prefix` on the base layer is every binding's inbox prefix, on
-        // every workload the host runs — which is the one case
-        // `conn::binding_inbox_prefix` exists to prevent: two workloads sharing
-        // an inbox race to consume each other's replies. Per binding it is
-        // fine, since a binding belongs to one workload. There is no safe
-        // reading of it here, so it is refused rather than warned about.
+        // every workload the host runs. `conn::scope_inbox_prefix` gives each
+        // workload its own token beneath whatever prefix it is handed, so this
+        // is refused for what it says rather than for what it would do: one
+        // inbox root for every binding on the host is not a thing an operator
+        // can have meant. On a named binding it is kept, and scoped.
         if self.base.contains_key("inbox-prefix") {
             anyhow::bail!(
                 "`inbox-prefix` cannot be set on the host-wide wasmcloud:nats config: it would \
