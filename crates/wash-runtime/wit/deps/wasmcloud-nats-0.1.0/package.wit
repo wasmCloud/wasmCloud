@@ -500,3 +500,10 @@ world imports {
   import jetstream;
   import kv;
 }
+
+// The worlds above describe the NATS surface alone, which is what the host
+// binds. A standalone component ALSO needs the WASI command-line surface its
+// language runtime imports — those worlds live in the sibling
+// `wasmcloud:nats-guest@0.1.0` package (one `include` line in an application
+// world), kept separate so this package stays free of platform dependencies
+// for everything that embeds it.

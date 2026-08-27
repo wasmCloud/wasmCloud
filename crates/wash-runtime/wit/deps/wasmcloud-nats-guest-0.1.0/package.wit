@@ -1,0 +1,74 @@
+/// Worlds a standalone `wasmcloud:nats` component builds against.
+///
+/// `wasmcloud:nats@0.1.0`'s own worlds describe the NATS surface alone, which
+/// is what the host binds — but a guest built from Go or Rust also imports the
+/// WASI command-line surface (environment, clocks, random, stdio, filesystem
+/// preopens) through its language runtime, and a world without those imports
+/// fails to componentize. Until now every user hand-assembled that world; the
+/// worlds here carry both halves, so an application world is one line:
+///
+/// ```wit
+/// package my:app;
+/// world app {
+///   include wasmcloud:nats-guest/subscriber@0.1.0;
+/// }
+/// ```
+///
+/// against a single vendored `deps` tree (`wkg wit fetch`, or copy this
+/// package, `wasmcloud:nats@0.1.0`, and the `wasi:*@0.2.8` packages beside
+/// it). `componentize-go -d wit -w app build` and Rust `wit-bindgen` both
+/// work against it as is.
+///
+/// These worlds live beside `wasmcloud:nats` rather than in it so the
+/// interface package itself stays dependency-free: everything that embeds it —
+/// the host's own bindgen, fixtures pinned to other WASI revisions — keeps
+/// resolving without the P2 command-line tree.
+///
+/// Every function in `wasmcloud:nats` is an `async func`, so a component built
+/// against these worlds is lifted with the async ABI regardless of the P2
+/// (`@0.2.8`) platform imports; componentize-go selects its async runtime
+/// (`componentizego_async`) from that automatically.
+package wasmcloud:nats-guest@0.1.0;
+
+/// The import surface: every `wasmcloud:nats` interface plus the platform
+/// imports a real guest toolchain needs. A component that only publishes,
+/// requests, or reads KV targets this directly.
+///
+/// Every NATS interface is imported. Imports a component never calls are
+/// dropped at build time by both toolchains, so the generous surface costs a
+/// built component nothing — and one world serves a publisher, a requester, a
+/// KV client, and any mix of them.
+world imports {
+  include wasi:cli/imports@0.2.8;
+  import wasi:logging/logging@0.1.0-draft;
+
+  import wasmcloud:nats/types@0.1.0;
+  import wasmcloud:nats/core@0.1.0;
+  import wasmcloud:nats/jetstream@0.1.0;
+  import wasmcloud:nats/kv@0.1.0;
+}
+
+/// A standalone component the host pushes core NATS messages into: [`imports`]
+/// plus the `core-handler` export. The manifest names the subjects under
+/// `core-subscriptions`.
+world subscriber {
+  include imports;
+  export wasmcloud:nats/core-handler@0.1.0;
+}
+
+/// A standalone component the host pushes JetStream deliveries into:
+/// [`imports`] plus the `jetstream-handler` export. The manifest names the
+/// stream and filter under `subscriptions`; who acknowledges is the binding's
+/// `ack-mode`.
+world js-processor {
+  include imports;
+  export wasmcloud:nats/jetstream-handler@0.1.0;
+}
+
+/// A standalone component the host pushes KV change events into: [`imports`]
+/// plus the `kv-handler` export. The manifest names the bucket and key filter
+/// under `kv-watches`.
+world kv-watcher {
+  include imports;
+  export wasmcloud:nats/kv-handler@0.1.0;
+}
