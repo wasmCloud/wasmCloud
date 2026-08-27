@@ -59,6 +59,14 @@ pub struct MessageHandle {
 /// Handle to a pull-based JetStream consumer.
 pub struct PullConsumerHandle {
     pub(super) consumer: Option<Consumer<pull::Config>>,
+    /// Ceiling on what one `fetch` may materialize into host memory, taken
+    /// from the binding that opened it.
+    ///
+    /// `fetch` names a message count and nothing else, so `fetch(100)` against
+    /// a stream of 5 MiB messages asks the host to hold 500 MiB — which
+    /// OOM-killed it. The count is the guest's; this bound is the binding's,
+    /// and the smaller of the two wins.
+    pub(super) max_fetch_bytes: u64,
 }
 
 /// Handle to an open JetStream KV bucket.

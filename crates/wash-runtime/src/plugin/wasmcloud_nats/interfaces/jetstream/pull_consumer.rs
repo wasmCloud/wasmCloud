@@ -25,6 +25,14 @@ fn consumer_ref<T>(
     Ok(access.get().table.get(rep)?.consumer.clone())
 }
 
+/// The binding's ceiling on one fetch, for the variant that names no bytes.
+fn max_fetch_bytes<T>(
+    access: &mut wasmtime::component::Access<'_, T, SharedCtx>,
+    rep: &Resource<PullConsumerHandle>,
+) -> wasmtime::Result<u64> {
+    Ok(access.get().table.get(rep)?.max_fetch_bytes)
+}
+
 /// How a pull request ended, read off the status message the server closes the
 /// batch with.
 ///
@@ -169,9 +177,11 @@ async fn fetch_batch<T: 'static + Send>(
             // The byte bound admitted nothing: the message at the head is
             // bigger than the bound itself, and retrying unchanged loops
             // forever. Say so rather than reporting an idle consumer.
-            Some(PullEnd::ByteLimit) => Ok(Err(types::NatsError::LimitExceeded(
-                "the next message is larger than the requested max-bytes".to_string(),
-            ))),
+            Some(PullEnd::ByteLimit) => Ok(Err(types::NatsError::LimitExceeded(format!(
+                "the next message is larger than this fetch's {max_bytes}-byte bound; \
+                 `fetch` without one is bound by the binding's \
+                 `subscription-capacity-bytes`"
+            )))),
             _ => Ok(Err(types::NatsError::NoMessages)),
         };
     }
@@ -233,7 +243,13 @@ impl<T: 'static + Send> js::HostPullConsumerWithStore<T> for SharedCtx {
         batch: u32,
         timeout_ms: u32,
     ) -> wasmtime::Result<Result<js::FetchedBatch, types::NatsError>> {
-        fetch_batch(accessor, rep, batch, 0, timeout_ms).await
+        // The guest named a count and no byte bound, so the binding's stands in
+        // for one: unbounded, `fetch(100)` on a jumbo stream materializes the
+        // whole batch in host memory and takes the host down with it. A batch
+        // the bound cuts short reports `byte-limit`, which is already how the
+        // guest learns there is more to come.
+        let max_bytes = accessor.with(|mut a| max_fetch_bytes(&mut a, &rep))?;
+        fetch_batch(accessor, rep, batch, max_bytes, timeout_ms).await
     }
 
     async fn fetch_with_limits(

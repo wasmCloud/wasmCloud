@@ -340,6 +340,8 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
         let resource = accessor.with(|mut a| {
             a.get().table.push(PullConsumerHandle {
                 consumer: Some(opened),
+                max_fetch_bytes: u64::try_from(conn.limits.subscription_capacity_bytes)
+                    .unwrap_or(u64::MAX),
             })
         })?;
         Ok(Ok(resource))
