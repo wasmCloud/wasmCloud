@@ -1227,15 +1227,7 @@ async fn consume_workload_failures(
 /// Config for the [`Host`]
 #[derive(Clone, Debug)]
 pub struct HostConfig {
-    /// Reach *every* registry over plain HTTP. Prefer
-    /// [`HostConfig::oci_insecure_registries`]: this switches public registries
-    /// to HTTP too, where the pull comes back as an authorization failure that
-    /// looks like a credentials problem.
     pub allow_oci_insecure: bool,
-    /// Registries (`host` or `host:port`) reachable over plain HTTP. Every
-    /// other registry stays on HTTPS, so a local registry does not cost you
-    /// pulls from public ones.
-    pub oci_insecure_registries: Vec<String>,
     pub oci_pull_timeout: Option<Duration>,
     pub oci_cache_dir: Option<PathBuf>,
     /// PEM CA bundles to trust for OCI pulls, on top of the compiled-in webpki
@@ -1259,7 +1251,6 @@ impl Default for HostConfig {
     fn default() -> Self {
         Self {
             allow_oci_insecure: false,
-            oci_insecure_registries: Vec::new(),
             oci_pull_timeout: Duration::from_secs(30).into(),
             oci_cache_dir: None,
             oci_ca_paths: Vec::new(),

@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Context as _;
 use clap::Args;
-use tracing::{info, warn};
+use tracing::info;
 use wash_runtime::{
     engine::{Engine, WasmProposal},
     observability::Meters,
@@ -267,27 +267,9 @@ pub struct HostCommand {
     #[arg(long = "postgres-url", env = "WASH_POSTGRES_URL")]
     pub postgres_url: Option<String>,
 
-    /// Allow plain HTTP to **every** OCI registry.
-    ///
-    /// Including public ones: a pull from `ghcr.io` under this flag goes out
-    /// over `http://` and comes back as `Not authorized`, which reads as a
-    /// credentials problem and is not one. Prefer
-    /// `--insecure-registry=<host[:port]>`, which names the registries that may
-    /// be reached over HTTP and leaves every other one on HTTPS.
+    /// Allow insecure OCI Registries
     #[arg(long = "allow-insecure-registries", default_value_t = false)]
     pub allow_insecure_registries: bool,
-
-    /// Registries reachable over plain HTTP, as `host` or `host:port` (e.g. a
-    /// kind-local `localhost:5000`). Every registry not named here stays on
-    /// HTTPS.
-    ///
-    /// Accepts a comma-separated list and/or repeated flags.
-    #[arg(
-        long = "insecure-registry",
-        env = "WASH_INSECURE_REGISTRIES",
-        value_delimiter = ','
-    )]
-    pub insecure_registries: Vec<String>,
 
     /// Extra CA certificate bundle files (PEM) trusted when pulling from OCI
     /// registries: for a registry behind a private or in-cluster CA, which the
@@ -547,18 +529,8 @@ impl CliCommand for HostCommand {
         .context("failed to connect to NATS")?;
         let data_nats_client = Arc::new(data_nats_client);
 
-        if self.allow_insecure_registries {
-            warn!(
-                "--allow-insecure-registries applies to every registry, public ones included: \
-                 pulls from an HTTPS registry will go out over plain HTTP and fail as \
-                 `Not authorized`. Name the registries that need it with \
-                 --insecure-registry=<host[:port]> instead"
-            );
-        }
-
         let host_config = wash_runtime::host::HostConfig {
             allow_oci_insecure: self.allow_insecure_registries,
-            oci_insecure_registries: self.insecure_registries.clone(),
             oci_pull_timeout: Some(self.registry_pull_timeout),
             oci_cache_dir: self.oci_cache_dir.clone(),
             oci_ca_paths: self.oci_ca_paths.clone(),
@@ -775,7 +747,6 @@ impl CliCommand for HostCommand {
                     self.host_plugin_registry_password.as_deref(),
                 ),
                 insecure: self.allow_insecure_registries,
-                insecure_registries: self.insecure_registries.clone(),
                 cache_dir: self.oci_cache_dir.clone(),
                 timeout: Some(self.registry_pull_timeout),
             };

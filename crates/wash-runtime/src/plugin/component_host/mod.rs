@@ -1853,10 +1853,6 @@ fn build_plugin_store(
     // The registry marks this as the plugin (real) side of the resource bridge
     // and keeps the resources it hands out across the boundary alive.
     let mut store = Store::new(engine.inner(), SharedCtx::new(ctx).with_resource_registry());
-    // Same reason as `engine::linked_call::new_store_from_templates`: a store
-    // on a fuel-enabled engine starts at zero fuel, and instantiation runs
-    // guest code. Fuel is metering here, never the limit.
-    let _ = store.set_fuel(u64::MAX);
     // Required, not optional: the engine enables `epoch_interruption`, and a
     // store that never sets a deadline traps the moment it runs any guest code.
     // `WarnThenTrap` because this one store serves every workload that imports

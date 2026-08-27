@@ -532,7 +532,6 @@ fn image_pull_secret_to_oci_config(
     };
     oci_config.cache_dir = config.oci_cache_dir.clone();
     oci_config.insecure = config.allow_oci_insecure;
-    oci_config.insecure_registries = config.oci_insecure_registries.clone();
     oci_config.timeout = config.oci_pull_timeout;
 
     oci_config
@@ -1143,7 +1142,6 @@ mod tests {
     async fn test_image_pull_secret_to_oci_config_none() {
         let host_config = HostConfig {
             allow_oci_insecure: false,
-            oci_insecure_registries: Vec::new(),
             ..Default::default()
         };
         let secret: Option<types::v2::ImagePullSecret> = None;
@@ -1161,7 +1159,6 @@ mod tests {
 
         let host_config = HostConfig {
             allow_oci_insecure: false,
-            oci_insecure_registries: Vec::new(),
             ..Default::default()
         };
         let config = image_pull_secret_to_oci_config(&host_config, &secret);

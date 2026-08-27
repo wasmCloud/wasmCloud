@@ -262,16 +262,7 @@ pub struct OciConfig {
     /// Optional explicit credentials (username, password)
     pub credentials: Option<(String, String)>,
     /// Whether to allow insecure registries (HTTP instead of HTTPS)
-    ///
-    /// Applies to **every** registry, including public ones — a pull from
-    /// `ghcr.io` under this setting goes out over plain HTTP and comes back as
-    /// an authorization failure. Prefer [`OciConfig::insecure_registries`],
-    /// which names the registries that may be reached over HTTP and leaves
-    /// every other one on HTTPS.
     pub insecure: bool,
-    /// Registries (`host` or `host:port`) reachable over plain HTTP. Every
-    /// registry not named here stays on HTTPS.
-    pub insecure_registries: Vec<String>,
     /// Cache directory override
     pub cache_dir: Option<PathBuf>,
     /// Timeout for OCI operations (pull, push, etc.)
@@ -301,23 +292,6 @@ impl OciConfig {
         Self {
             insecure: true,
             ..Default::default()
-        }
-    }
-
-    /// The transport this config asks for.
-    ///
-    /// `insecure_registries` names the registries that may be reached over
-    /// plain HTTP and leaves every other one on HTTPS, which is what makes a
-    /// local kind registry usable without breaking pulls from public ones. The
-    /// blunt `insecure` flag still means every registry, because that is what
-    /// it has always meant — it is just no longer the only option.
-    pub fn client_protocol(&self) -> ClientProtocol {
-        if self.insecure {
-            ClientProtocol::Http
-        } else if self.insecure_registries.is_empty() {
-            ClientProtocol::Https
-        } else {
-            ClientProtocol::HttpsExcept(self.insecure_registries.clone())
         }
     }
 
@@ -634,7 +608,11 @@ pub async fn pull_component(
 
     // Configure OCI client
     let client_config = ClientConfig {
-        protocol: config.client_protocol(),
+        protocol: if config.insecure {
+            ClientProtocol::Http
+        } else {
+            ClientProtocol::Https
+        },
         extra_root_certificates: extra_ca_certificates(),
         ..Default::default()
     };
@@ -784,9 +762,6 @@ pub async fn push_component(
         .await
         .with_context(|| "component data is not a valid WebAssembly component")?;
 
-    // Resolved before the credentials are moved out of `config`.
-    let protocol = config.client_protocol();
-
     // Setup credential resolver
     let credential_resolver = CredentialResolver::new(config.credentials);
     let auth = credential_resolver
@@ -795,7 +770,11 @@ pub async fn push_component(
 
     // Configure OCI client
     let client_config = ClientConfig {
-        protocol,
+        protocol: if config.insecure {
+            ClientProtocol::Http
+        } else {
+            ClientProtocol::Https
+        },
         extra_root_certificates: extra_ca_certificates(),
         ..Default::default()
     };
