@@ -14,7 +14,7 @@ use crate::engine::ctx::{ActiveCtx, SharedCtx};
 
 use super::consumer_info_to_wit;
 use crate::plugin::wasmcloud_nats::interfaces::{consumer_lookup_err, jetstream_err, js, types};
-use crate::plugin::wasmcloud_nats::jetstream::{MessageHandle, PullConsumerHandle};
+use crate::plugin::wasmcloud_nats::jetstream::{FetchBudget, MessageHandle, PullConsumerHandle};
 
 /// Clones the consumer out of its resource, so the table borrow is not held
 /// across an await — `ActiveCtx` is not `Send`.
@@ -31,6 +31,14 @@ fn max_fetch_bytes<T>(
     rep: &Resource<PullConsumerHandle>,
 ) -> wasmtime::Result<u64> {
     Ok(access.get().table.get(rep)?.max_fetch_bytes)
+}
+
+/// The binding-wide budget this consumer charges against.
+fn fetch_budget<T>(
+    access: &mut wasmtime::component::Access<'_, T, SharedCtx>,
+    rep: &Resource<PullConsumerHandle>,
+) -> wasmtime::Result<Arc<FetchBudget>> {
+    Ok(access.get().table.get(rep)?.budget.clone())
 }
 
 /// How a pull request ended, read off the status message the server closes the
@@ -106,14 +114,34 @@ async fn fetch_batch<T: 'static + Send>(
             "pull consumer has been dropped".to_string(),
         )));
     };
+    let budget = accessor.with(|mut a| fetch_budget(&mut a, &rep))?;
+
+    // Bounding one call bounds one call. What OOM-killed the host is the
+    // ordinary shape of a pull worker — loop `fetch` until drained — because a
+    // delivered message stays resident until its handle is dropped, and acking
+    // does not drop it. So the byte bound this fetch is given is what the
+    // binding has *left*, not what it started with.
+    let available = budget.available();
+    if available == 0 {
+        return Ok(Err(types::NatsError::LimitExceeded(format!(
+            "this binding already holds {held} bytes of fetched messages, its whole \
+             `subscription-capacity-bytes` budget of {ceiling}. Drop the message handles \
+             from earlier batches — acknowledging one does not release it — or raise \
+             `subscription-capacity-bytes`.",
+            held = budget.outstanding(),
+            ceiling = budget.ceiling(),
+        ))));
+    }
+    let effective_bytes = match max_bytes {
+        0 => available,
+        asked => asked.min(available),
+    };
 
     let mut fetch = consumer
         .fetch()
         .max_messages(batch as usize)
         .expires(Duration::from_millis(timeout_ms as u64));
-    if max_bytes > 0 {
-        fetch = fetch.max_bytes(max_bytes.min(usize::MAX as u64) as usize);
-    }
+    fetch = fetch.max_bytes(effective_bytes.min(usize::MAX as u64) as usize);
     let mut stream = match fetch.messages().await {
         Ok(s) => s,
         Err(e) => return Ok(Err(jetstream_err("fetch failed", e))),
@@ -132,6 +160,10 @@ async fn fetch_batch<T: 'static + Send>(
                 // the handle regardless of ack-mode.
                 let (message, acker) = msg.split();
                 let acker = Arc::new(acker);
+                // Charged here, released by `MessageHandle::drop` — the point
+                // at which the payload is actually freed.
+                let charged = message.length as u64;
+                budget.charge(charged);
                 fetched.push(MessageHandle {
                     acker: Some(acker.clone()),
                     progress: Some(acker),
@@ -139,6 +171,7 @@ async fn fetch_batch<T: 'static + Send>(
                     message,
                     sequence,
                     delivery_count,
+                    charged: Some((budget.clone(), charged)),
                 });
             }
             Err(e) => {
@@ -178,9 +211,9 @@ async fn fetch_batch<T: 'static + Send>(
             // bigger than the bound itself, and retrying unchanged loops
             // forever. Say so rather than reporting an idle consumer.
             Some(PullEnd::ByteLimit) => Ok(Err(types::NatsError::LimitExceeded(format!(
-                "the next message is larger than this fetch's {max_bytes}-byte bound; \
-                 `fetch` without one is bound by the binding's \
-                 `subscription-capacity-bytes`"
+                "the next message is larger than this fetch's {effective_bytes}-byte bound; \
+                 `fetch` without one is bound by what is left of the binding's \
+                 `subscription-capacity-bytes` after the handles it still holds"
             )))),
             _ => Ok(Err(types::NatsError::NoMessages)),
         };

@@ -3,7 +3,7 @@
 //! [`super::interfaces`] point the generated resource types at these.
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_nats::jetstream::consumer::{Consumer, pull};
 use async_nats::jetstream::kv::Store;
@@ -54,6 +54,25 @@ pub struct MessageHandle {
     pub(super) message: async_nats::Message,
     pub(super) sequence: u64,
     pub(super) delivery_count: u32,
+    /// The binding budget this delivery is charged against, and what it was
+    /// charged, released when the handle is dropped.
+    ///
+    /// Only a pull-fetched delivery carries one: a push delivery is already
+    /// bounded by `max-ack-pending`, and its handle lives and dies with the
+    /// store the host built for it.
+    pub(super) charged: Option<(Arc<FetchBudget>, u64)>,
+}
+
+impl Drop for MessageHandle {
+    fn drop(&mut self) {
+        // Dropping the handle is what actually frees the payload, so it is
+        // also what returns its bytes to the binding's budget. Doing this in
+        // `Drop` rather than at the resource-drop call site covers every way a
+        // handle can go: a guest drop, a table teardown, a torn-down workload.
+        if let Some((budget, bytes)) = self.charged.take() {
+            budget.release(bytes);
+        }
+    }
 }
 
 /// Handle to a pull-based JetStream consumer.
@@ -67,9 +86,105 @@ pub struct PullConsumerHandle {
     /// OOM-killed it. The count is the guest's; this bound is the binding's,
     /// and the smaller of the two wins.
     pub(super) max_fetch_bytes: u64,
+    /// The binding's running total, which is what bounds a guest that loops
+    /// `fetch` — the ordinary shape of a pull worker. See [`FetchBudget`].
+    pub(super) budget: Arc<FetchBudget>,
+}
+
+/// What a binding's pull consumers are holding in host memory right now.
+///
+/// Bounding one `fetch` bounds one call and nothing else: a worker that loops
+/// `fetch` until drained walks the host into an OOM at a rate set only by
+/// message size, because a delivered message stays resident until the guest
+/// drops its handle — acking does not free it, and a guest that never drops
+/// never frees it at all. This is the budget that spans fetches: every
+/// delivery is charged on the way out and released when its handle is dropped,
+/// and a `fetch` may only ask for what is left.
+#[derive(Debug)]
+pub struct FetchBudget {
+    outstanding: AtomicU64,
+    ceiling: u64,
+}
+
+impl FetchBudget {
+    pub(super) fn new(ceiling: u64) -> Self {
+        Self {
+            outstanding: AtomicU64::new(0),
+            // A ceiling of zero would refuse every fetch; treat it as "one
+            // message at a time" rather than "nothing ever".
+            ceiling: ceiling.max(1),
+        }
+    }
+
+    /// Bytes a fetch may still materialize.
+    pub(super) fn available(&self) -> u64 {
+        self.ceiling
+            .saturating_sub(self.outstanding.load(Ordering::Relaxed))
+    }
+
+    /// The whole budget, for the error that has to name it.
+    pub(super) fn ceiling(&self) -> u64 {
+        self.ceiling
+    }
+
+    pub(super) fn outstanding(&self) -> u64 {
+        self.outstanding.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn charge(&self, bytes: u64) {
+        self.outstanding.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    pub(super) fn release(&self, bytes: u64) {
+        // Saturating: a double release would otherwise wrap the counter and
+        // hand the binding an unbounded budget for the rest of its life.
+        let _ = self
+            .outstanding
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+                Some(held.saturating_sub(bytes))
+            });
+    }
 }
 
 /// Handle to an open JetStream KV bucket.
 pub struct BucketHandle {
     pub(super) store: Store,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_budget_spans_fetches_and_is_released_by_dropping_a_handle() {
+        // The shape that OOM-killed the host: a worker looping `fetch`, acking
+        // every message, never dropping a handle. The budget has to notice.
+        let budget = Arc::new(FetchBudget::new(30));
+        assert_eq!(budget.available(), 30);
+        budget.charge(25);
+        assert_eq!(budget.available(), 5);
+        budget.charge(5);
+        assert_eq!(
+            budget.available(),
+            0,
+            "a full budget must refuse the next fetch rather than let it OOM the host"
+        );
+        budget.release(25);
+        assert_eq!(budget.available(), 25);
+    }
+
+    #[test]
+    fn a_double_release_cannot_hand_out_an_unbounded_budget() {
+        let budget = FetchBudget::new(100);
+        budget.charge(10);
+        budget.release(10);
+        budget.release(10);
+        assert_eq!(budget.outstanding(), 0);
+        assert_eq!(budget.available(), 100);
+    }
+
+    #[test]
+    fn a_zero_ceiling_still_admits_one_message_at_a_time() {
+        assert_eq!(FetchBudget::new(0).ceiling(), 1);
+    }
 }

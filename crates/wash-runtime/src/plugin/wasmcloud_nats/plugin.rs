@@ -24,6 +24,20 @@ use super::config::{
 use super::conn::{self, ConnHandle, ConnectionRegistry};
 use super::{NATS_VERSION, PLUGIN_NATS_ID, interfaces, subscriber};
 
+/// The share of the host's guest-memory budget this plugin will promise to
+/// NATS backlogs across every workload it carries.
+///
+/// Host-side backlog is not guest memory, but it comes out of the same
+/// container, and it is the guests the budget is actually named for. A quarter
+/// leaves three for them and is still far more than a subscription that is
+/// keeping up ever holds.
+const NATS_BACKLOG_BUDGET_DIVISOR: u64 = 4;
+
+/// How many granted subjects one bind will ask the server about when looking
+/// for a stream that captures them. See
+/// [`WasmcloudNats::warn_on_silently_captured_subjects`].
+const MAX_CAPTURE_CHECKS: usize = 32;
+
 /// Per-component subscription state.
 pub struct ComponentData {
     pub(super) jetstream_subs: Vec<JetStreamSubscriptionConfig>,
@@ -50,6 +64,15 @@ pub struct WasmcloudNats {
     /// a server-side permission denial parks a subscription that deployed
     /// cleanly, and nothing else would ever move the workload off running.
     failure_sink: arc_swap::ArcSwapOption<WorkloadFailureSink>,
+    /// The host's guest-memory budget, when it told this plugin. Subscription
+    /// byte budgets are per subscription and were never compared against it:
+    /// seven subscriptions at the 32MiB default is 224MiB of potential backlog
+    /// on a 256Mi host, before a single guest instantiates.
+    memory_budget: Option<u64>,
+    /// Backlog bytes this plugin has promised across every live workload, so
+    /// the clamp is host-wide rather than per bind. Keyed by workload id and
+    /// released on unbind.
+    reserved_bytes: Arc<RwLock<HashMap<String, u64>>>,
 }
 
 impl Default for WasmcloudNats {
@@ -67,7 +90,20 @@ impl WasmcloudNats {
             lattice_prefixes: Vec::new(),
             bindings: NatsBindings::default(),
             failure_sink: arc_swap::ArcSwapOption::empty(),
+            memory_budget: None,
+            reserved_bytes: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Tells the plugin what the host's guest-memory budget is, so a
+    /// subscription's byte budget can be clamped against it at bind.
+    ///
+    /// Without this the per-subscription default stands however many
+    /// subscriptions a host ends up carrying, and the first sign of the
+    /// mismatch is an OOMKill.
+    pub fn with_memory_budget(mut self, max_guest_memory: u64) -> Self {
+        self.memory_budget = Some(max_guest_memory);
+        self
     }
 
     /// Denies the host's own lattice subject space to every workload.
@@ -229,6 +265,127 @@ impl WasmcloudNats {
         Ok(())
     }
 
+    /// The share of the host's memory budget these subscriptions may hold, as
+    /// a per-subscription byte ceiling.
+    ///
+    /// `subscription-capacity-bytes` bounds one subscription. Nothing bounded
+    /// the sum: a rig running eight workloads with seven core subscriptions
+    /// between them reserved `7 x 32MiB = 224MiB` of potential backlog on a
+    /// 256Mi host — 87% of the budget — and the first sign of it was an
+    /// OOMKill. The host knows its budget and the subscription count before a
+    /// single message is delivered, so the arithmetic is done here.
+    ///
+    /// Returns the configured value unchanged when the host named no budget,
+    /// or when the share is roomy enough to carry it.
+    async fn clamp_capacity_bytes(
+        &self,
+        workload_id: &str,
+        binding: &str,
+        handle: &ConnHandle,
+        subscriptions: usize,
+    ) -> usize {
+        let configured = handle.limits.subscription_capacity_bytes;
+        let Some(budget) = self.memory_budget else {
+            return configured;
+        };
+        if subscriptions == 0 {
+            return configured;
+        }
+        // Host-side backlog is not guest memory, but it comes out of the same
+        // container. A minority share leaves the guests the budget is actually
+        // named for, and is still far more than a healthy subscription holds.
+        let share = budget / NATS_BACKLOG_BUDGET_DIVISOR;
+        let already = {
+            let reserved = self.reserved_bytes.read().await;
+            reserved.values().copied().sum::<u64>()
+        };
+        let available = share.saturating_sub(already);
+        let per_subscription =
+            usize::try_from(available / subscriptions as u64).unwrap_or(usize::MAX);
+        let effective = handle.limits.clamp_capacity_bytes(per_subscription);
+
+        let claimed = effective as u64 * subscriptions as u64;
+        {
+            let mut reserved = self.reserved_bytes.write().await;
+            *reserved.entry(workload_id.to_string()).or_default() += claimed;
+        }
+
+        if effective < configured {
+            tracing::warn!(
+                workload_id,
+                binding = describe_binding(binding),
+                subscriptions,
+                configured_bytes = configured,
+                effective_bytes = effective,
+                host_budget_bytes = budget,
+                plugin_share_bytes = share,
+                already_reserved_bytes = already,
+                "wasmcloud:nats clamped `subscription-capacity-bytes`: {subscriptions} \
+                 subscriptions at the configured size would reserve more host memory than \
+                 this host has left for NATS backlogs. Raise the host's memory budget, \
+                 lower `subscription-capacity-bytes`, or split the subscriptions across \
+                 hosts."
+            );
+        }
+        effective
+    }
+
+    /// Says, once per bind, when a subject this binding may publish to is
+    /// captured by a stream whose per-message limit is below the connection's.
+    ///
+    /// A core publish is fire-and-forget: it resolves once written to the
+    /// connection, not once accepted. JetStream refusing it above the stream's
+    /// own limit is therefore silent at every layer — the publisher reports
+    /// OK, the stream stores nothing, consumers see nothing, this host logs
+    /// nothing. The overlap is computable before any traffic, so it is said
+    /// before any traffic.
+    ///
+    /// Best effort throughout: a server without JetStream, a stream that does
+    /// not exist yet, or a lookup that fails is not a reason to refuse a bind.
+    async fn warn_on_silently_captured_subjects(
+        &self,
+        workload_id: &str,
+        binding: &str,
+        handle: &ConnHandle,
+    ) {
+        let max_payload = handle.max_payload();
+        // Two round trips per subject, on the bind path. A grant with hundreds
+        // of literal subjects is not what this is for, and a slow bind is a
+        // worse problem than a missing advisory.
+        for subject in handle
+            .policy
+            .publishable_literal_subjects()
+            .into_iter()
+            .take(MAX_CAPTURE_CHECKS)
+        {
+            let Ok(stream_name) = handle.jetstream.stream_by_subject(&subject).await else {
+                continue;
+            };
+            let Ok(stream) = handle.jetstream.get_stream(&stream_name).await else {
+                continue;
+            };
+            let limit = stream.cached_info().config.max_message_size;
+            // `-1` is the stream deferring to the server, which is the same
+            // limit the publish already honours: nothing to warn about.
+            if limit <= 0 || limit as u64 >= max_payload {
+                continue;
+            }
+            tracing::warn!(
+                workload_id,
+                binding = describe_binding(binding),
+                subject = %subject,
+                stream = %stream_name,
+                stream_max_message_size = limit,
+                connection_max_payload = max_payload,
+                "a core (fire-and-forget) publish to '{subject}' is captured by stream \
+                 '{stream_name}', which refuses messages above {limit} bytes — below this \
+                 connection's {max_payload}-byte limit. JetStream drops those silently: \
+                 neither the publisher nor this host observes the loss. Use \
+                 `jetstream.publish` (acked) for JetStream-bound subjects."
+            );
+        }
+    }
+
     /// Starts every subscription declared on one binding, on that binding's
     /// connection.
     ///
@@ -318,6 +475,20 @@ impl WasmcloudNats {
             "starting wasmcloud:nats subscriptions"
         );
 
+        // The byte budget is per subscription and the host's is not, so this
+        // is where the two meet: what is left of the plugin's share, divided
+        // by the subscriptions about to claim it.
+        let capacity_bytes = self
+            .clamp_capacity_bytes(workload_id, binding, &handle, core_subs.len())
+            .await;
+
+        // A core publish into a subject a stream captures is refused by
+        // JetStream above the stream's own per-message limit, and neither the
+        // publisher nor this host observes the loss. Nothing at run time can
+        // see it, so it is said here, once, while the coordinates are known.
+        self.warn_on_silently_captured_subjects(workload_id, binding, &handle)
+            .await;
+
         if !jetstream_subs.is_empty() {
             subscriber::spawn_jetstream_subscriptions(
                 workload,
@@ -341,6 +512,7 @@ impl WasmcloudNats {
                 execution_meter.clone(),
                 failure_sink.clone(),
                 workload_id,
+                capacity_bytes,
             )
             .await?;
         }
@@ -817,6 +989,7 @@ impl HostPlugin for WasmcloudNats {
             .await;
 
         self.connections.release(workload_id).await;
+        self.reserved_bytes.write().await.remove(workload_id);
         debug!(
             workload_id,
             "released every wasmcloud:nats connection and cancelled its subscriptions"

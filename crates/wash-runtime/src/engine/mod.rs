@@ -363,6 +363,49 @@ impl std::error::Error for SharedError {
     }
 }
 
+/// Turns a compile failure into something an operator can act on.
+///
+/// The pooling allocator refuses a component whose minimum linear memory
+/// exceeds `--default-heap-memory` with a message that is precise and useless:
+/// it mixes decimal and hex, names no flag, and — once it has been re-wrapped
+/// on the way up and truncated at the CRD boundary — reaches a `kubectl`-only
+/// operator as nothing at all. The refusal is correct; only the explanation is
+/// missing, and every number it needs is already here.
+fn explain_compile_failure(e: wasmtime::Error, default_heap_memory: u64) -> anyhow::Error {
+    use host_memory::render_bytes;
+
+    let text = format!("{e:#}");
+    let Some(required) = parse_pooling_minimum(&text) else {
+        return anyhow::Error::from(e);
+    };
+    // Round up to the next power of two at or above the requirement: the pool
+    // sizes slots in whole memories, so the next size that certainly fits is
+    // the useful advice, not the bare minimum.
+    let suggested = required.next_power_of_two().max(4 * host_memory::MIB);
+    anyhow::Error::from(e).context(format!(
+        "the component needs {} of linear memory but --default-heap-memory is {}. \
+         Raise it to at least {} (chart: runtime.resources.defaultHeapMemory).",
+        render_bytes(required),
+        render_bytes(default_heap_memory),
+        render_bytes(suggested),
+    ))
+}
+
+/// Reads the minimum byte size out of the pooling allocator's refusal.
+///
+/// Matching on the message is unpleasant, but wasmtime offers no typed form of
+/// it and the alternative is discarding the only number that makes the failure
+/// actionable.
+fn parse_pooling_minimum(text: &str) -> Option<u64> {
+    let tail = text.split_once("minimum byte size of")?.1;
+    let digits: String = tail
+        .trim_start()
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
+}
+
 impl Engine {
     /// host_memory has the memory budgets this engine was built with including max host
     /// memory available, default component heap limit, and number of core instances available.
@@ -591,6 +634,11 @@ impl Engine {
         Ok(service)
     }
 
+    /// See [`explain_compile_failure`].
+    fn explain_compile_failure(&self, e: wasmtime::Error) -> anyhow::Error {
+        explain_compile_failure(e, self.host_memory.default_heap_memory)
+    }
+
     /// Load a WebAssembly component from raw bytes or yields a previously compiled one.
     #[instrument(name = "load_component_bytes", skip_all, fields(digest = %digest.as_ref().map(|d| d.as_ref()).unwrap_or("none")))]
     fn load_component_bytes(
@@ -602,7 +650,7 @@ impl Engine {
             None => {
                 tracing::debug!("no digest provided, compiling component without caching");
                 let compiled = Component::new(&self.inner, bytes.as_ref())
-                    .map_err(anyhow::Error::from)
+                    .map_err(|e| self.explain_compile_failure(e))
                     .context("failed to compile component from bytes")?;
                 Ok(compiled)
             }
@@ -610,11 +658,12 @@ impl Engine {
                 let key = CacheKey(digest.as_ref().to_string());
                 let inner = &self.inner;
                 let bytes_ref = bytes.as_ref();
+                let heap = self.host_memory.default_heap_memory;
 
                 self.cache
                     .try_get_with(key, || {
                         Component::new(inner, bytes_ref)
-                            .map_err(anyhow::Error::from)
+                            .map_err(|e| explain_compile_failure(e, heap))
                             .context("failed to compile component from bytes")
                             .map(CacheValue)
                     })
@@ -1210,6 +1259,40 @@ where
     }
 }
 
+/// Reports a `WASMTIME_POOLING_*` value that overrides a resolved flag.
+///
+/// `host memory resolved` is the line an operator reads to confirm what the
+/// host is running, and every sizing rule is derived against it. These envs are
+/// applied *after* it, so when one is set the line is quietly wrong — it names
+/// the flag, not the number in force. This says so, once, next to it.
+///
+/// Also refuses a zero. Every one of these knobs means "this host runs
+/// nothing" at zero, which is never what an operator meant, and the flags they
+/// shadow are already rejected for exactly that.
+fn pooling_env_override<T>(key: &str, resolved: T) -> Option<T>
+where
+    T: FromStr + PartialEq + Default + std::fmt::Display + Copy,
+    T::Err: core::fmt::Debug,
+{
+    let value: T = getenv(key)?;
+    if value == T::default() {
+        warn!(
+            "`{key}` is 0, which would leave this host unable to instantiate anything; \
+             ignoring it and keeping {resolved}"
+        );
+        return None;
+    }
+    if value != resolved {
+        warn!(
+            resolved = %resolved,
+            override_value = %value,
+            "`{key}` overrides the resolved host memory budget: this host runs with \
+             {value}, not the {resolved} reported by `host memory resolved`"
+        );
+    }
+    Some(value)
+}
+
 fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAllocationConfig {
     let mut config = PoolingAllocationConfig::default();
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_UNUSED_WASM_SLOTS") {
@@ -1259,11 +1342,12 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
     } else {
         config.total_stacks(instances);
     }
-    if let Some(v) = getenv("WASMTIME_POOLING_TOTAL_CORE_INSTANCES") {
-        config.total_core_instances(v);
-    } else {
-        config.total_core_instances(instances);
-    }
+    // `--core-instances` is what `host memory resolved` reports, and this is
+    // what actually sizes the pool.
+    config.total_core_instances(
+        pooling_env_override("WASMTIME_POOLING_TOTAL_CORE_INSTANCES", instances)
+            .unwrap_or(instances),
+    );
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_CORE_INSTANCE_SIZE") {
         config.max_core_instance_size(v);
     }
@@ -1280,11 +1364,14 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
     // so wasmtime's default stood on every host and nothing named it. The
     // fallback is that same default unless an operator set the flag, so this
     // changes no behaviour by itself — it only makes the number reachable.
-    if let Some(v) = getenv("WASMTIME_POOLING_MAX_MEMORY_SIZE") {
-        config.max_memory_size(v);
-    } else {
-        config.max_memory_size(usize::try_from(default_heap_memory).unwrap_or(usize::MAX));
-    }
+    // It is also the number a component's minimum linear memory is checked
+    // against, so an env that shadows `--default-heap-memory` here is worth
+    // saying out loud.
+    let resolved_heap = usize::try_from(default_heap_memory).unwrap_or(usize::MAX);
+    config.max_memory_size(
+        pooling_env_override("WASMTIME_POOLING_MAX_MEMORY_SIZE", resolved_heap)
+            .unwrap_or(resolved_heap),
+    );
     #[cfg(not(windows))]
     if let Some(v) = getenv("WASMTIME_POOLING_TOTAL_GC_HEAPS") {
         config.total_gc_heaps(v);
@@ -1297,6 +1384,36 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The refusal is correct and its text is the only place the number
+    /// appears; discarding it is what left a `kubectl`-only operator with
+    /// "ready=0 unavailable=1" and nothing else.
+    #[test]
+    fn a_heap_floor_refusal_names_the_flag_and_both_sizes() {
+        let raw = wasmtime::Error::msg(
+            "module memory does not fit in pooling allocator requirements: memory has a \
+             minimum byte size of 2424832 which exceeds the limit of 0x100000",
+        );
+        let explained = format!("{:#}", explain_compile_failure(raw, 1024 * 1024));
+        assert!(explained.contains("2.3MiB"), "{explained}");
+        assert!(
+            explained.contains("--default-heap-memory is 1MiB"),
+            "{explained}"
+        );
+        assert!(
+            explained.contains("Raise it to at least 4MiB"),
+            "{explained}"
+        );
+        // And the original text is still underneath it.
+        assert!(explained.contains("pooling allocator"), "{explained}");
+    }
+
+    #[test]
+    fn an_unrelated_compile_failure_is_left_alone() {
+        let raw = wasmtime::Error::msg("expected a WebAssembly component");
+        let explained = format!("{:#}", explain_compile_failure(raw, 1024 * 1024));
+        assert_eq!(explained, "expected a WebAssembly component");
+    }
 
     // A custom base config can now be combined with the pooling allocator and
     // instance limits, which previously errored out of `build()`.

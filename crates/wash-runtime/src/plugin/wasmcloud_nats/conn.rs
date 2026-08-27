@@ -68,6 +68,10 @@ pub struct ConnHandle {
     pub policy: Arc<PolicyEngine>,
     pub ack_mode: super::config::AckMode,
     pub limits: super::config::Limits,
+    /// What this binding's pull consumers are holding in host memory, shared
+    /// by every consumer opened on it. See
+    /// [`super::jetstream::FetchBudget`].
+    pub fetch_budget: Arc<super::jetstream::FetchBudget>,
     /// Inboxes the host has handed to the guest as a `reply-to`, each good for
     /// one publish.
     ///
@@ -434,6 +438,9 @@ impl ConnectionRegistry {
             policy: Arc::new(PolicyEngine::new(&config.policy, lattice_prefixes)),
             ack_mode: config.ack_mode,
             limits: config.limits.clone(),
+            fetch_budget: Arc::new(super::jetstream::FetchBudget::new(
+                u64::try_from(config.limits.subscription_capacity_bytes).unwrap_or(u64::MAX),
+            )),
             pending_replies: std::sync::Mutex::new(HashMap::new()),
         });
 

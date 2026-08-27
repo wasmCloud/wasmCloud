@@ -20,7 +20,27 @@ const DEFAULT_SUBSCRIPTION_CAPACITY: usize = 1024;
 /// `subscription-capacity` counts messages, so it bounds memory only if
 /// payloads are small. This is the companion bound in bytes, and binds only
 /// when large payloads make the message count a poor proxy.
-const DEFAULT_SUBSCRIPTION_CAPACITY_BYTES: usize = 32 * 1024 * 1024;
+///
+/// Per subscription, and clamped down at bind time when the host's own memory
+/// budget cannot carry every subscription at this size — see
+/// [`Limits::clamp_capacity_bytes`].
+pub const DEFAULT_SUBSCRIPTION_CAPACITY_BYTES: usize = 32 * 1024 * 1024;
+
+/// Floor a bind-time clamp will not take a subscription below.
+///
+/// Below this the byte budget stops being backpressure and starts being a
+/// throughput ceiling, and a subscription that admits one message at a time is
+/// worse than one that sheds.
+pub const MIN_SUBSCRIPTION_CAPACITY_BYTES: usize = 1024 * 1024;
+
+/// Default ceiling on how many times a JetStream delivery is retried.
+///
+/// Unset, the server retries forever, so a handler that traps deterministically
+/// — the same input, the same trap — never makes progress and never stops. This
+/// is what turns that livelock into a bounded ladder ending in a term, so a
+/// poison message reaches a dead-letter state instead of being retried until
+/// the stream ages it out. `0` restores the server's own default (unlimited).
+const DEFAULT_MAX_DELIVER: usize = 32;
 
 /// How a workload authenticates to NATS.
 ///
@@ -88,6 +108,9 @@ pub struct Limits {
     /// What the JetStream push consumer asks the server for, or `None` to
     /// derive it. See [`Limits::effective_max_ack_pending`].
     pub max_ack_pending: Option<usize>,
+    /// Ceiling on JetStream redeliveries, or `None` for
+    /// [`DEFAULT_MAX_DELIVER`]. See [`Limits::effective_max_deliver`].
+    pub max_deliver: Option<usize>,
 }
 
 impl Default for Limits {
@@ -97,6 +120,7 @@ impl Default for Limits {
             subscription_capacity: DEFAULT_SUBSCRIPTION_CAPACITY,
             subscription_capacity_bytes: DEFAULT_SUBSCRIPTION_CAPACITY_BYTES,
             max_ack_pending: None,
+            max_deliver: None,
         }
     }
 }
@@ -109,15 +133,60 @@ impl Limits {
     /// outstanding deliveries it stops sending until some settle.
     ///
     /// Unset, it is `max-in-flight` doubled (capped at
-    /// `subscription-capacity`), so the handler pool always has a message
-    /// queued behind every one it is running. `0` hands the decision back to
-    /// the server, whose default is far above either.
-    pub fn effective_max_ack_pending(&self) -> i64 {
+    /// `subscription-capacity`) and then **bounded in bytes**: a message count
+    /// cannot bound memory, and `128 x 896KiB` is 112MiB of unsettled
+    /// deliveries on a host that may only have 256MiB. `server_max_payload` is
+    /// the largest a single message can be, so
+    /// `subscription-capacity-bytes / max_payload` is the count at which the
+    /// worst case still fits the byte budget the core path already honours.
+    ///
+    /// `0` hands the decision back to the server, whose default is far above
+    /// either.
+    pub fn effective_max_ack_pending(&self, server_max_payload: u64) -> i64 {
+        if let Some(explicit) = self.max_ack_pending {
+            return i64::try_from(explicit).unwrap_or(i64::MAX);
+        }
         let derived = self
             .max_in_flight
             .saturating_mul(2)
-            .min(self.subscription_capacity);
-        i64::try_from(self.max_ack_pending.unwrap_or(derived)).unwrap_or(i64::MAX)
+            .min(self.subscription_capacity)
+            .min(self.max_ack_pending_by_bytes(server_max_payload))
+            // A byte budget smaller than one max-size message would derive
+            // zero, which is the server's "unlimited" — the opposite of what
+            // the budget asked for.
+            .max(1);
+        i64::try_from(derived).unwrap_or(i64::MAX)
+    }
+
+    /// The unsettled-delivery count at which the worst case still fits
+    /// `subscription-capacity-bytes`.
+    fn max_ack_pending_by_bytes(&self, server_max_payload: u64) -> usize {
+        let per_message = server_max_payload.max(1);
+        usize::try_from(self.subscription_capacity_bytes as u64 / per_message).unwrap_or(usize::MAX)
+    }
+
+    /// How many times a JetStream delivery may be retried before the server
+    /// stops offering it.
+    ///
+    /// `-1` is the server's unlimited, which is what an unset `max_deliver`
+    /// meant before this: a deterministically trapping handler retried until
+    /// the stream aged the message out.
+    pub fn effective_max_deliver(&self) -> i64 {
+        match self.max_deliver.unwrap_or(DEFAULT_MAX_DELIVER) {
+            0 => -1,
+            n => i64::try_from(n).unwrap_or(i64::MAX),
+        }
+    }
+
+    /// Narrows this binding's per-subscription byte budget to `ceiling`.
+    ///
+    /// Called at bind, once the host knows how many subscriptions will share
+    /// its memory. Never raises the configured value, and never goes below
+    /// [`MIN_SUBSCRIPTION_CAPACITY_BYTES`]. Returns the value actually applied
+    /// so the caller can say when it clamped.
+    pub fn clamp_capacity_bytes(&self, ceiling: usize) -> usize {
+        self.subscription_capacity_bytes
+            .min(ceiling.max(MIN_SUBSCRIPTION_CAPACITY_BYTES))
     }
 }
 
@@ -312,6 +381,14 @@ impl NatsConfig {
                 })?),
                 None => None,
             },
+            // Zero is meaningful here too: it is how an operator asks for the
+            // server's unlimited redelivery back.
+            max_deliver: match get(cfg, "max-deliver") {
+                Some(raw) => Some(raw.parse().with_context(|| {
+                    format!("`max-deliver` must be a non-negative integer, got `{raw}`")
+                })?),
+                None => None,
+            },
         };
         if limits.max_in_flight == 0 {
             bail!("`max-in-flight` must be greater than zero");
@@ -417,6 +494,7 @@ impl NatsConfig {
         self.limits.subscription_capacity.hash(&mut hasher);
         self.limits.subscription_capacity_bytes.hash(&mut hasher);
         self.limits.max_ack_pending.hash(&mut hasher);
+        self.limits.max_deliver.hash(&mut hasher);
         self.request_timeout.hash(&mut hasher);
 
         ConnKey {
@@ -707,10 +785,82 @@ mod tests {
         assert!(err.to_string().contains("must be set together"));
     }
 
+    /// A server whose `max_payload` is small enough that the message-count
+    /// derivation is the binding one.
+    const SMALL_PAYLOAD: u64 = 16 * 1024;
+
     #[test]
     fn max_ack_pending_defaults_to_twice_max_in_flight() {
         let cfg = NatsConfig::from_map(&map(&[("servers", "nats://localhost:4222")])).unwrap();
-        assert_eq!(cfg.limits.effective_max_ack_pending(), 128);
+        // 32MiB / 16KiB = 2048, so the count derivation is what binds here.
+        assert_eq!(cfg.limits.effective_max_ack_pending(SMALL_PAYLOAD), 128);
+    }
+
+    #[test]
+    fn max_ack_pending_is_bounded_in_bytes_not_only_in_messages() {
+        // The regression this exists for: 128 unsettled deliveries of a
+        // 896KiB payload is 112MiB in flight, on a host that may have 256MiB
+        // in total. The byte budget has to be what decides, not the count.
+        let cfg = NatsConfig::from_map(&map(&[("servers", "nats://localhost:4222")])).unwrap();
+        let max_payload = 1024 * 1024;
+        let derived = cfg.limits.effective_max_ack_pending(max_payload);
+        assert_eq!(derived, 32, "32MiB of budget / 1MiB max payload");
+        assert!(
+            derived as u64 * max_payload <= cfg.limits.subscription_capacity_bytes as u64,
+            "worst-case in-flight bytes must fit the byte budget"
+        );
+    }
+
+    #[test]
+    fn max_ack_pending_never_derives_to_the_servers_unlimited() {
+        // A byte budget smaller than one max-size message divides to zero, and
+        // zero is how the server spells "no limit" — the opposite of the ask.
+        let cfg = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("subscription-capacity-bytes", "1048576"),
+        ]))
+        .unwrap();
+        assert_eq!(cfg.limits.effective_max_ack_pending(64 * 1024 * 1024), 1);
+    }
+
+    #[test]
+    fn max_deliver_defaults_to_a_bounded_ladder_and_zero_restores_unlimited() {
+        let cfg = NatsConfig::from_map(&map(&[("servers", "nats://localhost:4222")])).unwrap();
+        assert_eq!(cfg.limits.effective_max_deliver(), 32);
+
+        let unlimited = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("max-deliver", "0"),
+        ]))
+        .unwrap();
+        assert_eq!(unlimited.limits.effective_max_deliver(), -1);
+
+        let explicit = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("max-deliver", "5"),
+        ]))
+        .unwrap();
+        assert_eq!(explicit.limits.effective_max_deliver(), 5);
+    }
+
+    #[test]
+    fn a_clamped_capacity_never_rises_and_never_starves() {
+        let cfg = NatsConfig::from_map(&map(&[("servers", "nats://localhost:4222")])).unwrap();
+        // A ceiling below the configured value binds.
+        assert_eq!(
+            cfg.limits.clamp_capacity_bytes(8 * 1024 * 1024),
+            8 * 1024 * 1024
+        );
+        // A ceiling above it does not raise it.
+        assert_eq!(
+            cfg.limits.clamp_capacity_bytes(1024 * 1024 * 1024),
+            DEFAULT_SUBSCRIPTION_CAPACITY_BYTES
+        );
+        // And no share of a small host takes a subscription below the floor.
+        assert_eq!(
+            cfg.limits.clamp_capacity_bytes(1024),
+            MIN_SUBSCRIPTION_CAPACITY_BYTES
+        );
     }
 
     #[test]
@@ -724,7 +874,7 @@ mod tests {
             ("subscription-capacity", "1024"),
         ]))
         .unwrap();
-        assert_eq!(cfg.limits.effective_max_ack_pending(), 1024);
+        assert_eq!(cfg.limits.effective_max_ack_pending(SMALL_PAYLOAD), 1024);
     }
 
     #[test]
@@ -734,14 +884,17 @@ mod tests {
             ("max-ack-pending", "5000"),
         ]))
         .unwrap();
-        assert_eq!(explicit.limits.effective_max_ack_pending(), 5000);
+        assert_eq!(
+            explicit.limits.effective_max_ack_pending(SMALL_PAYLOAD),
+            5000
+        );
 
         let deferred = NatsConfig::from_map(&map(&[
             ("servers", "nats://localhost:4222"),
             ("max-ack-pending", "0"),
         ]))
         .unwrap();
-        assert_eq!(deferred.limits.effective_max_ack_pending(), 0);
+        assert_eq!(deferred.limits.effective_max_ack_pending(SMALL_PAYLOAD), 0);
     }
 
     #[test]

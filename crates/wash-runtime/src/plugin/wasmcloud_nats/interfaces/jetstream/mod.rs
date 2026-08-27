@@ -342,6 +342,7 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
                 consumer: Some(opened),
                 max_fetch_bytes: u64::try_from(conn.limits.subscription_capacity_bytes)
                     .unwrap_or(u64::MAX),
+                budget: conn.fetch_budget.clone(),
             })
         })?;
         Ok(Ok(resource))
