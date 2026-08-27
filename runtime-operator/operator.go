@@ -13,12 +13,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
+// DefaultHeartbeatTTL is how long a host may go unheard-from before it is
+// considered unreachable: four missed heartbeats at the host's 15s interval.
+const DefaultHeartbeatTTL = 60 * time.Second
+
+// MinHeartbeatTTL is the shortest TTL the operator honours. Hosts publish every
+// 15s, so under two intervals a live fleet reads as unheard between ticks and
+// no host is ever reaped.
+const MinHeartbeatTTL = 30 * time.Second
+
 type EmbeddedOperatorConfig struct {
 	// NATS connection string. Used to communicate with hosts.
 	NatsURL string
 	// NATS options. Used to configure the NATS connection.
 	NatsOptions []nats.Option
-	// Heartbeat TTL. Used to determine how long to wait before considering a host unreachable.
+	// Heartbeat TTL. Used to determine how long to wait before considering a
+	// host unreachable. Unset means DefaultHeartbeatTTL; anything under
+	// MinHeartbeatTTL is raised to it.
 	HeartbeatTTL time.Duration
 	// Host CPU threshold (percentage).
 	// Used to calculate workload scheduling, avoiding hosts that are over this threshold.
@@ -66,6 +77,15 @@ func NewEmbeddedOperator(
 	// namespaced Role for Host CRUD binds there.
 	if cfg.Namespace == "" {
 		return nil, errors.New("EmbeddedOperatorConfig.Namespace is required")
+	}
+
+	switch {
+	case cfg.HeartbeatTTL <= 0:
+		cfg.HeartbeatTTL = DefaultHeartbeatTTL
+	case cfg.HeartbeatTTL < MinHeartbeatTTL:
+		mgr.GetLogger().Info("HeartbeatTTL raised to the minimum the host heartbeat interval allows",
+			"configured", cfg.HeartbeatTTL, "using", MinHeartbeatTTL)
+		cfg.HeartbeatTTL = MinHeartbeatTTL
 	}
 
 	nc, err := wasmbus.NatsConnect(cfg.NatsURL, cfg.NatsOptions...)

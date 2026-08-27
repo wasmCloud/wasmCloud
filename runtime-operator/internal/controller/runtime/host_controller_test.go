@@ -27,11 +27,18 @@ import (
 	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
 )
 
-// Shared test fixtures for host OS arch and version, factored out so repeated
-// literals stay consistent across the suite.
+// Shared test fixtures for the values a host reports about itself, factored
+// out so repeated literals stay consistent across the suite.
 const (
-	testOSArch  = "arm64"
-	testVersion = "1.2.3"
+	testOSArch   = "arm64"
+	testOSName   = "linux"
+	testOSKernel = "6.1.0"
+	testVersion  = "1.2.3"
+	testCPUUsage = "0.5"
+	// testHeartbeatHostID is the host these tests heartbeat as. Distinct from
+	// workload_route_controller_test.go's testHostID, which names the host a
+	// route is expected to resolve to.
+	testHeartbeatHostID = "host-id-1"
 )
 
 // requiredHostStatusKeys are the status fields the Host CRD marks as required.
@@ -86,10 +93,10 @@ func TestHostStatusPatch_EmptyStatusInjectsRequiredKeys(t *testing.T) {
 func TestHostStatusPatch_ReportedFieldsPreserved(t *testing.T) {
 	keys := patchStatusKeys(t, &runtimev1alpha1.HostStatus{
 		Version:           testVersion,
-		OSName:            "linux",
+		OSName:            testOSName,
 		OSArch:            testOSArch,
-		OSKernel:          "6.1.0",
-		SystemCPUUsage:    "0.5",
+		OSKernel:          testOSKernel,
+		SystemCPUUsage:    testCPUUsage,
 		SystemMemoryTotal: 16000,
 		SystemMemoryFree:  8000,
 	})
@@ -240,7 +247,7 @@ func TestHostApply_UpsertIsIdempotent(t *testing.T) {
 	const name = "ssa-host"
 
 	// First apply: object does not exist yet -> SSA creates it.
-	if err := applyHost(ctx, c, ns, name, "host-id-1", "node-a", 8080, "tenant-a",
+	if err := applyHost(ctx, c, ns, name, testHeartbeatHostID, "node-a", 8080, "tenant-a",
 		map[string]string{"hostgroup": "default"}); err != nil {
 		t.Fatalf("first apply (create) failed: %v", err)
 	}
@@ -249,13 +256,13 @@ func TestHostApply_UpsertIsIdempotent(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, created); err != nil {
 		t.Fatalf("get after create: %v", err)
 	}
-	if created.HostID != "host-id-1" || created.Hostname != "node-a" || created.HTTPPort != 8080 {
+	if created.HostID != testHeartbeatHostID || created.Hostname != "node-a" || created.HTTPPort != 8080 {
 		t.Errorf("create did not persist spec/metadata: %+v", created)
 	}
 
 	// Second apply with changed fields: object exists -> SSA updates in place,
 	// with no client-side Get and so no possibility of AlreadyExists.
-	if err := applyHost(ctx, c, ns, name, "host-id-1", "node-a-renamed", 9090, "tenant-a",
+	if err := applyHost(ctx, c, ns, name, testHeartbeatHostID, "node-a-renamed", 9090, "tenant-a",
 		map[string]string{"hostgroup": "default"}); err != nil {
 		t.Fatalf("second apply (update) failed: %v", err)
 	}
@@ -290,7 +297,7 @@ func hostWith(hostID, hostname string, httpPort uint32, env string, labels map[s
 // case that must not register as a change.
 func TestHostSpecChanged(t *testing.T) {
 	base := func() *runtimev1alpha1.Host {
-		return hostWith("host-id-1", "node-a", 8080, "tenant-a", map[string]string{"hostgroup": "default"})
+		return hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", map[string]string{"hostgroup": "default"})
 	}
 
 	tests := []struct {
@@ -300,12 +307,12 @@ func TestHostSpecChanged(t *testing.T) {
 	}{
 		{"identical", base(), false},
 		{"hostID changed", hostWith("host-id-2", "node-a", 8080, "tenant-a", map[string]string{"hostgroup": "default"}), true},
-		{"hostname changed", hostWith("host-id-1", "node-b", 8080, "tenant-a", map[string]string{"hostgroup": "default"}), true},
-		{"httpPort changed", hostWith("host-id-1", "node-a", 9090, "tenant-a", map[string]string{"hostgroup": "default"}), true},
-		{"environment changed", hostWith("host-id-1", "node-a", 8080, "tenant-b", map[string]string{"hostgroup": "default"}), true},
-		{"label value changed", hostWith("host-id-1", "node-a", 8080, "tenant-a", map[string]string{"hostgroup": "other"}), true},
-		{"label added", hostWith("host-id-1", "node-a", 8080, "tenant-a", map[string]string{"hostgroup": "default", "extra": "x"}), true},
-		{"label removed", hostWith("host-id-1", "node-a", 8080, "tenant-a", nil), true},
+		{"hostname changed", hostWith(testHeartbeatHostID, "node-b", 8080, "tenant-a", map[string]string{"hostgroup": "default"}), true},
+		{"httpPort changed", hostWith(testHeartbeatHostID, "node-a", 9090, "tenant-a", map[string]string{"hostgroup": "default"}), true},
+		{"environment changed", hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-b", map[string]string{"hostgroup": "default"}), true},
+		{"label value changed", hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", map[string]string{"hostgroup": "other"}), true},
+		{"label added", hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", map[string]string{"hostgroup": "default", "extra": "x"}), true},
+		{"label removed", hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", nil), true},
 	}
 
 	for _, tt := range tests {
@@ -319,8 +326,8 @@ func TestHostSpecChanged(t *testing.T) {
 	// A nil label map and an empty one are equivalent and must not be reported
 	// as a change: req.GetLabels() yields nil when the heartbeat carries none.
 	t.Run("nil vs empty labels", func(t *testing.T) {
-		existing := hostWith("host-id-1", "node-a", 8080, "tenant-a", nil)
-		next := hostWith("host-id-1", "node-a", 8080, "tenant-a", map[string]string{})
+		existing := hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", nil)
+		next := hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", map[string]string{})
 		if hostSpecChanged(existing, next) {
 			t.Errorf("nil and empty label maps must compare equal")
 		}
@@ -348,19 +355,37 @@ func (m *mockBus) Subscribe(string, int) (wasmbus.Subscription, error)          
 func (m *mockBus) QueueSubscribe(string, string, int) (wasmbus.Subscription, error) { return nil, nil }
 func (m *mockBus) Publish(*wasmbus.Message) error                                   { return nil }
 
+// testUnreachableTimeout is the unreachable window the readiness tests judge
+// hosts against. Long enough that no test trips it by wall-clock drift.
+const testUnreachableTimeout = time.Hour
+
+// settledFleetReconciler builds a HostReconciler that has been hearing the
+// fleet without a gap for longer than the unreachable window, which is the
+// steady state every host is judged in once the operator has been running for
+// a while.
+func settledFleetReconciler() *HostReconciler {
+	r := &HostReconciler{UnreachableTimeout: testUnreachableTimeout}
+	// Drive the witness the way production does: a run of heartbeats reaching
+	// back past the window, the most recent of them just now.
+	r.fleet.heard(time.Now().Add(-2 * testUnreachableTimeout))
+	r.fleet.observe(time.Now().Add(-2*testUnreachableTimeout), testUnreachableTimeout)
+	r.fleet.heard(time.Now())
+	return r
+}
+
 // TestReconcileReporting verifies the heartbeat response is mapped onto Host
 // status, including the float32->string CPU formatting and the unsigned->signed
 // memory/count casts, and that the host's heartbeat subject is addressed.
 func TestReconcileReporting(t *testing.T) {
 	hb := &runtimev2.HostHeartbeat{
-		SystemCpuUsage:    0.5, // exactly representable, so FormatFloat yields "0.5"
+		SystemCpuUsage:    0.5, // exactly representable, so FormatFloat yields testCPUUsage
 		SystemMemoryTotal: 16000,
 		SystemMemoryFree:  8000,
 		ComponentCount:    3,
 		WorkloadCount:     2,
-		OsName:            "linux",
+		OsName:            testOSName,
 		OsArch:            testOSArch,
-		OsKernel:          "6.1.0",
+		OsKernel:          testOSKernel,
 		Version:           testVersion,
 	}
 	data, err := protojson.Marshal(hb)
@@ -370,7 +395,7 @@ func TestReconcileReporting(t *testing.T) {
 
 	bus := &mockBus{reply: &wasmbus.Message{Data: data}}
 	r := &HostReconciler{Bus: bus}
-	host := &runtimev1alpha1.Host{HostID: "host-id-1"}
+	host := &runtimev1alpha1.Host{HostID: testHeartbeatHostID}
 
 	if err := r.reconcileReporting(context.Background(), host); err != nil {
 		t.Fatalf("reconcileReporting: %v", err)
@@ -379,8 +404,8 @@ func TestReconcileReporting(t *testing.T) {
 	if want := "runtime.host.host-id-1.heartbeat"; bus.gotSubject != want {
 		t.Errorf("heartbeat subject = %q, want %q", bus.gotSubject, want)
 	}
-	if host.Status.SystemCPUUsage != "0.5" {
-		t.Errorf("SystemCPUUsage = %q, want %q", host.Status.SystemCPUUsage, "0.5")
+	if host.Status.SystemCPUUsage != testCPUUsage {
+		t.Errorf("SystemCPUUsage = %q, want %q", host.Status.SystemCPUUsage, testCPUUsage)
 	}
 	if host.Status.SystemMemoryTotal != 16000 {
 		t.Errorf("SystemMemoryTotal = %d, want 16000", host.Status.SystemMemoryTotal)
@@ -391,8 +416,8 @@ func TestReconcileReporting(t *testing.T) {
 	if host.Status.ComponentCount != 3 || host.Status.WorkloadCount != 2 {
 		t.Errorf("counts = (%d,%d), want (3,2)", host.Status.ComponentCount, host.Status.WorkloadCount)
 	}
-	if host.Status.OSName != "linux" || host.Status.OSArch != testOSArch ||
-		host.Status.OSKernel != "6.1.0" || host.Status.Version != testVersion {
+	if host.Status.OSName != testOSName || host.Status.OSArch != testOSArch ||
+		host.Status.OSKernel != testOSKernel || host.Status.Version != testVersion {
 		t.Errorf("OS/version fields not mapped: %+v", host.Status)
 	}
 	if host.Status.LastSeen.IsZero() {
@@ -405,7 +430,7 @@ func TestReconcileReporting(t *testing.T) {
 func TestReconcileReporting_Error(t *testing.T) {
 	bus := &mockBus{err: errors.New("bus down")}
 	r := &HostReconciler{Bus: bus}
-	host := &runtimev1alpha1.Host{HostID: "host-id-1"}
+	host := &runtimev1alpha1.Host{HostID: testHeartbeatHostID}
 
 	if err := r.reconcileReporting(context.Background(), host); err == nil {
 		t.Fatalf("expected error when the heartbeat request fails")
@@ -419,10 +444,8 @@ func TestReconcileReporting_Error(t *testing.T) {
 // ready, a recent-but-not-reporting host is Unknown (still within the
 // unreachable window), and a long-silent host is a definite failure.
 func TestReconcileReady(t *testing.T) {
-	const timeout = time.Hour
-
 	t.Run("reporting true is ready", func(t *testing.T) {
-		r := &HostReconciler{UnreachableTimeout: timeout}
+		r := settledFleetReconciler()
 		host := &runtimev1alpha1.Host{}
 		host.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.HostConditionReporting))
 		if err := r.reconcileReady(context.Background(), host); err != nil {
@@ -431,7 +454,7 @@ func TestReconcileReady(t *testing.T) {
 	})
 
 	t.Run("recently seen but not reporting is unknown", func(t *testing.T) {
-		r := &HostReconciler{UnreachableTimeout: timeout}
+		r := settledFleetReconciler()
 		host := &runtimev1alpha1.Host{}
 		host.Status.LastSeen = metav1.Now()
 		err := r.reconcileReady(context.Background(), host)
@@ -444,9 +467,9 @@ func TestReconcileReady(t *testing.T) {
 	})
 
 	t.Run("silent past the unreachable window is failed", func(t *testing.T) {
-		r := &HostReconciler{UnreachableTimeout: timeout}
+		r := settledFleetReconciler()
 		host := &runtimev1alpha1.Host{}
-		host.Status.LastSeen = metav1.NewTime(time.Now().Add(-2 * timeout))
+		host.Status.LastSeen = metav1.NewTime(time.Now().Add(-2 * testUnreachableTimeout))
 		err := r.reconcileReady(context.Background(), host)
 		if err == nil {
 			t.Fatalf("expected an error for a long-silent host")
@@ -455,6 +478,172 @@ func TestReconcileReady(t *testing.T) {
 			t.Errorf("past the unreachable window the error must be a definite failure, not Unknown: %v", err)
 		}
 	})
+}
+
+// TestReconcileReporting_StartsFleetGraceClock pins the grace clock to a call
+// site that runs on every pass. Wound only where it is read — the failure path
+// — it would read zero through a healthy uptime.
+func TestReconcileReporting_StartsFleetGraceClock(t *testing.T) {
+	r := &HostReconciler{
+		Bus:                &mockBus{err: errors.New("no responders")},
+		UnreachableTimeout: testUnreachableTimeout,
+	}
+	// Some host was heard from, so the operator is not deaf — this one host's
+	// probe just failed.
+	start := time.Now()
+	r.fleet.heard(start)
+
+	if err := r.reconcileReporting(context.Background(), &runtimev1alpha1.Host{HostID: testHeartbeatHostID}); err == nil {
+		t.Fatalf("expected the heartbeat probe to fail")
+	}
+
+	if r.fleet.settled(start, testUnreachableTimeout) {
+		t.Errorf("the window cannot already be satisfied the instant the clock starts")
+	}
+
+	// Well past the window, with the fleet still being heard.
+	later := start.Add(2 * testUnreachableTimeout)
+	r.fleet.heard(later)
+	if !r.fleet.settled(later, testUnreachableTimeout) {
+		t.Errorf("the window must be satisfied once the fleet has been heard for it")
+	}
+}
+
+// TestFleetWitness_SilenceDuringProbe covers the gap between the two calls: a
+// pass observes while the fleet is still inside the window, then spends up to
+// hostHeartbeatTimeout in the probe, by which point it is not. settled has to
+// re-check arrival rather than trust that observation.
+func TestFleetWitness_SilenceDuringProbe(t *testing.T) {
+	var w fleetWitness
+
+	busDied := time.Now()
+	w.heard(busDied)
+	w.heardSince = busDied.Add(-2 * time.Hour)
+
+	observeAt := busDied.Add(testUnreachableTimeout - hostHeartbeatTimeout + time.Second)
+	w.observe(observeAt, testUnreachableTimeout)
+
+	settledAt := observeAt.Add(hostHeartbeatTimeout)
+	if w.settled(settledAt, testUnreachableTimeout) {
+		t.Errorf("settled with the last heartbeat %v ago, past the %v window",
+			settledAt.Sub(busDied), testUnreachableTimeout)
+	}
+}
+
+// TestReconcileReady_FleetUnheard pins the guard that keeps the operator's own
+// deafness from being charged to the hosts, whose Workloads a definite
+// not-ready verdict deletes.
+func TestReconcileReady_FleetUnheard(t *testing.T) {
+	silentHost := func() *runtimev1alpha1.Host {
+		host := &runtimev1alpha1.Host{}
+		host.Status.LastSeen = metav1.NewTime(time.Now().Add(-2 * testUnreachableTimeout))
+		return host
+	}
+	observe := func(r *HostReconciler) {
+		r.fleet.observe(time.Now(), r.UnreachableTimeout)
+	}
+
+	t.Run("fleet heard past the window still fails the host", func(t *testing.T) {
+		// The counterweight to every case below: a host that really is gone
+		// must still be reaped, or its Workloads are never rescheduled.
+		r := settledFleetReconciler()
+		observe(r)
+		err := r.reconcileReady(context.Background(), silentHost())
+		if err == nil {
+			t.Fatalf("expected an error for a long-silent host")
+		}
+		if condition.IsStatusUnknown(err) {
+			t.Errorf("a dead host must be a definite failure once the fleet has been heard a full window, got %v", err)
+		}
+	})
+
+	t.Run("unheard fleet holds the host at unknown", func(t *testing.T) {
+		// A dead fleet and a deaf operator are indistinguishable here, and
+		// holding costs nothing: a fleet nobody can hear has nowhere to
+		// reschedule to either.
+		r := settledFleetReconciler()
+		r.fleet.lastHeard = time.Now().Add(-2 * testUnreachableTimeout)
+		observe(r)
+		err := r.reconcileReady(context.Background(), silentHost())
+		if err == nil {
+			t.Fatalf("expected an error for a long-silent host")
+		}
+		if !condition.IsStatusUnknown(err) {
+			t.Errorf("a silent host must stay Unknown while the operator hears nothing, got %v", err)
+		}
+	})
+
+	t.Run("freshly started operator holds the host at unknown", func(t *testing.T) {
+		// No priming: nothing heard yet, exactly as on the first reconcile
+		// after the process starts with LastSeen timestamps that went stale
+		// while it was down.
+		r := &HostReconciler{Bus: &mockBus{}, UnreachableTimeout: testUnreachableTimeout}
+		observe(r)
+		err := r.reconcileReady(context.Background(), silentHost())
+		if err == nil {
+			t.Fatalf("expected an error for a long-silent host")
+		}
+		if !condition.IsStatusUnknown(err) {
+			t.Errorf("a silent host must stay Unknown until the fleet has been heard a full window, got %v", err)
+		}
+	})
+
+	t.Run("hearing the fleet again restarts the grace period", func(t *testing.T) {
+		// Why arrival alone cannot be the gate: hosts publish every 15s, so
+		// just after the bus returns one has ticked and its neighbours have
+		// not, and they would be condemned on the strength of the one.
+		r := settledFleetReconciler()
+		r.fleet.lastHeard = time.Now().Add(-2 * testUnreachableTimeout)
+		observe(r)
+		if err := r.reconcileReady(context.Background(), silentHost()); !condition.IsStatusUnknown(err) {
+			t.Fatalf("expected Unknown while the operator hears nothing, got %v", err)
+		}
+
+		r.fleet.heard(time.Now())
+		observe(r)
+		err := r.reconcileReady(context.Background(), silentHost())
+		if !condition.IsStatusUnknown(err) {
+			t.Errorf("the window must restart from the first heartbeat back, not carry over, got %v", err)
+		}
+	})
+}
+
+// TestHeartbeatHandler_WitnessesFleet pins the wiring the whole guard rests on:
+// the readiness verdict is gated on heartbeats having arrived, so the handler
+// they arrive at has to record that they did.
+func TestHeartbeatHandler_WitnessesFleet(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := runtimev1alpha1.AddToScheme(s); err != nil {
+		t.Fatalf("add runtime v1alpha1: %v", err)
+	}
+
+	var fleet fleetWitness
+	// A fake client cannot serve the Server-Side Apply this handler makes, so
+	// the Host bookkeeping below fails — which is the point. Arrival is the
+	// evidence, and it has to be recorded before anything that can fail.
+	updater := &hostStatusUpdater{
+		client:            fake.NewClientBuilder().WithScheme(s).Build(),
+		operatorNamespace: testNamespace,
+		fleet:             &fleet,
+	}
+
+	start := time.Now()
+	if fleet.settled(start, testUnreachableTimeout) {
+		t.Fatalf("nothing heard yet, so the fleet cannot be settled")
+	}
+
+	updater.handleHeartbeat(context.Background(), logr.Discard(),
+		heartbeatBytes(t, "hb-host", testHeartbeatHostID, "node-a"))
+
+	// The handler's stamp is what lets a run start here; without it observe
+	// finds nothing heard and the witness never settles.
+	fleet.observe(start, testUnreachableTimeout)
+
+	later := start.Add(2 * testUnreachableTimeout)
+	fleet.heard(later)
+	if !fleet.settled(later, testUnreachableTimeout) {
+		t.Errorf("an arrived heartbeat must be recorded as hearing the fleet")
+	}
 }
 
 // newHostFinalizeClient builds a fake client wired with the same Status.HostID
@@ -491,9 +680,9 @@ func workloadForHost(name, hostID string) *runtimev1alpha1.Workload {
 // assigned to it: workloads on other hosts are untouched, and a workload
 // already being deleted is left alone rather than re-deleted.
 func TestFinalize(t *testing.T) {
-	assigned := workloadForHost("assigned", "host-id-1")
+	assigned := workloadForHost("assigned", testHeartbeatHostID)
 
-	deleting := workloadForHost("deleting", "host-id-1")
+	deleting := workloadForHost("deleting", testHeartbeatHostID)
 	now := metav1.Now()
 	deleting.DeletionTimestamp = &now
 	// A fake-client object carrying a DeletionTimestamp must also carry a
@@ -505,7 +694,7 @@ func TestFinalize(t *testing.T) {
 
 	c := newHostFinalizeClient(t, assigned, deleting, otherHost)
 	r := &HostReconciler{Client: c}
-	host := &runtimev1alpha1.Host{HostID: "host-id-1"}
+	host := &runtimev1alpha1.Host{HostID: testHeartbeatHostID}
 
 	if err := r.finalize(context.Background(), host); err != nil {
 		t.Fatalf("finalize: %v", err)
@@ -618,13 +807,13 @@ func TestHeartbeatHandler_SkipsRedundantApply(t *testing.T) {
 	ns := createTestNamespace(t, ctx, c, "host-heartbeat-skip")
 
 	counter := &applyCountingClient{Client: c}
-	updater := &hostStatusUpdater{client: counter, operatorNamespace: ns}
+	updater := &hostStatusUpdater{client: counter, operatorNamespace: ns, fleet: &fleetWitness{}}
 	log := logr.Discard()
 
 	const name = "hb-host"
 
 	// First heartbeat: object does not exist -> create via SSA.
-	updater.handleHeartbeat(ctx, log, heartbeatBytes(t, name, "host-id-1", "node-a"))
+	updater.handleHeartbeat(ctx, log, heartbeatBytes(t, name, testHeartbeatHostID, "node-a"))
 	if got := counter.applies.Load(); got != 1 {
 		t.Fatalf("first heartbeat: applies = %d, want 1", got)
 	}
@@ -640,7 +829,7 @@ func TestHeartbeatHandler_SkipsRedundantApply(t *testing.T) {
 	}
 
 	// Identical heartbeat: spec unchanged -> no apply, but LastSeen still refreshes.
-	updater.handleHeartbeat(ctx, log, heartbeatBytes(t, name, "host-id-1", "node-a"))
+	updater.handleHeartbeat(ctx, log, heartbeatBytes(t, name, testHeartbeatHostID, "node-a"))
 	if got := counter.applies.Load(); got != 1 {
 		t.Fatalf("redundant heartbeat must not re-apply: applies = %d, want 1", got)
 	}
@@ -653,7 +842,7 @@ func TestHeartbeatHandler_SkipsRedundantApply(t *testing.T) {
 	}
 
 	// Changed heartbeat: hostname differs -> apply again.
-	updater.handleHeartbeat(ctx, log, heartbeatBytes(t, name, "host-id-1", "node-b"))
+	updater.handleHeartbeat(ctx, log, heartbeatBytes(t, name, testHeartbeatHostID, "node-b"))
 	if got := counter.applies.Load(); got != 2 {
 		t.Fatalf("changed heartbeat must re-apply: applies = %d, want 2", got)
 	}
@@ -663,5 +852,69 @@ func TestHeartbeatHandler_SkipsRedundantApply(t *testing.T) {
 	}
 	if updated.Hostname != "node-b" {
 		t.Errorf("hostname = %q, want node-b after change", updated.Hostname)
+	}
+
+	// A restarted host that reuses its friendly name reports a new host ID, and
+	// the operator addresses every RPC by that ID — so this is the one field the
+	// skip must never swallow.
+	updater.handleHeartbeat(ctx, log, heartbeatBytes(t, name, "host-id-2", "node-b"))
+	if got := counter.applies.Load(); got != 3 {
+		t.Fatalf("changed hostID must re-apply: applies = %d, want 3", got)
+	}
+	reidentified := &runtimev1alpha1.Host{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, reidentified); err != nil {
+		t.Fatalf("get after hostID change: %v", err)
+	}
+	if reidentified.HostID != "host-id-2" {
+		t.Errorf("hostID = %q, want host-id-2 after change", reidentified.HostID)
+	}
+}
+
+// TestHeartbeatHandler_PreservesReportedStatus is the call-site counterpart to
+// TestHostStatusPatch_ReportedFieldsPreserved: the placeholders must come from
+// the stored status, so a heartbeat leaves what reconcileReporting measured.
+func TestHeartbeatHandler_PreservesReportedStatus(t *testing.T) {
+	c, ctx := startHostEnvtest(t)
+	ns := createTestNamespace(t, ctx, c, "host-heartbeat-status")
+
+	updater := &hostStatusUpdater{client: c, operatorNamespace: ns, fleet: &fleetWitness{}}
+	log := logr.Discard()
+
+	const name = "hb-status-host"
+	updater.handleHeartbeat(ctx, log, heartbeatBytes(t, name, testHeartbeatHostID, "node-a"))
+
+	// Stand in for reconcileReporting having polled the host.
+	reported := &runtimev1alpha1.Host{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, reported); err != nil {
+		t.Fatalf("get after first heartbeat: %v", err)
+	}
+	reported.Status.Version = testVersion
+	reported.Status.OSName = testOSName
+	reported.Status.OSArch = testOSArch
+	reported.Status.OSKernel = testOSKernel
+	reported.Status.SystemCPUUsage = testCPUUsage
+	reported.Status.SystemMemoryTotal = 16000
+	reported.Status.SystemMemoryFree = 8000
+	if err := c.Status().Update(ctx, reported); err != nil {
+		t.Fatalf("seed reported status: %v", err)
+	}
+	seenBefore := reported.Status.LastSeen
+
+	updater.handleHeartbeat(ctx, log, heartbeatBytes(t, name, testHeartbeatHostID, "node-a"))
+
+	after := &runtimev1alpha1.Host{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, after); err != nil {
+		t.Fatalf("get after steady-state heartbeat: %v", err)
+	}
+	if after.Status.Version != testVersion || after.Status.OSName != testOSName ||
+		after.Status.OSArch != testOSArch || after.Status.OSKernel != testOSKernel {
+		t.Errorf("heartbeat clobbered reported OS/version fields: %+v", after.Status)
+	}
+	if after.Status.SystemCPUUsage != testCPUUsage ||
+		after.Status.SystemMemoryTotal != 16000 || after.Status.SystemMemoryFree != 8000 {
+		t.Errorf("heartbeat clobbered reported system metrics: %+v", after.Status)
+	}
+	if !after.Status.LastSeen.After(seenBefore.Time) && !after.Status.LastSeen.Equal(&seenBefore) {
+		t.Errorf("LastSeen went backwards: %v -> %v", seenBefore, after.Status.LastSeen)
 	}
 }

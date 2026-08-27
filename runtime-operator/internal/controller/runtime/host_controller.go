@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -50,7 +51,77 @@ type HostReconciler struct {
 	// pod runs; tenant attribution lives on the Host's Environment field.
 	OperatorNamespace string
 
+	// fleet gates host deletion; the heartbeat subscription writes to it.
+	fleet fleetWitness
+
 	reconciler condition.AnyConditionedReconciler
+}
+
+// fleetWitness records whether the operator is hearing the fleet.
+//
+// A host's probe and its pushed heartbeats both travel over the operator's one
+// NATS connection, so a deaf operator sees every host fall silent at once and
+// deleteUnresponsiveHost deletes them all, each finalizer taking its Workloads
+// with it. Arrival is the evidence, not the connection's own state: NATS can
+// hold the socket up while it has lost its routes to the hosts, or has dropped
+// this subscription for overrunning its backlog.
+//
+// The signal is fleet-wide, so it catches total deafness only. A partition that
+// isolates some hosts while others keep publishing still reaps the unreachable
+// ones, as it did before this existed.
+type fleetWitness struct {
+	mu sync.Mutex
+	// lastHeard is when a heartbeat from any host last arrived.
+	lastHeard time.Time
+	// heardSince is when the operator resumed hearing the fleet after its most
+	// recent gap, or the zero time while it is hearing nothing.
+	heardSince time.Time
+}
+
+// heard records a heartbeat arriving from some host.
+func (w *fleetWitness) heard(now time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.lastHeard = now
+}
+
+// observe advances the grace period, or clears it if nothing has been heard
+// within window. It must run on every reconcile rather than only when a host
+// looks silent, or the clock reads zero through a healthy uptime and the first
+// host to genuinely die waits an extra window to be reaped.
+func (w *fleetWitness) observe(now time.Time, window time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.lastHeard.IsZero() || now.Sub(w.lastHeard) >= window {
+		w.heardSince = time.Time{}
+		return
+	}
+	if w.heardSince.IsZero() {
+		w.heardSince = now
+	}
+}
+
+// settled reports whether the operator has been hearing the fleet without a gap
+// for a full window. It re-checks arrival itself rather than trusting the last
+// observe: callers reach it after a heartbeat probe that can burn
+// hostHeartbeatTimeout, and the fleet can fall silent inside that.
+//
+// The gap is what makes recent arrival alone insufficient: hosts publish every
+// 15s, so for that long after the bus returns a live host has yet to be heard
+// from while its neighbours have already ticked. Requiring the whole window
+// keeps the ones that have not ticked from being condemned on their neighbours.
+func (w *fleetWitness) settled(now time.Time, window time.Duration) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.lastHeard.IsZero() || now.Sub(w.lastHeard) >= window {
+		return false
+	}
+	if w.heardSince.IsZero() {
+		return false
+	}
+	return now.Sub(w.heardSince) >= window
 }
 
 func (r *HostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -58,6 +129,10 @@ func (r *HostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 }
 
 func (r *HostReconciler) reconcileReporting(ctx context.Context, host *runtimev1alpha1.Host) error {
+	// Reporting is the first condition, so this runs on every reconcile pass
+	// that can reach the readiness verdict.
+	r.fleet.observe(time.Now(), r.UnreachableTimeout)
+
 	client := NewWashHostClient(r.Bus, host.HostID)
 
 	ctx, cancel := context.WithTimeout(ctx, hostHeartbeatTimeout)
@@ -89,8 +164,17 @@ func (r *HostReconciler) reconcileReady(_ context.Context, host *runtimev1alpha1
 		return nil
 	}
 
-	if host.Status.LastSeen.Add(r.UnreachableTimeout).After(metav1.Now().Time) {
+	now := time.Now()
+	if host.Status.LastSeen.Add(r.UnreachableTimeout).After(now) {
 		return condition.ErrStatusUnknown(fmt.Errorf("host is not reporting"))
+	}
+
+	// A definite failure here costs the host every Workload on it, so it is
+	// only reachable once the operator has been hearing the rest of the fleet
+	// long enough that this host's silence is the host's own.
+	if !r.fleet.settled(now, r.UnreachableTimeout) {
+		return condition.ErrStatusUnknown(
+			fmt.Errorf("host has not reported recently, but the operator has not been hearing the fleet for %s", r.UnreachableTimeout))
 	}
 
 	return fmt.Errorf("host has not reported recently")
@@ -165,6 +249,7 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		bus:               r.Bus,
 		client:            r.Client,
 		operatorNamespace: r.OperatorNamespace,
+		fleet:             &r.fleet,
 	}
 	if err := mgr.Add(statusUpdater); err != nil {
 		return err
@@ -199,6 +284,8 @@ type hostStatusUpdater struct {
 	client client.Client
 	// operatorNamespace is the namespace every Host object is created in.
 	operatorNamespace string
+	// fleet is stamped on every heartbeat that arrives.
+	fleet *fleetWitness
 }
 
 func (h *hostStatusUpdater) Start(ctx context.Context) error {
@@ -227,6 +314,10 @@ func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger
 		log.Error(err, "failed to decode heartbeat message")
 		return
 	}
+
+	// Stamped before the bookkeeping below, which can fail on its own: arrival
+	// is what proves the path from hosts to the operator works.
+	h.fleet.heard(time.Now())
 
 	// Every Host object lives in the operator's own namespace. Tenant
 	// attribution is recorded on the Host's Environment field,
@@ -273,7 +364,9 @@ func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger
 
 	// Patching the status subresource to update the LastSeen timestamp in case
 	// the other fields reported are not yet available (such as system/OS information).
-	statusPatch, err := hostStatusPatch(&host.Status)
+	// Built from the stored status: hostStatusPatch supplies the CRD's required
+	// fields only where they are still empty, and `host` carries a zero status.
+	statusPatch, err := hostStatusPatch(&existing.Status)
 	if err != nil {
 		log.Error(err, "failed to build Host status patch", "host", req.FriendlyName, "hostID", req.Id)
 		return
