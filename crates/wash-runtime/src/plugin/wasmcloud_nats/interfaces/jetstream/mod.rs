@@ -325,6 +325,30 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
             Ok(i) => i,
             Err(e) => return Ok(Err(consumer_lookup_err(&stream_name, &consumer, e))),
         };
+        // A durable is provisioned out of band, so its filter is the operator's
+        // and not this workload's to trust: attaching to one filtered
+        // `orders.>` under a `subject-allow` of `orders.mine` would deliver
+        // every subject in the stream. Refused at the attach, which is a much
+        // better place to fail than per delivery, and the same boundary a
+        // declarative `subscriptions:` entry is held to.
+        let filters: Vec<&str> = if !info.config.filter_subject.is_empty() {
+            vec![info.config.filter_subject.as_str()]
+        } else if !info.config.filter_subjects.is_empty() {
+            info.config
+                .filter_subjects
+                .iter()
+                .map(String::as_str)
+                .collect()
+        } else {
+            // No filter at all is the whole stream.
+            vec![">"]
+        };
+        for filter in filters {
+            if let Err(reason) = conn.policy.check_filter(filter) {
+                return Ok(Err(denied(reason, types::DeniedResource::Subject, filter)));
+            }
+        }
+
         let config = match jetstream::consumer::pull::Config::try_from_consumer_config(
             info.config.clone(),
         ) {
@@ -343,6 +367,7 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
                 max_fetch_bytes: u64::try_from(conn.limits.subscription_capacity_bytes)
                     .unwrap_or(u64::MAX),
                 budget: conn.fetch_budget.clone(),
+                policy: conn.policy.clone(),
             })
         })?;
         Ok(Ok(resource))
@@ -420,6 +445,16 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
         loop {
             match tokio::time::timeout_at(deadline, info.next()).await {
                 Ok(Some(Ok((subject, count)))) => {
+                    // Stream-level introspection is subject-scoped like every
+                    // other read here: `stream-allow` alone would hand back the
+                    // names of subjects `subject-allow` refuses to deliver, and
+                    // enumerating them is what the `denied-resource::message`
+                    // refusal is careful not to do. Skipped rather than
+                    // refused, so a wide stream still answers for the part of
+                    // it this workload was granted.
+                    if conn.policy.check_stored_subject(&subject).is_err() {
+                        continue;
+                    }
                     out.push(js::SubjectCount {
                         subject,
                         count: count as u64,

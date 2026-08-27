@@ -158,23 +158,20 @@ impl CliCommand for DevCommand {
         // grant.
         //
         // A dev host declares bindings the same way `wash host` does
-        // (`dev.wasmcloud_nats`, with `dev.wasmcloud_nats_url` — or
-        // `dev.data_nats_url` — as the address a binding falls back to), but
-        // leaves a workload free to describe its own: a project's manifest has
-        // to stay runnable on its own, and the operator boundary `wash host`
-        // enforces has no one to enforce it for here. With no URL configured
-        // there is no default, and a binding must name its own servers.
+        // (`dev.wasmcloud_nats`, with `dev.data_nats_url` as the address a
+        // binding falls back to), but leaves a workload free to describe its
+        // own: a project's manifest has to stay runnable on its own, and the
+        // operator boundary `wash host` enforces has no one to enforce it for
+        // here. With no `data_nats_url` there is no default, and a binding must
+        // name its own servers — in `dev.wasmcloud_nats`, or inline on the
+        // interface.
         let nats_bindings = {
             let declared = match &dev_config.wasmcloud_nats {
                 Some(nats) => nats.to_bindings(&config, project_dir, Some(project_dir))?,
                 None => plugin::wasmcloud_nats::NatsBindings::new(),
             };
-            let url = dev_config
-                .wasmcloud_nats_url
-                .clone()
-                .or_else(|| dev_config.data_nats_url.clone());
-            let declared = match url {
-                Some(url) => declared.with_default_servers(vec![url]),
+            let declared = match &dev_config.data_nats_url {
+                Some(url) => declared.with_default_servers(vec![url.clone()]),
                 None => declared,
             };
             declared.validate()?;

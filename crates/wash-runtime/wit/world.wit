@@ -70,60 +70,6 @@ world async-messaging {
 }
 
 
-// Host-side bindgen input: every import the plugin serves, in one world so the
-// linker is populated from a single generated module. Not a world components
-// target; those are the role-shaped ones below.
-//
-// Every `wasmcloud:nats` function is an `async func`, so these worlds are P3
-// worlds: a P2 guest cannot bind them, and there is no sync revision to fall
-// back to.
-world nats-imports {
-    import wasmcloud:nats/types@0.1.0;
-    import wasmcloud:nats/core@0.1.0;
-    import wasmcloud:nats/jetstream@0.1.0;
-    import wasmcloud:nats/kv@0.1.0;
-}
-
-// A workload that publishes, or does request/reply. No subscriptions.
-world nats-publisher {
-    import wasmcloud:nats/types@0.1.0;
-    import wasmcloud:nats/core@0.1.0;
-}
-
-// A workload the host pushes core NATS messages into.
-world nats-subscriber {
-    import wasmcloud:nats/types@0.1.0;
-    import wasmcloud:nats/core@0.1.0;
-    export wasmcloud:nats/core-handler@0.1.0;
-}
-
-// A workload that publishes into JetStream.
-world nats-js-publisher {
-    import wasmcloud:nats/types@0.1.0;
-    import wasmcloud:nats/jetstream@0.1.0;
-}
-
-// A workload the host pushes JetStream deliveries into. Per-request: it holds
-// no consumer and no stream, so it scales down between bursts.
-world nats-js-processor {
-    import wasmcloud:nats/types@0.1.0;
-    import wasmcloud:nats/jetstream@0.1.0;
-    export wasmcloud:nats/jetstream-handler@0.1.0;
-}
-
-// A workload that reads and writes KV directly.
-world nats-kv-client {
-    import wasmcloud:nats/types@0.1.0;
-    import wasmcloud:nats/kv@0.1.0;
-}
-
-// A workload the host pushes KV change events into.
-world nats-kv-watcher {
-    import wasmcloud:nats/types@0.1.0;
-    import wasmcloud:nats/kv@0.1.0;
-    export wasmcloud:nats/kv-handler@0.1.0;
-}
-
 world otel {
     import wasi:otel/types@0.2.0-rc.2;
     import wasi:otel/tracing@0.2.0-rc.2;

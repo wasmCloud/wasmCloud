@@ -24,7 +24,7 @@ pub use plugin::{ComponentData, WasmcloudNats};
 // `store.run_concurrent(..)` — see [`subscriber`].
 pub(super) mod jetstream_bindings {
     crate::wasmtime::component::bindgen!({
-        world: "nats-js-processor",
+        world: "wasmcloud:nats/js-processor@0.1.0",
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
         with: {
@@ -36,7 +36,7 @@ pub(super) mod jetstream_bindings {
 
 pub(super) mod core_bindings {
     crate::wasmtime::component::bindgen!({
-        world: "nats-subscriber",
+        world: "wasmcloud:nats/subscriber@0.1.0",
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
     });
@@ -44,7 +44,7 @@ pub(super) mod core_bindings {
 
 pub(super) mod kv_bindings {
     crate::wasmtime::component::bindgen!({
-        world: "nats-kv-watcher",
+        world: "wasmcloud:nats/kv-watcher@0.1.0",
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
         with: {

@@ -11,8 +11,8 @@ use wasmtime::component::{Accessor, Resource};
 use crate::engine::ctx::{ActiveCtx, SharedCtx};
 
 use crate::plugin::wasmcloud_nats::interfaces::{
-    NatsId, bucket_lookup_err, chain_timed_out, check_bucket, check_payload, conn_or_return, kv,
-    kv_err, labeled_kv, types,
+    NatsId, bucket_lookup_err, chain_timed_out, check_bucket, check_payload, kv, kv_err,
+    labeled_kv, types,
 };
 use crate::plugin::wasmcloud_nats::jetstream::BucketHandle;
 
@@ -69,6 +69,17 @@ fn store_ref<T>(
     Ok(access.get().table.get(rep)?.store.clone())
 }
 
+/// The connection the bucket was opened on, for the checks a write runs.
+///
+/// Not `conn()`: that resolves the *unnamed* binding by workload id, which a
+/// labeled-only import does not have and a labeled import does not want.
+fn conn_ref<T>(
+    access: &mut wasmtime::component::Access<'_, T, SharedCtx>,
+    rep: &Resource<BucketHandle>,
+) -> wasmtime::Result<std::sync::Arc<crate::plugin::wasmcloud_nats::conn::ConnHandle>> {
+    Ok(access.get().table.get(rep)?.conn.clone())
+}
+
 impl<T: 'static + Send> labeled_kv::HostWithStore<T> for SharedCtx {
     async fn open(
         accessor: &Accessor<T, Self>,
@@ -84,7 +95,7 @@ impl<T: 'static + Send> labeled_kv::HostWithStore<T> for SharedCtx {
             Ok(store) => store,
             Err(e) => return Ok(Err(bucket_lookup_err(&bucket, e))),
         };
-        let resource = accessor.with(|mut a| a.get().table.push(BucketHandle { store }))?;
+        let resource = accessor.with(|mut a| a.get().table.push(BucketHandle { store, conn }))?;
         Ok(Ok(resource))
     }
 }
@@ -117,8 +128,9 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
         key: String,
         value: Vec<u8>,
     ) -> wasmtime::Result<Result<u64, types::NatsError>> {
-        let store = accessor.with(|mut a| store_ref(&mut a, &rep))?;
-        let conn = conn_or_return!(accessor);
+        let (store, conn) = accessor.with(|mut a| {
+            Ok::<_, wasmtime::Error>((store_ref(&mut a, &rep)?, conn_ref(&mut a, &rep)?))
+        })?;
         // Same oversize condition as a publish, so it has to reach the guest as
         // the same typed error: a guest that switches to chunked storage on
         // `max-payload-exceeded` would otherwise see a generic jetstream fault
@@ -138,8 +150,9 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
         key: String,
         value: Vec<u8>,
     ) -> wasmtime::Result<Result<u64, types::NatsError>> {
-        let store = accessor.with(|mut a| store_ref(&mut a, &rep))?;
-        let conn = conn_or_return!(accessor);
+        let (store, conn) = accessor.with(|mut a| {
+            Ok::<_, wasmtime::Error>((store_ref(&mut a, &rep)?, conn_ref(&mut a, &rep)?))
+        })?;
         if let Err(e) = check_payload(value.len(), None, &conn) {
             return Ok(Err(e));
         }
@@ -156,8 +169,9 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
         value: Vec<u8>,
         expected_revision: u64,
     ) -> wasmtime::Result<Result<u64, types::NatsError>> {
-        let store = accessor.with(|mut a| store_ref(&mut a, &rep))?;
-        let conn = conn_or_return!(accessor);
+        let (store, conn) = accessor.with(|mut a| {
+            Ok::<_, wasmtime::Error>((store_ref(&mut a, &rep)?, conn_ref(&mut a, &rep)?))
+        })?;
         if let Err(e) = check_payload(value.len(), None, &conn) {
             return Ok(Err(e));
         }

@@ -350,6 +350,21 @@ pub fn binding_inbox_prefix(workload_id: &str, binding: &str) -> String {
     )
 }
 
+/// Scopes a declared inbox prefix to one workload.
+///
+/// A host's named binding is served to every workload that asks for it, so a
+/// prefix an operator declared is a *parent*, not an inbox: each workload gets
+/// its own token beneath it, or two workloads sharing the binding would race to
+/// consume each other's replies. Credentials granting `<declared>.>` still
+/// cover the result.
+pub fn scope_inbox_prefix(declared: &str, workload_id: &str) -> String {
+    format!(
+        "{}.{}",
+        declared.trim_end_matches('.'),
+        sanitize_subject_token(workload_id)
+    )
+}
+
 /// Escapes anything that would widen a subscription — a `.` opens a whole extra
 /// token level — into a form that stays one token.
 ///
@@ -560,6 +575,27 @@ mod tests {
         let prefix = workload_inbox_prefix("a.b/c-d");
         assert!(!prefix.contains('.'), "{prefix} spans two tokens");
         assert!(prefix.starts_with("_INBOX_"));
+    }
+
+    /// A declared prefix is a parent: every workload served the same named
+    /// binding still gets an inbox of its own beneath it.
+    #[test]
+    fn a_declared_inbox_prefix_is_scoped_per_workload() {
+        assert_eq!(
+            scope_inbox_prefix("_INBOX_orders", "wl1"),
+            "_INBOX_orders.wl1"
+        );
+        assert_ne!(
+            scope_inbox_prefix("_INBOX_orders", "wl1"),
+            scope_inbox_prefix("_INBOX_orders", "wl2")
+        );
+        // A trailing separator does not produce an empty token.
+        assert_eq!(
+            scope_inbox_prefix("_INBOX_orders.", "wl1"),
+            "_INBOX_orders.wl1"
+        );
+        // And the workload token is escaped, as it is everywhere else.
+        assert!(!scope_inbox_prefix("_INBOX_orders", "a.b").ends_with("a.b"));
     }
 
     /// Two workload ids that differ only in punctuation must not land on one

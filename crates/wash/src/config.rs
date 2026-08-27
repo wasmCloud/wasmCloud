@@ -624,7 +624,8 @@ impl WasmcloudNatsConfig {
         for (name, binding) in &self.bindings {
             if name.is_empty() {
                 bail!(
-                    "host.wasmcloudNats.bindings has an entry with an empty name; the unnamed                      binding is configured by `host.wasmcloudNats` itself"
+                    "host.wasmcloudNats.bindings has an entry with an empty name; the \
+                     unnamed binding is configured by `host.wasmcloudNats` itself"
                 );
             }
             let owner = format!("host.wasmcloudNats.bindings.{name}");
@@ -1013,17 +1014,6 @@ pub struct DevConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasi_keyvalue_nats_url: Option<String>,
 
-    /// Optional NATS connection URL for the `wasmcloud:nats` plugin. Overrides
-    /// `data_nats_url` for it, so a project can develop against a NATS cluster
-    /// that is not the one backing keyvalue, blobstore, and messaging.
-    /// Example: nats://127.0.0.1:4222
-    ///
-    /// The address a `wasmcloud:nats` binding falls back to when it names no
-    /// `servers` of its own. With neither this nor `data_nats_url` set there is
-    /// no default, and a binding must name its own.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub wasmcloud_nats_url: Option<String>,
-
     /// Bindings the dev host serves for `wasmcloud:nats`, in the same shape as
     /// `host.wasmcloudNats`. Unlike `wash host`, `wash dev` leaves a workload
     /// free to describe its own binding — a project's manifest stays
@@ -1139,9 +1129,6 @@ impl DevConfig {
                 &["nats", "tls"],
                 &mut errors,
             );
-        }
-        if let Some(url) = &self.wasmcloud_nats_url {
-            check_url_scheme("dev.wasmcloud_nats_url", url, &["nats", "tls"], &mut errors);
         }
         if let Some(url) = &self.postgres_url {
             check_url_scheme(
@@ -2201,15 +2188,17 @@ host:
             .expect_err("an empty binding name must be refused");
     }
 
-    /// `wash dev` reads the same shape under its own snake_case key, and its
-    /// own URL overrides the shared data-plane one.
+    /// `wash dev` reads the same block shape as `wash host`, under its own
+    /// snake_case key. A binding that wants a NATS other than the data plane
+    /// names its own `servers` in the block.
     #[test]
     fn dev_wasmcloud_nats_deserializes_from_yaml() {
         let yaml = r#"
 dev:
   data_nats_url: nats://127.0.0.1:4222
-  wasmcloud_nats_url: nats://127.0.0.1:4322
   wasmcloud_nats:
+    config:
+      servers: nats://127.0.0.1:4322
     bindings:
       orders:
         config:
@@ -2217,10 +2206,6 @@ dev:
 "#;
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
         let dev = config.dev();
-        assert_eq!(
-            dev.wasmcloud_nats_url.as_deref(),
-            Some("nats://127.0.0.1:4322")
-        );
         let defaults = dev
             .wasmcloud_nats
             .as_ref()
@@ -2228,20 +2213,13 @@ dev:
             .to_bindings(&config, Path::new("."), None)
             .expect("the declaration must resolve");
         assert_eq!(defaults.binding_names(), vec!["orders"]);
-    }
-
-    /// A URL with the wrong scheme is a typo, caught by validation rather than
-    /// by a connect that fails much later.
-    #[test]
-    fn dev_wasmcloud_nats_url_scheme_is_checked() {
-        let cfg = DevConfig {
-            wasmcloud_nats_url: Some("http://localhost:4222".to_string()),
-            ..Default::default()
-        };
-        let err = cfg.validate().unwrap_err().to_string();
-        assert!(
-            err.contains("wasmcloud_nats_url"),
-            "unexpected error: {err}"
+        let resolved = defaults
+            .resolve("orders", std::collections::HashMap::new())
+            .expect("the named binding is served");
+        assert_eq!(
+            resolved.get("servers").map(String::as_str),
+            Some("nats://127.0.0.1:4322"),
+            "the block's own `servers` reaches the binding"
         );
     }
 

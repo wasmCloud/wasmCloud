@@ -66,20 +66,20 @@ macro_rules! handler_pre {
 handler_pre!(
     JsHandlerPre,
     JsProxy,
-    jetstream_bindings::NatsJsProcessorPre<SharedCtx>,
-    jetstream_bindings::NatsJsProcessor
+    jetstream_bindings::JsProcessorPre<SharedCtx>,
+    jetstream_bindings::JsProcessor
 );
 handler_pre!(
     CoreHandlerPre,
     CoreProxy,
-    core_bindings::NatsSubscriberPre<SharedCtx>,
-    core_bindings::NatsSubscriber
+    core_bindings::SubscriberPre<SharedCtx>,
+    core_bindings::Subscriber
 );
 handler_pre!(
     KvHandlerPre,
     KvProxy,
-    kv_bindings::NatsKvWatcherPre<SharedCtx>,
-    kv_bindings::NatsKvWatcher
+    kv_bindings::KvWatcherPre<SharedCtx>,
+    kv_bindings::KvWatcher
 );
 
 impl JsProxy {
@@ -334,15 +334,6 @@ fn sanitize_name_component(name: &str) -> String {
     folded
 }
 
-/// A short, stable hex digest over `parts`.
-///
-/// Not a security boundary: all it has to guarantee is that the same
-/// subscription reaches the same name on every host and across restarts, and
-/// that a subscription differing in any part reaches a different one. FNV-1a
-/// is spelled out rather than reaching for `DefaultHasher` because
-/// `DefaultHasher`'s output is explicitly not stable across Rust releases —
-/// two hosts built with different toolchains would silently stop sharing a
-/// queue group's durable.
 /// The durable/deliver-plane scope for a workload's JetStream subscriptions.
 ///
 /// **Namespace only.** Every replica of a deployment is a separate workload
@@ -364,6 +355,15 @@ fn durable_scope(namespace: &str) -> String {
     short_hash(&[namespace])
 }
 
+/// A short, stable hex digest over `parts`.
+///
+/// Not a security boundary: all it has to guarantee is that the same
+/// subscription reaches the same name on every host and across restarts, and
+/// that a subscription differing in any part reaches a different one. FNV-1a
+/// is spelled out rather than reaching for `DefaultHasher` because
+/// `DefaultHasher`'s output is explicitly not stable across Rust releases —
+/// two hosts built with different toolchains would silently stop sharing a
+/// queue group's durable.
 fn short_hash(parts: &[&str]) -> String {
     const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -455,8 +455,10 @@ pub(super) async fn spawn_jetstream_subscriptions(
             // A SUB the server refuses is refused asynchronously: the deliver
             // subject looks subscribed and simply never carries anything.
             let mut denials = conn.subscription_denials.subscribe();
-            let mut denials_reported: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
+            // One flag, not a set keyed on the deliver subject: an ephemeral
+            // rebuild mints a fresh subject every time, so such a key would
+            // grow forever and never dedup. This task serves one subscription.
+            let mut denial_reported = false;
 
             let configured_policy = match sub.deliver_policy.as_str() {
                 "all" => jetstream::consumer::DeliverPolicy::All,
@@ -1174,7 +1176,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
                         denied = denials.recv() => {
                             if let Ok(subject) = denied
                                 && subject == deliver_subject
-                                && denials_reported.insert(subject.clone())
+                                && !std::mem::replace(&mut denial_reported, true)
                             {
                                 let reason = format!(
                                     "NATS server denied SUB on the JetStream deliver subject \
@@ -1702,7 +1704,9 @@ pub(super) async fn spawn_kv_watches(
                         continue 'watch;
                     }
                 };
-                consecutive_failures = 0;
+                // Deliberately not reset here: `get_key_value` succeeding only
+                // proves the bucket exists. A watch that keeps failing below
+                // would otherwise never leave the ladder's first rung.
 
                 // Already fetched by `get_key_value`, so this costs no round
                 // trip.
@@ -1743,6 +1747,7 @@ pub(super) async fn spawn_kv_watches(
                         continue 'watch;
                     }
                 };
+                consecutive_failures = 0;
 
                 loop {
                     // Taken before an entry is, so that waiting for capacity

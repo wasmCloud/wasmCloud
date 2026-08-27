@@ -89,6 +89,11 @@ pub struct PullConsumerHandle {
     /// The binding's running total, which is what bounds a guest that loops
     /// `fetch` — the ordinary shape of a pull worker. See [`FetchBudget`].
     pub(super) budget: Arc<FetchBudget>,
+    /// The grant every delivery is checked against, from the binding that
+    /// opened the consumer. A durable is provisioned out of band, so its filter
+    /// is not this workload's to trust: `open` refuses one that reaches outside
+    /// the grant, and this catches a filter widened after the attach.
+    pub(super) policy: Arc<super::policy::PolicyEngine>,
 }
 
 /// What a binding's pull consumers are holding in host memory right now.
@@ -149,6 +154,15 @@ impl FetchBudget {
 /// Handle to an open JetStream KV bucket.
 pub struct BucketHandle {
     pub(super) store: Store,
+    /// The connection `open` routed to, and the limits a write is checked
+    /// against.
+    ///
+    /// Carried rather than looked up per call: a labeled (`(implements ..)`)
+    /// import resolves its connection from the `NatsId` the call arrives with,
+    /// and a resource method has no id to resolve. Looking it up by workload
+    /// found the *unnamed* binding instead — an error where a labeled-only
+    /// workload has none, and the wrong server's `max_payload` where it does.
+    pub(super) conn: Arc<super::conn::ConnHandle>,
 }
 
 #[cfg(test)]
