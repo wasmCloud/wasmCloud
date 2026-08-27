@@ -241,12 +241,6 @@ struct Routes {
     /// Maps workload_id -> all hostnames (primary + aliases) registered for it,
     /// so `on_workload_unbind` can remove all entries cleanly.
     workload_to_host: HashMap<String, Vec<String>>,
-    /// Maps workload_id -> the deployment it is a replica of
-    /// (`<namespace>/<name>`), so registration can tell two replicas of one
-    /// workload — which *should* share a hostname — from two unrelated
-    /// workloads that both claimed it, which silently steal each other's
-    /// requests.
-    workload_claimant: HashMap<String, String>,
 }
 
 impl DynamicRouter {
@@ -255,54 +249,18 @@ impl DynamicRouter {
     /// [`Router::on_workload_unbind`] can later remove every entry cleanly.
     /// Idempotent: re-registering the same workload (e.g. a service restart)
     /// leaves the tables unchanged.
-    fn register_hostnames(&self, workload_id: &str, claimant: &str, hosts: &[String]) {
+    fn register_hostnames(&self, workload_id: &str, hosts: &[String]) {
         // Keyed without the port, matching how a request's Host header is
         // looked up (see [`Self::select_workload`]).
         let hosts: Vec<String> = hosts
             .iter()
             .map(|host| split_host_port(host).0.to_string())
             .collect();
-
-        // Find the workloads already claiming these hostnames and warn on any
-        // that are not replicas of this one — each would see a fraction of the
-        // other's traffic. Warned before the `rcu` below, which re-runs under
-        // contention.
-        {
-            let routes = self.routes.load();
-            for host in &hosts {
-                let Some(bound) = routes.host_to_workload.get(host) else {
-                    continue;
-                };
-                let mut others: Vec<&str> = bound
-                    .iter()
-                    .filter(|id| id.as_str() != workload_id)
-                    .filter_map(|id| routes.workload_claimant.get(id))
-                    .filter(|other| other.as_str() != claimant)
-                    .map(String::as_str)
-                    .collect();
-                others.sort_unstable();
-                others.dedup();
-                if !others.is_empty() {
-                    warn!(
-                        host,
-                        claimant,
-                        also_claimed_by = others.join(","),
-                        "two unrelated workloads claim the same HTTP hostname; requests to it \
-                         are split between them at random. Give each workload its own `host`, \
-                         or its own host group"
-                    );
-                }
-            }
-        }
-
         self.routes.rcu(|cur| {
             let mut routes = (**cur).clone();
             routes
                 .workload_to_host
                 .insert(workload_id.to_string(), hosts.clone());
-            routes
-                .workload_claimant
-                .insert(workload_id.to_string(), claimant.to_string());
             for host in &hosts {
                 routes
                     .host_to_workload
@@ -393,10 +351,7 @@ impl Router for DynamicRouter {
             );
         }
 
-        // A deployment's replicas share `<namespace>/<name>`, so they read as
-        // replicas of one workload rather than as rival claimants.
-        let claimant = format!("{}/{}", resolved_handle.namespace(), resolved_handle.name());
-        self.register_hostnames(resolved_handle.id(), &claimant, &all_hosts);
+        self.register_hostnames(resolved_handle.id(), &all_hosts);
 
         Ok(())
     }
@@ -417,18 +372,13 @@ impl Router for DynamicRouter {
             );
             return Ok(());
         }
-        // A service registers by id alone; with no deployment identity to
-        // compare, take the id as its own claimant. Two ids then read as two
-        // claimants, which is the conservative direction: a genuine replica
-        // pair is warned about once, and a real collision is never missed.
-        self.register_hostnames(workload_id, workload_id, hostnames);
+        self.register_hostnames(workload_id, hostnames);
         Ok(())
     }
 
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
         self.routes.rcu(|cur| {
             let mut routes = (**cur).clone();
-            routes.workload_claimant.remove(workload_id);
             if let Some(hostnames) = routes.workload_to_host.remove(workload_id) {
                 for hostname in &hostnames {
                     if let Some(workload_set) = routes.host_to_workload.get_mut(hostname) {
@@ -2179,31 +2129,19 @@ pub async fn handle_component_request(
 
         // Otherwise the `sender` will get dropped along with the `Store`
         // meaning that the oneshot will get disconnected
-        Some((Err(e), _)) => match task.await {
-            // The task panicked or was cancelled.
-            Err(task_error) => {
+        Some((Err(e), _)) => {
+            if let Err(task_error) = task.await {
                 error!(err = ?task_error, "error receiving http response");
                 Err(anyhow::anyhow!(
                     "error receiving http response: {task_error}"
                 ))
-            }
-            // The guest-side call failed — instantiation, metering, or
-            // `call_handle` itself. This is the error that says *why* nothing
-            // was sent, and the only one worth reporting: dropping it for the
-            // channel's own "closed" leaves every guest failure looking
-            // identical from the outside.
-            Ok(Err(guest_error)) => {
-                error!(err = ?guest_error, "component failed before sending an http response");
-                Err(guest_error.context("component failed before sending an http response"))
-            }
-            // The call returned without ever setting the response outparam.
-            Ok(Ok(())) => {
+            } else {
                 error!(err = ?e, "error receiving http response");
                 Err(anyhow::anyhow!(
                     "oneshot channel closed but no response was sent"
                 ))
             }
-        },
+        }
 
         // No response within the deadline; the call is abandoned, and the
         // store's epoch callback ends the guest work behind it.
