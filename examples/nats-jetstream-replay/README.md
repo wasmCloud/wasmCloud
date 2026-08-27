@@ -87,8 +87,7 @@ host:
 This component imports `wasmcloud:nats` plainly, so it gets the *unnamed*
 binding — the block above. A workload that wants two bindings labels its
 imports (`(implements orders)`) and the host declares each under
-`wasmcloudNats.bindings.<name>`; label routing is served by the async
-`@0.2.0` package only.
+`wasmcloudNats.bindings.<name>`.
 
 The manifest then says only what it wants delivered:
 
