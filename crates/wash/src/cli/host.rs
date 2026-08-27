@@ -662,6 +662,12 @@ impl CliCommand for HostCommand {
             .with_plugin(Arc::new(
                 plugin::wasmcloud_nats::WasmcloudNats::new()
                     .with_bindings(wasmcloud_nats_bindings)
+                    // A subscription's byte budget is per subscription and
+                    // this host's memory is not. Without the budget the plugin
+                    // cannot tell whether the subscriptions it is about to
+                    // start fit, and the first sign of the mismatch is an
+                    // OOMKill.
+                    .with_memory_budget(host_memory.max_guest_memory)
                     .with_lattice_prefixes(vec![
                         format!("{}.", wash_runtime::washlet::HOST_API_PREFIX),
                         format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),

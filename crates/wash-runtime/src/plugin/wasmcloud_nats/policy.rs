@@ -36,6 +36,10 @@ const BUCKET_BACKING_STREAM_PREFIXES: &[&str] = &["KV_", "OBJ_"];
 #[derive(Debug, Clone)]
 pub struct PolicyEngine {
     subject_allow: Vec<NatsSubjectPattern>,
+    /// The subject grant as written. Kept because a bind-time check needs the
+    /// literal subjects an operator named, which a compiled pattern no longer
+    /// carries — see [`PolicyEngine::publishable_literal_subjects`].
+    subject_allow_raw: Vec<String>,
     stream_allow: Vec<NatsSubjectPattern>,
     bucket_allow: Vec<NatsSubjectPattern>,
     /// Lattice subjects to deny when the host is lattice-connected.
@@ -231,6 +235,7 @@ impl PolicyEngine {
                 .iter()
                 .map(|s| NatsSubjectPattern::parse(s))
                 .collect(),
+            subject_allow_raw: spec.subject_allow.clone(),
             stream_allow: spec
                 .stream_allow
                 .iter()
@@ -243,6 +248,21 @@ impl PolicyEngine {
                 .collect(),
             lattice_prefixes,
         }
+    }
+
+    /// The wildcard-free subjects this grant permits a publish to.
+    ///
+    /// A pattern containing `*` or `>` names a set, and a bind-time check
+    /// cannot ask a server about a set — `stream_by_subject` answers for one
+    /// subject. Those are skipped rather than expanded: the check is an
+    /// advisory, and a partial advisory beats a wrong one.
+    pub fn publishable_literal_subjects(&self) -> Vec<String> {
+        self.subject_allow_raw
+            .iter()
+            .filter(|raw| !raw.contains('*') && !raw.contains('>'))
+            .filter(|raw| self.check_subject(raw).is_ok())
+            .cloned()
+            .collect()
     }
 
     /// True when the subject is reserved or belongs to the host itself.

@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use anyhow::Context as _;
 use async_nats::jetstream;
 use futures::StreamExt;
 use opentelemetry::KeyValue;
@@ -262,6 +263,17 @@ impl Drop for EphemeralConsumerGuard {
     }
 }
 
+/// Heartbeat-driven KV watch rebuilds tolerated before one is worth a WARN.
+///
+/// A single rebuild loses nothing — the watch resumes at the revision after
+/// the last one dispatched — so it is reported at `debug`. A run of them says
+/// the bucket is under load the watch cannot keep up with, which is worth
+/// saying once.
+const KV_REBUILD_REPORT_THRESHOLD: u32 = 10;
+
+/// How often a run of KV watch rebuilds is worth reporting.
+const KV_REBUILD_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Delay before rebuilding a push consumer whose delivery stream ended.
 const RESUBSCRIBE_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -333,16 +345,23 @@ fn sanitize_name_component(name: &str) -> String {
 /// queue group's durable.
 /// The durable/deliver-plane scope for a workload's JetStream subscriptions.
 ///
-/// Keyed by *manifest* identity — namespace and name — never by workload id.
-/// Every replica of a deployment is a separate workload with its own
-/// `uuid::Uuid::new_v4()` id (see
-/// [`crate::plugin::wasmcloud_messaging::AdmissionIdentity`], keyed this way for
-/// the same reason), so scoping by id gave each replica its own durable: a
-/// queue group of N replicas processed every message N times, and departed
-/// replicas' durables were never reclaimed. The namespace is in the key because
-/// workload names are only unique within one.
-fn durable_scope(namespace: &str, name: &str) -> String {
-    short_hash(&[namespace, name])
+/// **Namespace only.** Every replica of a deployment is a separate workload
+/// with its own `uuid::Uuid::new_v4()` id *and* its own generated name —
+/// `js-sink-8b6857494-69bc97f647`, `js-sink-8b6857494-6dc679c6` — so both are
+/// per-replica keys and neither can scope a durable that replicas must share.
+/// Keying by either gave each replica a durable of its own: a queue group of N
+/// replicas processed every message N times, and every re-bind minted another
+/// durable nothing would ever delete.
+///
+/// What separates one subscription's durable from another's is the queue-group
+/// name the operator chose plus the identity hash over
+/// `(stream, filter, deliver-policy, group)` — see the call site. That is the
+/// NATS rendezvous rule as written: two subscriptions naming the same group on
+/// the same stream, filter and policy *are* one queue group, and sharing a
+/// durable is what a queue group means. The namespace stays in the scope
+/// because group names are only meaningful within one tenant.
+fn durable_scope(namespace: &str) -> String {
+    short_hash(&[namespace])
 }
 
 fn short_hash(parts: &[&str]) -> String {
@@ -409,13 +428,15 @@ pub(super) async fn spawn_jetstream_subscriptions(
     let instance_pre = workload.instantiate_pre(component_id).await?;
     let pre = JsHandlerPre::new(instance_pre)?;
     let workload_id = workload_id.into();
-    // Manifest identity, not workload id: replicas must converge on one
-    // durable. See [`durable_scope`].
-    let scope = durable_scope(workload.namespace(), workload.name());
+    // Namespace only: both the workload id and the workload *name* are
+    // per-replica, and replicas must converge on one durable. See
+    // [`durable_scope`].
+    let scope = durable_scope(workload.namespace());
 
     for sub in subs {
         let conn = conn.clone();
         let ack_mode = conn.ack_mode;
+        let max_deliver = conn.limits.effective_max_deliver();
         let in_flight = Arc::new(tokio::sync::Semaphore::new(conn.limits.max_in_flight));
         let workload = workload.clone();
         let component_id = component_id.to_string();
@@ -502,10 +523,22 @@ pub(super) async fn spawn_jetstream_subscriptions(
                 // waiting on it, so it goes now rather than lingering for its
                 // inactive threshold. Best effort: after a server restart it
                 // is already gone, which is not worth a warn.
-                if let Some((prev_stream, name)) = ephemeral.take()
-                    && let Err(e) = prev_stream.delete_consumer(&name).await
-                {
-                    debug!(stream = %sub.stream, "could not delete the previous ephemeral consumer: {e}");
+                //
+                // Its ack floor is read first. That is the server's own record
+                // of what it has taken off our hands, and everything above it
+                // is unsettled by definition — including the delivery that was
+                // in flight when the connection dropped, which the host's
+                // in-flight set never learns about because it was buffered in
+                // the client and discarded with it. Resuming above the floor
+                // is how that one message per rebuild went missing.
+                let mut server_ack_floor = None;
+                if let Some((prev_stream, name)) = ephemeral.take() {
+                    if let Ok(info) = prev_stream.consumer_info(&name).await {
+                        server_ack_floor = Some(info.ack_floor.stream_sequence);
+                    }
+                    if let Err(e) = prev_stream.delete_consumer(&name).await {
+                        debug!(stream = %sub.stream, "could not delete the previous ephemeral consumer: {e}");
+                    }
                 }
 
                 // With a queue group the consumer must be shared across hosts,
@@ -548,13 +581,26 @@ pub(super) async fn spawn_jetstream_subscriptions(
                 // one keeps its own position server-side.
                 let resume_from = match sub.queue_group {
                     Some(_) => None,
-                    None => oldest_tracked(&in_flight_sequences)
-                        .or_else(|| last_delivered.map(|seq| seq.saturating_add(1)))
+                    None => {
+                        let tracked = oldest_tracked(&in_flight_sequences)
+                            .or_else(|| last_delivered.map(|seq| seq.saturating_add(1)));
+                        // Whichever position is *older* wins. The host's own
+                        // tracking only knows about deliveries it dispatched;
+                        // the server's floor also covers the ones it sent that
+                        // never reached the loop. Taking the minimum means a
+                        // rebuilt consumer can duplicate a delivery — which
+                        // at-least-once already allows — but cannot skip one.
+                        let from_server = server_ack_floor.map(|floor| floor.saturating_add(1));
+                        match (tracked, from_server) {
+                            (Some(a), Some(b)) => Some(a.min(b)),
+                            (a, b) => a.or(b),
+                        }
                         // Stream sequences start at 1, so 0 is not a position
                         // the server will accept as a start: asking for it
                         // fails the create and takes the whole subscription
                         // down with it.
-                        .filter(|&sequence| sequence >= 1),
+                        .filter(|&sequence| sequence >= 1)
+                    }
                 };
                 let info = stream.cached_info();
                 let created = info.created.unix_timestamp_nanos();
@@ -601,8 +647,14 @@ pub(super) async fn spawn_jetstream_subscriptions(
                     // Server-enforced ceiling on unacked deliveries: it
                     // stops sending past this, pacing the stream to how fast
                     // the component drains. A queue group shares one durable,
-                    // so replicas divide this budget.
-                    max_ack_pending: conn.limits.effective_max_ack_pending(),
+                    // so replicas divide this budget. Derived in bytes as well
+                    // as in messages — see `effective_max_ack_pending`.
+                    max_ack_pending: conn.limits.effective_max_ack_pending(conn.max_payload()),
+                    // Unset, the server retries a delivery forever, so a
+                    // handler that traps on the same input every time never
+                    // progresses and never stops. Past this the server gives
+                    // up on the message rather than the subscription.
+                    max_deliver: conn.limits.effective_max_deliver(),
                     // A queue group is deliberately left without one; see
                     // `IDLE_HEARTBEAT`. `QUEUE_LIVENESS_PROBE` covers what the
                     // heartbeat would have caught there.
@@ -946,6 +998,10 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                 message,
                                 sequence,
                                 delivery_count,
+                                // A push delivery is bounded by
+                                // `max-ack-pending` and dies with the store
+                                // built for it, so it charges no budget.
+                                charged: None,
                             };
                             let resource: Resource<MessageHandle> =
                                 match store.data_mut().table.push(handle) {
@@ -1023,7 +1079,34 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                 let retired = match host_acker {
                                     Some(acker) => {
                                         let handled = matches!(&result, Ok(Ok(())));
-                                        let settled = if handled {
+                                        // A handler that fails the same way
+                                        // every time is not waiting on
+                                        // anything, and the ladder cannot tell
+                                        // that from a transient fault. At the
+                                        // last rung the message is terminated
+                                        // rather than nakked, so it reaches a
+                                        // dead letter now instead of being
+                                        // redelivered until the stream ages it
+                                        // out. `max_deliver` on the consumer
+                                        // bounds this server-side too; this is
+                                        // what makes the give-up visible.
+                                        let exhausted = !handled
+                                            && max_deliver > 0
+                                            && u64::from(delivery_count) >= max_deliver as u64;
+                                        if exhausted {
+                                            warn!(
+                                                subject = %subject_str,
+                                                sequence,
+                                                delivery_count,
+                                                max_deliver,
+                                                "JetStream handler failed on every delivery; \
+                                                 terminating the message rather than asking for \
+                                                 another redelivery"
+                                            );
+                                        }
+                                        let settled = if exhausted {
+                                            acker.ack_with(async_nats::jetstream::AckKind::Term).await
+                                        } else if handled {
                                             // A plain `ack` is a fire-and-forget
                                             // publish: it can be lost in the
                                             // very disconnect that forces the
@@ -1043,7 +1126,11 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                         if let Err(e) = &settled {
                                             warn!("failed to settle JetStream message: {e}");
                                         }
-                                        handled && settled.is_ok()
+                                        // A term retires the message as surely
+                                        // as an ack does: the server will not
+                                        // offer it again, so a rebuild must not
+                                        // resume at it.
+                                        (handled || exhausted) && settled.is_ok()
                                     }
                                     // Under `manual` the guest owns the ack, so
                                     // only its own ack or term retires this.
@@ -1182,13 +1269,35 @@ const SHED_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_secs
 /// Bytes are tracked because `subscription-capacity` counts messages, and a
 /// large-payload burst exhausts memory. The reader only adds and the delivery
 /// loop only subtracts, so the count runs slightly conservative at worst.
-#[derive(Default)]
 struct CoreBacklog {
     /// Bytes sitting between the reader and the delivery loop.
     queued_bytes: std::sync::atomic::AtomicUsize,
     /// Deliveries shed since the subscription started, and their total size.
     shed: std::sync::atomic::AtomicU64,
     shed_bytes: std::sync::atomic::AtomicU64,
+    /// The totals as of the last report, so a line can carry what happened
+    /// *in this window* rather than only a running total. A running total
+    /// alone cannot distinguish a subscription that shed once an hour ago
+    /// from one shedding continuously.
+    reported: std::sync::atomic::AtomicU64,
+    /// What this subscription was configured to hold. Carried so the line
+    /// that reports shedding also names the two numbers that would have to
+    /// change, which is otherwise a manifest lookup away.
+    capacity: usize,
+    capacity_bytes: usize,
+}
+
+impl CoreBacklog {
+    fn new(capacity: usize, capacity_bytes: usize) -> Self {
+        Self {
+            queued_bytes: std::sync::atomic::AtomicUsize::new(0),
+            shed: std::sync::atomic::AtomicU64::new(0),
+            shed_bytes: std::sync::atomic::AtomicU64::new(0),
+            reported: std::sync::atomic::AtomicU64::new(0),
+            capacity,
+            capacity_bytes,
+        }
+    }
 }
 
 /// Whether a delivery of `len` bytes may join a backlog already holding
@@ -1212,15 +1321,31 @@ fn record_shed(
     let total_bytes = backlog.shed_bytes.fetch_add(len as u64, Ordering::Relaxed) + len as u64;
     let now = tokio::time::Instant::now();
     if last_report.is_none_or(|at| now.duration_since(at) >= SHED_REPORT_INTERVAL) {
+        let window = last_report.map(|at| now.duration_since(at));
+        let since_last = total - backlog.reported.swap(total, Ordering::Relaxed);
         *last_report = Some(now);
+        // The deficit is what the operator has to size against, and it is not
+        // derivable from the workload: the same subscription behind a fast
+        // guest never sheds and behind a slow one sheds most of a burst, so
+        // the number that would have absorbed this window is only knowable
+        // here. Reported as a suggestion rather than applied, because raising
+        // it trades host memory for tolerance.
+        let would_have_absorbed = backlog.capacity.saturating_add(since_last as usize);
         warn!(
             subject = %subject,
             reason,
             shed_total = total,
             shed_bytes = total_bytes,
+            shed_in_window = since_last,
+            window_ms = window.map(|w| w.as_millis() as u64).unwrap_or(0),
             queued_bytes = backlog.queued_bytes.load(Ordering::Relaxed),
+            capacity = backlog.capacity,
+            capacity_bytes = backlog.capacity_bytes,
+            would_have_absorbed,
             "core subscription is shedding: deliveries are arriving faster than \
-             the component drains them"
+             the component drains them. A `subscription-capacity` of \
+             {would_have_absorbed} would have absorbed this window; the deficit \
+             is set by how fast the guest drains, not by the publisher alone"
         );
     }
 }
@@ -1298,6 +1423,11 @@ pub(super) async fn spawn_core_subscriptions(
     execution_meter: ExecutionTimeMeter,
     failure_sink: Option<crate::plugin::WorkloadFailureSink>,
     workload_id: impl Into<String>,
+    // The byte budget one of these subscriptions may hold, already clamped
+    // against the host's memory budget at bind (see `clamp_capacity_bytes`).
+    // Read from here rather than from `conn.limits` so the clamp cannot be
+    // bypassed by a later reader.
+    capacity_bytes: usize,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
     let pre = CoreHandlerPre::new(instance_pre)?;
@@ -1314,6 +1444,27 @@ pub(super) async fn spawn_core_subscriptions(
         let failure_sink = failure_sink.clone();
         let workload_id = workload_id.clone();
 
+        // Subscribed *here*, not inside the task below. The bind hook awaits
+        // this function, and the workload is reported ready once it returns,
+        // so a SUB issued from a spawned task left a window in which the
+        // deployment read `Ready` and the subject was not yet subscribed —
+        // core publishes into it are fire-and-forget and vanish without a
+        // trace. Doing it before returning makes "the bind completed" mean
+        // "the subscriptions are attached".
+        //
+        // A failure is the deploy's, for the same reason: a subscription that
+        // could not be made never delivers, and starting the workload anyway
+        // would hide that behind a running pod.
+        let messages = match &sub.queue_group {
+            Some(group) => {
+                conn.client
+                    .queue_subscribe(sub.subject.clone(), group.clone())
+                    .await
+            }
+            None => conn.client.subscribe(sub.subject.clone()).await,
+        }
+        .with_context(|| format!("failed to subscribe to core subject '{}'", sub.subject))?;
+
         tokio::spawn(async move {
             // A SUB the server refuses is refused after the fact: the
             // subscription is accepted locally and simply never delivers, so
@@ -1321,27 +1472,14 @@ pub(super) async fn spawn_core_subscriptions(
             let mut denials = conn.subscription_denials.subscribe();
             let mut denial_reported = false;
 
-            let subscriber = match &sub.queue_group {
-                Some(group) => {
-                    conn.client
-                        .queue_subscribe(sub.subject.clone(), group.clone())
-                        .await
-                }
-                None => conn.client.subscribe(sub.subject.clone()).await,
-            };
-            let messages = match subscriber {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!("failed to subscribe to core subject '{}': {e}", sub.subject);
-                    return;
-                }
-            };
-
             // The subscription is read by its own task and this loop takes
             // from the backlog it fills, so that waiting for a handler permit
             // never means leaving the client's channel unread. See
             // `spawn_core_reader` for what that costs when it is not done.
-            let backlog = Arc::new(CoreBacklog::default());
+            let backlog = Arc::new(CoreBacklog::new(
+                conn.limits.subscription_capacity,
+                capacity_bytes,
+            ));
             let (deliveries, mut inbound) =
                 tokio::sync::mpsc::channel(conn.limits.subscription_capacity);
             spawn_core_reader(
@@ -1349,7 +1487,7 @@ pub(super) async fn spawn_core_subscriptions(
                 messages,
                 deliveries,
                 backlog.clone(),
-                conn.limits.subscription_capacity_bytes,
+                capacity_bytes,
                 cancel_token.clone(),
             );
 
@@ -1533,6 +1671,10 @@ pub(super) async fn spawn_kv_watches(
             // wait doubles to a cap, and only the first failure of a run is a
             // WARN: the repeats say nothing new.
             let mut consecutive_failures: u32 = 0;
+            // Heartbeat-driven rebuilds, and when a run of them was last
+            // reported. See the `Consumer` arm below.
+            let mut rebuilds: u32 = 0;
+            let mut last_rebuild_report: Option<tokio::time::Instant> = None;
 
             'watch: loop {
                 let store_kv = match conn.jetstream.get_key_value(&watch.bucket).await {
@@ -1636,10 +1778,38 @@ pub(super) async fn spawn_kv_watches(
                                         e.kind(),
                                         async_nats::jetstream::kv::WatcherErrorKind::Consumer
                                     ) {
-                                        warn!(
+                                        // The rebuild resumes at the revision
+                                        // after the last one dispatched, so a
+                                        // consumer lost to a missed heartbeat
+                                        // costs nothing and heals itself. It
+                                        // is also frequent under load, and at
+                                        // WARN it drowns the log and — because
+                                        // one host log covers every workload —
+                                        // flips unrelated workloads' verdicts.
+                                        // Only a run of them says anything, so
+                                        // that is what is reported.
+                                        rebuilds = rebuilds.saturating_add(1);
+                                        debug!(
                                             bucket = %watch.bucket,
+                                            rebuilds,
                                             "kv watch delivery lost, rebuilding watch: {e}"
                                         );
+                                        let now = tokio::time::Instant::now();
+                                        let due = last_rebuild_report
+                                            .is_none_or(|at| {
+                                                now.duration_since(at) >= KV_REBUILD_REPORT_INTERVAL
+                                            });
+                                        if rebuilds >= KV_REBUILD_REPORT_THRESHOLD && due {
+                                            last_rebuild_report = Some(now);
+                                            warn!(
+                                                bucket = %watch.bucket,
+                                                rebuilds,
+                                                "kv watch keeps losing its consumer and rebuilding; \
+                                                 delivery is resumed losslessly, but the bucket is \
+                                                 under enough load to miss idle heartbeats"
+                                            );
+                                            rebuilds = 0;
+                                        }
                                         break;
                                     }
                                     warn!("kv watch stream error: {e}");
@@ -1748,30 +1918,71 @@ mod tests {
 
     /// Replicas of one deployment must land on the same durable, or a queue
     /// group of N replicas processes every message N times and each departed
-    /// replica leaves a durable behind. Every replica is a separate workload
-    /// with its own uuid, so the scope may not depend on the workload id.
+    /// replica leaves a durable behind.
+    ///
+    /// The earlier version of this test hand-wrote a stable workload name and
+    /// so could not fail: it proved the *function* stable while the argument
+    /// varied per replica. This one feeds it the names a `WorkloadDeployment`
+    /// actually generates.
     #[test]
     fn the_durable_scope_is_stable_across_replicas() {
-        // Two replicas: same manifest identity, different workload ids.
-        assert_eq!(
-            durable_scope("team-a", "ingester"),
-            durable_scope("team-a", "ingester"),
-            "replicas of one deployment must share a durable"
-        );
+        // The three names one 3-replica WorkloadDeployment produced, each a
+        // separate `Workload` object with its own uuid.
+        let replicas = [
+            "js-sink-8b6857494-69bc97f647",
+            "js-sink-8b6857494-6dc679c6",
+            "js-sink-8b6857494-84698d758d",
+        ];
+        // Exactly what the subscription loop builds, for one fixed
+        // subscription: the group, the scope, and the identity hash. The
+        // replica's own name is passed in and deliberately unused — that it
+        // cannot reach the durable is the property under test.
+        let durable = |namespace: &str, _replica_name: &str| {
+            format!(
+                "{}_{}_{}",
+                sanitize_name_component("workers"),
+                durable_scope(namespace),
+                short_hash(&["LOAD", "js.work", "new", "workers"]),
+            )
+        };
+        let first = durable("team-a", replicas[0]);
+        for replica in replicas {
+            assert_eq!(
+                durable("team-a", replica),
+                first,
+                "replicas of one deployment must share a durable"
+            );
+        }
 
-        // A different workload must not join it, and names are only unique
-        // within a namespace.
+        // A tenant boundary still separates them.
         assert_ne!(
-            durable_scope("team-a", "ingester"),
-            durable_scope("team-a", "other")
+            durable("team-a", replicas[0]),
+            durable("team-b", replicas[0])
         );
-        assert_ne!(
-            durable_scope("team-a", "ingester"),
-            durable_scope("team-b", "ingester")
-        );
+    }
 
-        // The separator must keep ("a","bc") and ("ab","c") apart.
-        assert_ne!(durable_scope("a", "bc"), durable_scope("ab", "c"));
+    /// The scope may not vary with anything that is per-replica. Both the
+    /// workload id and the generated workload name are, so neither may reach
+    /// it — this pins the signature that made that possible.
+    #[test]
+    fn the_durable_scope_depends_only_on_the_namespace() {
+        assert_eq!(durable_scope("team-a"), durable_scope("team-a"));
+        assert_ne!(durable_scope("team-a"), durable_scope("team-b"));
+    }
+
+    /// Two subscriptions that merely reuse a group name on different
+    /// coordinates must not rendezvous on one durable — the identity hash is
+    /// what keeps them apart now that the scope no longer varies.
+    #[test]
+    fn the_identity_hash_separates_subscriptions_sharing_a_group_name() {
+        let identity = |stream: &str, filter: &str, policy: &str, group: &str| {
+            short_hash(&[stream, filter, policy, group])
+        };
+        let base = identity("LOAD", "js.work", "new", "workers");
+        assert_ne!(base, identity("OTHER", "js.work", "new", "workers"));
+        assert_ne!(base, identity("LOAD", "js.other", "new", "workers"));
+        assert_ne!(base, identity("LOAD", "js.work", "all", "workers"));
+        assert_ne!(base, identity("LOAD", "js.work", "new", "readers"));
     }
     use super::*;
     use std::sync::atomic::Ordering::Relaxed;
@@ -1800,7 +2011,7 @@ mod tests {
         // The property the `SlowConsumer` event cannot offer: every shed
         // delivery lands in the totals, whether or not it was reported. The
         // interval throttles the log line, never the accounting.
-        let backlog = CoreBacklog::default();
+        let backlog = CoreBacklog::new(1024, 32 * 1024 * 1024);
         let mut last_report = None;
         for _ in 0..10_000 {
             record_shed(&backlog, "fan.work", 64, &mut last_report, "backlog full");
@@ -1811,7 +2022,7 @@ mod tests {
 
     #[test]
     fn shedding_reports_at_most_once_per_interval() {
-        let backlog = CoreBacklog::default();
+        let backlog = CoreBacklog::new(1024, 32 * 1024 * 1024);
         let mut last_report = None;
         record_shed(&backlog, "fan.work", 64, &mut last_report, "backlog full");
         let first = last_report.expect("the first shed always reports");
