@@ -53,13 +53,15 @@ const GUEST_MEMORY_DENOMINATOR: u64 = 4;
 const MIN_DERIVED_MAX_GUEST_MEMORY: u64 = 256 * MIB;
 const MAX_DERIVED_MAX_GUEST_MEMORY: u64 = 1024 * 1024 * MIB;
 
-/// Parse a byte size, following Kubernetes' quantity suffixes exactly.
+/// Parse a byte size, following Kubernetes' quantity grammar.
 ///
-/// | Suffix | Meaning |
+/// | Form | Meaning |
 /// | --- | --- |
 /// | none, `B` | bytes |
-/// | `Ki`, `KiB`, `Mi`, `MiB`, `Gi`, `GiB`, `Ti`, `TiB` | binary (1024ⁿ) |
-/// | `K`, `KB`, `M`, `MB`, `G`, `GB`, `T`, `TB` | decimal (1000ⁿ) |
+/// | `Ki`, `Mi`, `Gi`, `Ti`, `Pi`, `Ei` (and the `…iB` spellings) | binary (1024ⁿ) |
+/// | `k`, `M`, `G`, `T`, `P`, `E` (and the `…B` spellings) | decimal (1000ⁿ) |
+/// | `1.5Gi` | fractional, truncated toward zero |
+/// | `1e9`, `1.5E3` | decimal exponent |
 ///
 /// Kubernetes semantics rather than "binary everywhere", because the Helm chart
 /// feeds this the host group's own `resources.limits.memory` verbatim — a
@@ -70,41 +72,123 @@ const MAX_DERIVED_MAX_GUEST_MEMORY: u64 = 1024 * 1024 * MIB;
 ///
 /// The `i` forms are what Kubernetes manifests overwhelmingly use, and what a
 /// wasm page (exactly 64 KiB) is denominated in.
+///
+/// Fractions evaluate in integer arithmetic: `1.5Gi` is exactly 1610612736.
+///
+/// # Errors
+///
+/// An empty string, a mantissa that is not a number, an unknown suffix, a bare
+/// `m` or `e`, a nonzero quantity under one byte, or a value past `u64`.
 pub fn parse_bytes(s: &str) -> Result<u64, String> {
     let s = s.trim();
     if s.is_empty() {
         return Err("expected a byte size, e.g. 128MiB".to_string());
     }
-    let digits_end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
-    if digits_end == 0 {
+    let mantissa_end = s
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(s.len());
+    if mantissa_end == 0 {
         return Err(format!("{s:?} does not start with a number"));
     }
-    let (number, suffix) = s.split_at(digits_end);
-    let value: u64 = number
-        .parse()
-        .map_err(|_| format!("{number:?} is not a valid number"))?;
-    let multiplier = match suffix.trim().to_ascii_lowercase().as_str() {
-        "" | "b" => 1,
-        // Binary — the `i` forms, as Kubernetes spells them.
-        "ki" | "kib" => 1024,
-        "mi" | "mib" => MIB,
-        "gi" | "gib" => 1024 * MIB,
-        "ti" | "tib" => 1024 * 1024 * MIB,
-        // Decimal — SI, and what Kubernetes means by a bare `K`/`M`/`G`/`T`.
-        "k" | "kb" => 1_000,
-        "m" | "mb" => 1_000_000,
-        "g" | "gb" => 1_000_000_000,
-        "t" | "tb" => 1_000_000_000_000,
-        other => {
+    let (mantissa, suffix) = s.split_at(mantissa_end);
+    let suffix = suffix.trim();
+
+    // Case folding below would merge these with `M` and `E`, which are orders
+    // of magnitude larger.
+    match suffix {
+        // Milli, not mega.
+        "m" => {
             return Err(format!(
-                "unknown size suffix {other:?}; expected a Kubernetes-style quantity \
-                 (Ki/Mi/Gi/Ti for binary, K/M/G/T for decimal, or plain bytes)"
+                "{s:?} uses Kubernetes' milli suffix, a thousandth of a byte, which is not a \
+                 memory size; write 'M' for megabytes or 'Mi' for mebibytes"
             ));
         }
+        // Exponent marker, not exa.
+        "e" | "eb" => {
+            return Err(format!(
+                "{s:?} has no exponent digits; write '1e9' for a decimal exponent, or 'E'/'Ei' \
+                 for exabytes/exbibytes"
+            ));
+        }
+        _ => {}
+    }
+
+    const KI: u64 = 1024;
+    let factor = match suffix.to_ascii_lowercase().as_str() {
+        "" | "b" => Some(1),
+        // Binary: the `i` forms, as Kubernetes spells them.
+        "ki" | "kib" => Some(KI),
+        "mi" | "mib" => Some(MIB),
+        "gi" | "gib" => Some(KI * MIB),
+        "ti" | "tib" => Some(KI * KI * MIB),
+        "pi" | "pib" => Some(KI * KI * KI * MIB),
+        "ei" | "eib" => Some(KI * KI * KI * KI * MIB),
+        // Decimal: SI, and what Kubernetes means by a bare `k`/`M`/`G`/`T`.
+        // Bare `m` is refused above; this arm is `M`, `MB`, `mb`.
+        "k" | "kb" => Some(1_000),
+        "m" | "mb" => Some(1_000_000),
+        "g" | "gb" => Some(1_000_000_000),
+        "t" | "tb" => Some(1_000_000_000_000),
+        "p" | "pb" => Some(1_000_000_000_000_000),
+        "e" | "eb" => Some(1_000_000_000_000_000_000),
+        _ => None,
     };
-    value
-        .checked_mul(multiplier)
-        .ok_or_else(|| format!("{s:?} overflows a byte count"))
+
+    // Decimal exponent. The table above claims `E` and `Ei` first.
+    let (factor, exponent) = match factor {
+        Some(factor) => (factor, 0i32),
+        None => {
+            let exponent = suffix.strip_prefix(['e', 'E']).ok_or_else(|| {
+                format!(
+                    "unknown size suffix {suffix:?}; expected a Kubernetes-style quantity \
+                     (Ki/Mi/Gi/Ti/Pi/Ei for binary, k/M/G/T/P/E for decimal, a decimal \
+                     exponent such as 1e9, or plain bytes)"
+                )
+            })?;
+            let exponent: i32 = exponent
+                .parse()
+                .map_err(|_| format!("{suffix:?} is not a valid decimal exponent"))?;
+            (1, exponent)
+        }
+    };
+
+    // Mantissa as a whole number over a power of ten, so fractions stay exact.
+    let (digits, fraction_len) = match mantissa.split_once('.') {
+        Some((whole, fraction)) => (format!("{whole}{fraction}"), fraction.len() as u32),
+        None => (mantissa.to_string(), 0),
+    };
+
+    let overflow = || format!("{s:?} overflows a byte count");
+    let digits: u128 = digits.parse().map_err(|_| {
+        // All digits but unparseable means too long for `u128`, not malformed.
+        if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+            overflow()
+        } else {
+            format!("{mantissa:?} is not a valid number")
+        }
+    })?;
+
+    let mut scaled = digits
+        .checked_mul(u128::from(factor))
+        .ok_or_else(overflow)?;
+    if exponent > 0 {
+        scaled = 10u128
+            .checked_pow(exponent.unsigned_abs())
+            .and_then(|p| scaled.checked_mul(p))
+            .ok_or_else(overflow)?;
+    }
+    // Fractional digits plus any negative exponent. A divisor past `u128`
+    // floors the result to zero, which the check below reports.
+    let divisor_pow = fraction_len.saturating_add(exponent.min(0).unsigned_abs());
+    let divisor = 10u128.checked_pow(divisor_pow).unwrap_or(u128::MAX);
+    let bytes = u64::try_from(scaled / divisor).map_err(|_| overflow())?;
+
+    // `0.5` is not zero. Returning zero would surface through `resolve` as
+    // "must be greater than zero".
+    if bytes == 0 && digits != 0 {
+        return Err(format!("{s:?} is less than one byte"));
+    }
+    Ok(bytes)
 }
 
 /// Render a byte count in binary units, for logs and errors.
@@ -167,25 +251,56 @@ impl HostMemoryBudgets {
     /// Rejects a zero for any of the three: each would mean "this host runs
     /// nothing", which is never what an operator meant, and two of them would
     /// panic or misbehave inside wasmtime rather than saying so.
+    ///
+    /// Errors name knobs canonically (`max-guest-memory`), not as flags. A
+    /// value may arrive from YAML or the environment, never from a flag.
     pub fn resolve(
         max_guest_memory: Option<u64>,
         default_heap_memory: Option<u64>,
         core_instances: Option<u32>,
     ) -> Result<Self, String> {
         if max_guest_memory == Some(0) {
-            return Err("--max-guest-memory must be greater than zero".to_string());
+            return Err("max-guest-memory must be greater than zero".to_string());
         }
         if default_heap_memory == Some(0) {
-            return Err("--default-heap-memory must be greater than zero".to_string());
+            return Err("default-heap-memory must be greater than zero".to_string());
         }
         if core_instances == Some(0) {
-            return Err("--core-instances must be at least 1".to_string());
+            return Err("core-instances must be at least 1".to_string());
         }
         Ok(Self {
             max_guest_memory: max_guest_memory.unwrap_or_else(derive_max_guest_memory),
             default_heap_memory: default_heap_memory.unwrap_or(WASMTIME_DEFAULT_HEAP_MEMORY),
             core_instances: core_instances.unwrap_or(WASMTIME_DEFAULT_CORE_INSTANCES),
         })
+    }
+
+    /// [`Self::resolve`] over the strings a host's configuration holds.
+    ///
+    /// Sizes follow [`parse_bytes`]. A blank value counts as unset: clap's
+    /// `env` fallback yields `Some("")` for a variable that is set but empty.
+    ///
+    /// # Errors
+    ///
+    /// A size that does not parse, naming the knob, plus everything
+    /// [`Self::resolve`] rejects.
+    pub fn resolve_strs(
+        max_guest_memory: Option<&str>,
+        default_heap_memory: Option<&str>,
+        core_instances: Option<u32>,
+    ) -> Result<Self, String> {
+        let parse = |value: Option<&str>, knob: &str| -> Result<Option<u64>, String> {
+            value
+                .map(str::trim)
+                .filter(|raw| !raw.is_empty())
+                .map(|raw| parse_bytes(raw).map_err(|e| format!("invalid {knob}: {e}")))
+                .transpose()
+        };
+        Self::resolve(
+            parse(max_guest_memory, "max-guest-memory")?,
+            parse(default_heap_memory, "default-heap-memory")?,
+            core_instances,
+        )
     }
 
     /// Address space the pooling allocator will reserve: every slot is sized
@@ -212,7 +327,7 @@ impl HostMemoryBudgets {
         // allocator can actually map, it will fail at the first instantiation.
         if self.pool_reservation() > MAX_POOL_RESERVATION {
             return Some(format!(
-                "--default-heap-memory {} across --core-instances {} would reserve {} of \
+                "default-heap-memory {} across core-instances {} would reserve {} of \
                  address space, past the {} the pooling allocator is probed for at startup. \
                  Instantiation will fail once the pool is exhausted. Lower one of the two.",
                 render_bytes(self.default_heap_memory),
@@ -223,7 +338,7 @@ impl HostMemoryBudgets {
         }
         if self.default_heap_memory > self.max_guest_memory {
             return Some(format!(
-                "--default-heap-memory {} is larger than this host's whole memory budget \
+                "default-heap-memory {} is larger than this host's whole memory budget \
                  ({}), so a single guest could exhaust the host on its own",
                 render_bytes(self.default_heap_memory),
                 render_bytes(self.max_guest_memory),
@@ -263,10 +378,18 @@ fn detected_memory_limit() -> Option<u64> {
 
 /// Total physical memory, for a host with no cgroup to read — a developer's
 /// laptop, or a bare-metal deployment.
+///
+/// Refreshes RAM only. [`SystemMonitor`] samples every CPU core for the host's
+/// periodic reporting, which this path would pay on every engine build.
+///
+/// [`SystemMonitor`]: crate::host::sysinfo::SystemMonitor
 fn system_total_memory() -> Option<u64> {
-    let mut monitor = crate::host::sysinfo::SystemMonitor::new();
-    monitor.refresh();
-    let total = monitor.memory_usage().total_memory;
+    use sysinfo::{MemoryRefreshKind, RefreshKind, System};
+
+    let system = System::new_with_specifics(
+        RefreshKind::new().with_memory(MemoryRefreshKind::new().with_ram()),
+    );
+    let total = system.total_memory();
     (total > 0).then_some(total)
 }
 
@@ -309,9 +432,6 @@ mod tests {
         assert_eq!(parse_bytes("4GiB"), Ok(4 * 1024 * MIB));
         assert_eq!(parse_bytes("512"), Ok(512));
         assert_eq!(parse_bytes(" 256 MiB "), Ok(256 * MIB));
-        // `MB` is a spelling of `MiB`, not 10^6: a host that resolved this to
-        // 512_000_000 while the cgroup counts 536_870_912 would be quietly
-        // wrong about the number that actually kills it.
         // Kubernetes quantities, which the chart passes through verbatim from
         // `resources.limits.memory`. `2Gi` and `2G` are different numbers and
         // must stay different: reading `2G` as binary would have the host
@@ -326,9 +446,91 @@ mod tests {
         );
         assert_eq!(render_bytes(4000 * 1024 * MIB), "3.9TiB");
         assert_eq!(render_bytes(4 * 1024 * MIB), "4GiB");
-        assert!(parse_bytes("12PiB").is_err());
+        // The large binary suffixes are part of the grammar and fit a u64.
+        assert_eq!(parse_bytes("12PiB"), Ok(12 * 1024 * 1024 * 1024 * MIB));
         assert!(parse_bytes("MiB").is_err());
         assert!(parse_bytes("").is_err());
+    }
+
+    #[test]
+    fn the_memory_only_refresh_still_reports_total_ram() {
+        // A refresh kind that stops populating `total_memory` fails silently:
+        // the derivation drops every non-cgroup host to the 256MiB floor.
+        let total =
+            system_total_memory().expect("a machine running this test has readable total memory");
+        assert!(
+            total >= MIN_DERIVED_MAX_GUEST_MEMORY,
+            "implausible total memory {total}, the refresh kind likely stopped populating it"
+        );
+    }
+
+    #[test]
+    fn milli_is_refused_rather_than_read_as_mega() {
+        // `500m` is half a byte to Kubernetes. Folded onto `M` it reads as
+        // 500_000_000, a billion-fold over-read.
+        let err = parse_bytes("500m").expect_err("milli is not a memory size");
+        assert!(
+            err.contains("milli") && err.contains("Mi"),
+            "the error must name the suffix and offer the one that was meant: {err}"
+        );
+        assert_eq!(parse_bytes("500M"), Ok(500_000_000));
+    }
+
+    #[test]
+    fn a_truncated_exponent_is_refused_rather_than_read_as_exa() {
+        // Folded onto `E`, a `1e9` that lost its digits reads as an exabyte.
+        for input in ["1e", "1eb"] {
+            let err = parse_bytes(input).expect_err("a bare exponent marker is not a size");
+            assert!(
+                err.contains("exponent"),
+                "the error must name what is missing: {err}"
+            );
+        }
+        assert_eq!(parse_bytes("1E"), Ok(1_000_000_000_000_000_000));
+        assert_eq!(parse_bytes("1e9"), Ok(1_000_000_000));
+    }
+
+    #[test]
+    fn a_sub_byte_quantity_is_refused_rather_than_truncated_to_zero() {
+        // `0.5` is not zero, and `resolve` would report a zero as "must be
+        // greater than zero".
+        for input in ["0.5", "1e-3", "0.0001"] {
+            let err = parse_bytes(input).expect_err("a sub-byte quantity is refused");
+            assert!(
+                err.contains("less than one byte"),
+                "the error must say what happened: {err}"
+            );
+        }
+        // A genuine zero is still a zero, for `resolve` to reject on its terms.
+        assert_eq!(parse_bytes("0"), Ok(0));
+    }
+
+    #[test]
+    fn an_over_long_mantissa_reports_an_overflow_not_a_bad_number() {
+        // The digits are digits; they just do not fit the arithmetic.
+        let err = parse_bytes(&"9".repeat(42)).expect_err("42 digits overflow a byte count");
+        assert!(
+            err.contains("overflows"),
+            "an all-digit mantissa that will not fit is an overflow: {err}"
+        );
+    }
+
+    #[test]
+    fn fractional_and_exponent_quantities_are_accepted() {
+        // Both are legal in `resources.limits.memory`.
+        assert_eq!(parse_bytes("1.5Gi"), Ok(1_610_612_736));
+        assert_eq!(parse_bytes("0.5Mi"), Ok(MIB / 2));
+        assert_eq!(parse_bytes("1e9"), Ok(1_000_000_000));
+        assert_eq!(parse_bytes("1.5E3"), Ok(1_500));
+        // Exact, not an `f64` approximation of 1.1 x 2^30.
+        assert_eq!(parse_bytes("1.1Gi"), Ok(1_181_116_006));
+        // Truncates rather than rounding up, so it can never over-read.
+        assert_eq!(parse_bytes("1.9"), Ok(1));
+        // The suffix table claims `E` and `Ei` before the exponent branch.
+        assert_eq!(parse_bytes("1E"), Ok(1_000_000_000_000_000_000));
+        assert_eq!(parse_bytes("1Ei"), Ok(1024 * 1024 * 1024 * 1024 * MIB));
+        assert!(parse_bytes("1.2.3Gi").is_err());
+        assert!(parse_bytes("1eX").is_err());
     }
 
     #[test]
@@ -341,6 +543,52 @@ mod tests {
         assert!(
             resolved.max_guest_memory >= MIN_DERIVED_MAX_GUEST_MEMORY,
             "an unset budget is derived, never zero or unbounded"
+        );
+    }
+
+    #[test]
+    fn string_knobs_resolve_the_same_as_parsed_ones() {
+        // The string form is `resolve` plus a parse, nothing more.
+        assert_eq!(
+            HostMemoryBudgets::resolve_strs(Some("8GiB"), Some("128MiB"), Some(100)),
+            HostMemoryBudgets::resolve(Some(8 * 1024 * MIB), Some(128 * MIB), Some(100))
+        );
+        // `2G` and `2Gi` are different numbers and stay different here.
+        let decimal = HostMemoryBudgets::resolve_strs(Some("2G"), None, None).unwrap();
+        let binary = HostMemoryBudgets::resolve_strs(Some("2Gi"), None, None).unwrap();
+        assert_eq!(decimal.max_guest_memory, 2_000_000_000);
+        assert_eq!(binary.max_guest_memory, 2 * 1024 * MIB);
+        // The zero checks apply to a parsed size too, not just a passed one.
+        assert!(HostMemoryBudgets::resolve_strs(Some("0"), None, None).is_err());
+    }
+
+    #[test]
+    fn a_blank_knob_is_unset_rather_than_a_parse_failure() {
+        // An empty ConfigMap key or `value: ""` reaches clap as `Some("")`.
+        let blank = HostMemoryBudgets::resolve_strs(Some(""), Some("   "), None)
+            .expect("a blank knob is unset, not a bad size");
+        // Compared against the fixed defaults, not a second `resolve(None, ..)`:
+        // the derived budget re-reads the cgroup and could differ.
+        assert_eq!(blank.default_heap_memory, WASMTIME_DEFAULT_HEAP_MEMORY);
+        assert!(blank.max_guest_memory >= MIN_DERIVED_MAX_GUEST_MEMORY);
+    }
+
+    #[test]
+    fn an_unparseable_size_names_the_knob_it_came_from() {
+        // Two of the three knobs are sizes; the parse error alone does not say
+        // which one failed.
+        let err = HostMemoryBudgets::resolve_strs(None, Some("512 gigabytes"), None)
+            .expect_err("an unparseable size is refused");
+        assert!(
+            err.contains("default-heap-memory"),
+            "the error must name the knob: {err}"
+        );
+
+        let err = HostMemoryBudgets::resolve_strs(Some("lots"), None, None)
+            .expect_err("an unparseable size is refused");
+        assert!(
+            err.contains("max-guest-memory"),
+            "the error must name the knob: {err}"
         );
     }
 
@@ -392,7 +640,7 @@ mod tests {
             "names the instance count: {advisory}"
         );
         assert!(
-            advisory.contains("--default-heap-memory") && advisory.contains("--core-instances"),
+            advisory.contains("default-heap-memory") && advisory.contains("core-instances"),
             "names both knobs so it is actionable: {advisory}"
         );
     }

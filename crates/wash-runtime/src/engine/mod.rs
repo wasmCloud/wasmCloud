@@ -237,6 +237,27 @@ pub mod workload;
 /// bounds how promptly an abandoned call can be noticed.
 pub(crate) const EPOCH_TICK: Duration = Duration::from_millis(10);
 
+/// What the pooling allocator was configured with, read back from the installed
+/// [`PoolingAllocationConfig`].
+///
+/// [`host_memory::HostMemoryBudgets`] holds what was asked for. The environment
+/// moves each of these three independently, so the two can disagree.
+#[derive(Debug, Clone, Copy)]
+struct InstalledPool {
+    core_instances: u32,
+    memories: u32,
+    max_memory_size: u64,
+}
+
+impl InstalledPool {
+    /// Address space the pool reserves. Keyed on the memory count, not the
+    /// instance count.
+    fn reservation(&self) -> u64 {
+        self.max_memory_size
+            .saturating_mul(u64::from(self.memories))
+    }
+}
+
 /// Start the thread that advances `engine`'s epoch every [`EPOCH_TICK`].
 ///
 /// Holds a [`wasmtime::Engine::weak`] handle rather than the engine itself, so
@@ -1072,12 +1093,16 @@ impl EngineBuilder {
 
         // Resolved before the pooling config, which both of its knobs feed.
         let host_memory = self.host_memory.unwrap_or_default();
+        // Reads the resolved budgets, not the installed pool: it advises on the
+        // knobs as configured.
         if let Some(advisory) = host_memory.advisory() {
             tracing::warn!("{advisory}");
         }
 
-        // The pooling allocator can be more efficient for workloads with many short-lived instances
-        let mut total_core_instances = None;
+        // The pooling allocator can be more efficient for workloads with many short-lived instances.
+        // Read back from the installed pool: the environment and a
+        // caller-supplied config both override what was asked for.
+        let mut installed_pool: Option<InstalledPool> = None;
         if use_pooling_allocator && let Ok(true) = is_pooling_allocator_supported() {
             tracing::debug!("using pooling allocator by default");
             let pooling = self.pooling_config.take().unwrap_or_else(|| {
@@ -1086,13 +1111,34 @@ impl EngineBuilder {
                     host_memory.default_heap_memory,
                 )
             });
-            // Read back what was actually configured rather than what was asked
-            // for: `new_pooling_config` lets the environment override the count,
-            // and a caller-supplied config ignores `max_instances` entirely.
-            total_core_instances = Some(pooling.get_total_core_instances());
+            installed_pool = Some(InstalledPool {
+                core_instances: pooling.get_total_core_instances(),
+                memories: pooling.get_total_memories(),
+                max_memory_size: u64::try_from(pooling.get_max_memory_size()).unwrap_or(u64::MAX),
+            });
             config.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pooling));
         } else if use_pooling_allocator {
             tracing::warn!("pooling allocator requested but not supported");
+        }
+        let total_core_instances = installed_pool.map(|pool| pool.core_instances);
+
+        // Reported here so every embedder says what it built. The reservation
+        // is `total_memories x max_memory_size`, not the instance count.
+        match installed_pool {
+            Some(pool) => tracing::info!(
+                max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
+                default_heap_memory = %host_memory::render_bytes(pool.max_memory_size),
+                core_instances = pool.core_instances,
+                memories = pool.memories,
+                pool_reservation = %host_memory::render_bytes(pool.reservation()),
+                "host memory resolved"
+            ),
+            // No pool, so no reservation and no installed ceiling to name.
+            None => tracing::info!(
+                max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
+                pooling = false,
+                "host memory resolved"
+            ),
         }
 
         // Only override fuel consumption when the caller explicitly set it, so a
