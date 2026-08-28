@@ -178,8 +178,9 @@ impl<T: 'static + Send> labeled_kv::HostBucketWithStore<T> for SharedCtx {
         accessor: &Accessor<T, Self>,
         _id: NatsId,
         rep: Resource<BucketHandle>,
+        filter: String,
     ) -> wasmtime::Result<Result<kv::KeyPage, types::NatsError>> {
-        <Self as kv::HostBucketWithStore<T>>::keys(accessor, rep).await
+        <Self as kv::HostBucketWithStore<T>>::keys(accessor, rep, filter).await
     }
     async fn history(
         accessor: &Accessor<T, Self>,

@@ -91,7 +91,10 @@ impl PublishLedger {
             return;
         }
         let window = last_report.map(|at| now.duration_since(at));
-        let since_last = total - self.reported.swap(total, Ordering::Relaxed);
+        // `total` was read at the `fetch_add` above, outside the mutex, so a
+        // thread descheduled between the two can resume with `reported` long
+        // past it. The count is advisory; underflowing it is not.
+        let since_last = total.saturating_sub(self.reported.swap(total, Ordering::Relaxed));
         *last_report = Some(now);
         warn!(
             subject = %subject,

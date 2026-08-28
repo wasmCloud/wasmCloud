@@ -55,8 +55,11 @@ jobs:
           {"key": "otel-config",              "workdir": "examples/otel-config",                         "image": "ghcr.io/wasmcloud/components/otel-config"},
           {"key": "qrcode",                   "workdir": "examples/qrcode",                              "image": "ghcr.io/wasmcloud/components/qrcode"}
         ]
-      # When these change, every example rebuilds. The last entry is a TODO:
-      # drop it once wasmcloud:nats is published to crates.io.
+      # When these change, every example rebuilds. The last two entries are a
+      # TODO: drop them once wasmcloud:nats is published to
+      # ghcr.io/wasmcloud/interfaces (see .github/workflows/wit.yml), at which
+      # point the example resolves it with a plain `wkg` install instead of a
+      # path override onto the in-repo copy.
       shared-paths: |
         [
           ".github/actions/build-rust-component/**",
@@ -66,6 +69,7 @@ jobs:
           ".github/scripts/coverage-matrix.mjs",
           ".github/scripts/gen-filters.mjs",
           ".github/workflows/examples.yml",
+          "wit/nats/**",
           "crates/wash-runtime/wit/deps/wasmcloud-nats-0.1.0/**"
         ]
       discovery-root: examples

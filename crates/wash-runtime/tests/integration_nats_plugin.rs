@@ -274,7 +274,7 @@ async fn delivers_and_auto_acks() -> Result<()> {
             ("subject-allow", "test.>"),
             ("stream-allow", STREAM),
             ("bucket-allow", COUNTS_BUCKET),
-            ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+            ("jetstream-subscriptions", &format!("{STREAM}:test.orders.>:all")),
         ]),
     ))
     .await
@@ -321,7 +321,7 @@ async fn handler_error_naks_and_redelivers() -> Result<()> {
             ("stream-allow", STREAM),
             ("bucket-allow", COUNTS_BUCKET),
             ("ack-mode", "auto"),
-            ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+            ("jetstream-subscriptions", &format!("{STREAM}:test.orders.>:all")),
         ]),
     ))
     .await?;
@@ -367,7 +367,7 @@ async fn subject_outside_grant_is_denied() -> Result<()> {
             ("subject-allow", "test.>"),
             ("stream-allow", STREAM),
             ("bucket-allow", COUNTS_BUCKET),
-            ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+            ("jetstream-subscriptions", &format!("{STREAM}:test.orders.>:all")),
         ]),
     ))
     .await?;
@@ -409,7 +409,7 @@ async fn reserved_subjects_are_denied_even_with_a_broad_grant() -> Result<()> {
             ("subject-allow", ">"),
             ("stream-allow", STREAM),
             ("bucket-allow", COUNTS_BUCKET),
-            ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+            ("jetstream-subscriptions", &format!("{STREAM}:test.orders.>:all")),
         ]),
     ))
     .await?;
@@ -452,7 +452,7 @@ async fn wildcard_publish_cannot_widen_a_grant() -> Result<()> {
             ("subject-allow", "test.>,other.*"),
             ("stream-allow", STREAM),
             ("bucket-allow", COUNTS_BUCKET),
-            ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+            ("jetstream-subscriptions", &format!("{STREAM}:test.orders.>:all")),
         ]),
     ))
     .await?;
@@ -518,7 +518,7 @@ async fn subscription_outside_grant_fails_the_deployment() -> Result<()> {
                 ("servers", &h.nats_url),
                 ("subject-allow", "test.>"),
                 ("stream-allow", "SOMETHING-ELSE"),
-                ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+                ("jetstream-subscriptions", &format!("{STREAM}:test.orders.>:all")),
             ]),
         ),
     )
@@ -575,7 +575,7 @@ async fn each_workload_is_held_to_its_own_grant() -> Result<()> {
             ("subject-allow", "test.>,other.>"),
             ("stream-allow", STREAM),
             ("bucket-allow", COUNTS_BUCKET),
-            ("subscriptions", &format!("{STREAM}:test.orders.broad:all")),
+            ("jetstream-subscriptions", &format!("{STREAM}:test.orders.broad:all")),
         ]),
     ))
     .await
@@ -588,7 +588,7 @@ async fn each_workload_is_held_to_its_own_grant() -> Result<()> {
             ("subject-allow", "test.>"),
             ("stream-allow", STREAM),
             ("bucket-allow", COUNTS_BUCKET),
-            ("subscriptions", &format!("{STREAM}:test.orders.narrow:all")),
+            ("jetstream-subscriptions", &format!("{STREAM}:test.orders.narrow:all")),
         ]),
     ))
     .await
@@ -653,7 +653,7 @@ async fn async_p3_handler_delivers_and_auto_acks() -> Result<()> {
             ("subject-allow", "test.>"),
             ("stream-allow", STREAM),
             ("bucket-allow", COUNTS_BUCKET),
-            ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+            ("jetstream-subscriptions", &format!("{STREAM}:test.orders.>:all")),
         ]),
     ))
     .await
@@ -702,7 +702,7 @@ async fn async_p3_denial_carries_reason_and_target() -> Result<()> {
             ("subject-allow", "test.>"),
             ("stream-allow", STREAM),
             ("bucket-allow", COUNTS_BUCKET),
-            ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+            ("jetstream-subscriptions", &format!("{STREAM}:test.orders.>:all")),
         ]),
     ))
     .await
@@ -749,7 +749,7 @@ async fn jetstream_filter_outside_the_subject_grant_is_refused() -> Result<()> {
                 ("servers", &h.nats_url),
                 ("subject-allow", "test.payments.>"),
                 ("stream-allow", STREAM),
-                ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+                ("jetstream-subscriptions", &format!("{STREAM}:test.orders.>:all")),
             ]),
         ),
     )
@@ -780,7 +780,7 @@ async fn jetstream_subscription_rebuilds_when_delivery_dies() -> Result<()> {
             ("subject-allow", "test.>"),
             ("stream-allow", STREAM),
             ("bucket-allow", COUNTS_BUCKET),
-            ("subscriptions", &format!("{STREAM}:test.orders.>:new")),
+            ("jetstream-subscriptions", &format!("{STREAM}:test.orders.>:new")),
         ]),
     ))
     .await
@@ -917,7 +917,7 @@ async fn a_nakd_message_survives_a_consumer_rebuild() -> Result<()> {
             ("stream-allow", STREAM),
             ("bucket-allow", COUNTS_BUCKET),
             ("ack-mode", "auto"),
-            ("subscriptions", &format!("{STREAM}:test.orders.>:new")),
+            ("jetstream-subscriptions", &format!("{STREAM}:test.orders.>:new")),
         ]),
     ))
     .await
@@ -1537,7 +1537,7 @@ async fn a_pooled_component_keeps_state_across_deliveries() -> Result<()> {
             ("servers", &h.nats_url),
             ("subject-allow", "test.>"),
             ("stream-allow", STREAM),
-            ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+            ("jetstream-subscriptions", &format!("{STREAM}:test.orders.>:all")),
         ]),
     ))
     .await
@@ -1566,7 +1566,7 @@ async fn an_ephemeral_component_starts_fresh_every_delivery() -> Result<()> {
             ("servers", &h.nats_url),
             ("subject-allow", "test.>"),
             ("stream-allow", STREAM),
-            ("subscriptions", &format!("{STREAM}:test.orders.>:all")),
+            ("jetstream-subscriptions", &format!("{STREAM}:test.orders.>:all")),
         ]),
         0,
     ))

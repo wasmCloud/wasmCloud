@@ -421,9 +421,9 @@ runtime:
       # replies, and the host's one-shot reply grant authorizes a responder's
       # reply without any `_INBOX` grant at all.
       #
-      # What stays in the workload's manifest: `subscriptions`,
-      # `core-subscriptions`, `kv-watches`, and `ack-mode` — what it wants
-      # delivered, within the grant declared here.
+      # What stays in the workload's manifest: `jetstream-subscriptions`,
+      # `core-subscriptions`, `kv-watches`, `component`, and `ack-mode` — what
+      # it wants delivered, within the grant declared here.
       #
       # Example:
       #

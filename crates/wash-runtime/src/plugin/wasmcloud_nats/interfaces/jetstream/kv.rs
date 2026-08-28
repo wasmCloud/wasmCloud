@@ -11,8 +11,8 @@ use wasmtime::component::{Accessor, Resource};
 use crate::engine::ctx::{ActiveCtx, SharedCtx};
 
 use crate::plugin::wasmcloud_nats::interfaces::{
-    NatsId, bucket_lookup_err, chain_timed_out, check_bucket, check_payload, kv, kv_err,
-    labeled_kv, types, with_deadline,
+    NatsId, bucket_lookup_err, chain_timed_out, check_bucket, check_payload, jetstream_err, kv,
+    kv_err, labeled_kv, types, with_deadline,
 };
 use crate::plugin::wasmcloud_nats::jetstream::BucketHandle;
 
@@ -20,6 +20,36 @@ use crate::plugin::wasmcloud_nats::jetstream::BucketHandle;
 const MAX_HISTORY_DURATION: Duration = Duration::from_secs(10);
 /// Cap on keys returned by one `keys` call.
 const KV_KEYS_BATCH: usize = 1000;
+
+/// Refuses a `keys` filter that could not be a KV subject pattern.
+///
+/// It is concatenated onto the bucket's subject prefix, so an empty token or
+/// stray whitespace produces a filter the server rejects at consumer-create
+/// time, with a message that names neither the bucket nor the call.
+fn validate_key_filter(filter: &str) -> Result<(), types::NatsError> {
+    let bad = filter.is_empty()
+        || filter.chars().any(char::is_whitespace)
+        || filter.split('.').any(str::is_empty);
+    if bad {
+        return Err(types::NatsError::Unexpected(format!(
+            "kv keys filter `{filter}` is not a valid subject filter; use `>` for every key"
+        )));
+    }
+    Ok(())
+}
+
+/// Whether a KV message is a delete or purge tombstone rather than a live
+/// value. The operation rides in a header; anything else is a put.
+fn is_tombstone(message: &async_nats::Message) -> bool {
+    message
+        .headers
+        .as_ref()
+        .and_then(|h| h.get("KV-Operation"))
+        .is_some_and(|op| {
+            let op = op.as_str();
+            op == "DEL" || op == "PURGE"
+        })
+}
 
 /// True when a failed `update` was refused by the CAS check rather than by
 /// anything else.
@@ -234,38 +264,87 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
     async fn keys(
         accessor: &Accessor<T, Self>,
         rep: Resource<BucketHandle>,
+        filter: String,
     ) -> wasmtime::Result<Result<kv::KeyPage, types::NatsError>> {
-        let store = accessor.with(|mut a| store_ref(&mut a, &rep))?;
-        let mut iter = match store.keys().await {
-            Ok(i) => i,
-            Err(e) => {
-                let timed_out = matches!(e.kind(), jetstream::kv::WatchErrorKind::TimedOut);
-                return Ok(Err(kv_err("kv keys failed", timed_out, e)));
-            }
+        let (store, conn) = accessor.with(|mut a| {
+            let handle = a.get().table.get(&rep)?;
+            Ok::<_, wasmtime::Error>((handle.store.clone(), handle.conn.clone()))
+        })?;
+        if let Err(e) = validate_key_filter(&filter) {
+            return Ok(Err(e));
+        }
+        // The filter goes onto the consumer rather than being applied to a
+        // full listing: the cap then bounds *matched* keys, which is what
+        // gives a guest a way to reach past it in a bucket that holds more.
+        // `Store::keys` is this consumer with a filter of `>` hard-coded.
+        let consumer = match store
+            .stream
+            .create_consumer(jetstream::consumer::push::OrderedConfig {
+                deliver_subject: conn.client.new_inbox(),
+                description: Some("wasmcloud:nats kv keys consumer".to_string()),
+                filter_subject: format!("{}{filter}", store.prefix),
+                headers_only: true,
+                replay_policy: jetstream::consumer::ReplayPolicy::Instant,
+                // Only the current state of each key, not its whole history.
+                deliver_policy: jetstream::consumer::DeliverPolicy::LastPerSubject,
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => return Ok(Err(jetstream_err("kv keys failed", e))),
         };
+        // A filter matching nothing yields a consumer with nothing pending,
+        // and its message stream would never end on its own.
+        if consumer.cached_info().num_pending == 0 {
+            return Ok(Ok(kv::KeyPage {
+                keys: Vec::new(),
+                truncated: false,
+            }));
+        }
+        let mut messages = match consumer.messages().await {
+            Ok(m) => m,
+            Err(e) => return Ok(Err(jetstream_err("kv keys failed", e))),
+        };
+
         let mut out = Vec::new();
         let mut truncated = false;
-        while let Some(next) = iter.next().await {
-            match next {
-                Ok(k) => {
-                    out.push(k);
-                    // The cap stays — draining an arbitrarily large bucket
-                    // into one guest allocation is its own failure mode — but
-                    // the walk goes one key past it. That key is the only
-                    // evidence the bucket holds more, and dropping it is what
-                    // made a partial listing indistinguishable from a whole
-                    // one.
-                    if out.len() > KV_KEYS_BATCH {
-                        warn!("kv keys truncated at {KV_KEYS_BATCH} entries — bucket has more");
-                        out.truncate(KV_KEYS_BATCH);
-                        truncated = true;
-                        break;
-                    }
-                }
+        while let Some(next) = messages.next().await {
+            let message = match next {
+                Ok(m) => m,
                 Err(e) => {
                     let timed_out = chain_timed_out(&e);
                     return Ok(Err(kv_err("kv keys iter failed", timed_out, e)));
                 }
+            };
+            let last = message
+                .info()
+                .map(|info| info.pending == 0)
+                .unwrap_or(true);
+            // A delete or purge tombstone is still the latest message on its
+            // subject, so it arrives here and is not a live key.
+            if !is_tombstone(&message) {
+                if let Some(key) = message.subject.strip_prefix(store.prefix.as_str()) {
+                    out.push(key.to_string());
+                }
+                // The cap stays — draining an arbitrarily large bucket into
+                // one guest allocation is its own failure mode — but the walk
+                // goes one key past it. That key is the only evidence the
+                // bucket holds more, and dropping it is what made a partial
+                // listing indistinguishable from a whole one.
+                if out.len() > KV_KEYS_BATCH {
+                    warn!(
+                        %filter,
+                        "kv keys truncated at {KV_KEYS_BATCH} entries — narrow the filter to \
+                         reach the rest"
+                    );
+                    out.truncate(KV_KEYS_BATCH);
+                    truncated = true;
+                    break;
+                }
+            }
+            if last {
+                break;
             }
         }
         Ok(Ok(kv::KeyPage {
@@ -332,8 +411,8 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
         // The probe closes the common case, but history can expire between it
         // and the consumer, so the drain carries its own bound.
         let mut out = Vec::new();
-        let deadline =
-            tokio::time::Instant::now() + conn.request_timeout.unwrap_or(MAX_HISTORY_DURATION);
+        let budget = conn.request_timeout.unwrap_or(MAX_HISTORY_DURATION);
+        let deadline = tokio::time::Instant::now() + budget;
         loop {
             match tokio::time::timeout_at(deadline, hist.next()).await {
                 Ok(Some(Ok(e))) => out.push(kv_entry_to_wit(&e)),
@@ -350,10 +429,11 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
                          timeout rather than blocking the guest"
                     );
                     return Ok(Err(types::NatsError::Timeout(format!(
+                        // The budget, not the remaining time: the deadline has
+                        // already fired here, so a `saturating_duration_since`
+                        // against it always renders "within 0ms".
                         "kv history on '{key}' did not complete within {}ms",
-                        deadline
-                            .saturating_duration_since(tokio::time::Instant::now())
-                            .as_millis()
+                        budget.as_millis()
                     ))));
                 }
             }

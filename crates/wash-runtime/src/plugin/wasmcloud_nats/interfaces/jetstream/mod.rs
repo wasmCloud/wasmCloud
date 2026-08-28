@@ -173,8 +173,8 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
                 if conn.policy.check_stored_subject(&m.subject).is_err() {
                     return Ok(Err(denied(
                         Denied::NotGranted,
-                        types::DeniedResource::Message,
-                        &format!("{stream_name}#{sequence}"),
+                        types::DeniedResource::Message(sequence),
+                        &stream_name,
                     )));
                 }
                 Ok(Ok(js::StoredMessage {
@@ -360,19 +360,7 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
         // every subject in the stream. Refused at the attach, which is a much
         // better place to fail than per delivery, and the same boundary a
         // declarative `subscriptions:` entry is held to.
-        let filters: Vec<&str> = if !info.config.filter_subject.is_empty() {
-            vec![info.config.filter_subject.as_str()]
-        } else if !info.config.filter_subjects.is_empty() {
-            info.config
-                .filter_subjects
-                .iter()
-                .map(String::as_str)
-                .collect()
-        } else {
-            // No filter at all is the whole stream.
-            vec![">"]
-        };
-        for filter in filters {
+        for filter in consumer_filters(&info.config) {
             if let Err(reason) = conn.policy.check_filter(filter) {
                 return Ok(Err(denied(reason, types::DeniedResource::Subject, filter)));
             }
@@ -392,7 +380,7 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
 
         let resource = accessor.with(|mut a| {
             a.get().table.push(PullConsumerHandle {
-                consumer: Some(opened),
+                consumer: opened,
                 max_fetch_bytes: u64::try_from(conn.limits.subscription_capacity_bytes)
                     .unwrap_or(u64::MAX),
                 budget: conn.fetch_budget.clone(),
@@ -616,13 +604,38 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
             Err(e) => return Ok(Err(stream_lookup_err(format!("stream '{stream_name}'"), e))),
         };
         match stream.consumer_info(&consumer).await {
-            Ok(info) => Ok(Ok(consumer_info_to_wit(&info))),
+            Ok(info) => {
+                // Same boundary `open_pull_consumer` holds a consumer to, for
+                // the same reason: a filter subject is a subject name, and a
+                // binding that may not read those messages may not learn the
+                // names either.
+                for filter in consumer_filters(&info.config) {
+                    if let Err(reason) = conn.policy.check_filter(filter) {
+                        return Ok(Err(denied(reason, types::DeniedResource::Subject, filter)));
+                    }
+                }
+                Ok(Ok(consumer_info_to_wit(&info)))
+            }
             Err(e) => Ok(Err(consumer_lookup_err(&stream_name, &consumer, e))),
         }
     }
 }
 
 impl js::Host for ActiveCtx<'_> {}
+
+/// The subjects a consumer's config filters on, as the grant check sees them.
+///
+/// A consumer with neither filter set captures the stream's whole subject
+/// space, which is `>`.
+fn consumer_filters(config: &jetstream::consumer::Config) -> Vec<&str> {
+    if !config.filter_subject.is_empty() {
+        vec![config.filter_subject.as_str()]
+    } else if !config.filter_subjects.is_empty() {
+        config.filter_subjects.iter().map(String::as_str).collect()
+    } else {
+        vec![">"]
+    }
+}
 
 fn consumer_info_to_wit(info: &jetstream::consumer::Info) -> js::ConsumerInfo {
     js::ConsumerInfo {

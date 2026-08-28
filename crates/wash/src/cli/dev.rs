@@ -152,8 +152,11 @@ impl CliCommand for DevCommand {
             debug!("wasmcloud:messaging plugin registered with in-memory backend");
         }
 
-        // `wasmcloud:nats` — NATS-native core pub/sub, JetStream, and KV.
+        // `wasmcloud:nats` is a NATS-native core pub/sub, JetStream, and KV.
         // Unlike the plugins above it borrows no *client* from the dev host: it
+        // opens one per workload, under that workload's own credentials and
+        // grant.
+        //
         // A dev host declares bindings the same way `wash host` does
         // (`dev.wasmcloud_nats`, with `dev.data_nats_url` as the address a
         // binding falls back to), but leaves a workload free to describe its

@@ -340,8 +340,24 @@ impl WasmcloudNats {
     ///
     /// Best effort throughout: a server without JetStream, a stream that does
     /// not exist yet, or a lookup that fails is not a reason to refuse a bind.
-    async fn warn_on_silently_captured_subjects(
-        &self,
+    ///
+    /// Detached rather than awaited: it is a round trip to the server for a log
+    /// line, and every subscription on the binding would otherwise attach that
+    /// much later. Nothing downstream reads its result.
+    fn warn_on_silently_captured_subjects(
+        workload_id: &str,
+        binding: &str,
+        handle: Arc<ConnHandle>,
+    ) {
+        let workload_id = workload_id.to_string();
+        let binding = binding.to_string();
+        tokio::spawn(async move {
+            let (workload_id, binding) = (workload_id.as_str(), binding.as_str());
+            Self::report_silently_captured_subjects(workload_id, binding, &handle).await;
+        });
+    }
+
+    async fn report_silently_captured_subjects(
         workload_id: &str,
         binding: &str,
         handle: &ConnHandle,
@@ -424,6 +440,7 @@ impl WasmcloudNats {
         kv_watches: Vec<KvWatchConfig>,
         cancel_token: tokio_util::sync::CancellationToken,
         execution_meter: crate::observability::ExecutionTimeMeter,
+        warm_sets: Arc<subscriber::WarmSets>,
     ) -> anyhow::Result<()> {
         let workload_id = workload.id();
         let Some(handle) = self.connections.get_named(workload_id, binding).await else {
@@ -506,8 +523,7 @@ impl WasmcloudNats {
         // JetStream above the stream's own per-message limit, and neither the
         // publisher nor this host observes the loss. Nothing at run time can
         // see it, so it is said here, once, while the coordinates are known.
-        self.warn_on_silently_captured_subjects(workload_id, binding, &handle)
-            .await;
+        Self::warn_on_silently_captured_subjects(workload_id, binding, handle.clone());
 
         if !jetstream_subs.is_empty() {
             subscriber::spawn_jetstream_subscriptions(
@@ -519,6 +535,7 @@ impl WasmcloudNats {
                 execution_meter.clone(),
                 failure_sink.clone(),
                 workload_id,
+                warm_sets.clone(),
             )
             .await?;
         }
@@ -533,6 +550,7 @@ impl WasmcloudNats {
                 failure_sink.clone(),
                 workload_id,
                 self.host_backlog.clone(),
+                warm_sets.clone(),
             )
             .await?;
         }
@@ -546,6 +564,7 @@ impl WasmcloudNats {
                 execution_meter,
                 failure_sink,
                 workload_id,
+                warm_sets,
             )
             .await?;
         }
@@ -819,19 +838,28 @@ impl HostPlugin for WasmcloudNats {
 
         for interface in &bound {
             let binding = binding_name(interface);
+            // Every other key this plugin reads accepts either spelling, so
+            // these do too.
+            let cfg = |key: &str| -> Option<&String> {
+                interface
+                    .config
+                    .iter()
+                    .find(|(k, _)| config::canonical_key(k) == key)
+                    .map(|(_, v)| v)
+            };
             // The runtime hands an unnamed host-interface entry to every
             // component whose world covers it, which for a subscription means
             // every handler in the workload receives every message. `component`
             // is how an author says which handler a subscription was written
             // for; entries that name another component are simply not this
             // component's.
-            let targeted = match interface.config.get("component") {
+            let targeted = match cfg("component") {
                 Some(target) if target.as_str() != component_id => continue,
                 Some(_) => true,
                 None => false,
             };
             if serves(interface, &["handler", "jetstream-handler"])
-                && let Some(raw) = interface.config.get("subscriptions")
+                && let Some(raw) = cfg("jetstream-subscriptions")
             {
                 let subs = parse_jetstream_subscriptions(binding, raw)?;
                 if !targeted {
@@ -842,13 +870,13 @@ impl HostPlugin for WasmcloudNats {
                             }
                             None => format!("{}:{}", sub.stream, sub.filter_subject),
                         };
-                        subscription_spec("subscriptions", binding, value)
+                        subscription_spec("jetstream-subscriptions", binding, value)
                     }));
                 }
                 jetstream_subs.extend(subs);
             }
             if serves(interface, &["handler", "core-handler"])
-                && let Some(raw) = interface.config.get("core-subscriptions")
+                && let Some(raw) = cfg("core-subscriptions")
             {
                 let subs = parse_core_subscriptions(binding, raw)?;
                 if !targeted {
@@ -863,7 +891,7 @@ impl HostPlugin for WasmcloudNats {
                 core_subs.extend(subs);
             }
             if serves(interface, &["handler", "kv-handler"])
-                && let Some(raw) = interface.config.get("kv-watches")
+                && let Some(raw) = cfg("kv-watches")
             {
                 let watches = parse_kv_watches(binding, raw)?;
                 if !targeted {
@@ -961,6 +989,10 @@ impl HostPlugin for WasmcloudNats {
         bindings.sort_unstable();
         bindings.dedup();
 
+        // Per component, not per binding: `poolSize` is the component's, and
+        // the parked stores are interchangeable across its bindings.
+        let warm_sets = subscriber::WarmSets::for_component(workload, component_id).await;
+
         for binding in bindings {
             let jetstream_subs: Vec<_> = jetstream_subs
                 .iter()
@@ -986,6 +1018,7 @@ impl HostPlugin for WasmcloudNats {
                 kv_watches,
                 cancel_token.clone(),
                 execution_meter.clone(),
+                warm_sets.clone(),
             )
             .await?;
         }
@@ -1101,7 +1134,7 @@ mod tests {
             entry(
                 "wasmcloud:nats/jetstream-handler@0.1.0",
                 None,
-                &[("subscriptions", "ORDERS:orders.eu.>")],
+                &[("jetstream-subscriptions", "ORDERS:orders.eu.>")],
             ),
         ];
 
@@ -1115,7 +1148,7 @@ mod tests {
         assert_eq!(parsed.policy.subject_allow, vec!["orders.>"]);
         assert_eq!(parsed.policy.stream_allow, vec!["ORDERS"]);
         assert_eq!(
-            config.get("subscriptions").map(String::as_str),
+            config.get("jetstream-subscriptions").map(String::as_str),
             Some("ORDERS:orders.eu.>")
         );
     }
@@ -1173,7 +1206,7 @@ mod tests {
         let entries = [entry(
             "wasmcloud:nats/jetstream-handler@0.1.0",
             None,
-            &[("subscriptions", "ORDERS:orders.>")],
+            &[("jetstream-subscriptions", "ORDERS:orders.>")],
         )];
         let merged = merge(&entries).unwrap();
         let err = NatsConfig::from_map(&merged[0].1).unwrap_err().to_string();

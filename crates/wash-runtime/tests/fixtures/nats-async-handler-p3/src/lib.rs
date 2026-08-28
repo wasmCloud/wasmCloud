@@ -55,12 +55,13 @@ fn reason(r: DenialReason) -> &'static str {
     }
 }
 
-fn target(t: DeniedResource) -> &'static str {
+fn target(t: &DeniedResource) -> String {
     match t {
-        DeniedResource::Subject => "subject",
-        DeniedResource::Stream => "stream",
-        DeniedResource::Bucket => "bucket",
-        DeniedResource::Message => "message",
+        DeniedResource::Subject => "subject".to_string(),
+        DeniedResource::Stream => "stream".to_string(),
+        DeniedResource::Bucket => "bucket".to_string(),
+        // The sequence rides on the variant; the denial's `name` is the stream.
+        DeniedResource::Message(sequence) => format!("message#{sequence}"),
     }
 }
 
@@ -70,7 +71,7 @@ fn label(err: &NatsError) -> String {
             format!(
                 "denied:{}:{}:{}",
                 reason(d.reason),
-                target(d.target),
+                target(&d.target),
                 d.name
             )
         }
@@ -84,6 +85,8 @@ fn label(err: &NatsError) -> String {
         NatsError::NoMessages => "no-messages".to_string(),
         NatsError::LimitExceeded(detail) => format!("limit-exceeded:{detail}"),
         NatsError::Disconnected => "disconnected".to_string(),
+        NatsError::AlreadySettled => "already-settled".to_string(),
+        NatsError::AckOwnedByHost => "ack-owned-by-host".to_string(),
         NatsError::Timeout(d) => format!("timeout:{d}"),
         NatsError::Connection(d) => format!("connection:{d}"),
         NatsError::Jetstream(d) => format!("jetstream:{d}"),

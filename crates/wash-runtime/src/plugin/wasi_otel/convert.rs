@@ -309,11 +309,7 @@ pub fn extract_counter_values(metrics: &wasi_metrics::ResourceMetrics) -> Vec<Co
 // ============================================================================
 
 /// Convert a WASI datetime to SystemTime
-// `clocks0_2_0`, not `clocks`: the WIT tree now carries wasi:clocks at 0.2.0
-// (this world's import) and 0.2.8 (the `wasmcloud:nats` guest worlds' include),
-// and bindgen disambiguates generated module names by version once a second
-// one exists.
-fn convert_datetime(dt: &super::bindings::wasi::clocks0_2_0::wall_clock::Datetime) -> SystemTime {
+fn convert_datetime(dt: &super::bindings::wasi::clocks::wall_clock::Datetime) -> SystemTime {
     let duration = Duration::new(dt.seconds, dt.nanoseconds);
     UNIX_EPOCH.checked_add(duration).unwrap_or(UNIX_EPOCH)
 }
