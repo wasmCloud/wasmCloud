@@ -92,6 +92,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Read-only pull for the drift check's destination probe.
+      packages: read
     outputs:
       matrix: ${{ steps.list.outputs.matrix }}
       has_packages: ${{ steps.list.outputs.has_packages }}
@@ -203,6 +205,21 @@ jobs:
         # Implementation lives in build-wit-matrix.mjs (JSON construction
         # is easier to get right in JS than in bash string-concat).
         run: node .github/scripts/build-wit-matrix.mjs
+
+      - name: Login to ghcr.io
+        # The drift check probes the destination with `docker manifest
+        # inspect`. Anonymously, ghcr.io answers a never-published
+        # repository with `denied` from the token endpoint rather than a
+        # 404, so a brand-new WIT package is indistinguishable from an
+        # auth failure and the check aborts. Authenticated, the same probe
+        # returns `manifest unknown` — the same credential the publish job
+        # already relies on for its immutability check.
+        if: steps.list.outputs.has_packages == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ github.token }}
 
       - name: Check for silent drift against already-published stable versions
         # `publish`'s immutability check means a stable version that's
