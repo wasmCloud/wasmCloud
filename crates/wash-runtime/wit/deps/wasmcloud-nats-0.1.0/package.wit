@@ -525,8 +525,8 @@ world kv-watcher {
 }
 
 // These worlds describe the NATS surface alone, which is what the host binds.
-// A standalone component also imports the WASI command-line surface its
-// language runtime needs (environment, clocks, random, stdio, preopens), and
-// a world without those fails to componentize — but which revision of it is
-// the application's business, not this interface's. See the example and the
-// `wash new` template for a world that carries both halves.
+// A component also needs the WASI platform surface its language runtime pulls
+// in, but which revision is the application's business, not this interface's:
+// a `wasm32-wasip2`/`wasip3` target supplies it (examples/nats-jetstream-replay
+// includes nothing else), while a `wasm32-wasip1` build names in its own world
+// whatever it awaits — `wasi:clocks/monotonic-clock`, and so on.
