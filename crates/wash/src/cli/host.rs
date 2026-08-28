@@ -412,14 +412,16 @@ fn host_plugin_registry_credentials(
 
 impl CliCommand for HostCommand {
     async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
-        // Resolved before anything is connected or built. A bad size is a typo
+        // Validated before anything is connected or built. A bad size is a typo
         // in a flag, and reporting it after a NATS dial has already failed
-        // buries the actionable error under an unrelated one.
-        let host_memory = crate::config::host_memory(
+        // buries the actionable error under an unrelated one. The resolved
+        // numbers are reported later, by the engine that installs them.
+        let host_memory = wash_runtime::engine::host_memory::HostMemoryBudgets::resolve_strs(
             self.max_guest_memory.as_deref(),
             self.default_heap_memory.as_deref(),
             self.core_instances,
-        )?;
+        )
+        .map_err(|e| anyhow::anyhow!(e))?;
 
         // Installed before connect_nats so TLS-enabled NATS clusters have a
         // crypto provider available. Idempotent; also called by Ingress::new.

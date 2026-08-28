@@ -251,25 +251,56 @@ impl HostMemoryBudgets {
     /// Rejects a zero for any of the three: each would mean "this host runs
     /// nothing", which is never what an operator meant, and two of them would
     /// panic or misbehave inside wasmtime rather than saying so.
+    ///
+    /// Errors name knobs canonically (`max-guest-memory`), not as flags. A
+    /// value may arrive from YAML or the environment, never from a flag.
     pub fn resolve(
         max_guest_memory: Option<u64>,
         default_heap_memory: Option<u64>,
         core_instances: Option<u32>,
     ) -> Result<Self, String> {
         if max_guest_memory == Some(0) {
-            return Err("--max-guest-memory must be greater than zero".to_string());
+            return Err("max-guest-memory must be greater than zero".to_string());
         }
         if default_heap_memory == Some(0) {
-            return Err("--default-heap-memory must be greater than zero".to_string());
+            return Err("default-heap-memory must be greater than zero".to_string());
         }
         if core_instances == Some(0) {
-            return Err("--core-instances must be at least 1".to_string());
+            return Err("core-instances must be at least 1".to_string());
         }
         Ok(Self {
             max_guest_memory: max_guest_memory.unwrap_or_else(derive_max_guest_memory),
             default_heap_memory: default_heap_memory.unwrap_or(WASMTIME_DEFAULT_HEAP_MEMORY),
             core_instances: core_instances.unwrap_or(WASMTIME_DEFAULT_CORE_INSTANCES),
         })
+    }
+
+    /// [`Self::resolve`] over the strings a host's configuration holds.
+    ///
+    /// Sizes follow [`parse_bytes`]. A blank value counts as unset: clap's
+    /// `env` fallback yields `Some("")` for a variable that is set but empty.
+    ///
+    /// # Errors
+    ///
+    /// A size that does not parse, naming the knob, plus everything
+    /// [`Self::resolve`] rejects.
+    pub fn resolve_strs(
+        max_guest_memory: Option<&str>,
+        default_heap_memory: Option<&str>,
+        core_instances: Option<u32>,
+    ) -> Result<Self, String> {
+        let parse = |value: Option<&str>, knob: &str| -> Result<Option<u64>, String> {
+            value
+                .map(str::trim)
+                .filter(|raw| !raw.is_empty())
+                .map(|raw| parse_bytes(raw).map_err(|e| format!("invalid {knob}: {e}")))
+                .transpose()
+        };
+        Self::resolve(
+            parse(max_guest_memory, "max-guest-memory")?,
+            parse(default_heap_memory, "default-heap-memory")?,
+            core_instances,
+        )
     }
 
     /// Address space the pooling allocator will reserve: every slot is sized
@@ -296,7 +327,7 @@ impl HostMemoryBudgets {
         // allocator can actually map, it will fail at the first instantiation.
         if self.pool_reservation() > MAX_POOL_RESERVATION {
             return Some(format!(
-                "--default-heap-memory {} across --core-instances {} would reserve {} of \
+                "default-heap-memory {} across core-instances {} would reserve {} of \
                  address space, past the {} the pooling allocator is probed for at startup. \
                  Instantiation will fail once the pool is exhausted. Lower one of the two.",
                 render_bytes(self.default_heap_memory),
@@ -307,7 +338,7 @@ impl HostMemoryBudgets {
         }
         if self.default_heap_memory > self.max_guest_memory {
             return Some(format!(
-                "--default-heap-memory {} is larger than this host's whole memory budget \
+                "default-heap-memory {} is larger than this host's whole memory budget \
                  ({}), so a single guest could exhaust the host on its own",
                 render_bytes(self.default_heap_memory),
                 render_bytes(self.max_guest_memory),
@@ -446,24 +477,6 @@ mod tests {
     }
 
     #[test]
-    fn fractional_and_exponent_quantities_are_accepted() {
-        // Both are legal in `resources.limits.memory`.
-        assert_eq!(parse_bytes("1.5Gi"), Ok(1_610_612_736));
-        assert_eq!(parse_bytes("0.5Mi"), Ok(MIB / 2));
-        assert_eq!(parse_bytes("1e9"), Ok(1_000_000_000));
-        assert_eq!(parse_bytes("1.5E3"), Ok(1_500));
-        // Exact, not an `f64` approximation of 1.1 x 2^30.
-        assert_eq!(parse_bytes("1.1Gi"), Ok(1_181_116_006));
-        // Truncates rather than rounding up, so it can never over-read.
-        assert_eq!(parse_bytes("1.9"), Ok(1));
-        // The suffix table claims `E` and `Ei` before the exponent branch.
-        assert_eq!(parse_bytes("1E"), Ok(1_000_000_000_000_000_000));
-        assert_eq!(parse_bytes("1Ei"), Ok(1024 * 1024 * 1024 * 1024 * MIB));
-        assert!(parse_bytes("1.2.3Gi").is_err());
-        assert!(parse_bytes("1eX").is_err());
-    }
-
-    #[test]
     fn a_truncated_exponent_is_refused_rather_than_read_as_exa() {
         // Folded onto `E`, a `1e9` that lost its digits reads as an exabyte.
         for input in ["1e", "1eb"] {
@@ -503,6 +516,24 @@ mod tests {
     }
 
     #[test]
+    fn fractional_and_exponent_quantities_are_accepted() {
+        // Both are legal in `resources.limits.memory`.
+        assert_eq!(parse_bytes("1.5Gi"), Ok(1_610_612_736));
+        assert_eq!(parse_bytes("0.5Mi"), Ok(MIB / 2));
+        assert_eq!(parse_bytes("1e9"), Ok(1_000_000_000));
+        assert_eq!(parse_bytes("1.5E3"), Ok(1_500));
+        // Exact, not an `f64` approximation of 1.1 x 2^30.
+        assert_eq!(parse_bytes("1.1Gi"), Ok(1_181_116_006));
+        // Truncates rather than rounding up, so it can never over-read.
+        assert_eq!(parse_bytes("1.9"), Ok(1));
+        // The suffix table claims `E` and `Ei` before the exponent branch.
+        assert_eq!(parse_bytes("1E"), Ok(1_000_000_000_000_000_000));
+        assert_eq!(parse_bytes("1Ei"), Ok(1024 * 1024 * 1024 * 1024 * MIB));
+        assert!(parse_bytes("1.2.3Gi").is_err());
+        assert!(parse_bytes("1eX").is_err());
+    }
+
+    #[test]
     fn unset_knobs_resolve_to_wasmtimes_own_defaults() {
         // The whole safety property of this change: setting nothing must leave
         // the host exactly as it was.
@@ -512,6 +543,52 @@ mod tests {
         assert!(
             resolved.max_guest_memory >= MIN_DERIVED_MAX_GUEST_MEMORY,
             "an unset budget is derived, never zero or unbounded"
+        );
+    }
+
+    #[test]
+    fn string_knobs_resolve_the_same_as_parsed_ones() {
+        // The string form is `resolve` plus a parse, nothing more.
+        assert_eq!(
+            HostMemoryBudgets::resolve_strs(Some("8GiB"), Some("128MiB"), Some(100)),
+            HostMemoryBudgets::resolve(Some(8 * 1024 * MIB), Some(128 * MIB), Some(100))
+        );
+        // `2G` and `2Gi` are different numbers and stay different here.
+        let decimal = HostMemoryBudgets::resolve_strs(Some("2G"), None, None).unwrap();
+        let binary = HostMemoryBudgets::resolve_strs(Some("2Gi"), None, None).unwrap();
+        assert_eq!(decimal.max_guest_memory, 2_000_000_000);
+        assert_eq!(binary.max_guest_memory, 2 * 1024 * MIB);
+        // The zero checks apply to a parsed size too, not just a passed one.
+        assert!(HostMemoryBudgets::resolve_strs(Some("0"), None, None).is_err());
+    }
+
+    #[test]
+    fn a_blank_knob_is_unset_rather_than_a_parse_failure() {
+        // An empty ConfigMap key or `value: ""` reaches clap as `Some("")`.
+        let blank = HostMemoryBudgets::resolve_strs(Some(""), Some("   "), None)
+            .expect("a blank knob is unset, not a bad size");
+        // Compared against the fixed defaults, not a second `resolve(None, ..)`:
+        // the derived budget re-reads the cgroup and could differ.
+        assert_eq!(blank.default_heap_memory, WASMTIME_DEFAULT_HEAP_MEMORY);
+        assert!(blank.max_guest_memory >= MIN_DERIVED_MAX_GUEST_MEMORY);
+    }
+
+    #[test]
+    fn an_unparseable_size_names_the_knob_it_came_from() {
+        // Two of the three knobs are sizes; the parse error alone does not say
+        // which one failed.
+        let err = HostMemoryBudgets::resolve_strs(None, Some("512 gigabytes"), None)
+            .expect_err("an unparseable size is refused");
+        assert!(
+            err.contains("default-heap-memory"),
+            "the error must name the knob: {err}"
+        );
+
+        let err = HostMemoryBudgets::resolve_strs(Some("lots"), None, None)
+            .expect_err("an unparseable size is refused");
+        assert!(
+            err.contains("max-guest-memory"),
+            "the error must name the knob: {err}"
         );
     }
 
@@ -563,7 +640,7 @@ mod tests {
             "names the instance count: {advisory}"
         );
         assert!(
-            advisory.contains("--default-heap-memory") && advisory.contains("--core-instances"),
+            advisory.contains("default-heap-memory") && advisory.contains("core-instances"),
             "names both knobs so it is actionable: {advisory}"
         );
     }
