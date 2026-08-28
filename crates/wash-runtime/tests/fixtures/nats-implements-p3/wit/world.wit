@@ -6,12 +6,16 @@ package wasmcloud:nats-implements-p3;
 // dispatches into. This is the leaf-node shape — a component bridging a leaf
 // cluster to a hub — and the reason the plugin routes per binding name.
 //
+// The one world here that names interfaces instead of `include`-ing a
+// published world: `include` cannot label what it brings in, and the plain
+// instances a published world would add go unlinked when a workload binds only
+// named instances. `types` is left implicit — `core` pulls it in.
+//
 // P3/wasip1: `wasmcloud:nats@0.1.0` is async throughout, and a labeled import
 // of a sync-signature interface fails componentization in wit-bindgen anyway.
 world nats-implements-p3 {
     import hub: wasmcloud:nats/core@0.1.0;
     import leaf: wasmcloud:nats/core@0.1.0;
-    import wasmcloud:nats/types@0.1.0;
     import wasi:clocks/monotonic-clock@0.3.0;
 
     export wasmcloud:nats/core-handler@0.1.0;
