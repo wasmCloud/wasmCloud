@@ -329,14 +329,16 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 		}
 
 		witWorld.Components = append(witWorld.Components, &runtimev2.Component{
-			Name:            c.Name,
-			Image:           c.Image,
-			ImagePullSecret: imagePullSecret,
-			ImagePullPolicy: translatePullPolicy(c.ImagePullPolicy),
-			PoolSize:        c.PoolSize,
-			MaxInvocations:  c.MaxInvocations,
-			MaxConcurrency:  c.MaxConcurrency,
-			LocalResources:  localResources,
+			Name:                 c.Name,
+			Image:                c.Image,
+			ImagePullSecret:      imagePullSecret,
+			ImagePullPolicy:      translatePullPolicy(c.ImagePullPolicy),
+			PoolSize:             c.PoolSize,
+			MaxInvocations:       c.MaxInvocations,
+			MaxConcurrency:       c.MaxConcurrency,
+			ReclaimWindowSeconds: c.ReclaimWindowSeconds,
+			ReclaimMinInstances:  c.ReclaimMinInstances,
+			LocalResources:       localResources,
 		})
 	}
 

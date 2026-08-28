@@ -760,7 +760,7 @@ async fn invoke_ephemeral_plain(
             reply,
             abandoned: call.flag(),
         }));
-        let outcome = match pool.offer(job) {
+        let outcome = match pool.try_dispatch(job) {
             Dispatch::Sent => Ok(()),
             // The pool has room. Build and instantiate the store out here,
             // where awaiting is allowed and where a component that fails to
@@ -771,7 +771,7 @@ async fn invoke_ephemeral_plain(
                     wasmtime::format_err!("new pooled store creation failed: {e:#}")
                 })?;
                 let instance = inv.pre.instantiate_async(&mut store).await?;
-                pool.install(ComponentInstance { store, instance }, job)
+                pool.dispatch_on_new(ComponentInstance { store, instance }, job)
             }
             Dispatch::Saturated(job) => Err(job),
         };

@@ -235,6 +235,7 @@ async fn setup(latency: Duration) -> Result<TestHarness> {
                 pool_size: 1,
                 max_invocations: 100,
                 max_concurrency: 1,
+                ..Default::default()
             }],
             host_interfaces: vec![WitInterface {
                 namespace: "wasmcloud".to_string(),

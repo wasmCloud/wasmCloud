@@ -30,7 +30,9 @@
 //!    many, after which it drains and its store drops. A call that times out
 //!    or fails in the host mid-call retires the instance the same way: the
 //!    guest work cannot be cancelled from the host, so draining and dropping
-//!    the store is what ends it.
+//!    the store is what ends it. So does the pool's idle sweep, through
+//!    [`InstanceDriver::retire`], when the component's traffic no longer
+//!    needs this many instances.
 //!
 //! A retired instance ends its own run loop as soon as its last call finishes,
 //! rather than waiting for the pool to notice. That matters for the timed-out
@@ -89,7 +91,7 @@ struct DriverState {
     retired: AtomicBool,
     /// Signalled when a retired instance's last call finishes, so its run loop
     /// stops there and then. Dropping the store is what ends guest work a
-    /// timed-out call left running, and waiting for the pool's next offer
+    /// timed-out call left running, and waiting for the pool's next dispatch
     /// would leave that running for as long as traffic stayed away.
     drained: tokio::sync::Notify,
 }
@@ -376,6 +378,15 @@ impl InstanceDriver {
     /// Whether this instance has served its last call and is only draining.
     pub(crate) fn is_retired(&self) -> bool {
         self.state.retired.load(Ordering::SeqCst)
+    }
+
+    /// Stop this instance admitting calls, from outside the calls running on
+    /// it: it drains what it already took, ends its run loop and drops its
+    /// store. What the pool's idle sweep uses to give back an instance the
+    /// component's traffic stopped needing (see
+    /// [`crate::engine::instance_pool::InstancePool::sweep`]).
+    pub(crate) fn retire(&self) {
+        self.state.retire();
     }
 
     /// Whether the driver's task has gone (the guest trapped, or the instance

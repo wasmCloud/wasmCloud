@@ -70,8 +70,8 @@ pub struct Component {
     /// The instance limits, exactly as the wire carried them. Signed because
     /// they mirror the Kubernetes CRD fields a workload sets them through, and
     /// unset is spelled as a non-positive value there. Nothing reads them
-    /// directly: [`crate::engine::InstancePolicy::from_component`] decodes all
-    /// three into named, non-zero limits once.
+    /// directly: [`crate::engine::InstancePolicy::from_component`] decodes the
+    /// whole set into named, non-zero limits once.
     pub pool_size: i32,
     pub max_invocations: i32,
     /// How many calls one warm instance may serve at the same time.
@@ -83,6 +83,18 @@ pub struct Component {
     /// blocks — a guest driving its own executor with `block_on` must stay at
     /// one.
     pub max_concurrency: i32,
+    /// How long the pool watches its own peak concurrency before retiring the
+    /// warm instances that peak did not need.
+    ///
+    /// Unset or below `1` means warm instances are never reclaimed for
+    /// idleness: a pool grows to `pool_size` under load and keeps whatever
+    /// its busiest moment needed until the workload stops.
+    pub reclaim_window_seconds: i32,
+    /// How many warm instances a reclaim sweep never retires below. Unset
+    /// lets an idle pool empty out, so the next call after a quiet spell
+    /// starts cold. Capped at `pool_size`, and only meaningful alongside
+    /// `reclaim_window_seconds`.
+    pub reclaim_min_instances: i32,
 }
 
 /// Resource limits and configuration for a component or service.

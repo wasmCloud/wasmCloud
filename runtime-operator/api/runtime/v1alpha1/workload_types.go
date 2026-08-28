@@ -180,6 +180,24 @@ type WorkloadComponent struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Minimum=0
 	MaxConcurrency int32 `json:"maxConcurrency,omitempty"`
+	// ReclaimWindowSeconds is how long the pool watches its own peak
+	// concurrency before retiring the warm instances that peak did not need.
+	// A pool grows to PoolSize under load and, unset, stays there, so a
+	// spike's high-water mark outlives the spike. Set this and the pool
+	// sweeps every window, keeps the instances its measured peak actually
+	// needed and drains the rest. Unset means warm instances are never
+	// reclaimed for idleness. Only meaningful alongside PoolSize.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=0
+	ReclaimWindowSeconds int32 `json:"reclaimWindowSeconds,omitempty"`
+	// ReclaimMinInstances is how many warm instances an idle sweep never
+	// retires below. Unset lets a fully idle pool empty out, so the next call
+	// after a quiet spell starts cold. Capped at PoolSize. This is a floor on
+	// reclaim, not a target to grow to: instances are still only built when a
+	// call needs one. Only meaningful alongside ReclaimWindowSeconds.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=0
+	ReclaimMinInstances int32 `json:"reclaimMinInstances,omitempty"`
 	// +kubebuilder:validation:Optional
 	LocalResources *LocalResources `json:"localResources,omitempty"`
 }

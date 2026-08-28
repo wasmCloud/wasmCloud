@@ -60,6 +60,7 @@ async fn test_p3_plain_value_async_call_uses_ephemeral_store() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
                 Component {
                     name: "ephemeral-callee".to_string(),
@@ -69,6 +70,7 @@ async fn test_p3_plain_value_async_call_uses_ephemeral_store() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
             ],
             host_interfaces: http_only_host_interfaces("p3-ephemeral"),

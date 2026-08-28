@@ -15,6 +15,9 @@
 //!    warm only when everything instantiated alongside it has opted in too.
 //!    Otherwise `pool_size: 0` on a callee would stop meaning "my state is
 //!    ephemeral" the moment something else imported it.
+//!  * **Idle reclaim** — `reclaim_window_seconds` gives a warm instance back
+//!    once the pool goes a window without needing it, so a spike's
+//!    high-water mark does not outlive the spike.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -34,6 +37,12 @@ const EPHEMERAL_CALLER_P3_WASM: &[u8] = include_bytes!("wasm/ephemeral_caller_p3
 const EPHEMERAL_CALLEE_P3_WASM: &[u8] = include_bytes!("wasm/ephemeral_callee_p3.wasm");
 /// A p3 HTTP handler reporting a per-instance request count.
 const SVC_NO_RUN_WASM: &[u8] = include_bytes!("wasm/svc_no_run.wasm");
+
+/// How long the reclaim cases leave a pool alone. The window they configure
+/// is one second — the smallest `reclaim_window_seconds` can name — and a
+/// sweep needs two of them to give an instance back, so this is generous
+/// enough that a runner slow enough to miss a tick or three still agrees.
+const RECLAIM_IDLE: Duration = Duration::from_secs(5);
 
 /// Start a host running the caller/callee pair, with the callee configured to
 /// the given warm-instance limits. The caller is never pooled, so only the
@@ -72,6 +81,7 @@ async fn start_pair_with_caller_pool(
                     pool_size: caller_pool_size,
                     max_invocations: 0,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
                 Component {
                     name: "ephemeral-callee".to_string(),
@@ -81,6 +91,7 @@ async fn start_pair_with_caller_pool(
                     pool_size: callee_pool_size,
                     max_invocations: callee_max_invocations,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
             ],
             host_interfaces: http_only_host_interfaces(host_header),
@@ -103,6 +114,45 @@ async fn start_http_component(
     max_invocations: i32,
     max_concurrency: i32,
 ) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    start_http_component_with(
+        host_header,
+        Component {
+            pool_size,
+            max_invocations,
+            max_concurrency,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+/// As [`start_http_component`], with one warm instance and the idle-reclaim
+/// knobs set: the pool gives instances back once a window passes without
+/// needing them, down to `reclaim_min_instances`.
+async fn start_reclaiming_http_component(
+    host_header: &'static str,
+    reclaim_window_seconds: i32,
+    reclaim_min_instances: i32,
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    start_http_component_with(
+        host_header,
+        Component {
+            pool_size: 1,
+            max_concurrency: 1,
+            reclaim_window_seconds,
+            reclaim_min_instances,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+/// Start the counter component under the given instance limits. `limits`
+/// carries nothing but those: the name, bytes and resources are this helper's.
+async fn start_http_component_with(
+    host_header: &'static str,
+    limits: Component,
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
     let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
 
     host.workload_start(WorkloadStartRequest {
@@ -117,9 +167,7 @@ async fn start_http_component(
                 digest: None,
                 bytes: bytes::Bytes::from_static(SVC_NO_RUN_WASM),
                 local_resources: LocalResources::default(),
-                pool_size,
-                max_invocations,
-                max_concurrency,
+                ..limits
             }],
             host_interfaces: http_only_host_interfaces(host_header),
             volumes: vec![],
@@ -359,6 +407,82 @@ async fn both_opted_in_keeps_the_pair_warm() -> Result<()> {
         counts,
         vec![1, 2, 3, 4],
         "with both components opted in the callee instance must be reused"
+    );
+    Ok(())
+}
+
+/// A window of the pool needing nothing gives the warm instance back. Without
+/// this a pool grows to `pool_size` under load and stays there for the life of
+/// the workload: nothing but `max_invocations`, a trap or a stop ever ends a
+/// warm instance, so a spike's high-water mark outlives the spike.
+///
+/// The counter is what says the instance went: it climbs while the same one
+/// serves, and restarts at `1` on the cold instance built after the sweep.
+#[tokio::test]
+async fn an_idle_pool_gives_its_warm_instance_back() -> Result<()> {
+    let (addr, _host) = start_reclaiming_http_component("warm-reclaim", 1, 0).await?;
+
+    assert_eq!(
+        http_call_counts(addr, "warm-reclaim", 2).await?,
+        vec![1, 2],
+        "back-to-back requests must share the warm instance"
+    );
+
+    // A sweep needs two windows to give an instance back: the one that
+    // follows the traffic still measures the peak that traffic set, and only
+    // the one after it sees a window of nothing. Windows are whole seconds,
+    // so this waits out five of them for the two it needs.
+    tokio::time::sleep(RECLAIM_IDLE).await;
+
+    assert_eq!(
+        http_call_counts(addr, "warm-reclaim", 2).await?,
+        vec![1, 2],
+        "the instance the idle pool held must have been given back"
+    );
+    Ok(())
+}
+
+/// `reclaim_min_instances` is the floor a sweep never retires below, so a
+/// component that would rather pay to keep an instance warm through the quiet
+/// can say so.
+#[tokio::test]
+async fn a_reclaim_floor_keeps_an_instance_through_the_quiet() -> Result<()> {
+    let (addr, _host) = start_reclaiming_http_component("warm-reclaim-floor", 1, 1).await?;
+
+    assert_eq!(
+        http_call_counts(addr, "warm-reclaim-floor", 2).await?,
+        vec![1, 2],
+        "back-to-back requests must share the warm instance"
+    );
+
+    tokio::time::sleep(RECLAIM_IDLE).await;
+
+    assert_eq!(
+        http_call_counts(addr, "warm-reclaim-floor", 2).await?,
+        vec![3, 4],
+        "the floor must hold an instance through an idle spell"
+    );
+    Ok(())
+}
+
+/// Leaving the window unset keeps what a component got before there was one:
+/// its warm instance stays warm however long the traffic stays away.
+#[tokio::test]
+async fn no_reclaim_window_keeps_a_warm_instance_indefinitely() -> Result<()> {
+    let (addr, _host) = start_reclaiming_http_component("warm-no-reclaim", 0, 0).await?;
+
+    assert_eq!(
+        http_call_counts(addr, "warm-no-reclaim", 2).await?,
+        vec![1, 2],
+        "back-to-back requests must share the warm instance"
+    );
+
+    tokio::time::sleep(RECLAIM_IDLE).await;
+
+    assert_eq!(
+        http_call_counts(addr, "warm-no-reclaim", 2).await?,
+        vec![3, 4],
+        "a component that asked for no reclaim must keep its warm instance"
     );
     Ok(())
 }

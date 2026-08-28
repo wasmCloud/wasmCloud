@@ -107,6 +107,7 @@ fn sync_echo_request(workload_id: &str, host_header: &str, subject: &str) -> Wor
                 pool_size: 1,
                 max_invocations: 100,
                 max_concurrency: 1,
+                ..Default::default()
             }],
             host_interfaces: vec![messaging_interface((0, 2, 0), subject)],
             volumes: vec![],

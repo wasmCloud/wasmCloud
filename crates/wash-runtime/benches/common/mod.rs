@@ -161,6 +161,7 @@ pub async fn start_backend_host(flavor: Flavor) -> anyhow::Result<BenchHost> {
             pool_size: 0,
             max_invocations: 0,
             max_concurrency: 1,
+            ..Default::default()
         }],
         host_interfaces: http_host_interfaces(host),
         volumes: vec![],

@@ -221,7 +221,7 @@ pub mod abandon;
 pub mod ctx;
 pub(crate) mod instance_driver;
 pub(crate) mod instance_pool;
-pub use instance_pool::InstancePolicy;
+pub use instance_pool::{InstancePolicy, ReclaimPolicy};
 pub mod host_memory;
 pub(crate) mod linked_call;
 pub(crate) mod store;

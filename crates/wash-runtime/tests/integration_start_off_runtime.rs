@@ -62,6 +62,7 @@ async fn compiling_a_workload_leaves_the_runtime_free() -> Result<()> {
                     pool_size: 0,
                     max_invocations: 0,
                     max_concurrency: 0,
+                    ..Default::default()
                 }],
                 host_interfaces: vec![],
                 volumes: vec![],

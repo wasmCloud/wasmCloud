@@ -86,6 +86,7 @@ fn resolve_workload(
                 pool_size: 1,
                 max_invocations: MAX_INVOCATIONS,
                 max_concurrency: 0,
+                ..Default::default()
             }],
             host_interfaces: http_only_host_interfaces(host_header),
             volumes: vec![],

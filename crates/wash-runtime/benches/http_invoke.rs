@@ -88,6 +88,7 @@ async fn start_warm_host_with_pool(flavor: Flavor, pool_size: i32) -> anyhow::Re
                 pool_size,
                 max_invocations: 0,
                 max_concurrency: 1,
+                ..Default::default()
             }],
             host_interfaces: http_host_interfaces(flavor.host_header()),
             volumes: vec![],
@@ -342,6 +343,7 @@ async fn start_sleeper_host(
                 pool_size,
                 max_invocations: 0,
                 max_concurrency,
+                ..Default::default()
             }],
             host_interfaces: http_host_interfaces(host_header),
             volumes: vec![],

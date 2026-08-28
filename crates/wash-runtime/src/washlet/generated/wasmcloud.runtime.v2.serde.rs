@@ -31,6 +31,12 @@ impl serde::Serialize for Component {
         if self.max_concurrency != 0 {
             len += 1;
         }
+        if self.reclaim_window_seconds != 0 {
+            len += 1;
+        }
+        if self.reclaim_min_instances != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("wasmcloud.runtime.v2.Component", len)?;
         if !self.image.is_empty() {
             struct_ser.serialize_field("image", &self.image)?;
@@ -58,6 +64,12 @@ impl serde::Serialize for Component {
         if self.max_concurrency != 0 {
             struct_ser.serialize_field("maxConcurrency", &self.max_concurrency)?;
         }
+        if self.reclaim_window_seconds != 0 {
+            struct_ser.serialize_field("reclaimWindowSeconds", &self.reclaim_window_seconds)?;
+        }
+        if self.reclaim_min_instances != 0 {
+            struct_ser.serialize_field("reclaimMinInstances", &self.reclaim_min_instances)?;
+        }
         struct_ser.end()
     }
 }
@@ -82,6 +94,10 @@ impl<'de> serde::Deserialize<'de> for Component {
             "imagePullPolicy",
             "max_concurrency",
             "maxConcurrency",
+            "reclaim_window_seconds",
+            "reclaimWindowSeconds",
+            "reclaim_min_instances",
+            "reclaimMinInstances",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -94,6 +110,8 @@ impl<'de> serde::Deserialize<'de> for Component {
             Name,
             ImagePullPolicy,
             MaxConcurrency,
+            ReclaimWindowSeconds,
+            ReclaimMinInstances,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -123,6 +141,8 @@ impl<'de> serde::Deserialize<'de> for Component {
                             "name" => Ok(GeneratedField::Name),
                             "imagePullPolicy" | "image_pull_policy" => Ok(GeneratedField::ImagePullPolicy),
                             "maxConcurrency" | "max_concurrency" => Ok(GeneratedField::MaxConcurrency),
+                            "reclaimWindowSeconds" | "reclaim_window_seconds" => Ok(GeneratedField::ReclaimWindowSeconds),
+                            "reclaimMinInstances" | "reclaim_min_instances" => Ok(GeneratedField::ReclaimMinInstances),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -150,6 +170,8 @@ impl<'de> serde::Deserialize<'de> for Component {
                 let mut name__ = None;
                 let mut image_pull_policy__ = None;
                 let mut max_concurrency__ = None;
+                let mut reclaim_window_seconds__ = None;
+                let mut reclaim_min_instances__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Image => {
@@ -206,6 +228,22 @@ impl<'de> serde::Deserialize<'de> for Component {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::ReclaimWindowSeconds => {
+                            if reclaim_window_seconds__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("reclaimWindowSeconds"));
+                            }
+                            reclaim_window_seconds__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::ReclaimMinInstances => {
+                            if reclaim_min_instances__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("reclaimMinInstances"));
+                            }
+                            reclaim_min_instances__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(Component {
@@ -217,6 +255,8 @@ impl<'de> serde::Deserialize<'de> for Component {
                     name: name__.unwrap_or_default(),
                     image_pull_policy: image_pull_policy__.unwrap_or_default(),
                     max_concurrency: max_concurrency__.unwrap_or_default(),
+                    reclaim_window_seconds: reclaim_window_seconds__.unwrap_or_default(),
+                    reclaim_min_instances: reclaim_min_instances__.unwrap_or_default(),
                 })
             }
         }

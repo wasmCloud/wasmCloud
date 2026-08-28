@@ -68,6 +68,7 @@ async fn test_p3_cross_component_stream_to_http() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
                 Component {
                     name: "stream-producer".to_string(),
@@ -77,6 +78,7 @@ async fn test_p3_cross_component_stream_to_http() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
             ],
             host_interfaces: http_only_host_interfaces("p3-stream"),
@@ -152,6 +154,7 @@ async fn test_p3_incoming_handler_streams_incrementally() -> Result<()> {
                 pool_size: 1,
                 max_invocations: 100,
                 max_concurrency: 1,
+                ..Default::default()
             }],
             host_interfaces: http_only_host_interfaces("p3-pacer"),
             volumes: vec![],
@@ -241,6 +244,7 @@ async fn test_p3_cross_component_stream_streams_incrementally() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
                 Component {
                     name: "stream-producer".to_string(),
@@ -250,6 +254,7 @@ async fn test_p3_cross_component_stream_streams_incrementally() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
             ],
             host_interfaces: http_only_host_interfaces("p3-stream-paced"),
