@@ -154,17 +154,14 @@ impl CliCommand for DevCommand {
 
         // `wasmcloud:nats` — NATS-native core pub/sub, JetStream, and KV.
         // Unlike the plugins above it borrows no *client* from the dev host: it
-        // opens one per workload, under that workload's own credentials and
-        // grant.
-        //
         // A dev host declares bindings the same way `wash host` does
         // (`dev.wasmcloud_nats`, with `dev.data_nats_url` as the address a
         // binding falls back to), but leaves a workload free to describe its
         // own: a project's manifest has to stay runnable on its own, and the
         // operator boundary `wash host` enforces has no one to enforce it for
-        // here. With no `data_nats_url` there is no default, and a binding must
-        // name its own servers — in `dev.wasmcloud_nats`, or inline on the
-        // interface.
+        // here. With no `data_nats_url` there is no default, and a binding
+        // must name its own servers — in `dev.wasmcloud_nats`, or inline on
+        // the interface.
         let nats_bindings = {
             let declared = match &dev_config.wasmcloud_nats {
                 Some(nats) => nats.to_bindings(&config, project_dir, Some(project_dir))?,
