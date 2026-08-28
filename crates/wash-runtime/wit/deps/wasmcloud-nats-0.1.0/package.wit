@@ -355,6 +355,11 @@ interface jetstream {
   /// The subjects a stream currently holds messages on, filtered by
   /// `subject-filter` (`>` for all), with per-subject message counts.
   ///
+  /// Only subjects inside the workload's subject grant are listed — a stream
+  /// grant is not authority to learn the names of subjects it may not read. If
+  /// every matching subject falls outside that grant the call returns `denied`
+  /// rather than an empty list, which would read as an empty stream.
+  ///
   /// Returns at most 1000 subjects: subject cardinality, not message count,
   /// bounds what the host has to buffer, so pass a narrower `subject-filter`
   /// to page through a stream that holds more than that.
