@@ -424,6 +424,8 @@ func (r *WorkloadReconciler) reconcileSync(ctx context.Context, workload *runtim
 	// the requirement, the flag and the value to raise it to. This condition
 	// message is the only path that reason has to somebody who is not reading
 	// host logs, so it carries it.
+	// Only an errored workload carries a message; every other state is named
+	// by WorkloadState alone, so this does not render the state twice.
 	if msg := resp.WorkloadStatus.Message; msg != "" {
 		return fmt.Errorf("workload is not operational: %s: %s",
 			resp.WorkloadStatus.WorkloadState.String(), msg)

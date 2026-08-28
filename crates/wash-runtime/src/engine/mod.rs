@@ -312,6 +312,16 @@ pub struct Engine {
     /// somewhere else would miss the env override (applied inside
     /// [`new_pooling_config`]) and drift the moment either side changed.
     total_core_instances: Option<u32>,
+    /// Linear memory the pooling allocator actually admits per memory, read
+    /// back from the installed [`PoolingAllocationConfig`]. `None` when
+    /// pooling is off, i.e. when no ceiling is enforced.
+    ///
+    /// Captured for the same reason as `total_core_instances`:
+    /// `--default-heap-memory` is only the *requested* size, and
+    /// `WASMTIME_POOLING_MAX_MEMORY_SIZE` or a caller-supplied pooling config
+    /// replaces it outright. Quoting the flag in a refusal that the installed
+    /// ceiling caused produces advice that cannot work.
+    installed_heap_memory: Option<u64>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -381,7 +391,10 @@ fn explain_compile_failure(e: wasmtime::Error, default_heap_memory: u64) -> anyh
     // Round up to the next power of two at or above the requirement: the pool
     // sizes slots in whole memories, so the next size that certainly fits is
     // the useful advice, not the bare minimum.
-    let suggested = required.next_power_of_two().max(4 * host_memory::MIB);
+    let suggested = required
+        .checked_next_power_of_two()
+        .unwrap_or(required)
+        .max(4 * host_memory::MIB);
     anyhow::Error::from(e).context(format!(
         "the component needs {} of linear memory but --default-heap-memory is {}. \
          Raise it to at least {} (chart: runtime.resources.defaultHeapMemory).",
@@ -403,7 +416,13 @@ fn parse_pooling_minimum(text: &str) -> Option<u64> {
         .chars()
         .take_while(char::is_ascii_digit)
         .collect();
-    digits.parse().ok()
+    // A zero-length run, or a leading `0`, means the size was not printed as
+    // plain decimal — wasmtime already renders the limit half of this message
+    // in hex. Fall back to the original error rather than reporting 0 bytes.
+    match digits.parse().ok()? {
+        0 => None,
+        required => Some(required),
+    }
 }
 
 impl Engine {
@@ -636,7 +655,15 @@ impl Engine {
 
     /// See [`explain_compile_failure`].
     fn explain_compile_failure(&self, e: wasmtime::Error) -> anyhow::Error {
-        explain_compile_failure(e, self.host_memory.default_heap_memory)
+        explain_compile_failure(e, self.effective_heap_memory())
+    }
+
+    /// The linear-memory ceiling a compile failure was actually measured
+    /// against: the installed pool's, falling back to the flag when there is
+    /// no pool to have overridden it.
+    fn effective_heap_memory(&self) -> u64 {
+        self.installed_heap_memory
+            .unwrap_or(self.host_memory.default_heap_memory)
     }
 
     /// Load a WebAssembly component from raw bytes or yields a previously compiled one.
@@ -658,7 +685,7 @@ impl Engine {
                 let key = CacheKey(digest.as_ref().to_string());
                 let inner = &self.inner;
                 let bytes_ref = bytes.as_ref();
-                let heap = self.host_memory.default_heap_memory;
+                let heap = self.effective_heap_memory();
 
                 self.cache
                     .try_get_with(key, || {
@@ -1121,6 +1148,7 @@ impl EngineBuilder {
             tracing::warn!("pooling allocator requested but not supported");
         }
         let total_core_instances = installed_pool.map(|pool| pool.core_instances);
+        let installed_heap_memory = installed_pool.map(|pool| pool.max_memory_size);
 
         // Reported here so every embedder says what it built. The reservation
         // is `total_memories x max_memory_size`, not the instance count.
@@ -1190,6 +1218,7 @@ impl EngineBuilder {
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
             total_core_instances,
+            installed_heap_memory,
         })
     }
 }
@@ -1269,7 +1298,7 @@ where
 /// Also refuses a zero. Every one of these knobs means "this host runs
 /// nothing" at zero, which is never what an operator meant, and the flags they
 /// shadow are already rejected for exactly that.
-fn pooling_env_override<T>(key: &str, resolved: T) -> Option<T>
+fn pooling_env_override<T>(key: &str, resolved: T, render: impl Fn(T) -> String) -> Option<T>
 where
     T: FromStr + PartialEq + Default + std::fmt::Display + Copy,
     T::Err: core::fmt::Debug,
@@ -1278,11 +1307,15 @@ where
     if value == T::default() {
         warn!(
             "`{key}` is 0, which would leave this host unable to instantiate anything; \
-             ignoring it and keeping {resolved}"
+             ignoring it and keeping {}",
+            render(resolved)
         );
         return None;
     }
     if value != resolved {
+        // Rendered, not raw: `host memory resolved` prints this knob through
+        // `render_bytes`, and an operator cannot compare 4294967296 to 256MiB.
+        let (resolved, value) = (render(resolved), render(value));
         warn!(
             resolved = %resolved,
             override_value = %value,
@@ -1345,8 +1378,10 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
     // `--core-instances` is what `host memory resolved` reports, and this is
     // what actually sizes the pool.
     config.total_core_instances(
-        pooling_env_override("WASMTIME_POOLING_TOTAL_CORE_INSTANCES", instances)
-            .unwrap_or(instances),
+        pooling_env_override("WASMTIME_POOLING_TOTAL_CORE_INSTANCES", instances, |v| {
+            v.to_string()
+        })
+        .unwrap_or(instances),
     );
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_CORE_INSTANCE_SIZE") {
         config.max_core_instance_size(v);
@@ -1369,8 +1404,10 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
     // saying out loud.
     let resolved_heap = usize::try_from(default_heap_memory).unwrap_or(usize::MAX);
     config.max_memory_size(
-        pooling_env_override("WASMTIME_POOLING_MAX_MEMORY_SIZE", resolved_heap)
-            .unwrap_or(resolved_heap),
+        pooling_env_override("WASMTIME_POOLING_MAX_MEMORY_SIZE", resolved_heap, |v| {
+            host_memory::render_bytes(u64::try_from(v).unwrap_or(u64::MAX))
+        })
+        .unwrap_or(resolved_heap),
     );
     #[cfg(not(windows))]
     if let Some(v) = getenv("WASMTIME_POOLING_TOTAL_GC_HEAPS") {
@@ -1406,6 +1443,36 @@ mod tests {
         );
         // And the original text is still underneath it.
         assert!(explained.contains("pooling allocator"), "{explained}");
+    }
+
+    /// wasmtime renders the limit half of this message in hex, and a size it
+    /// did not print as plain decimal used to parse as `0` — advising an
+    /// operator to raise the flag to 4MiB for a component needing 0 bytes.
+    #[test]
+    fn a_refusal_without_a_decimal_size_is_left_alone() {
+        for text in [
+            "memory has a minimum byte size of 0x250000 which exceeds the limit of 0x100000",
+            "memory has a minimum byte size of 0 which exceeds the limit of 0x100000",
+        ] {
+            let explained = format!(
+                "{:#}",
+                explain_compile_failure(wasmtime::Error::msg(text), 1024 * 1024,)
+            );
+            assert_eq!(explained, text, "should not have been annotated");
+        }
+    }
+
+    /// `next_power_of_two` panics under `debug_assertions` and wraps to zero in
+    /// release, so a refusal quoting a size near `u64::MAX` used to take the
+    /// host out rather than explain itself.
+    #[test]
+    fn an_unroundable_requirement_does_not_panic() {
+        let raw = wasmtime::Error::msg(format!(
+            "memory has a minimum byte size of {} which exceeds the limit of 0x100000",
+            u64::MAX
+        ));
+        let explained = format!("{:#}", explain_compile_failure(raw, 1024 * 1024));
+        assert!(explained.contains("Raise it to at least"), "{explained}");
     }
 
     #[test]

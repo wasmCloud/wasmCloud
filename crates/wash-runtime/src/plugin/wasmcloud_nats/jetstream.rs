@@ -85,8 +85,7 @@ impl Drop for MessageHandle {
         if charged.is_none() || self.settled.load(Ordering::Acquire) {
             return;
         }
-        let Settlement::Guest(acker) =
-            std::mem::replace(&mut self.settlement, Settlement::Settled)
+        let Settlement::Guest(acker) = std::mem::replace(&mut self.settlement, Settlement::Settled)
         else {
             return;
         };

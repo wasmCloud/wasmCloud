@@ -930,9 +930,12 @@ impl HostApi for Host {
             // is in `WORKLOAD_STATE_ERROR`. Wrapping it in "Workload is
             // Error: " spends the front of a truncated condition message on
             // saying again what the state field already says.
+            // Every other state is already named by `workload_state`, and the
+            // operator formats both — so a message here renders the state
+            // twice ("WORKLOAD_STATE_STARTING: Workload is Starting").
             let message = match workload {
                 HostWorkload::Error(reason) => reason.clone(),
-                other => format!("Workload is {other}"),
+                _ => String::new(),
             };
             Ok(WorkloadStatusResponse {
                 workload_status: WorkloadStatus {
