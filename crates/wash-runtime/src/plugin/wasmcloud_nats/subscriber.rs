@@ -141,8 +141,8 @@ impl KvProxy {
     }
 }
 
-/// The warm set one handler flavour of `component_id` serves its deliveries
-/// from, built from the instance policy the component declared.
+/// The warm sets a component's handlers serve their deliveries from, built from
+/// the instance policy the component declared.
 ///
 /// The same `poolSize` / `maxInvocations` knobs that feed the engine's
 /// [`InstanceJob`] pool, honoured here because a NATS delivery cannot take
@@ -150,37 +150,55 @@ impl KvProxy {
 /// store that runs it, and its ack ownership lives in the subscription loop.
 /// See [`super::warm`] for what is and is not honoured.
 ///
+/// One set per handler flavour, built once per *component* rather than once per
+/// binding: `poolSize` is the component's, and the stores are interchangeable
+/// across the bindings it serves. Per binding, a component bridging two
+/// clusters with `(implements hub)` and `(implements leaf)` at `poolSize: 8`
+/// parked up to 16 live stores on a host sized for 8.
+///
 /// [`InstanceJob`]: crate::engine::instance_driver::InstanceJob
-async fn warm_set_for<H>(
-    workload: &ResolvedWorkload,
-    component_id: &str,
-    flavour: &'static str,
-) -> Arc<super::warm::WarmSet<H>> {
-    let policy = workload.warm_instance_policy(component_id).await;
-    let set = Arc::new(super::warm::WarmSet::new(policy));
-    if set.keeps_instances() {
-        debug!(
-            component_id,
-            flavour,
-            ?policy,
-            "wasmcloud:nats deliveries will reuse warm instances; note that \
-             `maxConcurrency` above 1 is served by additional one-shot stores on this \
-             path rather than by concurrent calls on one instance"
-        );
-    }
-    set
+pub(super) struct WarmSets {
+    jetstream: Arc<super::warm::WarmSet<(crate::wasmtime::Store<SharedCtx>, JsProxy)>>,
+    core: Arc<super::warm::WarmSet<(crate::wasmtime::Store<SharedCtx>, CoreProxy)>>,
+    kv: Arc<super::warm::WarmSet<(crate::wasmtime::Store<SharedCtx>, KvProxy)>>,
 }
 
-/// Gives a fresh store fuel before anything runs in it.
+impl WarmSets {
+    pub(super) async fn for_component(
+        workload: &ResolvedWorkload,
+        component_id: &str,
+    ) -> Arc<Self> {
+        let policy = workload.warm_instance_policy(component_id).await;
+        let sets = Self {
+            jetstream: Arc::new(super::warm::WarmSet::new(policy)),
+            core: Arc::new(super::warm::WarmSet::new(policy)),
+            kv: Arc::new(super::warm::WarmSet::new(policy)),
+        };
+        if sets.jetstream.keeps_instances() {
+            debug!(
+                component_id,
+                ?policy,
+                "wasmcloud:nats deliveries will reuse warm instances; note that \
+                 `maxConcurrency` above 1 is served by additional one-shot stores on this \
+                 path rather than by concurrent calls on one instance"
+            );
+        }
+        Arc::new(sets)
+    }
+}
+
+/// Waives the fuel limit on a fresh store, so nothing on this path is metered
+/// or bounded by fuel.
 ///
-/// This plugin meters guest execution by sampling the epoch callback
-/// ([`crate::observability::ExecutionTimeMeter`]) and never burns fuel, but the
-/// engine it runs on may still have fuel enabled — `--enable-meters` turns it
-/// on for the paths that do measure by it. A store on a fuel-enabled engine
-/// starts at **zero**, and instantiation runs guest code, so without this the
-/// component traps on instantiate. Errors when fuel is off, which is not a
-/// failure.
-fn prime_fuel<T>(store: &mut crate::wasmtime::Store<T>) {
+/// This plugin measures guest execution by sampling the epoch callback
+/// ([`crate::observability::ExecutionTimeMeter`]); it never reads a fuel
+/// counter and never bounds a call by one. The engine underneath it may still
+/// have fuel *enabled* — `--enable-meters` turns it on for the paths that do
+/// measure by it, and it is an engine-wide switch. A store on a fuel-enabled
+/// engine starts at **zero** and instantiation runs guest code, so without this
+/// the component traps on instantiate. Errors when fuel is off, which is the
+/// ordinary case and not a failure.
+fn waive_fuel_limit<T>(store: &mut crate::wasmtime::Store<T>) {
     let _ = store.set_fuel(u64::MAX);
 }
 
@@ -457,15 +475,11 @@ pub(super) async fn spawn_jetstream_subscriptions(
     execution_meter: ExecutionTimeMeter,
     failure_sink: Option<crate::plugin::WorkloadFailureSink>,
     workload_id: impl Into<String>,
+    warm_sets: Arc<WarmSets>,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
     let pre = JsHandlerPre::new(instance_pre)?;
-    let warm_set = warm_set_for::<(crate::wasmtime::Store<SharedCtx>, JsProxy)>(
-        workload,
-        component_id,
-        "jetstream",
-    )
-    .await;
+    let warm_set = warm_sets.jetstream.clone();
     let workload_id = workload_id.into();
     // Namespace only: both the workload id and the workload *name* are
     // per-replica, and replicas must converge on one durable. See
@@ -796,6 +810,29 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                         }
                                         continue 'delivery;
                                     }
+                                    // The durable's identity hash covers the
+                                    // filter and policy but not the ceilings,
+                                    // so two subscriptions that agree on both
+                                    // still meet here with different ones.
+                                    // First to create it wins, which is a
+                                    // silent change to when a message stops
+                                    // being redelivered.
+                                    if found.max_deliver != config.max_deliver
+                                        || found.max_ack_pending != config.max_ack_pending
+                                    {
+                                        warn!(
+                                            durable,
+                                            stream = %sub.stream,
+                                            found_max_deliver = found.max_deliver,
+                                            wanted_max_deliver = config.max_deliver,
+                                            found_max_ack_pending = found.max_ack_pending,
+                                            wanted_max_ack_pending = config.max_ack_pending,
+                                            "attached to an existing durable provisioned with \
+                                             different limits; this subscription runs under the \
+                                             consumer's, not its own. Update the consumer, or \
+                                             give this delivery its own queue group"
+                                        );
+                                    }
                                     existing
                                 }
                                 Err(e) => {
@@ -1067,7 +1104,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                     super::warm::Warmed::fresh((store, proxy))
                                 }
                             };
-                            prime_fuel(&mut warmed.handler.0);
+                            waive_fuel_limit(&mut warmed.handler.0);
 
                             // One `Acker`, three uses: whoever settles keeps
                             // `acker`, and `progress` extends ack-wait without
@@ -1075,9 +1112,14 @@ pub(super) async fn spawn_jetstream_subscriptions(
                             let acker = std::sync::Arc::new(acker);
                             // Under `auto` the host settles the message, so the
                             // guest handle carries no settling acker.
-                            let (guest_acker, host_acker) = match ack_mode {
-                                AckMode::Auto => (None, Some(acker.clone())),
-                                AckMode::Manual => (Some(acker.clone()), None),
+                            let (settlement, host_acker) = match ack_mode {
+                                AckMode::Auto => {
+                                    (super::jetstream::Settlement::HostOwned, Some(acker.clone()))
+                                }
+                                AckMode::Manual => (
+                                    super::jetstream::Settlement::Guest(acker.clone()),
+                                    None,
+                                ),
                             };
                             // Under `manual` this is how the guest's ack or
                             // term reaches the loop: nothing else survives the
@@ -1091,8 +1133,8 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                 conn.grant_reply(reply);
                             }
                             let handle = MessageHandle {
-                                acker: guest_acker,
-                                progress: Some(acker.clone()),
+                                settlement,
+                                progress: acker.clone(),
                                 settled: guest_settled.clone(),
                                 message,
                                 sequence,
@@ -1127,6 +1169,9 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                 stream = %sub.stream,
                             );
 
+                            // Kept so the handle can be cleared before the
+                            // store is parked; see the delete below.
+                            let handle_rep = resource.rep();
                             let execution_meter = execution_meter.clone();
                             let subject_label = subject_str.clone();
                             let warm_set = warm_set.clone();
@@ -1176,7 +1221,26 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                 // completed is offered back.
                                 match &result {
                                     Err(_) => drop(warmed),
-                                    Ok(_) => warm_set.park(warmed),
+                                    Ok(_) => {
+                                        // A handler that returns without
+                                        // dropping its handle leaves the whole
+                                        // payload in the parked store's table,
+                                        // and the next delivery on that
+                                        // instance adds another. Before warm
+                                        // pooling this self-healed when the
+                                        // store died; now `max_invocations` is
+                                        // the only bound, and it is optional.
+                                        // Typed, so a rep the guest already
+                                        // freed and something else reused is
+                                        // refused rather than deleted.
+                                        let _ = warmed
+                                            .handler
+                                            .0
+                                            .data_mut()
+                                            .table
+                                            .delete(Resource::<MessageHandle>::new_own(handle_rep));
+                                        warm_set.park(warmed);
+                                    }
                                 }
                                 drop(permit);
 
@@ -1501,6 +1565,19 @@ impl CoreBacklog {
     }
 }
 
+impl Drop for CoreBacklog {
+    fn drop(&mut self) {
+        // Whatever is still queued was never received, so the delivery loop
+        // will never dequeue it. The host budget outlives every subscription,
+        // so without this a cancelled one keeps its bytes forever and enough
+        // unbind/rebind churn walks the ceiling down to nothing.
+        let stranded = self.queued_bytes.load(Ordering::Relaxed);
+        if stranded > 0 {
+            self.host.release(stranded);
+        }
+    }
+}
+
 /// Whether a delivery of `len` bytes may join a backlog already holding
 /// `queued`.
 ///
@@ -1661,15 +1738,11 @@ pub(super) async fn spawn_core_subscriptions(
     // is the second one, and the only one that knows about the other
     // workloads. See `HostBacklogBudget`.
     host_budget: Arc<HostBacklogBudget>,
+    warm_sets: Arc<WarmSets>,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
     let pre = CoreHandlerPre::new(instance_pre)?;
-    let warm_set = warm_set_for::<(crate::wasmtime::Store<SharedCtx>, CoreProxy)>(
-        workload,
-        component_id,
-        "core",
-    )
-    .await;
+    let warm_set = warm_sets.core.clone();
     let workload_id = workload_id.into();
 
     for sub in subs {
@@ -1792,7 +1865,7 @@ pub(super) async fn spawn_core_subscriptions(
                                 super::warm::Warmed::fresh((store, proxy))
                             }
                         };
-                        prime_fuel(&mut warmed.handler.0);
+                        waive_fuel_limit(&mut warmed.handler.0);
 
                         let subject_label = raw.subject.to_string();
                         let span = tracing::span!(
@@ -1893,12 +1966,11 @@ pub(super) async fn spawn_kv_watches(
     execution_meter: ExecutionTimeMeter,
     _failure_sink: Option<crate::plugin::WorkloadFailureSink>,
     _workload_id: impl Into<String>,
+    warm_sets: Arc<WarmSets>,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
     let pre = KvHandlerPre::new(instance_pre)?;
-    let warm_set =
-        warm_set_for::<(crate::wasmtime::Store<SharedCtx>, KvProxy)>(workload, component_id, "kv")
-            .await;
+    let warm_set = warm_sets.kv.clone();
 
     for watch in watches {
         let conn = conn.clone();
@@ -2126,7 +2198,7 @@ pub(super) async fn spawn_kv_watches(
                                     super::warm::Warmed::fresh((store, proxy))
                                 }
                             };
-                            prime_fuel(&mut warmed.handler.0);
+                            waive_fuel_limit(&mut warmed.handler.0);
 
                             let key_label = entry.key.clone();
                             let span = tracing::span!(

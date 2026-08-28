@@ -11,18 +11,14 @@ use wasmtime::component::{Accessor, Resource};
 use crate::engine::ctx::{ActiveCtx, SharedCtx};
 
 use crate::plugin::wasmcloud_nats::interfaces::{build_nats_message, jetstream_err, js, types};
-use crate::plugin::wasmcloud_nats::jetstream::MessageHandle;
+use crate::plugin::wasmcloud_nats::jetstream::{MessageHandle, Settlement};
 
-/// Reported when a guest settles a message the host already owns.
-fn already_settled() -> types::NatsError {
-    types::NatsError::Unexpected(
-        "message already settled, or acknowledgement is owned by the host under ack-mode: auto"
-            .to_string(),
-    )
-}
+/// The acker a guest settle runs on, and the flag it sets when the settle
+/// retires the message.
+type GuestSettle = (Arc<jetstream::message::Acker>, Arc<AtomicBool>);
 
 /// Clones the handle's acker, and the settled flag alongside it, leaving both
-/// on the handle.
+/// on the handle — or the error that says why the guest has no settle to make.
 ///
 /// Cloning rather than taking is what makes a failed settle retryable. A settle
 /// that never reached the server is exactly the case a guest should retry — and
@@ -33,18 +29,22 @@ fn already_settled() -> types::NatsError {
 fn clone_acker<T: 'static + Send>(
     accessor: &Accessor<T, SharedCtx>,
     rep: &Resource<MessageHandle>,
-) -> wasmtime::Result<Option<(Arc<jetstream::message::Acker>, Arc<AtomicBool>)>> {
+) -> wasmtime::Result<Result<GuestSettle, types::NatsError>> {
     accessor.with(|mut a| {
         let handle = a.get().table.get(rep)?;
         let settled = handle.settled.clone();
-        Ok(handle.acker.clone().map(|acker| (acker, settled)))
+        Ok(match &handle.settlement {
+            Settlement::Guest(acker) => Ok((acker.clone(), settled)),
+            Settlement::Settled => Err(types::NatsError::AlreadySettled),
+            Settlement::HostOwned => Err(types::NatsError::AckOwnedByHost),
+        })
     })
 }
 
-/// Retires the acker once the server has taken the settle, making the handle
-/// one-shot from that point on.
+/// Retires the handle once the server has taken the settle, making it one-shot
+/// from that point on.
 ///
-/// Taking an acker that a concurrent settle already took is a harmless no-op,
+/// Retiring a handle a concurrent settle already retired is a harmless no-op,
 /// and a handle that vanished from the table is nothing left to clear.
 fn clear_acker<T: 'static + Send>(
     accessor: &Accessor<T, SharedCtx>,
@@ -52,7 +52,7 @@ fn clear_acker<T: 'static + Send>(
 ) {
     accessor.with(|mut a| {
         if let Ok(handle) = a.get().table.get_mut(rep) {
-            handle.acker.take();
+            handle.settlement = Settlement::Settled;
         }
     });
 }
@@ -69,8 +69,9 @@ async fn settle<T: 'static + Send>(
     retires: bool,
     what: &'static str,
 ) -> wasmtime::Result<Result<(), types::NatsError>> {
-    let Some((acker, settled)) = clone_acker(accessor, &rep)? else {
-        return Ok(Err(already_settled()));
+    let (acker, settled) = match clone_acker(accessor, &rep)? {
+        Ok(pair) => pair,
+        Err(e) => return Ok(Err(e)),
     };
     match acker.ack_with(kind).await {
         Ok(()) => {
@@ -89,8 +90,9 @@ impl<T: 'static + Send> js::HostMessageHandleWithStore<T> for SharedCtx {
         accessor: &Accessor<T, Self>,
         rep: Resource<MessageHandle>,
     ) -> wasmtime::Result<Result<(), types::NatsError>> {
-        let Some((acker, settled)) = clone_acker(accessor, &rep)? else {
-            return Ok(Err(already_settled()));
+        let (acker, settled) = match clone_acker(accessor, &rep)? {
+            Ok(pair) => pair,
+            Err(e) => return Ok(Err(e)),
         };
         match acker.ack().await {
             Ok(()) => {
@@ -106,8 +108,9 @@ impl<T: 'static + Send> js::HostMessageHandleWithStore<T> for SharedCtx {
         accessor: &Accessor<T, Self>,
         rep: Resource<MessageHandle>,
     ) -> wasmtime::Result<Result<(), types::NatsError>> {
-        let Some((acker, settled)) = clone_acker(accessor, &rep)? else {
-            return Ok(Err(already_settled()));
+        let (acker, settled) = match clone_acker(accessor, &rep)? {
+            Ok(pair) => pair,
+            Err(e) => return Ok(Err(e)),
         };
         match acker.double_ack().await {
             Ok(()) => {
@@ -141,12 +144,10 @@ impl<T: 'static + Send> js::HostMessageHandleWithStore<T> for SharedCtx {
     /// `progress` acker rather than its `acker`.
     ///
     /// The two differ under `ack-mode: auto`, where the host owns settlement
-    /// and `acker` is `None`: gating this on settlement ownership left the
-    /// default mode with no way to extend ack-wait at all, so a handler slower
-    /// than the 30s ack-wait was redelivered and run twice while the WIT-
-    /// sanctioned mitigation returned "already settled". `progress` is
-    /// populated in both modes; `None` now means only a delivery that never
-    /// carried an acker, such as a `scan` result.
+    /// and `settlement` is `HostOwned`: gating this on settlement ownership
+    /// left the default mode with no way to extend ack-wait at all, so a
+    /// handler slower than the 30s ack-wait was redelivered and run twice while
+    /// the WIT-sanctioned mitigation returned "already settled".
     async fn in_progress(
         accessor: &Accessor<T, Self>,
         rep: Resource<MessageHandle>,
@@ -154,9 +155,6 @@ impl<T: 'static + Send> js::HostMessageHandleWithStore<T> for SharedCtx {
         let acker = accessor.with(|mut a| -> wasmtime::Result<_> {
             Ok(a.get().table.get(&rep)?.progress.clone())
         })?;
-        let Some(acker) = acker else {
-            return Ok(Err(already_settled()));
-        };
         Ok(acker
             .ack_with(jetstream::AckKind::Progress)
             .await

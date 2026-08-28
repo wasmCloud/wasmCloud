@@ -5,13 +5,12 @@ package wasmcloud:nats-async-handler-fixture;
 // sync-signature package cannot express, because lifting a sync function with
 // the async canonical ABI fails component validation, which is why
 // `wasmcloud:nats@0.1.0` is async throughout.
+//
+// Two handler flavours is two `include` lines: both worlds carry the same
+// `imports` set, so what each adds is its export.
 world nats-async-handler-fixture {
-    import wasmcloud:nats/types@0.1.0;
-    import wasmcloud:nats/core@0.1.0;
-    import wasmcloud:nats/jetstream@0.1.0;
-    import wasmcloud:nats/kv@0.1.0;
-    import wasi:clocks/monotonic-clock@0.3.0;
+    include wasmcloud:nats/js-processor@0.1.0;
+    include wasmcloud:nats/subscriber@0.1.0;
 
-    export wasmcloud:nats/jetstream-handler@0.1.0;
-    export wasmcloud:nats/core-handler@0.1.0;
+    import wasi:clocks/monotonic-clock@0.3.0;
 }

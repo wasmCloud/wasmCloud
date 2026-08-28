@@ -9,34 +9,37 @@ use async_nats::jetstream::consumer::{Consumer, pull};
 use async_nats::jetstream::kv::Store;
 use async_nats::jetstream::message::Acker;
 
+/// Who settles a delivery, and whether it still can be.
+///
+/// The three states were an `Option<Arc<Acker>>`, which folded "the guest
+/// already settled this" and "the host owns the settle" into one `None` — and
+/// so into one `unexpected` string, the two likeliest settle failures a guest
+/// sees.
+pub enum Settlement {
+    /// The guest settles, through the handle.
+    Guest(Arc<Acker>),
+    /// A settle the server accepted retired the handle. A settle it *rejected*
+    /// leaves the handle in `Guest`, so a retry is the natural response to a
+    /// transient error rather than a report that the message was already gone.
+    Settled,
+    /// `ack-mode: auto`: the host acks on `ok` and naks on `error` or a trap.
+    HostOwned,
+}
+
 /// Handle to a single JetStream-delivered message.
 ///
 /// Holds an `Acker` rather than the whole message: `Message::split` separates
 /// the ack capability from the contents, so the payload is not stored twice.
-/// The acker is `take()`n on the first ack/nak/term the server accepts, making
-/// the handle one-shot; later calls report that it was already settled. A
-/// settle that failed on the wire is retryable.
-///
-/// Under `ack-mode: auto` the host keeps the acker and this is `None`, so a
-/// guest ack reports that the host owns the acknowledgement.
 pub struct MessageHandle {
-    /// Settlement ownership: present when the guest is the one that settles.
-    ///
-    /// Cleared on the first *successful* settle, making the handle one-shot. A
-    /// settle the server rejected leaves it in place, so the guest can retry
-    /// the natural response to a transient error rather than being told the
-    /// message was already settled.
-    ///
-    /// Under `ack-mode: auto` the host settles, so this is `None`.
-    pub(super) acker: Option<Arc<Acker>>,
+    /// Settlement ownership, and the one-shot state machine over it.
+    pub(super) settlement: Settlement,
     /// Ack-wait extension, which settles nothing.
     ///
-    /// Present whenever the delivery has an acker at all, in *both* ack modes:
-    /// `in-progress` is the WIT-sanctioned way for a slow handler to keep a
-    /// message from being redelivered underneath it, and gating it on
-    /// settlement ownership left auto — the default mode — with no way to do
-    /// that at all.
-    pub(super) progress: Option<Arc<Acker>>,
+    /// Held in *both* ack modes: `in-progress` is the WIT-sanctioned way for a
+    /// slow handler to keep a message from being redelivered underneath it,
+    /// and gating it on settlement ownership left auto — the default mode —
+    /// with no way to do that at all.
+    pub(super) progress: Arc<Acker>,
     /// Set when the message has been settled in a way that retires it: an
     /// `ack`, or a `term` that deliberately discards it. A `nak`, a settle the
     /// server rejected, and a handler that returns without settling all leave
@@ -69,15 +72,40 @@ impl Drop for MessageHandle {
         // also what returns its bytes to the binding's budget. Doing this in
         // `Drop` rather than at the resource-drop call site covers every way a
         // handle can go: a guest drop, a table teardown, a torn-down workload.
-        if let Some((budget, bytes)) = self.charged.take() {
-            budget.release(bytes);
+        let charged = self.charged.take();
+        if let Some((budget, bytes)) = &charged {
+            budget.release(*bytes);
+        }
+
+        // Only a pull delivery is settled by whoever holds the handle; a push
+        // delivery's outcome belongs to the subscriber loop. Dropping an
+        // unsettled one is the moment we learn nothing will handle it, so nak
+        // it rather than let it hold a `max-ack-pending` slot for the whole
+        // ack-wait.
+        if charged.is_none() || self.settled.load(Ordering::Acquire) {
+            return;
+        }
+        let Settlement::Guest(acker) =
+            std::mem::replace(&mut self.settlement, Settlement::Settled)
+        else {
+            return;
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                if let Err(e) = acker
+                    .ack_with(async_nats::jetstream::AckKind::Nak(None))
+                    .await
+                {
+                    tracing::warn!("failed to nak a dropped pull message: {e}");
+                }
+            });
         }
     }
 }
 
 /// Handle to a pull-based JetStream consumer.
 pub struct PullConsumerHandle {
-    pub(super) consumer: Option<Consumer<pull::Config>>,
+    pub(super) consumer: Consumer<pull::Config>,
     /// Ceiling on what one `fetch` may materialize into host memory, taken
     /// from the binding that opened it.
     ///

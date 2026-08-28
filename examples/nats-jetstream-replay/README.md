@@ -107,8 +107,9 @@ spec:
       version: "0.1.0"
       interfaces: [types, jetstream, kv, jetstream-handler]
       config:
-        # STREAM:filter[:policy[:queue]]
-        subscriptions: ORDERS:orders.received:all
+        # STREAM:filter[:policy[:queue]] — an empty policy slot is the
+        # default (`new`), so a queue group needs no policy spelled out
+        jetstream-subscriptions: ORDERS:orders.received:all
         ack-mode: auto
         max-in-flight: "32"
 ```
@@ -162,6 +163,10 @@ nats pub orders.received "not-an-order"
 
 ## Notes
 
+- `component: <id>` scopes an entry's subscriptions to one component of the
+  workload. Without it, every component that exports the matching handler
+  attaches — so a multi-component workload is refused at deploy rather than
+  started with each message handled twice.
 - `ack-mode: auto` means the host acks on `Ok` and naks on `Err` or trap. Set
   `manual` to take over, and call `handle.ack()` / `nak()` / `term()` yourself.
 - `max-in-flight` bounds concurrent handler invocations per consumer. Without a

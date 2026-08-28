@@ -607,7 +607,23 @@ fn validate_queue_group(entry: &str, group: &str, jetstream: bool) -> anyhow::Re
     Ok(())
 }
 
-/// Parses `STREAM:filter[:policy[:queue]]`, comma separated.
+/// Refuses a subject or filter NATS itself would reject.
+///
+/// Nothing else checks these, so an illegal subject reaches the server, the
+/// subscribe fails, and the subscription parks under a workload that reports
+/// running — the same failure the queue-group checks above exist to prevent.
+fn validate_subject(entry: &str, subject: &str, what: &str) -> anyhow::Result<()> {
+    if subject.chars().any(char::is_whitespace) {
+        anyhow::bail!("{what} `{entry}` has a subject containing whitespace")
+    }
+    if subject.split('.').any(str::is_empty) {
+        anyhow::bail!("{what} `{entry}` has a subject with an empty token")
+    }
+    Ok(())
+}
+
+/// Parses `STREAM:filter[:policy[:queue]]`, comma separated. An empty policy
+/// slot is the default, so a queue group does not force it to be spelled out.
 pub(super) fn parse_jetstream_subscriptions(
     binding: &str,
     raw: &str,
@@ -626,7 +642,13 @@ pub(super) fn parse_jetstream_subscriptions(
             if stream.is_empty() || filter_subject.is_empty() {
                 anyhow::bail!("jetstream subscription `{entry}` has an empty stream or filter")
             }
-            let deliver_policy = parts.get(2).copied().unwrap_or("new");
+            validate_subject(entry, filter_subject, "jetstream subscription")?;
+            // An empty slot is the default, so naming a queue group does not
+            // force the policy to be spelled out: `STREAM:filter::group`.
+            let deliver_policy = match parts.get(2).copied() {
+                None | Some("") => "new",
+                Some(policy) => policy,
+            };
             if !matches!(deliver_policy, "all" | "last" | "last-per-subject" | "new") {
                 anyhow::bail!(
                     "jetstream subscription `{entry}` has an unknown deliver policy \
@@ -690,11 +712,22 @@ pub(super) fn parse_core_subscriptions(
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
         .map(|entry| {
+            // `:` is not special to NATS, so `orders:eu` is a legal subject
+            // that this grammar reads as `orders` in queue group `eu`. That
+            // one cannot be told apart here; a second `:` always can, and is
+            // never what was meant.
+            if entry.matches(':').count() > 1 {
+                anyhow::bail!(
+                    "core subscription `{entry}` has more than one `:`; the grammar is \
+                     subject[:queue], so a subject containing `:` cannot be expressed"
+                )
+            }
             let mut parts = entry.splitn(2, ':');
             let subject = parts.next().unwrap_or_default();
             if subject.is_empty() {
                 anyhow::bail!("core subscription `{entry}` has an empty subject")
             }
+            validate_subject(entry, subject, "core subscription")?;
             let queue_group = parts.next();
             if let Some(group) = queue_group {
                 validate_queue_group(entry, group, false)?;
@@ -708,18 +741,21 @@ pub(super) fn parse_core_subscriptions(
         .collect()
 }
 
-/// Parses `bucket:filter`, comma separated.
+/// Parses `bucket[:filter]`, comma separated. An omitted filter is `>`.
 pub(super) fn parse_kv_watches(binding: &str, raw: &str) -> anyhow::Result<Vec<KvWatchConfig>> {
     raw.split(',')
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
         .map(|entry| {
-            let Some((bucket, filter)) = entry.split_once(':') else {
-                anyhow::bail!("invalid kv watch `{entry}`, expected bucket:filter")
+            // A bare bucket watches all of it, which is what `>` means.
+            let (bucket, filter) = match entry.split_once(':') {
+                Some((bucket, filter)) => (bucket, filter),
+                None => (entry, ">"),
             };
             if bucket.is_empty() || filter.is_empty() {
                 anyhow::bail!("kv watch `{entry}` has an empty bucket or filter")
             }
+            validate_subject(entry, filter, "kv watch")?;
             Ok(KvWatchConfig {
                 binding: binding.to_string(),
                 bucket: bucket.to_string(),
@@ -1226,6 +1262,30 @@ mod tests {
         assert!(err.to_string().contains("unknown deliver policy"));
     }
 
+    /// A queue group must not force the policy to be spelled out, which is
+    /// what an empty slot being an error amounted to.
+    #[test]
+    fn an_empty_deliver_policy_slot_is_the_default() {
+        let subs = parse_jetstream_subscriptions("", "ORDERS:orders.>::workers").unwrap();
+        assert_eq!(subs[0].deliver_policy, "new");
+        assert_eq!(subs[0].queue_group.as_deref(), Some("workers"));
+    }
+
+    /// `:` is legal in a NATS subject, so this grammar cannot express one that
+    /// contains it. A second `:` is the case that can always be told apart.
+    #[test]
+    fn a_core_subject_with_two_colons_is_refused() {
+        let err = parse_core_subscriptions("", "orders:eu:west").unwrap_err();
+        assert!(err.to_string().contains("more than one `:`"));
+    }
+
+    #[test]
+    fn subjects_nats_would_reject_are_refused() {
+        assert!(parse_core_subscriptions("", "orders..eu").is_err());
+        assert!(parse_core_subscriptions("", "orders eu").is_err());
+        assert!(parse_jetstream_subscriptions("", "ORDERS:orders..eu").is_err());
+    }
+
     #[test]
     fn core_subs_basic() {
         let subs = parse_core_subscriptions("", "events.*,metrics.>:stats").unwrap();
@@ -1246,9 +1306,21 @@ mod tests {
         assert_eq!(watches[1].filter, "prod.>");
     }
 
+    /// A bare bucket watches all of it: `>` is the only thing it could mean,
+    /// and `subscriptions` defaults its own optional slot the same way.
+    #[test]
+    fn a_kv_watch_without_a_filter_watches_the_whole_bucket() {
+        let watches = parse_kv_watches("", "config").unwrap();
+        assert_eq!(watches.len(), 1);
+        assert_eq!(watches[0].bucket, "config");
+        assert_eq!(watches[0].filter, ">");
+    }
+
     #[test]
     fn kv_watches_reject_malformed() {
-        assert!(parse_kv_watches("", "configonly").is_err());
+        // An explicit `:` still promises a filter, so an empty one is a typo.
         assert!(parse_kv_watches("", "config:").is_err());
+        assert!(parse_kv_watches("", "config:a..b").is_err());
+        assert!(parse_kv_watches("", "config:a b").is_err());
     }
 }

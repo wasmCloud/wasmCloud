@@ -46,6 +46,12 @@ fn describe(err: &NatsError) -> String {
         NatsError::NotFound(what) => format!("not found: {what}"),
         NatsError::UnsupportedByServer(detail) => format!("unsupported by server: {detail}"),
         NatsError::Disconnected => "disconnected".to_string(),
+        NatsError::AlreadySettled => "message already settled".to_string(),
+        // This example runs `ack-mode: auto`, so a settle from here is the
+        // host's to make.
+        NatsError::AckOwnedByHost => {
+            "acknowledgement is the host's under `ack-mode: auto`".to_string()
+        }
         NatsError::InvalidHeader(detail) => format!("invalid header: {detail}"),
         NatsError::LimitExceeded(detail) => format!("limit exceeded: {detail}"),
         NatsError::Unexpected(detail) => format!("unexpected: {detail}"),

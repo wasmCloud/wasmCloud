@@ -45,21 +45,22 @@ interface types {
   ///
   /// Subscription patterns are not here: they are checked once at bind time,
   /// where a refusal fails the deployment rather than reaching a guest.
-  enum denied-resource {
+  variant denied-resource {
     /// A publish or request subject.
     subject,
     /// A JetStream stream name.
     %stream,
     /// A KV bucket name.
     bucket,
-    /// A stored JetStream message, named `<stream>#<sequence>`.
+    /// A stored JetStream message. The payload is its stream sequence; the
+    /// denial's `name` is the stream.
     ///
     /// A read of a stored message is checked against the subject grant, but
     /// the refusal names the sequence rather than the subject it was stored
     /// on: naming the subject would let a caller walk sequences to enumerate
     /// subjects it was never granted. Widen `subject-allow` to cover the
     /// subject the stream stores those messages on.
-    message,
+    message(u64),
   }
 
   /// A refusal by the host's grant check.
@@ -98,11 +99,20 @@ interface types {
     /// consumer had nothing to give. Compare `limit-exceeded`, where the
     /// request never ran.
     no-messages,
-    /// The server refused the request outright because it exceeds a limit the
-    /// consumer was provisioned with — a batch over `max-request-batch`, a
-    /// byte bound over `max-request-max-bytes`, or too many waiting pulls.
-    /// Nothing was delivered, and retrying unchanged fails the same way;
-    /// `info` reports the limits to size the next request against.
+    /// A request refused before anything was delivered. Two causes, with
+    /// different fixes:
+    ///
+    /// - The server refused it outright because it exceeds a limit the
+    ///   consumer was provisioned with: a batch over `max-request-batch`, a
+    ///   byte bound over `max-request-max-bytes`, or too many waiting pulls.
+    ///   `info` reports those limits, to size the next request against.
+    /// - The host refused it because this binding's already-fetched messages
+    ///   hold its whole memory budget. `info` says nothing about this one:
+    ///   drop the `message-handle`s from earlier batches, since acking one
+    ///   does not release it.
+    ///
+    /// Either way nothing was delivered, and retrying unchanged fails the
+    /// same way.
     limit-exceeded(string),
     /// Named resource (stream, bucket, consumer) doesn't exist.
     not-found(string),
@@ -112,6 +122,16 @@ interface types {
     /// No live connection is bound to this workload. Distinct from
     /// `connection`, which is a transport error on a live connection.
     disconnected,
+    /// A `message-handle` settle was refused because the handle is already
+    /// settled: an `ack`, `nak`, or `term` the server accepted retired it.
+    /// Never means "retry is pointless" — a settle the server *rejected*
+    /// leaves the handle usable, so this says the work was already done.
+    already-settled,
+    /// A `message-handle` settle was refused because the host owns it: the
+    /// binding runs `ack-mode: auto`, so the host acks on `ok` and naks on
+    /// `error` or a trap. Fixed in the manifest, not in the guest.
+    /// `in-progress` still works in this mode.
+    ack-owned-by-host,
     /// Anything that doesn't fit the cases above.
     unexpected(string),
   }
@@ -250,9 +270,14 @@ interface jetstream {
 
   /// Handle to a single JetStream-delivered message.
   ///
-  /// Acknowledgement methods consume the handle's internal state — calling
-  /// ack/nak/term more than once returns an error. `in-progress` can be called
-  /// repeatedly to extend ack-wait.
+  /// Settling is one-shot, but only on success: an `ack`, `nak`, or `term`
+  /// the server accepted retires the handle, and a later settle returns
+  /// `already-settled`. A settle that *failed* on the wire leaves the handle
+  /// usable, so retrying it is correct rather than a lost message.
+  ///
+  /// `in-progress` may be called repeatedly to extend ack-wait. It works
+  /// under `ack-mode: auto` too, where the host owns the settle and every
+  /// other method here returns `ack-owned-by-host`.
   resource message-handle {
     /// Borrow the underlying message.
     message: func() -> nats-message;
@@ -388,6 +413,8 @@ interface kv {
   }
 
   /// Handle to an open KV bucket.
+  ///
+  /// Reads and writes only. For watch triggers see `kv-handler`.
   resource bucket {
     /// Fetch the latest entry for a key. `key-not-found` when the key is
     /// absent, deleted, or purged.
@@ -404,11 +431,14 @@ interface kv {
     /// Purge a key (removes history as well).
     purge: async func(key: string) -> result<_, nats-error>;
 
-    /// Lists keys in the bucket, up to a host-imposed cap of 1000.
+    /// Lists keys in the bucket matching `filter` (`>` for all), up to a
+    /// host-imposed cap of 1000.
     ///
     /// `truncated` is what tells a guest the bucket holds more than the page
     /// carries, so a partial answer is never mistaken for a complete one.
-    keys: async func() -> result<key-page, nats-error>;
+    /// Key cardinality, not value size, is what the cap bounds — pass a
+    /// narrower `filter` to walk a bucket that holds more than it.
+    keys: async func(filter: string) -> result<key-page, nats-error>;
     /// All historical entries for a key (put/update/delete/purge ops).
     /// `key-not-found` when the key has no history at all.
     history: async func(key: string) -> result<list<entry>, nats-error>;
@@ -451,52 +481,45 @@ interface kv-handler {
   handle-event: async func(bucket: string, entry: entry) -> result<_, string>;
 }
 
-/// A workload that publishes, or does request/reply. No subscriptions.
-world publisher {
-  import types;
-  import core;
-}
-
-/// A workload the host pushes core NATS messages into.
-world subscriber {
-  import types;
-  import core;
-  export core-handler;
-}
-
-/// A workload that publishes into JetStream.
-world js-publisher {
-  import types;
-  import jetstream;
-}
-
-/// A workload the host pushes JetStream deliveries into. Per-request: it holds
-/// no consumer and no stream, so it scales down between bursts.
-world js-processor {
-  import types;
-  import jetstream;
-  export jetstream-handler;
-}
-
-/// A workload that reads and writes KV directly.
-world kv-client {
-  import types;
-  import kv;
-}
-
-/// A workload the host pushes KV change events into.
-world kv-watcher {
-  import types;
-  import kv;
-  export kv-handler;
-}
-
-/// Every interface a workload can import, for a component that wants the whole
-/// surface. Also the host's own bindgen input, so the linker is populated from
-/// one generated module.
+/// Every interface a workload can import. The grant — `subject-allow`,
+/// `stream-allow`, `bucket-allow`, all deny-by-default — is what bounds what a
+/// workload reaches, not which of these it imports, so this is one set rather
+/// than three. Imports a component never calls are dropped at build time by
+/// both toolchains, so the generous surface costs it nothing.
+///
+/// Also the world for a component that only publishes or does request/reply,
+/// and the host's own bindgen input.
 world imports {
   import types;
   import core;
   import jetstream;
   import kv;
+}
+
+/// A workload that publishes, or does request/reply. No subscriptions.
+world publisher {
+  include imports;
+}
+
+/// A workload the host pushes core NATS messages into. The manifest names the
+/// subjects under `core-subscriptions`.
+world subscriber {
+  include imports;
+  export core-handler;
+}
+
+/// A workload the host pushes JetStream deliveries into. Per-request: it holds
+/// no consumer and no stream, so it scales down between bursts. The manifest
+/// names the stream and filter under `jetstream-subscriptions`; who
+/// acknowledges is the binding's `ack-mode`.
+world js-processor {
+  include imports;
+  export jetstream-handler;
+}
+
+/// A workload the host pushes KV change events into. The manifest names the
+/// bucket and key filter under `kv-watches`.
+world kv-watcher {
+  include imports;
+  export kv-handler;
 }

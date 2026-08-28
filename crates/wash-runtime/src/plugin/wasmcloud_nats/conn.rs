@@ -387,10 +387,11 @@ fn sanitize_subject_token(raw: &str) -> String {
         if c.is_ascii_alphanumeric() {
             out.push(c);
         } else {
-            // Fixed-width hex of the code point, so no two inputs can produce
-            // the same escape.
+            // Fixed-width hex of the code point — eight digits, because
+            // `{:04x}` is a *minimum* width and a non-BMP code point emits
+            // five, letting `"\u{1f38}9"` and `"🎉"` escape to one prefix.
             out.push('_');
-            out.push_str(&format!("{:04x}", c as u32));
+            out.push_str(&format!("{:08x}", c as u32));
         }
     }
     out
@@ -622,6 +623,12 @@ mod tests {
         assert_ne!(
             workload_inbox_prefix("a_0062"),
             workload_inbox_prefix("a.b")
+        );
+        // Non-BMP: a five-digit code point followed by an alphanumeric is the
+        // pair a minimum-width escape collapses.
+        assert_ne!(
+            workload_inbox_prefix("\u{1f38}9"),
+            workload_inbox_prefix("🎉")
         );
     }
 

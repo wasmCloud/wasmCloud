@@ -16,7 +16,9 @@ use super::consumer_info_to_wit;
 use crate::plugin::wasmcloud_nats::interfaces::{
     consumer_lookup_err, denied, jetstream_err, js, types,
 };
-use crate::plugin::wasmcloud_nats::jetstream::{FetchBudget, MessageHandle, PullConsumerHandle};
+use crate::plugin::wasmcloud_nats::jetstream::{
+    FetchBudget, MessageHandle, PullConsumerHandle, Settlement,
+};
 use crate::plugin::wasmcloud_nats::policy::Denied;
 
 /// Clones the consumer out of its resource, so the table borrow is not held
@@ -24,7 +26,7 @@ use crate::plugin::wasmcloud_nats::policy::Denied;
 fn consumer_ref<T>(
     access: &mut wasmtime::component::Access<'_, T, SharedCtx>,
     rep: &Resource<PullConsumerHandle>,
-) -> wasmtime::Result<Option<jetstream::consumer::Consumer<jetstream::consumer::pull::Config>>> {
+) -> wasmtime::Result<jetstream::consumer::Consumer<jetstream::consumer::pull::Config>> {
     Ok(access.get().table.get(rep)?.consumer.clone())
 }
 
@@ -121,11 +123,6 @@ async fn fetch_batch<T: 'static + Send>(
     }
 
     let consumer = accessor.with(|mut a| consumer_ref(&mut a, &rep))?;
-    let Some(consumer) = consumer else {
-        return Ok(Err(types::NatsError::Unexpected(
-            "pull consumer has been dropped".to_string(),
-        )));
-    };
     let budget = accessor.with(|mut a| fetch_budget(&mut a, &rep))?;
     let binding_bound = accessor.with(|mut a| max_fetch_bytes(&mut a, &rep))?;
     let policy = accessor.with(|mut a| policy(&mut a, &rep))?;
@@ -197,8 +194,8 @@ async fn fetch_batch<T: 'static + Send>(
                 if policy.check_stored_subject(&msg.subject).is_err() {
                     return Ok(Err(denied(
                         Denied::NotGranted,
-                        types::DeniedResource::Message,
-                        &format!("{stream}#{sequence}"),
+                        types::DeniedResource::Message(sequence),
+                        &stream,
                     )));
                 }
                 // Pull consumers are always guest-driven, so the acker goes to
@@ -210,8 +207,9 @@ async fn fetch_batch<T: 'static + Send>(
                 let charged = message.length as u64;
                 budget.charge(charged);
                 fetched.push(MessageHandle {
-                    acker: Some(acker.clone()),
-                    progress: Some(acker),
+                    // Pull deliveries are always guest-settled.
+                    settlement: Settlement::Guest(acker.clone()),
+                    progress: acker,
                     settled: Arc::new(AtomicBool::new(false)),
                     message,
                     sequence,
@@ -278,8 +276,13 @@ async fn fetch_batch<T: 'static + Send>(
     // already treats the identical failure as warn-nak-continue. Keep the
     // ackers first — a handle consumed by a failed `push` is gone, and the
     // whole batch has to be nakked either way.
-    let ackers: Vec<Arc<jetstream::message::Acker>> =
-        fetched.iter().filter_map(|h| h.acker.clone()).collect();
+    let ackers: Vec<Arc<jetstream::message::Acker>> = fetched
+        .iter()
+        .filter_map(|h| match &h.settlement {
+            Settlement::Guest(acker) => Some(acker.clone()),
+            Settlement::Settled | Settlement::HostOwned => None,
+        })
+        .collect();
     let pushed = accessor.with(|mut a| {
         let access = a.get();
         let mut ids = Vec::with_capacity(fetched.len());
@@ -343,12 +346,7 @@ impl<T: 'static + Send> js::HostPullConsumerWithStore<T> for SharedCtx {
         accessor: &Accessor<T, Self>,
         rep: Resource<PullConsumerHandle>,
     ) -> wasmtime::Result<Result<js::ConsumerInfo, types::NatsError>> {
-        let consumer = accessor.with(|mut a| consumer_ref(&mut a, &rep))?;
-        let Some(mut consumer) = consumer else {
-            return Ok(Err(types::NatsError::Unexpected(
-                "pull consumer has been dropped".to_string(),
-            )));
-        };
+        let mut consumer = accessor.with(|mut a| consumer_ref(&mut a, &rep))?;
         // Classified the same way `get-consumer-info` classifies it: a consumer
         // deleted out from under a live handle has to look the same through
         // both introspection paths, or a guest cannot write one handler for it.

@@ -50,7 +50,7 @@ macro_rules! conn_or_return {
 pub(super) use conn_or_return;
 
 /// Lowers a policy refusal onto the wire, keeping the reason and the kind of
-/// name that was refused — `@0.1.0` collapsed both into one string.
+/// name that was refused rather than collapsing both into one string.
 pub(super) fn denied(
     reason: Denied,
     target: types::DeniedResource,
