@@ -188,6 +188,7 @@ fn egress_workload_with(
                 pool_size,
                 max_invocations: 1000,
                 max_concurrency,
+                ..Default::default()
             }],
             host_interfaces: vec![WitInterface {
                 namespace: "wasi".to_string(),

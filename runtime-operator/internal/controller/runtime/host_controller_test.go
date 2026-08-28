@@ -335,16 +335,19 @@ func TestHostSpecChanged(t *testing.T) {
 }
 
 // mockBus is a wasmbus.Bus that answers Request with a canned reply (or error),
-// recording the subject the host client addressed. Only Request is exercised by
-// the heartbeat round-trip; the remaining methods satisfy the interface.
+// recording the subject the host client addressed and the request it sent.
+// Only Request is exercised by the round-trips under test; the remaining
+// methods satisfy the interface.
 type mockBus struct {
 	reply      *wasmbus.Message
 	err        error
 	gotSubject string
+	gotData    []byte
 }
 
 func (m *mockBus) Request(_ context.Context, msg *wasmbus.Message) (*wasmbus.Message, error) {
 	m.gotSubject = msg.Subject
+	m.gotData = msg.Data
 	if m.err != nil {
 		return nil, m.err
 	}

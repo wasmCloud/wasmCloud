@@ -159,6 +159,7 @@ async fn start_sleeper(host: &impl HostApi, name: &str, as_service: bool) -> Res
                 pool_size: 1,
                 max_invocations: 0,
                 max_concurrency: 4,
+                ..Default::default()
             }],
         )
     };
@@ -200,6 +201,7 @@ async fn start_linked(host: &impl HostApi, name: &str, callee_pool: i32) -> Resu
                     pool_size: 1,
                     max_invocations: 0,
                     max_concurrency: 4,
+                    ..Default::default()
                 },
                 Component {
                     name: "ephemeral-callee".to_string(),
@@ -209,6 +211,7 @@ async fn start_linked(host: &impl HostApi, name: &str, callee_pool: i32) -> Resu
                     pool_size: callee_pool,
                     max_invocations: 0,
                     max_concurrency: 4,
+                    ..Default::default()
                 },
             ],
             host_interfaces: http_only_host_interfaces(name),

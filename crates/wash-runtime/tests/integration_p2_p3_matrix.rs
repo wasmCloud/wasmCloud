@@ -73,6 +73,7 @@ async fn test_p3_http_handler_serves_request() -> Result<()> {
                 pool_size: 1,
                 max_invocations: 100,
                 max_concurrency: 1,
+                ..Default::default()
             }],
             host_interfaces: p3_http_host_interfaces("p3-handler"),
             volumes: vec![],
@@ -126,6 +127,7 @@ async fn test_p3_http_blobstore() -> Result<()> {
                 pool_size: 1,
                 max_invocations: 100,
                 max_concurrency: 1,
+                ..Default::default()
             }],
             host_interfaces: p3_http_blobstore_host_interfaces("p3-blobstore"),
             volumes: vec![],
@@ -182,6 +184,7 @@ async fn test_p3_http_concurrent_requests() -> Result<()> {
                 pool_size: 1,
                 max_invocations: 100,
                 max_concurrency: 1,
+                ..Default::default()
             }],
             host_interfaces: p3_http_host_interfaces("p3-concurrent"),
             volumes: vec![],
@@ -313,6 +316,7 @@ async fn test_p3_caller_p2_middleware_p2_callee() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
                 Component {
                     name: "p2-middleware".to_string(),
@@ -322,6 +326,7 @@ async fn test_p3_caller_p2_middleware_p2_callee() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
                 Component {
                     name: "p2-callee".to_string(),
@@ -331,6 +336,7 @@ async fn test_p3_caller_p2_middleware_p2_callee() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
             ],
             host_interfaces: inter_component_host_interfaces("p3-p2-p2"),
@@ -390,6 +396,7 @@ async fn test_p2_caller_p2_middleware_p3_callee() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
                 Component {
                     name: "p2-middleware".to_string(),
@@ -399,6 +406,7 @@ async fn test_p2_caller_p2_middleware_p3_callee() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
                 Component {
                     name: "p3-callee".to_string(),
@@ -408,6 +416,7 @@ async fn test_p2_caller_p2_middleware_p3_callee() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
             ],
             host_interfaces: inter_component_host_interfaces("p2-p2-p3"),
@@ -463,6 +472,7 @@ async fn test_p3_caller_p2_middleware_p3_callee() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
                 Component {
                     name: "p2-middleware".to_string(),
@@ -472,6 +482,7 @@ async fn test_p3_caller_p2_middleware_p3_callee() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
                 Component {
                     name: "p3-callee".to_string(),
@@ -481,6 +492,7 @@ async fn test_p3_caller_p2_middleware_p3_callee() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 },
             ],
             host_interfaces: inter_component_host_interfaces("p3-p2-p3"),
@@ -542,6 +554,7 @@ async fn test_all_p3_workload() -> Result<()> {
                 pool_size: 1,
                 max_invocations: 100,
                 max_concurrency: 1,
+                ..Default::default()
             }],
             host_interfaces: p3_http_blobstore_host_interfaces("all-p3"),
             volumes: vec![],
@@ -608,6 +621,7 @@ async fn test_p2_regression_with_p3_enabled() -> Result<()> {
                 pool_size: 1,
                 max_invocations: 100,
                 max_concurrency: 1,
+                ..Default::default()
             }],
             host_interfaces: http_counter_host_interfaces("p2-regression"),
             volumes: vec![],

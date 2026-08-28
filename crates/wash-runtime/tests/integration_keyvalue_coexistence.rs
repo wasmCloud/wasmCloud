@@ -104,6 +104,7 @@ async fn standalone_and_multiplexed_keyvalue_coexist() -> Result<()> {
                 pool_size: 1,
                 max_invocations: 100,
                 max_concurrency: 1,
+                ..Default::default()
             }],
             host_interfaces,
             volumes: vec![],

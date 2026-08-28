@@ -1705,6 +1705,7 @@ mod tests {
                         pool_size: 1,
                         max_invocations: 100,
                         max_concurrency: 1,
+                        ..Default::default()
                     }],
                     host_interfaces: vec![],
                     volumes: vec![],
@@ -1897,6 +1898,7 @@ mod tests {
                     pool_size: 1,
                     max_invocations: 100,
                     max_concurrency: 1,
+                    ..Default::default()
                 }],
                 host_interfaces: marker_interfaces(),
                 volumes: vec![],

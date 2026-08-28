@@ -472,6 +472,30 @@ pub struct Component {
     /// blocking call must stay at one. Only meaningful alongside pool_size.
     #[prost(sint32, tag = "8")]
     pub max_concurrency: i32,
+    /// How long the pool watches its own peak concurrency before retiring the
+    /// warm instances that peak did not need.
+    ///
+    /// A pool grows to pool_size under load and, without this, stays there:
+    /// nothing but max_invocations, a trap or a stop ever ends a warm instance,
+    /// so a spike's high-water mark outlives the spike. Set this and the pool
+    /// sweeps every window, keeps the instances its measured peak actually
+    /// needed (peak concurrent calls divided by max_concurrency, rounded up)
+    /// and retires the rest -- draining them, never dropping a call in flight.
+    ///
+    /// Unset or below 1 means warm instances are never reclaimed for idleness,
+    /// which is the behavior of a host that predates this field. Only
+    /// meaningful alongside pool_size.
+    #[prost(sint32, tag = "9")]
+    pub reclaim_window_seconds: i32,
+    /// How many warm instances an idle sweep never retires below.
+    ///
+    /// Unset or below 1 lets a fully idle pool empty out, so the next call after
+    /// a quiet spell starts cold. Raise it to keep a floor of instances warm
+    /// through the quiet. Capped at pool_size, and only meaningful alongside
+    /// reclaim_window_seconds. Note this is a floor under the pool, not a target
+    /// to grow to: instances are still only built when a call needs one.
+    #[prost(sint32, tag = "10")]
+    pub reclaim_min_instances: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LocalResources {

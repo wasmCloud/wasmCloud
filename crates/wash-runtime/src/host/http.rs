@@ -1977,7 +1977,7 @@ async fn invoke_component_handler(
             use crate::engine::instance_pool::Dispatch;
             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
             let call = DispatchedCall::new("HTTP (pooled)", crate::timeouts::http_response());
-            let outcome = match pool.offer(InstanceJob::Http(Box::new(ServiceHttpJob {
+            let outcome = match pool.try_dispatch(InstanceJob::Http(Box::new(ServiceHttpJob {
                 req,
                 resp_tx,
                 abandoned: call.flag(),
@@ -1990,7 +1990,7 @@ async fn invoke_component_handler(
                 Dispatch::NeedsInstance(job) => {
                     let mut store = workload_handle.new_store(component_id).await?;
                     let instance = instance_pre.instantiate_async(&mut store).await?;
-                    pool.install(
+                    pool.dispatch_on_new(
                         crate::engine::instance_pool::ComponentInstance { store, instance },
                         job,
                     )

@@ -558,6 +558,8 @@ fn component_from_wire(
         pool_size: wire.pool_size,
         max_invocations: wire.max_invocations,
         max_concurrency: wire.max_concurrency,
+        reclaim_window_seconds: wire.reclaim_window_seconds,
+        reclaim_min_instances: wire.reclaim_min_instances,
     }
 }
 
@@ -1017,6 +1019,8 @@ mod tests {
             pool_size: 4,
             max_invocations: 100,
             max_concurrency: 8,
+            reclaim_window_seconds: 30,
+            reclaim_min_instances: 2,
             ..Default::default()
         };
 
@@ -1033,6 +1037,8 @@ mod tests {
         assert_eq!(component.pool_size, 4);
         assert_eq!(component.max_invocations, 100);
         assert_eq!(component.max_concurrency, 8);
+        assert_eq!(component.reclaim_window_seconds, 30);
+        assert_eq!(component.reclaim_min_instances, 2);
 
         // And the runtime reads those limits as the policy they name.
         assert_eq!(
@@ -1041,6 +1047,10 @@ mod tests {
                 pool_size: std::num::NonZeroUsize::new(4).unwrap(),
                 max_invocations: std::num::NonZeroUsize::new(100),
                 max_concurrency: std::num::NonZeroUsize::new(8).unwrap(),
+                reclaim: Some(crate::engine::ReclaimPolicy {
+                    window: std::time::Duration::from_secs(30),
+                    min_instances: 2,
+                }),
             }
         );
     }

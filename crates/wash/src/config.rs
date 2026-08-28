@@ -410,6 +410,25 @@ pub struct DevComponent {
     /// itself. Only meaningful alongside `poolSize`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_concurrency: Option<i32>,
+    /// How long the pool watches its own peak concurrency before retiring the
+    /// warm instances that peak did not need, in seconds.
+    ///
+    /// A pool grows to `poolSize` under load and, unset, stays there: a
+    /// spike's high-water mark outlives the spike. Set this and the pool
+    /// sweeps every window, keeps the instances its measured peak actually
+    /// needed and drains the rest — never ending a call in flight. Unset (or
+    /// `0`) means warm instances are never reclaimed for idleness. Only
+    /// meaningful alongside `poolSize`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reclaim_window_seconds: Option<i32>,
+    /// How many warm instances a reclaim sweep never retires below.
+    ///
+    /// Unset (or `0`) lets a fully idle pool empty out, so the next call
+    /// after a quiet spell starts cold. Capped at `poolSize`. A floor on
+    /// reclaim, not a target to grow to: instances are still only built when
+    /// a call needs one. Only meaningful alongside `reclaimWindowSeconds`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reclaim_min_instances: Option<i32>,
 }
 
 impl DevComponent {
@@ -432,6 +451,8 @@ impl DevComponent {
             pool_size: None,
             max_invocations: None,
             max_concurrency: None,
+            reclaim_window_seconds: None,
+            reclaim_min_instances: None,
         }
     }
 }

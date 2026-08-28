@@ -97,6 +97,7 @@ async fn p3_guest_plain_blobstore_uses_default_backend() -> Result<()> {
                 pool_size: 1,
                 max_invocations: 100,
                 max_concurrency: 1,
+                ..Default::default()
             }],
             host_interfaces,
             volumes: vec![],

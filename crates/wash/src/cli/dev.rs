@@ -481,9 +481,9 @@ impl CliCommand for DevCommand {
 /// extracted WIT interface set, and its resolved workload values (workload
 /// base merged with the component's overrides), so the pure assembly step
 /// needs no further I/O or host calls.
-/// What `Component.pool_size` / `max_invocations` carry when `wash dev` has
-/// nothing to say about them: they are `sint32` on the wire, and the runtime
-/// reads anything that is not a positive pool size as "do not keep instances".
+/// What a `Component`'s instance limits carry when `wash dev` has nothing to
+/// say about them: they are `sint32` on the wire, and the runtime reads
+/// anything that is not a positive pool size as "do not keep instances".
 const UNSET_LIMIT: i32 = -1;
 
 struct SidecarComponent {
@@ -491,11 +491,13 @@ struct SidecarComponent {
     bytes: Bytes,
     interfaces: HashSet<WitInterface>,
     workload: ResolvedWorkload,
-    /// Warm-instance limits from `dev.components[].poolSize` /
-    /// `maxInvocations`, `None` where the config left them unset.
+    /// The warm-instance limits from `dev.components[]`, `None` where the
+    /// config left them unset.
     pool_size: Option<i32>,
     max_invocations: Option<i32>,
     max_concurrency: Option<i32>,
+    reclaim_window_seconds: Option<i32>,
+    reclaim_min_instances: Option<i32>,
 }
 
 /// Thin wrapper around [`build_workload`]: extracts dev-component
@@ -544,6 +546,8 @@ async fn create_workload(
             pool_size: dev_component.pool_size,
             max_invocations: dev_component.max_invocations,
             max_concurrency: dev_component.max_concurrency,
+            reclaim_window_seconds: dev_component.reclaim_window_seconds,
+            reclaim_min_instances: dev_component.reclaim_min_instances,
         });
     }
 
@@ -662,6 +666,8 @@ fn build_workload(
             pool_size: UNSET_LIMIT,
             max_invocations: UNSET_LIMIT,
             max_concurrency: UNSET_LIMIT,
+            reclaim_window_seconds: UNSET_LIMIT,
+            reclaim_min_instances: UNSET_LIMIT,
         });
 
         if let Some(service_bytes) = service_bytes {
@@ -681,11 +687,13 @@ fn build_workload(
             digest: None,
             local_resources: local_resources_for(&sidecar.workload),
             // `Component` carries these as `sint32`, where a negative means
-            // "not configured"; the runtime decodes the pair into an
+            // "not configured"; the runtime decodes them into an
             // `InstancePolicy`.
             pool_size: sidecar.pool_size.unwrap_or(UNSET_LIMIT),
             max_invocations: sidecar.max_invocations.unwrap_or(UNSET_LIMIT),
             max_concurrency: sidecar.max_concurrency.unwrap_or(UNSET_LIMIT),
+            reclaim_window_seconds: sidecar.reclaim_window_seconds.unwrap_or(UNSET_LIMIT),
+            reclaim_min_instances: sidecar.reclaim_min_instances.unwrap_or(UNSET_LIMIT),
         });
     }
 
@@ -873,6 +881,8 @@ mod tests {
             pool_size: None,
             max_invocations: None,
             max_concurrency: None,
+            reclaim_window_seconds: None,
+            reclaim_min_instances: None,
         }
     }
 
@@ -933,10 +943,10 @@ mod tests {
         );
     }
 
-    /// `poolSize` / `maxInvocations` on a `dev.components` entry must reach the
+    /// The warm-instance limits on a `dev.components` entry must reach the
     /// workload component; the runtime reads them to decide whether to keep
-    /// instances warm. A sidecar that sets neither stays at `-1` (unset), which
-    /// the runtime reads as "no pooling".
+    /// instances warm and when to give them back. A sidecar that sets none
+    /// stays at `-1` (unset), which the runtime reads as "no pooling".
     #[test]
     fn build_workload_carries_warm_instance_limits() {
         let resolved = ResolvedWorkload::default();
@@ -950,6 +960,8 @@ mod tests {
         let mut pooled = loaded_sidecar("pooled", resolved.clone());
         pooled.pool_size = Some(4);
         pooled.max_invocations = Some(100);
+        pooled.reclaim_window_seconds = Some(30);
+        pooled.reclaim_min_instances = Some(1);
         let sidecars = vec![pooled, loaded_sidecar("unpooled", resolved.clone())];
 
         let workload = build_workload(
@@ -965,10 +977,14 @@ mod tests {
         let pooled = find_component(&workload, "pooled").unwrap();
         assert_eq!(pooled.pool_size, 4);
         assert_eq!(pooled.max_invocations, 100);
+        assert_eq!(pooled.reclaim_window_seconds, 30);
+        assert_eq!(pooled.reclaim_min_instances, 1);
 
         let unpooled = find_component(&workload, "unpooled").unwrap();
         assert_eq!(unpooled.pool_size, UNSET_LIMIT);
         assert_eq!(unpooled.max_invocations, UNSET_LIMIT);
+        assert_eq!(unpooled.reclaim_window_seconds, UNSET_LIMIT);
+        assert_eq!(unpooled.reclaim_min_instances, UNSET_LIMIT);
     }
 
     /// The config keys are camelCase on the wire and optional, so a component
@@ -976,16 +992,21 @@ mod tests {
     #[test]
     fn dev_component_warm_instance_limits_deserialize() {
         let with: DevComponent = serde_yaml_ng::from_str(
-            "name: pooled\nfile: pooled.wasm\npoolSize: 8\nmaxInvocations: 50",
+            "name: pooled\nfile: pooled.wasm\npoolSize: 8\nmaxInvocations: 50\n\
+             reclaimWindowSeconds: 60\nreclaimMinInstances: 2",
         )
         .unwrap();
         assert_eq!(with.pool_size, Some(8));
         assert_eq!(with.max_invocations, Some(50));
+        assert_eq!(with.reclaim_window_seconds, Some(60));
+        assert_eq!(with.reclaim_min_instances, Some(2));
 
         let without: DevComponent =
             serde_yaml_ng::from_str("name: plain\nfile: plain.wasm").unwrap();
         assert_eq!(without.pool_size, None);
         assert_eq!(without.max_invocations, None);
+        assert_eq!(without.reclaim_window_seconds, None);
+        assert_eq!(without.reclaim_min_instances, None);
     }
 
     #[test]
@@ -1174,6 +1195,8 @@ mod tests {
             pool_size: None,
             max_invocations: None,
             max_concurrency: None,
+            reclaim_window_seconds: None,
+            reclaim_min_instances: None,
         }];
 
         let workload = build_workload(

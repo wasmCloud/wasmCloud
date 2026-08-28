@@ -71,6 +71,7 @@ async fn start_sleeper_with(
                 pool_size,
                 max_invocations,
                 max_concurrency,
+                ..Default::default()
             }],
             host_interfaces: http_only_host_interfaces(host_header),
             volumes: vec![],
@@ -308,6 +309,7 @@ async fn linked_calls_share_the_warm_instances() -> Result<()> {
                     pool_size: 2,
                     max_invocations: 0,
                     max_concurrency: 4,
+                    ..Default::default()
                 },
                 Component {
                     name: "callee".to_string(),
@@ -317,6 +319,7 @@ async fn linked_calls_share_the_warm_instances() -> Result<()> {
                     pool_size: 1,
                     max_invocations: 0,
                     max_concurrency: 4,
+                    ..Default::default()
                 },
             ],
             host_interfaces: http_only_host_interfaces("linked-conc"),
