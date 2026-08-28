@@ -9,6 +9,8 @@
 //!   - `/paced` — eight rows emitted ~120ms apart (a per-row `pg_sleep`),
 //!     forwarded to the response body as each arrives. A test times the chunks
 //!     to prove rows stream through incrementally rather than being buffered.
+//!   - `/warmup` — one trivial row over the same forwarding path, so a test can
+//!     pay instantiation and connection setup before it starts timing.
 //!   - anything else — reads `items` and forwards it (a small sanity default).
 
 mod bindings {
@@ -58,6 +60,11 @@ fn route(path: &str) -> (&'static str, bool) {
              CROSS JOIN LATERAL (SELECT pg_sleep(0.12) WHERE g.i IS NOT NULL) AS s",
             true,
         )
+    } else if path.starts_with("/warmup") {
+        // One row, no sleeps and no table: the cheapest trip that still walks
+        // the whole path a timed request will (instantiate, connect, stream a
+        // row, write the response body).
+        ("SELECT 'ok'::text", true)
     } else {
         ("SELECT val FROM items ORDER BY id", true)
     }
