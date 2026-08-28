@@ -324,7 +324,7 @@ impl ExecutionCredit {
 /// from is armed on every store anyway, for the teardown this module exists
 /// for.
 ///
-/// What it costs instead is resolution, and the shortfall is one-directional.
+/// What it costs instead is resolution, in both directions.
 /// The callback fires at the first back-edge past a deadline of
 /// [`EPOCH_DEADLINE_TICKS`] ticks, and [`rearm_for_call`] restarts that
 /// countdown per call, so **a call whose guest runs for less than one sampling
