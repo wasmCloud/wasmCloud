@@ -317,10 +317,7 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
                     return Ok(Err(kv_err("kv keys iter failed", timed_out, e)));
                 }
             };
-            let last = message
-                .info()
-                .map(|info| info.pending == 0)
-                .unwrap_or(true);
+            let last = message.info().map(|info| info.pending == 0).unwrap_or(true);
             // A delete or purge tombstone is still the latest message on its
             // subject, so it arrives here and is not a live key.
             if !is_tombstone(&message) {

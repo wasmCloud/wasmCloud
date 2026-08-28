@@ -265,9 +265,12 @@ impl ExecutionTimeMeter {
         // store, and the counter is shared with the callback either way.
         let executed = Arc::clone(&store.data().executed);
         let before = executed.millis();
-        let result = func(store).await?;
+        // Recorded before the `?`: a call that traps or errors still consumed
+        // the time it ran for, and dropping those samples biases the histogram
+        // toward the calls that succeeded.
+        let result = func(store).await;
         hist.record(executed.millis().saturating_sub(before), attributes);
-        Ok(result)
+        result
     }
 }
 
@@ -281,7 +284,10 @@ fn execution_time_histogram_boundaries() -> Vec<f64> {
     const MULTIPLIERS: [f64; 4] = [1.0, 2.5, 5.0, 7.5];
 
     let mut boundaries = vec![0.0];
-    let mut base = crate::engine::abandon::sampling_window().as_millis() as f64;
+    // Floored at 1ms: a sub-millisecond window truncates to zero, and a zero
+    // base stays zero through `base *= 10.0`, so the loop would never reach
+    // `MAX` and would push boundaries until it ran out of memory.
+    let mut base = (crate::engine::abandon::sampling_window().as_millis() as f64).max(1.0);
     loop {
         for &m in &MULTIPLIERS {
             let value = base * m;

@@ -305,7 +305,7 @@ host:
     {{- with .bindings }}
     bindings:
       {{- range $name, $binding := . }}
-      {{ $name }}:
+      {{ $name | quote }}:
         {{- with $binding.config }}
         config:
           {{- toYaml . | nindent 10 }}
