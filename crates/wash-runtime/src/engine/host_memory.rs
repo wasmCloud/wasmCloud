@@ -347,10 +347,18 @@ fn detected_memory_limit() -> Option<u64> {
 
 /// Total physical memory, for a host with no cgroup to read — a developer's
 /// laptop, or a bare-metal deployment.
+///
+/// Refreshes RAM only. [`SystemMonitor`] samples every CPU core for the host's
+/// periodic reporting, which this path would pay on every engine build.
+///
+/// [`SystemMonitor`]: crate::host::sysinfo::SystemMonitor
 fn system_total_memory() -> Option<u64> {
-    let mut monitor = crate::host::sysinfo::SystemMonitor::new();
-    monitor.refresh();
-    let total = monitor.memory_usage().total_memory;
+    use sysinfo::{MemoryRefreshKind, RefreshKind, System};
+
+    let system = System::new_with_specifics(
+        RefreshKind::new().with_memory(MemoryRefreshKind::new().with_ram()),
+    );
+    let total = system.total_memory();
     (total > 0).then_some(total)
 }
 
@@ -411,6 +419,18 @@ mod tests {
         assert_eq!(parse_bytes("12PiB"), Ok(12 * 1024 * 1024 * 1024 * MIB));
         assert!(parse_bytes("MiB").is_err());
         assert!(parse_bytes("").is_err());
+    }
+
+    #[test]
+    fn the_memory_only_refresh_still_reports_total_ram() {
+        // A refresh kind that stops populating `total_memory` fails silently:
+        // the derivation drops every non-cgroup host to the 256MiB floor.
+        let total =
+            system_total_memory().expect("a machine running this test has readable total memory");
+        assert!(
+            total >= MIN_DERIVED_MAX_GUEST_MEMORY,
+            "implausible total memory {total}, the refresh kind likely stopped populating it"
+        );
     }
 
     #[test]
