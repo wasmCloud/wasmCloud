@@ -41,6 +41,15 @@ package wasmcloud:nats-guest@0.1.0;
 world imports {
   include wasi:cli/imports@0.2.8;
   import wasi:logging/logging@0.1.0-draft;
+  // The one P3 platform import, and it is load-bearing: a Go guest that parks
+  // on its own runtime timer (`time.Sleep`) inside an async-lifted export
+  // traps — the goroutine parks, the export returns nothing, and wasmtime
+  // reports "async-lifted export failed to produce a result". Awaiting the
+  // host's clock is the working sleep: `wait-for` is an ordinary async host
+  // import, the same mechanism every `wasmcloud:nats` call already uses, so a
+  // handler that debounces, backs off, or rate-limits sleeps through this
+  // instead. (Rust guests: it is also just the natural P3 sleep.)
+  import wasi:clocks/monotonic-clock@0.3.0;
 
   import wasmcloud:nats/types@0.1.0;
   import wasmcloud:nats/core@0.1.0;
