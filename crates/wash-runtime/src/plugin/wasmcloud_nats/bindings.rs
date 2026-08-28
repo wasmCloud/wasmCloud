@@ -159,6 +159,37 @@ impl NatsBindings {
         self
     }
 
+    /// TLS material for the default servers, seeded the same way — a
+    /// fallback each binding may override per key.
+    ///
+    /// Must run **before** [`Self::with_default_servers`]: a `servers` already
+    /// in the base at this point is the operator's own address, and the data
+    /// plane's certificates say nothing about it, so nothing is seeded. This
+    /// is what lets a stock chart install work out of the box — the cluster's
+    /// own NATS requires TLS by default, and an address-only fallback would
+    /// have every inheriting binding dial it plaintext and fail at connect.
+    pub fn with_default_tls(
+        mut self,
+        ca: Option<&std::path::Path>,
+        cert: Option<&std::path::Path>,
+        key: Option<&std::path::Path>,
+        tls_first: bool,
+    ) -> Self {
+        if self.base.contains_key("servers") {
+            return self;
+        }
+        let mut seed = |k: &str, v: Option<String>| {
+            if let Some(v) = v {
+                self.base.entry(k.to_string()).or_insert(v);
+            }
+        };
+        seed("tls-ca", ca.map(|p| p.display().to_string()));
+        seed("tls-cert", cert.map(|p| p.display().to_string()));
+        seed("tls-key", key.map(|p| p.display().to_string()));
+        seed("tls-first", tls_first.then(|| "true".to_string()));
+        self
+    }
+
     /// Configuration for one `(implements ..)` name, layered over [`Self::with_base`].
     pub fn with_binding(
         mut self,
@@ -404,6 +435,79 @@ mod tests {
         assert_eq!(
             resolved.get("servers").map(String::as_str),
             Some("nats://declared:4222")
+        );
+    }
+
+    /// The data plane's TLS material rides along with its address, so the
+    /// chart's default install — TLS on — works with no per-binding config.
+    #[test]
+    fn the_data_plane_fallback_carries_its_tls_material() {
+        let bindings = NatsBindings::new()
+            .with_default_tls(
+                Some(std::path::Path::new("/data-cert/ca.crt")),
+                Some(std::path::Path::new("/data-cert/tls.crt")),
+                Some(std::path::Path::new("/data-cert/tls.key")),
+                false,
+            )
+            .with_default_servers(vec!["nats://host:4222".into()]);
+        let resolved = bindings.resolve(UNNAMED_BINDING, HashMap::new()).unwrap();
+        assert_eq!(
+            resolved.get("tls-ca").map(String::as_str),
+            Some("/data-cert/ca.crt")
+        );
+        assert_eq!(
+            resolved.get("tls-cert").map(String::as_str),
+            Some("/data-cert/tls.crt")
+        );
+        assert_eq!(
+            resolved.get("tls-key").map(String::as_str),
+            Some("/data-cert/tls.key")
+        );
+        assert!(
+            !resolved.contains_key("tls-first"),
+            "tls-first is seeded only when the host runs with it"
+        );
+    }
+
+    /// An operator who named `servers` meant that address, and the data
+    /// plane's certificates say nothing about it.
+    #[test]
+    fn declared_servers_suppress_the_tls_fallback() {
+        let bindings = NatsBindings::new()
+            .with_base(map(&[("servers", "nats://declared:4222")]))
+            .with_default_tls(
+                Some(std::path::Path::new("/data-cert/ca.crt")),
+                None,
+                None,
+                true,
+            )
+            .with_default_servers(vec!["nats://flag:4222".into()]);
+        let resolved = bindings.resolve(UNNAMED_BINDING, HashMap::new()).unwrap();
+        assert!(!resolved.contains_key("tls-ca"));
+        assert!(!resolved.contains_key("tls-first"));
+    }
+
+    /// Per key, a fallback not an override: the operator's own TLS entry wins.
+    #[test]
+    fn declared_tls_wins_over_the_fallback() {
+        let bindings = NatsBindings::new()
+            .with_base(map(&[("tls-ca", "/mnt/other/ca.pem")]))
+            .with_default_tls(
+                Some(std::path::Path::new("/data-cert/ca.crt")),
+                Some(std::path::Path::new("/data-cert/tls.crt")),
+                Some(std::path::Path::new("/data-cert/tls.key")),
+                false,
+            )
+            .with_default_servers(vec!["nats://host:4222".into()]);
+        let resolved = bindings.resolve(UNNAMED_BINDING, HashMap::new()).unwrap();
+        assert_eq!(
+            resolved.get("tls-ca").map(String::as_str),
+            Some("/mnt/other/ca.pem")
+        );
+        assert_eq!(
+            resolved.get("tls-cert").map(String::as_str),
+            Some("/data-cert/tls.crt"),
+            "the other keys still fall back independently"
         );
     }
 

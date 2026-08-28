@@ -338,8 +338,12 @@ pub struct HostCommand {
     /// on a cluster. Set this when the NATS a workload talks to is not the one
     /// backing the host's data plane.
     ///
-    /// Address only: it carries no credentials and no grant, so a binding that
-    /// inherits it still reaches nothing until the host grants it something.
+    /// The data-plane fallback also carries the host's `--data-nats-tls-*`
+    /// material, so a TLS-fronted cluster NATS works with no per-binding
+    /// configuration. Setting this flag switches the fallback to address
+    /// only — the data plane's certificates say nothing about another NATS —
+    /// and it carries no grant either way: a binding that inherits it still
+    /// reaches nothing until the host grants it something.
     #[arg(long = "wasmcloud-nats-url", env = "WASH_WASMCLOUD_NATS_URL")]
     pub wasmcloud_nats_url: Option<String>,
 
@@ -458,6 +462,21 @@ impl HostCommand {
                 .to_bindings(config, project_dir, Some(project_dir))
                 .context("failed to resolve host.wasmcloudNats")?,
             None => wash_runtime::plugin::wasmcloud_nats::NatsBindings::new(),
+        };
+        // TLS before servers (see `with_default_tls`), and only when the
+        // fallback address *is* the data plane: `--wasmcloud-nats-url` points
+        // at some other NATS, whose trust the data plane's certs say nothing
+        // about. Without this a stock chart install — TLS on by default —
+        // seeds an address every inheriting binding fails to dial.
+        let declared = if self.wasmcloud_nats_url.is_none() {
+            declared.with_default_tls(
+                self.data_nats_tls_ca.as_deref(),
+                self.data_nats_tls_cert.as_deref(),
+                self.data_nats_tls_key.as_deref(),
+                self.data_nats_tls_first,
+            )
+        } else {
+            declared
         };
         let defaults = declared
             .with_default_servers(vec![
