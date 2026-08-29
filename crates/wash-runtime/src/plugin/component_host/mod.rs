@@ -1852,7 +1852,14 @@ fn build_plugin_store(
     let ctx = ctx_builder.build();
     // The registry marks this as the plugin (real) side of the resource bridge
     // and keeps the resources it hands out across the boundary alive.
-    let mut store = Store::new(engine.inner(), SharedCtx::new(ctx).with_resource_registry());
+    // A host component plugin is a guest too: its linear memory is charged to
+    // the same host-wide budget the workloads on this engine draw on.
+    let mut store = Store::new(
+        engine.inner(),
+        SharedCtx::new(ctx)
+            .with_resource_registry()
+            .with_guest_memory(engine.guest_memory()),
+    );
     // Required, not optional: the engine enables `epoch_interruption`, and a
     // store that never sets a deadline traps the moment it runs any guest code.
     // `WarnThenTrap` because this one store serves every workload that imports
@@ -1862,6 +1869,7 @@ fn build_plugin_store(
         &mut store,
         crate::engine::abandon::AbandonedCallPolicy::WarnThenTrap,
     );
+    crate::engine::guest_memory::install_memory_limiter(&mut store);
     store
 }
 

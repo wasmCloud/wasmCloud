@@ -77,6 +77,8 @@ pub(crate) struct ComponentCtxTemplate {
     /// `allowedHostLoopbackPorts`) comes from `local_resources` and is layered over
     /// this when the check is built.
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
+    /// The host-wide guest memory budget this component's stores draw on.
+    guest_memory: Arc<crate::engine::guest_memory::GuestMemoryBudget>,
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
 }
@@ -91,6 +93,7 @@ impl ComponentCtxTemplate {
             plugins: metadata.plugins.clone(),
             loopback: metadata.loopback.clone(),
             socket_policy: metadata.socket_policy.clone(),
+            guest_memory: metadata.guest_memory.clone(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
         }
@@ -336,7 +339,7 @@ pub(crate) async fn new_store_from_templates(
         is_service,
     )
     .await?;
-    let mut shared_ctx = SharedCtx::new(active_ctx);
+    let mut shared_ctx = SharedCtx::new(active_ctx).with_guest_memory(&active.guest_memory);
 
     for linked in linked {
         let linked_ctx = build_ctx_from_template(
@@ -356,6 +359,7 @@ pub(crate) async fn new_store_from_templates(
     // Trap for every store built here, services included: trapping a service
     // means a supervisor restart, which beats carrying a wedged call forever.
     arm_epoch_deadline(&mut store, AbandonedCallPolicy::Trap);
+    crate::engine::guest_memory::install_memory_limiter(&mut store);
 
     let active_id = active.component_id.clone();
     for (linked_id, linked_pre) in linked_instances {

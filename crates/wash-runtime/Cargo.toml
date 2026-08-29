@@ -158,6 +158,10 @@ wasi-webgpu-wasmtime = { version = "0.2", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+# `testing` brings in `InMemoryMetricExporter`, which is how the guest memory
+# budget's OTel instruments are asserted against a real collection rather than
+# by calling their getters.
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 # `stream` (bytes_stream / Body::wrap_stream) is used by the blobstore

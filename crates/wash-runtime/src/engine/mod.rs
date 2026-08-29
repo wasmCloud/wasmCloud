@@ -219,6 +219,7 @@ pub fn targets_wasip3_http(component: &Component) -> bool {
 
 pub mod abandon;
 pub mod ctx;
+pub mod guest_memory;
 pub(crate) mod instance_driver;
 pub(crate) mod instance_pool;
 pub use instance_pool::InstancePolicy;
@@ -299,6 +300,10 @@ pub struct Engine {
     /// (`allowedHosts`, `allowedHostLoopbackPorts`) is layered over it per component.
     pub(crate) socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
     pub(crate) host_memory: host_memory::HostMemoryBudgets,
+    /// The host-wide counter of guest linear-memory bytes that
+    /// [`host_memory::HostMemoryBudgets::max_guest_memory`] is the cap on.
+    /// Every store this engine builds carries a limiter drawing on it.
+    pub(crate) guest_memory: Arc<guest_memory::GuestMemoryBudget>,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
@@ -432,6 +437,12 @@ impl Engine {
     /// installed — including an embedder's `max_instances` winning over the flag-driven count.
     pub fn host_memory(&self) -> host_memory::HostMemoryBudgets {
         self.host_memory
+    }
+
+    /// The host-wide guest memory budget, for reporting what guests are
+    /// holding and what the budget has refused.
+    pub fn guest_memory(&self) -> &Arc<guest_memory::GuestMemoryBudget> {
+        &self.guest_memory
     }
 
     /// Core instances the pooling allocator was configured to admit, captured
@@ -639,6 +650,7 @@ impl Engine {
             loopback,
         );
         service.metadata.socket_policy = Arc::clone(&self.socket_policy);
+        service.metadata.guest_memory = Arc::clone(&self.guest_memory);
 
         let world = service.world();
 
@@ -764,6 +776,7 @@ impl Engine {
             instances,
         );
         workload_component.metadata.socket_policy = Arc::clone(&self.socket_policy);
+        workload_component.metadata.guest_memory = Arc::clone(&self.guest_memory);
         Ok(workload_component)
     }
 
@@ -948,6 +961,7 @@ pub struct EngineBuilder {
     fuel_consumption: Option<bool>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
+    guest_memory_mode: guest_memory::GuestMemoryMode,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -970,6 +984,19 @@ impl EngineBuilder {
     /// Unset, the engine uses wasmtime's default memory limits.
     pub fn with_host_memory(mut self, host_memory: host_memory::HostMemoryBudgets) -> Self {
         self.host_memory = Some(host_memory);
+        self
+    }
+
+    /// Whether `max_guest_memory` is enforced or only accounted.
+    ///
+    /// Unset, it is [`guest_memory::GuestMemoryMode::Count`]: the budget is
+    /// charged and reported but never refuses a growth. That is deliberate —
+    /// `max_guest_memory` is derived when an operator sets nothing, so
+    /// enforcing by default would give every host a ceiling on upgrade that
+    /// nobody chose.
+    #[must_use]
+    pub fn with_guest_memory_mode(mut self, mode: guest_memory::GuestMemoryMode) -> Self {
+        self.guest_memory_mode = mode;
         self
     }
 
@@ -1125,6 +1152,13 @@ impl EngineBuilder {
         if let Some(advisory) = host_memory.advisory() {
             tracing::warn!("{advisory}");
         }
+        // Only when the budget is a real ceiling: an over-large budget the host
+        // merely counts against costs nothing.
+        if self.guest_memory_mode == guest_memory::GuestMemoryMode::Enforce
+            && let Some(advisory) = host_memory.enforcement_advisory()
+        {
+            tracing::warn!("{advisory}");
+        }
 
         // The pooling allocator can be more efficient for workloads with many short-lived instances.
         // Read back from the installed pool: the environment and a
@@ -1155,6 +1189,7 @@ impl EngineBuilder {
         match installed_pool {
             Some(pool) => tracing::info!(
                 max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
+                guest_memory_mode = self.guest_memory_mode.as_str(),
                 default_heap_memory = %host_memory::render_bytes(pool.max_memory_size),
                 core_instances = pool.core_instances,
                 memories = pool.memories,
@@ -1164,6 +1199,7 @@ impl EngineBuilder {
             // No pool, so no reservation and no installed ceiling to name.
             None => tracing::info!(
                 max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
+                guest_memory_mode = self.guest_memory_mode.as_str(),
                 pooling = false,
                 "host memory resolved"
             ),
@@ -1215,6 +1251,21 @@ impl EngineBuilder {
             cache,
             socket_policy: self.socket_policy.unwrap_or_default(),
             host_memory,
+            guest_memory: {
+                let budget = guest_memory::GuestMemoryBudget::from_budgets(
+                    &host_memory,
+                    self.guest_memory_mode,
+                );
+                // The ceiling the pool actually installed, not the knob that
+                // asked for it: the budget must not charge for growth the pool
+                // is going to refuse. The same figure `explain_compile_failure`
+                // measures against, so they cannot drift apart.
+                match installed_heap_memory {
+                    Some(ceiling) => budget.with_heap_ceiling(ceiling),
+                    None => budget,
+                }
+                .into_metered()
+            },
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
             total_core_instances,

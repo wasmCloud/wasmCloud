@@ -841,6 +841,10 @@ impl HostApi for Host {
             monitor.refresh();
             monitor.report_usage();
         }
+        // Reported beside the machine's own usage, because the two answer
+        // different questions: the monitor says how much memory this process
+        // holds, the budget says how much of it guests asked for.
+        self.engine.guest_memory().report();
 
         let (os_arch, os_name, os_kernel) = self.get_system_info().await;
         let (system_memory_total, system_memory_free) = self
