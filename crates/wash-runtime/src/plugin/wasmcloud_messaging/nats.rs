@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use async_nats::Subscriber;
 use futures::stream::StreamExt;
-use opentelemetry::KeyValue;
 use tokio::sync::RwLock;
 use tracing::{Instrument, debug, instrument, trace, warn};
 use wasmtime::error::Context as _;
@@ -64,6 +63,11 @@ use crate::plugin::{HostPlugin, WitInterfaces, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
 const PLUGIN_MESSAGING_ID: &str = "wasmcloud-messaging";
+
+/// The WIT export a delivery invokes, and what its measurements are grouped by.
+/// Bounded by the interface set, so it is safe as a metric attribute — unlike
+/// the concrete subject, which stays on the span and the logs.
+const MESSAGING_OPERATION: &str = "wasmcloud:messaging/incoming-handler#handle-message";
 const CONSUMER_GROUP_CONFIG: &str = "consumer_group";
 const BROADCAST_CONSUMER_GROUP: &str = "broadcast";
 const DEFAULT_CONSUMER_GROUP_PREFIX: &str = "wasmcloud";
@@ -573,6 +577,12 @@ impl HostPlugin for NatsMessaging {
 
         let mut messages = futures::stream::select_all(subscriptions);
         let fuel_meter = self.meters.read().await.fuel_consumption.clone();
+        // The identity every message on this component is measured under,
+        // resolved once here rather than per delivery.
+        let attributes = workload
+            .component_identity(&component_id)
+            .await
+            .attributes(PLUGIN_MESSAGING_ID, MESSAGING_OPERATION);
 
         let span = tracing::Span::current();
         let handle = tokio::spawn(async move {
@@ -733,6 +743,7 @@ impl HostPlugin for NatsMessaging {
                         let abandoned = store.data().abandoned.watch(call.flag());
                         let deadline = call.arm_on_timer();
 
+                        let attributes = attributes.clone();
                         tokio::spawn(async move {
                             // Released on completion, trap or not — which is
                             // what frees the instance slot this message holds.
@@ -741,10 +752,7 @@ impl HostPlugin for NatsMessaging {
                             let _abandoned = abandoned;
                             let _deadline = deadline;
                             let result = fuel_meter.observe(
-                                &[
-                                    KeyValue::new("plugin", PLUGIN_MESSAGING_ID),
-                                    KeyValue::new("subject", msg.subject.to_string()),
-                                ],
+                                &attributes,
                                 &mut store,
                                 async move |store| {
                                     proxy

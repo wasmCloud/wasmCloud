@@ -7,11 +7,15 @@ use crate::observability::Meters;
 use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::wit::{WitInterface, WitWorld};
 use anyhow::Context;
-use opentelemetry::KeyValue;
 use tokio::sync::{Notify, RwLock, oneshot};
 use tracing::{Instrument, debug, instrument, trace, warn};
 
 const PLUGIN_MESSAGING_MEMORY_ID: &str = "wasmcloud-messaging-memory";
+
+/// The WIT export a delivery invokes, and what its measurements are grouped by.
+/// Bounded by the interface set, so it is safe as a metric attribute — unlike
+/// the concrete subject, which stays on the span and the logs.
+const MESSAGING_OPERATION: &str = "wasmcloud:messaging/incoming-handler#handle-message";
 const MAX_QUEUE_SIZE: usize = 10000;
 /// Default `request` timeout when the caller passes `none`, matching the NATS
 /// client's default of 10 seconds.
@@ -652,6 +656,12 @@ impl HostPlugin for InMemoryMessaging {
         // Spawn the message processing task
         let task_component_id = component_id.clone();
         let fuel_meter = self.meters.read().await.fuel_consumption.clone();
+        // The identity every message on this component is measured under,
+        // resolved once here rather than per delivery.
+        let attributes = workload
+            .component_identity(&component_id)
+            .await
+            .attributes(PLUGIN_MESSAGING_MEMORY_ID, MESSAGING_OPERATION);
 
         let handle = tokio::spawn(async move {
             // Labelled so the inner drain below can end the whole task on
@@ -795,6 +805,7 @@ impl HostPlugin for InMemoryMessaging {
                         let abandoned = store.data().abandoned.watch(call.flag());
                         let deadline = call.arm_on_timer();
 
+                        let attributes = attributes.clone();
                         tokio::spawn(async move {
                             // Released on completion, trap or not — which is
                             // what frees the instance slot this message holds.
@@ -802,10 +813,7 @@ impl HostPlugin for InMemoryMessaging {
                             let _abandoned = abandoned;
                             let _deadline = deadline;
                             let result = fuel_meter.observe(
-                                &[
-                                    KeyValue::new("plugin", PLUGIN_MESSAGING_MEMORY_ID),
-                                    KeyValue::new("subject", msg.subject.to_string()),
-                                ],
+                                &attributes,
                                 &mut store,
                                 async move |store| {
                                     proxy
