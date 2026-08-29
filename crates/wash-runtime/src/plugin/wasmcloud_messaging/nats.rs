@@ -508,9 +508,9 @@ impl HostPlugin for NatsMessaging {
         // pre-instantiate; its receive loop delivers to the running service
         // instead. Only components get a `MessagingPre` for per-message work.
         let pre = match workload.instantiate_pre(component_id).await {
-            Ok(instance_pre) => {
-                Some(HandlerPre::new(instance_pre).context("failed to instantiate messaging pre")?)
-            }
+            Ok(instance_pre) => Some(
+                HandlerTarget::new(instance_pre).context("failed to instantiate messaging pre")?,
+            ),
             Err(e) => {
                 trace!(component_id, error = %e, "no per-message instance (long-lived service); messages delivered to the service");
                 None
@@ -573,6 +573,13 @@ impl HostPlugin for NatsMessaging {
 
         let mut messages = futures::stream::select_all(subscriptions);
         let fuel_meter = self.meters.read().await.fuel_consumption.clone();
+        // What a pooled delivery is measured under, built once here rather
+        // than per message. Both are bounded by what is deployed; the subject a
+        // message carries is not, so it stays on the span and the log line.
+        let attributes = vec![
+            KeyValue::new("plugin", PLUGIN_MESSAGING_ID),
+            KeyValue::new("operation", super::MESSAGING_OPERATION),
+        ];
 
         let span = tracing::Span::current();
         let handle = tokio::spawn(async move {
@@ -617,7 +624,11 @@ impl HostPlugin for NatsMessaging {
                             };
                             match workload
                                 .http_handler()
-                                .deliver_trigger_service_message(workload.id(), broker)
+                                .deliver_trigger_service_message(
+                                    workload.id(),
+                                    broker,
+                                    attributes.clone(),
+                                )
                                 .await
                             {
                                 Ok(Ok(())) => debug!(%subject, "trigger service handled message"),
@@ -640,10 +651,13 @@ impl HostPlugin for NatsMessaging {
                             continue;
                         };
 
-                        // Admission. Taken BEFORE the store and instance are
-                        // built and held until the handler returns, so permits
-                        // held and instances alive are the same number and the
-                        // ceiling is structural rather than advisory.
+                        // Admission. Taken BEFORE any store or instance is
+                        // built and held until the handler returns, so the
+                        // ceiling is structural rather than advisory. For a
+                        // component with no pool it is equally a ceiling on
+                        // instances, one per permit; for a pooled one the
+                        // instance count is bounded by `poolSize` and only the
+                        // deliveries past it build stores of their own.
                         //
                         // Waiting here stops us draining the subscription.
                         // That cannot back up the socket or endanger the shared
@@ -693,6 +707,55 @@ impl HostPlugin for NatsMessaging {
                             }
                         };
 
+                        let span = tracing::span!(
+                            tracing::Level::INFO,
+                            "incoming_wasmcloud_message",
+                            subject = %subject,
+                            reply_to = %reply_to.as_deref().unwrap_or("<none>"),
+                        );
+
+                        // An async `@0.3.0` handler on a component that opted
+                        // into pooling is served on a warm instance, honouring
+                        // the `poolSize`, `maxInvocations` and `maxConcurrency`
+                        // it declared. Everything else keeps a store per
+                        // message: without a pool there is nothing to reuse,
+                        // and the sync `@0.2.0` call holds `&mut Store` so it
+                        // could not share an instance anyway.
+                        let pool = if pre.serves_async() {
+                            workload.instance_pool_for_component(&component_id).await
+                        } else {
+                            None
+                        };
+
+                        if let Some(pool) = pool {
+                            let msg = crate::host::trigger_service::BrokerMessage {
+                                subject,
+                                body,
+                                reply_to,
+                            };
+                            let attributes = attributes.clone();
+                            let workload = workload.clone();
+                            let component_id = component_id.clone();
+                            let instance_pre = pre.instance_pre().clone();
+                            tokio::spawn(async move {
+                                // Released on completion, trap or not — which
+                                // is what frees the slot this message holds.
+                                let _permit = permit;
+                                let result = super::deliver_pooled(
+                                    &workload,
+                                    &component_id,
+                                    &instance_pre,
+                                    &pool,
+                                    msg,
+                                    attributes,
+                                )
+                                .instrument(span)
+                                .await;
+                                super::log_delivery(&result);
+                            });
+                            continue;
+                        }
+
                         let mut store = match workload.new_store(&component_id).await {
                             Err(e) => {
                                 warn!("failed to create store for component {component_id}: {e}");
@@ -712,13 +775,6 @@ impl HostPlugin for NatsMessaging {
                             reply_to,
                             body,
                         };
-
-                        let span = tracing::span!(
-                            tracing::Level::INFO,
-                            "incoming_wasmcloud_message",
-                            subject = %msg.subject,
-                            reply_to = %msg.reply_to.as_deref().unwrap_or("<none>"),
-                        );
 
                         let fuel_meter = fuel_meter.clone();
 
@@ -755,14 +811,7 @@ impl HostPlugin for NatsMessaging {
                                 }
                             ).await;
 
-                            match result {
-                                Ok(_) => {
-                                    debug!("Message handled successfully");
-                                }
-                                Err(e) => {
-                                    warn!("Error handling message: {e}");
-                                }
-                            };
+                            super::log_delivery(&result);
                         });
                     }
                     _ = cancel_token.cancelled() => {
