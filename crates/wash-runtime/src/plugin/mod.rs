@@ -76,11 +76,46 @@ pub mod component_plugin_spec;
 #[cfg(feature = "oci")]
 pub use component_plugin_spec::ComponentPluginSpec;
 
+/// Every plugin id this codebase has, independent of which cargo features a
+/// given build enabled.
+///
+/// The roster exists to tell two conditions apart, because only one of them
+/// should refuse to start: an id that is not here at all is a typo, and may be
+/// shadowing a real plugin the operator meant to constrain — an inert
+/// `workloadConfig: deny` is exactly the shape that rule guards against. An id
+/// that *is* here but was not compiled in is a chart/binary skew, and refusing
+/// there buys nothing: if the plugin is absent, no workload can bind it either,
+/// so the declaration denies nothing and protects nothing.
+///
+/// Keep it in sync when a plugin id is added. A missing entry only downgrades a
+/// warning to a refusal, so the failure is loud rather than silent.
+pub const KNOWN_PLUGIN_IDS: &[&str] = &[
+    "wasi-blobstore",
+    "wasi-blobstore-multiplexed",
+    "wasi-config",
+    "wasi-keyvalue",
+    "wasi-keyvalue-multiplexed",
+    "wasi-logging",
+    "wasi-otel",
+    "wasi-webgpu",
+    "wasmcloud-blobstore-multiplexed",
+    "wasmcloud-keyvalue-multiplexed",
+    "wasmcloud-messaging",
+    "wasmcloud-messaging-async-multiplexed",
+    "wasmcloud-messaging-memory",
+    "wasmcloud-messaging-multiplexed",
+    "wasmcloud-nats",
+    "wasmcloud-postgres",
+    "wasmcloud-secrets",
+];
+
 /// Operator-declared bindings: the host's side of an
 /// `interface-binding{name, config}`, and the `workloadConfig` policy that
 /// decides whether a workload may write over it.
 pub mod bindings;
-pub use bindings::{BindingSchema, PluginBindingSet, PluginBindings, WorkloadConfigPolicy};
+pub use bindings::{
+    BindingSchema, KeyOwnership, PluginBindingSet, PluginBindings, WorkloadConfigPolicy,
+};
 
 /// Shared `(implements ..)` multiplexing core
 #[cfg(feature = "wasm_component_model_implements")]
@@ -253,6 +288,29 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// binding.
     fn validate_bindings(&self, _declared: &PluginBindingSet) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    /// Whether a workload's `value` for a narrowable `key` is contained by the
+    /// host's `ceiling`.
+    ///
+    /// Called only for keys [`HostPlugin::binding_schema`] marks
+    /// [`KeyOwnership::HostCeiling`], only under
+    /// [`WorkloadConfigPolicy::Deny`], and only when both sides set the key.
+    /// Returning `false` refuses the bind. The generic layer has no opinion
+    /// about what containment means for any key.
+    ///
+    /// A predicate rather than a merge function returning the intersection:
+    /// a merge would let a plugin produce a value *neither* side wrote, so the
+    /// resolved config would contain a computed artifact and an operator
+    /// debugging a grant would not be reading anything anyone declared. Here
+    /// the resolved value is always exactly the manifest's, and the host's is
+    /// purely a gate.
+    ///
+    /// The default refuses everything, so a plugin that classifies a key
+    /// narrowable and forgets the predicate gets a refusal rather than a silent
+    /// acceptance: the unsafe direction is the one that requires writing code.
+    fn narrows(&self, _key: &str, _ceiling: &str, _value: &str) -> bool {
+        false
     }
 
     /// Returns whether this plugin supports handling multiple named instances

@@ -165,29 +165,11 @@ impl CliCommand for DevCommand {
         // here. With no `data_nats_url` there is no default, and a binding
         // must name its own servers — in `dev.wasmcloud_nats`, or inline on
         // the interface.
-        let nats_bindings = {
-            let declared = match &dev_config.wasmcloud_nats {
-                Some(nats) => nats.to_bindings(&config, project_dir, Some(project_dir))?,
-                None => plugin::wasmcloud_nats::NatsBindings::new(),
-            };
-            let declared = match &dev_config.data_nats_url {
-                Some(url) => declared.with_default_servers(vec![url.clone()]),
-                None => declared,
-            };
-            declared.validate()?;
-            declared
-        };
-        debug!(
-            bindings = nats_bindings.binding_names().join(","),
-            "wasmcloud:nats plugin registered"
-        );
         host_builder = host_builder.with_plugin(Arc::new(
-            plugin::wasmcloud_nats::WasmcloudNats::new()
-                .with_bindings(nats_bindings)
-                .with_lattice_prefixes(vec![
-                    format!("{}.", wash_runtime::washlet::HOST_API_PREFIX),
-                    format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),
-                ]),
+            plugin::wasmcloud_nats::WasmcloudNats::new().with_lattice_prefixes(vec![
+                format!("{}.", wash_runtime::washlet::HOST_API_PREFIX),
+                format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),
+            ]),
         ))?;
 
         // Per-plugin settings override the in-memory default. The order of precedence is:
@@ -396,11 +378,20 @@ impl CliCommand for DevCommand {
 
         // After every plugin is registered, so `build()` can refuse a
         // declaration naming an id this host has no plugin for.
-        host_builder = host_builder.with_plugin_bindings(dev_config.to_plugin_bindings(
-            &config,
-            project_dir,
-            Some(project_dir),
-        )?);
+        //
+        // `dev.data_nats_url` is the address a `wasmcloud:nats` binding falls
+        // back to. An anchored bundle rather than a plain default: a binding
+        // that names its own `servers` is pointing somewhere else, and should
+        // inherit nothing else from the dev NATS either.
+        let mut plugin_bindings =
+            dev_config.to_plugin_bindings(&config, project_dir, Some(project_dir))?;
+        if let Some(url) = &dev_config.data_nats_url {
+            let nats = plugin_bindings
+                .entry(plugin::wasmcloud_nats::PLUGIN_NATS_ID)
+                .with_default_bundle("servers", [("servers", url.clone())]);
+            plugin_bindings = plugin_bindings.with_plugin(nats);
+        }
+        host_builder = host_builder.with_plugin_bindings(plugin_bindings);
 
         // Build and start the host
         let host = host_builder.build()?.start().await?;

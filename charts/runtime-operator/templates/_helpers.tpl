@@ -200,13 +200,9 @@ Shared by deployment.yaml (which needs both partitions, to render
 host-plugin-config.yaml (which needs only `fileBacked`, to render the
 `wash host` config file).
 
-`wasmcloudNats` shares the same file and the same ConfigMap/Secret catalogs:
-the bindings a host serves for `wasmcloud:nats` carry NATS credentials, which
-have no CLI equivalent for exactly the same reason a plugin's config does not.
-
 Takes the host group dict directly (e.g. `.` inside
 `range .Values.runtime.hostGroups`). Returns a JSON object
-`{fileBacked, cli, configFromNames, secretFromNames, wasmcloudNats, needsConfigFile}`
+`{fileBacked, cli, configFromNames, secretFromNames, needsConfigFile}`
 and parses the result with `fromJson`.
 */}}
 {{- define "runtime-operator.hostPluginPartition" -}}
@@ -219,7 +215,6 @@ and parses the result with `fromJson`.
 {{- $cli = append $cli . }}
 {{- end }}
 {{- end }}
-{{- $nats := .wasmcloudNats | default dict }}
 {{- $configFromNames := list }}
 {{- $secretFromNames := list }}
 {{- range $fileBacked }}
@@ -238,22 +233,7 @@ and parses the result with `fromJson`.
 {{- end }}
 {{- end }}
 {{- end }}
-{{- /* The nats block's own references, plus every declared binding's. */}}
-{{- range $nats.configFrom }}
-{{- $configFromNames = append $configFromNames . }}
-{{- end }}
-{{- range $nats.secretFrom }}
-{{- $secretFromNames = append $secretFromNames . }}
-{{- end }}
-{{- range $name, $binding := ($nats.bindings | default dict) }}
-{{- range $binding.configFrom }}
-{{- $configFromNames = append $configFromNames . }}
-{{- end }}
-{{- range $binding.secretFrom }}
-{{- $secretFromNames = append $secretFromNames . }}
-{{- end }}
-{{- end }}
-{{- dict "fileBacked" $fileBacked "cli" $cli "configFromNames" ($configFromNames | uniq) "secretFromNames" ($secretFromNames | uniq) "wasmcloudNats" $nats "needsConfigFile" (or (gt (len $fileBacked) 0) (gt (len $nats) 0)) | toJson }}
+{{- dict "fileBacked" $fileBacked "cli" $cli "configFromNames" ($configFromNames | uniq) "secretFromNames" ($secretFromNames | uniq) "needsConfigFile" (gt (len $fileBacked) 0) | toJson }}
 {{- end }}
 
 {{/*
@@ -300,39 +280,6 @@ secrets:
   {{- end }}
 {{- end }}
 host:
-  {{- with $partition.wasmcloudNats }}
-  wasmcloudNats:
-    {{- with .config }}
-    config:
-      {{- toYaml . | nindent 6 }}
-    {{- end }}
-    {{- with .configFrom }}
-    configFrom:
-      {{- toYaml . | nindent 6 }}
-    {{- end }}
-    {{- with .secretFrom }}
-    secretFrom:
-      {{- toYaml . | nindent 6 }}
-    {{- end }}
-    {{- with .bindings }}
-    bindings:
-      {{- range $name, $binding := . }}
-      {{ $name | quote }}:
-        {{- with $binding.config }}
-        config:
-          {{- toYaml . | nindent 10 }}
-        {{- end }}
-        {{- with $binding.configFrom }}
-        configFrom:
-          {{- toYaml . | nindent 10 }}
-        {{- end }}
-        {{- with $binding.secretFrom }}
-        secretFrom:
-          {{- toYaml . | nindent 10 }}
-        {{- end }}
-      {{- end }}
-    {{- end }}
-  {{- end }}
   {{- if $partition.fileBacked }}
   plugins:
     {{- range $partition.fileBacked }}

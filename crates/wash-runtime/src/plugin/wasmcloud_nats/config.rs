@@ -247,13 +247,15 @@ pub struct NatsConfig {
     pub request_timeout: Option<Duration>,
 }
 
-/// Reads a key in kebab-case, falling back to snake_case.
+/// Reads a key through the plugin's key table, in whichever spelling — or
+/// alias — a manifest used.
+///
+/// Going through [`super::keys`] rather than reading the map directly is what
+/// keeps this reader and [`super::binding_schema`] from drifting: a key asked
+/// for here that the table does not name trips a debug assertion, and a key in
+/// the table nothing asks for is dead weight the table's own tests name.
 fn get<'a>(cfg: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
-    cfg.get(key)
-        .or_else(|| cfg.get(&key.replace('-', "_")))
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
+    super::keys::get(cfg, key)
 }
 
 /// The single spelling a key is stored under once several entries are folded
@@ -265,7 +267,7 @@ fn get<'a>(cfg: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
 /// entry writing the other spelling would look like it were setting a key
 /// nothing had claimed — and `get` would then quietly honour only one of them.
 pub fn canonical_key(key: &str) -> String {
-    key.replace('_', "-")
+    crate::plugin::bindings::canonical_key(key)
 }
 
 /// Splits a comma-separated list, dropping empties.
@@ -304,10 +306,12 @@ fn parse_bool(cfg: &HashMap<String, String>, key: &str) -> anyhow::Result<bool> 
 /// Silently preferring one when several are set hides a misconfiguration until
 /// the connection is refused, so a conflict is an error at bind time.
 fn parse_auth(cfg: &HashMap<String, String>) -> anyhow::Result<NatsAuth> {
-    let creds = get(cfg, "creds").or_else(|| get(cfg, "creds-file"));
+    // One `get` per setting: aliases are resolved by the key table, so
+    // `creds-file` and `creds` are the same lookup rather than two.
+    let creds = get(cfg, "creds");
     let jwt = get(cfg, "jwt");
-    let seed = get(cfg, "nkey-seed").or_else(|| get(cfg, "nkey"));
-    let username = get(cfg, "username").or_else(|| get(cfg, "user"));
+    let seed = get(cfg, "nkey-seed");
+    let username = get(cfg, "username");
     let password = get(cfg, "password");
     let token = get(cfg, "token");
 

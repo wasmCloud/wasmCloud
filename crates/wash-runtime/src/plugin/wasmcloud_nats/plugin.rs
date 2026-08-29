@@ -17,7 +17,6 @@ use crate::observability::Meters;
 use crate::plugin::{HostPlugin, WitInterfaces, WorkloadFailureSink, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
-use super::bindings::NatsBindings;
 use super::config::{
     self, CoreSubscriptionConfig, JetStreamSubscriptionConfig, KvWatchConfig, NatsConfig,
     parse_core_subscriptions, parse_jetstream_subscriptions, parse_kv_watches, subscription_spec,
@@ -58,9 +57,6 @@ pub struct WasmcloudNats {
     pub(super) meters: Arc<RwLock<Meters>>,
     /// Subjects the host itself uses, denied to every workload.
     lattice_prefixes: Vec<String>,
-    /// The bindings this host declares, and whether a workload may describe
-    /// its own. See [`super::bindings`].
-    bindings: NatsBindings,
     /// How a subscriber loop tells the host its workload has died out of band —
     /// a server-side permission denial parks a subscription that deployed
     /// cleanly, and nothing else would ever move the workload off running.
@@ -90,7 +86,6 @@ impl WasmcloudNats {
             connections: Arc::new(ConnectionRegistry::default()),
             meters: Default::default(),
             lattice_prefixes: Vec::new(),
-            bindings: NatsBindings::default(),
             failure_sink: arc_swap::ArcSwapOption::empty(),
             memory_budget: None,
             host_backlog: Arc::new(subscriber::HostBacklogBudget::unbounded()),
@@ -118,17 +113,6 @@ impl WasmcloudNats {
         self
     }
 
-    /// Sets the bindings this host declares.
-    ///
-    /// A workload asks for a binding by name and the host decides what it is:
-    /// which servers it dials, as whom, and what it is granted. Under
-    /// [`super::bindings::WorkloadConfig::Deny`] a manifest that describes any of that is
-    /// refused at bind — see [`super::bindings`] for the key classes and why.
-    pub fn with_bindings(mut self, bindings: NatsBindings) -> Self {
-        self.bindings = bindings;
-        self
-    }
-
     /// Resolves the connection a plain, unlabeled call goes out on.
     pub(super) async fn conn_for(&self, workload_id: &str) -> Option<Arc<ConnHandle>> {
         self.connections.get(workload_id).await
@@ -147,18 +131,12 @@ impl WasmcloudNats {
         opened: &mut bool,
     ) -> anyhow::Result<()> {
         for (binding, merged) in bindings {
-            // The host's own declaration for this binding, with whatever the
-            // manifest is still allowed to say layered on top. Resolved before
-            // parsing rather than after, so the resolved address is what
-            // `connection_key` identifies the connection by — two bindings that
-            // both fall back to the host must read as one connection, not two.
-            let merged = self.bindings.resolve(binding, merged).with_context(|| {
-                format!(
-                    "wasmcloud:nats binding `{}` of workload `{workload_id}` cannot be opened",
-                    describe_binding(binding)
-                )
-            })?;
-
+            // Already resolved: the host's declaration for this binding, the
+            // policy check, and the fold across the manifest's entries all
+            // happened in `bind_plugins` before this plugin was called. What
+            // arrives is one map per binding — which is what `connection_key`
+            // needs, since two bindings that both fall back to the same host
+            // configuration must read as one connection, not two.
             // A binding is described by the manifest as a whole, and only the
             // entries a component actually matched are folded into `merged`. So
             // the connection settings going missing while other keys survive
@@ -592,59 +570,25 @@ fn describe_binding(binding: &str) -> &str {
     }
 }
 
-/// Folds every bound entry into one configuration per binding name.
+/// Groups the bound entries by binding name.
 ///
-/// A binding is described by the manifest as a whole rather than by any one
-/// entry: the servers, the credentials and the grants belong on the entry that
-/// imports `wasmcloud:nats`, while `subscriptions` belong on the entry that
-/// exports a handler. Reading each entry as a complete connection spec would
-/// refuse that split and leave authors copying the connection into every entry,
-/// where a later edit to one copy quietly gives one binding two grants.
+/// The fold that used to live here — the union across every entry of one label,
+/// with a key two of them disagree about refused — moved into the generic
+/// binding layer, because it has to happen before the operator's host layer
+/// lands rather than after. It is also not about NATS: "one label is one
+/// config" is a property of every plugin that serves named bindings.
 ///
-/// Entries arrive out of a `HashSet`, so they are ordered before they are
-/// folded: a manifest that cannot be deployed has to be refused with the same
-/// key named every time, not with whichever entry happened to be visited first.
-fn merge_binding_configs<'a>(
-    bound: &[&'a WitInterface],
-) -> anyhow::Result<Vec<(&'a str, HashMap<String, String>)>> {
-    let mut ordered = bound.to_vec();
-    ordered.sort_by_cached_key(|interface| {
-        let mut keys: Vec<String> = interface.config.keys().cloned().collect();
-        keys.sort();
-        (interface.instance(), keys)
-    });
-
+/// What remains is the read side. By the time this runs, every entry of a
+/// label already carries the same resolved map, so taking the first is taking
+/// all of them.
+fn bindings_by_name<'a>(bound: &[&'a WitInterface]) -> Vec<(&'a str, HashMap<String, String>)> {
     let mut merged: BTreeMap<&str, HashMap<String, String>> = BTreeMap::new();
-    for interface in ordered {
-        let binding = binding_name(interface);
-        let mut pairs: Vec<(&String, &String)> = interface.config.iter().collect();
-        pairs.sort_by_key(|(key, _)| *key);
-
-        let config = merged.entry(binding).or_default();
-        for (key, value) in pairs {
-            let canonical = config::canonical_key(key);
-            // Never first-wins. The entries of one binding open one connection
-            // checked against one grant, so a key two of them disagree about
-            // has no answer that can be picked here, and picking one would let
-            // a stale copy of a grant outlive the edit that narrowed it. The
-            // key is named and the values are not: one of them may be a
-            // credential.
-            if let Some(existing) = config.get(&canonical)
-                && existing != value
-            {
-                anyhow::bail!(
-                    "conflicting values for `{canonical}` across the wasmcloud:nats entries of \
-                     binding `{}`; the entries of one binding are folded into a single \
-                     connection configuration, so a key more than one of them sets must agree \
-                     (kebab-case and snake_case spellings are the same key)",
-                    describe_binding(binding)
-                )
-            }
-            config.insert(canonical, value.clone());
-        }
+    for interface in bound {
+        merged
+            .entry(binding_name(interface))
+            .or_insert_with(|| interface.config.clone());
     }
-
-    Ok(merged.into_iter().collect())
+    merged.into_iter().collect()
 }
 
 fn serves(interface: &WitInterface, names: &[&str]) -> bool {
@@ -656,6 +600,73 @@ fn serves(interface: &WitInterface, names: &[&str]) -> bool {
 
 #[async_trait::async_trait]
 impl HostPlugin for WasmcloudNats {
+    fn binding_schema(&self) -> crate::plugin::BindingSchema {
+        super::binding_schema()
+    }
+
+    /// Parses the operator's declaration with this plugin's own reader, so a
+    /// binding an operator wrote wrong fails the host rather than the first
+    /// workload that names it.
+    fn validate_bindings(&self, declared: &crate::plugin::PluginBindingSet) -> anyhow::Result<()> {
+        // `inbox-prefix` on the base layer is every binding's inbox prefix, on
+        // every workload the host runs. `conn::scope_inbox_prefix` gives each
+        // workload its own token beneath whatever prefix it is handed, so this
+        // is refused for what it says rather than for what it would do: one
+        // inbox root for every binding on the host is not a thing an operator
+        // can have meant. On a named binding it is kept, and scoped.
+        if declared
+            .base()
+            .keys()
+            .any(|k| super::keys::canonical(k) == "inbox-prefix")
+        {
+            anyhow::bail!(
+                "`inbox-prefix` cannot be set on a wasmcloud:nats entry's own `config`: it would \
+                 give every workload on this host the same inbox, and two workloads sharing an \
+                 inbox consume each other's replies. Set it on a single named binding, or leave \
+                 it unset — the per-workload default already isolates replies"
+            )
+        }
+
+        // The base alone is not required to be complete: a host that sets only
+        // grants leaves the servers to a workload under `allow`.
+        for (name, layer) in declared.host_layers() {
+            NatsConfig::from_map(&layer).map_err(|e| anyhow::anyhow!("binding `{name}`: {e:#}"))?;
+        }
+        Ok(())
+    }
+
+    /// Whether a workload's grant is inside the one the operator declared.
+    ///
+    /// The containment function already existed — [`super::policy::NatsSubjectPattern`]
+    /// answers exactly this question for subscriptions — so a grant an operator
+    /// declares as a ceiling costs the plugin nothing beyond routing each key to
+    /// the right comparison.
+    fn narrows(&self, key: &str, ceiling: &str, value: &str) -> bool {
+        fn split(s: &str) -> impl Iterator<Item = &str> {
+            s.split(',').map(str::trim).filter(|s| !s.is_empty())
+        }
+        match key {
+            // Pattern containment: `orders.received` is inside `orders.>`.
+            "subject-allow" => {
+                let ceiling: Vec<_> = split(ceiling)
+                    .map(super::policy::NatsSubjectPattern::parse)
+                    .collect();
+                split(value)
+                    .map(super::policy::NatsSubjectPattern::parse)
+                    .all(|v| ceiling.iter().any(|c| c.contains(&v)))
+            }
+            // Plain names: subset, not pattern containment.
+            "stream-allow" | "bucket-allow" => {
+                let ceiling: std::collections::HashSet<&str> = split(ceiling).collect();
+                split(value).all(|v| ceiling.contains(v))
+            }
+            // An empty workload list trivially narrows — deny-all is the
+            // narrowest thing there is — and falls out of `all()` above with no
+            // special case.
+            _ => false,
+        }
+    }
+
     fn id(&self) -> &'static str {
         PLUGIN_NATS_ID
     }
@@ -707,7 +718,7 @@ impl HostPlugin for WasmcloudNats {
         }
 
         let workload_id = workload.id();
-        let bindings = merge_binding_configs(&bound)?;
+        let bindings = bindings_by_name(&bound);
 
         // A bind that fails partway has already opened every connection ahead
         // of the failure, and the workload it belongs to will never resolve.
@@ -830,6 +841,13 @@ impl HostPlugin for WasmcloudNats {
         let mut untargeted_specs: Vec<String> = Vec::new();
 
         let component_id = item.id().to_string();
+        // The manifest's `components[].name`, alongside the runtime id. A
+        // manifest is written before the workload exists, so the id — a fresh
+        // UUID per start — is not something an author can name; the name is.
+        let component_name = match &item {
+            WorkloadItem::Component(component) => Some(component.name().to_string()),
+            WorkloadItem::Service(_) => None,
+        };
         let workload_id = item.workload_id().to_string();
 
         for interface in &bound {
@@ -850,7 +868,12 @@ impl HostPlugin for WasmcloudNats {
             // for; entries that name another component are simply not this
             // component's.
             let targeted = match cfg("component") {
-                Some(target) if target.as_str() != component_id => continue,
+                Some(target)
+                    if target.as_str() != component_id
+                        && Some(target.as_str()) != component_name.as_deref() =>
+                {
+                    continue;
+                }
                 Some(_) => true,
                 None => false,
             };
@@ -928,7 +951,7 @@ impl HostPlugin for WasmcloudNats {
                     anyhow::bail!(
                         "workload `{workload_id}` declares {spec} without naming a component, so \
                          it attaches to both `{other_id}` and `{component_id}` and every message \
-                         would be handled twice. Add `component: <id>` to each \
+                         would be handled twice. Add `component: <name>` to each \
                          subscription-bearing wasmcloud:nats entry"
                     )
                 }
@@ -1072,7 +1095,7 @@ impl HostPlugin for WasmcloudNats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::wasmcloud_nats::WorkloadConfig;
+    use crate::plugin::{PluginBindingSet, WorkloadConfigPolicy};
 
     #[test]
     fn world_advertises_the_package() {
@@ -1111,8 +1134,29 @@ mod tests {
         interface
     }
 
-    fn merge(entries: &[WitInterface]) -> anyhow::Result<Vec<(&str, HashMap<String, String>)>> {
-        merge_binding_configs(&entries.iter().collect::<Vec<_>>())
+    /// Run `entries` through the generic binding layer the way `bind_plugins`
+    /// does, with nothing declared, then group them the way this plugin does.
+    ///
+    /// The fold itself lives in [`crate::plugin::bindings`] now; these tests
+    /// stay because what they cover is a `wasmcloud:nats` manifest shape — a
+    /// binding split across an import entry and a handler entry — and that
+    /// shape has to keep working whoever owns the folding.
+    fn merge(entries: &[WitInterface]) -> anyhow::Result<Vec<(String, HashMap<String, String>)>> {
+        // `allow`, the `wash dev` posture: these cover the *fold*, and a
+        // manifest that describes its own binding is exactly what the fold is
+        // for. Under `deny` the same manifest is refused before the fold is
+        // reached — which the policy tests below cover.
+        let declared = crate::plugin::PluginBindingSet::new(super::super::PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Allow);
+        let set: std::collections::HashSet<WitInterface> = entries.iter().cloned().collect();
+        let resolved = declared.resolve_by_name(
+            &set,
+            &super::super::binding_schema(),
+            &|key: &str, host: &str, workload: &str| {
+                WasmcloudNats::default().narrows(key, host, workload)
+            },
+        )?;
+        Ok(resolved.into_iter().collect())
     }
 
     #[test]
@@ -1137,7 +1181,7 @@ mod tests {
         let merged = merge(&entries).unwrap();
         assert_eq!(merged.len(), 1, "{merged:?}");
         let (binding, config) = &merged[0];
-        assert_eq!(*binding, conn::UNNAMED_BINDING);
+        assert_eq!(binding, conn::UNNAMED_BINDING);
 
         let parsed = NatsConfig::from_map(config).unwrap();
         assert_eq!(parsed.servers, vec!["nats://localhost:4222"]);
@@ -1232,7 +1276,7 @@ mod tests {
 
         let merged = merge(&entries).unwrap();
         assert_eq!(
-            merged.iter().map(|(b, _)| *b).collect::<Vec<_>>(),
+            merged.iter().map(|(b, _)| b.as_str()).collect::<Vec<_>>(),
             vec!["hub", "leaf"]
         );
         let hub = NatsConfig::from_map(&merged[0].1).unwrap();
@@ -1268,17 +1312,32 @@ mod tests {
         assert!(!opened, "nothing was opened");
     }
 
-    /// The host's declaration reaches `open_bindings`: a binding that names no
+    /// The host's declaration reaches the plugin: a binding that names no
     /// servers of its own gets the host's address and reaches a real connect
     /// attempt rather than the missing-`servers` refusal.
+    ///
+    /// Resolution is the generic layer's now, so the test drives it the way
+    /// `bind_plugins` does and hands the plugin what comes out.
     #[tokio::test]
     async fn the_host_declaration_reaches_open_bindings() {
-        let plugin = WasmcloudNats::new().with_bindings(
-            NatsBindings::new().with_default_servers(vec!["nats://host:4222".to_string()]),
-        );
-        let mut opened = false;
-        let merged = HashMap::from([("subject-allow".to_string(), "orders.>".to_string())]);
+        let declared = PluginBindingSet::new(super::super::PLUGIN_NATS_ID)
+            .with_default_bundle("servers", [("servers", "nats://host:4222")])
+            .with_base(HashMap::from([(
+                "subject-allow".to_string(),
+                "orders.>".to_string(),
+            )]));
+        let plugin = WasmcloudNats::new();
 
+        let merged = declared
+            .resolve(
+                conn::UNNAMED_BINDING,
+                &HashMap::from([("subject-allow".to_string(), "orders.received".to_string())]),
+                &super::super::binding_schema(),
+                &|key: &str, host: &str, workload: &str| plugin.narrows(key, host, workload),
+            )
+            .expect("the workload sets only a grant it may narrow into");
+
+        let mut opened = false;
         let err = plugin
             .open_bindings("wl", vec![(conn::UNNAMED_BINDING, merged)], &mut opened)
             .await
@@ -1291,32 +1350,104 @@ mod tests {
         );
     }
 
+    /// A workload may take less of a grant than the operator declared, and is
+    /// refused for taking more. The predicate is this plugin's; the layer only
+    /// asks it.
+    #[test]
+    fn a_workload_may_narrow_a_grant_but_not_widen_one() {
+        let declared = PluginBindingSet::new(super::super::PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Deny)
+            .with_base(HashMap::from([(
+                "servers".to_string(),
+                "nats://host:4222".to_string(),
+            )]))
+            .with_binding(
+                "orders",
+                HashMap::from([
+                    ("subject-allow".to_string(), "orders.>".to_string()),
+                    ("stream-allow".to_string(), "ORDERS,PROCESSED".to_string()),
+                ]),
+            );
+        let plugin = WasmcloudNats::new();
+        let schema = super::super::binding_schema();
+        let narrows = |key: &str, host: &str, workload: &str| plugin.narrows(key, host, workload);
+
+        let resolved = declared
+            .resolve(
+                "orders",
+                &HashMap::from([
+                    ("subject-allow".to_string(), "orders.received".to_string()),
+                    ("stream-allow".to_string(), "ORDERS".to_string()),
+                ]),
+                &schema,
+                &narrows,
+            )
+            .expect("asking for less than the ceiling is the point of a ceiling");
+        assert_eq!(
+            resolved["subject-allow"], "orders.received",
+            "the workload runs with what it asked for, not a computed intersection"
+        );
+        assert_eq!(resolved["stream-allow"], "ORDERS");
+
+        let err = declared
+            .resolve(
+                "orders",
+                &HashMap::from([(
+                    "subject-allow".to_string(),
+                    "orders.received,billing.>".to_string(),
+                )]),
+                &schema,
+                &narrows,
+            )
+            .expect_err("a workload may never widen a grant")
+            .to_string();
+        assert!(err.contains("`billing.>` is outside it"), "{err}");
+    }
+
+    /// A grant the operator never declared cannot be narrowed into: an
+    /// ungranted allowlist resolves to empty, not to whatever the manifest
+    /// wrote.
+    #[test]
+    fn a_ceiling_nobody_declared_grants_nothing() {
+        let declared = PluginBindingSet::new(super::super::PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Deny)
+            .with_binding("orders", HashMap::new());
+        let plugin = WasmcloudNats::new();
+
+        let err = declared
+            .resolve(
+                "orders",
+                &HashMap::from([("subject-allow".to_string(), "orders.>".to_string())]),
+                &super::super::binding_schema(),
+                &|key: &str, host: &str, workload: &str| plugin.narrows(key, host, workload),
+            )
+            .expect_err("nothing contains a grant that was never declared")
+            .to_string();
+        assert!(err.contains("declares no ceiling"), "{err}");
+    }
+
     /// A refusal from the host's declaration fails the bind, and names the
     /// binding it came from.
-    #[tokio::test]
-    async fn a_refused_workload_key_fails_the_bind() {
-        let plugin = WasmcloudNats::new().with_bindings(
-            NatsBindings::new()
-                .with_workload_config(WorkloadConfig::Deny)
-                .with_default_servers(vec!["nats://host:4222".to_string()])
-                .with_binding(
-                    "orders",
-                    HashMap::from([("subject-allow".to_string(), "orders.processed".to_string())]),
-                ),
-        );
-        let mut opened = false;
-        let merged = HashMap::from([("subject-allow".to_string(), "orders.>".to_string())]);
+    #[test]
+    fn a_refused_workload_key_fails_the_bind() {
+        let declared = PluginBindingSet::new(super::super::PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Deny)
+            .with_base(HashMap::from([(
+                "servers".to_string(),
+                "nats://host:4222".to_string(),
+            )]))
+            .with_binding("orders", HashMap::new());
+        let plugin = WasmcloudNats::new();
 
-        let err = plugin
-            .open_bindings("wl", vec![("orders", merged)], &mut opened)
-            .await
-            .expect_err("a manifest may not grant itself subjects");
-
-        assert!(
-            err.chain()
-                .any(|e| e.to_string().contains("`subject-allow`")),
-            "names the refused key: {err:#}"
-        );
-        assert!(!opened, "nothing was opened");
+        let err = declared
+            .resolve(
+                "orders",
+                &HashMap::from([("servers".to_string(), "nats://elsewhere:4222".to_string())]),
+                &super::super::binding_schema(),
+                &|key: &str, host: &str, workload: &str| plugin.narrows(key, host, workload),
+            )
+            .expect_err("a manifest may not point itself at another cluster")
+            .to_string();
+        assert!(err.contains("`servers`"), "names the refused key: {err}");
     }
 }

@@ -48,7 +48,7 @@ pub struct PolicyEngine {
 
 /// A NATS subject pattern: literal tokens, `*` for one token, `>` for the tail.
 #[derive(Debug, Clone)]
-struct NatsSubjectPattern {
+pub(super) struct NatsSubjectPattern {
     tokens: Vec<Token>,
     /// True when the pattern ends in `>`.
     trailing: bool,
@@ -64,7 +64,7 @@ enum Token {
 }
 
 impl NatsSubjectPattern {
-    fn parse(raw: &str) -> Self {
+    pub(super) fn parse(raw: &str) -> Self {
         let mut tokens = Vec::new();
         let mut trailing = false;
         let mut valid = !raw.is_empty();
@@ -118,7 +118,7 @@ impl NatsSubjectPattern {
     ///
     /// This is set containment, not matching: a grant of `orders.*` does not
     /// contain a subscription to `orders.>`, because `>` reaches deeper.
-    fn contains(&self, other: &NatsSubjectPattern) -> bool {
+    pub(super) fn contains(&self, other: &NatsSubjectPattern) -> bool {
         if !self.valid || !other.valid {
             return false;
         }
