@@ -240,6 +240,14 @@ pub fn execution_time_meter() -> Option<&'static ExecutionTimeMeter> {
 }
 
 impl Meters {
+    /// The meter a call path measures through; see [`GuestMeter`].
+    pub fn guest(&self) -> GuestMeter {
+        GuestMeter {
+            fuel: self.fuel_consumption.clone(),
+            execution_time: self.execution_time.clone(),
+        }
+    }
+
     pub fn new(kind: MeterKind) -> Self {
         let meters = Self {
             fuel_consumption: FuelConsumptionMeter::new(kind == MeterKind::Fuel),
@@ -264,7 +272,54 @@ pub struct FuelConsumptionMeter {
     hist: Option<opentelemetry::metrics::Histogram<u64>>,
 }
 
+/// The guest-execution meter a host runs, whichever kind it chose.
+///
+/// A call path that can hand over its `&mut Store` measures through this rather
+/// than naming one of the two meters, so [`MeterKind`] decides *how* the
+/// measurement is taken and the path does not have to know. That is what makes
+/// [`MeterKind::Epoch`] universal: every path that measures at all can measure
+/// by epoch, including the ones that used to count fuel and nothing else.
+///
+/// The reverse does not hold. A pooled call runs under an `Accessor` with no
+/// `&mut Store` anywhere, so it cannot be wrapped like this and samples the
+/// epoch counter directly instead (`ExecutionSample` in the instance driver).
+/// [`MeterKind::Fuel`] therefore covers only the paths below, which is the one
+/// asymmetry between the two choices.
+#[derive(Clone, Default)]
+pub struct GuestMeter {
+    fuel: FuelConsumptionMeter,
+    execution_time: ExecutionTimeMeter,
+}
+
+impl GuestMeter {
+    /// Measure one call, by whichever meter this host was built with.
+    ///
+    /// Falls through to the call itself when neither is on, so a path never has
+    /// to ask whether metering is enabled.
+    pub async fn observe<F, R>(
+        &self,
+        attributes: &[KeyValue],
+        store: &mut wasmtime::Store<crate::engine::ctx::SharedCtx>,
+        func: F,
+    ) -> anyhow::Result<R>
+    where
+        F: AsyncFnOnce(&mut wasmtime::Store<crate::engine::ctx::SharedCtx>) -> anyhow::Result<R>,
+    {
+        if self.fuel.is_enabled() {
+            self.fuel.observe(attributes, store, func).await
+        } else {
+            self.execution_time.observe(attributes, store, func).await
+        }
+    }
+}
+
 impl FuelConsumptionMeter {
+    /// Whether this meter records anything, which is how [`GuestMeter`] picks
+    /// between the two without consulting the [`MeterKind`] again.
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.hist.is_some()
+    }
+
     pub(crate) fn new(enabled: bool) -> Self {
         let hist = enabled.then(|| {
             opentelemetry::global::meter("wash-runtime")

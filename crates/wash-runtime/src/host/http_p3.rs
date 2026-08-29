@@ -10,7 +10,7 @@
 //! [`crate::host::http::OutgoingHandler`] trait via its `send_request_p3` method.
 
 use crate::engine::instance_pool::ComponentInstance;
-use crate::observability::FuelConsumptionMeter;
+use crate::observability::GuestMeter;
 use http_body_util::BodyExt;
 use tracing::Instrument;
 use wasmtime_wasi_http::p3::bindings::Service;
@@ -85,9 +85,11 @@ pub(crate) async fn handle_component_request_p3(
     warm: ComponentInstance,
     req: hyper::Request<hyper::body::Incoming>,
     abandoned: std::sync::Arc<crate::engine::abandon::AbandonFlag>,
-    fuel_meter: FuelConsumptionMeter,
+    guest_meter: GuestMeter,
 ) -> anyhow::Result<hyper::Response<P3Body>> {
-    let _ = &fuel_meter; // fuel metering integration deferred to match P2's observe() pattern
+    // Not measured here: this path hands its store to `run_concurrent` and
+    // never holds a `&mut Store` around the call, so it has nothing to wrap.
+    let _ = &guest_meter;
 
     // Convert the hyper request body — map error type since hyper::Error doesn't impl Into<ErrorCode>
     let (parts, body) = req.into_parts();
