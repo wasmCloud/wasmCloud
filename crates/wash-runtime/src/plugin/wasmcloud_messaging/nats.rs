@@ -743,7 +743,7 @@ impl HostPlugin for NatsMessaging {
                         let abandoned = store.data().abandoned.watch(call.flag());
                         let deadline = call.arm_on_timer();
 
-                        let attributes = attributes.clone();
+                        let attributes = std::sync::Arc::clone(&attributes);
                         tokio::spawn(async move {
                             // Released on completion, trap or not — which is
                             // what frees the instance slot this message holds.

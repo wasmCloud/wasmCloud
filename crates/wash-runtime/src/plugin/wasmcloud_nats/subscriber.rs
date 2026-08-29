@@ -125,9 +125,11 @@ fn kv_entry_to_kv_handler_wit(e: &jetstream::kv::Entry) -> kv_bindings::wasmclou
 struct HandlerTarget {
     component_id: Arc<str>,
     pre: InstancePre<SharedCtx>,
-    /// Resolved once per subscription rather than per delivery: it costs a
-    /// read lock and cannot change under a resolved workload.
-    identity: crate::observability::WorkloadIdentity,
+    /// Built once per subscription rather than per delivery: neither the
+    /// identity nor the operation can change under a resolved workload, and
+    /// resolving the identity costs a read lock.
+    core_attributes: Arc<[opentelemetry::KeyValue]>,
+    kv_attributes: Arc<[opentelemetry::KeyValue]>,
 }
 
 /// The outcome channel every delivery job replies on: the handler's own
@@ -160,7 +162,7 @@ struct CoreDeliveryJob {
     msg: core_bindings::wasmcloud::nats::types::NatsMessage,
     abandoned: Arc<crate::engine::abandon::AbandonFlag>,
     reply: DeliveryReply,
-    attributes: Vec<opentelemetry::KeyValue>,
+    attributes: Arc<[opentelemetry::KeyValue]>,
 }
 
 impl crate::engine::instance_driver::PluginJob for CoreDeliveryJob {
@@ -242,7 +244,7 @@ struct KvDeliveryJob {
     entry: kv_bindings::wasmcloud::nats::kv::Entry,
     abandoned: Arc<crate::engine::abandon::AbandonFlag>,
     reply: DeliveryReply,
-    attributes: Vec<opentelemetry::KeyValue>,
+    attributes: Arc<[opentelemetry::KeyValue]>,
 }
 
 impl crate::engine::instance_driver::PluginJob for KvDeliveryJob {
@@ -747,9 +749,12 @@ pub(super) async fn spawn_jetstream_subscriptions(
     let instance_pre = workload.instantiate_pre(component_id).await?;
     let pre = JsHandlerPre::new(instance_pre)?;
     let warm_set = warm_sets.jetstream.clone();
-    // Resolved once for the whole subscription set: the same identity every
+    // Built once for the whole subscription set: the same attributes every
     // JetStream delivery on this component is measured under.
-    let identity = workload.component_identity(component_id).await;
+    let attributes = workload
+        .component_identity(component_id)
+        .await
+        .attributes(PLUGIN_NATS_ID, JETSTREAM_OPERATION);
     let workload_id = workload_id.into();
     // Namespace only: both the workload id and the workload *name* are
     // per-replica, and replicas must converge on one durable. See
@@ -770,7 +775,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
         let workload_id = workload_id.clone();
         let scope = scope.clone();
         let warm_set = warm_set.clone();
-        let identity = identity.clone();
+        let attributes = Arc::clone(&attributes);
 
         tokio::spawn(async move {
             // Mark the current generation as seen, so the connect that opened
@@ -1444,8 +1449,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
                             // store is parked; see the delete below.
                             let handle_rep = resource.rep();
                             let execution_meter = execution_meter.clone();
-                            let attributes =
-                                identity.attributes(PLUGIN_NATS_ID, JETSTREAM_OPERATION);
+                            let attributes = Arc::clone(&attributes);
                             let warm_set = warm_set.clone();
                             tokio::spawn(async move {
                                 // Split borrows: the call takes the store
@@ -2008,10 +2012,12 @@ pub(super) async fn spawn_core_subscriptions(
     host_budget: Arc<HostBacklogBudget>,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
+    let identity = workload.component_identity(component_id).await;
     let target = HandlerTarget {
         component_id: Arc::from(component_id),
         pre: instance_pre,
-        identity: workload.component_identity(component_id).await,
+        core_attributes: identity.attributes(PLUGIN_NATS_ID, CORE_OPERATION),
+        kv_attributes: identity.attributes(PLUGIN_NATS_ID, KV_OPERATION),
     };
     let workload_id = workload_id.into();
 
@@ -2126,9 +2132,7 @@ pub(super) async fn spawn_core_subscriptions(
                                 msg,
                                 abandoned: call.flag(),
                                 reply,
-                                attributes: target
-                                    .identity
-                                    .attributes(PLUGIN_NATS_ID, CORE_OPERATION),
+                                attributes: Arc::clone(&target.core_attributes),
                             });
                         let span = tracing::span!(
                             tracing::Level::INFO,
@@ -2206,10 +2210,12 @@ pub(super) async fn spawn_kv_watches(
     _workload_id: impl Into<String>,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
+    let identity = workload.component_identity(component_id).await;
     let target = HandlerTarget {
         component_id: Arc::from(component_id),
         pre: instance_pre,
-        identity: workload.component_identity(component_id).await,
+        core_attributes: identity.attributes(PLUGIN_NATS_ID, CORE_OPERATION),
+        kv_attributes: identity.attributes(PLUGIN_NATS_ID, KV_OPERATION),
     };
 
     for watch in watches {
@@ -2410,9 +2416,7 @@ pub(super) async fn spawn_kv_watches(
                                     entry: kv_entry_to_kv_handler_wit(&entry),
                                     abandoned: call.flag(),
                                     reply,
-                                    attributes: target
-                                        .identity
-                                        .attributes(PLUGIN_NATS_ID, KV_OPERATION),
+                                    attributes: Arc::clone(&target.kv_attributes),
                                 });
                             let span = tracing::span!(
                                 tracing::Level::INFO,

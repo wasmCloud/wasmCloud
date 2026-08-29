@@ -72,7 +72,7 @@ pub(crate) struct LinkedJob {
     pub(crate) abandoned: Arc<crate::engine::abandon::AbandonFlag>,
     /// What this call is measured under, built where the link is prepared —
     /// the manifest identity a linked call needs is not reachable from here.
-    pub(crate) attributes: Vec<opentelemetry::KeyValue>,
+    pub(crate) attributes: Arc<[opentelemetry::KeyValue]>,
 }
 
 /// Work an instance can be given. Both shapes run as concurrent tasks on the
@@ -138,13 +138,13 @@ pub(crate) trait PluginJob: Send + 'static {
 pub(crate) struct ExecutionSample {
     executed: Arc<crate::engine::abandon::GuestExecution>,
     before: u64,
-    attributes: Vec<opentelemetry::KeyValue>,
+    attributes: Arc<[opentelemetry::KeyValue]>,
 }
 
 impl ExecutionSample {
     pub(crate) fn start(
         accessor: &Accessor<SharedCtx>,
-        attributes: Vec<opentelemetry::KeyValue>,
+        attributes: Arc<[opentelemetry::KeyValue]>,
     ) -> Self {
         let executed = accessor.with(|mut access| Arc::clone(&access.get().executed));
         let before = executed.millis();

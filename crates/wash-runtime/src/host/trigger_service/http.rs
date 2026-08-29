@@ -68,7 +68,7 @@ pub(crate) struct HttpTask {
     pub(crate) abandoned: std::sync::Arc<crate::engine::abandon::AbandonFlag>,
     /// What this call is measured under, or `None` when it cannot be measured
     /// per request — see [`crate::host::http::ServiceHttpJob`].
-    pub(crate) attributes: Option<Vec<opentelemetry::KeyValue>>,
+    pub(crate) attributes: Option<std::sync::Arc<[opentelemetry::KeyValue]>>,
     /// This call's tether to a pooled instance: holds its in-flight slot and
     /// can retire the instance. `None` for a service, whose singleton instance
     /// is not the pool's to retire.

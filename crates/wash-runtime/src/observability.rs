@@ -204,18 +204,47 @@ impl WorkloadIdentity {
     /// set a component declares. Neither can be invented by traffic, so the
     /// series count stays bounded by what is deployed.
     ///
-    /// A call surface with a further *bounded* dimension appends its own: an
-    /// HTTP method, a configured subscription. Anything a caller can invent
-    /// belongs on the span instead, where it costs one event rather than one
-    /// time series per histogram bucket, forever.
-    pub fn attributes(&self, plugin: &'static str, operation: &str) -> Vec<KeyValue> {
-        vec![
+    /// A call surface with a further *bounded* dimension appends its own
+    /// through [`Self::attributes_with`]. Anything a caller can invent belongs
+    /// on the span instead, where it costs one event rather than one time
+    /// series per histogram bucket, forever.
+    ///
+    /// Shared rather than owned: every value here is fixed for the life of a
+    /// subscription or a route, so callers build one set when that is set up
+    /// and clone the handle per call. Rebuilding it per call would allocate the
+    /// vector and five strings on a delivery hot path to arrive at the same
+    /// answer every time.
+    pub fn attributes(&self, plugin: &'static str, operation: &str) -> Arc<[KeyValue]> {
+        self.build(plugin, operation, None)
+    }
+
+    /// As [`Self::attributes`], plus one further dimension this surface bounds
+    /// itself — an HTTP method, a configured subscription.
+    pub fn attributes_with(
+        &self,
+        plugin: &'static str,
+        operation: &str,
+        extra: KeyValue,
+    ) -> Arc<[KeyValue]> {
+        self.build(plugin, operation, Some(extra))
+    }
+
+    fn build(
+        &self,
+        plugin: &'static str,
+        operation: &str,
+        extra: Option<KeyValue>,
+    ) -> Arc<[KeyValue]> {
+        let mut attributes = Vec::with_capacity(5 + usize::from(extra.is_some()));
+        attributes.extend([
             KeyValue::new("plugin", plugin),
             KeyValue::new("operation", operation.to_string()),
             KeyValue::new("workload.namespace", self.namespace.to_string()),
             KeyValue::new("workload.name", self.name.to_string()),
             KeyValue::new("component", self.component.to_string()),
-        ]
+        ]);
+        attributes.extend(extra);
+        attributes.into()
     }
 }
 

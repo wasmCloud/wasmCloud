@@ -992,9 +992,21 @@ fn watch_body(
     })
 }
 
-/// A map from host header to resolved workload handles and their associated component id
-pub type WorkloadHandles =
-    Arc<RwLock<HashMap<String, (ResolvedWorkload, InstancePre<SharedCtx>, String)>>>;
+/// A map from host header to resolved workload handles, their associated
+/// component id, and the identity that component's calls are measured under.
+pub type WorkloadHandles = Arc<
+    RwLock<
+        HashMap<
+            String,
+            (
+                ResolvedWorkload,
+                InstancePre<SharedCtx>,
+                String,
+                crate::observability::WorkloadIdentity,
+            ),
+        >,
+    >,
+>;
 
 /// An inbound HTTP request routed to a long-lived service instance, paired with
 /// a oneshot for its response and the abandonment flag of the [`DispatchedCall`]
@@ -1012,7 +1024,7 @@ pub struct ServiceHttpJob {
     /// once, and `GuestExecution` counts a *store's* execution, so a per-request
     /// sample there would report every concurrent request's time as its own.
     /// The pooled path is bounded by `maxConcurrency` and does measure.
-    pub attributes: Option<Vec<opentelemetry::KeyValue>>,
+    pub attributes: Option<Arc<[opentelemetry::KeyValue]>>,
 }
 
 /// The attribute set an inbound HTTP call is measured under: the shared scheme
@@ -1023,13 +1035,33 @@ pub(crate) fn http_attributes(
     identity: &crate::observability::WorkloadIdentity,
     method: &hyper::Method,
     operation: &'static str,
-) -> Vec<opentelemetry::KeyValue> {
-    let mut attributes = identity.attributes("wasi-http", operation);
-    attributes.push(opentelemetry::KeyValue::new(
-        "method",
-        method.as_str().to_string(),
-    ));
-    attributes
+) -> Arc<[opentelemetry::KeyValue]> {
+    identity.attributes_with(
+        "wasi-http",
+        operation,
+        opentelemetry::KeyValue::new("method", known_method(method)),
+    )
+}
+
+/// The request method, or `_OTHER` for anything outside the registered set.
+///
+/// `hyper::Method` accepts an arbitrary extension token, so the method a client
+/// sends is caller-invented like the URI is. Folding the unregistered ones into
+/// one bucket is what keeps it usable as an attribute; the exact token stays on
+/// the span. This is the treatment the OTel HTTP semconv prescribes.
+fn known_method(method: &hyper::Method) -> &'static str {
+    match *method {
+        hyper::Method::GET => "GET",
+        hyper::Method::HEAD => "HEAD",
+        hyper::Method::POST => "POST",
+        hyper::Method::PUT => "PUT",
+        hyper::Method::DELETE => "DELETE",
+        hyper::Method::CONNECT => "CONNECT",
+        hyper::Method::OPTIONS => "OPTIONS",
+        hyper::Method::TRACE => "TRACE",
+        hyper::Method::PATCH => "PATCH",
+        _ => "_OTHER",
+    }
 }
 
 /// The WIT exports an inbound request can invoke, and what its measurements
@@ -1351,6 +1383,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                     resolved_handle.clone(),
                     instance_pre,
                     component_id.to_string(),
+                    resolved_handle.component_identity(component_id).await,
                 ),
             );
         }
@@ -1776,7 +1809,7 @@ async fn handle_http_request<T: Router>(
     };
 
     let response = match workload_handle {
-        Some((handle, instance_pre, component_id)) => {
+        Some((handle, instance_pre, component_id, identity)) => {
             let req_span = tracing::span!(
                 tracing::Level::INFO,
                 "invoke_component_handler",
@@ -1784,9 +1817,16 @@ async fn handle_http_request<T: Router>(
                 workload.namespace = handle.namespace(),
                 workload.id = handle.id(),
             );
-            match invoke_component_handler(handle, instance_pre, &component_id, req, fuel_meter)
-                .instrument(req_span)
-                .await
+            match invoke_component_handler(
+                handle,
+                instance_pre,
+                &component_id,
+                req,
+                fuel_meter,
+                &identity,
+            )
+            .instrument(req_span)
+            .await
             {
                 Ok(resp) => resp,
                 Err(e) => {
@@ -1999,6 +2039,8 @@ async fn invoke_component_handler(
     component_id: &str,
     req: hyper::Request<hyper::body::Incoming>,
     fuel_meter: FuelConsumptionMeter,
+    // Resolved once when the route was registered: this runs per request.
+    identity: &crate::observability::WorkloadIdentity,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
     if crate::engine::targets_wasip3_http(instance_pre.component()) {
         let pool = workload_handle
@@ -2014,11 +2056,7 @@ async fn invoke_component_handler(
             use crate::engine::instance_pool::Dispatch;
             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
             let call = DispatchedCall::new("HTTP (pooled)", crate::timeouts::http_response());
-            let attributes = Some(http_attributes(
-                &workload_handle.component_identity(component_id).await,
-                req.method(),
-                HTTP_OPERATION_P3,
-            ));
+            let attributes = Some(http_attributes(identity, req.method(), HTTP_OPERATION_P3));
             let outcome = match pool.try_dispatch(InstanceJob::Http(Box::new(ServiceHttpJob {
                 req,
                 resp_tx,
@@ -2097,14 +2135,7 @@ async fn invoke_component_handler(
     // owned by a detached task that outlives the response head, so recovering
     // it for reuse needs a restructure the p3 path did not.
     let store = workload_handle.new_store(component_id).await?;
-    handle_component_request(
-        store,
-        instance_pre,
-        req,
-        fuel_meter,
-        workload_handle.component_identity(component_id).await,
-    )
-    .await
+    handle_component_request(store, instance_pre, req, fuel_meter, identity).await
 }
 
 /// Handle a component request using WASI HTTP (copied from wash/crates/src/cli/dev.rs)
@@ -2113,7 +2144,7 @@ pub async fn handle_component_request(
     pre: InstancePre<SharedCtx>,
     req: hyper::Request<hyper::body::Incoming>,
     fuel_meter: FuelConsumptionMeter,
-    identity: crate::observability::WorkloadIdentity,
+    identity: &crate::observability::WorkloadIdentity,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let scheme = match req.uri().scheme() {
@@ -2124,7 +2155,7 @@ pub async fn handle_component_request(
         None => Scheme::Http,
     };
 
-    let attributes = http_attributes(&identity, req.method(), HTTP_OPERATION_P2);
+    let attributes = http_attributes(identity, req.method(), HTTP_OPERATION_P2);
 
     let req = store.data_mut().http().new_incoming_request(scheme, req)?;
     let out = store.data_mut().http().new_response_outparam(sender)?;
