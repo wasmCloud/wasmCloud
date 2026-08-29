@@ -10,13 +10,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Context as _;
 use async_nats::jetstream;
 use futures::StreamExt;
-use opentelemetry::KeyValue;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, warn};
 
+use crate::engine::instance_driver::InstanceJob;
+use crate::engine::instance_pool::{ComponentInstance, Dispatch};
 use crate::engine::workload::ResolvedWorkload;
 use crate::observability::ExecutionTimeMeter;
-use crate::wasmtime::component::Resource;
+use crate::wasmtime::component::{Accessor, InstancePre, Resource};
+use opentelemetry::KeyValue;
 
 use super::config::{AckMode, CoreSubscriptionConfig, JetStreamSubscriptionConfig, KvWatchConfig};
 use super::conn::ConnHandle;
@@ -69,18 +71,6 @@ handler_pre!(
     jetstream_bindings::JsProcessorPre<SharedCtx>,
     jetstream_bindings::JsProcessor
 );
-handler_pre!(
-    CoreHandlerPre,
-    CoreProxy,
-    core_bindings::SubscriberPre<SharedCtx>,
-    core_bindings::Subscriber
-);
-handler_pre!(
-    KvHandlerPre,
-    KvProxy,
-    kv_bindings::KvWatcherPre<SharedCtx>,
-    kv_bindings::KvWatcher
-);
 
 impl JsProxy {
     async fn call(
@@ -99,54 +89,361 @@ impl JsProxy {
     }
 }
 
-impl CoreProxy {
-    async fn call(
-        &self,
-        store: &mut crate::wasmtime::Store<SharedCtx>,
-        raw: &async_nats::Message,
-    ) -> wasmtime::Result<Result<(), String>> {
-        let msg = core_bindings::wasmcloud::nats::types::NatsMessage {
-            subject: raw.subject.to_string(),
-            reply_to: raw.reply.as_ref().map(|r| r.to_string()),
-            body: raw.payload.to_vec(),
-            headers: raw.headers.as_ref().map(nats_headers_to_core_wit),
-        };
-        let p = &self.0;
-        store
-            .run_concurrent(async move |accessor| {
-                p.wasmcloud_nats_core_handler()
-                    .call_handle_message(accessor, msg)
-                    .await
-            })
-            .await?
+fn nats_headers_to_core_wit(
+    headers: &async_nats::HeaderMap,
+) -> Vec<core_bindings::wasmcloud::nats::types::HeaderEntry> {
+    let mut out = Vec::new();
+    for (name, values) in headers.iter() {
+        for value in values {
+            out.push(core_bindings::wasmcloud::nats::types::HeaderEntry {
+                name: name.to_string(),
+                value: value.as_str().to_string(),
+            });
+        }
+    }
+    out
+}
+
+fn kv_entry_to_kv_handler_wit(e: &jetstream::kv::Entry) -> kv_bindings::wasmcloud::nats::kv::Entry {
+    let operation = match e.operation {
+        jetstream::kv::Operation::Put => kv_bindings::wasmcloud::nats::kv::KvOperation::Put,
+        jetstream::kv::Operation::Delete => kv_bindings::wasmcloud::nats::kv::KvOperation::Delete,
+        jetstream::kv::Operation::Purge => kv_bindings::wasmcloud::nats::kv::KvOperation::Purge,
+    };
+
+    kv_bindings::wasmcloud::nats::kv::Entry {
+        key: e.key.clone(),
+        value: e.value.to_vec(),
+        revision: e.revision,
+        created_at_unix_nanos: e.created.unix_timestamp_nanos().max(0) as u64,
+        operation,
     }
 }
 
-impl KvProxy {
-    async fn call(
-        &self,
-        store: &mut crate::wasmtime::Store<SharedCtx>,
-        bucket: &str,
-        entry: &jetstream::kv::Entry,
-    ) -> wasmtime::Result<Result<(), String>> {
-        let (bucket, entry) = (bucket.to_string(), kv_entry_to_kv_handler_wit(entry));
-        let p = &self.0;
-        store
-            .run_concurrent(async move |accessor| {
-                p.wasmcloud_nats_kv_handler()
-                    .call_handle_event(accessor, bucket, entry)
-                    .await
-            })
-            .await?
+/// What a core or KV delivery needs to reach its handler, resolved once per
+/// subscription rather than once per message.
+#[derive(Clone)]
+struct HandlerTarget {
+    component_id: Arc<str>,
+    pre: InstancePre<SharedCtx>,
+}
+
+/// The outcome channel every delivery job replies on: the handler's own
+/// `result<_, string>`, or a host failure that kept it from being reached.
+type DeliveryReply = tokio::sync::oneshot::Sender<anyhow::Result<Result<(), String>>>;
+
+/// Re-arms this call's epoch deadline and hands back the store's abandon set,
+/// the way [`LinkedTask`] does — a pooled store is reused, so the countdown has
+/// to measure this call rather than the instance's whole life.
+fn call_guard(accessor: &Accessor<SharedCtx>) -> Arc<crate::engine::abandon::AbandonedCalls> {
+    accessor.with(|mut access| {
+        crate::engine::abandon::rearm_for_call(&mut access);
+        Arc::clone(&access.get().abandoned)
+    })
+}
+
+/// How each delivery flavour names itself in a driver log line.
+const CORE_OPERATION: &str = "wasmcloud:nats/core-handler#handle-message";
+const KV_OPERATION: &str = "wasmcloud:nats/kv-handler#handle-event";
+
+/// One core NATS delivery, run on whichever instance the pool picks.
+///
+/// The payload stays a `Vec<u8>` inside the generated `NatsMessage`. Lowering
+/// it to a store-independent `Val` instead would cost one 48-byte `Val` per
+/// byte, which on the payload sizes core NATS carries is the memory blow-up
+/// `subscription-capacity-bytes` exists to prevent.
+struct CoreDeliveryJob {
+    msg: core_bindings::wasmcloud::nats::types::NatsMessage,
+    abandoned: Arc<crate::engine::abandon::AbandonFlag>,
+    reply: DeliveryReply,
+    attributes: Vec<opentelemetry::KeyValue>,
+}
+
+impl crate::engine::instance_driver::PluginJob for CoreDeliveryJob {
+    fn describe(&self) -> &str {
+        CORE_OPERATION
     }
+
+    fn run<'a>(
+        self: Box<Self>,
+        accessor: &'a Accessor<SharedCtx>,
+        instance: crate::wasmtime::component::Instance,
+        slot: Option<crate::engine::instance_driver::PoolSlot>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            let Self {
+                msg,
+                abandoned,
+                reply,
+                attributes,
+            } = *self;
+            let calls = call_guard(accessor);
+            let proxy = accessor.with(|mut access| {
+                core_bindings::Subscriber::new(&mut access, &instance).map_err(|e| {
+                    anyhow::anyhow!(
+                        "pooled instance does not export wasmcloud:nats/core-handler: {e:#}"
+                    )
+                })
+            });
+            let proxy = match proxy {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = reply.send(Err(e));
+                    return;
+                }
+            };
+            // Bounds this task, which the dispatcher's own deadline cannot: a
+            // guest subtask is not cancellable from the host, so a delivery
+            // that never returns would hold its in-flight slot for the life of
+            // the workload. Retiring is what ends it — the driver stops
+            // admitting, drains, and the store's teardown takes the stalled
+            // work with it. The same contract [`LinkedTask`] follows.
+            let _sample =
+                crate::engine::instance_driver::ExecutionSample::start(accessor, attributes);
+            let outcome = tokio::time::timeout(
+                crate::timeouts::ephemeral_call(),
+                crate::engine::abandon::watch_until_abandoned(
+                    &calls,
+                    abandoned,
+                    proxy
+                        .wasmcloud_nats_core_handler()
+                        .call_handle_message(accessor, msg),
+                ),
+            )
+            .await;
+            let _ = reply.send(match outcome {
+                Ok(Ok(inner)) => Ok(inner),
+                // A host failure mid-call leaves guest state indeterminate.
+                Ok(Err(e)) => {
+                    if let Some(slot) = slot {
+                        slot.retire_instance();
+                    }
+                    Err(anyhow::anyhow!("{e:#}"))
+                }
+                Err(e) => {
+                    if let Some(slot) = slot {
+                        slot.retire_instance();
+                    }
+                    Err(anyhow::anyhow!("delivery timed out: {e}"))
+                }
+            });
+        })
+    }
+}
+
+/// One KV watch event. Same shape and the same reason as [`CoreDeliveryJob`]:
+/// a KV value is bytes too.
+struct KvDeliveryJob {
+    bucket: String,
+    entry: kv_bindings::wasmcloud::nats::kv::Entry,
+    abandoned: Arc<crate::engine::abandon::AbandonFlag>,
+    reply: DeliveryReply,
+    attributes: Vec<opentelemetry::KeyValue>,
+}
+
+impl crate::engine::instance_driver::PluginJob for KvDeliveryJob {
+    fn describe(&self) -> &str {
+        KV_OPERATION
+    }
+
+    fn run<'a>(
+        self: Box<Self>,
+        accessor: &'a Accessor<SharedCtx>,
+        instance: crate::wasmtime::component::Instance,
+        slot: Option<crate::engine::instance_driver::PoolSlot>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            let Self {
+                bucket,
+                entry,
+                abandoned,
+                reply,
+                attributes,
+            } = *self;
+            let calls = call_guard(accessor);
+            let proxy = accessor.with(|mut access| {
+                kv_bindings::KvWatcher::new(&mut access, &instance).map_err(|e| {
+                    anyhow::anyhow!(
+                        "pooled instance does not export wasmcloud:nats/kv-handler: {e:#}"
+                    )
+                })
+            });
+            let proxy = match proxy {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = reply.send(Err(e));
+                    return;
+                }
+            };
+            // Bounds this task, which the dispatcher's own deadline cannot: a
+            // guest subtask is not cancellable from the host, so a delivery
+            // that never returns would hold its in-flight slot for the life of
+            // the workload. Retiring is what ends it — the driver stops
+            // admitting, drains, and the store's teardown takes the stalled
+            // work with it. The same contract [`LinkedTask`] follows.
+            let _sample =
+                crate::engine::instance_driver::ExecutionSample::start(accessor, attributes);
+            let outcome = tokio::time::timeout(
+                crate::timeouts::ephemeral_call(),
+                crate::engine::abandon::watch_until_abandoned(
+                    &calls,
+                    abandoned,
+                    proxy
+                        .wasmcloud_nats_kv_handler()
+                        .call_handle_event(accessor, bucket, entry),
+                ),
+            )
+            .await;
+            let _ = reply.send(match outcome {
+                Ok(Ok(inner)) => Ok(inner),
+                // A host failure mid-call leaves guest state indeterminate.
+                Ok(Err(e)) => {
+                    if let Some(slot) = slot {
+                        slot.retire_instance();
+                    }
+                    Err(anyhow::anyhow!("{e:#}"))
+                }
+                Err(e) => {
+                    if let Some(slot) = slot {
+                        slot.retire_instance();
+                    }
+                    Err(anyhow::anyhow!("delivery timed out: {e}"))
+                }
+            });
+        })
+    }
+}
+
+/// Builds a store and instantiates the handler into it, giving up if the
+/// workload is torn down first.
+///
+/// `Ok(None)` means cancelled: the delivery is abandoned, which is not a
+/// failure worth logging — the subscription it arrived on is going away too.
+async fn build_instance(
+    workload: &ResolvedWorkload,
+    target: &HandlerTarget,
+    component_id: &str,
+    cancel_token: &CancellationToken,
+) -> anyhow::Result<
+    Option<(
+        crate::wasmtime::Store<SharedCtx>,
+        crate::wasmtime::component::Instance,
+    )>,
+> {
+    let mut store = tokio::select! {
+        created = workload.new_store(component_id) => created?,
+        _ = cancel_token.cancelled() => return Ok(None),
+    };
+    waive_fuel_limit(&mut store);
+    let instance = tokio::select! {
+        instantiated = target.pre.instantiate_async(&mut store) => {
+            instantiated.map_err(|e| anyhow::anyhow!("{e:#}"))?
+        }
+        _ = cancel_token.cancelled() => return Ok(None),
+    };
+    Ok(Some((store, instance)))
+}
+
+/// Runs one delivery: through the workload's instance pool when the component
+/// opted into pooling, and in a store of its own otherwise.
+///
+/// The job crosses as [`InstanceJob::Plugin`], so a core or KV delivery takes
+/// the same path as inbound HTTP and linked calls and honours the same
+/// `poolSize`, `maxInvocations` and `maxConcurrency` the component declared —
+/// including several deliveries in flight on one instance, which the plugin's
+/// own warm set can never do because its call holds the store for the length
+/// of the call.
+///
+/// The same job runs either way: a delivery the pool declines is not rebuilt,
+/// it is handed back and run in a fresh store, so a large payload is never
+/// copied to pay for the attempt.
+///
+/// JetStream stays on the warm set. Its call carries a `message-handle`
+/// resource — an index into one store's table — so its argument cannot exist
+/// before the store is chosen, and a job the pool hands back would already
+/// hold an index into a table it no longer belongs to.
+///
+/// `cancel_token` ends the delivery at the two awaits that can block on a
+/// workload being torn down: building a store and instantiating into it is work
+/// nobody will see the result of, and an instance built for the pool could
+/// otherwise be installed after the pool was cleared.
+async fn run_delivery(
+    workload: &ResolvedWorkload,
+    target: &HandlerTarget,
+    job: Box<dyn crate::engine::instance_driver::PluginJob>,
+    reply_rx: tokio::sync::oneshot::Receiver<anyhow::Result<Result<(), String>>>,
+    call: crate::engine::abandon::DispatchedCall,
+    cancel_token: &CancellationToken,
+) -> anyhow::Result<Result<(), String>> {
+    let component_id = target.component_id.as_ref();
+    let mut job = job;
+
+    if let Some(pool) = workload.instance_pool_for_component(component_id).await {
+        let outcome = match pool.offer(InstanceJob::Plugin(job)) {
+            Dispatch::Sent => Ok(()),
+            // Built out here, where awaiting is allowed and where a component
+            // that fails to instantiate reports it to this delivery rather
+            // than only to the log.
+            Dispatch::NeedsInstance(pending) => {
+                let Some((store, instance)) =
+                    build_instance(workload, target, component_id, cancel_token).await?
+                else {
+                    return Ok(Ok(()));
+                };
+                pool.install(ComponentInstance { store, instance }, pending)
+            }
+            Dispatch::Saturated(pending) => Err(pending),
+        };
+        match outcome {
+            Ok(()) => {
+                return call
+                    .await_reply(reply_rx)
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("pooled instance produced no reply in time"))?
+                    .map_err(|_| anyhow::anyhow!("pooled instance dropped the delivery"))?;
+            }
+            // Every instance was busy and the pool is full, so run the very
+            // same job in a store of its own.
+            Err(declined) => {
+                let InstanceJob::Plugin(returned) = declined else {
+                    return Err(anyhow::anyhow!("pool returned the wrong job kind"));
+                };
+                debug!(
+                    job = returned.describe(),
+                    "warm instances saturated; own store"
+                );
+                job = returned;
+            }
+        }
+    }
+
+    let Some((mut store, instance)) =
+        build_instance(workload, target, component_id, cancel_token).await?
+    else {
+        return Ok(Ok(()));
+    };
+    // Awaited through the same `DispatchedCall` the pooled path uses:
+    // `arm_after` runs inside `await_reply`, so a cold delivery that skipped it
+    // would be unbounded while looking bounded. Giving up here drops the
+    // future, and with it the store, which is what ends the guest's work.
+    call.await_reply(store.run_concurrent(async move |accessor| {
+        // No pool slot: nothing to retire, the store goes when this ends.
+        job.run(accessor, instance, None).await;
+    }))
+    .await
+    .ok_or_else(|| anyhow::anyhow!("delivery produced no reply in time"))?
+    .map_err(|e| anyhow::anyhow!("{e:#}"))?;
+    reply_rx
+        .await
+        .map_err(|_| anyhow::anyhow!("delivery task dropped the reply"))?
 }
 
 /// The warm sets a component's handlers serve their deliveries from, built from
 /// the instance policy the component declared.
 ///
 /// The same `poolSize` / `maxInvocations` knobs that feed the engine's
-/// [`InstanceJob`] pool, honoured here because a NATS delivery cannot take
-/// that path — its call carries a typed resource that must live in the very
+/// [`InstanceJob`] pool, honoured here because a *JetStream* delivery cannot
+/// take that path — its call carries a typed resource that must live in the very
 /// store that runs it, and its ack ownership lives in the subscription loop.
 /// See [`super::warm`] for what is and is not honoured.
 ///
@@ -159,8 +456,6 @@ impl KvProxy {
 /// [`InstanceJob`]: crate::engine::instance_driver::InstanceJob
 pub(super) struct WarmSets {
     jetstream: Arc<super::warm::WarmSet<(crate::wasmtime::Store<SharedCtx>, JsProxy)>>,
-    core: Arc<super::warm::WarmSet<(crate::wasmtime::Store<SharedCtx>, CoreProxy)>>,
-    kv: Arc<super::warm::WarmSet<(crate::wasmtime::Store<SharedCtx>, KvProxy)>>,
 }
 
 impl WarmSets {
@@ -171,16 +466,15 @@ impl WarmSets {
         let policy = workload.warm_instance_policy(component_id).await;
         let sets = Self {
             jetstream: Arc::new(super::warm::WarmSet::new(policy)),
-            core: Arc::new(super::warm::WarmSet::new(policy)),
-            kv: Arc::new(super::warm::WarmSet::new(policy)),
         };
         if sets.jetstream.keeps_instances() {
             debug!(
                 component_id,
                 ?policy,
-                "wasmcloud:nats deliveries will reuse warm instances; note that \
-                 `maxConcurrency` above 1 is served by additional one-shot stores on this \
-                 path rather than by concurrent calls on one instance"
+                "wasmcloud:nats JetStream deliveries will reuse warm instances; note \
+                 that on this path `maxConcurrency` above 1 is served by additional \
+                 one-shot stores rather than by concurrent calls on one instance. Core \
+                 and KV deliveries go through the engine's pool and do honour it."
             );
         }
         Arc::new(sets)
@@ -430,37 +724,6 @@ fn short_hash(parts: &[&str]) -> String {
         hash = hash.wrapping_mul(PRIME);
     }
     format!("{hash:016x}")[..12].to_string()
-}
-
-fn nats_headers_to_core_wit(
-    headers: &async_nats::HeaderMap,
-) -> Vec<core_bindings::wasmcloud::nats::types::HeaderEntry> {
-    let mut out = Vec::new();
-    for (name, values) in headers.iter() {
-        for value in values {
-            out.push(core_bindings::wasmcloud::nats::types::HeaderEntry {
-                name: name.to_string(),
-                value: value.as_str().to_string(),
-            });
-        }
-    }
-    out
-}
-
-fn kv_entry_to_kv_handler_wit(e: &jetstream::kv::Entry) -> kv_bindings::wasmcloud::nats::kv::Entry {
-    let operation = match e.operation {
-        jetstream::kv::Operation::Put => kv_bindings::wasmcloud::nats::kv::KvOperation::Put,
-        jetstream::kv::Operation::Delete => kv_bindings::wasmcloud::nats::kv::KvOperation::Delete,
-        jetstream::kv::Operation::Purge => kv_bindings::wasmcloud::nats::kv::KvOperation::Purge,
-    };
-
-    kv_bindings::wasmcloud::nats::kv::Entry {
-        key: e.key.clone(),
-        value: e.value.to_vec(),
-        revision: e.revision,
-        created_at_unix_nanos: e.created.unix_timestamp_nanos().max(0) as u64,
-        operation,
-    }
 }
 
 /// Spawn a JetStream push subscription per entry. Each consumer uses explicit
@@ -1730,7 +1993,6 @@ pub(super) async fn spawn_core_subscriptions(
     conn: Arc<ConnHandle>,
     subs: Vec<CoreSubscriptionConfig>,
     cancel_token: CancellationToken,
-    execution_meter: ExecutionTimeMeter,
     failure_sink: Option<crate::plugin::WorkloadFailureSink>,
     workload_id: impl Into<String>,
     // The host-wide ceiling every core subscription on this host shares. The
@@ -1738,25 +2000,23 @@ pub(super) async fn spawn_core_subscriptions(
     // is the second one, and the only one that knows about the other
     // workloads. See `HostBacklogBudget`.
     host_budget: Arc<HostBacklogBudget>,
-    warm_sets: Arc<WarmSets>,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
-    let pre = CoreHandlerPre::new(instance_pre)?;
-    let warm_set = warm_sets.core.clone();
+    let target = HandlerTarget {
+        component_id: Arc::from(component_id),
+        pre: instance_pre,
+    };
     let workload_id = workload_id.into();
 
     for sub in subs {
         let conn = conn.clone();
         let in_flight = Arc::new(tokio::sync::Semaphore::new(conn.limits.max_in_flight));
         let workload = workload.clone();
-        let component_id = component_id.to_string();
-        let pre = pre.clone();
+        let target = target.clone();
         let cancel_token = cancel_token.clone();
-        let execution_meter = execution_meter.clone();
         let failure_sink = failure_sink.clone();
         let workload_id = workload_id.clone();
         let host_budget = host_budget.clone();
-        let warm_set = warm_set.clone();
 
         // Subscribed *here*, not inside the task below. The bind hook awaits
         // this function, and the workload is reported ready once it returns,
@@ -1832,75 +2092,54 @@ pub(super) async fn spawn_core_subscriptions(
                         // the host-wide total too.
                         backlog.dequeue(raw.length);
 
-                        // Warm when the component opted in, cold otherwise —
-                        // see the JetStream loop for the shape.
-                        let mut warmed = match warm_set.checkout() {
-                            Some(mut warmed) => {
-                                crate::engine::abandon::rearm_for_call(&mut warmed.handler.0);
-                                warmed
-                            }
-                            None => {
-                                let mut store = tokio::select! {
-                                    created = workload.new_store(&component_id) => match created {
-                                        Err(e) => {
-                                            warn!("failed to create store for {component_id}: {e}");
-                                            continue;
-                                        }
-                                        Ok(s) => s,
-                                    },
-                                    // Instantiating into a workload that is being torn
-                                    // down is work nobody will see the result of.
-                                    _ = cancel_token.cancelled() => break,
-                                };
-                                let proxy = tokio::select! {
-                                    instantiated = pre.instantiate(&mut store) => match instantiated {
-                                        Err(e) => {
-                                            warn!("failed to instantiate {component_id}: {e}");
-                                            continue;
-                                        }
-                                        Ok(p) => p,
-                                    },
-                                    _ = cancel_token.cancelled() => break,
-                                };
-                                super::warm::Warmed::fresh((store, proxy))
-                            }
-                        };
-                        waive_fuel_limit(&mut warmed.handler.0);
-
-                        let subject_label = raw.subject.to_string();
-                        let span = tracing::span!(
-                            tracing::Level::INFO,
-                            "incoming_nats_core_message",
-                            subject = %subject_label,
-                        );
-
                         // A responder answers on the inbox the requester chose,
                         // which no sane grant covers. This is what authorizes
                         // that one reply, for this inbox only.
                         if let Some(reply) = raw.reply.as_deref() {
                             conn.grant_reply(reply);
                         }
-                        let execution_meter = execution_meter.clone();
-                        let warm_set = warm_set.clone();
-                        tokio::spawn(async move {
-                            let _permit = permit;
-                            let (store, proxy) = (&mut warmed.handler.0, &warmed.handler.1);
-                            let result = execution_meter.observe(
-                                &[
+
+                        let subject_label = raw.subject.to_string();
+                        let msg = core_bindings::wasmcloud::nats::types::NatsMessage {
+                            subject: subject_label.clone(),
+                            reply_to: raw.reply.as_ref().map(|r| r.to_string()),
+                            body: raw.payload.to_vec(),
+                            headers: raw.headers.as_ref().map(nats_headers_to_core_wit),
+                        };
+                        let (reply, reply_rx) = tokio::sync::oneshot::channel();
+                        // Enforced out here, outside the store the guest runs
+                        // in, so a guest that never yields cannot hold off its
+                        // own deadline.
+                        let call = crate::engine::abandon::DispatchedCall::new(
+                            "wasmcloud:nats core delivery",
+                            crate::timeouts::ephemeral_call(),
+                        );
+                        let job: Box<dyn crate::engine::instance_driver::PluginJob> =
+                            Box::new(CoreDeliveryJob {
+                                msg,
+                                abandoned: call.flag(),
+                                reply,
+                                attributes: vec![
                                     KeyValue::new("plugin", PLUGIN_NATS_ID),
                                     KeyValue::new("subject", subject_label.clone()),
                                 ],
-                                store,
-                                async move |store| {
-                                    proxy
-                                        .call(store, &raw)
-                                        .instrument(span)
-                                        .await
-                                        .map_err(Into::into)
-                                },
-                            ).await;
+                            });
+                        let span = tracing::span!(
+                            tracing::Level::INFO,
+                            "incoming_nats_core_message",
+                            subject = %subject_label,
+                        );
+                        let workload = workload.clone();
+                        let target = target.clone();
+                        let delivery_cancel = cancel_token.clone();
+                        tokio::spawn(async move {
+                            let _permit = permit;
+                            let result = run_delivery(&workload, &target, job, reply_rx, call, &delivery_cancel)
+                                .instrument(span)
+                                .await;
                             // The handler's own error is the useful one; the
-                            // outer result only carries traps.
+                            // outer result carries traps and the host failures
+                            // that kept the delivery from reaching the guest.
                             match &result {
                                 Ok(Err(handler_err)) => warn!(
                                     subject = %subject_label,
@@ -1908,15 +2147,9 @@ pub(super) async fn spawn_core_subscriptions(
                                 ),
                                 Err(e) => warn!(
                                     subject = %subject_label,
-                                    "core handler trapped: {e}"
+                                    "core delivery failed: {e:#}"
                                 ),
                                 Ok(Ok(())) => {}
-                            }
-                            // A trap poisons the store; anything else may
-                            // serve the next delivery warm.
-                            match &result {
-                                Err(_) => drop(warmed),
-                                Ok(_) => warm_set.park(warmed),
                             }
                         });
                     }
@@ -1963,24 +2196,21 @@ pub(super) async fn spawn_kv_watches(
     conn: Arc<ConnHandle>,
     watches: Vec<KvWatchConfig>,
     cancel_token: CancellationToken,
-    execution_meter: ExecutionTimeMeter,
     _failure_sink: Option<crate::plugin::WorkloadFailureSink>,
     _workload_id: impl Into<String>,
-    warm_sets: Arc<WarmSets>,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
-    let pre = KvHandlerPre::new(instance_pre)?;
-    let warm_set = warm_sets.kv.clone();
+    let target = HandlerTarget {
+        component_id: Arc::from(component_id),
+        pre: instance_pre,
+    };
 
     for watch in watches {
         let conn = conn.clone();
         let in_flight = Arc::new(tokio::sync::Semaphore::new(conn.limits.max_in_flight));
         let workload = workload.clone();
-        let component_id = component_id.to_string();
-        let pre = pre.clone();
+        let target = target.clone();
         let cancel_token = cancel_token.clone();
-        let execution_meter = execution_meter.clone();
-        let warm_set = warm_set.clone();
 
         tokio::spawn(async move {
             // A KV watch is an ordered consumer underneath, which recovers
@@ -2156,79 +2386,43 @@ pub(super) async fn spawn_kv_watches(
                                 None => break,
                             };
 
-                            let bucket_name = watch.bucket.clone();
                             // Recorded before the entry moves into the handler
                             // task: this is where a rebuild resumes from.
                             last_revision = Some(entry.revision);
 
-                            // Warm when the component opted in, cold
-                            // otherwise — see the JetStream loop for the
-                            // shape.
-                            let mut warmed = match warm_set.checkout() {
-                                Some(mut warmed) => {
-                                    crate::engine::abandon::rearm_for_call(
-                                        &mut warmed.handler.0,
-                                    );
-                                    warmed
-                                }
-                                None => {
-                                    let mut store = tokio::select! {
-                                        created = workload.new_store(&component_id) => match created {
-                                            Err(e) => {
-                                                warn!("failed to create store for {component_id}: {e}");
-                                                continue;
-                                            }
-                                            Ok(s) => s,
-                                        },
-                                        // Instantiating into a workload that is being
-                                        // torn down is work nobody will see the result
-                                        // of.
-                                        _ = cancel_token.cancelled() => break 'watch,
-                                    };
-                                    let proxy = tokio::select! {
-                                        instantiated = pre.instantiate(&mut store) => match instantiated {
-                                            Err(e) => {
-                                                warn!("failed to instantiate {component_id}: {e}");
-                                                continue;
-                                            }
-                                            Ok(p) => p,
-                                        },
-                                        _ = cancel_token.cancelled() => break 'watch,
-                                    };
-                                    super::warm::Warmed::fresh((store, proxy))
-                                }
-                            };
-                            waive_fuel_limit(&mut warmed.handler.0);
-
+                            let bucket_for_label = watch.bucket.clone();
                             let key_label = entry.key.clone();
-                            let span = tracing::span!(
-                                tracing::Level::INFO,
-                                "incoming_nats_kv_event",
-                                bucket = %bucket_name,
-                                key = %key_label,
+                            let (reply, reply_rx) = tokio::sync::oneshot::channel();
+                            let call = crate::engine::abandon::DispatchedCall::new(
+                                "wasmcloud:nats kv delivery",
+                                crate::timeouts::ephemeral_call(),
                             );
-
-                            let execution_meter = execution_meter.clone();
-                            let warm_set = warm_set.clone();
-                            tokio::spawn(async move {
-                                let _permit = permit;
-                                let bucket_for_label = bucket_name.clone();
-                                let (store, proxy) =
-                                    (&mut warmed.handler.0, &warmed.handler.1);
-                                let result = execution_meter.observe(
-                                    &[
+                            let job: Box<dyn crate::engine::instance_driver::PluginJob> =
+                                Box::new(KvDeliveryJob {
+                                    bucket: bucket_for_label.clone(),
+                                    entry: kv_entry_to_kv_handler_wit(&entry),
+                                    abandoned: call.flag(),
+                                    reply,
+                                    attributes: vec![
                                         KeyValue::new("plugin", PLUGIN_NATS_ID),
                                         KeyValue::new("bucket", bucket_for_label.clone()),
                                     ],
-                                    store,
-                                    async move |store| {
-                                        proxy
-                                            .call(store, &bucket_name, &entry)
-                                            .instrument(span)
-                                            .await
-                                            .map_err(Into::into)
-                                    },
-                                ).await;
+                                });
+                            let span = tracing::span!(
+                                tracing::Level::INFO,
+                                "incoming_nats_kv_event",
+                                bucket = %bucket_for_label,
+                                key = %key_label,
+                            );
+                            let workload = workload.clone();
+                            let target = target.clone();
+                            let delivery_cancel = cancel_token.clone();
+                            tokio::spawn(async move {
+                                let _permit = permit;
+                                let result =
+                                    run_delivery(&workload, &target, job, reply_rx, call, &delivery_cancel)
+                                        .instrument(span)
+                                        .await;
                                 match &result {
                                     Ok(Err(handler_err)) => warn!(
                                         bucket = %bucket_for_label,
@@ -2238,15 +2432,9 @@ pub(super) async fn spawn_kv_watches(
                                     Err(e) => warn!(
                                         bucket = %bucket_for_label,
                                         key = %key_label,
-                                        "KV handler trapped: {e}"
+                                        "KV event delivery failed: {e:#}"
                                     ),
                                     Ok(Ok(())) => {}
-                                }
-                                // A trap poisons the store; anything else may
-                                // serve the next event warm.
-                                match &result {
-                                    Err(_) => drop(warmed),
-                                    Ok(_) => warm_set.park(warmed),
                                 }
                             });
                         }

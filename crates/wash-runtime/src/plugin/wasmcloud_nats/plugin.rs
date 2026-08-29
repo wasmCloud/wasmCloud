@@ -546,11 +546,9 @@ impl WasmcloudNats {
                 handle.clone(),
                 core_subs,
                 cancel_token.clone(),
-                execution_meter.clone(),
                 failure_sink.clone(),
                 workload_id,
                 self.host_backlog.clone(),
-                warm_sets.clone(),
             )
             .await?;
         }
@@ -561,10 +559,8 @@ impl WasmcloudNats {
                 handle,
                 kv_watches,
                 cancel_token,
-                execution_meter,
                 failure_sink,
                 workload_id,
-                warm_sets,
             )
             .await?;
         }
