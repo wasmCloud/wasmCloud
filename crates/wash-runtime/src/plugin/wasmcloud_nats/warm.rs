@@ -1,4 +1,4 @@
-//! Warm handler instances for the NATS delivery loops.
+//! Warm handler instances for the JetStream delivery loop.
 //!
 //! Every delivery loop in [`super::subscriber`] built, instantiated, invoked
 //! and dropped a store per message. That keeps guest state ephemeral — the
@@ -10,13 +10,17 @@
 //!
 //! The engine already has an opt-in for exactly this — `poolSize`,
 //! `maxInvocations`, `maxConcurrency` on the component, decoded once into
-//! [`InstancePolicy`] — but it fed only the [`InstanceJob`] paths (inbound
-//! HTTP and linked calls), so the three knobs silently did nothing for a NATS
-//! workload. A NATS delivery cannot become an [`InstanceJob`]: its call
-//! carries a typed resource (the JetStream message handle) that must be pushed
-//! into the very store that will run the call, and its settle-ack ownership
-//! and rebuild resume point live in the subscription loop. So the subscriber
-//! keeps a warm set of its own, honouring the same declaration:
+//! [`InstancePolicy`] — and core and KV deliveries take it: they cross as an
+//! [`InstanceJob::Plugin`] and the pool routes them like any other call.
+//! **JetStream
+//! cannot.** Its call carries a `message-handle` resource, which is an index
+//! into one store's resource table, so the argument cannot be built until the
+//! store is chosen — and a job the pool hands back has already been pushed
+//! into a table it no longer belongs to. Its settle-ack ownership and its
+//! rebuild resume point live in the subscription loop for the same reason.
+//!
+//! So the JetStream loop alone keeps a warm set, honouring the same
+//! declaration:
 //!
 //! * `pool_size` — instances parked between deliveries. A delivery finding
 //!   none idle builds a one-shot store exactly as before, so pooling never
@@ -27,9 +31,12 @@
 //!   has served that many, so guest state (and any message-handle resources a
 //!   guest leaked into the store's table) cannot accumulate forever.
 //! * `max_concurrency` — **not honoured per instance here.** These are
-//!   checkout instances: one call at a time each, which is `max_concurrency`'s
-//!   default. Deliveries beyond the idle set are served from one-shot stores,
-//!   so a value above 1 loses no throughput; it just does not multiply reuse.
+//!   checkout instances: the proxy call takes `&mut Store`, so one call at a
+//!   time each, which is `max_concurrency`'s default. Deliveries beyond the
+//!   idle set are served from one-shot stores, so a value above 1 loses no
+//!   throughput; it just does not multiply reuse. Core and KV deliveries do
+//!   honour it, because the driver holds the store in one long
+//!   `run_concurrent` and their calls arrive as tasks on it.
 //!
 //! A trapped store is poison — it can no longer enter any component instance —
 //! so a call that traps drops its store instead of parking it, and the next

@@ -2011,9 +2011,16 @@ async fn invoke_component_handler(
                 Err(InstanceJob::Http(job)) => job.req,
                 // A job comes back as the variant it went in as, so this is
                 // unreachable — but not worth a panic on a request path.
-                Err(InstanceJob::Linked(_)) => {
-                    debug_assert!(false, "an HTTP job cannot come back as a linked one");
-                    anyhow::bail!("instance pool returned a linked job for an HTTP request");
+                Err(other) => {
+                    debug_assert!(false, "an HTTP job cannot come back as another kind");
+                    anyhow::bail!(
+                        "instance pool returned a {} job for an HTTP request",
+                        match other {
+                            InstanceJob::Linked(_) => "linked",
+                            InstanceJob::Plugin(_) => "plugin",
+                            InstanceJob::Http(_) => "http",
+                        }
+                    );
                 }
             }
         } else {

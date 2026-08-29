@@ -43,6 +43,8 @@
 //! with it, so every call in flight on that instance fails rather than just
 //! one. That is bounded by `max_concurrency`, and by `1/pool_size` of the pool.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -79,6 +81,101 @@ pub(crate) enum InstanceJob {
     Http(Box<ServiceHttpJob>),
     /// A call from another component in the workload.
     Linked(Box<LinkedJob>),
+    /// A call a host plugin supplies, made on a pooled instance.
+    ///
+    /// The engine routes it like any other job and never looks inside: the
+    /// plugin keeps its own payload and makes its own typed call. That is what
+    /// lets a delivery carry, say, a NATS message's bytes rather than the one
+    /// 48-byte [`Val`] per byte a store-independent lowering would cost.
+    Plugin(Box<dyn PluginJob>),
+}
+
+/// A call a plugin hands to the pool, run on whichever instance is free.
+///
+/// Implemented by the plugin so the engine needs none of its types. The
+/// plugin's own bindgen call takes an [`Accessor`] rather than a `&mut Store`,
+/// so it runs inside the driver's long-lived `run_concurrent` exactly as a
+/// linked call does — several at a time on one instance, up to
+/// `max_concurrency`.
+pub(crate) trait PluginJob: Send + 'static {
+    /// Names this job in a driver log line.
+    fn describe(&self) -> &str;
+
+    /// Runs the call. Owns replying to whoever is waiting for it, and may
+    /// retire the instance through `slot` when it ends leaving guest state
+    /// indeterminate — the same contract [`LinkedTask`] follows.
+    fn run<'a>(
+        self: Box<Self>,
+        accessor: &'a Accessor<SharedCtx>,
+        instance: Instance,
+        slot: Option<PoolSlot>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+}
+
+/// Measures the guest execution one pooled call adds, and records it when
+/// dropped.
+///
+/// Every pooled call is metered, not just the ones a plugin remembered to wrap:
+/// `guest.execution.time` is the only signal an operator has for what a warm
+/// instance is spending, and a histogram whose population depends on which
+/// call site opted in cannot be read as a distribution.
+///
+/// Recording on drop is what makes it cover a call that ends by trapping or
+/// timing out — the two an operator most wants in the histogram, and the two an
+/// early return would otherwise skip.
+///
+/// Started once the export has resolved, not before: a call that never reached
+/// guest code has no execution to report, and recording it anyway would put a
+/// 0ms observation in the same bucket as a genuinely fast call.
+///
+/// A plugin serving a call from a store of its own — because the component
+/// declared no pool, or because every instance was busy — starts one of these
+/// too, so a component's measurements do not depend on whether it opted into
+/// pooling.
+pub(crate) struct ExecutionSample {
+    executed: Arc<crate::engine::abandon::GuestExecution>,
+    before: u64,
+    attributes: Vec<opentelemetry::KeyValue>,
+}
+
+impl ExecutionSample {
+    pub(crate) fn start(
+        accessor: &Accessor<SharedCtx>,
+        attributes: Vec<opentelemetry::KeyValue>,
+    ) -> Self {
+        let executed = accessor.with(|mut access| Arc::clone(&access.get().executed));
+        let before = executed.millis();
+        Self {
+            executed,
+            before,
+            attributes,
+        }
+    }
+}
+
+impl Drop for ExecutionSample {
+    fn drop(&mut self) {
+        if let Some(meter) = crate::observability::execution_time_meter() {
+            meter.record(
+                &self.attributes,
+                self.executed.millis().saturating_sub(self.before),
+            );
+        }
+    }
+}
+
+/// Drives one [`PluginJob`] as an ordinary pooled task.
+struct PluginTask {
+    instance: Instance,
+    job: Box<dyn PluginJob>,
+    slot: PoolSlot,
+}
+
+impl AccessorTask<SharedCtx> for PluginTask {
+    async fn run(self, accessor: &Accessor<SharedCtx>) -> wasmtime::Result<()> {
+        self.job.run(accessor, self.instance, Some(self.slot)).await;
+        Ok(())
+    }
 }
 
 /// What an instance's driver handle and the calls running on it share: how many
@@ -164,7 +261,6 @@ impl AccessorTask<SharedCtx> for LinkedTask {
             crate::engine::abandon::rearm_for_call(&mut access);
             Arc::clone(&access.get().abandoned)
         });
-
         let func = accessor.with(|mut access| {
             instance
                 .get_func(&mut access, func_idx)
@@ -338,6 +434,14 @@ impl InstanceDriver {
                                 })
                             }
                             InstanceJob::Linked(job) => accessor.spawn(LinkedTask {
+                                instance,
+                                job,
+                                slot: PoolSlot {
+                                    state: Arc::clone(&task_state),
+                                    _in_flight: guard,
+                                },
+                            }),
+                            InstanceJob::Plugin(job) => accessor.spawn(PluginTask {
                                 instance,
                                 job,
                                 slot: PoolSlot {

@@ -161,13 +161,41 @@ pub struct Meters {
     pub meters: HashMap<String, Arc<dyn Any + Send + Sync + 'static>>,
 }
 
+/// The execution-time histogram, reachable without a `Meters` in hand.
+///
+/// A pooled call runs inside the driver's `run_concurrent`, several layers
+/// below anything holding a `Meters`, and carrying one down to every driver
+/// would thread a metric through the engine's whole dispatch path. The
+/// histogram is a handle rather than host state — OTel's own meter registry is
+/// process-global for the same reason — so it is published here once and read
+/// where a call actually ends.
+static EXECUTION_TIME: std::sync::OnceLock<ExecutionTimeMeter> = std::sync::OnceLock::new();
+
+/// The execution-time meter, once a host has built its [`Meters`].
+///
+/// `None` before that, and on a host that did not enable metering the meter
+/// itself is inert, so a caller never has to ask which.
+pub fn execution_time_meter() -> Option<&'static ExecutionTimeMeter> {
+    EXECUTION_TIME.get()
+}
+
 impl Meters {
     pub fn new(enabled: bool) -> Self {
-        Self {
+        let meters = Self {
             fuel_consumption: FuelConsumptionMeter::new(enabled),
             execution_time: ExecutionTimeMeter::new(enabled),
             meters: Default::default(),
+        };
+        // First host with metering on wins. A second one in the same process
+        // (tests, an embedder running two) records into the first's histogram,
+        // which is the same instrument OTel would have handed it anyway.
+        // Skipping the disabled ones matters: a host built with metering off
+        // would otherwise claim the slot and silence every pooled call after
+        // it, including calls on a later host that did ask for metrics.
+        if enabled {
+            let _ = EXECUTION_TIME.set(meters.execution_time.clone());
         }
+        meters
     }
 }
 
@@ -247,6 +275,22 @@ impl ExecutionTimeMeter {
                 .build()
         });
         Self { hist }
+    }
+
+    /// Records the guest execution one call added, measured by the caller.
+    ///
+    /// The store-taking [`Self::observe`] cannot be used from inside a pooled
+    /// call: the driver owns the store for the instance's whole life and calls
+    /// arrive as tasks on it, so nobody down there has a `&mut Store`. Read
+    /// `SharedCtx::executed` through the accessor either side of the call and
+    /// hand the delta here instead. Same counter, same caveats — read
+    /// [`crate::engine::abandon::GuestExecution`] before reading the number,
+    /// and note that on an instance serving several calls at once the delta
+    /// includes its neighbours'.
+    pub fn record(&self, attributes: &[KeyValue], millis: u64) {
+        if let Some(hist) = &self.hist {
+            hist.record(millis, attributes);
+        }
     }
 
     pub async fn observe<F, R>(
