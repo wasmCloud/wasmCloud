@@ -22,6 +22,15 @@
 //!     admission_wait: "5m"     # this handler is slow on purpose
 //! ```
 //!
+//! # Instance limits
+//!
+//! A component exporting the async `wasmcloud:messaging/handler@0.3.0` serves
+//! its deliveries on the workload's instance pool, so the `poolSize`,
+//! `maxInvocations` and `maxConcurrency` it declares mean here what they mean
+//! for inbound HTTP and linked calls — see [`crate::engine::instance_driver`].
+//! A component exporting the sync `@0.2.0` handler cannot: its call holds the
+//! store for its whole length, so it keeps an instance per message.
+//!
 //! `max_in_flight` is a **per-component total**, unlike `max_concurrency`
 //! (per warm instance), and is separately bounded by the host-wide ceiling —
 //! see [`MessagingLimits`]. It is a total for the *component*, not for one
@@ -222,6 +231,143 @@ where
 /// this cap only stops runaway streams.
 const MAX_COLLECTED_BODY_BYTES: usize = 16 * 1024 * 1024;
 
+/// Report one delivery's outcome.
+///
+/// The handler's own error is the useful one; the outer result carries traps
+/// and the host failures that kept the delivery from reaching the guest. Both
+/// backends and both delivery shapes report through this, so a message that
+/// failed reads the same however it was served.
+pub(crate) fn log_delivery(result: &anyhow::Result<Result<(), String>>) {
+    match result {
+        Ok(Ok(())) => tracing::debug!("message handled successfully"),
+        Ok(Err(handler_err)) => {
+            tracing::warn!("messaging handler returned an error: {handler_err}")
+        }
+        Err(e) => tracing::warn!("message delivery failed: {e:#}"),
+    }
+}
+
+/// Runs one `@0.3.0` delivery: through the workload's instance pool when the
+/// component opted into pooling, and in a store of its own when every warm
+/// instance is busy.
+///
+/// The job crosses as [`InstanceJob::Messaging`], so a message takes the same
+/// path as inbound HTTP and linked calls and honours the same `poolSize`,
+/// `maxInvocations` and `maxConcurrency` the component declared — including
+/// several deliveries in flight on one instance, which per-message stores can
+/// never do.
+///
+/// The same job runs either way: a delivery the pool declines is not rebuilt,
+/// it is handed back and run in a fresh store, so a large payload is never
+/// copied to pay for the attempt.
+///
+/// Only `@0.3.0` reaches here. The sync `@0.2.0` handler takes `&mut Store` for
+/// the length of its call, so it cannot share an instance and keeps a store per
+/// message.
+pub(crate) async fn deliver_pooled(
+    workload: &crate::engine::workload::ResolvedWorkload,
+    component_id: &str,
+    pre: &wasmtime::component::InstancePre<crate::engine::ctx::SharedCtx>,
+    pool: &Arc<crate::engine::instance_pool::InstancePool>,
+    msg: crate::host::trigger_service::BrokerMessage,
+    attributes: Vec<KeyValue>,
+) -> anyhow::Result<Result<(), String>> {
+    use crate::engine::instance_driver::InstanceJob;
+    use crate::engine::instance_pool::{ComponentInstance, Dispatch};
+    use crate::host::trigger_service::{MessagingJob, MessagingTask};
+
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    // Enforced out here, outside the store the guest runs in, so a guest that
+    // never yields cannot hold off its own deadline.
+    let call = crate::engine::abandon::DispatchedCall::new(
+        "messaging (pooled)",
+        crate::timeouts::messaging_deliver(),
+    );
+    let job = MessagingJob {
+        msg,
+        result_tx,
+        abandoned: call.flag(),
+        attributes,
+    };
+
+    let declined = match pool.try_dispatch(InstanceJob::Messaging(Box::new(job))) {
+        Dispatch::Sent => None,
+        // Built out here, where awaiting is allowed and where a component that
+        // fails to instantiate reports it to this delivery rather than only to
+        // the log.
+        Dispatch::NeedsInstance(job) => {
+            let mut store = workload.new_store(component_id).await?;
+            crate::engine::waive_fuel_limit(&mut store);
+            let instance = pre.instantiate_async(&mut store).await?;
+            pool.dispatch_on_new(ComponentInstance { store, instance }, job)
+                .err()
+        }
+        Dispatch::Saturated(job) => Some(job),
+    };
+
+    let Some(declined) = declined else {
+        return call
+            .await_reply(result_rx)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("pooled instance produced no message response in time"))?
+            .map_err(|_| anyhow::anyhow!("pooled instance dropped the message response"));
+    };
+
+    // Every instance was busy and the pool is full, so run the very same job in
+    // a store of its own.
+    let InstanceJob::Messaging(job) = declined else {
+        anyhow::bail!("instance pool returned the wrong job kind for a message");
+    };
+    tracing::debug!(component_id, "warm instances saturated; own store");
+
+    let mut store = workload.new_store(component_id).await?;
+    crate::engine::waive_fuel_limit(&mut store);
+    let instance = pre.instantiate_async(&mut store).await?;
+    let handler = Arc::new(
+        crate::host::trigger_service::AsyncMessaging::new(&mut store, &instance).map_err(|e| {
+            anyhow::anyhow!("component does not export wasmcloud:messaging/handler@0.3.0: {e:#}")
+        })?,
+    );
+    let MessagingJob {
+        msg,
+        result_tx,
+        abandoned,
+        attributes,
+    } = *job;
+    // Awaited through the same `DispatchedCall` the pooled path uses: `arm_after`
+    // runs inside `await_reply`, so a cold delivery that skipped it would be
+    // unbounded while looking bounded. No pool slot — the store goes when this
+    // future is dropped, which is what ends the guest's work.
+    let task = MessagingTask {
+        handler,
+        msg,
+        result_tx,
+        abandoned,
+        attributes,
+        pool_slot: None,
+    };
+    // Two unwraps, not one: the outer is `run_concurrent` faulting, the inner
+    // the task's own trap.
+    call.await_reply(store.run_concurrent(async move |accessor| {
+        wasmtime::component::AccessorTask::run(task, accessor).await
+    }))
+    .await
+    .ok_or_else(|| anyhow::anyhow!("delivery produced no message response in time"))?
+    .map_err(|e| anyhow::anyhow!("{e:#}"))?
+    .map_err(|e| anyhow::anyhow!("{e:#}"))?;
+    result_rx
+        .await
+        .map_err(|_| anyhow::anyhow!("delivery task dropped the message response"))
+}
+
+/// The WIT export a delivery invokes, and what its measurements are grouped by.
+/// Bounded by the interface set, so it is safe as a metric attribute — unlike
+/// the concrete subject, which stays on the span and the logs.
+///
+/// One string for every backend and both delivery shapes, so a dashboard reads
+/// a service's deliveries and a pooled component's as the same operation.
+pub(crate) const MESSAGING_OPERATION: &str = "wasmcloud:messaging/handler#handle-message";
+
 /// Mint a `stream<u8>` carrying `bytes`, for handing a message body to a guest.
 pub(crate) fn mint_body<T, D>(
     accessor: &wasmtime::component::Accessor<T, D>,
@@ -247,6 +393,55 @@ where
 /// is written once here.
 macro_rules! messaging_handler_dispatch {
     (sync: $sync:ident, async: $async:ident $(,)?) => {
+        /// A component's messaging handler, resolved once where the
+        /// subscription is set up rather than once per message.
+        ///
+        /// Both halves come from the same `InstancePre`: `pre` is the
+        /// revision-typed view the per-message store path calls through, and
+        /// `instance_pre` is what the instance pool instantiates a warm
+        /// instance from — the pool binds its own typed view.
+        struct HandlerTarget {
+            handler: HandlerPre,
+            instance_pre: wasmtime::component::InstancePre<$crate::engine::ctx::SharedCtx>,
+        }
+
+        impl HandlerTarget {
+            fn new(
+                instance_pre: wasmtime::component::InstancePre<$crate::engine::ctx::SharedCtx>,
+            ) -> wasmtime::Result<Self> {
+                Ok(Self {
+                    handler: HandlerPre::new(instance_pre.clone())?,
+                    instance_pre,
+                })
+            }
+
+            /// Whether this component exports the async `@0.3.0` handler, the
+            /// only revision a pooled instance can serve: its call takes an
+            /// `Accessor`, so deliveries share one instance up to
+            /// `max_concurrency`. The sync `@0.2.0` export holds `&mut Store`
+            /// for the length of its call and keeps its per-message store.
+            fn serves_async(&self) -> bool {
+                matches!(self.handler, HandlerPre::V0_3(_))
+            }
+
+            /// What the instance pool instantiates a warm instance from. The
+            /// pool binds its own typed view over the result, so this is the
+            /// raw pre rather than the revision-typed one.
+            fn instance_pre(
+                &self,
+            ) -> &wasmtime::component::InstancePre<$crate::engine::ctx::SharedCtx> {
+                &self.instance_pre
+            }
+
+            /// Instantiate for one message, on the per-message store path.
+            async fn instantiate(
+                &self,
+                store: &mut wasmtime::Store<$crate::engine::ctx::SharedCtx>,
+            ) -> wasmtime::Result<HandlerProxy> {
+                self.handler.instantiate(store).await
+            }
+        }
+
         /// A pre-instantiated messaging handler component, at whichever revision
         /// of `wasmcloud:messaging/handler` it exports.
         enum HandlerPre {
@@ -367,10 +562,13 @@ pub(crate) use messaging_handler_dispatch;
 /// What an unset per-component ceiling resolves to **when pooling is
 /// disabled**: how many messages one component may process at once.
 ///
-/// A messaging-triggered component gets a fresh instance per message, so this
-/// is equally a ceiling on instances. 32 of a Componentize-Go component (the
-/// worst measured shape, at 5 core instances each) is 160 core instances —
-/// a bound on one workload's blast radius.
+/// A messaging-triggered component that declared no `poolSize` gets a fresh
+/// instance per message, so for those this is equally a ceiling on instances.
+/// 32 of a Componentize-Go component (the worst measured shape, at 5 core
+/// instances each) is 160 core instances — a bound on one workload's blast
+/// radius. A component that *did* declare `poolSize` is bounded by that
+/// instead: its deliveries run on warm instances, and only the ones arriving
+/// once every instance is busy build a store of their own.
 ///
 /// On a pooled host this constant does not apply: `per_component_ceiling`
 /// divides whatever host total is in force, so the number moves with the pool

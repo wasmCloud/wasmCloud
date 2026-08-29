@@ -634,7 +634,7 @@ impl HostPlugin for InMemoryMessaging {
         // instead. Only components get a `MessagingPre` for per-message work.
         let pre = match workload.instantiate_pre(component_id).await {
             Ok(instance_pre) => Some(
-                HandlerPre::new(instance_pre)
+                HandlerTarget::new(instance_pre)
                     .map_err(anyhow::Error::from)
                     .context("failed to instantiate messaging pre")?,
             ),
@@ -652,6 +652,12 @@ impl HostPlugin for InMemoryMessaging {
         // Spawn the message processing task
         let task_component_id = component_id.clone();
         let fuel_meter = self.meters.read().await.fuel_consumption.clone();
+        // As in the NATS backend: bounded labels only, so the subject stays
+        // on the span rather than minting a time series per value.
+        let attributes = vec![
+            KeyValue::new("plugin", PLUGIN_MESSAGING_MEMORY_ID),
+            KeyValue::new("operation", super::MESSAGING_OPERATION),
+        ];
 
         let handle = tokio::spawn(async move {
             // Labelled so the inner drain below can end the whole task on
@@ -688,7 +694,11 @@ impl HostPlugin for InMemoryMessaging {
                             };
                             match workload
                                 .http_handler()
-                                .deliver_trigger_service_message(workload.id(), broker)
+                                .deliver_trigger_service_message(
+                                    workload.id(),
+                                    broker,
+                                    attributes.clone(),
+                                )
                                 .await
                             {
                                 Ok(Ok(())) => debug!(subject = %msg.subject, "trigger service handled message"),
@@ -711,9 +721,8 @@ impl HostPlugin for InMemoryMessaging {
                             continue;
                         };
 
-                        // Admission. Taken BEFORE the store and instance are
-                        // built and held until the handler returns, so permits
-                        // held and instances alive are the same number. Mirrors
+                        // Admission. Taken BEFORE any store or instance is
+                        // built and held until the handler returns. Mirrors
                         // the NATS backend exactly; see `Admission::acquire`
                         // for why the component level is taken before the host
                         // one, and `DEFAULT_ADMISSION_WAIT` for why the wait is
@@ -761,6 +770,52 @@ impl HostPlugin for InMemoryMessaging {
                             }
                         };
 
+                        let span = tracing::span!(
+                            tracing::Level::INFO,
+                            "incoming_wasmcloud_message_memory",
+                            subject = %msg.subject,
+                            reply_to = %msg.reply_to.as_deref().unwrap_or("<none>"),
+                        );
+
+                        // As in the NATS backend: an async `@0.3.0` handler on
+                        // a component that opted into pooling is served on a
+                        // warm instance, honouring the limits it declared.
+                        // Everything else keeps a store per message.
+                        let pool = if pre.serves_async() {
+                            workload.instance_pool_for_component(&component_id).await
+                        } else {
+                            None
+                        };
+
+                        if let Some(pool) = pool {
+                            let broker = crate::host::trigger_service::BrokerMessage {
+                                subject: msg.subject,
+                                body: msg.body,
+                                reply_to: msg.reply_to,
+                            };
+                            let attributes = attributes.clone();
+                            let workload = workload.clone();
+                            let component_id = component_id.clone();
+                            let instance_pre = pre.instance_pre().clone();
+                            tokio::spawn(async move {
+                                // Released on completion, trap or not — which
+                                // is what frees the slot this message holds.
+                                let _permit = permit;
+                                let result = super::deliver_pooled(
+                                    &workload,
+                                    &component_id,
+                                    &instance_pre,
+                                    &pool,
+                                    broker,
+                                    attributes,
+                                )
+                                .instrument(span)
+                                .await;
+                                super::log_delivery(&result);
+                            });
+                            continue;
+                        }
+
                         let mut store = match workload.new_store(&component_id).await {
                             Err(e) => {
                                 warn!("failed to create store for component {component_id}: {e}");
@@ -776,13 +831,6 @@ impl HostPlugin for InMemoryMessaging {
                             }
                             Ok(p) => p,
                         };
-
-                        let span = tracing::span!(
-                            tracing::Level::INFO,
-                            "incoming_wasmcloud_message_memory",
-                            subject = %msg.subject,
-                            reply_to = %msg.reply_to.as_deref().unwrap_or("<none>"),
-                        );
 
                         let fuel_meter = fuel_meter.clone();
 
@@ -816,14 +864,7 @@ impl HostPlugin for InMemoryMessaging {
                                 }
                             ).await;
 
-                            match result {
-                                Ok(_) => {
-                                    debug!("Message handled successfully");
-                                }
-                                Err(e) => {
-                                    warn!("Error handling message: {e}");
-                                }
-                            };
+                            super::log_delivery(&result);
                         });
                         }
                     }
