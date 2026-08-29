@@ -486,15 +486,20 @@ pub struct HostPluginConfig {
     /// Whether a workload's own `interface-binding` config may set keys this
     /// plugin considers the host's.
     ///
-    /// `allow` (the default, and the behavior before this existed) layers a
-    /// workload's config over the operator's. `deny` makes this entry the whole
-    /// allowlist: a workload that sets a host-owned key, or names a binding
-    /// absent from `bindings`, fails to deploy.
+    /// `deny` (the default) makes this entry the whole allowlist: a workload
+    /// that sets a host-owned key, or that names a binding absent from
+    /// `bindings` once any binding is declared, fails to deploy. `allow` layers
+    /// a workload's config over the operator's instead.
+    ///
+    /// `deny` only bites where something is declared: a plugin that names no
+    /// keys in code, under an entry that sets none, owns nothing and refuses
+    /// nothing.
     #[serde(default, skip_serializing_if = "WorkloadConfigPolicy::is_default")]
     pub workload_config: WorkloadConfigPolicy,
     /// Extra keys this operator claims for the host under `workloadConfig:
     /// deny`, on top of the ones the plugin declares in code and the ones this
-    /// entry actually sets.
+    /// entry actually sets. A plugin that closed its schema will refuse a key
+    /// it does not read, so this names real keys, not arbitrary ones.
     ///
     /// The point is the keys left *unset*: without this, an allowlist the
     /// operator never wrote would fall through to whatever the workload wrote.
@@ -567,11 +572,14 @@ pub struct PluginBindingConfig {
 #[serde(rename_all = "kebab-case")]
 pub enum WorkloadConfigPolicy {
     /// A workload's own interface config may set host-owned keys, over the
-    /// operator's. The default: denying keys nothing else supplies would leave
-    /// every binding of every plugin unusable.
-    #[default]
+    /// operator's.
     Allow,
     /// Host-owned keys come only from the operator.
+    ///
+    /// The default. It refuses nothing where nothing is declared — a plugin
+    /// that names no keys of its own, under an entry that sets none, owns none
+    /// — so it is the stricter default without being a breaking one.
+    #[default]
     Deny,
 }
 
@@ -2654,6 +2662,35 @@ host:
         let owned = set.effective_host_owned(&wash_runtime::plugin::BindingSchema::empty());
         assert!(owned.contains("inbox-prefix"));
         assert!(owned.contains("subject-allow"));
+    }
+
+    #[test]
+    fn workload_config_defaults_to_deny_when_the_key_is_omitted() {
+        // Stricter by default, and non-breaking because it refuses nothing
+        // where nothing is declared.
+        let yaml = r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+    - id: relaxed
+      workloadConfig: allow
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let host = config.host();
+        assert_eq!(host.plugins[0].workload_config, WorkloadConfigPolicy::Deny);
+        assert_eq!(host.plugins[1].workload_config, WorkloadConfigPolicy::Allow);
+
+        let bindings = host
+            .to_plugin_bindings(&config, Path::new("."), None)
+            .unwrap();
+        assert_eq!(
+            bindings.for_plugin("wasmcloud-nats").workload_config(),
+            wash_runtime::plugin::WorkloadConfigPolicy::Deny
+        );
+        assert_eq!(
+            bindings.for_plugin("relaxed").workload_config(),
+            wash_runtime::plugin::WorkloadConfigPolicy::Allow
+        );
     }
 
     #[test]

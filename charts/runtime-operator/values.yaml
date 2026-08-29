@@ -492,12 +492,17 @@ runtime:
       #
       # Beyond a component entry's own fields, every entry may set:
       #
-      #   workloadConfig  `allow` (default) or `deny`. Under `deny`, keys this
+      #   workloadConfig  `deny` (default) or `allow`. Under `deny`, keys this
       #                   plugin considers the host's come only from here: a
       #                   workload that sets one, or that names a binding
-      #                   absent from `bindings`, fails to deploy. Under
-      #                   `allow` a workload's own interface config layers over
-      #                   what is declared here.
+      #                   absent from `bindings` once any binding is declared,
+      #                   fails to deploy. Under `allow` a workload's own
+      #                   interface config layers over what is declared here.
+      #
+      #                   `deny` refuses nothing where nothing is declared, so
+      #                   it is safe as the default: a plugin that names no
+      #                   keys of its own, under an entry that sets none, owns
+      #                   none.
       #   hostOwnedKeys   extra keys claimed for the host under `deny`, on top
       #                   of the ones the plugin declares in code and the ones
       #                   this entry sets. The point is the keys left *unset* —
@@ -515,7 +520,6 @@ runtime:
       #
       #   plugins:
       #     - id: wasmcloud-nats           # native: no image/file
-      #       workloadConfig: deny
       #       config:
       #         servers: nats://nats.default.svc:4222
       #       bindings:
@@ -527,7 +531,6 @@ runtime:
       #     - id: wasmcloud-secrets        # component: has a source
       #       image: ghcr.io/wasmcloud/plugins/secrets:0.1.0
       #       allowedHosts: [vault.internal]
-      #       workloadConfig: deny
       #       hostOwnedKeys: [vault-addr, vault-role]
       #       bindings:
       #         prod:

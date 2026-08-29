@@ -37,14 +37,18 @@ pub fn canonical_key(key: &str) -> String {
 pub enum WorkloadConfigPolicy {
     /// A workload's own `interface-binding` config supplies it, with the
     /// operator's declaration as a default beneath it.
-    ///
-    /// The default, and what every plugin got before this existed: denying keys
-    /// nothing else supplies would leave a binding unusable.
-    #[default]
     Allow,
     /// Host-owned keys come only from the operator. A workload that sets one is
-    /// refused at bind, and a workload that names a binding the operator did
-    /// not declare is refused rather than handed the base config.
+    /// refused at bind, and — once the operator has declared any binding for
+    /// this plugin — a workload naming a binding absent from that declaration
+    /// is refused rather than handed the base config.
+    ///
+    /// The default. It costs nothing where nothing is declared: with no
+    /// [`BindingSchema`] and no operator config, the host owns no keys and
+    /// claims no binding names, so `Deny` refuses exactly what `Allow` does
+    /// (nothing). Strictness arrives the moment a plugin names its own keys or
+    /// an operator writes a `host.plugins` entry — which is when it is wanted.
+    #[default]
     Deny,
 }
 
@@ -83,39 +87,69 @@ impl std::str::FromStr for WorkloadConfigPolicy {
     }
 }
 
-/// What a plugin declares about its own config keys.
+/// What a plugin declares about its own config keys: which are the host's, and
+/// — optionally — the complete set it reads at all.
 ///
-/// A plugin compiles in the keys that decide where a binding connects, as whom,
-/// and what it may reach — the ones an operator running under
-/// [`WorkloadConfigPolicy::Deny`] must own even when nothing set them. Everything
-/// else (a subscription list, a timeout) stays the workload's to write.
+/// `host_owned` are the keys that decide where a binding connects, as whom, and
+/// what it may reach: the ones an operator running under
+/// [`WorkloadConfigPolicy::Deny`] must own even when nothing set them.
+/// Everything else (a subscription list, a timeout) stays the workload's to
+/// write and belongs in `workload_owned`.
 ///
-/// List every alias the plugin's own reader accepts. A deny set that names only
-/// one spelling of a key the reader takes under two denies nothing.
+/// Naming *both* closes the schema, and a closed schema is checked: a key in
+/// neither list is refused wherever it appears, with the nearest spelling
+/// suggested. That is what keeps the lists honest — a key added to the plugin's
+/// reader and forgotten here fails the first manifest that uses it, loudly,
+/// instead of silently becoming workload-writable under `Deny`. A schema that
+/// names only `host_owned` stays open, and unknown keys pass through.
+///
+/// List every alias the plugin's own reader accepts. A list naming one spelling
+/// of a key the reader takes under two is wrong in both directions: it denies
+/// nothing, and it refuses the other spelling as unknown. (`_` and `-` are the
+/// same key and need no separate entry — see [`canonical_key`].)
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BindingSchema {
     host_owned: BTreeSet<String>,
+    workload_owned: BTreeSet<String>,
+    closed: bool,
 }
 
 impl BindingSchema {
-    /// A schema that owns no keys — every key is the workload's to write.
+    /// A schema that owns no keys and names none — every key is the workload's
+    /// to write, and nothing is refused as unknown.
     #[must_use]
     pub fn empty() -> Self {
         Self::default()
     }
 
-    /// A schema owning `keys`, canonicalized.
+    /// A schema owning `keys`, canonicalized. Open until
+    /// [`BindingSchema::and_workload_owned_keys`] closes it.
     pub fn with_host_owned_keys<I, S>(keys: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
         Self {
-            host_owned: keys
-                .into_iter()
-                .map(|k| canonical_key(k.as_ref()))
-                .collect(),
+            host_owned: canonical_set(keys),
+            workload_owned: BTreeSet::new(),
+            closed: false,
         }
+    }
+
+    /// Name the remaining keys this plugin reads, closing the schema: from here
+    /// on a key in neither list is refused as unknown.
+    ///
+    /// Pass an empty iterator for a plugin whose every key is host-owned — the
+    /// closing is the point, not the contents.
+    #[must_use]
+    pub fn and_workload_owned_keys<I, S>(mut self, keys: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.workload_owned.extend(canonical_set(keys));
+        self.closed = true;
+        self
     }
 
     /// The keys this plugin considers the host's, in canonical spelling.
@@ -129,11 +163,120 @@ impl BindingSchema {
         self.host_owned.contains(&canonical_key(key))
     }
 
-    /// Whether this schema names nothing.
+    /// Whether the plugin named every key it reads, so unknown keys are refused.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    /// Whether this schema names nothing at all.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.host_owned.is_empty()
+        self.host_owned.is_empty() && self.workload_owned.is_empty() && !self.closed
     }
+
+    /// Whether `key` (any spelling) is one this plugin reads.
+    fn knows(&self, key: &str) -> bool {
+        let key = canonical_key(key);
+        self.host_owned.contains(&key) || self.workload_owned.contains(&key)
+    }
+
+    /// Refuse any key of `config` this plugin does not read, naming `owner` as
+    /// where it was written.
+    ///
+    /// A no-op on an open schema.
+    ///
+    /// # Errors
+    ///
+    /// Names every unrecognized key, sorted, with the closest known spelling
+    /// where there is an obvious one.
+    pub fn reject_unknown_keys(
+        &self,
+        config: &HashMap<String, String>,
+        owner: &str,
+    ) -> anyhow::Result<()> {
+        if !self.closed {
+            return Ok(());
+        }
+        let mut unknown: Vec<String> = config
+            .keys()
+            .filter(|key| !self.knows(key))
+            .map(|key| match self.nearest(key) {
+                Some(near) => format!("`{key}` (did you mean `{near}`?)"),
+                None => format!("`{key}`"),
+            })
+            .collect();
+        if unknown.is_empty() {
+            return Ok(());
+        }
+        // Sorted: `config` is a `HashMap`, and the same input has to be refused
+        // with the same message every time.
+        unknown.sort();
+        anyhow::bail!(
+            "{owner} sets {}, which this plugin does not read. A key it does not recognize is \
+             silently ignored, so a typo in a grant or a credential would leave the binding \
+             configured as if nothing had been written",
+            unknown.join(", "),
+        )
+    }
+
+    /// The known key closest to `key`, when one is close enough to be worth
+    /// naming — a single edit away, or one that contains it.
+    fn nearest(&self, key: &str) -> Option<&str> {
+        let key = canonical_key(key);
+        self.host_owned
+            .iter()
+            .chain(self.workload_owned.iter())
+            .find(|known| within_one_edit(&key, known))
+            .map(String::as_str)
+    }
+}
+
+/// Canonicalize an iterator of keys into a set.
+fn canonical_set<I, S>(keys: I) -> BTreeSet<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    keys.into_iter()
+        .map(|k| canonical_key(k.as_ref()))
+        .collect()
+}
+
+/// Whether `a` and `b` differ by at most one insertion, deletion, or
+/// substitution.
+///
+/// Enough to catch what a suggestion is for — a dropped letter (`subject-alow`)
+/// or a fat-fingered one — without turning every unrelated key into a guess.
+fn within_one_edit(a: &str, b: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let (short, long) = if a.len() <= b.len() {
+        (&a, &b)
+    } else {
+        (&b, &a)
+    };
+    if long.len() - short.len() > 1 {
+        return false;
+    }
+    let same_length = short.len() == long.len();
+    let (mut i, mut j, mut edited) = (0, 0, false);
+    while let (Some(s), Some(l)) = (short.get(i), long.get(j)) {
+        if s == l {
+            i += 1;
+            j += 1;
+            continue;
+        }
+        if edited {
+            return false;
+        }
+        edited = true;
+        // A substitution consumes both; an insertion consumes only the longer.
+        if same_length {
+            i += 1;
+        }
+        j += 1;
+    }
+    true
 }
 
 /// One plugin's operator declaration: a base config, the named bindings it
@@ -263,9 +406,13 @@ impl PluginBindingSet {
     }
 
     /// Whether resolution can hand back the workload's config untouched.
+    ///
+    /// Independent of the policy: `Deny` with nothing declared anywhere owns no
+    /// keys, claims no names, and knows no schema to check against, so it
+    /// refuses exactly what `Allow` would. That is what makes `Deny` a safe
+    /// default for a host whose operator has written no `host.plugins` at all.
     fn is_passthrough(&self, schema: &BindingSchema) -> bool {
-        self.workload_config == WorkloadConfigPolicy::Allow
-            && self.base.is_empty()
+        self.base.is_empty()
             && self.bindings.is_empty()
             && schema.is_empty()
             && self.declared_host_owned.is_empty()
@@ -303,12 +450,31 @@ impl PluginBindingSet {
         workload: &HashMap<String, String>,
         schema: &BindingSchema,
     ) -> anyhow::Result<HashMap<String, String>> {
+        schema.reject_unknown_keys(
+            workload,
+            &format!(
+                "binding `{}` of plugin `{}`",
+                describe_binding(binding),
+                self.plugin_id
+            ),
+        )?;
+
         if self.workload_config == WorkloadConfigPolicy::Deny {
             // Falling back to the base config for an undeclared name would start
             // the workload against the right backend with none of the grants the
             // operator meant it to have, and every call would be refused one at
             // a time with nothing pointing at the missing declaration.
-            if binding != UNNAMED_BINDING && !self.bindings.contains_key(binding) {
+            //
+            // Only once the operator has declared *something*, though: a plugin
+            // with no declared bindings is not an operator saying "these are the
+            // ones I serve", it is an operator who has not spoken. Refusing
+            // every label there would break named routing on every host that
+            // never wrote a `host.plugins` entry, which is what makes `Deny`
+            // safe as the default.
+            if binding != UNNAMED_BINDING
+                && !self.bindings.is_empty()
+                && !self.bindings.contains_key(binding)
+            {
                 anyhow::bail!(
                     "plugin `{}` serves no binding named `{binding}`{}. A workload asks for a \
                      binding by name and the host declares what it is; add `{binding}` under \
@@ -405,6 +571,28 @@ impl PluginBindingSet {
     #[must_use]
     pub fn base(&self) -> &HashMap<String, String> {
         &self.base
+    }
+
+    /// Refuse any key the operator wrote that the plugin does not read.
+    ///
+    /// The operator's half of [`BindingSchema::reject_unknown_keys`], checked
+    /// once at host startup rather than per workload. A no-op on an open schema.
+    ///
+    /// # Errors
+    ///
+    /// Names the entry or binding the unknown key was written on.
+    pub fn reject_unknown_keys(&self, schema: &BindingSchema) -> anyhow::Result<()> {
+        schema.reject_unknown_keys(
+            &self.base,
+            &format!("`host.plugins` entry `{}`", self.plugin_id),
+        )?;
+        for (name, config) in &self.bindings {
+            schema.reject_unknown_keys(
+                config,
+                &format!("`host.plugins` entry `{}` binding `{name}`", self.plugin_id),
+            )?;
+        }
+        Ok(())
     }
 
     /// `; this host serves ...` for an error, or nothing when it serves none.
@@ -517,20 +705,112 @@ mod tests {
         }
     }
 
+    /// A closed schema in the shape the NATS plugin will declare: connection and
+    /// grant keys owned by the host, the rest named so a typo is caught.
     fn nats_schema() -> BindingSchema {
-        BindingSchema::with_host_owned_keys(["servers", "creds", "subject-allow"])
+        BindingSchema::with_host_owned_keys([
+            "servers",
+            "creds",
+            "subject-allow",
+            "stream-allow",
+            "inbox-prefix",
+            "jetstream-domain",
+        ])
+        .and_workload_owned_keys(["ack-mode", "core-subscriptions"])
     }
 
     #[test]
-    fn undeclared_plugin_resolves_passthrough() {
+    fn undeclared_plugin_resolves_passthrough_under_the_deny_default() {
+        // What makes `Deny` safe as the default: nothing declared means no keys
+        // owned, no names claimed, and no schema to check, so a host whose
+        // operator wrote no `host.plugins` behaves exactly as before.
         let bindings = PluginBindings::new();
         let set = bindings.for_plugin("wasmcloud-nats");
-        let interfaces: HashSet<_> = [iface(None, &[("servers", "nats://guest:4222")])].into();
+        assert_eq!(set.workload_config(), WorkloadConfigPolicy::Deny);
+
+        let interfaces: HashSet<_> = [
+            iface(None, &[("servers", "nats://guest:4222")]),
+            iface(Some("some-label"), &[("bucket", "cache")]),
+        ]
+        .into();
 
         let resolved = set
             .resolve_interfaces(&interfaces, &BindingSchema::empty())
             .unwrap();
         assert_eq!(resolved, interfaces);
+    }
+
+    #[test]
+    fn deny_claims_no_names_until_the_operator_declares_one() {
+        // An operator who declared only host-wide config has not said "these are
+        // the bindings I serve", so a label still routes; one who declared a
+        // binding has, so an unlisted label is refused.
+        let quiet = PluginBindingSet::new("kv").with_base(map(&[("url", "redis://host:6379")]));
+        let resolved = quiet
+            .resolve("sessions", &HashMap::new(), &BindingSchema::empty())
+            .unwrap();
+        assert_eq!(resolved["url"], "redis://host:6379");
+
+        let spoken = quiet.clone().with_binding("cache", map(&[("bucket", "c")]));
+        assert!(
+            spoken
+                .resolve("sessions", &HashMap::new(), &BindingSchema::empty())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_closed_schema_refuses_an_unknown_key_and_suggests_the_near_miss() {
+        // The check that keeps the lists honest: a key the plugin does not read
+        // is a typo or a stale doc, and silently ignoring it leaves a grant
+        // configured as if nothing had been written.
+        let schema = nats_schema();
+        let set = PluginBindingSet::new("wasmcloud-nats").with_binding("orders", HashMap::new());
+
+        let err = set
+            .resolve("orders", &map(&[("subject-alow", "orders.>")]), &schema)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`subject-alow`"), "got: {err}");
+        assert!(err.contains("did you mean `subject-allow`"), "got: {err}");
+
+        // A key with no near miss is still refused, just without a suggestion.
+        let err = set
+            .resolve("orders", &map(&[("totally-made-up", "1")]), &schema)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`totally-made-up`"), "got: {err}");
+        assert!(!err.contains("did you mean"), "got: {err}");
+    }
+
+    #[test]
+    fn an_open_schema_still_passes_unknown_keys_through() {
+        // A plugin that names only its host-owned keys has not claimed to have
+        // listed everything it reads, so nothing is refused as unknown.
+        let open = BindingSchema::with_host_owned_keys(["servers"]);
+        assert!(!open.is_closed());
+
+        let set = PluginBindingSet::new("p").with_workload_config(WorkloadConfigPolicy::Allow);
+        let resolved = set
+            .resolve("", &map(&[("anything-at-all", "1")]), &open)
+            .unwrap();
+        assert_eq!(resolved["anything-at-all"], "1");
+    }
+
+    #[test]
+    fn an_operators_own_typo_is_refused_at_startup() {
+        let set = PluginBindingSet::new("wasmcloud-nats")
+            .with_base(map(&[("server", "nats://host:4222")]))
+            .with_binding("orders", map(&[("stream-alow", "ORDERS")]));
+
+        let err = set
+            .reject_unknown_keys(&nats_schema())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`server`"), "got: {err}");
+        assert!(err.contains("did you mean `servers`"), "got: {err}");
+
+        set.reject_unknown_keys(&BindingSchema::empty()).unwrap();
     }
 
     #[test]
@@ -540,7 +820,8 @@ mod tests {
                 ("servers", "nats://host:4222"),
                 ("creds", "/h.creds"),
             ]))
-            .with_binding("orders", map(&[("subject-allow", "orders.>")]));
+            .with_binding("orders", map(&[("subject-allow", "orders.>")]))
+            .with_workload_config(WorkloadConfigPolicy::Allow);
 
         let resolved = set
             .resolve(
@@ -560,7 +841,9 @@ mod tests {
     fn a_workload_key_replaces_the_operators_other_spelling() {
         // Not both spellings side by side: one key stays one key, whichever way
         // each side wrote it.
-        let set = PluginBindingSet::new("p").with_base(map(&[("ack_mode", "auto")]));
+        let set = PluginBindingSet::new("p")
+            .with_base(map(&[("ack_mode", "auto")]))
+            .with_workload_config(WorkloadConfigPolicy::Allow);
         let resolved = set
             .resolve("", &map(&[("ack-mode", "manual")]), &BindingSchema::empty())
             .unwrap();
