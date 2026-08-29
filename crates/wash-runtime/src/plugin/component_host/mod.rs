@@ -1006,8 +1006,11 @@ async fn link_native_imports(
 
     let mut synthetic =
         UnresolvedWorkload::new(id, id, id, None, [plugin_component], native_imports);
+    // No operator bindings: a plugin's own native imports are configured by the
+    // plugin entry's `config`, delivered through `on-workload-bind`, not by a
+    // workload naming a binding.
     synthetic
-        .bind_plugins(native_plugins)
+        .bind_plugins(native_plugins, &crate::plugin::PluginBindings::new())
         .await
         .with_context(|| {
             format!("failed to resolve native capability imports for plugin '{id}'")

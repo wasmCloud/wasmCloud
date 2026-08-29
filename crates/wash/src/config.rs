@@ -457,19 +457,56 @@ impl DevComponent {
     }
 }
 
-/// A host component plugin to load into the `wash dev` host: a WebAssembly
-/// component that provides a host capability, served to every workload that
-/// imports its interface. Provide exactly one of `file` (local path) or `image`
-/// (OCI reference). Requires a wash build with the `host-component-plugins`
-/// feature.
+/// A host plugin an operator declares under `host.plugins`.
+///
+/// Two flavors share this shape:
+///
+/// - **native** — no `file`/`image`. The host already has the plugin compiled
+///   in; the entry exists to configure it (`config`, `bindings`,
+///   `workloadConfig`, `hostOwnedKeys`).
+/// - **component** — exactly one of `file` (local path) or `image` (OCI
+///   reference). A WebAssembly component providing a host capability, served to
+///   every workload that imports its interface. Requires a wash build with the
+///   `host-component-plugins` feature.
+///
+/// The load-bearing fields (`config`, `bindings`, `workloadConfig`,
+/// `hostOwnedKeys`) apply to both — an operator configures a plugin the same way
+/// whether the host implements it in Rust or loads it as a component.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostPluginConfig {
-    /// Host-unique plugin id.
+    /// Host-unique plugin id. For a native plugin this is the id the plugin
+    /// reports from `HostPlugin::id()`; for a component plugin it is the id the
+    /// host registers it under.
     pub id: String,
-    /// Where the plugin's wasm comes from: a local `file` or an `image`.
+    /// Where a component plugin's wasm comes from: a local `file` or an
+    /// `image`. Omitted for a native plugin.
     #[serde(flatten)]
     pub source: ComponentSourceConfig,
+    /// Whether a workload's own `interface-binding` config may set keys this
+    /// plugin considers the host's.
+    ///
+    /// `allow` (the default, and the behavior before this existed) layers a
+    /// workload's config over the operator's. `deny` makes this entry the whole
+    /// allowlist: a workload that sets a host-owned key, or names a binding
+    /// absent from `bindings`, fails to deploy.
+    #[serde(default, skip_serializing_if = "WorkloadConfigPolicy::is_default")]
+    pub workload_config: WorkloadConfigPolicy,
+    /// Extra keys this operator claims for the host under `workloadConfig:
+    /// deny`, on top of the ones the plugin declares in code and the ones this
+    /// entry actually sets.
+    ///
+    /// The point is the keys left *unset*: without this, an allowlist the
+    /// operator never wrote would fall through to whatever the workload wrote.
+    /// Naming it here makes it resolve to empty instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_owned_keys: Vec<String>,
+    /// The named bindings this host serves for the plugin — the operator's
+    /// declaration of the `interface-binding{name, config}` a workload asks for
+    /// by name (`(implements ..)` label). Each entry layers over this entry's
+    /// own `config`/`configFrom`/`secretFrom`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bindings: BTreeMap<String, PluginBindingConfig>,
     /// Supervised driver restarts before the plugin is declared dead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_restarts: Option<u32>,
@@ -513,7 +550,104 @@ pub struct HostPluginConfig {
     pub ports: Vec<wash_runtime::host::declared_port::DeclaredPort>,
 }
 
+/// One named binding under a `host.plugins` entry: the operator's config for
+/// the `(implements ..)` label a workload asks for.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginBindingConfig {
+    /// This binding's own keys, layered over the plugin entry's. Resolved
+    /// through the same `configs:`/`secrets:` catalogs as everything else.
+    #[serde(flatten)]
+    pub environment: EnvironmentLayer,
+}
+
+/// Config-file spelling of
+/// [`wash_runtime::plugin::WorkloadConfigPolicy`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkloadConfigPolicy {
+    /// A workload's own interface config may set host-owned keys, over the
+    /// operator's. The default: denying keys nothing else supplies would leave
+    /// every binding of every plugin unusable.
+    #[default]
+    Allow,
+    /// Host-owned keys come only from the operator.
+    Deny,
+}
+
+impl WorkloadConfigPolicy {
+    // serde's `skip_serializing_if` hands the field by reference.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+impl From<WorkloadConfigPolicy> for wash_runtime::plugin::WorkloadConfigPolicy {
+    fn from(policy: WorkloadConfigPolicy) -> Self {
+        match policy {
+            WorkloadConfigPolicy::Allow => Self::Allow,
+            WorkloadConfigPolicy::Deny => Self::Deny,
+        }
+    }
+}
+
 impl HostPluginConfig {
+    /// Whether this entry names a component to load, rather than configuring a
+    /// plugin the host already has.
+    pub fn is_component(&self) -> bool {
+        self.source.file.is_some() || self.source.image.is_some()
+    }
+
+    /// Resolve this entry's operator declaration: base config, every named
+    /// binding, the policy, and the extra host-owned keys.
+    ///
+    /// # Errors
+    ///
+    /// An empty `id`, an empty binding name, or a `configFrom`/`secretFrom`
+    /// reference that does not resolve — same failure modes as
+    /// [`crate::workload::resolve_workload`].
+    pub fn to_binding_set(
+        &self,
+        config: &Config,
+        project_dir: &Path,
+        repo_root: Option<&Path>,
+    ) -> Result<wash_runtime::plugin::PluginBindingSet> {
+        if self.id.is_empty() {
+            bail!("host.plugins entry is missing a non-empty `id`");
+        }
+        let resolve = |env: &EnvironmentLayer, owner: &str| -> Result<HashMap<String, String>> {
+            wash_runtime::config_source::resolve_environment_layer(
+                Some(env),
+                owner,
+                &config.config_sources,
+                &config.secret_sources,
+                project_dir,
+                repo_root,
+            )
+            .with_context(|| format!("failed to resolve {owner}"))
+        };
+
+        let owner = format!("host.plugins '{}'", self.id);
+        let mut set = wash_runtime::plugin::PluginBindingSet::new(self.id.clone())
+            .with_base(resolve(&self.environment, &owner)?)
+            .with_host_owned_keys(&self.host_owned_keys)
+            .with_workload_config(self.workload_config.into());
+        for (name, binding) in &self.bindings {
+            if name.is_empty() {
+                bail!(
+                    "host.plugins '{}' has a binding with an empty name; the unnamed binding is                      configured by the entry's own `config`",
+                    self.id
+                );
+            }
+            set = set.with_binding(
+                name.clone(),
+                resolve(&binding.environment, &format!("{owner} binding '{name}'"))?,
+            );
+        }
+        Ok(set)
+    }
+
     /// Convert to a runtime [`wash_runtime::plugin::ComponentPluginSpec`],
     /// without resolving `configFrom`/`secretFrom` — used where no [`Config`]
     /// is available. Prefer [`HostPluginConfig::to_spec`] when one is.
@@ -523,9 +657,16 @@ impl HostPluginConfig {
     /// without fetching.
     pub fn to_spec_unresolved(&self) -> Result<wash_runtime::plugin::ComponentPluginSpec> {
         if self.id.is_empty() {
-            bail!("host_plugins entry is missing a non-empty `id`");
+            bail!("host.plugins entry is missing a non-empty `id`");
         }
-        let what = format!("host_plugins '{}'", self.id);
+        if !self.is_component() {
+            bail!(
+                "host.plugins '{}' declares no `file` or `image`, so it configures a plugin the \
+                 host already has rather than loading one",
+                self.id
+            );
+        }
+        let what = format!("host.plugins '{}'", self.id);
         // Catch a bad port declaration here, where the error can name the
         // config entry, rather than at plugin start.
         wash_runtime::host::declared_port::validate_ports(&self.ports, &what)?;
@@ -557,7 +698,7 @@ impl HostPluginConfig {
         repo_root: Option<&Path>,
     ) -> Result<wash_runtime::plugin::ComponentPluginSpec> {
         let mut spec = self.to_spec_unresolved()?;
-        let owner = format!("host_plugins '{}'", self.id);
+        let owner = format!("host.plugins '{}'", self.id);
         spec.config = wash_runtime::config_source::resolve_environment_layer(
             Some(&self.environment),
             &owner,
@@ -664,10 +805,18 @@ impl WasmcloudNatsConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostConfig {
-    /// Host component plugins to load: WebAssembly components that provide
-    /// host capabilities. Requires a wash build with the
-    /// `host-component-plugins` feature. Merges with (does not replace) any
-    /// plugins declared via repeated `--host-plugin` flags.
+    /// Every plugin this host serves, native or component, and how the operator
+    /// configures it: `config`, named `bindings`, `workloadConfig`,
+    /// `hostOwnedKeys`. A component entry (`file`/`image`) is also loaded, and
+    /// requires a wash build with the `host-component-plugins` feature.
+    ///
+    /// Merges with (does not replace) `hostPlugins` and any plugins declared
+    /// via repeated `--host-plugin` flags.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<HostPluginConfig>,
+    /// Deprecated alias for [`HostConfig::plugins`], from when only component
+    /// plugins could be declared. Entries here must name a `file` or `image`;
+    /// a native plugin's configuration belongs under `plugins`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_plugins: Vec<HostPluginConfig>,
 
@@ -677,6 +826,99 @@ pub struct HostConfig {
     /// declared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wasmcloud_nats: Option<WasmcloudNatsConfig>,
+}
+
+/// Merge a `plugins` list with its deprecated source-only alias, `plugins`
+/// first. `alias` names the deprecated key for error messages
+/// (`host.hostPlugins` / `dev.host_plugins`).
+fn merge_plugin_entries<'a>(
+    plugins: &'a [HostPluginConfig],
+    deprecated: &'a [HostPluginConfig],
+    alias: &str,
+    canonical: &str,
+) -> Result<Vec<&'a HostPluginConfig>> {
+    for entry in deprecated {
+        if !entry.is_component() {
+            bail!(
+                "{alias} '{}' declares no `file` or `image`. `{alias}` is a deprecated alias that \
+                 only ever loaded component plugins; move the entry to `{canonical}`, which \
+                 configures native plugins too",
+                entry.id
+            );
+        }
+    }
+    let all: Vec<&HostPluginConfig> = plugins.iter().chain(deprecated.iter()).collect();
+    let mut seen = HashSet::new();
+    for entry in &all {
+        if !seen.insert(entry.id.as_str()) {
+            bail!(
+                "plugin id '{}' is declared more than once across `{canonical}` and `{alias}`; \
+                 ids are host-unique",
+                entry.id
+            );
+        }
+    }
+    Ok(all)
+}
+
+/// Resolve every entry's operator declaration into one catalog.
+fn plugin_bindings_from(
+    entries: &[&HostPluginConfig],
+    config: &Config,
+    project_dir: &Path,
+    repo_root: Option<&Path>,
+) -> Result<wash_runtime::plugin::PluginBindings> {
+    let mut bindings = wash_runtime::plugin::PluginBindings::new();
+    for entry in entries {
+        bindings = bindings.with_plugin(entry.to_binding_set(config, project_dir, repo_root)?);
+    }
+    Ok(bindings)
+}
+
+impl HostConfig {
+    /// Every declared plugin, `plugins` before the deprecated `hostPlugins`.
+    ///
+    /// # Errors
+    ///
+    /// A `hostPlugins` entry with no source (that shape only ever named a
+    /// component plugin), or one id declared twice across the two lists.
+    pub fn all_plugins(&self) -> Result<Vec<&HostPluginConfig>> {
+        merge_plugin_entries(
+            &self.plugins,
+            &self.host_plugins,
+            "host.hostPlugins",
+            "host.plugins",
+        )
+    }
+
+    /// The component plugins to load — every declared entry with a source.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`HostConfig::all_plugins`].
+    pub fn component_plugins(&self) -> Result<Vec<&HostPluginConfig>> {
+        Ok(self
+            .all_plugins()?
+            .into_iter()
+            .filter(|entry| entry.is_component())
+            .collect())
+    }
+
+    /// The operator's binding declarations for every plugin, native and
+    /// component alike.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`HostConfig::all_plugins`], plus any unresolvable
+    /// `configFrom`/`secretFrom` in an entry or one of its bindings.
+    pub fn to_plugin_bindings(
+        &self,
+        config: &Config,
+        project_dir: &Path,
+        repo_root: Option<&Path>,
+    ) -> Result<wash_runtime::plugin::PluginBindings> {
+        plugin_bindings_from(&self.all_plugins()?, config, project_dir, repo_root)
+    }
 }
 
 /// Built-in trust roots for outbound HTTPS from components, before any extra
@@ -930,9 +1172,14 @@ pub struct DevConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<DevComponent>,
 
-    /// Host component plugins to load into the dev host: WebAssembly components
-    /// that provide host capabilities. Requires a wash build with the
-    /// `host-component-plugins` feature.
+    /// Every plugin this dev host serves, native or component, and how it is
+    /// configured: `config`, named `bindings`, `workloadConfig`,
+    /// `hostOwnedKeys`. A component entry (`file`/`image`) is also loaded, and
+    /// requires a wash build with the `host-component-plugins` feature.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<HostPluginConfig>,
+    /// Deprecated alias for [`DevConfig::plugins`], from when only component
+    /// plugins could be declared. Entries here must name a `file` or `image`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_plugins: Vec<HostPluginConfig>,
 
@@ -1065,6 +1312,49 @@ pub struct DevConfig {
 }
 
 impl DevConfig {
+    /// Every declared plugin, `plugins` before the deprecated `host_plugins`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`HostConfig::all_plugins`].
+    pub fn all_plugins(&self) -> Result<Vec<&HostPluginConfig>> {
+        merge_plugin_entries(
+            &self.plugins,
+            &self.host_plugins,
+            "dev.host_plugins",
+            "dev.plugins",
+        )
+    }
+
+    /// The component plugins the dev host loads — every entry with a source.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`DevConfig::all_plugins`].
+    pub fn component_plugins(&self) -> Result<Vec<&HostPluginConfig>> {
+        Ok(self
+            .all_plugins()?
+            .into_iter()
+            .filter(|entry| entry.is_component())
+            .collect())
+    }
+
+    /// The operator's binding declarations for every plugin the dev host
+    /// serves.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`DevConfig::all_plugins`], plus any unresolvable
+    /// `configFrom`/`secretFrom`.
+    pub fn to_plugin_bindings(
+        &self,
+        config: &Config,
+        project_dir: &Path,
+        repo_root: Option<&Path>,
+    ) -> Result<wash_runtime::plugin::PluginBindings> {
+        plugin_bindings_from(&self.all_plugins()?, config, project_dir, repo_root)
+    }
+
     /// The connection quota registry this dev config asks for.
     ///
     /// Lives here rather than at the call site so the five knobs are read in
@@ -1185,10 +1475,15 @@ impl DevConfig {
             }
         }
 
-        for plugin in &self.host_plugins {
-            if let Err(err) = plugin.to_spec_unresolved() {
-                errors.push(format!("{err:#}"));
+        match self.all_plugins() {
+            Ok(plugins) => {
+                for plugin in plugins.iter().filter(|p| p.is_component()) {
+                    if let Err(err) = plugin.to_spec_unresolved() {
+                        errors.push(format!("{err:#}"));
+                    }
+                }
             }
+            Err(err) => errors.push(format!("{err:#}")),
         }
 
         if let Err(err) = self.service_source() {
@@ -2242,6 +2537,140 @@ dev:
             Some("nats://127.0.0.1:4322"),
             "the block's own `servers` reaches the binding"
         );
+    }
+
+    #[test]
+    fn host_plugins_is_a_deprecated_alias_that_still_loads() {
+        // The shape from before `host.plugins` existed keeps working, merged
+        // with (not replaced by) the new key.
+        let yaml = r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+      workloadConfig: deny
+      config:
+        servers: nats://nats.default.svc:4222
+  hostPlugins:
+    - id: etcd-secrets
+      image: ghcr.io/example/etcd-secrets:1.0.0
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let host = config.host();
+        let ids: Vec<&str> = host
+            .all_plugins()
+            .unwrap()
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(ids, ["wasmcloud-nats", "etcd-secrets"]);
+
+        // Only the entry with a source is loaded as a component.
+        let components: Vec<&str> = host
+            .component_plugins()
+            .unwrap()
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(components, ["etcd-secrets"]);
+    }
+
+    #[test]
+    fn a_native_entry_under_the_deprecated_alias_says_where_it_goes() {
+        let yaml = r#"
+host:
+  hostPlugins:
+    - id: wasmcloud-nats
+      config:
+        servers: nats://nats:4222
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let err = config.host().all_plugins().unwrap_err().to_string();
+        assert!(err.contains("host.plugins"), "got: {err}");
+        assert!(err.contains("deprecated"), "got: {err}");
+    }
+
+    #[test]
+    fn a_plugin_id_declared_in_both_lists_is_refused() {
+        let yaml = r#"
+host:
+  plugins:
+    - id: etcd-secrets
+      image: ghcr.io/example/etcd-secrets:1.0.0
+  hostPlugins:
+    - id: etcd-secrets
+      image: ghcr.io/example/etcd-secrets:2.0.0
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let err = config.host().all_plugins().unwrap_err().to_string();
+        assert!(err.contains("more than once"), "got: {err}");
+    }
+
+    #[test]
+    fn plugin_bindings_resolve_config_from_and_secret_from_per_binding() {
+        // The shape from the design: a native entry configured host-wide, with
+        // a named binding layering its own grants and credentials on top.
+        let yaml = r#"
+configs:
+  orders-grants:
+    inline:
+      stream-allow: ORDERS
+secrets:
+  orders-nats-creds:
+    inline:
+      creds: /etc/nats/orders.creds
+host:
+  plugins:
+    - id: wasmcloud-nats
+      workloadConfig: deny
+      hostOwnedKeys: [inbox-prefix]
+      config:
+        servers: nats://nats.default.svc:4222
+      bindings:
+        orders:
+          config:
+            subject-allow: orders.processed,orders.received
+          configFrom: [orders-grants]
+          secretFrom: [orders-nats-creds]
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let entry = &config.host().plugins[0];
+        assert_eq!(entry.workload_config, WorkloadConfigPolicy::Deny);
+        assert!(!entry.is_component());
+
+        let set = entry.to_binding_set(&config, Path::new("."), None).unwrap();
+        assert_eq!(
+            set.workload_config(),
+            wash_runtime::plugin::WorkloadConfigPolicy::Deny
+        );
+        assert_eq!(set.binding_names().collect::<Vec<_>>(), ["orders"]);
+
+        let layer = set.host_layer("orders");
+        assert_eq!(layer["servers"], "nats://nats.default.svc:4222");
+        assert_eq!(layer["subject-allow"], "orders.processed,orders.received");
+        assert_eq!(layer["stream-allow"], "ORDERS");
+        assert_eq!(layer["creds"], "/etc/nats/orders.creds");
+
+        // Declared-but-unset keys are the operator's too.
+        let owned = set.effective_host_owned(&wash_runtime::plugin::BindingSchema::empty());
+        assert!(owned.contains("inbox-prefix"));
+        assert!(owned.contains("subject-allow"));
+    }
+
+    #[test]
+    fn a_native_entry_is_not_a_component_spec() {
+        let yaml = r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+      config:
+        servers: nats://nats:4222
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let err = config.host().plugins[0]
+            .to_spec_unresolved()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no `file` or `image`"), "got: {err}");
     }
 
     #[test]

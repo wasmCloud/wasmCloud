@@ -215,8 +215,9 @@ impl CliCommand for DevCommand {
 
         #[cfg(not(feature = "host-component-plugins"))]
         ensure!(
-            dev_config.host_plugins.is_empty(),
-            "dev.host_plugins requires a wash build with the `host-component-plugins` feature"
+            dev_config.component_plugins()?.is_empty(),
+            "a `dev.plugins` entry with a `file`/`image` requires a wash build with the \
+             `host-component-plugins` feature"
         );
 
         let http_handler = wash_runtime::host::http::DevRouter::default();
@@ -376,7 +377,7 @@ impl CliCommand for DevCommand {
         {
             let native_plugins = host_builder.native_plugins();
             let http_handler = host_builder.http_handler();
-            for hp in &dev_config.host_plugins {
+            for hp in dev_config.component_plugins()? {
                 let spec = hp.to_spec(&config, project_dir, Some(project_dir))?;
                 let plugin = wash_runtime::plugin::component_host::load_component_plugin(
                     &spec,
@@ -392,6 +393,14 @@ impl CliCommand for DevCommand {
                 debug!(id = %spec.id, "host component plugin registered");
             }
         }
+
+        // After every plugin is registered, so `build()` can refuse a
+        // declaration naming an id this host has no plugin for.
+        host_builder = host_builder.with_plugin_bindings(dev_config.to_plugin_bindings(
+            &config,
+            project_dir,
+            Some(project_dir),
+        )?);
 
         // Build and start the host
         let host = host_builder.build()?.start().await?;

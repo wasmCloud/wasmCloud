@@ -76,6 +76,12 @@ pub mod component_plugin_spec;
 #[cfg(feature = "oci")]
 pub use component_plugin_spec::ComponentPluginSpec;
 
+/// Operator-declared bindings: the host's side of an
+/// `interface-binding{name, config}`, and the `workloadConfig` policy that
+/// decides whether a workload may write over it.
+pub mod bindings;
+pub use bindings::{BindingSchema, PluginBindingSet, PluginBindings, WorkloadConfigPolicy};
+
 /// Shared `(implements ..)` multiplexing core
 #[cfg(feature = "wasm_component_model_implements")]
 pub mod multiplex;
@@ -212,6 +218,41 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// everything the world matched.
     fn claims(&self, _interface: &WitInterface) -> bool {
         true
+    }
+
+    /// The config keys this plugin considers the host operator's rather than a
+    /// workload's — where a binding connects, as whom, and what it may reach.
+    ///
+    /// Only consulted under `workloadConfig: deny`, where these keys are
+    /// refused to a workload even when no operator set them: an ungranted
+    /// allowlist has to resolve to empty, not to whatever the manifest wrote.
+    /// Name every alias the plugin's own reader accepts — a deny set covering
+    /// one spelling of a key read under two denies nothing.
+    ///
+    /// The default owns nothing, which leaves a plugin's config entirely the
+    /// workload's to write, as it was before bindings existed.
+    fn binding_schema(&self) -> BindingSchema {
+        BindingSchema::empty()
+    }
+
+    /// Check the operator's declaration for this plugin at host startup.
+    ///
+    /// Called once by [`crate::host::HostBuilder::build`] with whatever
+    /// `host.plugins` declared for this id. A plugin parses each of
+    /// [`PluginBindingSet::host_layers`] with its own reader here, so a
+    /// declaration it cannot use fails the host rather than the first workload
+    /// that needs it — and so an operator cannot write a value the manifest
+    /// parser would have rejected.
+    ///
+    /// The default accepts everything, which is what a plugin with no
+    /// [`HostPlugin::binding_schema`] wants.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the plugin's own parser refuses. The error should name the
+    /// binding.
+    fn validate_bindings(&self, _declared: &PluginBindingSet) -> anyhow::Result<()> {
+        Ok(())
     }
 
     /// Returns whether this plugin supports handling multiple named instances

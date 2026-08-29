@@ -98,6 +98,13 @@ impl ClusterHostBuilder {
         Ok(self)
     }
 
+    /// Sets the operator's plugin binding declarations. See
+    /// [`crate::host::HostBuilder::with_plugin_bindings`].
+    pub fn with_plugin_bindings(mut self, bindings: crate::plugin::PluginBindings) -> Self {
+        self.host_builder = self.host_builder.with_plugin_bindings(bindings);
+        self
+    }
+
     /// Every native (non-component) plugin registered so far. See
     /// [`crate::host::HostBuilder::native_plugins`].
     #[cfg(feature = "host-component-plugins")]
