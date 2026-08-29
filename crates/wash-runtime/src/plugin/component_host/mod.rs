@@ -1860,6 +1860,10 @@ fn build_plugin_store(
             .with_resource_registry()
             .with_guest_memory(engine.guest_memory()),
     );
+    // The other half of the same requirement: on a fuel-metering engine a store
+    // starts with no fuel, and calling a guest without fuel traps. See
+    // `new_store_from_templates`, which does this for every workload store.
+    let _ = store.set_fuel(u64::MAX);
     // Required, not optional: the engine enables `epoch_interruption`, and a
     // store that never sets a deadline traps the moment it runs any guest code.
     // `WarnThenTrap` because this one store serves every workload that imports

@@ -15,7 +15,6 @@ use tracing::{Instrument, debug, error, warn};
 
 use crate::engine::instance_driver::InstanceJob;
 use crate::engine::instance_pool::{ComponentInstance, Dispatch};
-use crate::engine::waive_fuel_limit;
 use crate::engine::workload::ResolvedWorkload;
 use crate::observability::ExecutionTimeMeter;
 use crate::wasmtime::component::{Accessor, InstancePre, Resource};
@@ -335,7 +334,6 @@ async fn build_instance(
         created = workload.new_store(component_id) => created?,
         _ = cancel_token.cancelled() => return Ok(None),
     };
-    waive_fuel_limit(&mut store);
     let instance = tokio::select! {
         instantiated = target.pre.instantiate_async(&mut store) => {
             instantiated.map_err(|e| anyhow::anyhow!("{e:#}"))?
@@ -1353,7 +1351,6 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                     super::warm::Warmed::fresh((store, proxy))
                                 }
                             };
-                            waive_fuel_limit(&mut warmed.handler.0);
 
                             // One `Acker`, three uses: whoever settles keeps
                             // `acker`, and `progress` extends ack-wait without
