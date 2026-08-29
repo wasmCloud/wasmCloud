@@ -572,7 +572,7 @@ impl HostPlugin for NatsMessaging {
         }
 
         let mut messages = futures::stream::select_all(subscriptions);
-        let fuel_meter = self.meters.read().await.fuel_consumption.clone();
+        let guest_meter = self.meters.read().await.guest();
         // What a pooled delivery is measured under, built once here rather
         // than per message. Both are bounded by what is deployed; the subject a
         // message carries is not, so it stays on the span and the log line.
@@ -776,7 +776,7 @@ impl HostPlugin for NatsMessaging {
                             body,
                         };
 
-                        let fuel_meter = fuel_meter.clone();
+                        let guest_meter = guest_meter.clone();
 
                         // Nothing awaits this call, so its deadline is a timer
                         // outliving the store's own task; without it a guest
@@ -796,7 +796,7 @@ impl HostPlugin for NatsMessaging {
                             // Dropped when the call ends, however it ends.
                             let _abandoned = abandoned;
                             let _deadline = deadline;
-                            let result = fuel_meter.observe(
+                            let result = guest_meter.observe(
                                 &[
                                     KeyValue::new("plugin", PLUGIN_MESSAGING_ID),
                                     KeyValue::new("subject", msg.subject.to_string()),

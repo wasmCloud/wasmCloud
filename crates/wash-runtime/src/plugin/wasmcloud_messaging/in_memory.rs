@@ -651,7 +651,7 @@ impl HostPlugin for InMemoryMessaging {
 
         // Spawn the message processing task
         let task_component_id = component_id.clone();
-        let fuel_meter = self.meters.read().await.fuel_consumption.clone();
+        let guest_meter = self.meters.read().await.guest();
         // As in the NATS backend: bounded labels only, so the subject stays
         // on the span rather than minting a time series per value.
         let attributes = vec![
@@ -832,7 +832,7 @@ impl HostPlugin for InMemoryMessaging {
                             Ok(p) => p,
                         };
 
-                        let fuel_meter = fuel_meter.clone();
+                        let guest_meter = guest_meter.clone();
 
                         // As in the NATS backend: nothing awaits this call, so
                         // its deadline is a timer outliving the store's task.
@@ -849,7 +849,7 @@ impl HostPlugin for InMemoryMessaging {
                             let _permit = permit;
                             let _abandoned = abandoned;
                             let _deadline = deadline;
-                            let result = fuel_meter.observe(
+                            let result = guest_meter.observe(
                                 &[
                                     KeyValue::new("plugin", PLUGIN_MESSAGING_MEMORY_ID),
                                     KeyValue::new("subject", msg.subject.to_string()),
