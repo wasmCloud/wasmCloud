@@ -108,6 +108,7 @@ const P3_FIXTURES: &[&str] = &[
     "nats-implements-p3",
     "messaging-dual-handler",
     "http-handler-p3",
+    "http-memory-grow",
     "http-ip-name-lookup-p3",
     "http-blobstore-p3",
     "cli-service-p3",

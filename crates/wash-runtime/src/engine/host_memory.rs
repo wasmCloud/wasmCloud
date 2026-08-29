@@ -12,11 +12,13 @@
 //!
 //! **Nothing here changes behaviour when the flags are unset.** Both pool knobs
 //! fall through to exactly the values wasmtime has always used, and the budget
-//! is used to *check* the other two rather than to gate anything. That is
-//! deliberate: this is the vocabulary a memory-aware host needs, landed on its
-//! own so the enforcement built on top of it can be reviewed separately.
+//! only *checks* the other two unless a host opts into enforcing it. What
+//! enforces it is [`crate::engine::guest_memory`], which counts rather than
+//! refuses by default — for the same reason: an unset budget is derived, never
+//! absent, so enforcing it out of the box would hand every host a ceiling
+//! nobody chose.
 //!
-//! # Why the budget is worth having before anything enforces it
+//! # Why the budget is worth naming apart from enforcing it
 //!
 //! `default_heap_memory × core_instances` is what the pooling allocator
 //! reserves — every slot is sized for the largest memory it might hold, whether
@@ -346,7 +348,47 @@ impl HostMemoryBudgets {
         }
         None
     }
+
+    /// What to say about enforcing this budget on this machine, if anything.
+    ///
+    /// Separate from [`Self::advisory`] because it is only worth saying when
+    /// the budget is a real ceiling: in count mode a budget larger than the
+    /// machine costs nothing, because nothing is refused.
+    ///
+    /// The check is against the limit that would actually OOM-kill this
+    /// process, not against the budget's own derivation, so it catches the
+    /// misconfiguration however it arrived — a flag, an environment variable,
+    /// or a Helm chart passing `resources.limits.memory` straight through.
+    /// A *derived* budget is three quarters of that limit and never trips it.
+    pub fn enforcement_advisory(&self) -> Option<String> {
+        let limit = detected_memory_limit()?;
+        if self.max_guest_memory.saturating_mul(100)
+            <= limit.saturating_mul(MAX_ENFORCED_SHARE_PERCENT)
+        {
+            return None;
+        }
+        Some(format!(
+            "max-guest-memory {} is {}% of the {} this process is actually limited to, and \
+             guest memory is being enforced. Everything a guest is not — wasmtime itself, \
+             compiled module images, NATS, OCI pulls, host buffers — comes out of the same \
+             limit and is not charged to this budget, so the kernel is likely to OOM-kill \
+             this host before the budget ever refuses a guest. An unset budget reserves a \
+             quarter of the limit for them; set max-guest-memory below the container limit, \
+             or raise the limit.",
+            render_bytes(self.max_guest_memory),
+            self.max_guest_memory.saturating_mul(100) / limit.max(1),
+            render_bytes(limit),
+        ))
+    }
 }
+
+/// Share of the real memory limit an *enforced* guest budget may claim before
+/// the host says the number leaves it no room to be a host.
+///
+/// Above the derived 75%, so a host that named no budget never trips it, and
+/// below 100%, which is the value a chart passing `limits.memory` through
+/// produces.
+const MAX_ENFORCED_SHARE_PERCENT: u64 = 90;
 
 /// What `is_pooling_allocator_supported` probes for at startup, and therefore
 /// the most address space the pool can be assumed to get.
@@ -643,6 +685,52 @@ mod tests {
             advisory.contains("default-heap-memory") && advisory.contains("core-instances"),
             "names both knobs so it is actionable: {advisory}"
         );
+    }
+
+    /// The chart passes `resources.limits.memory` through as the guest budget
+    /// verbatim, so an operator turning enforcement on gets a ceiling equal to
+    /// 100% of the pod — and the host's own overhead, which this budget does
+    /// not charge, then OOM-kills the pod before the budget refuses anything.
+    #[test]
+    fn enforcing_a_budget_that_leaves_the_host_no_room_is_called_out() {
+        let limit = detected_memory_limit().expect("a test machine has a readable memory limit");
+
+        // The whole limit: what the chart renders today.
+        let whole = HostMemoryBudgets::resolve(Some(limit), None, None).unwrap();
+        let advisory = whole
+            .enforcement_advisory()
+            .expect("a budget equal to the real limit leaves the host nothing");
+        assert!(
+            advisory.contains("max-guest-memory") && advisory.contains("OOM"),
+            "the advisory must name the knob and the consequence: {advisory}"
+        );
+
+        // Half of it: room to spare, nothing to say.
+        let modest = HostMemoryBudgets::resolve(Some(limit / 2), None, None).unwrap();
+        assert_eq!(modest.enforcement_advisory(), None);
+    }
+
+    /// The derived budget is three quarters of the limit, so a host that named
+    /// no budget must never trip the advisory — otherwise every host that
+    /// turned enforcement on would be warned about a number it did not choose.
+    #[test]
+    fn a_derived_budget_is_never_warned_about() {
+        let derived = HostMemoryBudgets::resolve(None, None, None).unwrap();
+        // Only meaningful where the derivation was not clamped: the 256MiB
+        // floor can legitimately exceed a tiny container's limit, and being
+        // told so is correct.
+        let limit = detected_memory_limit().expect("a test machine has a readable memory limit");
+        if derived.max_guest_memory > MIN_DERIVED_MAX_GUEST_MEMORY
+            && derived.max_guest_memory < MAX_DERIVED_MAX_GUEST_MEMORY
+        {
+            assert_eq!(
+                derived.enforcement_advisory(),
+                None,
+                "a derived budget is {} of a {} limit and reserves its own headroom",
+                render_bytes(derived.max_guest_memory),
+                render_bytes(limit),
+            );
+        }
     }
 
     #[test]

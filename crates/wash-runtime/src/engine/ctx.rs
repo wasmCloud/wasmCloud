@@ -84,6 +84,11 @@ pub struct SharedCtx {
     /// reported by [`crate::observability::ExecutionTimeMeter`]. Read its docs
     /// before reading the number: it is a floor, not a total.
     pub executed: Arc<crate::engine::abandon::GuestExecution>,
+    /// This store's share of the host's guest memory budget, installed on the
+    /// store by [`crate::engine::guest_memory::install_memory_limiter`]. Living
+    /// here is what makes the release exact: dropping the store drops this and
+    /// hands the bytes back.
+    pub memory_limiter: crate::engine::guest_memory::StoreMemoryLimiter,
 }
 
 /// The identity of whoever is invoking a host component plugin, used to
@@ -110,6 +115,7 @@ impl SharedCtx {
             resource_registry: None,
             abandoned: Arc::default(),
             executed: Arc::default(),
+            memory_limiter: Default::default(),
         }
     }
 
@@ -117,6 +123,16 @@ impl SharedCtx {
     /// real resources alive as it hands proxies across the bridge.
     pub fn with_resource_registry(mut self) -> Self {
         self.resource_registry = Some(Default::default());
+        self
+    }
+
+    /// Draws this store's linear memory from `budget`. Without this the store
+    /// is neither charged nor limited.
+    pub fn with_guest_memory(
+        mut self,
+        budget: &Arc<crate::engine::guest_memory::GuestMemoryBudget>,
+    ) -> Self {
+        self.memory_limiter = budget.limiter();
         self
     }
 

@@ -26,6 +26,7 @@ members = [
     "postgres-implements",
     # P3 fixtures (wasm32-wasip1 + reactor adapter)
     "http-handler-p3",
+    "http-memory-grow",
     "http-ip-name-lookup-p3",
     "http-blobstore-p3",
     "cli-service-p3",

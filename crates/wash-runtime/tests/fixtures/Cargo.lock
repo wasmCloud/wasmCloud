@@ -401,6 +401,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-memory-grow"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "http-sleeper"
 version = "0.0.0"
 dependencies = [
