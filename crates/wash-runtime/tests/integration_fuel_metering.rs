@@ -23,6 +23,65 @@ use wash_runtime::{
 const CRON_SERVICE_WASM: &[u8] = include_bytes!("wasm/cron_service.wasm");
 const CRON_COMPONENT_WASM: &[u8] = include_bytes!("wasm/cron_component.wasm");
 
+/// Whether this engine compiles fuel counters into its guests.
+///
+/// `get_fuel` is the observable form of `Config::consume_fuel`: it errors on an
+/// engine that is not metering fuel, which is what makes this an assertion
+/// about the engine rather than about a budget someone set.
+fn meters_fuel(engine: &Engine) -> bool {
+    wasmtime::Store::new(engine.inner(), ()).get_fuel().is_ok()
+}
+
+/// Fuel is off unless it is asked for.
+///
+/// It is not free: `consume_fuel` compiles a counter into every block of guest
+/// code, and the guest pays it whether or not anyone reads the number. A
+/// default host must not.
+#[test]
+fn a_default_engine_does_not_meter_fuel() -> Result<()> {
+    assert!(
+        !meters_fuel(&Engine::builder().build()?),
+        "the default engine must not compile fuel counters into guests"
+    );
+    Ok(())
+}
+
+/// Epoch-based execution timing costs the guest nothing at run time, and asking
+/// for it must not quietly turn fuel on.
+///
+/// `guest.execution.time` is sampled from the epoch callback every store arms
+/// anyway ([`wash_runtime::engine`]'s abandon machinery), which is the whole
+/// reason it exists alongside `fuel.consumption`. A host that wants only the
+/// epoch metric — the `wasmcloud:nats` delivery paths measure with it — must
+/// not pay fuel's per-block counters for the privilege.
+#[test]
+fn epoch_metering_alone_does_not_meter_fuel() -> Result<()> {
+    // The meters are host state, not engine state: building them decides which
+    // histograms exist, never how guests are compiled.
+    let _meters = wash_runtime::observability::Meters::new(true);
+    assert!(
+        !meters_fuel(&Engine::builder().build()?),
+        "building meters must not turn fuel on for an engine that did not ask"
+    );
+    // And the explicit negative stays negative.
+    assert!(
+        !meters_fuel(&Engine::builder().with_fuel_consumption(false).build()?),
+        "an engine told not to meter fuel must not meter fuel"
+    );
+    Ok(())
+}
+
+/// The positive control, so the three tests above cannot pass by the assertion
+/// being incapable of firing.
+#[test]
+fn an_engine_asked_to_meter_fuel_does() -> Result<()> {
+    assert!(
+        meters_fuel(&Engine::builder().with_fuel_consumption(true).build()?),
+        "an engine told to meter fuel must meter fuel"
+    );
+    Ok(())
+}
+
 /// A metering host runs its guests rather than trapping them.
 ///
 /// The service calls the component on a timer, so reaching the component's

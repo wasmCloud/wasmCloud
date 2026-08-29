@@ -440,7 +440,7 @@ impl WasmcloudNats {
         kv_watches: Vec<KvWatchConfig>,
         cancel_token: tokio_util::sync::CancellationToken,
         execution_meter: crate::observability::ExecutionTimeMeter,
-        warm_sets: Arc<subscriber::WarmSets>,
+        warm_set: Arc<subscriber::JetStreamWarmSet>,
     ) -> anyhow::Result<()> {
         let workload_id = workload.id();
         let Some(handle) = self.connections.get_named(workload_id, binding).await else {
@@ -535,7 +535,7 @@ impl WasmcloudNats {
                 execution_meter.clone(),
                 failure_sink.clone(),
                 workload_id,
-                warm_sets.clone(),
+                warm_set.clone(),
             )
             .await?;
         }
@@ -987,7 +987,7 @@ impl HostPlugin for WasmcloudNats {
 
         // Per component, not per binding: `poolSize` is the component's, and
         // the parked stores are interchangeable across its bindings.
-        let warm_sets = subscriber::WarmSets::for_component(workload, component_id).await;
+        let warm_set = subscriber::jetstream_warm_set(workload, component_id).await;
 
         for binding in bindings {
             let jetstream_subs: Vec<_> = jetstream_subs
@@ -1014,7 +1014,7 @@ impl HostPlugin for WasmcloudNats {
                 kv_watches,
                 cancel_token.clone(),
                 execution_meter.clone(),
-                warm_sets.clone(),
+                warm_set.clone(),
             )
             .await?;
         }

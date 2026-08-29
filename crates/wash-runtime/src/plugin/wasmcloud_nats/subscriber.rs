@@ -37,7 +37,8 @@ macro_rules! handler_pre {
     ($name:ident, $proxy:ident, $pre:ty, $instance:ty) => {
         struct $name($pre);
 
-        struct $proxy($instance);
+        // As visible as the warm set that names it in its type.
+        pub(super) struct $proxy($instance);
 
         impl Clone for $name {
             fn clone(&self) -> Self {
@@ -443,47 +444,34 @@ async fn run_delivery(
         .map_err(|_| anyhow::anyhow!("delivery task dropped the reply"))?
 }
 
-/// The warm sets a component's handlers serve their deliveries from, built from
-/// the instance policy the component declared.
+/// The warm instances a component's JetStream deliveries are served from,
+/// built from the instance policy the component declared.
 ///
 /// The same `poolSize` / `maxInvocations` knobs that feed the engine's
-/// [`InstanceJob`] pool, honoured here because a *JetStream* delivery cannot
-/// take that path — its call carries a typed resource that must live in the very
+/// [`InstanceJob`] pool, honoured here because a JetStream delivery cannot take
+/// that path — its call carries a typed resource that must live in the very
 /// store that runs it, and its ack ownership lives in the subscription loop.
-/// See [`super::warm`] for what is and is not honoured.
+/// Core and KV deliveries do take the pool. See [`super::warm`] for what is and
+/// is not honoured.
 ///
-/// One set per handler flavour, built once per *component* rather than once per
-/// binding: `poolSize` is the component's, and the stores are interchangeable
-/// across the bindings it serves. Per binding, a component bridging two
-/// clusters with `(implements hub)` and `(implements leaf)` at `poolSize: 8`
-/// parked up to 16 live stores on a host sized for 8.
+/// Built once per *component* rather than once per binding: `poolSize` is the
+/// component's, and the stores are interchangeable across the bindings it
+/// serves. Per binding, a component bridging two clusters with
+/// `(implements hub)` and `(implements leaf)` at `poolSize: 8` parked up to 16
+/// live stores on a host sized for 8.
 ///
 /// [`InstanceJob`]: crate::engine::instance_driver::InstanceJob
-pub(super) struct WarmSets {
-    jetstream: Arc<super::warm::WarmSet<(crate::wasmtime::Store<SharedCtx>, JsProxy)>>,
-}
+pub(super) type JetStreamWarmSet =
+    super::warm::WarmSet<(crate::wasmtime::Store<SharedCtx>, JsProxy)>;
 
-impl WarmSets {
-    pub(super) async fn for_component(
-        workload: &ResolvedWorkload,
-        component_id: &str,
-    ) -> Arc<Self> {
-        let policy = workload.warm_instance_policy(component_id).await;
-        let sets = Self {
-            jetstream: Arc::new(super::warm::WarmSet::new(policy)),
-        };
-        if sets.jetstream.keeps_instances() {
-            debug!(
-                component_id,
-                ?policy,
-                "wasmcloud:nats JetStream deliveries will reuse warm instances; note \
-                 that on this path `maxConcurrency` above 1 is served by additional \
-                 one-shot stores rather than by concurrent calls on one instance. Core \
-                 and KV deliveries go through the engine's pool and do honour it."
-            );
-        }
-        Arc::new(sets)
-    }
+/// The warm set a component's JetStream deliveries share.
+pub(super) async fn jetstream_warm_set(
+    workload: &ResolvedWorkload,
+    component_id: &str,
+) -> Arc<JetStreamWarmSet> {
+    Arc::new(super::warm::WarmSet::new(
+        workload.warm_instance_policy(component_id).await,
+    ))
 }
 
 /// How long an unsettled sequence holds a rebuild back before the loop stops
@@ -728,11 +716,19 @@ pub(super) async fn spawn_jetstream_subscriptions(
     execution_meter: ExecutionTimeMeter,
     failure_sink: Option<crate::plugin::WorkloadFailureSink>,
     workload_id: impl Into<String>,
-    warm_sets: Arc<WarmSets>,
+    warm_set: Arc<JetStreamWarmSet>,
 ) -> anyhow::Result<()> {
     let instance_pre = workload.instantiate_pre(component_id).await?;
     let pre = JsHandlerPre::new(instance_pre)?;
-    let warm_set = warm_sets.jetstream.clone();
+    if warm_set.keeps_instances() {
+        debug!(
+            component_id,
+            "wasmcloud:nats JetStream deliveries will reuse warm instances; note that on \
+             this path `maxConcurrency` above 1 is served by additional one-shot stores \
+             rather than by concurrent calls on one instance. Core and KV deliveries go \
+             through the engine's pool and do honour it."
+        );
+    }
     // Built once for the whole subscription set: the same attributes every
     // JetStream delivery on this component is measured under.
     let attributes = workload
