@@ -1538,8 +1538,13 @@ impl HostBuilder {
                 .plugins
                 .get(id)
                 .context("plugin vanished between validation and build")?;
+            let declared = self.plugin_bindings.for_plugin(id);
+            // The schema check first: an operator typo is named as a typo,
+            // rather than as whatever the plugin's parser makes of a config
+            // missing the key they meant to set.
+            declared.reject_unknown_keys(&plugin.binding_schema())?;
             plugin
-                .validate_bindings(self.plugin_bindings.for_plugin(id))
+                .validate_bindings(declared)
                 .with_context(|| format!("invalid `host.plugins` declaration for '{id}'"))?;
         }
 
