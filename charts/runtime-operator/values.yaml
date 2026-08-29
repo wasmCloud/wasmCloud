@@ -364,14 +364,17 @@ runtime:
       # Empty falls back to this group's data NATS URL. Set it when the NATS
       # your workloads talk to is not the one backing the host's data plane.
       #
-      # Left empty, the fallback also carries the host's own data-plane TLS
-      # material, so the default install — `global.tls.enabled: true` — works
-      # with no per-binding configuration. Setting this points bindings at a
-      # NATS the data plane's certificates say nothing about, so it switches
-      # the fallback to address only: name the TLS material (`tls-ca`,
-      # `tls-cert`, `tls-key`) in `wasmcloudNats` yourself if that server
-      # needs it. It carries no grant either way — a binding that inherits it
-      # still reaches nothing until `wasmcloudNats` grants it something.
+      # Address only: it carries no credentials, no TLS material and no grant.
+      # With `global.tls.enabled` (the default) the cluster's own NATS requires
+      # TLS, so a binding that inherits this address must also name the certs
+      # already mounted in the container — otherwise it fails at connect, not
+      # at first call:
+      #
+      #   wasmcloudNats:
+      #     config:
+      #       tls-ca: /data-cert/ca.crt
+      #       tls-cert: /data-cert/tls.crt
+      #       tls-key: /data-cert/tls.key
       wasmcloudNatsUrl: ""
       # -- Whether a workload's own manifest may describe a `wasmcloud:nats`
       # binding. Empty takes the host default, `deny`.
