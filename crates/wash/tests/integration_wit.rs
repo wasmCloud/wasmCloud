@@ -31,11 +31,17 @@ const VENDORED_WASI_CONFIG: &str = concat!(
 
 /// `CliContext::build()` moves the *process* working directory, so tests that
 /// build one cannot overlap. Every such test takes this for its whole body.
-static CWD_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+///
+/// Async-aware, because the body it guards is full of `.await`: a
+/// `std::sync::MutexGuard` held across one blocks the worker thread rather than
+/// the task, which deadlocks as soon as the runtime schedules another of these
+/// tests onto it.
+static CWD_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Poisoning is ignored: the next test overwrites the cwd regardless.
-fn lock_cwd() -> std::sync::MutexGuard<'static, ()> {
-    CWD_GUARD.lock().unwrap_or_else(|e| e.into_inner())
+/// No poisoning to handle: a panicking test leaves the cwd wherever it was, and
+/// the next holder overwrites it regardless.
+async fn lock_cwd() -> tokio::sync::MutexGuard<'static, ()> {
+    CWD_GUARD.lock().await
 }
 
 /// A test project with a world.wit, plus a `wkg.toml` pointing both packages at
@@ -68,7 +74,7 @@ async fn setup_test_project_with_world(content: &str) -> Result<(TempDir, std::p
 
 #[tokio::test]
 async fn wit_integration() -> Result<()> {
-    let _cwd = lock_cwd();
+    let _cwd = lock_cwd().await;
     test_remove_workflow().await?;
     test_error_missing_world_wit().await?;
     Ok(())
@@ -78,7 +84,7 @@ async fn wit_integration() -> Result<()> {
 /// Tests the most common user workflow end-to-end
 #[tokio::test]
 async fn test_add_fetch_clean_workflow() -> Result<()> {
-    let _cwd = lock_cwd();
+    let _cwd = lock_cwd().await;
     let (temp, wit_dir) =
         setup_test_project_with_world("package test:component@0.1.0;\n\nworld example {\n}\n")
             .await?;
@@ -149,7 +155,7 @@ async fn test_add_fetch_clean_workflow() -> Result<()> {
 /// Verifies `wash wit add` handles valid multi-line world declarations
 #[tokio::test]
 async fn test_add_with_next_line_world_brace() -> Result<()> {
-    let _cwd = lock_cwd();
+    let _cwd = lock_cwd().await;
     let (temp, wit_dir) =
         setup_test_project_with_world("package test:component@0.1.0;\n\nworld example\n{\n}\n")
             .await?;
@@ -184,7 +190,7 @@ async fn test_add_with_next_line_world_brace() -> Result<()> {
 /// Overridden packages get no `wkg.lock` entry, which splits the two halves.
 #[tokio::test]
 async fn test_update_selective_and_full() -> Result<()> {
-    let _cwd = lock_cwd();
+    let _cwd = lock_cwd().await;
     let (temp, _wit_dir) = setup_test_project_with_world(
         r#"package test:component@0.1.0;
 
@@ -297,7 +303,7 @@ world example {
 /// Tests that build creates wasm file in correct location
 #[tokio::test]
 async fn test_build_output_location() -> Result<()> {
-    let _cwd = lock_cwd();
+    let _cwd = lock_cwd().await;
     let (temp, _wit_dir) = setup_test_project_with_world(
         r#"package test:component@1.0.0;
 
