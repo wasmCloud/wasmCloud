@@ -47,6 +47,7 @@ const FIXTURES: &[(&str, FixtureKind)] = &[
     // `wasmcloud:messaging@0.3.0`, so the e2e covers both revisions on a real
     // NATS bus rather than only the sync one.
     ("messaging-echo-p3", FixtureKind::P3),
+    ("messaging-sleeper-p3", FixtureKind::P3),
     ("keyvalue-implements", FixtureKind::P2),
     ("http-handler-p2", FixtureKind::P2),
     // Host component plugin fixtures (P3 async): kv-plugin serves acme:kv/store

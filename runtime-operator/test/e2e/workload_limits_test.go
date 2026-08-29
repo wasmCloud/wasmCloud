@@ -214,11 +214,300 @@ spec:
 	})
 })
 
+// The same limits, arriving over the messaging trigger rather than HTTP.
+//
+// Worth a spec of its own because the two triggers reach the pool by different
+// routes: an HTTP request arrives at the gateway and is dispatched by the host's
+// own ingress, while a message arrives at the NatsMessaging plugin's
+// subscription loop, which has its own admission gate (`max_in_flight`) in front
+// of the pool. A limit that survives one path is no evidence it survives the
+// other, and the failure mode is again invisible — `maxConcurrency` unset looks
+// exactly like `maxConcurrency` dropped in transit.
+//
+// Only the async `@0.3.0` handler can be pooled at all: its `handle-message` is
+// an `async func`, so deliveries overlap on one instance. The `@0.2.0` handler
+// holds the store for the length of its call and keeps an instance per message,
+// which is why this spec pins the version explicitly.
+//
+// The fixture (messaging-sleeper-p3) is http-sleeper with the trigger swapped:
+// its messaging handler parks on the clock for the milliseconds the body names,
+// and reports the two counts that make the limits observable from outside the
+// cluster, both timing-independent:
+//
+//   - `msg_peak`: the most deliveries this instance ever had in flight at once.
+//     An instance serving one at a time reports 1 however hard it is driven, so
+//     a value above 1 can only come from `maxConcurrency` arriving.
+//   - `msg_served`: how many it has handled. A fresh instance starts at zero, so
+//     a count that carries across two rounds is one instance serving both —
+//     which is `poolSize` arriving.
+//
+// `maxInvocations` is deliberately not asserted here. Reading a counter means
+// probing the instance that holds it, and an instance retired by its budget is
+// exactly the one that can no longer answer; the budget is set high enough to
+// stay out of the way. That a delivery spends the budget at all is covered in
+// process by integration_messaging_concurrency.rs, which reads the consequence
+// (a replacement counting from one) rather than the retired instance.
+//
+// Needs the in-cluster registry and NATS; self-skips otherwise.
+var _ = Describe("Workload Messaging Limits", Ordered, func() {
+	const (
+		workloadName = "messaging-sleeper-p3"
+		fixture      = "messaging-sleeper-p3"
+		workloadHost = "messaging-sleeper.localhost.direct"
+		subject      = "test.limits.p3"
+
+		poolSize       = 1
+		maxConcurrency = 4
+		// Above every call this spec makes — two bursts plus its probes — so
+		// the instance is never retired mid-spec. A budget below that would
+		// retire the very instance whose counters the probes have to read, and
+		// every probe after it would be answered by a replacement reporting
+		// zeroes.
+		maxInvocations = 40
+
+		// Deliveries per round. Above maxConcurrency, so the instance is driven
+		// past its own bound and the excess falls through to stores of its own.
+		burst = 8
+		// What the fixture parks for, in the message body it parses. Long
+		// enough that the whole burst is still in flight when the last of it
+		// arrives.
+		deliveryMillis = "300"
+	)
+
+	var fixtureImage string
+
+	BeforeAll(func() {
+		if !inClusterRegistry {
+			Skip("skipping messaging limits e2e (needs the in-cluster registry)")
+		}
+		fixtureImage = registryRef(fixture)
+	})
+
+	AfterEach(func() {
+		if !CurrentSpecReport().Failed() {
+			return
+		}
+		dump := func(label string, args ...string) {
+			out, err := utils.Run(exec.Command("kubectl", args...))
+			if err == nil {
+				_, _ = fmt.Fprintf(GinkgoWriter, "=== %s ===\n%s\n", label, out)
+			} else {
+				_, _ = fmt.Fprintf(GinkgoWriter, "=== %s (FAILED: %s) ===\n", label, err)
+			}
+		}
+		dump("Workload CRs", "get", "workloads.runtime.wasmcloud.dev",
+			"-n", namespace, "-o", "yaml")
+		dump("Hostgroup logs", "logs", "-n", namespace,
+			"-l", "wasmcloud.com/name=hostgroup", "--tail=400", "--prefix=true")
+	})
+
+	AfterAll(func() {
+		if fixtureImage == "" {
+			return
+		}
+		_ = exec.Command("kubectl", "delete", "workloaddeployment", workloadName,
+			"-n", namespace, "--ignore-not-found=true").Run()
+		// publishBurst names its pod per round; a spec failing between apply
+		// and its own delete would otherwise leak one into the namespace.
+		for round := 0; round < 2; round++ {
+			_ = exec.Command("kubectl", "delete", "pod",
+				fmt.Sprintf("nats-limits-pub-%d", round),
+				"-n", namespace, "--ignore-not-found=true").Run()
+		}
+	})
+
+	It("carries a component's declared limits through to messaging deliveries", func() {
+		By("deploying a messaging-triggered workload declaring every instance limit")
+		// Both host interfaces: messaging delivers the work, HTTP is how the
+		// per-instance counters are read back out of the cluster.
+		manifest := fmt.Sprintf(`apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  replicas: 1
+  template:
+    spec:
+      hostSelector:
+        hostgroup: default
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          version: "0.3.0"
+          interfaces:
+            - handler
+          config:
+            host: %s
+        - namespace: wasmcloud
+          package: messaging
+          version: "0.3.0"
+          interfaces:
+            - handler
+          config:
+            subscriptions: "%s"
+      components:
+        - name: %s
+          image: %s
+          poolSize: %d
+          maxConcurrency: %d
+          maxInvocations: %d
+`, workloadName, namespace, workloadHost, subject, fixture, fixtureImage,
+			poolSize, maxConcurrency, maxInvocations)
+
+		cmd := exec.Command("kubectl", "apply", "-f", "-")
+		cmd.Stdin = strings.NewReader(manifest)
+		_, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "failed to apply the WorkloadDeployment")
+
+		By("waiting for the WorkloadDeployment to become Ready")
+		Eventually(func(g Gomega) {
+			out, err := utils.Run(exec.Command("kubectl", "get", "workloaddeployment",
+				workloadName, "-n", namespace,
+				"-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}"))
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(Equal("True"))
+		}).WithTimeout(3 * time.Minute).Should(Succeed())
+
+		By("waiting for the workload to serve HTTP, so the counters are readable")
+		Eventually(func(g Gomega) {
+			_, err := probeOnce(workloadHost)
+			g.Expect(err).NotTo(HaveOccurred())
+		}).WithTimeout(2 * time.Minute).Should(Succeed())
+
+		By("publishing bursts of messages and reading what the instance reports")
+		// Two rounds, each proving itself: the burst spends the instance's
+		// budget, so the second round can only report anything if the pool
+		// retired that instance and built a replacement.
+		peak, served := 0, 0
+		for round := 0; round < 2; round++ {
+			publishBurst(subject, burst, deliveryMillis, round)
+
+			// Deliveries are spawned rather than awaited by the publisher, so
+			// poll rather than sleeping a guessed interval. A probe arriving
+			// while the burst is still in flight is answered by a store of its
+			// own and reports zeroes, which is what the retry is for.
+			roundPeak, roundServed := 0, 0
+			Eventually(func(g Gomega) {
+				reply, err := probeOnce(workloadHost)
+				g.Expect(err).NotTo(HaveOccurred())
+				if reply.MsgPeak > roundPeak {
+					roundPeak = reply.MsgPeak
+				}
+				if reply.MsgServed > roundServed {
+					roundServed = reply.MsgServed
+				}
+				g.Expect(roundPeak).To(BeNumerically(">", 0),
+					"no delivery has been observed in round %d", round)
+			}).WithTimeout(2 * time.Minute).WithPolling(2 * time.Second).Should(Succeed())
+
+			if roundPeak > peak {
+				peak = roundPeak
+			}
+			if roundServed > served {
+				served = roundServed
+			}
+		}
+		_, _ = fmt.Fprintf(GinkgoWriter,
+			"observed msg_peak=%d msg_served=%d\n", peak, served)
+
+		By("verifying maxConcurrency arrived on the messaging path")
+		// Without it an instance takes one delivery at a time and reports 1
+		// however hard it is driven, so this separates "the limit reached the
+		// runtime" from "the limit was dropped somewhere on this path".
+		Expect(peak).To(BeNumerically(">", 1),
+			"no instance ever overlapped deliveries — maxConcurrency did not reach "+
+				"the messaging path")
+
+		By("verifying maxConcurrency is also a bound")
+		Expect(peak).To(BeNumerically("<=", maxConcurrency),
+			"an instance exceeded maxConcurrency on the messaging path")
+
+		By("verifying poolSize arrived, so deliveries reuse an instance")
+		// A fresh instance starts at zero, so a count carrying past one round's
+		// worth is the second round landing on the instance the first warmed.
+		// Per-message instances — the behaviour before deliveries reached the
+		// pool — could never report more than one.
+		Expect(served).To(BeNumerically(">", maxConcurrency),
+			"no instance served more than a single round's deliveries — poolSize "+
+				"did not reach the messaging path")
+	})
+})
+
+// publishBurst publishes `count` messages carrying `body` to `subject` from a
+// one-shot nats-box pod against the in-cluster NATS service.
+//
+// `nats pub --count` sends them back to back, which is enough for the
+// deliveries to overlap: the host spawns a task per received message and each
+// one parks on the clock for the body's worth of milliseconds.
+func publishBurst(subject string, count int, body string, round int) {
+	name := fmt.Sprintf("nats-limits-pub-%d", round)
+	_ = exec.Command("kubectl", "delete", "pod", name,
+		"-n", namespace, "--ignore-not-found=true").Run()
+
+	// As in the messaging round-trip spec: the chart enables TLS + mTLS by
+	// default, so the pod mounts the cluster-generated data-plane cert secret
+	// and passes the cert / key / CA to the nats CLI. The volume is optional so
+	// this still runs if someone disables TLS by helm override.
+	//
+	// A flow sequence with every argument quoted, because `command` is a
+	// []string and an unquoted body of digits is a YAML *number* — which the
+	// API server refuses to unmarshal into one.
+	pod := fmt.Sprintf(`apiVersion: v1
+kind: Pod
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  restartPolicy: Never
+  containers:
+    - name: nats
+      image: natsio/nats-box:latest
+      command: [
+        "nats", "--server=nats://nats:4222",
+        "--tlsca=/data-cert/ca.crt",
+        "--tlscert=/data-cert/tls.crt",
+        "--tlskey=/data-cert/tls.key",
+        "pub", "--count=%d", %q, %q
+      ]
+      volumeMounts:
+        - name: data-cert
+          mountPath: /data-cert
+          readOnly: true
+  volumes:
+    - name: data-cert
+      secret:
+        secretName: wasmcloud-data-tls
+        optional: true
+`, name, namespace, count, subject, body)
+
+	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(pod)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "failed to create the nats publisher pod")
+
+	Eventually(func(g Gomega) {
+		out, err := utils.Run(exec.Command("kubectl", "get", "pod", name,
+			"-n", namespace, "-o", "jsonpath={.status.phase}"))
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(strings.TrimSpace(out)).To(Equal("Succeeded"))
+	}).WithTimeout(2*time.Minute).Should(Succeed(),
+		"the nats publisher pod did not complete")
+
+	_ = exec.Command("kubectl", "delete", "pod", name,
+		"-n", namespace, "--ignore-not-found=true").Run()
+}
+
 // sleeperReply is what the http-sleeper fixture reports about the instance that
 // served the request.
 type sleeperReply struct {
 	PeakInFlight int `json:"peak_in_flight"`
 	Served       int `json:"served"`
+	// The same two counts for the messaging trigger, kept separately by the
+	// fixture so a probe (which is itself an HTTP call) cannot be mistaken for
+	// a delivery.
+	MsgPeak   int `json:"msg_peak"`
+	MsgServed int `json:"msg_served"`
 }
 
 // probeOnce sends one request through the gateway to the workload behind host.
