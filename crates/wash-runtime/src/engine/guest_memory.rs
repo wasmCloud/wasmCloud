@@ -58,9 +58,19 @@
 //! told about — so the growth that gets charged is the growth that happens.
 //!
 //! What is left over is the host genuinely running out: an `mmap` that fails
-//! under real memory pressure. That charge is held until the store is dropped,
-//! which makes the budget refuse sooner than it strictly must — the safe
+//! after the growth was approved. That charge is held until the store is
+//! dropped, so the budget refuses sooner than it strictly must — the safe
 //! direction, and a host in that state has larger problems.
+//!
+//! A guest that *retries* such a growth is charged again each time, because
+//! wasmtime reports the memory at its old size and there is nothing in the
+//! call to say it is the same request. `ResourceLimiter` identifies no memory,
+//! so charging it once would mean conflating two memories that happen to grow
+//! to the same size — which is what every linked component does at
+//! instantiation. Refunding from `memory_grow_failed` is worse still, for the
+//! reason above. Bounding this properly needs a memory identity the trait does
+//! not provide; until then a guest retrying into a failing `mmap` inflates the
+//! figure, and it is the host's own memory exhaustion that put it there.
 //!
 //! # A plugin draws on the same budget as the workloads that call it
 //!
@@ -326,8 +336,8 @@ impl GuestMemoryBudget {
         let would_refuse = self.would_refuse();
         let refusals = refused.saturating_add(would_refuse);
         let new_refusals = refusals > self.reported_refusals.swap(refusals, Ordering::Relaxed);
-        // Saturating, so a `u64::MAX` cap (the unmetered default) cannot
-        // overflow its way under the threshold.
+        // Divided before it is multiplied, so a `u64::MAX` cap — the unmetered
+        // default — cannot overflow its way under the threshold.
         let pressured = in_use >= self.cap / PRESSURE_DENOMINATOR * PRESSURE_NUMERATOR;
 
         if !pressured && !new_refusals {
@@ -340,6 +350,23 @@ impl GuestMemoryBudget {
             );
             return;
         }
+        // Said separately because they are different states, and one message
+        // for both would misdescribe whichever it was not: a host can be
+        // refusing nothing right now and still have refused since the last
+        // report, and calling that "close to its budget" once `in_use` has
+        // fallen back is the opposite of the live reading this is keyed on.
+        if pressured {
+            tracing::info!(
+                mode = self.mode.as_str(),
+                in_use = %render_bytes(in_use),
+                high_water = %render_bytes(self.high_water()),
+                max_guest_memory = %render_bytes(self.cap),
+                refused,
+                would_refuse,
+                "guest memory is close to this host's budget"
+            );
+            return;
+        }
         tracing::info!(
             mode = self.mode.as_str(),
             in_use = %render_bytes(in_use),
@@ -347,7 +374,7 @@ impl GuestMemoryBudget {
             max_guest_memory = %render_bytes(self.cap),
             refused,
             would_refuse,
-            "guest memory is close to this host's budget"
+            "guest memory growth has been refused since the last report"
         );
     }
 
