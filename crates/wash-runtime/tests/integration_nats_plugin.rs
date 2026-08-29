@@ -183,6 +183,17 @@ fn workload_request_with_pool(
     interface: WitInterface,
     pool_size: i32,
 ) -> WorkloadStartRequest {
+    workload_request_with_limits(workload_id, interface, pool_size, 4)
+}
+
+/// As [`workload_request_with_pool`], but with `max_concurrency` too — how many
+/// deliveries one warm instance may have in flight at once.
+fn workload_request_with_limits(
+    workload_id: &str,
+    interface: WitInterface,
+    pool_size: i32,
+    max_concurrency: i32,
+) -> WorkloadStartRequest {
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
@@ -206,7 +217,7 @@ fn workload_request_with_pool(
                 },
                 pool_size,
                 max_invocations: 100,
-                max_concurrency: 4,
+                max_concurrency,
             }],
             host_interfaces: vec![interface],
             volumes: vec![],
@@ -1525,6 +1536,153 @@ async fn asking_for_an_undeclared_binding_fails_the_deployment() -> Result<()> {
     assert!(
         message.contains("leaf"),
         "expected the refusal to name the binding asked for, got {message}"
+    );
+    Ok(())
+}
+
+/// Publishes `runs` `conc:` triggers back to back on a core subject and returns
+/// the peak in-flight each delivery saw on its own instance.
+///
+/// Published without waiting between them, which is the point: the fixture
+/// holds each delivery open for 50ms, so a burst of four is still in flight
+/// when the last arrives — *if* an instance is allowed to take more than one.
+async fn conc_probe(h: &Harness, runs: usize) -> Result<Vec<u32>> {
+    let mut results = h.client.subscribe("test.results".to_string()).await?;
+
+    // Core NATS drops anything published before the workload's subscription has
+    // attached, and how long that takes depends on what else the machine is
+    // doing. Prove it is attached before sending the burst: a burst that landed
+    // on nothing is indistinguishable here from one the host refused to overlap.
+    //
+    // The ping takes the handler's echo branch, which leaves the in-flight
+    // counters alone, so warming the subscription cannot colour the result.
+    let mut attached = false;
+    for _ in 0..45 {
+        h.client
+            .publish("trigger.conc".to_string(), "ready".into())
+            .await
+            .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?;
+        h.client
+            .flush()
+            .await
+            .map_err(|e| anyhow::anyhow!("flush failed: {e}"))?;
+        if matches!(
+            timeout(Duration::from_secs(1), results.next()).await,
+            Ok(Some(_))
+        ) {
+            attached = true;
+            break;
+        }
+    }
+    anyhow::ensure!(
+        attached,
+        "the workload's core subscription never attached to `trigger.conc`"
+    );
+
+    for run in 0..runs {
+        h.client
+            .publish("trigger.conc".to_string(), format!("conc:{run}").into())
+            .await
+            .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?;
+    }
+    h.client
+        .flush()
+        .await
+        .map_err(|e| anyhow::anyhow!("flush failed: {e}"))?;
+
+    let mut peaks = Vec::new();
+    while peaks.len() < runs {
+        let got = timeout(Duration::from_secs(20), results.next())
+            .await
+            .context("no result before the deadline")?
+            .context("results subscription ended")?;
+        let body = String::from_utf8_lossy(&got.payload).to_string();
+        // A retried readiness ping echoes on this subject too.
+        if !body.starts_with("conc:") {
+            continue;
+        }
+        let peak = body
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse::<u32>().ok())
+            .with_context(|| format!("unparseable result `{body}`"))?;
+        peaks.push(peak);
+    }
+    Ok(peaks)
+}
+
+/// A core subscription bound to the `conc:` trigger.
+///
+/// The async variant, because only it declares `core-handler`: a
+/// `core-subscriptions` key on a binding without that export subscribes nothing.
+fn conc_interface(h: &Harness) -> WitInterface {
+    nats_async_interface(&[
+        ("servers", &h.nats_url),
+        ("subject-allow", "trigger.>,test.>"),
+        ("core-subscriptions", "trigger.conc"),
+    ])
+}
+
+/// `maxConcurrency` reaches core deliveries: one warm instance takes several at
+/// once rather than serving them in turn while its siblings fall back to stores
+/// of their own.
+///
+/// The peak the fixture reports is the signal, not wall clock. A delivery the
+/// warm set cannot take is served from a store of its own and runs in parallel
+/// anyway, so both configurations drain the burst in about the same time — what
+/// differs is *where* the calls ran, and so how much per-instance state they
+/// could share.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn max_concurrency_overlaps_core_deliveries_on_one_instance() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+
+    host.workload_start(workload_request_with_limits(
+        "wl-conc",
+        conc_interface(&h),
+        1,
+        4,
+    ))
+    .await
+    .context("failed to start the concurrent workload")?;
+
+    let peaks = conc_probe(&h, 4).await?;
+    assert!(
+        peaks.iter().any(|p| *p > 1),
+        "one instance should have taken more than one delivery at a time, saw {peaks:?}"
+    );
+    assert!(
+        peaks.iter().all(|p| *p <= 4),
+        "no instance may exceed max_concurrency of 4, saw {peaks:?}"
+    );
+    Ok(())
+}
+
+/// The control, and the default: `max_concurrency` of one means one call at a
+/// time on an instance however hard it is driven. A component that only asked
+/// for `poolSize` keeps the behaviour it had before this existed — which
+/// matters, because a guest driving its own executor cannot survive a second
+/// concurrent call entering it.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn without_max_concurrency_core_deliveries_do_not_overlap() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+
+    host.workload_start(workload_request_with_limits(
+        "wl-serial",
+        conc_interface(&h),
+        1,
+        1,
+    ))
+    .await
+    .context("failed to start the serial workload")?;
+
+    let peaks = conc_probe(&h, 4).await?;
+    assert!(
+        peaks.iter().all(|p| *p == 1),
+        "no instance may serve two deliveries at once at max_concurrency 1, saw {peaks:?}"
     );
     Ok(())
 }

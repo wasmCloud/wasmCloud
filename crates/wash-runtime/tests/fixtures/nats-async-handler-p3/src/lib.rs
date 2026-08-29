@@ -41,9 +41,25 @@ const PULL_TIMEOUT_MS: u32 = 1_000;
 /// reusing the instance (`poolSize`).
 const WARM_MARKER: &str = "warm:";
 
+/// Body prefix that reports the peak number of core deliveries this instance
+/// had in flight at once.
+///
+/// Peak rather than wall clock, for the reason `http-sleeper` gives: a delivery
+/// the warm set cannot take is served from a store of its own and runs in
+/// parallel anyway, so both configurations drain a burst in about the same
+/// time. What differs is *where* the calls ran. An instance serving one call at
+/// a time reports `1` however hard it is driven, so the signal does not depend
+/// on the burst actually overlapping.
+const CONC_MARKER: &str = "conc:";
+/// Long enough that a burst published back-to-back is still in flight when the
+/// next delivery arrives, short enough not to pace the test.
+const CONC_NANOS: u64 = 50_000_000; // 50ms
+
 /// Lives in this instance's linear memory and nowhere else: a fresh store per
 /// delivery reads 1 every time, a warm instance counts up.
 static WARM_DELIVERIES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static IN_FLIGHT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static PEAK_IN_FLIGHT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 struct Component;
 
@@ -240,6 +256,18 @@ impl CoreGuest for Component {
         if let Some(run) = body.strip_prefix(WARM_MARKER) {
             let seen = WARM_DELIVERIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             return core::publish(message("test.results", format!("warm:{run}:{seen}")))
+                .await
+                .map_err(|e| label(&e));
+        }
+        if let Some(run) = body.strip_prefix(CONC_MARKER) {
+            let now = IN_FLIGHT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            PEAK_IN_FLIGHT.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+            // Held open so a sibling delivery can overlap this one, if the
+            // instance is allowed to take a sibling at all.
+            monotonic_clock::wait_for(CONC_NANOS).await;
+            IN_FLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            let peak = PEAK_IN_FLIGHT.load(std::sync::atomic::Ordering::SeqCst);
+            return core::publish(message("test.results", format!("conc:{run}:{peak}")))
                 .await
                 .map_err(|e| label(&e));
         }
