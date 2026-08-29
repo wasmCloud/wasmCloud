@@ -22,7 +22,8 @@ use tokio::time::timeout;
 use wash_runtime::{
     engine::Engine,
     host::{HostApi, HostBuilder},
-    plugin::wasmcloud_nats::{NatsBindings, WasmcloudNats, WorkloadConfig},
+    plugin::wasmcloud_nats::{PLUGIN_NATS_ID, WasmcloudNats},
+    plugin::{PluginBindingSet, PluginBindings, WorkloadConfigPolicy},
     types::{Component, LocalResources, Workload, WorkloadStartRequest, WorkloadState},
     wit::WitInterface,
 };
@@ -228,22 +229,25 @@ fn workload_request_with_limits(
 }
 
 async fn start_host() -> Result<impl HostApi> {
-    start_host_with(NatsBindings::new()).await
+    // `allow`, the `wash dev` posture: these fixtures describe their own
+    // bindings, which is what a project manifest does. The tests that declare
+    // an operator's bindings switch to `deny` themselves.
+    start_host_with(
+        PluginBindingSet::new(PLUGIN_NATS_ID).with_workload_config(WorkloadConfigPolicy::Allow),
+    )
+    .await
 }
 
 /// A host that declares its own bindings, the way `wash host` does.
-async fn start_host_with(defaults: NatsBindings) -> Result<impl HostApi> {
+async fn start_host_with(declared: PluginBindingSet) -> Result<impl HostApi> {
     let engine = Engine::builder().build()?;
     let host = HostBuilder::new()
         .with_engine(engine)
-        .with_plugin(Arc::new(
-            WasmcloudNats::new()
-                .with_bindings(defaults)
-                .with_lattice_prefixes(vec![
-                    "runtime.host.".to_string(),
-                    "runtime.operator.".to_string(),
-                ]),
-        ))?
+        .with_plugin(Arc::new(WasmcloudNats::new().with_lattice_prefixes(vec![
+            "runtime.host.".to_string(),
+            "runtime.operator.".to_string(),
+        ])))?
+        .with_plugin_bindings(PluginBindings::new().with_plugin(declared))
         .build()?;
     host.start().await.context("failed to start host")
 }
@@ -1409,8 +1413,8 @@ async fn declared_bindings_serve_a_manifest_that_only_asks() -> Result<()> {
     let (leaf_url, leaf_client, _leaf) = start_bare_nats().await?;
 
     let host = start_host_with(
-        NatsBindings::new()
-            .with_workload_config(WorkloadConfig::Deny)
+        PluginBindingSet::new(PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Deny)
             .with_binding(
                 "hub",
                 declared(&[("servers", &hub_url), ("subject-allow", "bridge.>")]),
@@ -1489,9 +1493,9 @@ async fn declared_bindings_serve_a_manifest_that_only_asks() -> Result<()> {
 async fn a_manifest_cannot_widen_a_declared_grant() -> Result<()> {
     let h = start_nats().await?;
     let host = start_host_with(
-        NatsBindings::new()
-            .with_workload_config(WorkloadConfig::Deny)
-            .with_default_servers(vec![h.nats_url.clone()])
+        PluginBindingSet::new(PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Deny)
+            .with_default_bundle("servers", [("servers", h.nats_url.clone())])
             .with_base(declared(&[("subject-allow", "test.orders.>")])),
     )
     .await?;
@@ -1505,10 +1509,46 @@ async fn a_manifest_cannot_widen_a_declared_grant() -> Result<()> {
     )
     .await?;
 
+    // `subject-allow` is a ceiling, so the refusal is about widening rather
+    // than about touching the key at all: `test.>` is not inside
+    // `test.orders.>`. `stream-allow` has no ceiling declared, and a grant the
+    // operator never declared cannot be narrowed into either.
+    // Not `` `subject-allow` ``: a ceiling is refused with the value that
+    // widened it, so the key is quoted together with what the manifest wrote.
     assert!(
-        message.contains("`subject-allow`") && message.contains("`stream-allow`"),
+        message.contains("`subject-allow: test.>`") && message.contains("`stream-allow`"),
         "expected the refusal to name the keys the host does not accept, got {message}"
     );
+    assert!(
+        message.contains("never widen") || message.contains("not within the grant"),
+        "expected the refusal to say the manifest widened a grant, got {message}"
+    );
+    Ok(())
+}
+
+/// The other direction: a manifest asking for *less* than the host declared is
+/// served, and runs with exactly what it asked for.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn a_manifest_may_narrow_a_declared_grant() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host_with(
+        PluginBindingSet::new(PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Deny)
+            .with_default_bundle("servers", [("servers", h.nats_url.clone())])
+            .with_base(declared(&[
+                ("subject-allow", "test.>"),
+                ("stream-allow", STREAM),
+            ])),
+    )
+    .await?;
+
+    host.workload_start(workload_request(
+        "wl-narrowed",
+        nats_interface(&[("subject-allow", "test.orders.new")]),
+    ))
+    .await
+    .context("a workload that asks for less than the ceiling must be served")?;
     Ok(())
 }
 
@@ -1519,8 +1559,8 @@ async fn a_manifest_cannot_widen_a_declared_grant() -> Result<()> {
 async fn asking_for_an_undeclared_binding_fails_the_deployment() -> Result<()> {
     let (hub_url, _hub_client, _hub) = start_bare_nats().await?;
     let host = start_host_with(
-        NatsBindings::new()
-            .with_workload_config(WorkloadConfig::Deny)
+        PluginBindingSet::new(PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Deny)
             .with_binding("hub", declared(&[("servers", &hub_url)])),
     )
     .await?;

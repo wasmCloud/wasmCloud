@@ -19,7 +19,6 @@ use wash_runtime::host::allowed_hosts::AllowedHost;
 use wash_runtime::host::allowed_ip_name::AllowedIpName;
 use wash_runtime::host::allowed_loopback::AllowedLoopbackPort;
 use wash_runtime::oci::OciPullPolicy;
-use wash_runtime::plugin::wasmcloud_nats::NatsBindings;
 use wash_runtime::wit::WitInterface;
 
 use crate::{
@@ -486,16 +485,24 @@ pub struct HostPluginConfig {
     /// Whether a workload's own `interface-binding` config may set keys this
     /// plugin considers the host's.
     ///
-    /// `deny` (the default) makes this entry the whole allowlist: a workload
-    /// that sets a host-owned key, or that names a binding absent from
-    /// `bindings` once any binding is declared, fails to deploy. `allow` layers
-    /// a workload's config over the operator's instead.
+    /// `deny` makes this entry the whole allowlist: a workload that sets a
+    /// host-owned key, that widens a grant the operator declared, or that names
+    /// a binding absent from `bindings` once any binding is declared, fails to
+    /// deploy. `allow` layers a workload's config over the operator's instead,
+    /// and `warn` is `allow` with everything `deny` would refuse logged.
+    ///
+    /// Omitted takes the front end's default: `deny` under `wash host`, `allow`
+    /// under `wash dev`. Dev differs because there is no operator there — the
+    /// person writing `dev.plugins` and the person writing the manifest are the
+    /// same person, so there is no boundary for `deny` to enforce and a project
+    /// manifest should stay runnable on its own. Writing `deny` explicitly in
+    /// `dev.plugins` is how a developer rehearses against a production posture.
     ///
     /// `deny` only bites where something is declared: a plugin that names no
     /// keys in code, under an entry that sets none, owns nothing and refuses
     /// nothing.
-    #[serde(default, skip_serializing_if = "WorkloadConfigPolicy::is_default")]
-    pub workload_config: WorkloadConfigPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload_config: Option<WorkloadConfigPolicy>,
     /// Extra keys this operator claims for the host under `workloadConfig:
     /// deny`, on top of the ones the plugin declares in code and the ones this
     /// entry actually sets. A plugin that closed its schema will refuse a key
@@ -576,19 +583,14 @@ pub enum WorkloadConfigPolicy {
     Allow,
     /// Host-owned keys come only from the operator.
     ///
-    /// The default. It refuses nothing where nothing is declared — a plugin
-    /// that names no keys of its own, under an entry that sets none, owns none
-    /// — so it is the stricter default without being a breaking one.
+    /// The default on `wash host`. It refuses nothing where nothing is declared
+    /// — a plugin that names no keys of its own, under an entry that sets none,
+    /// owns none — so it is the stricter default without being a breaking one.
     #[default]
     Deny,
-}
-
-impl WorkloadConfigPolicy {
-    // serde's `skip_serializing_if` hands the field by reference.
-    #[allow(clippy::trivially_copy_pass_by_ref)]
-    fn is_default(&self) -> bool {
-        *self == Self::default()
-    }
+    /// `allow` plus diagnostics: nothing is refused, but everything `deny`
+    /// would refuse is logged. How an operator rehearses a flip to `deny`.
+    Warn,
 }
 
 impl From<WorkloadConfigPolicy> for wash_runtime::plugin::WorkloadConfigPolicy {
@@ -596,6 +598,7 @@ impl From<WorkloadConfigPolicy> for wash_runtime::plugin::WorkloadConfigPolicy {
         match policy {
             WorkloadConfigPolicy::Allow => Self::Allow,
             WorkloadConfigPolicy::Deny => Self::Deny,
+            WorkloadConfigPolicy::Warn => Self::Warn,
         }
     }
 }
@@ -620,6 +623,7 @@ impl HostPluginConfig {
         config: &Config,
         project_dir: &Path,
         repo_root: Option<&Path>,
+        default_policy: WorkloadConfigPolicy,
     ) -> Result<wash_runtime::plugin::PluginBindingSet> {
         if self.id.is_empty() {
             bail!("host.plugins entry is missing a non-empty `id`");
@@ -640,7 +644,7 @@ impl HostPluginConfig {
         let mut set = wash_runtime::plugin::PluginBindingSet::new(self.id.clone())
             .with_base(resolve(&self.environment, &owner)?)
             .with_host_owned_keys(&self.host_owned_keys)
-            .with_workload_config(self.workload_config.into());
+            .with_workload_config(self.workload_config.unwrap_or(default_policy).into());
         for (name, binding) in &self.bindings {
             if name.is_empty() {
                 bail!(
@@ -719,96 +723,6 @@ impl HostPluginConfig {
     }
 }
 
-/// Operator-owned `wasmcloud:nats` configuration.
-///
-/// A workload asks for a binding by name — `(implements orders)` on its import,
-/// or a plain import for the unnamed binding — and this is where the host says
-/// what that binding *is*: the servers it dials, the credentials it dials them
-/// with, and the subject, stream, and bucket grants it carries. Under the
-/// default `--wasmcloud-nats-workload-config=deny` a manifest that sets any of
-/// those is refused at bind, so a workload can ask for a capability but never
-/// widen one.
-///
-/// `config`/`configFrom`/`secretFrom` merge exactly like a `hostPlugins` entry
-/// (inline → configFrom → secretFrom, last source wins), resolved against the
-/// same top-level `configs:`/`secrets:` catalogs. That is how NATS credentials
-/// reach the host without appearing in a workload manifest or on a command
-/// line.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WasmcloudNatsConfig {
-    /// Configuration applied to every binding, named or not. `servers` here
-    /// overrides `--wasmcloud-nats-url`; leave it out to take the flag.
-    #[serde(flatten)]
-    pub environment: EnvironmentLayer,
-
-    /// Per-`(implements ..)` name, layered over the block above. A workload
-    /// that names a binding absent from here is refused, rather than started
-    /// against the right cluster with an empty grant.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub bindings: BTreeMap<String, WasmcloudNatsBinding>,
-}
-
-/// One named `wasmcloud:nats` binding a host serves.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WasmcloudNatsBinding {
-    /// This binding's own keys, layered over [`WasmcloudNatsConfig`]'s.
-    #[serde(flatten)]
-    pub environment: EnvironmentLayer,
-}
-
-impl WasmcloudNatsConfig {
-    /// The bindings this configuration declares, with `configFrom`/`secretFrom`
-    /// resolved against the top-level `configs:`/`secrets:` catalogs.
-    ///
-    /// The caller layers on the address (`--wasmcloud-nats-url`) and decides
-    /// who may configure a binding, so this is only the operator's own
-    /// declaration.
-    ///
-    /// # Errors
-    ///
-    /// Same failure modes as [`crate::workload::resolve_workload`], for each
-    /// block's `configFrom`/`secretFrom` references.
-    pub fn to_bindings(
-        &self,
-        config: &Config,
-        project_dir: &Path,
-        repo_root: Option<&Path>,
-    ) -> Result<NatsBindings> {
-        let resolve = |env: &EnvironmentLayer, owner: &str| -> Result<HashMap<String, String>> {
-            wash_runtime::config_source::resolve_environment_layer(
-                Some(env),
-                owner,
-                &config.config_sources,
-                &config.secret_sources,
-                project_dir,
-                repo_root,
-            )
-        };
-
-        let mut bindings = NatsBindings::new().with_base(
-            resolve(&self.environment, "host.wasmcloudNats")
-                .context("failed to resolve host.wasmcloudNats")?,
-        );
-        for (name, binding) in &self.bindings {
-            if name.is_empty() {
-                bail!(
-                    "host.wasmcloudNats.bindings has an entry with an empty name; the \
-                     unnamed binding is configured by `host.wasmcloudNats` itself"
-                );
-            }
-            let owner = format!("host.wasmcloudNats.bindings.{name}");
-            bindings = bindings.with_binding(
-                name.clone(),
-                resolve(&binding.environment, &owner)
-                    .with_context(|| format!("failed to resolve {owner}"))?,
-            );
-        }
-        Ok(bindings)
-    }
-}
-
 /// `wash host` configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -827,13 +741,6 @@ pub struct HostConfig {
     /// a native plugin's configuration belongs under `plugins`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_plugins: Vec<HostPluginConfig>,
-
-    /// The `wasmcloud:nats` bindings this host serves. See
-    /// [`WasmcloudNatsConfig`]: a workload asks for one by name, and this is
-    /// where the servers, the credentials, and the grants behind that name are
-    /// declared.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasmcloud_nats: Option<WasmcloudNatsConfig>,
 }
 
 /// Merge a `plugins` list with its deprecated source-only alias, `plugins`
@@ -875,10 +782,16 @@ fn plugin_bindings_from(
     config: &Config,
     project_dir: &Path,
     repo_root: Option<&Path>,
+    default_policy: WorkloadConfigPolicy,
 ) -> Result<wash_runtime::plugin::PluginBindings> {
     let mut bindings = wash_runtime::plugin::PluginBindings::new();
     for entry in entries {
-        bindings = bindings.with_plugin(entry.to_binding_set(config, project_dir, repo_root)?);
+        bindings = bindings.with_plugin(entry.to_binding_set(
+            config,
+            project_dir,
+            repo_root,
+            default_policy,
+        )?);
     }
     Ok(bindings)
 }
@@ -925,7 +838,13 @@ impl HostConfig {
         project_dir: &Path,
         repo_root: Option<&Path>,
     ) -> Result<wash_runtime::plugin::PluginBindings> {
-        plugin_bindings_from(&self.all_plugins()?, config, project_dir, repo_root)
+        plugin_bindings_from(
+            &self.all_plugins()?,
+            config,
+            project_dir,
+            repo_root,
+            WorkloadConfigPolicy::Deny,
+        )
     }
 }
 
@@ -1290,14 +1209,6 @@ pub struct DevConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasi_keyvalue_nats_url: Option<String>,
 
-    /// Bindings the dev host serves for `wasmcloud:nats`, in the same shape as
-    /// `host.wasmcloudNats`. Unlike `wash host`, `wash dev` leaves a workload
-    /// free to describe its own binding — a project's manifest stays
-    /// self-contained — so this is a set of defaults beneath it rather than a
-    /// boundary around it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub wasmcloud_nats: Option<WasmcloudNatsConfig>,
-
     /// Optional path for WASI blobstore filesystem storage. If not set, an in-memory store is used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasi_blobstore_path: Option<PathBuf>,
@@ -1360,7 +1271,16 @@ impl DevConfig {
         project_dir: &Path,
         repo_root: Option<&Path>,
     ) -> Result<wash_runtime::plugin::PluginBindings> {
-        plugin_bindings_from(&self.all_plugins()?, config, project_dir, repo_root)
+        // `allow`, not `deny`: there is no operator in `wash dev`, so there is
+        // no boundary to enforce and a project's manifest has to stay runnable
+        // on its own. An entry that says `deny` explicitly still gets it.
+        plugin_bindings_from(
+            &self.all_plugins()?,
+            config,
+            project_dir,
+            repo_root,
+            WorkloadConfigPolicy::Allow,
+        )
     }
 
     /// The connection quota registry this dev config asks for.
@@ -2425,45 +2345,52 @@ dev:
         );
     }
 
-    /// Locks in the YAML contract an operator writes in the host's config
-    /// file. A renamed or moved field would leave the block silently ignored,
-    /// and every workload would fall back to the bare data-plane address with
-    /// no grant — visible only as denied calls.
+    /// The shape an operator writes for `wasmcloud:nats` since it is a 
+    /// `host.plugins` entry like any other. A renamed or moved field would
+    /// leave the block silently ignored, and every workload would fall back to
+    /// the bare data-plane address with no grant — visible only as denied
+    /// calls.
     #[test]
-    fn host_wasmcloud_nats_deserializes_from_yaml() {
+    fn wasmcloud_nats_declares_its_bindings_under_host_plugins() {
         let yaml = r#"
 secrets:
   orders-nats-creds:
     inline:
       creds: /etc/nats/orders.creds
 host:
-  wasmcloudNats:
-    config:
-      servers: nats://nats.default.svc:4222
-    bindings:
-      orders:
-        config:
-          subject-allow: orders.processed,orders.received
-          stream-allow: ORDERS,PROCESSED
-          bucket-allow: order-totals
-        secretFrom:
-          - orders-nats-creds
+  plugins:
+    - id: wasmcloud-nats
+      config:
+        servers: nats://nats.default.svc:4222
+      bindings:
+        orders:
+          config:
+            subject-allow: orders.processed,orders.received
+            stream-allow: ORDERS,PROCESSED
+            bucket-allow: order-totals
+          secretFrom:
+            - orders-nats-creds
 "#;
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
-        let nats = config
+        let bindings = config
             .host()
-            .wasmcloud_nats
-            .expect("the block must deserialize");
-        assert_eq!(nats.bindings.len(), 1);
-
-        let defaults = nats
-            .to_bindings(&config, Path::new("."), None)
+            .to_plugin_bindings(&config, Path::new("."), None)
             .expect("the declaration must resolve");
-        assert_eq!(defaults.binding_names(), vec!["orders"]);
+        let declared = bindings.for_plugin("wasmcloud-nats");
+        assert_eq!(declared.binding_names().collect::<Vec<_>>(), ["orders"]);
+        assert_eq!(
+            declared.workload_config(),
+            wash_runtime::plugin::WorkloadConfigPolicy::Deny,
+            "`wash host` denies by default"
+        );
 
-        let resolved = defaults
-            .with_workload_config(wash_runtime::plugin::wasmcloud_nats::WorkloadConfig::Deny)
-            .resolve("orders", HashMap::new())
+        let resolved = declared
+            .resolve(
+                "orders",
+                &HashMap::new(),
+                &wash_runtime::plugin::wasmcloud_nats::binding_schema(),
+                wash_runtime::plugin::bindings::never_narrows(),
+            )
             .expect("a workload that asks for `orders` is served");
 
         // The base reaches the named binding, the grants come with it, and the
@@ -2482,68 +2409,67 @@ host:
         );
     }
 
-    /// The block is optional: a host that declares nothing serves the unnamed
-    /// binding at its data-plane address, with no grant.
-    #[test]
-    fn host_wasmcloud_nats_block_is_optional() {
-        let config: Config = serde_yaml_ng::from_str("host: {}").unwrap();
-        assert!(config.host().wasmcloud_nats.is_none());
-    }
-
     /// A binding under an empty name is refused: the unnamed binding is
-    /// configured by the block itself, so an empty key is a typo that would
+    /// configured by the entry itself, so an empty key is a typo that would
     /// otherwise be silently unreachable.
     #[test]
-    fn host_wasmcloud_nats_refuses_an_empty_binding_name() {
+    fn a_binding_with_an_empty_name_is_refused() {
         let yaml = r#"
 host:
-  wasmcloudNats:
-    bindings:
-      "":
-        config:
-          subject-allow: orders.>
+  plugins:
+    - id: wasmcloud-nats
+      bindings:
+        "":
+          config:
+            subject-allow: orders.>
 "#;
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
         config
             .host()
-            .wasmcloud_nats
-            .unwrap()
-            .to_bindings(&config, Path::new("."), None)
+            .to_plugin_bindings(&config, Path::new("."), None)
             .expect_err("an empty binding name must be refused");
     }
 
-    /// `wash dev` reads the same block shape as `wash host`, under its own
-    /// snake_case key. A binding that wants a NATS other than the data plane
-    /// names its own `servers` in the block.
+    /// `wash dev` reads the same entry shape under its own snake_case key, and
+    /// leaves the policy at `allow` so a project's manifest stays runnable on
+    /// its own.
     #[test]
-    fn dev_wasmcloud_nats_deserializes_from_yaml() {
+    fn dev_plugins_default_to_allow() {
         let yaml = r#"
 dev:
   data_nats_url: nats://127.0.0.1:4222
-  wasmcloud_nats:
-    config:
-      servers: nats://127.0.0.1:4322
-    bindings:
-      orders:
-        config:
-          subject-allow: orders.>
+  plugins:
+    - id: wasmcloud-nats
+      config:
+        servers: nats://127.0.0.1:4322
+      bindings:
+        orders:
+          config:
+            subject-allow: orders.>
+    - id: wasmcloud-postgres
+      workloadConfig: deny
 "#;
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
-        let dev = config.dev();
-        let defaults = dev
-            .wasmcloud_nats
-            .as_ref()
-            .expect("the block must deserialize")
-            .to_bindings(&config, Path::new("."), None)
+        let bindings = config
+            .dev()
+            .to_plugin_bindings(&config, Path::new("."), None)
             .expect("the declaration must resolve");
-        assert_eq!(defaults.binding_names(), vec!["orders"]);
-        let resolved = defaults
-            .resolve("orders", std::collections::HashMap::new())
-            .expect("the named binding is served");
+
+        let nats = bindings.for_plugin("wasmcloud-nats");
         assert_eq!(
-            resolved.get("servers").map(String::as_str),
-            Some("nats://127.0.0.1:4322"),
-            "the block's own `servers` reaches the binding"
+            nats.workload_config(),
+            wash_runtime::plugin::WorkloadConfigPolicy::Allow,
+            "dev leaves a manifest free to describe its own binding"
+        );
+        assert_eq!(
+            nats.host_layer("orders")["servers"],
+            "nats://127.0.0.1:4322"
+        );
+
+        assert_eq!(
+            bindings.for_plugin("wasmcloud-postgres").workload_config(),
+            wash_runtime::plugin::WorkloadConfigPolicy::Deny,
+            "an explicit `deny` is how a developer rehearses the production posture"
         );
     }
 
@@ -2642,10 +2568,12 @@ host:
 "#;
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
         let entry = &config.host().plugins[0];
-        assert_eq!(entry.workload_config, WorkloadConfigPolicy::Deny);
+        assert_eq!(entry.workload_config, Some(WorkloadConfigPolicy::Deny));
         assert!(!entry.is_component());
 
-        let set = entry.to_binding_set(&config, Path::new("."), None).unwrap();
+        let set = entry
+            .to_binding_set(&config, Path::new("."), None, WorkloadConfigPolicy::Deny)
+            .unwrap();
         assert_eq!(
             set.workload_config(),
             wash_runtime::plugin::WorkloadConfigPolicy::Deny
@@ -2659,9 +2587,13 @@ host:
         assert_eq!(layer["creds"], "/etc/nats/orders.creds");
 
         // Declared-but-unset keys are the operator's too.
+        // `hostOwnedKeys` claims a key the operator left unset. Setting a value
+        // is *not* a claim: `subject-allow` has a value here and is still the
+        // schema's to classify, so an operator's convenience default does not
+        // silently become a ceiling nobody can move.
         let owned = set.effective_host_owned(&wash_runtime::plugin::BindingSchema::empty());
         assert!(owned.contains("inbox-prefix"));
-        assert!(owned.contains("subject-allow"));
+        assert!(!owned.contains("subject-allow"));
     }
 
     #[test]
@@ -2677,8 +2609,14 @@ host:
 "#;
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
         let host = config.host();
-        assert_eq!(host.plugins[0].workload_config, WorkloadConfigPolicy::Deny);
-        assert_eq!(host.plugins[1].workload_config, WorkloadConfigPolicy::Allow);
+        assert_eq!(
+            host.plugins[0].workload_config, None,
+            "omitted takes the front end's default"
+        );
+        assert_eq!(
+            host.plugins[1].workload_config,
+            Some(WorkloadConfigPolicy::Allow)
+        );
 
         let bindings = host
             .to_plugin_bindings(&config, Path::new("."), None)

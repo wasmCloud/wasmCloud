@@ -380,24 +380,6 @@ pub struct HostCommand {
     #[arg(long = "wasmcloud-nats-url", env = "WASH_WASMCLOUD_NATS_URL")]
     pub wasmcloud_nats_url: Option<String>,
 
-    /// Whether a workload's own interface `config` may describe a
-    /// `wasmcloud:nats` binding.
-    ///
-    /// `deny` (the default) makes the bindings declared under
-    /// `host.wasmcloudNats` the whole allowlist: a workload asks for one by
-    /// `(implements ..)` name and receives what the host declared. A manifest
-    /// that sets `servers`, credentials, TLS, or a `*-allow` grant is refused
-    /// at bind, and one that names a binding the host does not serve is refused
-    /// too. `allow` treats the host's declaration as a default a manifest may
-    /// override — how `wash dev` runs, so a project stays self-contained.
-    #[arg(
-        long = "wasmcloud-nats-workload-config",
-        env = "WASH_WASMCLOUD_NATS_WORKLOAD_CONFIG",
-        value_enum,
-        default_value = "deny"
-    )]
-    pub wasmcloud_nats_workload_config: NatsWorkloadConfig,
-
     /// Enable additional wasm proposals on the engine. Accepts a comma-separated
     /// list and/or repeated flags, e.g. `--wasm-proposal gc,threads`. Accepted
     /// names: component-model-async, component-model-map, gc,
@@ -479,50 +461,54 @@ fn host_plugin_registry_credentials(
 }
 
 impl HostCommand {
-    /// The `wasmcloud:nats` bindings this host serves.
+    /// The operator's plugin binding declarations, plus the fallbacks this
+    /// host's own flags supply.
     ///
-    /// The operator's declaration (`host.wasmcloudNats`, with its
-    /// `configFrom`/`secretFrom` already resolved) plus the address every
-    /// binding falls back to, under the flag that decides whether a workload
-    /// may describe a binding of its own.
-    fn wasmcloud_nats_bindings(
+    /// `wasmcloud:nats` is the only plugin with a fallback today: a binding
+    /// that names no `servers` dials the data plane. The TLS material rides
+    /// with it as an *anchored bundle* rather than as three independent
+    /// defaults, because certs are only valid for the address they were issued
+    /// for — an operator who points a binding at some other NATS and sets no
+    /// TLS must not inherit the cluster's. The bundle is evaluated at resolve
+    /// time, so a workload setting `servers` under `allow` skips it too.
+    fn plugin_bindings(
         &self,
         config: &crate::config::Config,
         project_dir: &std::path::Path,
-    ) -> anyhow::Result<wash_runtime::plugin::wasmcloud_nats::NatsBindings> {
-        let declared = match &config.host().wasmcloud_nats {
-            Some(nats) => nats
-                .to_bindings(config, project_dir, Some(project_dir))
-                .context("failed to resolve host.wasmcloudNats")?,
-            None => wash_runtime::plugin::wasmcloud_nats::NatsBindings::new(),
-        };
-        // TLS before servers (see `with_default_tls`), and only when the
-        // fallback address *is* the data plane: `--wasmcloud-nats-url` points
-        // at some other NATS, whose trust the data plane's certs say nothing
-        // about. Without this a stock chart install — TLS on by default —
-        // seeds an address every inheriting binding fails to dial.
-        let declared = if self.wasmcloud_nats_url.is_none() {
-            declared.with_default_tls(
-                self.data_nats_tls_ca.as_deref(),
-                self.data_nats_tls_cert.as_deref(),
-                self.data_nats_tls_key.as_deref(),
-                self.data_nats_tls_first,
-            )
-        } else {
-            declared
-        };
-        let defaults = declared
-            .with_default_servers(vec![
-                self.wasmcloud_nats_url
-                    .clone()
-                    .unwrap_or_else(|| self.data_nats_url.clone()),
-            ])
-            .with_workload_config(self.wasmcloud_nats_workload_config.into());
-        // A declaration that cannot be parsed is a typo in the host's own
-        // config file. Caught here, it names the binding; caught at the first
-        // workload that asks for it, it looks like the workload's fault.
-        defaults.validate()?;
-        Ok(defaults)
+    ) -> anyhow::Result<wash_runtime::plugin::PluginBindings> {
+        let declared = config
+            .host()
+            .to_plugin_bindings(config, project_dir, Some(project_dir))
+            .context("failed to resolve host.plugins")?;
+
+        let mut bundle: Vec<(&str, String)> = vec![(
+            "servers",
+            self.wasmcloud_nats_url
+                .clone()
+                .unwrap_or_else(|| self.data_nats_url.clone()),
+        )];
+        // Only when the fallback address *is* the data plane:
+        // `--wasmcloud-nats-url` points at some other NATS, whose trust the
+        // data plane's certs say nothing about.
+        if self.wasmcloud_nats_url.is_none() {
+            for (key, path) in [
+                ("tls-ca", self.data_nats_tls_ca.as_deref()),
+                ("tls-cert", self.data_nats_tls_cert.as_deref()),
+                ("tls-key", self.data_nats_tls_key.as_deref()),
+            ] {
+                if let Some(path) = path {
+                    bundle.push((key, path.display().to_string()));
+                }
+            }
+            if self.data_nats_tls_first {
+                bundle.push(("tls-first", "true".to_string()));
+            }
+        }
+
+        let nats = declared
+            .entry(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID)
+            .with_default_bundle("servers", bundle);
+        Ok(declared.with_plugin(nats))
     }
 }
 
@@ -646,15 +632,30 @@ impl CliCommand for HostCommand {
         // Resolved before anything is built: a binding an operator declared
         // wrong is a typo in the host's config file, and the workload that
         // later asks for it is not the thing at fault.
-        let wasmcloud_nats_bindings = self.wasmcloud_nats_bindings(&config, project_dir)?;
-        // Stated at startup because it decides what every `wasmcloud:nats`
-        // workload can reach, and the default declines to take a manifest's
-        // word for it.
-        info!(
-            workload_config = wasmcloud_nats_bindings.workload_config().as_str(),
-            bindings = wasmcloud_nats_bindings.binding_names().join(","),
-            "wasmcloud:nats bindings resolved (see host.wasmcloudNats and --wasmcloud-nats-*)"
-        );
+        let plugin_bindings = self.plugin_bindings(&config, project_dir)?;
+        // Stated at startup because it decides what every workload on the
+        // plugin can reach, and the default declines to take a manifest's word
+        // for it. `warn` is called out rather than merely reported: it enforces
+        // nothing, so an operator who set it and forgot has no protection.
+        for id in plugin_bindings.plugin_ids() {
+            let declared = plugin_bindings.for_plugin(id);
+            let policy = declared.workload_config();
+            let names = declared.binding_names().collect::<Vec<_>>().join(",");
+            if policy == wash_runtime::plugin::WorkloadConfigPolicy::Warn {
+                tracing::warn!(
+                    plugin_id = id,
+                    bindings = names,
+                    "workloadConfig is `warn`: nothing is refused, only reported"
+                );
+            } else {
+                info!(
+                    plugin_id = id,
+                    workload_config = policy.as_str(),
+                    bindings = names,
+                    "plugin bindings resolved (see host.plugins)"
+                );
+            }
+        }
 
         let mut cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default()
             .with_engine(engine.clone())
@@ -687,7 +688,6 @@ impl CliCommand for HostCommand {
             // workload asks for a capability by name and cannot widen one.
             .with_plugin(Arc::new(
                 plugin::wasmcloud_nats::WasmcloudNats::new()
-                    .with_bindings(wasmcloud_nats_bindings)
                     // A subscription's byte budget is per subscription and
                     // this host's memory is not. Without the budget the plugin
                     // cannot tell whether the subscriptions it is about to
@@ -847,11 +847,7 @@ impl CliCommand for HostCommand {
         // After every plugin is registered — including the component plugins
         // above — so `build()` can refuse a declaration naming an id this host
         // has no plugin for.
-        cluster_host_builder = cluster_host_builder.with_plugin_bindings(
-            config
-                .host()
-                .to_plugin_bindings(&config, project_dir, Some(project_dir))?,
-        );
+        cluster_host_builder = cluster_host_builder.with_plugin_bindings(plugin_bindings);
 
         let cluster_host = cluster_host_builder
             .build()
@@ -879,7 +875,8 @@ impl CliCommand for HostCommand {
 mod nats_tests {
     use clap::Parser;
 
-    use super::{HostCommand, NatsWorkloadConfig};
+    use super::HostCommand;
+    use wash_runtime::plugin::{WorkloadConfigPolicy, bindings::never_narrows, wasmcloud_nats};
 
     /// `HostCommand` is an `Args` group, so give it a `Parser` to parse under.
     #[derive(Debug, Parser)]
@@ -896,14 +893,38 @@ mod nats_tests {
         serde_yaml_ng::from_str(yaml).expect("config must parse")
     }
 
-    /// With no flags a host takes a workload's word for nothing: the bindings
-    /// an operator declared are the whole allowlist.
+    fn nats_bindings(
+        host: &HostCommand,
+        config: &crate::config::Config,
+    ) -> anyhow::Result<wash_runtime::plugin::PluginBindingSet> {
+        Ok(host
+            .plugin_bindings(config, std::path::Path::new("."))?
+            .for_plugin(wasmcloud_nats::PLUGIN_NATS_ID)
+            .clone())
+    }
+
+    fn resolve(
+        declared: &wash_runtime::plugin::PluginBindingSet,
+        binding: &str,
+        workload: &[(&str, &str)],
+    ) -> anyhow::Result<std::collections::HashMap<String, String>> {
+        declared.resolve(
+            binding,
+            &workload
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
+            &wasmcloud_nats::binding_schema(),
+            never_narrows(),
+        )
+    }
+
+    /// With no `host.plugins` entry a host denies by default — and, owning
+    /// nothing an operator declared, refuses nothing a manifest writes.
     #[test]
     fn workload_config_defaults_to_deny() {
-        assert_eq!(
-            parse(&[]).wasmcloud_nats_workload_config,
-            NatsWorkloadConfig::Deny
-        );
+        let declared = nats_bindings(&parse(&[]), &config_from("{}")).unwrap();
+        assert_eq!(declared.workload_config(), WorkloadConfigPolicy::Deny);
     }
 
     /// A binding that names no servers falls back to the data plane, so a
@@ -911,115 +932,93 @@ mod nats_tests {
     #[test]
     fn the_address_falls_back_to_the_data_plane() {
         let host = parse(&["--data-nats-url", "nats://data:4222"]);
-        let defaults = host
-            .wasmcloud_nats_bindings(&config_from("{}"), std::path::Path::new("."))
-            .expect("the default flags must resolve");
-        let resolved = defaults
-            .resolve("", std::collections::HashMap::new())
-            .expect("the unnamed binding is served");
+        let declared = nats_bindings(&host, &config_from("{}")).expect("the flags must resolve");
+        let resolved = resolve(&declared, "", &[]).unwrap();
         assert_eq!(
             resolved.get("servers").map(String::as_str),
             Some("nats://data:4222")
         );
     }
 
-    /// `--wasmcloud-nats-url` points the plugin's bindings somewhere other than
-    /// the host's own data plane.
+    /// The data plane's TLS material rides with its address as one bundle. A
+    /// binding pointed somewhere else takes neither — certs are only valid for
+    /// the address they were issued for.
     #[test]
-    fn the_address_flag_overrides_the_data_plane() {
+    fn the_tls_material_travels_with_the_address_it_belongs_to() {
         let host = parse(&[
             "--data-nats-url",
             "nats://data:4222",
-            "--wasmcloud-nats-url",
-            "nats://workloads:4222",
+            "--data-nats-tls-ca",
+            "/certs/ca.crt",
         ]);
-        let defaults = host
-            .wasmcloud_nats_bindings(&config_from("{}"), std::path::Path::new("."))
-            .unwrap();
-        let resolved = defaults
-            .resolve("", std::collections::HashMap::new())
-            .unwrap();
+        let declared = nats_bindings(&host, &config_from("{}")).unwrap();
+
+        let inherited = resolve(&declared, "", &[]).unwrap();
         assert_eq!(
-            resolved.get("servers").map(String::as_str),
-            Some("nats://workloads:4222")
+            inherited.get("tls-ca").map(String::as_str),
+            Some("/certs/ca.crt"),
+            "a binding on the data plane gets its certs"
+        );
+
+        // Evaluated at resolve time, so a workload naming its own address under
+        // `allow` skips the bundle too — not just an operator who declared one.
+        let elsewhere = resolve(
+            &declared
+                .clone()
+                .with_workload_config(WorkloadConfigPolicy::Allow),
+            "",
+            &[("servers", "nats://elsewhere:4222")],
+        )
+        .unwrap();
+        assert_eq!(
+            elsewhere.get("servers").map(String::as_str),
+            Some("nats://elsewhere:4222")
+        );
+        assert!(
+            !elsewhere.contains_key("tls-ca"),
+            "the data plane's certs say nothing about another NATS: {elsewhere:?}"
         );
     }
 
-    /// The end the whole change exists for: a workload asks for `orders` and
-    /// receives the grant the operator declared, having written none itself.
+    /// An operator's declaration reaches the binding, and `deny` refuses a
+    /// manifest that would point itself elsewhere.
     #[test]
-    fn a_declared_binding_carries_the_operators_grant() {
+    fn a_declared_binding_is_the_whole_allowlist() {
         let config = config_from(
             r#"
 host:
-  wasmcloudNats:
-    bindings:
-      orders:
-        config:
-          subject-allow: orders.processed,orders.received
-          stream-allow: ORDERS,PROCESSED
-          bucket-allow: order-totals
+  plugins:
+    - id: wasmcloud-nats
+      bindings:
+        orders:
+          config:
+            subject-allow: orders.processed
 "#,
         );
-        let defaults = parse(&["--data-nats-url", "nats://data:4222"])
-            .wasmcloud_nats_bindings(&config, std::path::Path::new("."))
-            .expect("the declaration must resolve");
+        let host = parse(&["--data-nats-url", "nats://data:4222"]);
+        let declared = nats_bindings(&host, &config).unwrap();
 
-        let resolved = defaults
-            .resolve(
-                "orders",
-                std::collections::HashMap::from([(
-                    "subscriptions".to_string(),
-                    "ORDERS:orders.received:all".to_string(),
-                )]),
-            )
-            .expect("a workload that only asks is accepted");
-
-        assert_eq!(
-            resolved.get("servers").map(String::as_str),
-            Some("nats://data:4222")
-        );
-        assert_eq!(
-            resolved.get("stream-allow").map(String::as_str),
-            Some("ORDERS,PROCESSED")
-        );
-        assert_eq!(
-            resolved.get("subscriptions").map(String::as_str),
-            Some("ORDERS:orders.received:all")
-        );
-
-        defaults
-            .resolve(
-                "orders",
-                std::collections::HashMap::from([(
-                    "subject-allow".to_string(),
-                    "orders.>".to_string(),
-                )]),
-            )
-            .expect_err("but one that grants itself subjects is not");
+        resolve(&declared, "orders", &[]).expect("a workload that only asks is served");
+        resolve(&declared, "orders", &[("servers", "nats://elsewhere:4222")])
+            .expect_err("but one that points itself at another cluster is not");
     }
 
     /// `allow` puts the host's declaration back under the manifest instead of
-    /// around it.
+    /// around it. It is written on the entry now, not on a flag.
     #[test]
     fn allow_lets_a_manifest_describe_its_own_binding() {
-        let defaults = parse(&[
-            "--data-nats-url",
-            "nats://data:4222",
-            "--wasmcloud-nats-workload-config",
-            "allow",
-        ])
-        .wasmcloud_nats_bindings(&config_from("{}"), std::path::Path::new("."))
-        .unwrap();
+        let config = config_from(
+            r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+      workloadConfig: allow
+"#,
+        );
+        let host = parse(&["--data-nats-url", "nats://data:4222"]);
+        let declared = nats_bindings(&host, &config).unwrap();
 
-        let resolved = defaults
-            .resolve(
-                "",
-                std::collections::HashMap::from([(
-                    "subject-allow".to_string(),
-                    "orders.>".to_string(),
-                )]),
-            )
+        let resolved = resolve(&declared, "", &[("subject-allow", "orders.>")])
             .expect("allow accepts a workload's own grant");
         assert_eq!(
             resolved.get("subject-allow").map(String::as_str),
@@ -1027,35 +1026,13 @@ host:
         );
     }
 
-    /// A declaration that would not parse fails while resolving the host's
-    /// config, so the host does not start and then refuse the first workload
-    /// that asks for the binding.
+    /// An unparseable policy is a config error, named as one.
     #[test]
-    fn a_bad_declaration_fails_at_startup() {
-        let config = config_from(
-            r#"
-host:
-  wasmcloudNats:
-    bindings:
-      orders:
-        config:
-          ack-mode: sometimes
-"#,
-        );
-        let err = parse(&["--data-nats-url", "nats://data:4222"])
-            .wasmcloud_nats_bindings(&config, std::path::Path::new("."))
-            .expect_err("`sometimes` is not an ack mode");
-        assert!(
-            format!("{err:#}").contains("orders"),
-            "names the binding: {err:#}"
-        );
-    }
-
-    /// An unparseable flag value is a clap error, not a resolution error.
-    #[test]
-    fn the_workload_config_flag_is_typed() {
-        TestCli::try_parse_from(["wash-host", "--wasmcloud-nats-workload-config", "sometimes"])
-            .expect_err("`sometimes` must not parse");
+    fn the_workload_config_value_is_typed() {
+        serde_yaml_ng::from_str::<crate::config::Config>(
+            "host:\n  plugins:\n    - id: wasmcloud-nats\n      workloadConfig: sometimes\n",
+        )
+        .expect_err("`sometimes` is not a policy");
     }
 }
 
@@ -1082,25 +1059,6 @@ mod tests {
         // credentials — never a basic auth with an empty half.
         assert_eq!(host_plugin_registry_credentials(Some("user"), None), None);
         assert_eq!(host_plugin_registry_credentials(None, Some("pass")), None);
-    }
-}
-
-/// CLI spelling of [`wash_runtime::plugin::wasmcloud_nats::WorkloadConfig`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
-pub enum NatsWorkloadConfig {
-    /// Connection settings and grants come only from `host.wasmcloudNats`.
-    #[default]
-    Deny,
-    /// A workload's own interface `config` may supply them, over the host's.
-    Allow,
-}
-
-impl From<NatsWorkloadConfig> for wash_runtime::plugin::wasmcloud_nats::WorkloadConfig {
-    fn from(mode: NatsWorkloadConfig) -> Self {
-        match mode {
-            NatsWorkloadConfig::Deny => Self::Deny,
-            NatsWorkloadConfig::Allow => Self::Allow,
-        }
     }
 }
 

@@ -5,11 +5,11 @@
 //! in `config`, and the long-lived subscription loops it spawns are in
 //! `subscriber`.
 
-pub mod bindings;
 pub(super) mod config;
 pub(super) mod conn;
 pub(super) mod interfaces;
 pub(super) mod jetstream;
+pub(super) mod keys;
 pub(super) mod ledger;
 pub(super) mod macros;
 mod plugin;
@@ -17,8 +17,21 @@ pub(super) mod policy;
 mod subscriber;
 pub(super) mod warm;
 
-pub use bindings::{NatsBindings, WorkloadConfig};
 pub use plugin::{ComponentData, WasmcloudNats};
+
+/// How this plugin classifies its config keys, built from the one table that
+/// also drives the reader — see [`keys`].
+///
+/// Closed: every key the plugin reads is named, so a manifest key it does not
+/// recognize is refused rather than silently ignored. That is what keeps the
+/// table honest, since a key added to `NatsConfig::from_map` and forgotten here
+/// fails the first manifest that uses it.
+#[must_use]
+pub fn binding_schema() -> crate::plugin::BindingSchema {
+    crate::plugin::BindingSchema::with_host_owned_keys(keys::host_owned())
+        .and_host_ceiling_keys(keys::host_ceiling())
+        .and_workload_owned_keys(keys::workload_owned())
+}
 
 // Handler worlds. Each lives in its own module so their duplicate import types
 // don't collide, and so a component exporting only one handler still
@@ -55,6 +68,8 @@ pub(super) mod kv_bindings {
     });
 }
 
-pub(super) const PLUGIN_NATS_ID: &str = "wasmcloud-nats";
+/// This plugin's host-unique id, and the key an operator declares it under
+/// in `host.plugins`.
+pub const PLUGIN_NATS_ID: &str = "wasmcloud-nats";
 
 const NATS_VERSION: &str = "0.1.0";

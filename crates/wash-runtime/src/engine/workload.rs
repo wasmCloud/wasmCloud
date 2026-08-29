@@ -2225,29 +2225,43 @@ impl UnresolvedWorkload {
 
             // If this plugin matches any components, bind them
             if !plugin_component_bindings.is_empty() {
-                // The operator's declaration for this plugin, merged under each
-                // matched interface's own config before any of it reaches the
-                // plugin. Done once, here, so `on_workload_bind` and
-                // `on_workload_item_bind` see the same resolved map and no
-                // plugin has to know the policy exists. The pre-resolution
-                // interfaces stay in `plugin_component_bindings`: they are what
-                // `unmatched_interfaces` is keyed by.
+                // The operator's declaration for this plugin, applied before
+                // any of it reaches the plugin.
+                // `on_workload_bind` and `on_workload_item_bind` see the same
+                // resolved map and no plugin has to know the policy exists. The
+
+                // Resolution is keyed by binding name across the *whole*
+                // workload, not per component: one label is one binding — one
+                // connection, one grant — however many entries or components a
+                // manifest splits it across.
                 let declared = plugin_bindings.for_plugin(plugin_id);
                 let schema = p.binding_schema();
-                let mut resolved_component_bindings =
-                    Vec::with_capacity(plugin_component_bindings.len());
-                for (component_id, interfaces) in &plugin_component_bindings {
-                    match declared.resolve_interfaces(interfaces, &schema) {
-                        Ok(resolved) => resolved_component_bindings.push(resolved),
+                let narrows =
+                    |key: &str, host: &str, workload: &str| p.narrows(key, host, workload);
+                let requested_interfaces: HashSet<WitInterface> = plugin_component_bindings
+                    .iter()
+                    .flat_map(|(_, interfaces)| interfaces.clone())
+                    .collect();
+                let resolved_by_name =
+                    match declared.resolve_by_name(&requested_interfaces, &schema, &narrows) {
+                        Ok(resolved) => resolved,
                         Err(e) => {
                             unbind_all(self.id(), &bound_plugins_with_interfaces, "binding policy")
                                 .await;
                             bail!(e.context(format!(
-                                "workload item {component_id} cannot bind plugin '{plugin_id}'"
+                                "workload {} cannot bind plugin '{plugin_id}'",
+                                self.id()
                             )))
                         }
-                    }
-                }
+                    };
+
+                let resolved_component_bindings: Vec<HashSet<WitInterface>> =
+                    plugin_component_bindings
+                        .iter()
+                        .map(|(_, interfaces)| {
+                            declared.apply_resolved(interfaces, &resolved_by_name)
+                        })
+                        .collect();
 
                 // Collect all unique interfaces across all component bindings for on_workload_bind
                 let plugin_matched_interfaces: HashSet<WitInterface> = resolved_component_bindings
