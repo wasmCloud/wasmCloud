@@ -1341,10 +1341,15 @@ where
 
 /// Reports a `WASMTIME_POOLING_*` value that overrides a resolved flag.
 ///
-/// `host memory resolved` is the line an operator reads to confirm what the
-/// host is running, and every sizing rule is derived against it. These envs are
-/// applied *after* it, so when one is set the line is quietly wrong — it names
-/// the flag, not the number in force. This says so, once, next to it.
+/// The flags are what an operator set and what every sizing rule is derived
+/// against; these envs are applied on top of them, here. Where the two differ
+/// the host runs on the env, and an operator reading back the flag they set
+/// has no way to tell — so this says which one won, once, at startup.
+///
+/// It does not say `host memory resolved` is wrong. That line is read back
+/// from the pool that was actually built ([`InstalledPool`]), so for the three
+/// knobs it names it already prints the overridden number; the other four it
+/// does not mention at all.
 ///
 /// Also refuses a zero. Every one of these knobs means "this host runs
 /// nothing" at zero, which is never what an operator meant, and the flags they
@@ -1364,14 +1369,14 @@ where
         return None;
     }
     if value != resolved {
-        // Rendered, not raw: `host memory resolved` prints this knob through
-        // `render_bytes`, and an operator cannot compare 4294967296 to 256MiB.
+        // Rendered, not raw: the byte-sized knobs go through `render_bytes`,
+        // and an operator cannot compare 4294967296 to 256MiB.
         let (resolved, value) = (render(resolved), render(value));
         warn!(
             resolved = %resolved,
             override_value = %value,
-            "`{key}` overrides the resolved host memory budget: this host runs with \
-             {value}, not the {resolved} reported by `host memory resolved`"
+            "`{key}` overrides the flag it shadows: this host runs with {value}, not the \
+             {resolved} it was configured with"
         );
     }
     Some(value)
