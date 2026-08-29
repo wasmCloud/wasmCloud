@@ -1377,6 +1377,14 @@ where
     Some(value)
 }
 
+/// [`pooling_env_override`] for the knobs that are plain instance counts.
+///
+/// All of them default to the same resolved `--core-instances` and all of them
+/// mean "this host runs nothing" at zero, so all of them want the same guard.
+fn pooling_env_instances(key: &str, resolved: u32) -> u32 {
+    pooling_env_override(key, resolved, |v| v.to_string()).unwrap_or(resolved)
+}
+
 fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAllocationConfig {
     let mut config = PoolingAllocationConfig::default();
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_UNUSED_WASM_SLOTS") {
@@ -1394,11 +1402,10 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
     if let Some(v) = getenv("WASMTIME_POOLING_TABLE_KEEP_RESIDENT") {
         config.table_keep_resident(v);
     }
-    if let Some(v) = getenv("WASMTIME_POOLING_TOTAL_COMPONENT_INSTANCES") {
-        config.total_component_instances(v);
-    } else {
-        config.total_component_instances(instances);
-    }
+    config.total_component_instances(pooling_env_instances(
+        "WASMTIME_POOLING_TOTAL_COMPONENT_INSTANCES",
+        instances,
+    ));
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_COMPONENT_INSTANCE_SIZE") {
         config.max_component_instance_size(v);
     }
@@ -1411,29 +1418,24 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_TABLES_PER_COMPONENT") {
         config.max_tables_per_component(v);
     }
-    if let Some(v) = getenv("WASMTIME_POOLING_TOTAL_MEMORIES") {
-        config.total_memories(v);
-    } else {
-        config.total_memories(instances);
-    }
-    if let Some(v) = getenv("WASMTIME_POOLING_TOTAL_TABLES") {
-        config.total_tables(v);
-    } else {
-        config.total_tables(instances);
-    }
-    if let Some(v) = getenv("WASMTIME_POOLING_TOTAL_STACKS") {
-        config.total_stacks(v);
-    } else {
-        config.total_stacks(instances);
-    }
+    config.total_memories(pooling_env_instances(
+        "WASMTIME_POOLING_TOTAL_MEMORIES",
+        instances,
+    ));
+    config.total_tables(pooling_env_instances(
+        "WASMTIME_POOLING_TOTAL_TABLES",
+        instances,
+    ));
+    config.total_stacks(pooling_env_instances(
+        "WASMTIME_POOLING_TOTAL_STACKS",
+        instances,
+    ));
     // `--core-instances` is what `host memory resolved` reports, and this is
     // what actually sizes the pool.
-    config.total_core_instances(
-        pooling_env_override("WASMTIME_POOLING_TOTAL_CORE_INSTANCES", instances, |v| {
-            v.to_string()
-        })
-        .unwrap_or(instances),
-    );
+    config.total_core_instances(pooling_env_instances(
+        "WASMTIME_POOLING_TOTAL_CORE_INSTANCES",
+        instances,
+    ));
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_CORE_INSTANCE_SIZE") {
         config.max_core_instance_size(v);
     }
@@ -1461,11 +1463,10 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
         .unwrap_or(resolved_heap),
     );
     #[cfg(not(windows))]
-    if let Some(v) = getenv("WASMTIME_POOLING_TOTAL_GC_HEAPS") {
-        config.total_gc_heaps(v);
-    } else {
-        config.total_gc_heaps(instances);
-    }
+    config.total_gc_heaps(pooling_env_instances(
+        "WASMTIME_POOLING_TOTAL_GC_HEAPS",
+        instances,
+    ));
     config
 }
 
