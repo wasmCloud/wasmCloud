@@ -611,6 +611,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "messaging-sleeper-p3"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "msg-counter"
 version = "0.0.0"
 dependencies = [

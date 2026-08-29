@@ -1,0 +1,25 @@
+package wasmcloud:msg-sleeper-p3;
+
+/// The messaging counterpart of `http-sleeper`: a `wasmcloud:messaging@0.3.0`
+/// handler that *awaits* rather than computes, so per-instance concurrency is
+/// measurable. A handler that returned immediately would have nothing to
+/// overlap, and could not tell a concurrent instance from a serial one.
+///
+/// `wasi:http/handler` is how the counters leave the guest. It is a reporting
+/// surface only — it neither sleeps nor touches the messaging counters, so
+/// reading them cannot perturb them. It does count its own calls, because a
+/// probe is a call on the same pool and consumes the same `maxInvocations`
+/// budget; a test needs to see that.
+///
+/// Deliberately a fixture of its own rather than another export on
+/// `http-sleeper`: that one is started as a *service* by other tests, and a
+/// component exporting a messaging handler takes a different validation path
+/// there — it would be required to export `wasi:cli/run` as well.
+world msg-sleeper-p3 {
+    import wasi:http/types@0.3.0;
+    import wasi:clocks/types@0.3.0;
+    import wasi:clocks/monotonic-clock@0.3.0;
+
+    export wasi:http/handler@0.3.0;
+    export wasmcloud:messaging/handler@0.3.0;
+}

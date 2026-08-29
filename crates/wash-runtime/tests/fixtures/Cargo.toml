@@ -14,6 +14,7 @@ members = [
     "nats-implements-p3",
     "messaging-echo",
     "messaging-echo-p3",
+    "messaging-sleeper-p3",
     "messaging-dual-handler",
     "inter-component-call-caller",
     "inter-component-call-callee",
