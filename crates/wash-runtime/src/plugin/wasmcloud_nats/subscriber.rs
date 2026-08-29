@@ -340,7 +340,6 @@ async fn build_instance(
         created = workload.new_store(component_id) => created?,
         _ = cancel_token.cancelled() => return Ok(None),
     };
-    waive_fuel_limit(&mut store);
     let instance = tokio::select! {
         instantiated = target.pre.instantiate_async(&mut store) => {
             instantiated.map_err(|e| anyhow::anyhow!("{e:#}"))?
@@ -485,21 +484,6 @@ impl WarmSets {
         }
         Arc::new(sets)
     }
-}
-
-/// Waives the fuel limit on a fresh store, so nothing on this path is metered
-/// or bounded by fuel.
-///
-/// This plugin measures guest execution by sampling the epoch callback
-/// ([`crate::observability::ExecutionTimeMeter`]); it never reads a fuel
-/// counter and never bounds a call by one. The engine underneath it may still
-/// have fuel *enabled* — `--enable-meters` turns it on for the paths that do
-/// measure by it, and it is an engine-wide switch. A store on a fuel-enabled
-/// engine starts at **zero** and instantiation runs guest code, so without this
-/// the component traps on instantiate. Errors when fuel is off, which is the
-/// ordinary case and not a failure.
-fn waive_fuel_limit<T>(store: &mut crate::wasmtime::Store<T>) {
-    let _ = store.set_fuel(u64::MAX);
 }
 
 /// How long an unsettled sequence holds a rebuild back before the loop stops
@@ -1380,7 +1364,6 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                     super::warm::Warmed::fresh((store, proxy))
                                 }
                             };
-                            waive_fuel_limit(&mut warmed.handler.0);
 
                             // One `Acker`, three uses: whoever settles keeps
                             // `acker`, and `progress` extends ack-wait without
