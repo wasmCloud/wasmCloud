@@ -151,11 +151,71 @@ fn directive(directive: impl AsRef<str>) -> anyhow::Result<Directive> {
         .with_context(|| format!("failed to parse filter: {}", directive.as_ref()))
 }
 
+/// How a host measures the time its guests spend running.
+///
+/// The two meters answer the same question and cost very differently, so a host
+/// picks one rather than paying for both:
+///
+/// * [`Self::Epoch`] samples the epoch callback every store arms anyway, so it
+///   costs the guest nothing at run time. It reports whole milliseconds and is
+///   a floor, not a total — see [`crate::engine::abandon::GuestExecution`].
+/// * [`Self::Fuel`] counts executed operations exactly, at the price of a
+///   counter compiled into every block of guest code, which the guest pays
+///   whether or not anyone reads the number.
+///
+/// [`Self::Fuel`] is also the only one that needs anything of the engine:
+/// `Config::consume_fuel` has to be on, and a store on such an engine starts
+/// with no fuel, so guests only run because every store is given a budget.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MeterKind {
+    /// Measure neither. The default: a host that was not asked to measure
+    /// guest execution should not make its guests slower.
+    #[default]
+    Off,
+    /// `guest.execution.time`, sampled from the epoch callback.
+    Epoch,
+    /// `fuel.consumption`, counted in the guest.
+    Fuel,
+}
+
+impl MeterKind {
+    /// Whether the engine has to compile fuel counters into its guests.
+    pub fn consumes_fuel(&self) -> bool {
+        matches!(self, Self::Fuel)
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Epoch => "epoch",
+            Self::Fuel => "fuel",
+        }
+    }
+}
+
+impl std::str::FromStr for MeterKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "off" | "none" => Ok(Self::Off),
+            "epoch" => Ok(Self::Epoch),
+            "fuel" => Ok(Self::Fuel),
+            other => Err(format!(
+                "unknown meter `{other}`, expected one of: off, epoch, fuel"
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Meters {
+    /// Built only under [`MeterKind::Fuel`]; inert otherwise, so a call path
+    /// that measures with it records nothing rather than having to ask which
+    /// meter the host chose.
     pub fuel_consumption: FuelConsumptionMeter,
-    /// Sampled rather than burned, for the plugins that ask for it. Both meters
-    /// are built: which one a call path uses is that path's choice.
+    /// Built only under [`MeterKind::Epoch`], and inert otherwise for the same
+    /// reason.
     pub execution_time: ExecutionTimeMeter,
     /// User-defined meters
     pub meters: HashMap<String, Arc<dyn Any + Send + Sync + 'static>>,
@@ -180,10 +240,10 @@ pub fn execution_time_meter() -> Option<&'static ExecutionTimeMeter> {
 }
 
 impl Meters {
-    pub fn new(enabled: bool) -> Self {
+    pub fn new(kind: MeterKind) -> Self {
         let meters = Self {
-            fuel_consumption: FuelConsumptionMeter::new(enabled),
-            execution_time: ExecutionTimeMeter::new(enabled),
+            fuel_consumption: FuelConsumptionMeter::new(kind == MeterKind::Fuel),
+            execution_time: ExecutionTimeMeter::new(kind == MeterKind::Epoch),
             meters: Default::default(),
         };
         // First host with metering on wins. A second one in the same process
@@ -192,7 +252,7 @@ impl Meters {
         // Skipping the disabled ones matters: a host built with metering off
         // would otherwise claim the slot and silence every pooled call after
         // it, including calls on a later host that did ask for metrics.
-        if enabled {
+        if kind == MeterKind::Epoch {
             let _ = EXECUTION_TIME.set(meters.execution_time.clone());
         }
         meters

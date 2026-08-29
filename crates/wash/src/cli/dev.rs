@@ -76,7 +76,7 @@ impl CliCommand for DevCommand {
 
         let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)
-            .with_fuel_consumption(ctx.enable_meters());
+            .with_fuel_consumption(ctx.meters().consumes_fuel());
         for name in &dev_config.wasm_proposals {
             let proposal: WasmProposal = name
                 .parse()
@@ -87,7 +87,7 @@ impl CliCommand for DevCommand {
 
         let mut host_builder = Host::builder()
             .with_engine(engine.clone())
-            .with_meters(Meters::new(ctx.enable_meters()));
+            .with_meters(Meters::new(ctx.meters()));
 
         // Enable wasi config. `copy_environment = true` surfaces each
         // component's `LocalResources.environment` via `wasi:config/store`,

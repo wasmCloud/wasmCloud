@@ -51,9 +51,13 @@ struct Cli {
     #[arg(short = 'C', default_value = find_project_root().into_os_string())]
     project_path: PathBuf,
 
-    /// Enable host meters
-    #[arg(long = "enable-meters", global = true)]
-    enable_meters: bool,
+    /// Which guest-execution meter to run: `off`, `epoch`, or `fuel`.
+    ///
+    /// `epoch` samples the clock the host already arms, so guests pay nothing
+    /// for it. `fuel` counts exactly, at the price of a counter compiled into
+    /// every block of guest code.
+    #[arg(long = "meters", global = true, default_value = "off")]
+    meters: wash_runtime::observability::MeterKind,
 
     #[command(subcommand)]
     command: Option<WashCliCommand>,
@@ -135,7 +139,7 @@ async fn main() {
         non_interactive: false,
         user_config: None,
         project_path: find_project_root(),
-        enable_meters: false,
+        meters: wash_runtime::observability::MeterKind::Off,
         command: None,
     });
 
@@ -211,7 +215,7 @@ async fn main() {
     let mut ctx_builder = CliContext::builder()
         .non_interactive(non_interactive)
         .project_dir(project_absolute_path)
-        .enable_meters(global_args.enable_meters);
+        .meters(global_args.meters);
 
     // Load custom config if provided, otherwise will default to XDG config path
     if let Some(config_path) = global_args.user_config {

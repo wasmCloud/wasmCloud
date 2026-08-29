@@ -596,7 +596,7 @@ impl CliCommand for HostCommand {
 
         let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)
-            .with_fuel_consumption(ctx.enable_meters());
+            .with_fuel_consumption(ctx.meters().consumes_fuel());
         for proposal in &self.wasm_proposals {
             engine_builder = engine_builder.with_wasm_proposal(*proposal);
         }
@@ -699,7 +699,7 @@ impl CliCommand for HostCommand {
                         format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),
                     ]),
             ))?
-            .with_meters(Meters::new(ctx.enable_meters()));
+            .with_meters(Meters::new(ctx.meters()));
 
         #[cfg(feature = "wasm_component_model_implements")]
         {
