@@ -482,7 +482,63 @@ runtime:
       # component-model-async, gc, exception-handling, wide-arithmetic,
       # threads, tail-call.
       wasmProposals: []
-      # -- Host component plugins for this host group: WebAssembly components
+      # -- Every plugin this host group serves and how the operator configures
+      # it, native or component.
+      #
+      # A **native** entry has no `image`/`file`: the host already has the
+      # plugin compiled in, and the entry exists to configure it. A
+      # **component** entry names exactly one of `image` or `file` and is
+      # loaded as well — see `hostPlugins` below for the component-only fields.
+      #
+      # Beyond a component entry's own fields, every entry may set:
+      #
+      #   workloadConfig  `allow` (default) or `deny`. Under `deny`, keys this
+      #                   plugin considers the host's come only from here: a
+      #                   workload that sets one, or that names a binding
+      #                   absent from `bindings`, fails to deploy. Under
+      #                   `allow` a workload's own interface config layers over
+      #                   what is declared here.
+      #   hostOwnedKeys   extra keys claimed for the host under `deny`, on top
+      #                   of the ones the plugin declares in code and the ones
+      #                   this entry sets. The point is the keys left *unset* —
+      #                   an allowlist nobody wrote must resolve to empty, not
+      #                   to whatever the workload wrote.
+      #   bindings        the named backends this host serves, keyed by the
+      #                   `(implements ..)` label a workload asks for. Each
+      #                   takes its own `config`/`configFrom`/`secretFrom`,
+      #                   layered over the entry's.
+      #
+      # Every entry here is file-backed (rendered into the `wash host` config
+      # file, never a CLI arg), since a binding can carry credentials.
+      #
+      # Examples:
+      #
+      #   plugins:
+      #     - id: wasmcloud-nats           # native: no image/file
+      #       workloadConfig: deny
+      #       config:
+      #         servers: nats://nats.default.svc:4222
+      #       bindings:
+      #         orders:
+      #           config:
+      #             subject-allow: orders.processed,orders.received
+      #             stream-allow: ORDERS
+      #           secretFrom: [orders-nats-creds]
+      #     - id: wasmcloud-secrets        # component: has a source
+      #       image: ghcr.io/wasmcloud/plugins/secrets:0.1.0
+      #       allowedHosts: [vault.internal]
+      #       workloadConfig: deny
+      #       hostOwnedKeys: [vault-addr, vault-role]
+      #       bindings:
+      #         prod:
+      #           configFrom: [vault-prod]
+      plugins: []
+      # -- Deprecated alias for `plugins`, from when only component plugins
+      # could be declared. Entries here must name an `image` or `file`; a
+      # native plugin's configuration belongs under `plugins`. Merges with
+      # (does not replace) `plugins`.
+      #
+      # Host component plugins for this host group: WebAssembly components
       # that provide a host capability, each served from its own supervised
       # store to every workload that imports its interface.
       #

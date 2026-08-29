@@ -310,6 +310,10 @@ pub struct Host {
     reservations: std::sync::atomic::AtomicU64,
     /// Plugins in a map from their ID to the plugin itself
     plugins: HashMap<&'static str, Arc<dyn HostPlugin>>,
+    /// What the operator declared about each plugin's bindings — the host layer
+    /// under every workload's own `interface-binding` config, and who is
+    /// allowed to write it.
+    plugin_bindings: Arc<crate::plugin::PluginBindings>,
     /// Host metadata
     id: String,
     hostname: String,
@@ -801,7 +805,11 @@ impl Host {
         // `resolve` binds the workload's plugins, and gives back whatever it
         // bound if any part of that fails.
         let mut resolved_workload = unresolved_workload
-            .resolve(Some(&self.plugins), self.http_handler.clone())
+            .resolve(
+                Some(&self.plugins),
+                &self.plugin_bindings,
+                self.http_handler.clone(),
+            )
             .await?;
 
         // Past this point the plugins are bound, so every exit either hands the
@@ -1281,6 +1289,7 @@ pub struct HostBuilder {
     id: String,
     engine: Option<Engine>,
     plugins: HashMap<&'static str, Arc<dyn HostPlugin>>,
+    plugin_bindings: crate::plugin::PluginBindings,
     hostname: Option<String>,
     friendly_name: Option<String>,
     environment: Option<String>,
@@ -1296,6 +1305,7 @@ impl Default for HostBuilder {
             id: uuid::Uuid::new_v4().to_string(),
             engine: Default::default(),
             plugins: Default::default(),
+            plugin_bindings: Default::default(),
             hostname: Default::default(),
             friendly_name: Default::default(),
             environment: Default::default(),
@@ -1337,6 +1347,16 @@ impl HostBuilder {
 
         self.plugins.insert(plugin_id, plugin);
         Ok(self)
+    }
+
+    /// Sets what the operator declared about the registered plugins' bindings.
+    ///
+    /// Checked against the registered plugins by [`HostBuilder::build`], so
+    /// call this at any point before it — a declaration naming a plugin the
+    /// host does not have is refused rather than left inert.
+    pub fn with_plugin_bindings(mut self, bindings: crate::plugin::PluginBindings) -> Self {
+        self.plugin_bindings = bindings;
+        self
     }
 
     /// Every native (non-component) plugin registered so far — what a host
@@ -1504,11 +1524,31 @@ impl HostBuilder {
             None => Arc::new(crate::host::http::NullServer::default()),
         };
 
+        // Every plugin is registered by now, so a binding declaration naming an
+        // id this host does not have is a typo — and an inert one, which is the
+        // dangerous shape: a `workloadConfig: deny` that never applies.
+        let registered: Vec<&str> = self.plugins.keys().copied().collect();
+        self.plugin_bindings.validate_against(&registered)?;
+
+        // Each plugin checks its own declaration with its own parser, so a
+        // binding an operator wrote wrong fails startup rather than the first
+        // workload that names it.
+        for id in self.plugin_bindings.plugin_ids() {
+            let plugin = self
+                .plugins
+                .get(id)
+                .context("plugin vanished between validation and build")?;
+            plugin
+                .validate_bindings(self.plugin_bindings.for_plugin(id))
+                .with_context(|| format!("invalid `host.plugins` declaration for '{id}'"))?;
+        }
+
         Ok(Host {
             engine,
             workloads: Arc::default(),
             reservations: std::sync::atomic::AtomicU64::default(),
             plugins: self.plugins,
+            plugin_bindings: Arc::new(self.plugin_bindings),
             id: self.id,
             hostname,
             friendly_name,

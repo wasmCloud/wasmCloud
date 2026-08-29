@@ -185,11 +185,15 @@ workloads can use a separate NATS cluster from the control plane if desired.
 {{- end }}
 
 {{/*
-Partitions a host group's hostPlugins[] into file-backed entries (config/
-configFrom/secretFrom/allowedHosts/allowedIpNameLookups set. There is no
-`--host-plugin` CLI-arg equivalent, since a secret must never land on the
-command line) vs plain CLI-only entries, and collects the deduped
+Partitions a host group's plugins[] (plus the deprecated hostPlugins[] alias)
+into file-backed entries vs plain CLI-only entries, and collects the deduped
 configFrom/secretFrom names referenced across the file-backed set.
+
+An entry is file-backed when it sets anything `--host-plugin` cannot express —
+config/configFrom/secretFrom/allowedHosts/allowedIpNameLookups, or any of the
+binding fields (workloadConfig/hostOwnedKeys/bindings). A secret must never
+land on the command line, and a native entry (no image/file) has nothing to put
+there at all, so it is always file-backed.
 
 Shared by deployment.yaml (which needs both partitions, to render
 `--host-plugin` args for `cli` and mount volumes for `fileBacked`) and
@@ -208,8 +212,8 @@ and parses the result with `fromJson`.
 {{- define "runtime-operator.hostPluginPartition" -}}
 {{- $fileBacked := list }}
 {{- $cli := list }}
-{{- range .hostPlugins }}
-{{- if or .config .configFrom .secretFrom .allowedHosts .allowedIpNameLookups }}
+{{- range concat (default list .plugins) (default list .hostPlugins) }}
+{{- if or .config .configFrom .secretFrom .allowedHosts .allowedIpNameLookups .workloadConfig .hostOwnedKeys .bindings (not (or .image .file)) }}
 {{- $fileBacked = append $fileBacked . }}
 {{- else }}
 {{- $cli = append $cli . }}
@@ -224,6 +228,14 @@ and parses the result with `fromJson`.
 {{- end }}
 {{- range .secretFrom }}
 {{- $secretFromNames = append $secretFromNames . }}
+{{- end }}
+{{- range $name, $binding := (default dict .bindings) }}
+{{- range $binding.configFrom }}
+{{- $configFromNames = append $configFromNames . }}
+{{- end }}
+{{- range $binding.secretFrom }}
+{{- $secretFromNames = append $secretFromNames . }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- /* The nats block's own references, plus every declared binding's. */}}
@@ -322,7 +334,7 @@ host:
     {{- end }}
   {{- end }}
   {{- if $partition.fileBacked }}
-  hostPlugins:
+  plugins:
     {{- range $partition.fileBacked }}
     - id: {{ .id }}
       {{- if .image }}
@@ -357,6 +369,17 @@ host:
       {{- end }}
       {{- with .allowedIpNameLookups }}
       allowedIpNameLookups:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .workloadConfig }}
+      workloadConfig: {{ . }}
+      {{- end }}
+      {{- with .hostOwnedKeys }}
+      hostOwnedKeys:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .bindings }}
+      bindings:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     {{- end }}

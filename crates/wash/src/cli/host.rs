@@ -814,10 +814,10 @@ impl CliCommand for HostCommand {
             // still add one ad hoc via `--host-plugin` without duplicating
             // the rest.
             let mut specs: Vec<wash_runtime::plugin::ComponentPluginSpec> = Vec::new();
-            for hp in &config.host().host_plugins {
+            for hp in config.host().component_plugins()? {
                 specs.push(
                     hp.to_spec(&config, project_dir, Some(project_dir))
-                        .with_context(|| format!("failed to resolve host_plugins '{}'", hp.id))?,
+                        .with_context(|| format!("failed to resolve host.plugins '{}'", hp.id))?,
                 );
             }
             specs.extend(self.host_plugins.iter().cloned());
@@ -839,9 +839,18 @@ impl CliCommand for HostCommand {
         }
         #[cfg(not(feature = "host-component-plugins"))]
         anyhow::ensure!(
-            self.host_plugins.is_empty() && config.host().host_plugins.is_empty(),
-            "--host-plugin/WASH_HOST_PLUGINS/host.hostPlugins requires a wash build with the \
-             `host-component-plugins` feature"
+            self.host_plugins.is_empty() && config.host().component_plugins()?.is_empty(),
+            "--host-plugin/WASH_HOST_PLUGINS and a `host.plugins` entry with a `file`/`image` \
+             require a wash build with the `host-component-plugins` feature"
+        );
+
+        // After every plugin is registered — including the component plugins
+        // above — so `build()` can refuse a declaration naming an id this host
+        // has no plugin for.
+        cluster_host_builder = cluster_host_builder.with_plugin_bindings(
+            config
+                .host()
+                .to_plugin_bindings(&config, project_dir, Some(project_dir))?,
         );
 
         let cluster_host = cluster_host_builder
