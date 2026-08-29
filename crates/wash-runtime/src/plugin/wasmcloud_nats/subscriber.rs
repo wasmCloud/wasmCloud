@@ -379,7 +379,7 @@ async fn run_delivery(
     let mut job = job;
 
     if let Some(pool) = workload.instance_pool_for_component(component_id).await {
-        let outcome = match pool.offer(InstanceJob::Plugin(job)) {
+        let outcome = match pool.try_dispatch(InstanceJob::Plugin(job)) {
             Dispatch::Sent => Ok(()),
             // Built out here, where awaiting is allowed and where a component
             // that fails to instantiate reports it to this delivery rather
@@ -390,7 +390,7 @@ async fn run_delivery(
                 else {
                     return Ok(Ok(()));
                 };
-                pool.install(ComponentInstance { store, instance }, pending)
+                pool.dispatch_on_new(ComponentInstance { store, instance }, pending)
             }
             Dispatch::Saturated(pending) => Err(pending),
         };

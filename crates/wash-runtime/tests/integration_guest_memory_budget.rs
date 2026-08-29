@@ -103,6 +103,8 @@ fn grow_workload(name: &str) -> WorkloadStartRequest {
                 pool_size: 1,
                 max_invocations: 100,
                 max_concurrency: 1,
+                reclaim_window_seconds: 0,
+                reclaim_min_instances: 0,
             }],
             host_interfaces: vec![WitInterface {
                 namespace: "wasi".to_string(),
