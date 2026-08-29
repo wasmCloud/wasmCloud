@@ -209,15 +209,48 @@ pub struct HostCommand {
     /// where there is no cgroup, clamped to 256 MiB..1 TiB. An unset flag means
     /// the derived number, never "unbounded".
     ///
-    /// Nothing is gated on this yet — it is reported at startup and checked
-    /// against the two pool knobs below, so a host says whether the pool it is
-    /// about to build is one the machine could back.
+    /// What this bounds is the *total* of every guest's linear memory, which
+    /// no other knob does: `--default-heap-memory` bounds one memory and
+    /// `--core-instances` bounds a count of slots. Whether it is enforced or
+    /// only accounted is `--guest-memory-mode`, which counts by default.
     //
     // Deliberately no `default_value_t`: a parse-time default is
     // indistinguishable downstream from an operator typing the same number, and
     // the derivation has to tell them apart.
     #[arg(long = "max-guest-memory", env = "WASH_HOST_MAX_GUEST_MEMORY")]
     pub max_guest_memory: Option<String>,
+
+    /// How `--max-guest-memory` is applied.
+    ///
+    /// `count` (the default) charges every guest `memory.grow` to the budget
+    /// and records what it would have refused, but allows the growth anyway.
+    /// Guest memory was never bounded in aggregate and the budget is derived
+    /// when unset, so enforcing on upgrade would hand every host a ceiling
+    /// nobody chose; run in `count` first, watch the reported high-water mark
+    /// and `would_refuse` count, then switch to `enforce`.
+    ///
+    /// Under `enforce`, a growth past the budget makes the guest's
+    /// `memory.grow` return -1 — the same failure it already sees on hitting
+    /// `--default-heap-memory` — rather than trapping it.
+    ///
+    /// `enforce` makes `--max-guest-memory` a real ceiling, so it has to leave
+    /// the host room to be a host: wasmtime, compiled module images, NATS, OCI
+    /// pulls and HTTP buffers are not charged to this budget but do come out
+    /// of the same container limit. An unset budget already reserves a quarter
+    /// of the detected limit for them; a budget set to the whole container
+    /// limit can be OOM-killed before it ever refuses a guest.
+    //
+    // Parsed through `parse_guest_memory_mode` rather than plain `value_enum`
+    // so a blank value counts as unset, matching the sibling size knobs: a
+    // ConfigMap key or `value: ""` reaches clap as `Some("")`, and failing to
+    // parse that would refuse to start the host over a variable nobody set.
+    #[arg(
+        long = "guest-memory-mode",
+        env = "WASH_GUEST_MEMORY_MODE",
+        value_parser = parse_guest_memory_mode,
+        default_value = "count"
+    )]
+    pub guest_memory_mode: GuestMemoryMode,
 
     /// Ceiling on how large any single guest linear memory may grow
     /// (e.g. `512MiB`).
@@ -592,6 +625,7 @@ impl CliCommand for HostCommand {
         });
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         engine_builder = engine_builder.with_host_memory(host_memory);
+        engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
 
         let engine = engine_builder.build()?;
 
@@ -1057,6 +1091,41 @@ impl From<NatsWorkloadConfig> for wash_runtime::plugin::wasmcloud_nats::Workload
         match mode {
             NatsWorkloadConfig::Deny => Self::Deny,
             NatsWorkloadConfig::Allow => Self::Allow,
+        }
+    }
+}
+
+/// CLI spelling of [`wash_runtime::engine::guest_memory::GuestMemoryMode`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GuestMemoryMode {
+    /// Charge and report guest memory growth; allow it either way.
+    #[default]
+    Count,
+    /// Refuse guest memory growth past `--max-guest-memory`.
+    Enforce,
+}
+
+/// [`GuestMemoryMode`] from a flag or environment value, reading a blank one
+/// as unset.
+fn parse_guest_memory_mode(raw: &str) -> Result<GuestMemoryMode, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(GuestMemoryMode::default());
+    }
+    match raw.to_ascii_lowercase().as_str() {
+        "count" => Ok(GuestMemoryMode::Count),
+        "enforce" => Ok(GuestMemoryMode::Enforce),
+        _ => Err(format!(
+            "invalid guest-memory-mode {raw:?}; expected 'count' or 'enforce'"
+        )),
+    }
+}
+
+impl From<GuestMemoryMode> for wash_runtime::engine::guest_memory::GuestMemoryMode {
+    fn from(mode: GuestMemoryMode) -> Self {
+        match mode {
+            GuestMemoryMode::Count => Self::Count,
+            GuestMemoryMode::Enforce => Self::Enforce,
         }
     }
 }

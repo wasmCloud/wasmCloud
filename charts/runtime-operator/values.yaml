@@ -313,11 +313,11 @@ runtime:
   # host: size `limits.memory` for your expected per-host workload density, or
   # remove it to leave host memory uncapped.
   #
-  # `defaultHeapMemory` and `coreInstances` are wasmtime knobs rather than
-  # Kubernetes resource fields; the chart strips them out of the container's
-  # `resources` block and sets them as `WASH_DEFAULT_HEAP_MEMORY` /
-  # `WASH_CORE_INSTANCES` for the host.
-  # Leaving both empty uses the default wasmtime values.
+  # `defaultHeapMemory`, `coreInstances` and `guestMemoryMode` are host knobs
+  # rather than Kubernetes resource fields; the chart strips them out of the
+  # container's `resources` block and sets them as `WASH_DEFAULT_HEAP_MEMORY` /
+  # `WASH_CORE_INSTANCES` / `WASH_GUEST_MEMORY_MODE` for the host.
+  # Leaving them empty uses the host's own defaults.
   #
   # The simplest way to change host sizing for the whole release:
   #   --set runtime.resources.limits.memory=2Gi
@@ -334,6 +334,23 @@ runtime:
     # -- Instance slots the pooling allocator keeps. Empty leaves wasmtime's
     # default of 1000.
     coreInstances: ""
+    # -- Whether `limits.memory` is enforced against total guest memory or only
+    # counted: `count` (the default) charges every guest `memory.grow` to the
+    # budget and reports what it would have refused, but allows it; `enforce`
+    # refuses growth past the budget, which the guest sees as `memory.grow`
+    # returning -1. Guest memory has never been bounded in aggregate, so run in
+    # `count` and watch the host's reported high-water mark before switching.
+    #
+    # Before setting `enforce`, note that the chart passes `limits.memory`
+    # through as the guest budget unchanged — 100% of the pod. Guests are not
+    # all a host pod holds: wasmtime itself, compiled module images, NATS, OCI
+    # pulls and HTTP buffers come out of the same limit, and none of them is
+    # charged to this budget. A host left to derive its own budget keeps a
+    # quarter back for them. So an enforced budget equal to `limits.memory` can
+    # still be OOM-killed before it ever refuses a guest; give the host its
+    # headroom by setting `limits.memory` above the guest budget you want, or
+    # by overriding `WASH_HOST_MAX_GUEST_MEMORY` below it via `runtime.env`.
+    guestMemoryMode: ""
   # -- Additional environment variables applied to every host group container,
   # appended after the chart-managed vars and before any per-host-group `env`.
   # Standard Kubernetes env shape (supports `valueFrom`).
@@ -635,6 +652,7 @@ runtime:
       #     memory: "2Gi"
       #   defaultHeapMemory: "512MiB"
       #   coreInstances: "200"
+      #   guestMemoryMode: "enforce"
       # -- Extra CA bundles trusted when this group pulls images, added to the
       # chart-wide `runtime.ociCaPaths` rather than replacing it:
       # ociCaPaths:
