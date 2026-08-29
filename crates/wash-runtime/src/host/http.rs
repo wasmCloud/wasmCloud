@@ -797,11 +797,14 @@ pub trait HostHandler: Send + Sync + 'static {
         Ok(())
     }
     /// Deliver a message to a workload's registered messaging trigger service, returning
-    /// the handler's `result<_, string>`. Default: no messaging support.
+    /// the handler's `result<_, string>`. `attributes` is what the delivery is
+    /// measured under, built by the backend — the layer that knows which
+    /// messaging plugin drove it. Default: no messaging support.
     async fn deliver_trigger_service_message(
         &self,
         _workload_id: &str,
         _msg: BrokerMessage,
+        _attributes: Vec<opentelemetry::KeyValue>,
     ) -> anyhow::Result<Result<(), String>> {
         anyhow::bail!("this host does not support trigger service messaging delivery")
     }
@@ -1391,6 +1394,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         &self,
         workload_id: &str,
         msg: BrokerMessage,
+        attributes: Vec<opentelemetry::KeyValue>,
     ) -> anyhow::Result<Result<(), String>> {
         let sender = self
             .messaging_handlers
@@ -1412,6 +1416,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 msg,
                 result_tx: tx,
                 abandoned: call.flag(),
+                attributes,
             })
             .await
             .map_err(|_| anyhow::anyhow!("trigger service messaging instance is not running"))?;
@@ -2017,6 +2022,7 @@ async fn invoke_component_handler(
                         "instance pool returned a {} job for an HTTP request",
                         match other {
                             InstanceJob::Linked(_) => "linked",
+                            InstanceJob::Messaging(_) => "messaging",
                             InstanceJob::Plugin(_) => "plugin",
                             InstanceJob::Http(_) => "http",
                         }

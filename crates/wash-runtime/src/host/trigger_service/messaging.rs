@@ -1,15 +1,28 @@
-//! The [`Ingress::Messaging`] path: `wasmcloud:messaging/handler@0.3.0`
-//! invocations served on the shared service instance.
+//! `wasmcloud:messaging/handler@0.3.0` invocations, on a shared service
+//! instance or on a pooled one.
 //!
-//! Trigger services are p3-only, so this binds the async `@0.3.0` handler
-//! through generated typed bindings — `AsyncMessaging::new` over the live
-//! instance, the same shape `Service::new` gives the HTTP ingress — rather than
-//! the hand-rolled `Val` lowering the p2 handler once required. Typed bindings
-//! are also what make the `stream<u8>` message body workable: the delivered
-//! bytes are minted into a native stream per invocation, which `Val` has no
-//! ergonomic spelling for.
+//! Both shapes bind the async `@0.3.0` handler through generated typed
+//! bindings — `AsyncMessaging::new` over the live instance, the same shape
+//! `Service::new` gives the HTTP ingress — rather than the hand-rolled `Val`
+//! lowering the p2 handler once required. Typed bindings are also what make the
+//! `stream<u8>` message body workable: the delivered bytes are minted into a
+//! native stream per invocation, which `Val` has no ergonomic spelling for.
+//!
+//! [`MessagingJob`] serves both, exactly as [`ServiceHttpJob`] does for HTTP:
+//! the [`Ingress::Messaging`] path delivers to a service's singleton instance,
+//! and [`InstanceJob::Messaging`] delivers to whichever pooled instance is
+//! free. What separates them is [`MessagingTask::pool_slot`] — a service's
+//! instance is not the pool's to retire.
+//!
+//! Only `@0.3.0` reaches either. `handle-message` is an `async func` there, so
+//! its call takes an [`Accessor`] and several deliveries can share one instance
+//! up to `max_concurrency`. The sync `@0.2.0` export takes `&mut Store` for the
+//! length of its call, so it cannot share an instance at all and keeps its
+//! per-message store.
 //!
 //! [`Ingress::Messaging`]: super::Ingress::Messaging
+//! [`ServiceHttpJob`]: crate::host::http::ServiceHttpJob
+//! [`InstanceJob::Messaging`]: crate::engine::instance_driver::InstanceJob::Messaging
 
 use std::sync::Arc;
 
@@ -26,7 +39,7 @@ mod bindings {
     });
 }
 
-pub(super) use bindings::AsyncMessaging;
+pub(crate) use bindings::AsyncMessaging;
 use bindings::wasmcloud::messaging0_3_0::types::{
     BrokerMessage as WitBrokerMessage, HandleMessageError,
 };
@@ -51,10 +64,19 @@ pub struct BrokerMessage {
 /// outcome back to the host-side ingress (to ack/log, its disposition rendered
 /// to a string), and the abandonment flag of the dispatched call enforcing its
 /// deadline (see [`crate::engine::abandon`]).
+///
+/// Handle-free by construction — the body is bytes, and the `stream<u8>` the
+/// WIT carries is minted inside the invocation once the store is chosen — which
+/// is what lets the same job cross a channel to a service or go into the
+/// instance pool.
 pub struct MessagingJob {
     pub msg: BrokerMessage,
     pub result_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
     pub abandoned: Arc<AbandonFlag>,
+    /// What this call is measured under. Built by the dispatcher, which is the
+    /// layer that knows the workload's manifest identity — see
+    /// [`crate::observability::WorkloadIdentity`].
+    pub attributes: Vec<opentelemetry::KeyValue>,
 }
 
 /// The messaging handler export a trigger service must provide.
@@ -109,20 +131,28 @@ pub(super) fn bind_handler(
     })
 }
 
-/// Handles one inbound message on the shared service instance by invoking the
-/// async `@0.3.0` `handle-message` export through its typed bindings, and
-/// reports its disposition.
+/// Handles one inbound message by invoking the async `@0.3.0` `handle-message`
+/// export through its typed bindings, and reports its disposition.
 ///
 /// A handler `err` is an ordinary application outcome, reported on `result_tx`
-/// only. A guest *trap*, however, leaves the shared instance unenterable for
-/// every later message, so after reporting it the task returns the error —
-/// faulting `run_concurrent` so the driver exits and the service supervisor
-/// restarts (and re-registers) a fresh instance.
-pub(super) struct MessagingTask {
-    pub(super) handler: std::sync::Arc<AsyncMessaging>,
-    pub(super) msg: BrokerMessage,
-    pub(super) result_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
-    pub(super) abandoned: Arc<AbandonFlag>,
+/// only. A guest *trap*, however, leaves the instance unenterable for every
+/// later message, so after reporting it the task returns the error — faulting
+/// `run_concurrent` so the driver exits. A service's supervisor then restarts
+/// and re-registers a fresh instance; a pooled instance's handle is reaped by
+/// the next `offer`, and the delivery after it starts a new one.
+pub(crate) struct MessagingTask {
+    pub(crate) handler: std::sync::Arc<AsyncMessaging>,
+    pub(crate) msg: BrokerMessage,
+    pub(crate) result_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
+    pub(crate) abandoned: Arc<AbandonFlag>,
+    /// What this call is measured under; see
+    /// [`crate::observability::WorkloadIdentity`].
+    pub(crate) attributes: Vec<opentelemetry::KeyValue>,
+    /// This delivery's tether to a pooled instance: holds its in-flight slot
+    /// and can retire the instance. `None` for the two shapes with no instance
+    /// to retire — a service, whose singleton is not the pool's, and a cold
+    /// store serving one delivery and being dropped.
+    pub(crate) pool_slot: Option<crate::engine::instance_driver::PoolSlot>,
 }
 
 impl AccessorTask<SharedCtx> for MessagingTask {
@@ -132,6 +162,8 @@ impl AccessorTask<SharedCtx> for MessagingTask {
             msg,
             result_tx,
             abandoned,
+            attributes,
+            pool_slot,
         } = self;
 
         // The epoch deadline measures this call's own execution, so re-arm it
@@ -140,6 +172,9 @@ impl AccessorTask<SharedCtx> for MessagingTask {
             crate::engine::abandon::rearm_for_call(&mut access);
             Arc::clone(&access.get().abandoned)
         });
+        // Both delivery shapes — a pooled instance and a long-lived service —
+        // land here, so one sample covers both.
+        let _sample = crate::engine::instance_driver::ExecutionSample::start(accessor, attributes);
 
         let deliver = async {
             // The `@0.3.0` body is a native `stream<u8>`; mint one carrying the
@@ -156,13 +191,44 @@ impl AccessorTask<SharedCtx> for MessagingTask {
                 .await
         };
 
-        // Unbounded from in here: the dispatcher enforces the deadline the
-        // caller waits out, and a handler that overruns it is slow rather than
-        // wedged. This bounds only how long an overrunning delivery stays
-        // visible to the epoch callback, whose trap would take the service
-        // singleton every other subject shares.
-        let outcome =
-            crate::engine::abandon::watch_until_abandoned(&calls, abandoned, deliver).await;
+        // `watch_until_abandoned` bounds only how long an overrunning delivery
+        // stays visible to the epoch callback, whose trap would take every
+        // other delivery sharing this instance. The deadline the *caller* waits
+        // out is enforced by its `DispatchedCall`, outside this store.
+        let watched = crate::engine::abandon::watch_until_abandoned(&calls, abandoned, deliver);
+
+        // On a *pooled* instance the delivery is additionally bounded here, for
+        // the guest work the host cannot cancel: once the dispatcher has given
+        // up, retirement is what ends it — stop admitting, drain, and let the
+        // store's teardown take the stalled work with it.
+        //
+        // Without a slot there is nothing to retire, so the arm is left
+        // unbounded. For a cold store the dispatcher dropping this future is
+        // already the remedy. For a service it is load-bearing: a wedged guest
+        // is ended by the epoch callback trapping the store, which faults
+        // `run_concurrent` and restarts the service, and reporting a timeout
+        // first would return `Ok` and keep the wedged delivery on the instance
+        // every other subject shares.
+        //
+        // TODO: both arms want per-task cancellation
+        // (bytecodealliance/wasmtime#11833).
+        let outcome = match pool_slot {
+            None => watched.await,
+            Some(slot) => {
+                match tokio::time::timeout(crate::timeouts::messaging_deliver(), watched).await {
+                    Ok(outcome) => outcome,
+                    Err(_) => {
+                        let _ = result_tx.send(Err("handle-message timed out".to_string()));
+                        slot.retire_instance();
+                        tracing::error!(
+                            "messaging delivery timed out; retiring its pooled instance to \
+                             end the stalled work"
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        };
 
         match outcome {
             Ok(result) => {
@@ -171,7 +237,7 @@ impl AccessorTask<SharedCtx> for MessagingTask {
             }
             Err(e) => {
                 let _ = result_tx.send(Err(format!("handle-message trapped: {e:#}")));
-                Err(e.context("messaging handler trapped; restarting the trigger service"))
+                Err(e.context("messaging handler trapped; discarding its instance"))
             }
         }
     }

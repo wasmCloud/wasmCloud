@@ -53,6 +53,8 @@ mod messaging;
 #[cfg(feature = "host-component-plugins")]
 pub use capability::{CapabilityCall, CapabilityFunc, CapabilityJob, LifecycleReplay};
 pub use messaging::{BrokerMessage, MessagingJob};
+// The pooled path binds and drives the same handler the service ingress does.
+pub(crate) use messaging::{AsyncMessaging, MessagingTask};
 
 #[cfg(feature = "host-component-plugins")]
 pub(crate) use capability::decode_bind_reply;
@@ -60,7 +62,6 @@ pub(crate) use capability::decode_bind_reply;
 #[cfg(feature = "host-component-plugins")]
 use capability::{admit_and_spawn_call, drain_plugin_resources, flush_pending_resource_drops};
 pub(crate) use http::HttpTask;
-use messaging::MessagingTask;
 
 /// A host-invoked handler export the TriggerService serves, carrying the receiver end
 /// of its delivery channel. The paired sender is handed to the host-side ingress
@@ -223,6 +224,7 @@ impl PreparedIngress {
                     msg,
                     result_tx,
                     abandoned,
+                    attributes,
                 }) = rx.recv().await
                 {
                     if let Err(e) = accessor.spawn(MessagingTask {
@@ -230,6 +232,8 @@ impl PreparedIngress {
                         msg,
                         result_tx,
                         abandoned,
+                        attributes,
+                        pool_slot: None,
                     }) {
                         tracing::error!(err = %e, "failed to spawn messaging invocation task");
                     }

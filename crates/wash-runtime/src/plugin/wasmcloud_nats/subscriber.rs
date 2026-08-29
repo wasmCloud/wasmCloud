@@ -15,6 +15,7 @@ use tracing::{Instrument, debug, error, warn};
 
 use crate::engine::instance_driver::InstanceJob;
 use crate::engine::instance_pool::{ComponentInstance, Dispatch};
+use crate::engine::waive_fuel_limit;
 use crate::engine::workload::ResolvedWorkload;
 use crate::observability::ExecutionTimeMeter;
 use crate::wasmtime::component::{Accessor, InstancePre, Resource};
@@ -479,21 +480,6 @@ impl WarmSets {
         }
         Arc::new(sets)
     }
-}
-
-/// Waives the fuel limit on a fresh store, so nothing on this path is metered
-/// or bounded by fuel.
-///
-/// This plugin measures guest execution by sampling the epoch callback
-/// ([`crate::observability::ExecutionTimeMeter`]); it never reads a fuel
-/// counter and never bounds a call by one. The engine underneath it may still
-/// have fuel *enabled* — `--enable-meters` turns it on for the paths that do
-/// measure by it, and it is an engine-wide switch. A store on a fuel-enabled
-/// engine starts at **zero** and instantiation runs guest code, so without this
-/// the component traps on instantiate. Errors when fuel is off, which is the
-/// ordinary case and not a failure.
-fn waive_fuel_limit<T>(store: &mut crate::wasmtime::Store<T>) {
-    let _ = store.set_fuel(u64::MAX);
 }
 
 /// How long an unsettled sequence holds a rebuild back before the loop stops

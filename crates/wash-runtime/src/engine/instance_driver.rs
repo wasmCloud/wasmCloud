@@ -9,13 +9,13 @@
 //! awaiting I/O is exactly the guest with that kind of state, so a pool has to
 //! be sized to peak *concurrency* to keep any of it, rather than to peak work.
 //!
-//! A driver removes that. Both an inbound HTTP request and a call from another
-//! component in the workload are [`InstanceJob`]s, so a component reached both
-//! ways shares one warm set rather than keeping two. It owns its store for good
-//! and runs one long-lived
-//! [`wasmtime::Store::run_concurrent`], taking calls off a channel and
-//! [`Accessor::spawn`]ing each as a concurrent task on the same instance. That
-//! is what the host already does for a service (see
+//! A driver removes that. An inbound HTTP request, an inbound message, a call
+//! from another component in the workload and a plugin's delivery are all
+//! [`InstanceJob`]s, so a component reached several ways shares one warm set
+//! rather than keeping one per trigger. It owns its store for good and runs one
+//! long-lived [`wasmtime::Store::run_concurrent`], taking calls off a channel
+//! and [`Accessor::spawn`]ing each as a concurrent task on the same instance.
+//! That is what the host already does for a service (see
 //! [`crate::host::trigger_service`]) — this is the same driver, one per warm
 //! instance rather than one per workload, with admission control in front.
 //!
@@ -72,15 +72,23 @@ pub(crate) struct LinkedJob {
     pub(crate) abandoned: Arc<crate::engine::abandon::AbandonFlag>,
 }
 
-/// Work an instance can be given. Both shapes run as concurrent tasks on the
-/// same instance, so a component reached both ways shares one warm set rather
-/// than keeping two.
+/// Work an instance can be given. Every shape runs as a concurrent task on the
+/// same instance, so a component reached several ways shares one warm set
+/// rather than keeping one per trigger.
 pub(crate) enum InstanceJob {
     /// An inbound HTTP request (`wasi:http/handler@0.3`). Boxed to keep the
     /// variants a similar size; a declined job carries the whole request back.
     Http(Box<ServiceHttpJob>),
     /// A call from another component in the workload.
     Linked(Box<LinkedJob>),
+    /// An inbound message (`wasmcloud:messaging/handler@0.3.0`), delivered by
+    /// whichever messaging backend the workload bound.
+    ///
+    /// Only the async `@0.3.0` handler reaches here. Its call takes an
+    /// [`Accessor`], so deliveries overlap on one instance up to
+    /// `max_concurrency`; the sync `@0.2.0` export holds `&mut Store` for the
+    /// length of its call and keeps its per-message store.
+    Messaging(Box<crate::host::trigger_service::MessagingJob>),
     /// A call a host plugin supplies, made on a pooled instance.
     ///
     /// The engine routes it like any other job and never looks inside: the
@@ -352,10 +360,67 @@ pub(crate) struct InstanceDriver {
     admitted: AtomicUsize,
     max_concurrency: usize,
     max_invocations: Option<usize>,
-    /// Whether this instance exports `wasi:http/handler`. A component reached
-    /// only by linked calls does not, which is not an error — but it cannot be
-    /// given HTTP work either.
-    serves_http: bool,
+    /// The triggered work this instance can take, so admission never gives it
+    /// a job it could only fail.
+    accepts: Accepts,
+}
+
+/// The typed handler views bound over one instance, built once when its driver
+/// starts and reused by every call on it.
+///
+/// Each is both the probe and the binding: `Service::new` and
+/// `AsyncMessaging::new` type-check their export against the live instance and
+/// hand back the view. A component reached only by linked calls has neither,
+/// which is not an error — it just cannot be given triggered work.
+///
+/// A set rather than a flag per trigger: the next host-invoked export is a
+/// field and a match arm, not a third bool and a third special case in
+/// admission.
+struct BoundExports {
+    http: Option<Arc<Service>>,
+    messaging: Option<Arc<crate::host::trigger_service::AsyncMessaging>>,
+}
+
+/// Which job kinds an instance will accept — the presence half of
+/// [`BoundExports`], split off so admission can answer without the views (and
+/// so a test can build one without a store).
+#[derive(Clone, Copy)]
+struct Accepts {
+    http: bool,
+    messaging: bool,
+}
+
+impl BoundExports {
+    fn bind(store: &mut wasmtime::Store<SharedCtx>, instance: &Instance) -> Self {
+        Self {
+            http: Service::new(&mut *store, instance).ok().map(Arc::new),
+            messaging: crate::host::trigger_service::AsyncMessaging::new(&mut *store, instance)
+                .ok()
+                .map(Arc::new),
+        }
+    }
+
+    fn accepts(&self) -> Accepts {
+        Accepts {
+            http: self.http.is_some(),
+            messaging: self.messaging.is_some(),
+        }
+    }
+}
+
+impl Accepts {
+    /// Whether this instance can be given `job` at all.
+    ///
+    /// A linked call names the export index it resolved against this very
+    /// component, and a plugin job binds its own view when it runs, so neither
+    /// is gated here.
+    fn takes(self, job: &InstanceJob) -> bool {
+        match job {
+            InstanceJob::Http(_) => self.http,
+            InstanceJob::Messaging(_) => self.messaging,
+            InstanceJob::Linked(_) | InstanceJob::Plugin(_) => true,
+        }
+    }
 }
 
 impl InstanceDriver {
@@ -380,11 +445,11 @@ impl InstanceDriver {
         });
         let task_state = Arc::clone(&state);
 
-        // Built before the run loop so admission knows whether this instance
-        // can take HTTP at all, rather than accepting a request it could only
-        // drop.
-        let service = Service::new(&mut store, &instance).ok().map(Arc::new);
-        let serves_http = service.is_some();
+        // Built before the run loop so admission knows what this instance can
+        // take at all, rather than accepting work it could only drop. The views
+        // move into the run loop; admission keeps only their presence.
+        let bound = BoundExports::bind(&mut store, &instance);
+        let accepts = bound.accepts();
 
         tokio::spawn(async move {
             // One `run_concurrent` for the life of the instance. Each call is
@@ -412,7 +477,7 @@ impl InstanceDriver {
                                     resp_tx,
                                     abandoned,
                                 } = *job;
-                                let Some(service) = service.as_ref().map(Arc::clone) else {
+                                let Some(service) = bound.http.as_ref().map(Arc::clone) else {
                                     // Admission declines HTTP for an instance
                                     // without the export, so this is not
                                     // normally reachable; answer the request
@@ -427,6 +492,36 @@ impl InstanceDriver {
                                     req,
                                     resp_tx,
                                     abandoned,
+                                    pool_slot: Some(PoolSlot {
+                                        state: Arc::clone(&task_state),
+                                        _in_flight: guard,
+                                    }),
+                                })
+                            }
+                            InstanceJob::Messaging(job) => {
+                                let crate::host::trigger_service::MessagingJob {
+                                    msg,
+                                    result_tx,
+                                    abandoned,
+                                    attributes,
+                                } = *job;
+                                let Some(handler) = bound.messaging.as_ref().map(Arc::clone) else {
+                                    // As with HTTP: admission declines this for
+                                    // an instance without the export, so report
+                                    // it rather than dropping the delivery if
+                                    // it is ever reached.
+                                    let _ =
+                                        result_tx.send(Err("pooled instance does not export the \
+                                         @0.3.0 messaging handler"
+                                            .into()));
+                                    continue;
+                                };
+                                accessor.spawn(crate::host::trigger_service::MessagingTask {
+                                    handler,
+                                    msg,
+                                    result_tx,
+                                    abandoned,
+                                    attributes,
                                     pool_slot: Some(PoolSlot {
                                         state: Arc::clone(&task_state),
                                         _in_flight: guard,
@@ -470,7 +565,7 @@ impl InstanceDriver {
             admitted: AtomicUsize::new(0),
             max_concurrency,
             max_invocations,
-            serves_http,
+            accepts,
         }
     }
 
@@ -571,7 +666,10 @@ impl InstanceDriver {
                 admitted: AtomicUsize::new(0),
                 max_concurrency,
                 max_invocations,
-                serves_http: true,
+                accepts: Accepts {
+                    http: true,
+                    messaging: true,
+                },
             },
             rx,
         )
@@ -581,10 +679,10 @@ impl InstanceDriver {
     /// could not take it, so the caller can try elsewhere. Boxed because the
     /// refusal carries the whole request back.
     pub(crate) fn try_send(&self, job: InstanceJob) -> Result<(), InstanceJob> {
-        // An instance without the HTTP export can only fail such a call.
-        // Declining it sends the request to a store of its own, where the
-        // binding is built per request and its error reaches the client.
-        if !self.serves_http && matches!(job, InstanceJob::Http(_)) {
+        // An instance without the export a job needs can only fail it.
+        // Declining sends the job to a store of its own, where the binding is
+        // built per call and its error reaches whoever is waiting.
+        if !self.accepts.takes(&job) {
             return Err(job);
         }
         let Some(guard) = self.try_admit() else {
