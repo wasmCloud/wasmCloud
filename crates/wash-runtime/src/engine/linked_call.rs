@@ -387,10 +387,26 @@ pub(crate) async fn new_store_from_templates(
 /// Read from the component map per call rather than captured at link time, so
 /// a component whose entry is replaced does not keep serving from a pool that
 /// belongs to the old entry.
-async fn callee_instance_pool(call: &EphemeralLinkedCall) -> Option<Arc<InstancePool>> {
+/// The callee's pool, and the manifest identity its calls are measured under.
+///
+/// Both come from one read of the component map, so they cannot disagree about
+/// which snapshot they saw. The identity is the *callee's* because it is the
+/// callee's guest code the histogram times, and it is built only when a pool
+/// exists — an unpooled call is not measured, so resolving it would be three
+/// allocations of pure waste on the default path.
+async fn callee_pool_and_identity(
+    call: &EphemeralLinkedCall,
+) -> Option<(Arc<InstancePool>, crate::observability::WorkloadIdentity)> {
     let components = call.components.read().await;
     let linked: HashSet<Arc<str>> = call.linked_component_ids.iter().cloned().collect();
-    instance_pool::poolable(&components, &call.active_component_id, &linked)
+    let pool = instance_pool::poolable(&components, &call.active_component_id, &linked)?;
+    let component = components.get(&call.active_component_id)?;
+    let identity = crate::observability::WorkloadIdentity::new(
+        component.metadata().workload_namespace(),
+        component.metadata().workload_name(),
+        component.name(),
+    );
+    Some((pool, identity))
 }
 
 async fn new_ephemeral_store(
@@ -739,14 +755,14 @@ async fn invoke_ephemeral_plain(
         "invoking ephemeral dynamic export"
     );
 
-    let pool = callee_instance_pool(ephemeral_call).await;
+    let pooled = callee_pool_and_identity(ephemeral_call).await;
 
     // The params travel into the pooled job. A job the pool declines hands
     // them back, so the cold path below reuses that allocation rather than
     // cloning them a second time.
     let mut declined_params = None;
 
-    if let Some(pool) = pool.as_ref() {
+    if let Some((pool, identity)) = pooled.as_ref() {
         let (reply, reply_rx) = tokio::sync::oneshot::channel();
         // Deadline enforced here, in the caller's task, outside the callee's
         // store — where a non-yielding callee cannot block it (see
@@ -763,6 +779,10 @@ async fn invoke_ephemeral_plain(
             export_name: inv.export_name.clone(),
             reply,
             abandoned: call.flag(),
+            attributes: identity.attributes(
+                "linked",
+                &format!("{}#{}", inv.import_name, inv.export_name),
+            ),
         }));
         let outcome = match pool.try_dispatch(job) {
             Dispatch::Sent => Ok(()),

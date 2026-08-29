@@ -161,6 +161,64 @@ pub struct Meters {
     pub meters: HashMap<String, Arc<dyn Any + Send + Sync + 'static>>,
 }
 
+/// Who ran the guest code a measurement covers, in the terms a manifest author
+/// and a dashboard both recognize.
+///
+/// Every guest-execution measurement carries these three, whichever plugin
+/// drove the call and whichever of the two histograms records it, so one query
+/// groups calls across all of them. See [`Self::attributes`] for the full
+/// scheme.
+///
+/// Deliberately **not** the workload or component id: both are
+/// `uuid::Uuid::new_v4()` minted per workload construction, so attributing a
+/// series with one mints a fresh series on every restart, rolling update and
+/// replica — growth driven by deployment churn, and a value no operator can map
+/// back to a workload. The ids keep their place on the span and the log line,
+/// where identity is per-event and therefore free. This is the same rule
+/// `wasmcloud:messaging`'s admission counter follows.
+#[derive(Clone, Debug)]
+pub struct WorkloadIdentity {
+    /// The workload's manifest namespace.
+    pub namespace: Arc<str>,
+    /// The workload's manifest name.
+    pub name: Arc<str>,
+    /// The component's *manifest* name, so a workload running more than one
+    /// component can still be told apart.
+    pub component: Arc<str>,
+}
+
+impl WorkloadIdentity {
+    pub fn new(namespace: &str, name: &str, component: &str) -> Self {
+        Self {
+            namespace: Arc::from(namespace),
+            name: Arc::from(name),
+            component: Arc::from(component),
+        }
+    }
+
+    /// The attribute set shared by every guest-execution measurement.
+    ///
+    /// `plugin` names the host surface that drove the call, bounded by what is
+    /// compiled in. `operation` names the WIT export invoked — for example
+    /// `wasmcloud:nats/core-handler#handle-message` — bounded by the interface
+    /// set a component declares. Neither can be invented by traffic, so the
+    /// series count stays bounded by what is deployed.
+    ///
+    /// A call surface with a further *bounded* dimension appends its own: an
+    /// HTTP method, a configured subscription. Anything a caller can invent
+    /// belongs on the span instead, where it costs one event rather than one
+    /// time series per histogram bucket, forever.
+    pub fn attributes(&self, plugin: &'static str, operation: &str) -> Vec<KeyValue> {
+        vec![
+            KeyValue::new("plugin", plugin),
+            KeyValue::new("operation", operation.to_string()),
+            KeyValue::new("workload.namespace", self.namespace.to_string()),
+            KeyValue::new("workload.name", self.name.to_string()),
+            KeyValue::new("component", self.component.to_string()),
+        ]
+    }
+}
+
 /// The execution-time histogram, reachable without a `Meters` in hand.
 ///
 /// A pooled call runs inside the driver's `run_concurrent`, several layers

@@ -40,7 +40,7 @@ use hyper_util::{
     rt::{TokioExecutor, TokioTimer},
     server::conn::auto,
 };
-use opentelemetry::{KeyValue, context::FutureExt};
+use opentelemetry::context::FutureExt;
 use opentelemetry_semantic_conventions::attribute::{
     HTTP_REQUEST_METHOD, HTTP_RESPONSE_BODY_SIZE, HTTP_RESPONSE_STATUS_CODE, OTEL_STATUS_CODE,
     RPC_GRPC_STATUS_CODE, SERVER_ADDRESS, SERVER_PORT, URL_FULL, URL_PATH,
@@ -1003,7 +1003,43 @@ pub struct ServiceHttpJob {
     pub req: hyper::Request<hyper::body::Incoming>,
     pub resp_tx: tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
     pub abandoned: Arc<AbandonFlag>,
+    /// What this call is measured under, or `None` for a call that cannot be
+    /// measured per request.
+    ///
+    /// Built by the dispatcher, the layer that knows the workload's manifest
+    /// identity — see [`crate::observability::WorkloadIdentity`]. It is `None`
+    /// on the service path: a service is one store serving every request at
+    /// once, and `GuestExecution` counts a *store's* execution, so a per-request
+    /// sample there would report every concurrent request's time as its own.
+    /// The pooled path is bounded by `maxConcurrency` and does measure.
+    pub attributes: Option<Vec<opentelemetry::KeyValue>>,
 }
+
+/// The attribute set an inbound HTTP call is measured under: the shared scheme
+/// plus the request method, which is bounded by the HTTP spec. The URI and Host
+/// header are deliberately absent — a caller invents those, and a label a
+/// caller can invent mints a permanent time series per distinct value.
+pub(crate) fn http_attributes(
+    identity: &crate::observability::WorkloadIdentity,
+    method: &hyper::Method,
+    operation: &'static str,
+) -> Vec<opentelemetry::KeyValue> {
+    let mut attributes = identity.attributes("wasi-http", operation);
+    attributes.push(opentelemetry::KeyValue::new(
+        "method",
+        method.as_str().to_string(),
+    ));
+    attributes
+}
+
+/// The WIT exports an inbound request can invoke, and what its measurements
+/// are grouped by. Bounded by the interface, unlike the request's URI.
+///
+/// Two of them, because the p2 per-request path and the p3 pooled path call
+/// different exports; merging them would group calls under an export one of the
+/// two never invokes.
+pub(crate) const HTTP_OPERATION_P2: &str = "wasi:http/incoming-handler#handle";
+pub(crate) const HTTP_OPERATION_P3: &str = "wasi:http/handler#handle";
 
 /// A map from workload id to the channel of its HTTP-serving service instance.
 /// Empty unless a workload's service opts into HTTP ingress (a p3 feature).
@@ -1704,6 +1740,7 @@ async fn handle_http_request<T: Router>(
             req,
             resp_tx,
             abandoned: call.flag(),
+            attributes: None,
         };
         let response = if sender.send(job).await.is_err() {
             error!(host = %workload_id, "service HTTP instance is not running");
@@ -1977,10 +2014,16 @@ async fn invoke_component_handler(
             use crate::engine::instance_pool::Dispatch;
             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
             let call = DispatchedCall::new("HTTP (pooled)", crate::timeouts::http_response());
+            let attributes = Some(http_attributes(
+                &workload_handle.component_identity(component_id).await,
+                req.method(),
+                HTTP_OPERATION_P3,
+            ));
             let outcome = match pool.try_dispatch(InstanceJob::Http(Box::new(ServiceHttpJob {
                 req,
                 resp_tx,
                 abandoned: call.flag(),
+                attributes,
             }))) {
                 Dispatch::Sent => Ok(()),
                 // The pool has room. Build and instantiate the store out here,
@@ -2054,7 +2097,14 @@ async fn invoke_component_handler(
     // owned by a detached task that outlives the response head, so recovering
     // it for reuse needs a restructure the p3 path did not.
     let store = workload_handle.new_store(component_id).await?;
-    handle_component_request(store, instance_pre, req, fuel_meter).await
+    handle_component_request(
+        store,
+        instance_pre,
+        req,
+        fuel_meter,
+        workload_handle.component_identity(component_id).await,
+    )
+    .await
 }
 
 /// Handle a component request using WASI HTTP (copied from wash/crates/src/cli/dev.rs)
@@ -2063,6 +2113,7 @@ pub async fn handle_component_request(
     pre: InstancePre<SharedCtx>,
     req: hyper::Request<hyper::body::Incoming>,
     fuel_meter: FuelConsumptionMeter,
+    identity: crate::observability::WorkloadIdentity,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let scheme = match req.uri().scheme() {
@@ -2073,14 +2124,7 @@ pub async fn handle_component_request(
         None => Scheme::Http,
     };
 
-    let method = req.method().to_string();
-    let host_header = req
-        .headers()
-        .get(hyper::header::HOST)
-        .and_then(|h| h.to_str().ok())
-        .map(|h| h.to_string())
-        .unwrap_or_default();
-    let uri = req.uri().to_string();
+    let attributes = http_attributes(&identity, req.method(), HTTP_OPERATION_P2);
 
     let req = store.data_mut().http().new_incoming_request(scheme, req)?;
     let out = store.data_mut().http().new_response_outparam(sender)?;
@@ -2104,23 +2148,14 @@ pub async fn handle_component_request(
             let proxy = pre.instantiate_async(&mut store).await?;
 
             fuel_meter
-                .observe(
-                    &[
-                        KeyValue::new("plugin", "wasi-http"),
-                        KeyValue::new("method", method),
-                        KeyValue::new("host", host_header),
-                        KeyValue::new("uri", uri),
-                    ],
-                    &mut store,
-                    async move |store| {
-                        proxy
-                            .wasi_http_incoming_handler()
-                            .call_handle(store, req, out)
-                            .await?;
+                .observe(&attributes, &mut store, async move |store| {
+                    proxy
+                        .wasi_http_incoming_handler()
+                        .call_handle(store, req, out)
+                        .await?;
 
-                        Ok(())
-                    },
-                )
+                    Ok(())
+                })
                 .await?;
 
             Ok(())

@@ -70,6 +70,9 @@ pub(crate) struct LinkedJob {
     /// The abandonment flag of the dispatched call enforcing this job's
     /// deadline (see [`crate::engine::abandon`]).
     pub(crate) abandoned: Arc<crate::engine::abandon::AbandonFlag>,
+    /// What this call is measured under, built where the link is prepared —
+    /// the manifest identity a linked call needs is not reachable from here.
+    pub(crate) attributes: Vec<opentelemetry::KeyValue>,
 }
 
 /// Work an instance can be given. Both shapes run as concurrent tasks on the
@@ -252,6 +255,7 @@ impl AccessorTask<SharedCtx> for LinkedTask {
             export_name,
             reply,
             abandoned,
+            attributes,
         } = *self.job;
         let instance = self.instance;
 
@@ -273,6 +277,7 @@ impl AccessorTask<SharedCtx> for LinkedTask {
                 return Ok(());
             }
         };
+        let _sample = ExecutionSample::start(accessor, attributes);
 
         let mut results = vec![Val::Bool(false); results_len];
         let call_timeout = crate::timeouts::ephemeral_call();
@@ -411,6 +416,7 @@ impl InstanceDriver {
                                     req,
                                     resp_tx,
                                     abandoned,
+                                    attributes,
                                 } = *job;
                                 let Some(service) = service.as_ref().map(Arc::clone) else {
                                     // Admission declines HTTP for an instance
@@ -427,6 +433,7 @@ impl InstanceDriver {
                                     req,
                                     resp_tx,
                                     abandoned,
+                                    attributes,
                                     pool_slot: Some(PoolSlot {
                                         state: Arc::clone(&task_state),
                                         _in_flight: guard,
