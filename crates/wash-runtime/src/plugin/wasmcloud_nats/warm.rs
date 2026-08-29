@@ -151,9 +151,15 @@ impl<H> WarmSet<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::num::NonZeroUsize;
 
     fn warm(pool_size: usize, max_invocations: usize) -> InstancePolicy {
-        InstancePolicy::from_limits(pool_size as i32, max_invocations as i32, 0)
+        InstancePolicy::Warm {
+            pool_size: NonZeroUsize::new(pool_size).expect("pool_size must be positive"),
+            max_invocations: NonZeroUsize::new(max_invocations),
+            max_concurrency: NonZeroUsize::new(1).expect("1 is positive"),
+            reclaim: None,
+        }
     }
 
     #[test]
