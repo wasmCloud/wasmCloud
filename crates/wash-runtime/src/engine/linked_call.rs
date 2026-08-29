@@ -356,6 +356,13 @@ pub(crate) async fn new_store_from_templates(
     }
 
     let mut store = wasmtime::Store::new(engine, shared_ctx);
+    // A store on a fuel-metering engine starts at zero, and calling a guest
+    // without fuel traps. Fuel here is a counter, never a bound:
+    // `FuelConsumptionMeter::observe` resets it and reads the delta around the
+    // call it measures, and nothing else reads it at all. Giving every store
+    // the maximum is what lets a guest run while its consumption is counted.
+    // Errors when the engine is not metering fuel, which is the ordinary case.
+    let _ = store.set_fuel(u64::MAX);
     // Trap for every store built here, services included: trapping a service
     // means a supervisor restart, which beats carrying a wedged call forever.
     arm_epoch_deadline(&mut store, AbandonedCallPolicy::Trap);

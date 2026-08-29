@@ -1297,20 +1297,6 @@ pub fn exports_messaging_handler(component: &Component) -> bool {
         .any(|(export, _item)| export.starts_with("wasmcloud:messaging/handler"))
 }
 
-/// Waive the fuel limit on a store whose guest execution is measured some other
-/// way.
-///
-/// A store on a fuel-enabled engine starts at **zero** and instantiation runs
-/// guest code, so without this the component traps on instantiate. Fuel is an
-/// engine-wide switch (`--enable-meters` turns it on for the paths that do
-/// measure by it), so a path measuring by the epoch callback instead — see
-/// [`crate::observability::ExecutionTimeMeter`] — has to waive it rather than
-/// assume it is off. Errors when fuel is off, which is the ordinary case and
-/// not a failure.
-pub(crate) fn waive_fuel_limit<T>(store: &mut crate::wasmtime::Store<T>) {
-    let _ = store.set_fuel(u64::MAX);
-}
-
 pub fn imports_wasi_http(component: &Component) -> bool {
     let ty: wasmtime::component::types::Component = component.component_type();
     let engine = component.engine();

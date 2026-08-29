@@ -297,7 +297,6 @@ pub(crate) async fn deliver_pooled(
         // the log.
         Dispatch::NeedsInstance(job) => {
             let mut store = workload.new_store(component_id).await?;
-            crate::engine::waive_fuel_limit(&mut store);
             let instance = pre.instantiate_async(&mut store).await?;
             pool.dispatch_on_new(ComponentInstance { store, instance }, job)
                 .err()
@@ -321,7 +320,6 @@ pub(crate) async fn deliver_pooled(
     tracing::debug!(component_id, "warm instances saturated; own store");
 
     let mut store = workload.new_store(component_id).await?;
-    crate::engine::waive_fuel_limit(&mut store);
     let instance = pre.instantiate_async(&mut store).await?;
     let handler = Arc::new(
         crate::host::trigger_service::AsyncMessaging::new(&mut store, &instance).map_err(|e| {
