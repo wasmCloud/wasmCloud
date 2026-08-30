@@ -941,6 +941,25 @@ mod nats_tests {
         )
     }
 
+    /// Restored with the mechanism: `--wasmcloud-nats-url` is now an anchored
+    /// default bundle rather than a seeded `servers`, so it has to still beat
+    /// the data plane at resolve time.
+    #[test]
+    fn the_address_flag_overrides_the_data_plane() {
+        let host = parse(&[
+            "--data-nats-url",
+            "nats://data:4222",
+            "--wasmcloud-nats-url",
+            "nats://workloads:4222",
+        ]);
+        let declared = nats_bindings(&host, &config_from("{}")).unwrap();
+        let resolved = resolve(&declared, "", &[]).unwrap();
+        assert_eq!(
+            resolved.get("servers").map(String::as_str),
+            Some("nats://workloads:4222")
+        );
+    }
+
     /// With no `host.plugins` entry a host denies by default — and, owning
     /// nothing an operator declared, refuses nothing a manifest writes.
     #[test]

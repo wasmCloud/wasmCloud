@@ -143,7 +143,7 @@ impl WitWorld {
 /// - `wasi:http` - Just namespace and package
 /// - `wasi:http/incoming-handler` - With a single interface
 /// - `wasi:http/incoming-handler,outgoing-handler@0.2.0` - Multiple interfaces with version
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WitInterface {
     /// The namespace of the interface (e.g., "wasi")
     pub namespace: String,
@@ -161,6 +161,35 @@ pub struct WitInterface {
     /// of the same namespace:package exist. Used as the routing key in
     /// multiplexing plugins (the `identifier` in store::open, etc.).
     pub name: Option<String>,
+}
+
+/// Config keys, never config values.
+///
+/// Once bindings resolve, `config` carries whatever the operator's `secretFrom`
+/// resolved to — creds, tokens, TLS keys — and this type is `?`-logged on
+/// several paths. A plugin that wants a value in a log names that value itself.
+impl std::fmt::Debug for WitInterface {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct Keys<'a>(&'a HashMap<String, String>);
+        impl std::fmt::Debug for Keys<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let mut keys: Vec<&str> = self.0.keys().map(String::as_str).collect();
+                keys.sort_unstable();
+                f.debug_map()
+                    .entries(keys.into_iter().map(|k| (k, format_args!("<redacted>"))))
+                    .finish()
+            }
+        }
+
+        f.debug_struct("WitInterface")
+            .field("namespace", &self.namespace)
+            .field("package", &self.package)
+            .field("interfaces", &self.interfaces)
+            .field("version", &self.version)
+            .field("name", &self.name)
+            .field("config", &Keys(&self.config))
+            .finish()
+    }
 }
 
 impl WitInterface {
@@ -342,6 +371,36 @@ impl From<String> for WitInterface {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+
+    /// `WitInterface` is `?`-logged on several bind paths, and after binding
+    /// resolution its config carries the operator's resolved `secretFrom`
+    /// material.
+    #[test]
+    fn debug_shows_config_keys_and_no_config_values() {
+        let interface = WitInterface {
+            namespace: "wasmcloud".to_string(),
+            package: "nats".to_string(),
+            interfaces: ["core".to_string()].into_iter().collect(),
+            version: Some(semver::Version::new(0, 1, 0)),
+            config: [
+                ("creds".to_string(), "SUPERSECRET".to_string()),
+                ("password".to_string(), "hunter2".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            name: None,
+        };
+
+        let rendered = format!("{interface:?}");
+        assert!(!rendered.contains("SUPERSECRET"), "{rendered}");
+        assert!(!rendered.contains("hunter2"), "{rendered}");
+        // Keys stay: which settings are present is the diagnostic value, and a
+        // key name is not the secret.
+        assert!(rendered.contains("creds"), "{rendered}");
+        assert!(rendered.contains("password"), "{rendered}");
+        assert!(rendered.contains("wasmcloud"), "{rendered}");
+    }
+
     use super::*;
     use std::collections::HashSet;
 

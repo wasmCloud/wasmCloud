@@ -148,7 +148,7 @@ impl WasmcloudNats {
             // is dropped along with the servers on it. The bare "requires
             // `servers`" this would otherwise fail with sends authors looking
             // at config they can see is present.
-            if !merged.contains_key("servers") && !merged.is_empty() {
+            if super::keys::get(&merged, "servers").is_none() && !merged.is_empty() {
                 // Sorted: the same manifest has to be refused with the same
                 // message every time, and `merged` is a `HashMap`.
                 let mut present: Vec<String> =
@@ -629,7 +629,7 @@ impl HostPlugin for WasmcloudNats {
 
         // The base alone is not required to be complete: a host that sets only
         // grants leaves the servers to a workload under `allow`.
-        for (name, layer) in declared.host_layers() {
+        for (name, layer) in declared.host_layers(&super::binding_schema()) {
             NatsConfig::from_map(&layer).map_err(|e| anyhow::anyhow!("binding `{name}`: {e:#}"))?;
         }
         Ok(())
@@ -1206,6 +1206,34 @@ mod tests {
             ),
         ];
         assert_eq!(merge(&entries).unwrap().len(), 1);
+    }
+
+    /// A label equal to the plugin's own id routes to the unnamed binding, so a
+    /// manifest pairing a plain entry with `(implements wasmcloud-nats)` gets
+    /// one binding. Read as a name it would skip the undeclared-name refusal
+    /// and then open a *second* connection to the same servers, under its own
+    /// inbox prefix.
+    #[test]
+    fn a_label_naming_the_plugin_is_the_unnamed_binding() {
+        let plain = entry(
+            "wasmcloud:nats/core@0.1.0",
+            None,
+            &[("servers", "nats://localhost:4222")],
+        );
+        let labeled = entry(
+            "wasmcloud:nats/core-handler@0.1.0",
+            Some(super::super::PLUGIN_NATS_ID),
+            &[("core-subscriptions", "orders.new")],
+        );
+        assert_eq!(binding_name(&labeled), UNNAMED_BINDING);
+
+        let merged = merge(&[plain, labeled]).unwrap();
+        assert_eq!(
+            merged.len(),
+            1,
+            "one binding, so `open_bindings` opens one connection: {merged:?}"
+        );
+        assert_eq!(merged[0].0, UNNAMED_BINDING);
     }
 
     #[test]
