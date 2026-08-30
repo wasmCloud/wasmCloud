@@ -1,11 +1,11 @@
 mod filesystem;
 mod fs_store;
-mod in_memory;
+pub(crate) mod in_memory;
 #[cfg(feature = "wasm_component_model_implements")]
-mod multiplexed;
+pub(crate) mod multiplexed;
 #[cfg(feature = "wasm_component_model_implements")]
-mod multiplexed_async;
-mod nats;
+pub(crate) mod multiplexed_async;
+pub(crate) mod nats;
 mod redis;
 
 pub use filesystem::FilesystemKeyValue;

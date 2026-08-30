@@ -31,7 +31,7 @@ use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::plugin::{HostPlugin, WitInterfaces, WorkloadItem, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
-const WASI_OTEL_ID: &str = "wasi-otel";
+pub(crate) const WASI_OTEL_ID: &str = "wasi-otel";
 
 /// OTel gRPC default per the OTLP/gRPC spec. Matches what
 /// `opentelemetry_otlp::SpanExporter::builder().with_tonic()` falls back to

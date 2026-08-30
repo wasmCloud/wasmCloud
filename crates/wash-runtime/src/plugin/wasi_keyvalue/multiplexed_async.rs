@@ -59,7 +59,7 @@ use bindings::wasmcloud::keyvalue::cas::{CasOptions, CasResult, Entry};
 use bindings::wasmcloud::keyvalue::types::{Error as AsyncKvError, KeyResponse, SetOptions};
 
 const DEFAULT_BACKEND: &str = "in-memory";
-const MULTIPLEXED_ASYNC_KEYVALUE_ID: &str = "wasmcloud-keyvalue-multiplexed";
+pub(crate) const MULTIPLEXED_ASYNC_KEYVALUE_ID: &str = "wasmcloud-keyvalue-multiplexed";
 
 impl From<StoreError> for AsyncKvError {
     fn from(e: StoreError) -> Self {

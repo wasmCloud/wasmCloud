@@ -48,7 +48,7 @@ use bindings::wasmcloud::blobstore::types::{
 };
 
 const DEFAULT_BACKEND: &str = "in-memory";
-const MULTIPLEXED_ASYNC_BLOBSTORE_ID: &str = "wasmcloud-blobstore-multiplexed";
+pub(crate) const MULTIPLEXED_ASYNC_BLOBSTORE_ID: &str = "wasmcloud-blobstore-multiplexed";
 
 impl From<BlobBackendError> for AsyncError {
     fn from(e: BlobBackendError) -> Self {

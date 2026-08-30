@@ -63,31 +63,35 @@ while it does.
 
 Where a binding points, as whom, and what it may reach are the *host's* to
 declare — a workload asks for a binding and receives what the operator granted
-it. On a cluster that lives in the chart
-(`runtime.hostGroups[].wasmcloudNats`), which renders into the host's config
-file:
+it. `wasmcloud:nats` is configured like every other plugin, as an entry under
+`runtime.hostGroups[].plugins`, which renders into the host's config file:
 
 ```yaml
 host:
-  wasmcloudNats:
-    config:
-      servers: nats://nats.default.svc:4222
-      # Deny-by-default: without these the workload reaches nothing. A
-      # subscription's filter subject is checked against this too, so
-      # `orders.received` has to be listed even though the grant on the
-      # ORDERS stream is what selects the stream.
-      subject-allow: orders.processed,orders.received
-      stream-allow: ORDERS,PROCESSED
-      bucket-allow: order-totals
-    # Credentials never appear in a manifest, and never on a command line.
-    secretFrom:
-      - nats-credentials
+  plugins:
+    - id: wasmcloud-nats
+      config:
+        servers: nats://nats.default.svc:4222
+        # Deny-by-default: without these the workload reaches nothing. A
+        # subscription's filter subject is checked against this too, so
+        # `orders.received` has to be listed even though the grant on the
+        # ORDERS stream is what selects the stream.
+        subject-allow: orders.processed,orders.received
+        stream-allow: ORDERS,PROCESSED
+        bucket-allow: order-totals
+      # Credentials never appear in a manifest, and never on a command line.
+      secretFrom:
+        - nats-credentials
 ```
 
+The entry's `workloadConfig` decides whether a manifest may describe a binding
+of its own; it defaults to `deny`, under which the grants above are ceilings a
+workload may narrow but never widen.
+
 This component imports `wasmcloud:nats` plainly, so it gets the *unnamed*
-binding — the block above. A workload that wants two bindings labels its
-imports (`(implements orders)`) and the host declares each under
-`wasmcloudNats.bindings.<name>`.
+binding — the entry's own `config`. A workload that wants two bindings labels
+its imports (`(implements orders)`) and the host declares each under that
+entry's `bindings.<name>`.
 
 The manifest then says only what it wants delivered:
 

@@ -15,7 +15,6 @@
 //! `config` is already the merged, policy-checked map.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::sync::LazyLock;
 
 use tracing::{info, warn};
 
@@ -348,11 +347,23 @@ impl BindingSchema {
 
     /// The known key closest to `key`, when one is close enough to be worth
     /// naming — a single edit away.
+    ///
+    /// Every candidate here is one edit away, so "closest" has to be decided on
+    /// something else: the longest shared prefix, then the spelling. Taking
+    /// whichever sorted first instead made the suggestion arbitrary between two
+    /// equally-near keys — `bucket-allow` offered for a typo of `subject-allow`
+    /// reads as the wrong key rather than as a near miss.
     fn nearest(&self, key: &str) -> Option<&str> {
         let key = canonical_key(key);
         self.ownership
             .keys()
-            .find(|known| within_one_edit(&key, known))
+            .filter(|known| within_one_edit(&key, known))
+            .max_by(|a, b| {
+                common_prefix_len(&key, a)
+                    .cmp(&common_prefix_len(&key, b))
+                    // Reversed, so the tie-break is still "first spelling".
+                    .then_with(|| b.cmp(a))
+            })
             .map(String::as_str)
     }
 }
@@ -367,6 +378,11 @@ fn describe_unknown(unknown: &[(String, Option<String>)]) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// How many leading characters `a` and `b` share.
+fn common_prefix_len(a: &str, b: &str) -> usize {
+    a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count()
 }
 
 /// Whether `a` and `b` differ by at most one insertion, deletion, or
@@ -436,11 +452,6 @@ struct DefaultBundle {
     anchor: String,
     entries: Vec<(String, String)>,
 }
-
-/// Handed back by [`PluginBindings::for_plugin`] for a plugin no operator
-/// declared anything for: allow-all, no host layer, so resolution is the
-/// workload's own config unchanged.
-static UNDECLARED: LazyLock<PluginBindingSet> = LazyLock::new(PluginBindingSet::default);
 
 impl PluginBindingSet {
     /// An empty declaration for `plugin_id`.
@@ -559,20 +570,16 @@ impl PluginBindingSet {
         layer
     }
 
-    /// Every key the host has for this plugin, in canonical
-    /// spelling:
+    /// Every key the host owns for this plugin: the schema's, plus this entry's
+    /// `hostOwnedKeys`.
     ///
-    /// ```text
-    /// schema.host_owned_keys()   // compiled into the plugin
-    ///   ∪ entry.hostOwnedKeys    // declared in config, even when unset
-    /// ```
+    /// Both terms are explicit, because **providing a value is not claiming a
+    /// key**: an operator who writes `max-in-flight: 32` is setting a default a
+    /// workload may override, and one who wants it locked names it in
+    /// `hostOwnedKeys`.
     ///
-    /// Both terms are explicit: **providing a value is
-    /// not claiming a key.** An operator who writes `max-in-flight: 32` is
-    /// setting a default a workload may still override; one who wants the key
-    /// locked names it in `hostOwnedKeys`. Both cover keys left *unset* as
-    /// well — a grant nobody declared has to resolve to empty, not to whatever
-    /// the manifest wrote.
+    /// Reporting only. Enforcement is [`Self::ownership_of`], per key, which is
+    /// the same union asked one key at a time.
     #[must_use]
     pub fn effective_host_owned(&self, schema: &BindingSchema) -> BTreeSet<String> {
         schema
@@ -645,6 +652,7 @@ impl PluginBindingSet {
     fn fold_workload_entries<'a>(
         &self,
         interfaces: &[&'a WitInterface],
+        schema: &BindingSchema,
     ) -> anyhow::Result<BTreeMap<&'a str, HashMap<String, String>>> {
         // Entries arrive out of a `HashSet`, so they are ordered before they
         // are folded: a manifest that cannot be deployed has to be refused with
@@ -664,19 +672,55 @@ impl PluginBindingSet {
 
             let config = folded.entry(binding).or_default();
             for (key, value) in pairs {
-                let canonical = canonical_key(key);
-                if let Some(existing) = config.get(&canonical)
-                    && existing != value
-                {
-                    anyhow::bail!(
-                        "conflicting values for `{canonical}` across the entries of binding `{}` \
-                         of plugin `{}`; the entries of one binding are folded into a single \
+                // Two spellings are one key only where the plugin says so.
+                // `subject_allow` and `subject-allow` are one grant, because
+                // `wasmcloud:nats` reads them as one. A pair of keys a *guest*
+                // chose — `wasi:config` hands `interface.config` to the
+                // component verbatim — are two settings, and folding them
+                // would refuse a manifest that is fine.
+                let matched = if schema.knows(key) {
+                    let canonical = canonical_key(key);
+                    config
+                        .iter()
+                        .find(|(k, _)| canonical_key(k) == canonical)
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                } else {
+                    config
+                        .get_key_value(key.as_str())
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                };
+                match matched {
+                    Some((spelling, existing)) if &existing != value => anyhow::bail!(
+                        // Named by the spelling the plugin itself uses, so one
+                        // manifest is refused with one message however its
+                        // entries spelled the key; the written spellings follow
+                        // only when they differ from it.
+                        "conflicting values for `{}`{} across the entries of binding `{}` of \
+                         plugin `{}`; the entries of one binding are folded into a single \
                          configuration, so a key more than one of them sets must agree",
+                        if schema.knows(key) {
+                            canonical_key(key)
+                        } else {
+                            key.clone()
+                        },
+                        if spelling == *key {
+                            String::new()
+                        } else {
+                            format!(" (written `{spelling}` and `{key}`, which are one key)")
+                        },
                         describe_binding(binding),
-                        self.plugin_id,
-                    )
+                        self.describe_plugin(),
+                    ),
+                    // Already present, and agreeing. Keep the spelling that is
+                    // there rather than the one this entry used: the folded map
+                    // is handed back to the plugin as `interface.config`, and a
+                    // key nobody wrote is a key a plugin reading its config as
+                    // user data cannot find.
+                    Some(_) => {}
+                    None => {
+                        config.insert(key.clone(), value.clone());
+                    }
                 }
-                config.insert(canonical, value.clone());
             }
         }
         Ok(folded)
@@ -702,7 +746,7 @@ impl PluginBindingSet {
         narrows: NarrowsFn<'_>,
     ) -> anyhow::Result<BTreeMap<String, HashMap<String, String>>> {
         let borrowed: Vec<&WitInterface> = interfaces.iter().collect();
-        let folded = self.fold_workload_entries(&borrowed)?;
+        let folded = self.fold_workload_entries(&borrowed, schema)?;
         if self.is_passthrough(schema) {
             return Ok(folded
                 .into_iter()
@@ -767,9 +811,9 @@ impl PluginBindingSet {
         schema: &BindingSchema,
         narrows: NarrowsFn<'_>,
     ) -> anyhow::Result<HashMap<String, String>> {
+        let mut resolved = self.host_layer(binding);
         if self.workload_config.reports() {
-            let host_layer = self.host_layer(binding);
-            let findings = self.findings(binding, workload, &host_layer, schema, narrows);
+            let findings = self.findings(binding, workload, &resolved, schema, narrows);
             if !findings.is_empty() {
                 if self.workload_config.enforces() {
                     anyhow::bail!("{}", findings.join("; "));
@@ -784,7 +828,6 @@ impl PluginBindingSet {
             }
         }
 
-        let mut resolved = self.host_layer(binding);
         for (key, value) in workload {
             let canonical = canonical_key(key);
             // Replace the operator's spelling rather than adding beside it, so
@@ -939,10 +982,18 @@ impl PluginBindingSet {
     /// The base alone is not included: it is not required to be a complete
     /// configuration on its own, since under [`WorkloadConfigPolicy::Allow`] a
     /// workload supplies the rest.
+    ///
+    /// Default bundles are applied, unlike in [`Self::host_layer`]. A named
+    /// binding that sets no `servers` inherits the host's address at resolve
+    /// time and is complete when the plugin actually sees it, so validating
+    /// the layer without the bundle refuses the ordinary case: a second
+    /// binding on the same cluster, declared only to carry a narrower grant.
     pub fn host_layers(&self) -> impl Iterator<Item = (&str, HashMap<String, String>)> {
-        self.bindings
-            .keys()
-            .map(|name| (name.as_str(), self.host_layer(name)))
+        self.bindings.keys().map(|name| {
+            let mut layer = self.host_layer(name);
+            self.apply_default_bundles(name, &mut layer);
+            (name.as_str(), layer)
+        })
     }
 
     /// The base layer on its own, for a plugin checking a key that is only
@@ -997,7 +1048,27 @@ impl PluginBindingSet {
                 &format!("`host.plugins` entry `{}` binding `{name}`", self.plugin_id),
             )?;
         }
-        Ok(())
+        // `hostOwnedKeys` too: a typo there locks nothing, which is the inert
+        // `deny` this check exists to catch.
+        let claimed: HashMap<String, String> = self
+            .declared_host_owned
+            .iter()
+            .map(|key| (key.clone(), String::new()))
+            .collect();
+        schema.reject_unknown_keys(
+            &claimed,
+            &format!("`host.plugins` entry `{}` `hostOwnedKeys`", self.plugin_id),
+        )
+    }
+
+    /// This plugin's id for an error. The set `for_plugin` hands back for an
+    /// undeclared plugin carries none, and `plugin ` `` reads as a bug.
+    fn describe_plugin(&self) -> &str {
+        if self.plugin_id.is_empty() {
+            "<undeclared>"
+        } else {
+            &self.plugin_id
+        }
     }
 
     /// `; this host serves ...` for an error, or nothing when it serves none.
@@ -1046,7 +1117,7 @@ fn first_widening_element(
 }
 
 /// How a binding reads in an error message.
-fn describe_binding(binding: &str) -> &str {
+pub fn describe_binding(binding: &str) -> &str {
     if binding == UNNAMED_BINDING {
         "<unnamed>"
     } else {
@@ -1058,6 +1129,15 @@ fn describe_binding(binding: &str) -> &str {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PluginBindings {
     plugins: BTreeMap<String, PluginBindingSet>,
+    /// What a plugin with no entry at all resolves under.
+    ///
+    /// Not derivable from the entries: a front end's default is a statement
+    /// about the whole host, and the plugins an operator wrote nothing for are
+    /// exactly the ones it has to cover. `wash dev` defaults to `allow` so a
+    /// project manifest stays self-contained, and without this a plugin absent
+    /// from `dev.plugins` would still resolve under the struct default of
+    /// `deny`.
+    undeclared: PluginBindingSet,
 }
 
 impl PluginBindings {
@@ -1085,14 +1165,26 @@ impl PluginBindings {
         self.plugins.keys().map(String::as_str)
     }
 
-    /// The declaration for `plugin_id`, or an empty one.
+    /// The policy a plugin nobody declared an entry for resolves under.
     ///
-    /// The empty one is shared and carries no plugin id, which is fine for
-    /// resolving — nothing is declared, so nothing names it. Use
-    /// [`PluginBindings::entry`] to build on it.
+    /// Applies to [`PluginBindings::for_plugin`] and to the set
+    /// [`PluginBindings::entry`] mints, so a front end's default reaches every
+    /// plugin rather than only the ones named in config.
+    #[must_use]
+    pub fn with_default_workload_config(mut self, policy: WorkloadConfigPolicy) -> Self {
+        self.undeclared.workload_config = policy;
+        self
+    }
+
+    /// The declaration for `plugin_id`, or an empty one under the default
+    /// policy.
+    ///
+    /// The empty one carries no plugin id, which is fine for resolving —
+    /// nothing is declared, so nothing names it. Use [`PluginBindings::entry`]
+    /// to build on it.
     #[must_use]
     pub fn for_plugin(&self, plugin_id: &str) -> &PluginBindingSet {
-        self.plugins.get(plugin_id).unwrap_or(&UNDECLARED)
+        self.plugins.get(plugin_id).unwrap_or(&self.undeclared)
     }
 
     /// An owned declaration for `plugin_id` to add to: whatever the operator
@@ -1103,10 +1195,9 @@ impl PluginBindings {
     /// id and would re-insert under the wrong key.
     #[must_use]
     pub fn entry(&self, plugin_id: &str) -> PluginBindingSet {
-        self.plugins
-            .get(plugin_id)
-            .cloned()
-            .unwrap_or_else(|| PluginBindingSet::new(plugin_id))
+        self.plugins.get(plugin_id).cloned().unwrap_or_else(|| {
+            PluginBindingSet::new(plugin_id).with_workload_config(self.undeclared.workload_config)
+        })
     }
 
     /// Two conditions, and only one of them should stop a host from starting —
@@ -1462,7 +1553,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_host_owned_is_the_union_of_all_three_sources() {
+    fn effective_host_owned_is_the_union_of_both_sources() {
         let set = PluginBindingSet::new("wasmcloud-nats")
             .with_base(map(&[("jetstream-domain", "hub")]))
             .with_binding("orders", map(&[("stream_allow", "ORDERS")]))
@@ -1752,11 +1843,56 @@ mod tests {
         ]
         .into();
         let err = set
-            .resolve_by_name(&interfaces, &BindingSchema::empty(), never_narrows())
+            .resolve_by_name(&interfaces, &nats_schema(), never_narrows())
             .unwrap_err()
             .to_string();
-        assert!(err.contains("conflicting values for `servers`"), "{err}");
+        assert!(err.contains("conflicting values for `"), "{err}");
+        assert!(err.contains("servers"), "{err}");
         assert!(!err.contains("nats://"), "message leaks values: {err}");
+    }
+
+    /// Two spellings are one key only where the plugin says so. A plugin whose
+    /// schema classifies nothing hands `interface.config` on as user data —
+    /// `wasi:config` gives it straight to the guest — so `LOG_LEVEL` and
+    /// `log-level` are two settings there, not a conflict, and neither may be
+    /// rewritten on the way through.
+    #[test]
+    fn an_open_schema_folds_by_the_spelling_the_manifest_used() {
+        let set = PluginBindingSet::new("wasi-config");
+        let interfaces: HashSet<_> = [
+            iface(None, &[("LOG_LEVEL", "debug")]),
+            iface(None, &[("log-level", "info")]),
+        ]
+        .into();
+
+        let resolved = set
+            .resolve_by_name(&interfaces, &BindingSchema::empty(), never_narrows())
+            .expect("unclassified keys are the guest's, and two spellings are two keys");
+        assert_eq!(resolved[""]["LOG_LEVEL"], "debug");
+        assert_eq!(resolved[""]["log-level"], "info");
+    }
+
+    /// The same rule on the delivered map: a key a plugin reads as user data
+    /// has to arrive spelled the way it was written, or a guest asking for
+    /// `LOG_LEVEL` gets nothing while the value sits under `log-level`.
+    #[test]
+    fn resolution_never_rewrites_a_key_the_manifest_wrote() {
+        let interfaces: HashSet<_> = [iface(None, &[("LOG_LEVEL", "debug")])].into();
+
+        // Passthrough: nothing declared, no schema.
+        let bare = PluginBindingSet::new("wasi-config")
+            .resolve_by_name(&interfaces, &BindingSchema::empty(), never_narrows())
+            .unwrap();
+        assert_eq!(bare[""]["LOG_LEVEL"], "debug");
+
+        // And with an operator layer underneath, which is the path that does
+        // the merging.
+        let declared = PluginBindingSet::new("wasi-config")
+            .with_base(map(&[("REGION", "us-east-1")]))
+            .resolve_by_name(&interfaces, &BindingSchema::empty(), never_narrows())
+            .unwrap();
+        assert_eq!(declared[""]["LOG_LEVEL"], "debug");
+        assert_eq!(declared[""]["REGION"], "us-east-1");
     }
 
     #[test]
@@ -1783,6 +1919,44 @@ mod tests {
         // The base alone is not a layer: it need not be complete on its own.
         assert_eq!(layers.len(), 2);
         assert_eq!(set.base()["url"], "redis://host:6379");
+    }
+
+    /// A named binding that sets no anchor is complete by the time the plugin
+    /// sees it, so it has to be complete when the plugin *validates* it too.
+    /// Without the bundle here, the ordinary "second binding on the same
+    /// cluster, declared only for a narrower grant" fails the host at startup.
+    #[test]
+    fn host_layers_carry_the_default_bundle() {
+        let set = PluginBindingSet::new("nats")
+            .with_binding("orders", map(&[("subject-allow", "orders.>")]))
+            .with_binding("archive", map(&[("servers", "nats://archive:4222")]))
+            .with_default_bundle(
+                "servers",
+                [("servers", "nats://data-plane:4222"), ("tls-ca", "/ca.crt")],
+            );
+
+        let layers: BTreeMap<&str, HashMap<String, String>> = set.host_layers().collect();
+        assert_eq!(layers["orders"]["servers"], "nats://data-plane:4222");
+        assert_eq!(layers["orders"]["tls-ca"], "/ca.crt");
+
+        // Anchored: naming an address takes neither it nor the certs issued
+        // for it.
+        assert_eq!(layers["archive"]["servers"], "nats://archive:4222");
+        assert!(!layers["archive"].contains_key("tls-ca"));
+
+        // `host_layer` still reports what the operator wrote, and nothing more.
+        assert!(!set.host_layer("orders").contains_key("servers"));
+    }
+
+    /// Sorted and unique, so an id added by hand goes where it belongs and a
+    /// duplicate is caught rather than merged silently by the reader's eye.
+    #[test]
+    fn the_known_plugin_roster_is_sorted_and_unique() {
+        let roster = crate::plugin::KNOWN_PLUGIN_IDS;
+        let mut sorted = roster.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted, roster, "KNOWN_PLUGIN_IDS must be sorted and unique");
     }
 
     #[test]

@@ -1534,10 +1534,12 @@ impl HostBuilder {
         // binding an operator wrote wrong fails startup rather than the first
         // workload that names it.
         for id in self.plugin_bindings.plugin_ids() {
-            let plugin = self
-                .plugins
-                .get(id)
-                .context("plugin vanished between validation and build")?;
+            // Skipped, not refused: `validate_against` already warned that this
+            // build has no such plugin. Nothing can bind it either, so the
+            // declaration is inert rather than wrong.
+            let Some(plugin) = self.plugins.get(id) else {
+                continue;
+            };
             let declared = self.plugin_bindings.for_plugin(id);
             declared.validate_declaration()?;
             // The schema check next: an operator typo is named as a typo,

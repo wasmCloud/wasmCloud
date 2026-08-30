@@ -15,7 +15,7 @@ use crate::wit::{WitInterface, WitWorld};
 use tracing::instrument;
 use wasmtime::bail;
 
-const PLUGIN_LOGGING_ID: &str = "wasi-logging";
+pub(crate) const PLUGIN_LOGGING_ID: &str = "wasi-logging";
 
 mod bindings {
     crate::wasmtime::component::bindgen!({

@@ -57,7 +57,7 @@ mod multiplexed;
 #[cfg(feature = "wasm_component_model_implements")]
 pub use multiplexed::PgId;
 
-const PLUGIN_POSTGRES_ID: &str = "wasmcloud-postgres";
+pub(crate) const PLUGIN_POSTGRES_ID: &str = "wasmcloud-postgres";
 const DEFAULT_POOL_SIZE: usize = 10;
 
 // Two variants of the same `postgres` world. They generate identical

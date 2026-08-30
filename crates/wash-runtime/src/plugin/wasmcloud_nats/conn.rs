@@ -171,7 +171,7 @@ struct WorkloadConns {
 }
 
 /// The binding name of a plain, unlabeled `wasmcloud:nats` interface.
-pub const UNNAMED_BINDING: &str = "";
+pub use crate::plugin::bindings::UNNAMED_BINDING;
 
 /// All connections the plugin holds, partitioned by workload.
 #[derive(Default)]

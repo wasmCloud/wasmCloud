@@ -63,7 +63,7 @@ use crate::plugin::wasmcloud_messaging::Admitted;
 use crate::plugin::{HostPlugin, WitInterfaces, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
-const PLUGIN_MESSAGING_ID: &str = "wasmcloud-messaging";
+pub(crate) const PLUGIN_MESSAGING_ID: &str = "wasmcloud-messaging";
 const CONSUMER_GROUP_CONFIG: &str = "consumer_group";
 const BROADCAST_CONSUMER_GROUP: &str = "broadcast";
 const DEFAULT_CONSUMER_GROUP_PREFIX: &str = "wasmcloud";

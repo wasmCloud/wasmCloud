@@ -68,7 +68,7 @@ pub type BlobId = Arc<dyn BlobBackend>;
 const DEFAULT_MAX_OBJECT_SIZE: usize = 64 * 1024 * 1024;
 
 const DEFAULT_BACKEND: &str = "in-memory";
-const MULTIPLEXED_BLOBSTORE_ID: &str = "wasi-blobstore-multiplexed";
+pub(crate) const MULTIPLEXED_BLOBSTORE_ID: &str = "wasi-blobstore-multiplexed";
 
 /// Backend-agnostic container metadata; converted into the per-surface bindgen
 /// types by the host layers.

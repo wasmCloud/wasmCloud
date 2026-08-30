@@ -87,8 +87,14 @@ pub use component_plugin_spec::ComponentPluginSpec;
 /// there buys nothing: if the plugin is absent, no workload can bind it either,
 /// so the declaration denies nothing and protects nothing.
 ///
+/// Native ids only. A component plugin's id is whatever the operator wrote on
+/// the entry that loads it, so it cannot be enumerated here — and does not need
+/// to be, since a host that loaded one has it registered and never reaches the
+/// roster.
+///
 /// Keep it in sync when a plugin id is added. A missing entry only downgrades a
-/// warning to a refusal, so the failure is loud rather than silent.
+/// warning to a refusal, and only on a host that was not built with the plugin,
+/// so the failure is loud rather than silent.
 pub const KNOWN_PLUGIN_IDS: &[&str] = &[
     "wasi-blobstore",
     "wasi-blobstore-multiplexed",
@@ -108,6 +114,57 @@ pub const KNOWN_PLUGIN_IDS: &[&str] = &[
     "wasmcloud-postgres",
     "wasmcloud-secrets",
 ];
+
+#[cfg(test)]
+mod roster_tests {
+    /// Every native plugin's id, from the constant the plugin itself uses. A
+    /// plugin added without its roster entry gets a refusal instead of a
+    /// warning on any build that did not compile it in.
+    #[test]
+    fn the_roster_names_every_native_plugin() {
+        #[allow(unused_mut)]
+        let mut ids: Vec<&str> = vec![
+            super::wasmcloud_messaging::nats::PLUGIN_MESSAGING_ID,
+            super::wasmcloud_messaging::in_memory::PLUGIN_MESSAGING_MEMORY_ID,
+            super::wasmcloud_messaging::multiplexed::MULTIPLEXED_MESSAGING_ID,
+            super::wasmcloud_messaging::multiplexed_async::MULTIPLEXED_ASYNC_MESSAGING_ID,
+            super::wasmcloud_secrets::WASMCLOUD_SECRETS_ID,
+        ];
+        #[cfg(feature = "wasi-blobstore")]
+        ids.extend([
+            super::wasi_blobstore::nats::PLUGIN_BLOBSTORE_ID,
+            super::wasi_blobstore::multiplexed::MULTIPLEXED_BLOBSTORE_ID,
+            super::wasi_blobstore::multiplexed_async::MULTIPLEXED_ASYNC_BLOBSTORE_ID,
+        ]);
+        #[cfg(feature = "wasi-keyvalue")]
+        ids.extend([
+            super::wasi_keyvalue::nats::PLUGIN_KEYVALUE_ID,
+            super::wasi_keyvalue::multiplexed::MULTIPLEXED_KEYVALUE_ID,
+            super::wasi_keyvalue::multiplexed_async::MULTIPLEXED_ASYNC_KEYVALUE_ID,
+        ]);
+        #[cfg(feature = "wasi-config")]
+        ids.push(super::wasi_config::WASI_CONFIG_ID);
+        #[cfg(feature = "wasi-logging")]
+        ids.push(super::wasi_logging::PLUGIN_LOGGING_ID);
+        #[cfg(feature = "wasi-otel")]
+        ids.push(super::wasi_otel::WASI_OTEL_ID);
+        #[cfg(feature = "wasi-webgpu")]
+        ids.push(super::wasi_webgpu::WASI_WEBGPU_ID);
+        #[cfg(all(feature = "wasmcloud-postgres", not(doctest)))]
+        ids.push(super::wasmcloud_postgres::PLUGIN_POSTGRES_ID);
+        #[cfg(feature = "wasmcloud-nats")]
+        ids.push(super::wasmcloud_nats::PLUGIN_NATS_ID);
+
+        let missing: Vec<&str> = ids
+            .into_iter()
+            .filter(|id| !super::KNOWN_PLUGIN_IDS.contains(id))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "missing from KNOWN_PLUGIN_IDS: {missing:?}"
+        );
+    }
+}
 
 /// Operator-declared bindings: the host's side of an
 /// `interface-binding{name, config}`, and the `workloadConfig` policy that
