@@ -162,9 +162,50 @@ async fn test_secret_survives_other_workload_stop() -> Result<()> {
 }
 
 /// A workload that declares the same secret key across two separate
+/// Two entries of one binding that *agree* are one binding, and deploy.
+///
+/// Resolution stamps the folded config onto every entry of a binding, so a
+/// plugin that summed its matched interfaces would count each key once per
+/// entry and read the repetition as a collision — refusing a workload whose
+/// entries never disagreed about anything.
+#[tokio::test]
+async fn test_split_secret_config_across_entries_binds() -> Result<()> {
+    let host = "secrets-split";
+    let (_addr, h) = start_host_with_dev_router("127.0.0.1:0").await?;
+
+    let request = component_workload_request(
+        "secrets-caller",
+        host,
+        SECRETS_CALLER_WASM,
+        LocalResources::default(),
+        vec![
+            http_incoming_handler_interface(host, None),
+            secrets_interface(
+                [("registry-username".to_string(), "alice".to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
+            secrets_interface(
+                [("registry-password".to_string(), "s3cr3t".to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
+        ],
+    );
+
+    let response = h.workload_start(request).await?;
+    assert_ne!(
+        response.workload_status.workload_state,
+        WorkloadState::Error,
+        "disjoint keys across two entries of one binding must deploy, got: {:?}",
+        response.workload_status
+    );
+    Ok(())
+}
+
 /// `wasmcloud:secrets` bindings is rejected at bind time: `store.get` takes
 /// only a key, with no way to say which binding it's asking on behalf of, so
-/// the plugin refuses to let one binding's value silently shadow the other's.
+/// one binding's value must never silently shadow the other's.
 #[tokio::test]
 async fn test_colliding_secret_key_rejects_bind() -> Result<()> {
     let host = "secrets-collide";
@@ -198,12 +239,18 @@ async fn test_colliding_secret_key_rejects_bind() -> Result<()> {
         "colliding secret keys across bindings must fail to deploy, got: {:?}",
         response.workload_status
     );
+    // Caught by binding resolution rather than by the plugin: the entries of
+    // one binding are folded into a single config before any plugin sees them,
+    // so two that disagree are refused there, with the key named.
+    let message = &response.workload_status.message;
     assert!(
-        response
-            .workload_status
-            .message
-            .contains("set by more than one binding"),
-        "expected the plugin's own collision check to reject the bind, got: {:?}",
+        message.contains("conflicting values for `registry-username`"),
+        "expected the refusal to name the colliding key, got: {:?}",
+        response.workload_status
+    );
+    assert!(
+        !message.contains("alice") && !message.contains("mallory"),
+        "the message must not carry the values; they are secrets: {:?}",
         response.workload_status
     );
 
