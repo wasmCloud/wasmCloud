@@ -148,7 +148,12 @@ mod roster_tests {
         ids.push(super::wasi_logging::PLUGIN_LOGGING_ID);
         #[cfg(feature = "wasi-otel")]
         ids.push(super::wasi_otel::WASI_OTEL_ID);
-        #[cfg(feature = "wasi-webgpu")]
+        // Same gate as the module: the feature alone does not compile it in.
+        #[cfg(all(
+            feature = "wasi-webgpu",
+            not(target_os = "windows"),
+            not(target_arch = "s390x")
+        ))]
         ids.push(super::wasi_webgpu::WASI_WEBGPU_ID);
         #[cfg(all(feature = "wasmcloud-postgres", not(doctest)))]
         ids.push(super::wasmcloud_postgres::PLUGIN_POSTGRES_ID);
