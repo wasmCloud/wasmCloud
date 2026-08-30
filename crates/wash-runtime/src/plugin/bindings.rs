@@ -708,9 +708,9 @@ impl PluginBindingSet {
                         // manifest is refused with one message however its
                         // entries spelled the key; the written spellings follow
                         // only when they differ from it.
-                        "conflicting values for `{}`{} across the entries of binding `{}` of \
-                         plugin `{}`; the entries of one binding are folded into a single \
-                         configuration, so a key more than one of them sets must agree",
+                        "conflicting values for `{}`{} across the entries of binding `{}`; \
+                         the entries of one binding are folded into a single configuration, so \
+                         a key more than one of them sets must agree",
                         if schema.knows(key) {
                             canonical_key(key)
                         } else {
@@ -722,7 +722,6 @@ impl PluginBindingSet {
                             format!(" (written `{spelling}` and `{key}`, which are one key)")
                         },
                         describe_binding(binding),
-                        self.describe_plugin(),
                     ),
                     // Already present, and agreeing. Keep the spelling that is
                     // there rather than the one this entry used: the folded map
@@ -1071,16 +1070,6 @@ impl PluginBindingSet {
             &claimed,
             &format!("`host.plugins` entry `{}` `hostOwnedKeys`", self.plugin_id),
         )
-    }
-
-    /// This plugin's id for an error. The set `for_plugin` hands back for an
-    /// undeclared plugin carries none, and `plugin ` `` reads as a bug.
-    fn describe_plugin(&self) -> &str {
-        if self.plugin_id.is_empty() {
-            "<undeclared>"
-        } else {
-            &self.plugin_id
-        }
     }
 
     /// `; this host serves ...` for an error, or nothing when it serves none.

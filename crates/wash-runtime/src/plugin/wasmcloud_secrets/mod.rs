@@ -287,28 +287,27 @@ impl HostPlugin for WasmcloudSecrets {
         )?;
 
         if has_dynamic {
-            // Flatten every matched *dynamic* (unlabeled `store`/`reveal`)
-            // interface's config into one per-component map; the
-            // `wasmcloud:secrets` binding's config carries the credentials
-            // the platform sourced from `secretFrom`. `store.get` takes only
-            // a key, with no way to say which binding it's asking on behalf
-            // of, so a component with multiple `wasmcloud:secrets` bindings
-            // that happen to declare the same key is unresolvable — reject
-            // the bind rather than let one binding's value silently shadow
-            // another's.
-            let mut config = BTreeMap::new();
-            for iface in interfaces.iter().filter(|i| i.name.is_none()) {
-                for (key, value) in &iface.config {
-                    if config.insert(key.clone(), value.clone()).is_some() {
-                        anyhow::bail!(
-                            "secret key {key:?} is set by more than one binding for component \
-                             {:?} in workload {:?}",
-                            item.id(),
-                            item.workload_id()
-                        );
-                    }
-                }
-            }
+            // The unlabeled `store`/`reveal` entries all carry the *same*
+            // config: binding resolution folds a binding's entries into one
+            // map and stamps it onto each. So take it once rather than
+            // accumulating — summing them would see every key twice and read
+            // the duplicate as a collision.
+            //
+            // The collision this used to catch is caught earlier now, and
+            // better: two entries of one binding that disagree about a key are
+            // refused by the fold, with the key named. `store.get` takes only a
+            // key and cannot say which binding it asks on behalf of, so that
+            // check still has to happen — it just is not this plugin's.
+            let config: BTreeMap<String, String> = interfaces
+                .iter()
+                .find(|i| i.name.is_none())
+                .map(|i| {
+                    i.config
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect()
+                })
+                .unwrap_or_default();
 
             bindings::wasmcloud::secrets::reveal::add_to_linker::<_, SharedCtx>(
                 item.linker(),
