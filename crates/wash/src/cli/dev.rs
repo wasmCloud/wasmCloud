@@ -387,7 +387,7 @@ impl CliCommand for DevCommand {
             dev_config.to_plugin_bindings(&config, project_dir, Some(project_dir))?;
         if let Some(url) = &dev_config.data_nats_url {
             let nats = plugin_bindings
-                .entry(plugin::wasmcloud_nats::PLUGIN_NATS_ID)
+                .for_plugin(plugin::wasmcloud_nats::PLUGIN_NATS_ID)
                 .with_default_bundle("servers", [("servers", url.clone())]);
             plugin_bindings = plugin_bindings.with_plugin(nats);
         }

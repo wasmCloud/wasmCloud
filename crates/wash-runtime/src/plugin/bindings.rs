@@ -1155,9 +1155,9 @@ pub struct PluginBindings {
     /// about the whole host, and the plugins an operator wrote nothing for are
     /// exactly the ones it has to cover. `wash dev` defaults to `allow` so a
     /// project manifest stays self-contained, and without this a plugin absent
-    /// from `dev.plugins` would still resolve under the struct default of
+    /// from `dev.plugins` would still resolve under the field default of
     /// `deny`.
-    undeclared: PluginBindingSet,
+    undeclared: WorkloadConfigPolicy,
 }
 
 impl PluginBindings {
@@ -1187,36 +1187,29 @@ impl PluginBindings {
 
     /// The policy a plugin nobody declared an entry for resolves under.
     ///
-    /// Applies to [`PluginBindings::for_plugin`] and to the set
-    /// [`PluginBindings::entry`] mints, so a front end's default reaches every
-    /// plugin rather than only the ones named in config.
+    /// Applies to every set [`PluginBindings::for_plugin`] hands back, so a
+    /// front end's default reaches every plugin rather than only the ones
+    /// named in config.
     #[must_use]
     pub fn with_default_workload_config(mut self, policy: WorkloadConfigPolicy) -> Self {
-        self.undeclared.workload_config = policy;
+        self.undeclared = policy;
         self
     }
 
-    /// The declaration for `plugin_id`, or an empty one under the default
-    /// policy.
+    /// The declaration for `plugin_id`: whatever the operator wrote, or an
+    /// empty one under the default policy.
     ///
-    /// The empty one carries no plugin id, which is fine for resolving —
-    /// nothing is declared, so nothing names it. Use [`PluginBindings::entry`]
-    /// to build on it.
-    #[must_use]
-    pub fn for_plugin(&self, plugin_id: &str) -> &PluginBindingSet {
-        self.plugins.get(plugin_id).unwrap_or(&self.undeclared)
-    }
-
-    /// An owned declaration for `plugin_id` to add to: whatever the operator
-    /// declared, or a fresh one carrying the right id.
+    /// Always carries `plugin_id`, declared or not: the id is what an
+    /// `(implements ..)` label is matched against to route it to the unnamed
+    /// binding, and the plugin makes that same comparison against its own id.
+    /// A set under the wrong id splits one binding in two.
     ///
-    /// What a front end uses to layer its own flag-derived defaults on top of
-    /// the config file, since [`PluginBindings::for_plugin`]'s fallback has no
-    /// id and would re-insert under the wrong key.
+    /// Owned, so a front end can layer flag-derived defaults on top and put
+    /// the result back with [`PluginBindings::with_plugin`].
     #[must_use]
-    pub fn entry(&self, plugin_id: &str) -> PluginBindingSet {
+    pub fn for_plugin(&self, plugin_id: &str) -> PluginBindingSet {
         self.plugins.get(plugin_id).cloned().unwrap_or_else(|| {
-            PluginBindingSet::new(plugin_id).with_workload_config(self.undeclared.workload_config)
+            PluginBindingSet::new(plugin_id).with_workload_config(self.undeclared)
         })
     }
 
@@ -1660,6 +1653,41 @@ mod tests {
             .resolve_by_name(&interfaces, &nats_schema(), never_narrows())
             .unwrap();
         assert_eq!(resolved[UNNAMED_BINDING]["servers"], "nats://host:4222");
+    }
+
+    #[test]
+    fn a_plugin_id_label_routes_the_same_way_with_nothing_declared() {
+        // The plugin matches the label against its own id whether or not an
+        // operator wrote an entry, so an undeclared plugin's set has to carry
+        // the id too. Split in two here, the plugin still reads them as one
+        // binding and takes whichever half it reaches first.
+        let set = PluginBindings::new()
+            .with_default_workload_config(WorkloadConfigPolicy::Allow)
+            .for_plugin("wasmcloud-nats");
+        assert_eq!(set.plugin_id(), "wasmcloud-nats");
+
+        let interfaces: HashSet<_> = [
+            iface(None, &[("servers", "nats://host:4222")]),
+            iface(
+                Some("wasmcloud-nats"),
+                &[("core-subscriptions", "orders.new")],
+            ),
+        ]
+        .into();
+        let resolved = set
+            .resolve_by_name(&interfaces, &nats_schema(), never_narrows())
+            .unwrap();
+
+        assert_eq!(
+            resolved.keys().collect::<Vec<_>>(),
+            [UNNAMED_BINDING],
+            "one binding, however the manifest split it: {resolved:?}"
+        );
+        assert_eq!(resolved[UNNAMED_BINDING]["servers"], "nats://host:4222");
+        assert_eq!(
+            resolved[UNNAMED_BINDING]["core-subscriptions"],
+            "orders.new"
+        );
     }
 
     #[test]
