@@ -126,19 +126,29 @@ mod roster_tests {
         let mut ids: Vec<&str> = vec![
             super::wasmcloud_messaging::nats::PLUGIN_MESSAGING_ID,
             super::wasmcloud_messaging::in_memory::PLUGIN_MESSAGING_MEMORY_ID,
-            super::wasmcloud_messaging::multiplexed::MULTIPLEXED_MESSAGING_ID,
-            super::wasmcloud_messaging::multiplexed_async::MULTIPLEXED_ASYNC_MESSAGING_ID,
             super::wasmcloud_secrets::WASMCLOUD_SECRETS_ID,
         ];
-        #[cfg(feature = "wasi-blobstore")]
+        // Every multiplexer carries the same gate as its module: the plugin's
+        // own feature does not compile one in.
+        #[cfg(feature = "wasm_component_model_implements")]
         ids.extend([
-            super::wasi_blobstore::nats::PLUGIN_BLOBSTORE_ID,
+            super::wasmcloud_messaging::multiplexed::MULTIPLEXED_MESSAGING_ID,
+            super::wasmcloud_messaging::multiplexed_async::MULTIPLEXED_ASYNC_MESSAGING_ID,
+        ]);
+        #[cfg(feature = "wasi-blobstore")]
+        ids.push(super::wasi_blobstore::nats::PLUGIN_BLOBSTORE_ID);
+        #[cfg(all(
+            feature = "wasi-blobstore",
+            feature = "wasm_component_model_implements"
+        ))]
+        ids.extend([
             super::wasi_blobstore::multiplexed::MULTIPLEXED_BLOBSTORE_ID,
             super::wasi_blobstore::multiplexed_async::MULTIPLEXED_ASYNC_BLOBSTORE_ID,
         ]);
         #[cfg(feature = "wasi-keyvalue")]
+        ids.push(super::wasi_keyvalue::nats::PLUGIN_KEYVALUE_ID);
+        #[cfg(all(feature = "wasi-keyvalue", feature = "wasm_component_model_implements"))]
         ids.extend([
-            super::wasi_keyvalue::nats::PLUGIN_KEYVALUE_ID,
             super::wasi_keyvalue::multiplexed::MULTIPLEXED_KEYVALUE_ID,
             super::wasi_keyvalue::multiplexed_async::MULTIPLEXED_ASYNC_KEYVALUE_ID,
         ]);
