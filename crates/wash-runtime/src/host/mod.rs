@@ -1962,6 +1962,47 @@ mod tests {
             .expect("failed to build host")
     }
 
+    /// `build()` runs each plugin's own parser over the operator's
+    /// declaration, so a binding written wrong fails startup rather than the
+    /// first workload that asks for it. The message has to name the binding.
+    ///
+    /// Also the other direction: a named binding that omits `servers` inherits
+    /// the host's data-plane address at resolve time, so it is complete by the
+    /// time the plugin reads it and must *not* fail startup.
+    #[cfg(feature = "wasmcloud-nats")]
+    #[test]
+    fn a_bad_declaration_fails_at_startup() {
+        use crate::plugin::wasmcloud_nats::{PLUGIN_NATS_ID, WasmcloudNats};
+        use crate::plugin::{PluginBindingSet, PluginBindings};
+
+        let build = |binding: &[(&str, &str)]| {
+            let declared = PluginBindingSet::new(PLUGIN_NATS_ID)
+                .with_binding(
+                    "orders",
+                    binding
+                        .iter()
+                        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                        .collect(),
+                )
+                .with_default_bundle("servers", [("servers", "nats://data:4222")]);
+            Host::builder()
+                .with_plugin(Arc::new(WasmcloudNats::new()))
+                .expect("failed to register plugin")
+                .with_plugin_bindings(PluginBindings::new().with_plugin(declared))
+                .build()
+        };
+
+        let err = build(&[("ack-mode", "sometimes")]).expect_err("not an ack mode");
+        // Alternate form: the binding name is in the context chain, and a
+        // message that stops at "invalid declaration" sends an operator
+        // through every binding they have.
+        let err = format!("{err:#}");
+        assert!(err.contains("orders"), "names the binding: {err}");
+
+        build(&[("subject-allow", "orders.>")])
+            .expect("a binding that inherits the data-plane address is complete");
+    }
+
     /// A start that fails *after* its plugins bound must give the binding back.
     /// `resolve` rolls back its own failures; anything failing later has to be
     /// released by the start itself, or every plugin is left holding

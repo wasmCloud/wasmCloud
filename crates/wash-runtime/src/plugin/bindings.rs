@@ -560,12 +560,25 @@ impl PluginBindingSet {
     }
 
     /// The operator's config for `binding`: the base with the named entry
-    /// layered over it.
+    /// layered over it, in the spellings the operator wrote.
     #[must_use]
     pub fn host_layer(&self, binding: &str) -> HashMap<String, String> {
+        self.host_layer_with(binding, &BindingSchema::empty())
+    }
+
+    /// [`Self::host_layer`], collapsing two spellings of one key.
+    ///
+    /// The operator's own layers need this as much as the workload's: a base
+    /// that writes `Subject_Allow` and a binding that writes `subject-allow`
+    /// are one grant, and `extend` alone would leave both in the map for a
+    /// plugin to pick between.
+    #[must_use]
+    fn host_layer_with(&self, binding: &str, schema: &BindingSchema) -> HashMap<String, String> {
         let mut layer = self.base.clone();
         if let Some(named) = self.bindings.get(binding) {
-            layer.extend(named.iter().map(|(k, v)| (k.clone(), v.clone())));
+            for (key, value) in named {
+                layer_insert(&mut layer, key, value, schema);
+            }
         }
         layer
     }
@@ -811,7 +824,7 @@ impl PluginBindingSet {
         schema: &BindingSchema,
         narrows: NarrowsFn<'_>,
     ) -> anyhow::Result<HashMap<String, String>> {
-        let mut resolved = self.host_layer(binding);
+        let mut resolved = self.host_layer_with(binding, schema);
         if self.workload_config.reports() {
             let findings = self.findings(binding, workload, &resolved, schema, narrows);
             if !findings.is_empty() {
@@ -829,11 +842,7 @@ impl PluginBindingSet {
         }
 
         for (key, value) in workload {
-            let canonical = canonical_key(key);
-            // Replace the operator's spelling rather than adding beside it, so
-            // one key stays one key however each side spelled it.
-            resolved.retain(|existing, _| canonical_key(existing) != canonical);
-            resolved.insert(key.clone(), value.clone());
+            layer_insert(&mut resolved, key, value, schema);
         }
         self.apply_default_bundles(binding, &mut resolved);
         Ok(resolved)
@@ -988,9 +997,12 @@ impl PluginBindingSet {
     /// time and is complete when the plugin actually sees it, so validating
     /// the layer without the bundle refuses the ordinary case: a second
     /// binding on the same cluster, declared only to carry a narrower grant.
-    pub fn host_layers(&self) -> impl Iterator<Item = (&str, HashMap<String, String>)> {
-        self.bindings.keys().map(|name| {
-            let mut layer = self.host_layer(name);
+    pub fn host_layers<'a>(
+        &'a self,
+        schema: &'a BindingSchema,
+    ) -> impl Iterator<Item = (&'a str, HashMap<String, String>)> {
+        self.bindings.keys().map(move |name| {
+            let mut layer = self.host_layer_with(name, schema);
             self.apply_default_bundles(name, &mut layer);
             (name.as_str(), layer)
         })
@@ -1079,6 +1091,25 @@ impl PluginBindingSet {
         let names: Vec<String> = self.bindings.keys().map(|n| format!("`{n}`")).collect();
         format!("; it serves {}", names.join(", "))
     }
+}
+
+/// Write `key` into `layer`, replacing whatever spelling of it is already
+/// there.
+///
+/// Canonical only for keys the schema classifies. Two spellings of
+/// `subject-allow` are one grant; two spellings of a key a guest chose are two
+/// settings — the same rule [`PluginBindingSet::fold_workload_entries`] applies.
+fn layer_insert(
+    layer: &mut HashMap<String, String>,
+    key: &str,
+    value: &str,
+    schema: &BindingSchema,
+) {
+    if schema.knows(key) {
+        let canonical = canonical_key(key);
+        layer.retain(|existing, _| canonical_key(existing) != canonical);
+    }
+    layer.insert(key.to_string(), value.to_string());
 }
 
 /// Read `key` from `config` in any spelling.
@@ -1458,12 +1489,49 @@ mod tests {
             .resolve(
                 "",
                 &map(&[("ack-mode", "manual")]),
-                &BindingSchema::empty(),
+                &nats_schema(),
                 never_narrows(),
             )
             .unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved.get("ack-mode").unwrap(), "manual");
+
+        // And not for a key the plugin does not classify: there the two
+        // spellings are two settings the guest chose, and collapsing them would
+        // drop one.
+        let open = PluginBindingSet::new("wasi-config")
+            .with_base(map(&[("LOG_LEVEL", "info")]))
+            .with_workload_config(WorkloadConfigPolicy::Allow);
+        let resolved = open
+            .resolve(
+                "",
+                &map(&[("log-level", "debug")]),
+                &BindingSchema::empty(),
+                never_narrows(),
+            )
+            .unwrap();
+        assert_eq!(resolved["LOG_LEVEL"], "info");
+        assert_eq!(resolved["log-level"], "debug");
+    }
+
+    /// The operator's own two layers, same rule: a base and a binding that
+    /// spell one classified key differently are one key, not two.
+    #[test]
+    fn the_operators_layers_collapse_one_key_written_two_ways() {
+        let set = PluginBindingSet::new("wasmcloud-nats")
+            .with_base(map(&[("Subject_Allow", "orders.>")]))
+            .with_binding("eu", map(&[("subject-allow", "orders.eu.>")]));
+
+        let layer = set.host_layer_with("eu", &nats_schema());
+        assert_eq!(layer.len(), 1, "one grant, not two: {layer:?}");
+        assert_eq!(layer["subject-allow"], "orders.eu.>");
+
+        // The plugin's reader accepts either spelling, so an operator who only
+        // ever writes one is unaffected either way.
+        assert_eq!(
+            set.host_layer_with("", &nats_schema())["Subject_Allow"],
+            "orders.>"
+        );
     }
 
     #[test]
@@ -1912,7 +1980,8 @@ mod tests {
             .with_binding("cache", map(&[("bucket", "cache")]))
             .with_binding("sessions", map(&[("url", "redis://other:6379")]));
 
-        let layers: BTreeMap<&str, HashMap<String, String>> = set.host_layers().collect();
+        let schema = BindingSchema::empty();
+        let layers: BTreeMap<&str, HashMap<String, String>> = set.host_layers(&schema).collect();
         assert_eq!(layers["cache"]["url"], "redis://host:6379");
         assert_eq!(layers["cache"]["bucket"], "cache");
         assert_eq!(layers["sessions"]["url"], "redis://other:6379");
@@ -1935,7 +2004,8 @@ mod tests {
                 [("servers", "nats://data-plane:4222"), ("tls-ca", "/ca.crt")],
             );
 
-        let layers: BTreeMap<&str, HashMap<String, String>> = set.host_layers().collect();
+        let schema = BindingSchema::empty();
+        let layers: BTreeMap<&str, HashMap<String, String>> = set.host_layers(&schema).collect();
         assert_eq!(layers["orders"]["servers"], "nats://data-plane:4222");
         assert_eq!(layers["orders"]["tls-ca"], "/ca.crt");
 
