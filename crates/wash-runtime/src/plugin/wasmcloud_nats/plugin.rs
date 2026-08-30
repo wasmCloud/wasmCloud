@@ -14,11 +14,12 @@ use tracing::{debug, info};
 
 use crate::engine::workload::{ResolvedWorkload, UnresolvedWorkload, WorkloadItem};
 use crate::observability::Meters;
+use crate::plugin::bindings::{UNNAMED_BINDING, describe_binding};
 use crate::plugin::{HostPlugin, WitInterfaces, WorkloadFailureSink, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
 use super::config::{
-    self, CoreSubscriptionConfig, JetStreamSubscriptionConfig, KvWatchConfig, NatsConfig,
+    CoreSubscriptionConfig, JetStreamSubscriptionConfig, KvWatchConfig, NatsConfig,
     parse_core_subscriptions, parse_jetstream_subscriptions, parse_kv_watches, subscription_spec,
 };
 use super::conn::{self, ConnHandle, ConnectionRegistry};
@@ -555,18 +556,17 @@ fn nats_interfaces<'a>(interfaces: &'a WitInterfaces<'_>) -> Vec<&'a WitInterfac
         .collect()
 }
 
-/// The binding name an interface routes under: its `(implements ..)` label, or
-/// the empty string when it is bound plainly.
+/// The binding name an interface routes under, exactly as the generic layer
+/// reads it.
+///
+/// A label equal to the plugin's own id is a workload naming the plugin rather
+/// than a backend, so it routes to the unnamed binding. Reading it as a name
+/// here would let `(implements wasmcloud-nats)` skip the undeclared-name
+/// refusal and open a connection the operator never declared.
 fn binding_name(interface: &WitInterface) -> &str {
-    interface.name.as_deref().unwrap_or(conn::UNNAMED_BINDING)
-}
-
-/// A binding name for a log line or an error message.
-fn describe_binding(binding: &str) -> &str {
-    if binding.is_empty() {
-        "<unnamed>"
-    } else {
-        binding
+    match interface.name.as_deref() {
+        Some(name) if name != PLUGIN_NATS_ID => name,
+        _ => UNNAMED_BINDING,
     }
 }
 
@@ -835,20 +835,24 @@ impl HostPlugin for WasmcloudNats {
             return Ok(());
         }
 
+        // Before the entries are read, not after: a service has no manifest
+        // name, so `component:` could only ever match its per-start UUID, and
+        // the advice in every error below would be impossible to follow.
+        let WorkloadItem::Component(component) = item else {
+            anyhow::bail!("wasmcloud:nats handlers are only supported on components")
+        };
+
         let mut jetstream_subs = Vec::new();
         let mut core_subs = Vec::new();
         let mut kv_watches = Vec::new();
         let mut untargeted_specs: Vec<String> = Vec::new();
 
-        let component_id = item.id().to_string();
-        // The manifest's `components[].name`, alongside the runtime id. A
+        let component_id = component.id().to_string();
+        // The manifest's `components[].name`, alongside the runtime id: a
         // manifest is written before the workload exists, so the id — a fresh
-        // UUID per start — is not something an author can name; the name is.
-        let component_name = match &item {
-            WorkloadItem::Component(component) => Some(component.name().to_string()),
-            WorkloadItem::Service(_) => None,
-        };
-        let workload_id = item.workload_id().to_string();
+        // UUID per start — is not something an author can name.
+        let component_name = component.name().to_string();
+        let workload_id = component.workload_id().to_string();
 
         for interface in &bound {
             let binding = binding_name(interface);
@@ -858,7 +862,7 @@ impl HostPlugin for WasmcloudNats {
                 interface
                     .config
                     .iter()
-                    .find(|(k, _)| config::canonical_key(k) == key)
+                    .find(|(k, _)| super::keys::canonical(k) == key)
                     .map(|(_, v)| v)
             };
             // The runtime hands an unnamed host-interface entry to every
@@ -868,12 +872,7 @@ impl HostPlugin for WasmcloudNats {
             // for; entries that name another component are simply not this
             // component's.
             let targeted = match cfg("component") {
-                Some(target)
-                    if target.as_str() != component_id
-                        && Some(target.as_str()) != component_name.as_deref() =>
-                {
-                    continue;
-                }
+                Some(target) if *target != component_id && *target != component_name => continue,
                 Some(_) => true,
                 None => false,
             };
@@ -925,10 +924,6 @@ impl HostPlugin for WasmcloudNats {
                 kv_watches.extend(watches);
             }
         }
-
-        let WorkloadItem::Component(component) = item else {
-            anyhow::bail!("wasmcloud:nats handlers are only supported on components")
-        };
 
         let mut tracker = self.tracker.write().await;
 
@@ -1181,7 +1176,7 @@ mod tests {
         let merged = merge(&entries).unwrap();
         assert_eq!(merged.len(), 1, "{merged:?}");
         let (binding, config) = &merged[0];
-        assert_eq!(binding, conn::UNNAMED_BINDING);
+        assert_eq!(binding, UNNAMED_BINDING);
 
         let parsed = NatsConfig::from_map(config).unwrap();
         assert_eq!(parsed.servers, vec!["nats://localhost:4222"]);
@@ -1296,7 +1291,7 @@ mod tests {
         let merged = HashMap::from([("core-subscriptions".to_string(), "orders.new".to_string())]);
 
         let err = plugin
-            .open_bindings("wl", vec![(conn::UNNAMED_BINDING, merged)], &mut opened)
+            .open_bindings("wl", vec![(UNNAMED_BINDING, merged)], &mut opened)
             .await
             .expect_err("no servers reached the plugin");
         let msg = err.to_string();
@@ -1330,7 +1325,7 @@ mod tests {
 
         let merged = declared
             .resolve(
-                conn::UNNAMED_BINDING,
+                UNNAMED_BINDING,
                 &HashMap::from([("subject-allow".to_string(), "orders.received".to_string())]),
                 &super::super::binding_schema(),
                 &|key: &str, host: &str, workload: &str| plugin.narrows(key, host, workload),
@@ -1339,7 +1334,7 @@ mod tests {
 
         let mut opened = false;
         let err = plugin
-            .open_bindings("wl", vec![(conn::UNNAMED_BINDING, merged)], &mut opened)
+            .open_bindings("wl", vec![(UNNAMED_BINDING, merged)], &mut opened)
             .await
             .expect_err("nothing is listening on nats://host:4222");
         let msg = err.to_string();

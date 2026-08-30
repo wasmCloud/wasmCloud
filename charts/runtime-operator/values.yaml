@@ -468,12 +468,16 @@ runtime:
       #
       # Beyond a component entry's own fields, every entry may set:
       #
-      #   workloadConfig  `deny` (default) or `allow`. Under `deny`, keys this
-      #                   plugin considers the host's come only from here: a
-      #                   workload that sets one, or that names a binding
-      #                   absent from `bindings` once any binding is declared,
-      #                   fails to deploy. Under `allow` a workload's own
-      #                   interface config layers over what is declared here.
+      #   workloadConfig  `deny` (default), `allow`, or `warn`. Under `deny`,
+      #                   keys this plugin considers the host's come only from
+      #                   here: a workload that sets one, that widens a grant
+      #                   the operator declared, or that names a binding absent
+      #                   from `bindings` once any binding is declared, fails
+      #                   to deploy. Under `allow` a workload's own interface
+      #                   config layers over what is declared here. `warn` is
+      #                   `allow` with everything `deny` would refuse logged —
+      #                   how you rehearse a flip to `deny` without breaking a
+      #                   workload mid-flight.
       #
       #                   `deny` refuses nothing where nothing is declared, so
       #                   it is safe as the default: a plugin that names no

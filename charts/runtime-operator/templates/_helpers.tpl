@@ -206,6 +206,16 @@ Takes the host group dict directly (e.g. `.` inside
 and parses the result with `fromJson`.
 */}}
 {{- define "runtime-operator.hostPluginPartition" -}}
+{{- /* Removed keys, refused rather than ignored. Helm drops values nothing
+       reads, so an upgrade that keeps `wasmcloudNats` would render a host with
+       no binding, no credential and no grant — visible only as denied calls,
+       from a values file that still reads correct. */}}
+{{- if .wasmcloudNats }}
+{{- fail "runtime.hostGroups[].wasmcloudNats has been removed: declare it under this host group's `plugins` as an entry with `id: wasmcloud-nats`, moving `config`/`configFrom`/`secretFrom` onto the entry and `bindings` across unchanged" }}
+{{- end }}
+{{- if .wasmcloudNatsWorkloadConfig }}
+{{- fail "runtime.hostGroups[].wasmcloudNatsWorkloadConfig has been removed: set `workloadConfig` on this host group's `plugins` entry with `id: wasmcloud-nats`" }}
+{{- end }}
 {{- $fileBacked := list }}
 {{- $cli := list }}
 {{- range concat (default list .plugins) (default list .hostPlugins) }}

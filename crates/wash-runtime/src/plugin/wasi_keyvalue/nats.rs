@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use bytes::{Buf, Bytes};
 
-const PLUGIN_KEYVALUE_ID: &str = "wasi-keyvalue";
+pub(crate) const PLUGIN_KEYVALUE_ID: &str = "wasi-keyvalue";
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::{HostPlugin, WitInterfaces};

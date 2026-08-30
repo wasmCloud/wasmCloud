@@ -40,7 +40,7 @@ mod bindings {
     });
 }
 
-const WASI_CONFIG_ID: &str = "wasi-config";
+pub(crate) const WASI_CONFIG_ID: &str = "wasi-config";
 
 type ConfigMap = HashMap<Arc<str>, HashMap<String, String>>;
 

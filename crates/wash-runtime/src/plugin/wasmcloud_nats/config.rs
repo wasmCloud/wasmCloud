@@ -258,18 +258,6 @@ fn get<'a>(cfg: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
     super::keys::get(cfg, key)
 }
 
-/// The single spelling a key is stored under once several entries are folded
-/// into one map.
-///
-/// [`get`] reads kebab-case and falls back to snake_case, so `subject-allow`
-/// and `subject_allow` are one setting with two spellings. Anything deciding
-/// whether two entries speak about the same key has to agree with that, or an
-/// entry writing the other spelling would look like it were setting a key
-/// nothing had claimed — and `get` would then quietly honour only one of them.
-pub fn canonical_key(key: &str) -> String {
-    crate::plugin::bindings::canonical_key(key)
-}
-
 /// Splits a comma-separated list, dropping empties.
 fn list(cfg: &HashMap<String, String>, key: &str) -> Vec<String> {
     get(cfg, key)

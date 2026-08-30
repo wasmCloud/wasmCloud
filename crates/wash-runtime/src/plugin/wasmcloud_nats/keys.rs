@@ -133,7 +133,13 @@ pub fn find(key: &str) -> Option<&'static Key> {
 ///
 /// Trims, and treats an empty value as unset — a key present but blank is a
 /// manifest that meant to say nothing, and every caller here wants the default
-/// rather than an empty string.
+/// rather than an empty string, or the next alias.
+///
+/// Aliases have fixed precedence: the canonical spelling first, then each alias
+/// in the order [`KEYS`] lists it. Scanning `cfg` once and accepting whichever
+/// spelling turned up would let `HashMap` iteration order decide between two a
+/// config set both of — and for `creds` vs `creds-file` that is a credential
+/// picked at random, differing run to run on one unchanged config.
 ///
 /// # Panics
 ///
@@ -150,14 +156,13 @@ pub fn get<'a>(cfg: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
         Some(row) => row.spellings().collect(),
         None => vec![key],
     };
-    cfg.iter()
-        .find(|(k, _)| {
-            let k = canonical(k);
-            spellings.iter().any(|s| *s == k)
-        })
-        .map(|(_, v)| v.as_str())
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
+    spellings.into_iter().find_map(|spelling| {
+        cfg.iter()
+            .find(|(k, _)| canonical(k) == spelling)
+            .map(|(_, v)| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+    })
 }
 
 /// The keys the host owns outright, every spelling.
@@ -219,6 +224,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Two aliases of one key, both set. Which one wins cannot depend on where
+    /// a `HashMap` happened to put them — for `creds` that is a credential.
+    #[test]
+    fn an_alias_loses_to_the_canonical_spelling_every_time() {
+        let cfg: HashMap<String, String> = [
+            ("creds".to_string(), "/canonical.creds".to_string()),
+            ("creds-file".to_string(), "/alias.creds".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        for _ in 0..64 {
+            assert_eq!(get(&cfg, "creds"), Some("/canonical.creds"));
+            // Asking by the alias is asking for the same key, so it answers the
+            // same way.
+            assert_eq!(get(&cfg, "creds-file"), Some("/canonical.creds"));
+        }
+
+        // A blank canonical is unset rather than empty, so the alias is read.
+        let blank: HashMap<String, String> = [
+            ("creds".to_string(), "  ".to_string()),
+            ("creds-file".to_string(), "/alias.creds".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(get(&blank, "creds"), Some("/alias.creds"));
     }
 
     #[test]

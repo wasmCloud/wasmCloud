@@ -60,7 +60,7 @@ mod bindings {
 
 use bindings::wasmcloud::secrets::store::{SecretValue, SecretsError};
 
-const WASMCLOUD_SECRETS_ID: &str = "wasmcloud-secrets";
+pub(crate) const WASMCLOUD_SECRETS_ID: &str = "wasmcloud-secrets";
 
 /// Backing state for the exported `secret` resource: the resolved value, kept
 /// opaque to callers until they `reveal` it.

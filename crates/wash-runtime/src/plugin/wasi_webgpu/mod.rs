@@ -5,7 +5,7 @@
 
 use std::{collections::HashSet, sync::Arc};
 
-const WASI_WEBGPU_ID: &str = "wasi-webgpu";
+pub(crate) const WASI_WEBGPU_ID: &str = "wasi-webgpu";
 
 use crate::{
     engine::{ctx::SharedCtx, workload::WorkloadItem},

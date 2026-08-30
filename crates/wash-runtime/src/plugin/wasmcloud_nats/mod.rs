@@ -26,11 +26,18 @@ pub use plugin::{ComponentData, WasmcloudNats};
 /// recognize is refused rather than silently ignored. That is what keeps the
 /// table honest, since a key added to `NatsConfig::from_map` and forgotten here
 /// fails the first manifest that uses it.
+///
+/// Built once: the table is `const`, and this is asked for on every workload
+/// bind.
 #[must_use]
 pub fn binding_schema() -> crate::plugin::BindingSchema {
-    crate::plugin::BindingSchema::with_host_owned_keys(keys::host_owned())
-        .and_host_ceiling_keys(keys::host_ceiling())
-        .and_workload_owned_keys(keys::workload_owned())
+    static SCHEMA: std::sync::LazyLock<crate::plugin::BindingSchema> =
+        std::sync::LazyLock::new(|| {
+            crate::plugin::BindingSchema::with_host_owned_keys(keys::host_owned())
+                .and_host_ceiling_keys(keys::host_ceiling())
+                .and_workload_owned_keys(keys::workload_owned())
+        });
+    SCHEMA.clone()
 }
 
 // Handler worlds. Each lives in its own module so their duplicate import types

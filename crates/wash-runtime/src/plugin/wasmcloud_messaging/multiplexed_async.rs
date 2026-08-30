@@ -50,7 +50,7 @@ use bindings::wasmcloud::messaging0_3_0::types::{
 };
 
 const DEFAULT_BACKEND: &str = "in-memory";
-const MULTIPLEXED_ASYNC_MESSAGING_ID: &str = "wasmcloud-messaging-async-multiplexed";
+pub(crate) const MULTIPLEXED_ASYNC_MESSAGING_ID: &str = "wasmcloud-messaging-async-multiplexed";
 
 super::async_messaging_conversions! {
     error: AsyncMsgError,

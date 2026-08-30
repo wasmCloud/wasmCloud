@@ -380,6 +380,20 @@ pub struct HostCommand {
     #[arg(long = "wasmcloud-nats-url", env = "WASH_WASMCLOUD_NATS_URL")]
     pub wasmcloud_nats_url: Option<String>,
 
+    /// Removed: the policy is `workloadConfig` on the `host.plugins` entry.
+    ///
+    /// Hidden, and kept only to fail loudly. Dropping the arg outright makes
+    /// clap reject the *flag*, but `WASH_WASMCLOUD_NATS_WORKLOAD_CONFIG` in a
+    /// pod spec would simply stop being read — and a host that quietly stops
+    /// enforcing `deny` is the one failure this whole mechanism exists to
+    /// prevent.
+    #[arg(
+        long = "wasmcloud-nats-workload-config",
+        env = "WASH_WASMCLOUD_NATS_WORKLOAD_CONFIG",
+        hide = true
+    )]
+    pub removed_wasmcloud_nats_workload_config: Option<String>,
+
     /// Enable additional wasm proposals on the engine. Accepts a comma-separated
     /// list and/or repeated flags, e.g. `--wasm-proposal gc,threads`. Accepted
     /// names: component-model-async, component-model-map, gc,
@@ -628,6 +642,14 @@ impl CliCommand for HostCommand {
             self.wasmcloud_messaging_max_in_flight_per_component,
             engine.total_core_instances(),
         )?;
+
+        if let Some(value) = &self.removed_wasmcloud_nats_workload_config {
+            anyhow::bail!(
+                "`--wasmcloud-nats-workload-config` (WASH_WASMCLOUD_NATS_WORKLOAD_CONFIG) has \
+                 been removed. Set `workloadConfig: {value}` on the `host.plugins` entry with \
+                 `id: wasmcloud-nats` instead, where it applies to that plugin's bindings alone"
+            )
+        }
 
         // Resolved before anything is built: a binding an operator declared
         // wrong is a typo in the host's config file, and the workload that

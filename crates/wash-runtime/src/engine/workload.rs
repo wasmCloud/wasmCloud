@@ -2226,10 +2226,12 @@ impl UnresolvedWorkload {
             // If this plugin matches any components, bind them
             if !plugin_component_bindings.is_empty() {
                 // The operator's declaration for this plugin, applied before
-                // any of it reaches the plugin.
-                // `on_workload_bind` and `on_workload_item_bind` see the same
-                // resolved map and no plugin has to know the policy exists. The
-
+                // any of it reaches the plugin, so `on_workload_bind` and
+                // `on_workload_item_bind` see the same resolved map and no
+                // plugin has to know the policy exists. The pre-resolution
+                // interfaces stay in `plugin_component_bindings`: they are what
+                // `unmatched_interfaces` is keyed by.
+                //
                 // Resolution is keyed by binding name across the *whole*
                 // workload, not per component: one label is one binding — one
                 // connection, one grant — however many entries or components a

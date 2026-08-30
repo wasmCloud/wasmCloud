@@ -610,6 +610,55 @@ impl HostPluginConfig {
         self.source.file.is_some() || self.source.image.is_some()
     }
 
+    /// Refuse fields that only mean something for a plugin this host loads.
+    ///
+    /// A native entry configures a plugin the host already has: there is no
+    /// driver to restart, no image to pull or pin, no sandbox to grant egress
+    /// to, and no listener to publish. Accepting them silently is the same
+    /// failure `hostPlugins` without a source has — a line an operator wrote
+    /// deliberately that does nothing, and reads as if it did.
+    ///
+    /// # Errors
+    ///
+    /// Names every component-only field set on a native entry.
+    fn reject_component_only_fields(&self) -> Result<()> {
+        if self.is_component() {
+            return Ok(());
+        }
+        let mut set: Vec<&str> = Vec::new();
+        if self.max_restarts.is_some() {
+            set.push("maxRestarts");
+        }
+        if self.expected_digest.is_some() {
+            set.push("digest");
+        }
+        if self.source.pull_policy.is_some() {
+            set.push("pullPolicy");
+        }
+        if !self.allowed_hosts.is_empty() {
+            set.push("allowedHosts");
+        }
+        if !self.allowed_ip_name_lookups.is_empty() {
+            set.push("allowedIpNameLookups");
+        }
+        if !self.ports.is_empty() {
+            set.push("ports");
+        }
+        if set.is_empty() {
+            return Ok(());
+        }
+        bail!(
+            "host.plugins '{}' sets {}, which only apply to a plugin this host loads, but names \
+             no `image` or `file`. Either add the source, or drop the fields — a native entry \
+             configures a plugin the host already has",
+            self.id,
+            set.iter()
+                .map(|f| format!("`{f}`"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
+    }
+
     /// Resolve this entry's operator declaration: base config, every named
     /// binding, the policy, and the extra host-owned keys.
     ///
@@ -628,6 +677,7 @@ impl HostPluginConfig {
         if self.id.is_empty() {
             bail!("host.plugins entry is missing a non-empty `id`");
         }
+        self.reject_component_only_fields()?;
         let resolve = |env: &EnvironmentLayer, owner: &str| -> Result<HashMap<String, String>> {
             wash_runtime::config_source::resolve_environment_layer(
                 Some(env),
@@ -648,7 +698,8 @@ impl HostPluginConfig {
         for (name, binding) in &self.bindings {
             if name.is_empty() {
                 bail!(
-                    "host.plugins '{}' has a binding with an empty name; the unnamed binding is                      configured by the entry's own `config`",
+                    "host.plugins '{}' has a binding with an empty name; the unnamed binding \
+                     is configured by the entry's own `config`",
                     self.id
                 );
             }
@@ -741,6 +792,36 @@ pub struct HostConfig {
     /// a native plugin's configuration belongs under `plugins`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_plugins: Vec<HostPluginConfig>,
+
+    /// Removed: `wasmcloud:nats` is a `plugins` entry like any other.
+    ///
+    /// Present only so that upgrading with the old block still in place is an
+    /// error. Serde ignores unknown fields, so without this the block parses to
+    /// nothing and the host starts having silently lost every binding, every
+    /// credential and every grant it declared — visible only as calls denied
+    /// one at a time, on a config file that still reads correct.
+    #[serde(default, skip_serializing)]
+    pub wasmcloud_nats: Option<serde::de::IgnoredAny>,
+}
+
+impl HostConfig {
+    /// Refuse a config file still written against the removed shape.
+    ///
+    /// # Errors
+    ///
+    /// `host.wasmcloudNats` is present.
+    fn reject_removed_keys(&self) -> Result<()> {
+        if self.wasmcloud_nats.is_some() {
+            bail!(
+                "`host.wasmcloudNats` has been removed: declare `wasmcloud:nats` under \
+                 `host.plugins` as an entry with `id: wasmcloud-nats`, moving the block's own \
+                 `config`/`configFrom`/`secretFrom` onto the entry and its `bindings` across \
+                 unchanged. `--wasmcloud-nats-workload-config` is now that entry's \
+                 `workloadConfig`"
+            )
+        }
+        Ok(())
+    }
 }
 
 /// Merge a `plugins` list with its deprecated source-only alias, `plugins`
@@ -784,7 +865,14 @@ fn plugin_bindings_from(
     repo_root: Option<&Path>,
     default_policy: WorkloadConfigPolicy,
 ) -> Result<wash_runtime::plugin::PluginBindings> {
-    let mut bindings = wash_runtime::plugin::PluginBindings::new();
+    // On the catalog, not just on each entry: a front end's default is a
+    // statement about the whole host, and the plugins nobody wrote an entry for
+    // are exactly the ones it has to cover. Without it `wash dev` would hand
+    // every undeclared plugin the struct default of `deny` — which for
+    // `wasmcloud:nats`, the one plugin with a non-empty schema, refuses the
+    // self-contained manifest dev exists to run.
+    let mut bindings = wash_runtime::plugin::PluginBindings::new()
+        .with_default_workload_config(default_policy.into());
     for entry in entries {
         bindings = bindings.with_plugin(entry.to_binding_set(
             config,
@@ -838,6 +926,7 @@ impl HostConfig {
         project_dir: &Path,
         repo_root: Option<&Path>,
     ) -> Result<wash_runtime::plugin::PluginBindings> {
+        self.reject_removed_keys()?;
         plugin_bindings_from(
             &self.all_plugins()?,
             config,
@@ -1209,6 +1298,12 @@ pub struct DevConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasi_keyvalue_nats_url: Option<String>,
 
+    /// Removed: `wasmcloud:nats` is a `dev.plugins` entry like any other. See
+    /// [`HostConfig::wasmcloud_nats`] — present only so the old key is an error
+    /// rather than silently dropped.
+    #[serde(default, skip_serializing)]
+    pub wasmcloud_nats: Option<serde::de::IgnoredAny>,
+
     /// Optional path for WASI blobstore filesystem storage. If not set, an in-memory store is used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasi_blobstore_path: Option<PathBuf>,
@@ -1258,6 +1353,23 @@ impl DevConfig {
             .collect())
     }
 
+    /// Refuse a config file still written against the removed shape.
+    ///
+    /// # Errors
+    ///
+    /// `dev.wasmcloud_nats` is present.
+    fn reject_removed_keys(&self) -> Result<()> {
+        if self.wasmcloud_nats.is_some() {
+            bail!(
+                "`dev.wasmcloud_nats` has been removed: declare `wasmcloud:nats` under \
+                 `dev.plugins` as an entry with `id: wasmcloud-nats`, moving the block's own \
+                 `config`/`configFrom`/`secretFrom` onto the entry and its `bindings` across \
+                 unchanged"
+            )
+        }
+        Ok(())
+    }
+
     /// The operator's binding declarations for every plugin the dev host
     /// serves.
     ///
@@ -1271,6 +1383,7 @@ impl DevConfig {
         project_dir: &Path,
         repo_root: Option<&Path>,
     ) -> Result<wash_runtime::plugin::PluginBindings> {
+        self.reject_removed_keys()?;
         // `allow`, not `deny`: there is no operator in `wash dev`, so there is
         // no boundary to enforce and a project's manifest has to stay runnable
         // on its own. An entry that says `deny` explicitly still gets it.
@@ -2345,7 +2458,7 @@ dev:
         );
     }
 
-    /// The shape an operator writes for `wasmcloud:nats` since it is a 
+    /// The shape an operator writes for `wasmcloud:nats` since it is a
     /// `host.plugins` entry like any other. A renamed or moved field would
     /// leave the block silently ignored, and every workload would fall back to
     /// the bare data-plane address with no grant — visible only as denied
@@ -2407,6 +2520,122 @@ host:
             resolved.get("creds").map(String::as_str),
             Some("/etc/nats/orders.creds")
         );
+    }
+
+    /// The old block is an error, not an ignored key. Serde drops unknown
+    /// fields, so an operator who upgrades with `host.wasmcloudNats` still in
+    /// place would otherwise start a host that silently serves no binding, no
+    /// credential and no grant.
+    #[test]
+    fn the_removed_wasmcloud_nats_block_is_refused_by_name() {
+        let yaml = r#"
+host:
+  wasmcloudNats:
+    config:
+      servers: nats://nats.default.svc:4222
+    bindings:
+      orders:
+        config:
+          subject-allow: orders.>
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let err = config
+            .host()
+            .to_plugin_bindings(&config, Path::new("."), None)
+            .expect_err("the removed block must be refused")
+            .to_string();
+        assert!(err.contains("host.wasmcloudNats"), "got: {err}");
+        assert!(err.contains("id: wasmcloud-nats"), "got: {err}");
+
+        let dev_yaml = r#"
+dev:
+  wasmcloud_nats:
+    config:
+      servers: nats://127.0.0.1:4222
+"#;
+        let config: Config = serde_yaml_ng::from_str(dev_yaml).unwrap();
+        let err = config
+            .dev()
+            .to_plugin_bindings(&config, Path::new("."), None)
+            .expect_err("the removed block must be refused under dev too")
+            .to_string();
+        assert!(err.contains("dev.wasmcloud_nats"), "got: {err}");
+    }
+
+    /// `wash dev` leaves a manifest free to describe its own binding, and that
+    /// has to hold for a plugin nobody wrote a `dev.plugins` entry for —
+    /// `wasmcloud:nats` is the plugin with a closed schema, so a `deny` here
+    /// refuses exactly the self-contained manifest dev exists to run.
+    #[test]
+    fn dev_allows_a_plugin_it_declares_nothing_for() {
+        let config: Config = serde_yaml_ng::from_str("dev: {}").unwrap();
+        let bindings = config
+            .dev()
+            .to_plugin_bindings(&config, Path::new("."), None)
+            .unwrap();
+        assert_eq!(
+            bindings
+                .for_plugin(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID)
+                .workload_config(),
+            wash_runtime::plugin::WorkloadConfigPolicy::Allow,
+        );
+        // And the set a front end layers its own flag defaults onto, which is
+        // the one `wash dev` actually hands the host.
+        assert_eq!(
+            bindings
+                .entry(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID)
+                .workload_config(),
+            wash_runtime::plugin::WorkloadConfigPolicy::Allow,
+        );
+
+        // `wash host` is the other way round, for the same reason it always
+        // was: there an operator exists, so there is a boundary to enforce.
+        let config: Config = serde_yaml_ng::from_str("host: {}").unwrap();
+        assert_eq!(
+            config
+                .host()
+                .to_plugin_bindings(&config, Path::new("."), None)
+                .unwrap()
+                .entry(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID)
+                .workload_config(),
+            wash_runtime::plugin::WorkloadConfigPolicy::Deny,
+        );
+    }
+
+    /// A native entry configures a plugin the host already has, so the fields
+    /// that only mean something for one it loads are a mistake worth naming.
+    #[test]
+    fn a_native_entry_refuses_component_only_fields() {
+        let yaml = r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+      maxRestarts: 3
+      allowedHosts: ["nats.internal"]
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let err = config
+            .host()
+            .to_plugin_bindings(&config, Path::new("."), None)
+            .expect_err("component-only fields on a native entry must be refused")
+            .to_string();
+        assert!(err.contains("`maxRestarts`"), "got: {err}");
+        assert!(err.contains("`allowedHosts`"), "got: {err}");
+
+        // The same fields are fine once the entry names a source.
+        let yaml = r#"
+host:
+  plugins:
+    - id: wasmcloud-secrets
+      image: ghcr.io/wasmcloud/plugins/secrets:0.1.0
+      maxRestarts: 3
+      allowedHosts: ["vault.internal"]
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        config
+            .host()
+            .to_plugin_bindings(&config, Path::new("."), None)
+            .expect("a component entry may set them");
     }
 
     /// A binding under an empty name is refused: the unnamed binding is

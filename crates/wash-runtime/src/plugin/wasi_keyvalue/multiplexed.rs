@@ -313,7 +313,7 @@ impl<'a> bindings::named_imports::wasi::keyvalue::batch::Host for ActiveCtx<'a> 
 }
 
 const DEFAULT_BACKEND: &str = "in-memory";
-const MULTIPLEXED_KEYVALUE_ID: &str = "wasi-keyvalue-multiplexed";
+pub(crate) const MULTIPLEXED_KEYVALUE_ID: &str = "wasi-keyvalue-multiplexed";
 
 /// Page size for `list-keys` paging against the redis / NATS backends.
 const LIST_KEYS_BATCH_SIZE: usize = 1000;

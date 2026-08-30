@@ -19,7 +19,7 @@ use wasmtime_wasi::p2::{InputStream, OutputStream};
 use wasmtime_wasi_io::poll::Pollable;
 use wasmtime_wasi_io::streams::{StreamError, StreamResult};
 
-const PLUGIN_BLOBSTORE_ID: &str = "wasi-blobstore";
+pub(crate) const PLUGIN_BLOBSTORE_ID: &str = "wasi-blobstore";
 
 mod bindings {
     wasmtime::component::bindgen!({

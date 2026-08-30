@@ -96,7 +96,7 @@ impl<'a> bindings::named_imports::wasmcloud::messaging0_2_0::consumer::Host for 
 impl<'a> bindings::wasmcloud::messaging0_2_0::types::Host for ActiveCtx<'a> {}
 
 const DEFAULT_BACKEND: &str = "in-memory";
-const MULTIPLEXED_MESSAGING_ID: &str = "wasmcloud-messaging-multiplexed";
+pub(crate) const MULTIPLEXED_MESSAGING_ID: &str = "wasmcloud-messaging-multiplexed";
 
 /// A messaging backend provider: a [`BackendProvider`] producing [`MsgId`]s.
 pub type MsgProvider = dyn BackendProvider<MsgId>;
