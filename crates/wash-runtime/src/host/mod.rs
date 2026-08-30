@@ -1547,7 +1547,7 @@ impl HostBuilder {
             // missing the key they meant to set.
             declared.reject_unknown_keys(&plugin.binding_schema())?;
             plugin
-                .validate_bindings(declared)
+                .validate_bindings(&declared)
                 .with_context(|| format!("invalid `host.plugins` declaration for '{id}'"))?;
         }
 

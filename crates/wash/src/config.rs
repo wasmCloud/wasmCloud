@@ -2583,7 +2583,7 @@ dev:
         // the one `wash dev` actually hands the host.
         assert_eq!(
             bindings
-                .entry(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID)
+                .for_plugin(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID)
                 .workload_config(),
             wash_runtime::plugin::WorkloadConfigPolicy::Allow,
         );
@@ -2596,7 +2596,7 @@ dev:
                 .host()
                 .to_plugin_bindings(&config, Path::new("."), None)
                 .unwrap()
-                .entry(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID)
+                .for_plugin(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID)
                 .workload_config(),
             wash_runtime::plugin::WorkloadConfigPolicy::Deny,
         );

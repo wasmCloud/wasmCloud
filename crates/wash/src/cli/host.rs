@@ -520,7 +520,7 @@ impl HostCommand {
         }
 
         let nats = declared
-            .entry(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID)
+            .for_plugin(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID)
             .with_default_bundle("servers", bundle);
         Ok(declared.with_plugin(nats))
     }
