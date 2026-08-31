@@ -231,7 +231,7 @@ impl GuestMemoryBudget {
     /// and reads the atomics this budget already keeps, so nothing is recorded
     /// on the `memory.grow` path and the cost of being watched is zero.
     ///
-    /// Not gated behind `--enable-meters`, unlike
+    /// Not gated behind `--meters`, unlike
     /// [`crate::observability::FuelConsumptionMeter`]. That flag exists because
     /// fuel metering makes the guest measurably slower; this does not, and the
     /// high-water figure is the one an operator is told to watch before turning
