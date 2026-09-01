@@ -13,6 +13,9 @@
 //!   that then fails (OCI pull failure in the washlet) gives the ID back.
 //! - `finalize`'s idempotent teardown: stop/status of an unknown ID answer
 //!   `WORKLOAD_STATE_NOT_FOUND` instead of erroring.
+//! - Shutdown's drain: the commands already running get `COMMAND_DRAIN_TIMEOUT`
+//!   to finish and are abandoned after it, so one stalled on a pull cannot hold
+//!   a terminating host past the grace period its pod was given.
 //! - Host registration: the published heartbeat and the `heartbeat` RPC carry
 //!   the host ID, the `hostgroup` label, and the environment the operator
 //!   records verbatim, plus a workload count that tracks running workloads.
@@ -34,10 +37,15 @@ use testcontainers::{
     core::{IntoContainerPort, WaitFor},
     runners::AsyncRunner,
 };
-use wash_runtime::washlet::{ClusterHostBuilder, heartbeat_subject, rpc_subject, types::v2};
+use wash_runtime::washlet::{
+    COMMAND_DRAIN_TIMEOUT, ClusterHostBuilder, heartbeat_subject, rpc_subject, types::v2,
+};
 
 const HOST_GROUP: &str = "e2e";
 const ENVIRONMENT: &str = "e2e-env";
+/// Slack over the drain for the abort to unwind and `host.stop()` to run, on a
+/// runner busy with the rest of the suite.
+const ABANDON_MARGIN: Duration = Duration::from_secs(10);
 
 struct TestHarness {
     api_client: async_nats::Client,
@@ -700,4 +708,39 @@ async fn heartbeat_reports_identity_and_workload_count() -> Result<()> {
     assert_eq!(refreshed.workload_count, 1);
 
     harness.shutdown().await
+}
+
+/// Shutdown waits for the commands already running — but a start stalled on an
+/// unreachable registry runs to its own pull timeout, which is minutes. Waiting
+/// that out means the pod is killed before `host.stop()` unbinds anything, so
+/// the drain is bounded and whatever outlasts it is abandoned.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn shutdown_abandons_a_start_that_outlasts_the_drain() -> Result<()> {
+    let mut harness = setup().await?;
+    let registry = StallingRegistry::bind().await?;
+
+    let start = registry.spawn_start(&harness, "washlet-api-e2e-stalled-shutdown");
+    wait_for(Duration::from_secs(10), || registry.reached() > 0)
+        .await
+        .context("no start reached the stalling registry")?;
+
+    // Awaited here rather than through `TestHarness::shutdown` so the elapsed
+    // time covers the drain alone, not the container teardown behind it.
+    let began = std::time::Instant::now();
+    let stopped = (&mut harness.shutdown).await;
+    let drained_in = began.elapsed();
+    start.abort();
+    stopped.context("shutdown failed with a start still in flight")?;
+
+    assert!(
+        drained_in >= COMMAND_DRAIN_TIMEOUT,
+        "shutdown gave the start in flight {drained_in:?}, short of the {COMMAND_DRAIN_TIMEOUT:?} drain"
+    );
+    assert!(
+        drained_in < COMMAND_DRAIN_TIMEOUT + ABANDON_MARGIN,
+        "shutdown held for {drained_in:?} on a start stalled at its registry; \
+         it must abandon the start once the {COMMAND_DRAIN_TIMEOUT:?} drain is up"
+    );
+    Ok(())
 }

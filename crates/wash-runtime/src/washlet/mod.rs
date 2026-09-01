@@ -31,7 +31,7 @@ const MAX_CONCURRENT_STARTS: usize = 4;
 /// period a terminating pod gets, so it is killed before `host.stop()` unbinds
 /// anything. Better to abandon them and stop the host, which unbinds whatever
 /// they had bound anyway.
-const COMMAND_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+pub const COMMAND_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub mod types {
     pub mod v2 {
