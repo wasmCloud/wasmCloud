@@ -34,6 +34,7 @@ pub mod host;
 pub mod inspect;
 pub mod new;
 pub mod oci;
+pub mod signal;
 pub mod update;
 pub mod wit;
 
@@ -512,12 +513,36 @@ impl CliContext {
             return Ok(true);
         }
 
+        restore_cursor_on_interrupt();
+
         Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt(prompt)
             .default(true)
             .interact()
             .context("failed to read user confirmation")
     }
+}
+
+/// Leaves a terminal usable when a prompt is interrupted: dialoguer hides the
+/// cursor while it reads, and the default disposition for `SIGINT` would end
+/// the process with it still hidden.
+///
+/// Installed here rather than at startup because it exits, which is only right
+/// for a command sitting on a prompt — one running its own shutdown installs
+/// [`signal::arm`] instead, and this handler would both pre-empt that shutdown
+/// and replace the handler it registered.
+fn restore_cursor_on_interrupt() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+
+    INSTALLED.call_once(|| {
+        if let Err(e) = ctrlc::set_handler(|| {
+            let _ = dialoguer::console::Term::stdout().show_cursor();
+            // Exit with standard SIGINT code (128 + 2)
+            std::process::exit(130);
+        }) {
+            tracing::warn!(err = ?e, "failed to set ctrl_c handler, an interrupted prompt may leave the cursor hidden");
+        }
+    });
 }
 
 #[cfg(test)]

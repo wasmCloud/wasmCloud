@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context as _, bail, ensure};
 use bytes::Bytes;
 use clap::Args;
-use tokio::{select, sync::mpsc};
+use tokio::select;
 use tracing::{debug, info, instrument, warn};
 use wash_runtime::{
     engine::{Engine, WasmProposal},
@@ -25,7 +25,7 @@ use wash_runtime::{
 use crate::{
     cli::{
         CliCommand, CliContext, CommandOutput, component_build::build_dev_component,
-        oci::OCI_CACHE_DIR,
+        oci::OCI_CACHE_DIR, signal,
     },
     config::{Config, load_config},
     wit::WitConfig,
@@ -39,6 +39,10 @@ pub struct DevCommand {}
 impl CliCommand for DevCommand {
     async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
         wash_runtime::init_crypto();
+
+        // Armed before the build below, so a signal during it stops this
+        // process rather than being ignored until the session is up.
+        let shutdown = signal::arm()?;
 
         let project_dir = ctx.project_dir();
         info!(path = ?project_dir, "starting development session for project");
@@ -397,20 +401,6 @@ impl CliCommand for DevCommand {
         let host = host_builder.build()?.start().await?;
         host.log_interfaces();
 
-        let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
-
-        // Spawn a task to handle Ctrl + C signal
-        tokio::spawn(async move {
-            tokio::signal::ctrl_c()
-                .await
-                .context("failed to wait for ctrl_c signal")?;
-            stop_tx
-                .send(())
-                .await
-                .context("failed to send stop signal after receiving Ctrl + c")?;
-            Result::<_, anyhow::Error>::Ok(())
-        });
-
         info!("development session started, building and deploying component...");
 
         let build_result = build_dev_component(ctx, &config)
@@ -447,9 +437,13 @@ impl CliCommand for DevCommand {
         let display_addr = http_addr.replace("0.0.0.0", "127.0.0.1");
         info!(address = %format!("{}://{}", protocol, display_addr), "listening for HTTP requests");
 
+        // The component is running, so from here a signal stops the session
+        // rather than ending the process.
+        let shutdown = shutdown.ready();
+
         select! {
             // Process a stop
-            _ = stop_rx.recv() => {
+            _ = shutdown => {
                 info!("Stopping development session ...");
             },
         }
