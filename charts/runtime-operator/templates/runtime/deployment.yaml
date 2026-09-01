@@ -358,6 +358,6 @@ spec:
             {{- toYaml $top.Values.runtime.securityContext | nindent 12 }}
       dnsPolicy: ClusterFirst
       restartPolicy: Always
-      terminationGracePeriodSeconds: 0
+      terminationGracePeriodSeconds: {{ $top.Values.runtime.terminationGracePeriodSeconds }}
 ---
 {{- end }}

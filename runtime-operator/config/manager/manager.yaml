@@ -92,4 +92,8 @@ spec:
             cpu: 10m
             memory: 64Mi
       serviceAccountName: controller-manager
-      terminationGracePeriodSeconds: 10
+      # Clears controller-runtime's 30s wait for its runnables, with room to
+      # exit after it. Kept in step with the chart's
+      # `operator.terminationGracePeriodSeconds` by
+      # .github/scripts/check-termination-grace.mjs.
+      terminationGracePeriodSeconds: 45

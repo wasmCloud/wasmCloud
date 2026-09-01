@@ -82,5 +82,5 @@ spec:
             {{- toYaml .Values.nats.securityContext | nindent 12 }}
       dnsPolicy: ClusterFirst
       restartPolicy: Always
-      terminationGracePeriodSeconds: 0
+      terminationGracePeriodSeconds: {{ .Values.nats.terminationGracePeriodSeconds }}
 {{- end }}

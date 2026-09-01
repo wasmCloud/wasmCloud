@@ -33,6 +33,9 @@ jobs:
               - 'charts/**'
               - 'runtime-operator/config/crd/bases/**'
               - '.github/workflows/charts.yml'
+              - '.github/scripts/check-termination-grace.mjs'
+              - 'crates/wash-runtime/src/washlet/mod.rs'
+              - 'runtime-gateway/proxy.go'
               - 'Makefile'
 
   test:
@@ -51,6 +54,8 @@ jobs:
         run: make helm-crds-check
       - name: Render
         run: make helm-render
+      - name: Verify every pod outlives its own shutdown
+        run: node .github/scripts/check-termination-grace.mjs
 
   # Runs `helm lint` + yamllint on the chart. The chart `version` is
   # release-driven (see .github/ct.yaml), so this does not enforce a version bump.
