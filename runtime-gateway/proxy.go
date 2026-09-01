@@ -10,6 +10,12 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
+// How long the gateway lets the requests already in flight finish once it is
+// told to stop. The pod's terminationGracePeriodSeconds has to clear it, or
+// SIGKILL lands mid-response; .github/scripts/check-termination-grace.mjs
+// reads this and checks that it does.
+const gracefulShutdownTimeout = 15 * time.Second
+
 type HTTPGateway struct {
 	BindAddr string
 	Proxy    *httputil.ReverseProxy
@@ -26,9 +32,15 @@ func (h *HTTPGateway) SetupWithManager(ctx context.Context, manager ctrl.Manager
 func (h *HTTPGateway) Start(ctx context.Context) error {
 	log := ctrl.LoggerFrom(ctx).WithName("http-gateway")
 
+	// Requests take the manager's context values — its logger — but not its
+	// cancellation. Cancelling it is what starts the shutdown, and handing that
+	// same context to the handlers cancels every request the drain below exists
+	// to let finish, answering each one 502 instead.
+	serving := context.WithoutCancel(ctx)
+
 	publicFacing := &http.Server{
 		BaseContext: func(_ net.Listener) context.Context {
-			return ctx
+			return serving
 		},
 		Addr:              h.BindAddr,
 		Handler:           h.Proxy,
@@ -38,9 +50,11 @@ func (h *HTTPGateway) Start(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
 		defer cancel()
 
 		if err := publicFacing.Shutdown(shutdownCtx); err != nil {
@@ -53,6 +67,12 @@ func (h *HTTPGateway) Start(ctx context.Context) error {
 	if err := publicFacing.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
+
+	// Shutdown closes the listener first, so ListenAndServe returns while the
+	// requests already in flight are still being served. Returning here ends
+	// this runnable, and with it the manager and the process, hanging up on
+	// every one of them.
+	<-drained
 
 	return nil
 
