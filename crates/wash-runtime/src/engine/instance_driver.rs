@@ -70,6 +70,9 @@ pub(crate) struct LinkedJob {
     /// The abandonment flag of the dispatched call enforcing this job's
     /// deadline (see [`crate::engine::abandon`]).
     pub(crate) abandoned: Arc<crate::engine::abandon::AbandonFlag>,
+    /// What this call is measured under, built where the link is prepared —
+    /// the manifest identity a linked call needs is not reachable from here.
+    pub(crate) attributes: Arc<[opentelemetry::KeyValue]>,
 }
 
 /// Work an instance can be given. Every shape runs as a concurrent task on the
@@ -143,13 +146,13 @@ pub(crate) trait PluginJob: Send + 'static {
 pub(crate) struct ExecutionSample {
     executed: Arc<crate::engine::abandon::GuestExecution>,
     before: u64,
-    attributes: Vec<opentelemetry::KeyValue>,
+    attributes: Arc<[opentelemetry::KeyValue]>,
 }
 
 impl ExecutionSample {
     pub(crate) fn start(
         accessor: &Accessor<SharedCtx>,
-        attributes: Vec<opentelemetry::KeyValue>,
+        attributes: Arc<[opentelemetry::KeyValue]>,
     ) -> Self {
         let executed = accessor.with(|mut access| Arc::clone(&access.get().executed));
         let before = executed.millis();
@@ -260,6 +263,7 @@ impl AccessorTask<SharedCtx> for LinkedTask {
             export_name,
             reply,
             abandoned,
+            attributes,
         } = *self.job;
         let instance = self.instance;
 
@@ -281,6 +285,7 @@ impl AccessorTask<SharedCtx> for LinkedTask {
                 return Ok(());
             }
         };
+        let _sample = ExecutionSample::start(accessor, attributes);
 
         let mut results = vec![Val::Bool(false); results_len];
         let call_timeout = crate::timeouts::ephemeral_call();
@@ -476,6 +481,7 @@ impl InstanceDriver {
                                     req,
                                     resp_tx,
                                     abandoned,
+                                    attributes,
                                 } = *job;
                                 let Some(service) = bound.http.as_ref().map(Arc::clone) else {
                                     // Admission declines HTTP for an instance
@@ -492,6 +498,7 @@ impl InstanceDriver {
                                     req,
                                     resp_tx,
                                     abandoned,
+                                    attributes,
                                     pool_slot: Some(PoolSlot {
                                         state: Arc::clone(&task_state),
                                         _in_flight: guard,

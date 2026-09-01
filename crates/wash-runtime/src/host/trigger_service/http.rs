@@ -66,6 +66,9 @@ pub(crate) struct HttpTask {
     /// It is registered on the store for the life of the call so the epoch
     /// callback can see it — the only way to end a guest that never yields.
     pub(crate) abandoned: std::sync::Arc<crate::engine::abandon::AbandonFlag>,
+    /// What this call is measured under, or `None` when it cannot be measured
+    /// per request — see [`crate::host::http::ServiceHttpJob`].
+    pub(crate) attributes: Option<std::sync::Arc<[opentelemetry::KeyValue]>>,
     /// This call's tether to a pooled instance: holds its in-flight slot and
     /// can retire the instance. `None` for a service, whose singleton instance
     /// is not the pool's to retire.
@@ -79,6 +82,7 @@ impl AccessorTask<SharedCtx> for HttpTask {
             req,
             resp_tx,
             abandoned,
+            attributes,
             pool_slot,
         } = self;
 
@@ -87,6 +91,13 @@ impl AccessorTask<SharedCtx> for HttpTask {
         let calls = accessor.with(|mut access| {
             crate::engine::abandon::rearm_for_call(&mut access);
             std::sync::Arc::clone(&access.get().abandoned)
+        });
+        // Only the pooled path measures. A service shares one store across
+        // every concurrent request and the counter behind this is per store, so
+        // a per-request sample there would report its neighbours' time as its
+        // own.
+        let _sample = attributes.map(|attributes| {
+            crate::engine::instance_driver::ExecutionSample::start(accessor, attributes)
         });
 
         let (parts, body) = req.into_parts();

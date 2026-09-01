@@ -270,7 +270,7 @@ pub(crate) async fn deliver_pooled(
     pre: &wasmtime::component::InstancePre<crate::engine::ctx::SharedCtx>,
     pool: &Arc<crate::engine::instance_pool::InstancePool>,
     msg: crate::host::trigger_service::BrokerMessage,
-    attributes: Vec<KeyValue>,
+    attributes: std::sync::Arc<[KeyValue]>,
 ) -> anyhow::Result<Result<(), String>> {
     use crate::engine::instance_driver::InstanceJob;
     use crate::engine::instance_pool::{ComponentInstance, Dispatch};

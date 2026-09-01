@@ -1541,6 +1541,32 @@ impl ResolvedWorkload {
             .map_or(1, |component| component.instances.call_concurrency())
     }
 
+    /// The manifest identity a component's guest-execution measurements carry.
+    ///
+    /// Manifest names throughout, never the ids — see
+    /// [`crate::observability::WorkloadIdentity`] for why. Resolve it once
+    /// where a subscription or a route is set up rather than per call: the
+    /// component name costs a read lock, and it cannot change under a
+    /// resolved workload.
+    pub async fn component_identity(
+        &self,
+        component_id: &str,
+    ) -> crate::observability::WorkloadIdentity {
+        let name = self
+            .components
+            .read()
+            .await
+            .get(component_id)
+            .map(|component| Arc::<str>::from(component.name()));
+        crate::observability::WorkloadIdentity::new(
+            self.namespace(),
+            self.name(),
+            // A component absent from the map is one being torn down; the call
+            // that raced it still has to be measured under something.
+            name.as_deref().unwrap_or("unknown"),
+        )
+    }
+
     pub(crate) async fn instance_pool_for_component(
         &self,
         component_id: &str,
