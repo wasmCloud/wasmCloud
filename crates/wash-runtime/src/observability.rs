@@ -2,9 +2,12 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 
 use anyhow::Context;
 
+use std::time::Duration;
+
 use opentelemetry::{KeyValue, trace::TracerProvider};
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_sdk::Resource;
+use opentelemetry_semantic_conventions::attribute::ERROR_TYPE;
 use opentelemetry_semantic_conventions::resource;
 use tracing::Level;
 use tracing_subscriber::{
@@ -151,30 +154,30 @@ fn directive(directive: impl AsRef<str>) -> anyhow::Result<Directive> {
         .with_context(|| format!("failed to parse filter: {}", directive.as_ref()))
 }
 
-/// How a host measures the time its guests spend running.
+/// What a host measures about its guests.
 ///
-/// The two meters answer the same question and cost very differently, so a host
-/// picks one rather than paying for both:
+/// Rate, errors and duration ([`InvocationMeter`]) are what an operator asks
+/// for first and cost two clock reads, so they are what `Duration` — the
+/// default — gives. `Fuel` adds an exact count of the operations a guest
+/// executed, which is the only accurate guest-work signal this runtime has and
+/// is not free: `Config::consume_fuel` compiles a counter into every block of
+/// guest code, and the guest pays it whether or not anyone reads the number.
 ///
-/// * [`Self::Epoch`] samples the epoch callback every store arms anyway, so it
-///   costs the guest nothing at run time. It reports whole milliseconds and is
-///   a floor, not a total — see [`crate::engine::abandon::GuestExecution`].
-/// * [`Self::Fuel`] counts executed operations exactly, at the price of a
-///   counter compiled into every block of guest code, which the guest pays
-///   whether or not anyone reads the number.
-///
-/// [`Self::Fuel`] is also the only one that needs anything of the engine:
-/// `Config::consume_fuel` has to be on, and a store on such an engine starts
-/// with no fuel, so guests only run because every store is given a budget.
+/// There is no epoch option. Epoch sampling looked free, and was, but it
+/// reports a *store's* execution only when the store runs a full sampling
+/// window without a call starting — and `rearm_for_call` restarts that window
+/// on every call. A store taking calls more often than once per window credits
+/// nothing at all, so the signal fell to zero exactly as a host got busy. See
+/// [`crate::engine::abandon::GuestExecution`], which still counts for the
+/// teardown it was built for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MeterKind {
-    /// Measure neither. The default: a host that was not asked to measure
-    /// guest execution should not make its guests slower.
-    #[default]
+    /// Measure nothing.
     Off,
-    /// `guest.execution.time`, sampled from the epoch callback.
-    Epoch,
-    /// `fuel.consumption`, counted in the guest.
+    /// `guest.invocation.duration`: rate, errors and duration.
+    #[default]
+    Duration,
+    /// The above, plus `fuel.consumption`.
     Fuel,
 }
 
@@ -184,10 +187,15 @@ impl MeterKind {
         matches!(self, Self::Fuel)
     }
 
+    /// Whether anything is measured at all.
+    pub fn records(&self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Off => "off",
-            Self::Epoch => "epoch",
+            Self::Duration => "duration",
             Self::Fuel => "fuel",
         }
     }
@@ -199,10 +207,10 @@ impl std::str::FromStr for MeterKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "off" | "none" => Ok(Self::Off),
-            "epoch" => Ok(Self::Epoch),
+            "duration" => Ok(Self::Duration),
             "fuel" => Ok(Self::Fuel),
             other => Err(format!(
-                "unknown meter `{other}`, expected one of: off, epoch, fuel"
+                "unknown meter `{other}`, expected one of: off, duration, fuel"
             )),
         }
     }
@@ -210,13 +218,14 @@ impl std::str::FromStr for MeterKind {
 
 #[derive(Clone, Default)]
 pub struct Meters {
+    /// Rate, errors and duration. Built for any [`MeterKind`] but `Off`: it
+    /// costs the guest two clock reads, and it is the one an operator needs
+    /// first.
+    pub invocation: InvocationMeter,
     /// Built only under [`MeterKind::Fuel`]; inert otherwise, so a call path
     /// that measures with it records nothing rather than having to ask which
     /// meter the host chose.
     pub fuel_consumption: FuelConsumptionMeter,
-    /// Built only under [`MeterKind::Epoch`], and inert otherwise for the same
-    /// reason.
-    pub execution_time: ExecutionTimeMeter,
     /// User-defined meters
     pub meters: HashMap<String, Arc<dyn Any + Send + Sync + 'static>>,
 }
@@ -289,6 +298,17 @@ impl WorkloadIdentity {
         self.build(plugin, operation, Some(extra))
     }
 
+    /// The identity trio both instruments carry. One definition, so a rename
+    /// cannot leave `guest.execution.time` and `guest.execution.total`
+    /// disagreeing about the key to join on.
+    fn identity_keys(&self) -> [KeyValue; 3] {
+        [
+            KeyValue::new("workload.namespace", self.namespace.to_string()),
+            KeyValue::new("workload.name", self.name.to_string()),
+            KeyValue::new("component", self.component.to_string()),
+        ]
+    }
+
     fn build(
         &self,
         plugin: &'static str,
@@ -296,34 +316,76 @@ impl WorkloadIdentity {
         extra: Option<KeyValue>,
     ) -> Arc<[KeyValue]> {
         let mut attributes = Vec::with_capacity(5 + usize::from(extra.is_some()));
-        attributes.extend([
-            KeyValue::new("plugin", plugin),
-            KeyValue::new("operation", operation.to_string()),
-            KeyValue::new("workload.namespace", self.namespace.to_string()),
-            KeyValue::new("workload.name", self.name.to_string()),
-            KeyValue::new("component", self.component.to_string()),
-        ]);
+        attributes.push(KeyValue::new("plugin", plugin));
+        attributes.push(KeyValue::new("operation", operation.to_string()));
+        attributes.extend(self.identity_keys());
         attributes.extend(extra);
         attributes.into()
     }
 }
 
-/// The execution-time histogram, reachable without a `Meters` in hand.
+/// Rate, errors and duration for one guest invocation — the three questions
+/// asked of a serverless platform, from one instrument.
 ///
-/// A pooled call runs inside the driver's `run_concurrent`, several layers
-/// below anything holding a `Meters`, and carrying one down to every driver
-/// would thread a metric through the engine's whole dispatch path. The
-/// histogram is a handle rather than host state — OTel's own meter registry is
-/// process-global for the same reason — so it is published here once and read
-/// where a call actually ends.
-static EXECUTION_TIME: std::sync::OnceLock<ExecutionTimeMeter> = std::sync::OnceLock::new();
+/// Wall clock, not guest execution: it is what a caller waited, it is exact per
+/// call, and it costs two `Instant::now()`. `guest.execution.total` answers the
+/// different question of how much CPU a workload burned, and cannot answer this
+/// one — the epoch sampler credits a *store*, and only in whole sampling
+/// windows.
+///
+/// One histogram rather than three instruments, which is what the OTel
+/// conventions do: its count is the rate, and `error.type` — present only on a
+/// failure, per the convention — separates the errors out of the same series.
+#[derive(Clone, Default)]
+pub struct InvocationMeter {
+    duration: Option<opentelemetry::metrics::Histogram<f64>>,
+}
 
-/// The execution-time meter, once a host has built its [`Meters`].
-///
-/// `None` before that, and on a host that did not enable metering the meter
-/// itself is inert, so a caller never has to ask which.
-pub fn execution_time_meter() -> Option<&'static ExecutionTimeMeter> {
-    EXECUTION_TIME.get()
+impl InvocationMeter {
+    pub(crate) fn new(enabled: bool) -> Self {
+        let duration = enabled.then(|| {
+            opentelemetry::global::meter("wash-runtime")
+                .f64_histogram("guest.invocation.duration")
+                .with_description("Wall-clock duration of one guest invocation")
+                .with_unit("s")
+                .with_boundaries(vec![
+                    0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
+                ])
+                .build()
+        });
+        Self { duration }
+    }
+
+    /// Record one invocation. `error` names what went wrong, and is absent when
+    /// nothing did — the convention's own way of marking a failure, so an error
+    /// rate is a filter on this series rather than a second instrument to keep
+    /// in step with it.
+    /// Whether this meter records anything.
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.duration.is_some()
+    }
+
+    pub fn record(&self, attributes: &[KeyValue], elapsed: Duration, error: Option<&'static str>) {
+        let Some(duration) = &self.duration else {
+            return;
+        };
+        match error {
+            None => duration.record(elapsed.as_secs_f64(), attributes),
+            Some(error) => {
+                let mut with_error = attributes.to_vec();
+                with_error.push(KeyValue::new(ERROR_TYPE, error));
+                duration.record(elapsed.as_secs_f64(), &with_error);
+            }
+        }
+    }
+}
+
+/// The invocation meter, reachable the same way and for the same reason as the
+/// execution counter below.
+static INVOCATION: std::sync::OnceLock<InvocationMeter> = std::sync::OnceLock::new();
+
+pub fn invocation_meter() -> Option<&'static InvocationMeter> {
+    INVOCATION.get()
 }
 
 impl Meters {
@@ -331,24 +393,24 @@ impl Meters {
     pub fn guest(&self) -> GuestMeter {
         GuestMeter {
             fuel: self.fuel_consumption.clone(),
-            execution_time: self.execution_time.clone(),
+            invocation: self.invocation.clone(),
         }
     }
 
     pub fn new(kind: MeterKind) -> Self {
         let meters = Self {
-            fuel_consumption: FuelConsumptionMeter::new(kind == MeterKind::Fuel),
-            execution_time: ExecutionTimeMeter::new(kind == MeterKind::Epoch),
+            invocation: InvocationMeter::new(kind.records()),
+            fuel_consumption: FuelConsumptionMeter::new(kind.consumes_fuel()),
             meters: Default::default(),
         };
-        // First host with metering on wins. A second one in the same process
+        // First host that measures wins. A second one in the same process
         // (tests, an embedder running two) records into the first's histogram,
         // which is the same instrument OTel would have handed it anyway.
-        // Skipping the disabled ones matters: a host built with metering off
-        // would otherwise claim the slot and silence every pooled call after
-        // it, including calls on a later host that did ask for metrics.
-        if kind == MeterKind::Epoch {
-            let _ = EXECUTION_TIME.set(meters.execution_time.clone());
+        // Skipping the ones that measure nothing matters: a host built with
+        // metering off would otherwise claim the slot and silence every call
+        // after it, including calls on a later host that did ask.
+        if kind.records() {
+            let _ = INVOCATION.set(meters.invocation.clone());
         }
         meters
     }
@@ -367,22 +429,26 @@ pub struct FuelConsumptionMeter {
 /// [`MeterKind::Epoch`] universal: every path that measures at all can measure
 /// by epoch, including the ones that used to count fuel and nothing else.
 ///
-/// The reverse does not hold. A pooled call runs under an `Accessor` with no
-/// `&mut Store` anywhere, so it cannot be wrapped like this and samples the
-/// epoch counter directly instead (`ExecutionSample` in the instance driver).
-/// [`MeterKind::Fuel`] therefore covers only the paths below, which is the one
-/// asymmetry between the two choices.
+/// Fuel is the only kind that has to wrap the call: it is read off the store
+/// either side of it. Epoch execution is credited from the callback that
+/// observes it, and duration is timed here for every kind, so a path that
+/// measures through this gets rate, errors and duration whichever kind the host
+/// chose.
 #[derive(Clone, Default)]
 pub struct GuestMeter {
     fuel: FuelConsumptionMeter,
-    execution_time: ExecutionTimeMeter,
+    /// Carried rather than read from the global: this is built from the
+    /// [`Meters`] a host owns, so it can use that host's instrument instead of
+    /// whichever one happened to publish itself first.
+    invocation: InvocationMeter,
 }
 
 impl GuestMeter {
-    /// Measure one call, by whichever meter this host was built with.
+    /// Measure one call: its duration always, and its fuel when the host asked
+    /// for fuel.
     ///
-    /// Falls through to the call itself when neither is on, so a path never has
-    /// to ask whether metering is enabled.
+    /// Falls through to the call itself when nothing is metering, so a path
+    /// never has to ask whether metering is enabled.
     pub async fn observe<F, R>(
         &self,
         attributes: &[KeyValue],
@@ -392,11 +458,25 @@ impl GuestMeter {
     where
         F: AsyncFnOnce(&mut wasmtime::Store<crate::engine::ctx::SharedCtx>) -> anyhow::Result<R>,
     {
-        if self.fuel.is_enabled() {
+        if !self.invocation.is_enabled() {
+            return if self.fuel.is_enabled() {
+                self.fuel.observe(attributes, store, func).await
+            } else {
+                func(store).await
+            };
+        }
+        let started = std::time::Instant::now();
+        let result = if self.fuel.is_enabled() {
             self.fuel.observe(attributes, store, func).await
         } else {
-            self.execution_time.observe(attributes, store, func).await
-        }
+            func(store).await
+        };
+        // A host failure is all this layer can see; a guest that ran and
+        // returned its own error is a success here and named by whoever reads
+        // that error.
+        let error = result.is_err().then_some("host");
+        self.invocation.record(attributes, started.elapsed(), error);
+        result
     }
 }
 
@@ -442,110 +522,6 @@ impl FuelConsumptionMeter {
     }
 }
 
-/// Reports how long a call ran guest code, in milliseconds.
-///
-/// The alternative to [`FuelConsumptionMeter`], and what the `wasmcloud:nats`
-/// plugin measures its handlers with. Sampled by the epoch callback every store
-/// arms anyway ([`crate::engine::abandon::GuestExecution`]), so it costs the
-/// guest nothing at run time, where fuel's per-block counters are compiled into
-/// the guest and slow it down whether or not anyone is watching. Fuel stays the
-/// default everywhere it already was.
-///
-/// The trade is resolution, and it only ever undercounts: a call whose guest
-/// runs for less than one sampling window is never sampled and records **0**.
-/// Read the histogram as "calls that burned at least a window of guest
-/// execution", not as a CPU total — a host serving nothing but short calls
-/// reports zero and is not idle. `GuestExecution`'s docs have the rest,
-/// including why a store serving concurrent calls attributes their execution
-/// to each other.
-#[derive(Clone, Default)]
-pub struct ExecutionTimeMeter {
-    hist: Option<opentelemetry::metrics::Histogram<u64>>,
-}
-
-impl ExecutionTimeMeter {
-    pub(crate) fn new(enabled: bool) -> Self {
-        let hist = enabled.then(|| {
-            opentelemetry::global::meter("wash-runtime")
-                .u64_histogram("guest.execution.time")
-                .with_description(
-                    "Guest execution time for components that export host plugin interfaces, \
-                     sampled from the engine's epoch callback",
-                )
-                .with_unit("ms")
-                .with_boundaries(execution_time_histogram_boundaries())
-                .build()
-        });
-        Self { hist }
-    }
-
-    /// Records the guest execution one call added, measured by the caller.
-    ///
-    /// The store-taking [`Self::observe`] cannot be used from inside a pooled
-    /// call: the driver owns the store for the instance's whole life and calls
-    /// arrive as tasks on it, so nobody down there has a `&mut Store`. Read
-    /// `SharedCtx::executed` through the accessor either side of the call and
-    /// hand the delta here instead. Same counter, same caveats — read
-    /// [`crate::engine::abandon::GuestExecution`] before reading the number,
-    /// and note that on an instance serving several calls at once the delta
-    /// includes its neighbours'.
-    pub fn record(&self, attributes: &[KeyValue], millis: u64) {
-        if let Some(hist) = &self.hist {
-            hist.record(millis, attributes);
-        }
-    }
-
-    pub async fn observe<F, R>(
-        &self,
-        attributes: &[KeyValue],
-        store: &mut wasmtime::Store<crate::engine::ctx::SharedCtx>,
-        func: F,
-    ) -> anyhow::Result<R>
-    where
-        F: AsyncFnOnce(&mut wasmtime::Store<crate::engine::ctx::SharedCtx>) -> anyhow::Result<R>,
-    {
-        let Some(hist) = &self.hist else {
-            return func(store).await;
-        };
-        // Cloned out rather than re-read after the call: `func` takes the
-        // store, and the counter is shared with the callback either way.
-        let executed = Arc::clone(&store.data().executed);
-        let before = executed.millis();
-        // Recorded before the `?`: a call that traps or errors still consumed
-        // the time it ran for, and dropping those samples biases the histogram
-        // toward the calls that succeeded.
-        let result = func(store).await;
-        hist.record(executed.millis().saturating_sub(before), attributes);
-        result
-    }
-}
-
-/// Generate histogram boundaries for guest execution time, in milliseconds.
-///
-/// Produces boundaries following multipliers [1, 2.5, 5, 7.5] per decade,
-/// starting at one sampling window — below which every call records zero, so
-/// finer buckets would only split the zero bucket — up to an hour.
-fn execution_time_histogram_boundaries() -> Vec<f64> {
-    const MAX: f64 = 3_600_000.0;
-    const MULTIPLIERS: [f64; 4] = [1.0, 2.5, 5.0, 7.5];
-
-    let mut boundaries = vec![0.0];
-    // Floored at 1ms: a sub-millisecond window truncates to zero, and a zero
-    // base stays zero through `base *= 10.0`, so the loop would never reach
-    // `MAX` and would push boundaries until it ran out of memory.
-    let mut base = (crate::engine::abandon::sampling_window().as_millis() as f64).max(1.0);
-    loop {
-        for &m in &MULTIPLIERS {
-            let value = base * m;
-            if value > MAX {
-                return boundaries;
-            }
-            boundaries.push(value);
-        }
-        base *= 10.0;
-    }
-}
-
 /// Generate histogram boundaries for fuel consumption metrics.
 ///
 /// Produces boundaries following multipliers [1, 2.5, 5, 7.5] per decade,
@@ -565,5 +541,91 @@ fn fuel_histogram_boundaries() -> Vec<f64> {
             boundaries.push(value);
         }
         base *= 10.0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn keys_and_values(attributes: &[KeyValue]) -> Vec<(String, String)> {
+        attributes
+            .iter()
+            .map(|kv| (kv.key.to_string(), kv.value.to_string()))
+            .collect()
+    }
+
+    /// The scheme every guest-execution measurement shares, pinned by key.
+    ///
+    /// A rename here silently splits a dashboard's series in two, and nothing
+    /// else in the crate asserts these names.
+    #[test]
+    fn the_attribute_set_is_the_documented_scheme() {
+        let identity = WorkloadIdentity::new("shop", "checkout", "api");
+        assert_eq!(
+            keys_and_values(&identity.attributes("wasi-http", "wasi:http/handler#handle")),
+            vec![
+                ("plugin".to_string(), "wasi-http".to_string()),
+                (
+                    "operation".to_string(),
+                    "wasi:http/handler#handle".to_string()
+                ),
+                ("workload.namespace".to_string(), "shop".to_string()),
+                ("workload.name".to_string(), "checkout".to_string()),
+                ("component".to_string(), "api".to_string()),
+            ]
+        );
+    }
+
+    /// A surface's own bounded dimension appends, and does not displace.
+    ///
+    /// Spelled the way HTTP spells it: the semconv key, so the histogram and
+    /// the spans that already carry `http.request.method` join on it.
+    #[test]
+    fn an_extra_dimension_appends_to_the_shared_set() {
+        let identity = WorkloadIdentity::new("shop", "checkout", "api");
+        let attributes = identity.attributes_with(
+            "wasi-http",
+            "wasi:http/handler#handle",
+            KeyValue::new(
+                opentelemetry_semantic_conventions::attribute::HTTP_REQUEST_METHOD,
+                "GET",
+            ),
+        );
+        assert_eq!(attributes.len(), 6);
+        assert_eq!(
+            keys_and_values(&attributes).last().cloned(),
+            Some(("http.request.method".to_string(), "GET".to_string()))
+        );
+    }
+
+    /// Only the meter that was chosen is built. The other stays inert rather
+    /// than recording into a histogram nobody asked for.
+    #[test]
+    fn a_meter_kind_builds_only_its_own_histogram() {
+        // Fuel is the one that costs the guest, so only `fuel` builds it.
+        assert!(!Meters::new(MeterKind::Off).fuel_consumption.is_enabled());
+        assert!(
+            !Meters::new(MeterKind::Duration)
+                .fuel_consumption
+                .is_enabled()
+        );
+        assert!(Meters::new(MeterKind::Fuel).fuel_consumption.is_enabled());
+        // Duration is what an operator asks for first, so anything but `off`
+        // records it — including `fuel`.
+        assert!(!Meters::new(MeterKind::Off).invocation.is_enabled());
+        assert!(Meters::new(MeterKind::Duration).invocation.is_enabled());
+        assert!(Meters::new(MeterKind::Fuel).invocation.is_enabled());
+    }
+
+    #[test]
+    fn meter_kinds_parse_from_their_flag_spelling() {
+        assert_eq!("off".parse::<MeterKind>(), Ok(MeterKind::Off));
+        assert_eq!("duration".parse::<MeterKind>(), Ok(MeterKind::Duration));
+        assert_eq!("fuel".parse::<MeterKind>(), Ok(MeterKind::Fuel));
+        assert!("durations".parse::<MeterKind>().is_err());
+        // The default is what a serverless host should run: rate, errors and
+        // duration, which cost the guest two clock reads.
+        assert_eq!(MeterKind::default(), MeterKind::Duration);
     }
 }

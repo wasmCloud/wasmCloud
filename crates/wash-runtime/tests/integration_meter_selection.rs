@@ -64,34 +64,39 @@ async fn record_one(kind: MeterKind) -> Result<Vec<String>> {
 /// One test, sequentially, because the meter provider each case installs is
 /// process-global.
 #[tokio::test]
-async fn each_meter_records_its_own_histogram() -> Result<()> {
-    let epoch = record_one(MeterKind::Epoch).await?;
+async fn a_meter_kind_records_duration_and_only_its_own_cpu_metric() -> Result<()> {
+    // Duration is not the choice: it is what an operator asks for first, it
+    // costs the guest two clock reads, and it is recorded under either kind.
+    for kind in [MeterKind::Duration, MeterKind::Fuel] {
+        let recorded = record_one(kind).await?;
+        assert!(
+            recorded
+                .iter()
+                .any(|name| name == "guest.invocation.duration"),
+            "{kind:?} recorded no invocation duration; got {recorded:?}"
+        );
+    }
+
+    // Fuel is the one that costs the guest, so only `fuel` records it.
+    let duration = record_one(MeterKind::Duration).await?;
     assert!(
-        epoch.iter().any(|name| name == "guest.execution.time"),
-        "epoch metering recorded no execution time; got {epoch:?}"
-    );
-    assert!(
-        !epoch.iter().any(|name| name == "fuel.consumption"),
-        "epoch metering must not record fuel; got {epoch:?}"
+        !duration.iter().any(|name| name == "fuel.consumption"),
+        "`duration` must not record fuel; got {duration:?}"
     );
 
     let fuel = record_one(MeterKind::Fuel).await?;
     assert!(
         fuel.iter().any(|name| name == "fuel.consumption"),
-        "fuel metering recorded no consumption; got {fuel:?}"
-    );
-    assert!(
-        !fuel.iter().any(|name| name == "guest.execution.time"),
-        "fuel metering must not record execution time; got {fuel:?}"
+        "`fuel` recorded no consumption; got {fuel:?}"
     );
 
     // `off` is about these two only: the engine's own memory instruments are
-    // not guest-execution metering and are recorded regardless.
+    // not guest metering and are recorded regardless.
     let off = record_one(MeterKind::Off).await?;
     assert!(
         !off.iter()
-            .any(|name| name == "guest.execution.time" || name == "fuel.consumption"),
-        "a host metering nothing recorded a guest-execution metric; got {off:?}"
+            .any(|name| { name == "guest.invocation.duration" || name == "fuel.consumption" }),
+        "a host metering nothing recorded a guest metric; got {off:?}"
     );
 
     Ok(())

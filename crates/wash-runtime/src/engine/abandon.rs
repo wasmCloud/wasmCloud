@@ -337,19 +337,58 @@ impl ExecutionCredit {
 /// a store serving several at once — a pooled instance, a plugin store, any
 /// component under the concurrent ABI — includes its neighbours' execution.
 /// Fuel was per-store in exactly the same way.
+///
+/// That is why this credits `guest.execution.total` itself, here, where the
+/// execution is observed and the store is known: a store several calls share
+/// has no per-call answer to give, but it has one of its own. A per-call
+/// histogram sample is left to the calls that can prove they had the store
+/// alone — see [`Self::enter`].
+///
+/// The counter is a **floor**, for the same reason the histogram is and one
+/// more. It is credited only from callback fires, so execution below one
+/// sampling window is invisible; and [`rearm_for_call`] pushes the deadline out
+/// at the start of every call, so a store taking calls faster than a window
+/// can starve the callback and credit nothing at all. Read it as "at least this
+/// much guest execution happened here", never as utilisation.
 #[derive(Default, Debug)]
-pub struct GuestExecution(AtomicU64);
+pub struct GuestExecution {
+    millis: AtomicU64,
+    /// Whose execution this store runs, stamped once when it is built. Absent
+    /// only on a store built outside a workload — the engine's own probes.
+    ///
+    /// Kept here because the store outlives every call on it, which is what
+    /// lets a task on the store name itself without the dispatcher that sent
+    /// it having to know: a service's HTTP ingress has no workload handle to
+    /// look one up from, and does not need one.
+    /// Whose execution this store runs. Read by a task on the store that has
+    /// to name itself — a service's HTTP ingress has no workload handle to look
+    /// one up from.
+    stamp: std::sync::OnceLock<crate::observability::WorkloadIdentity>,
+}
 
 impl GuestExecution {
     /// Guest execution credited to this store so far, in milliseconds.
     pub fn millis(&self) -> u64 {
-        self.0.load(Ordering::Relaxed)
+        self.millis.load(Ordering::Relaxed)
+    }
+
+    /// Stamp whose execution this store runs. First stamp wins; a store's
+    /// identity does not change under it.
+    pub fn set_identity(&self, identity: crate::observability::WorkloadIdentity) {
+        let _ = self.stamp.set(identity);
+    }
+
+    /// Whose execution this store runs, for a task on it that has to name
+    /// itself. `None` on a store built outside a workload.
+    pub fn identity(&self) -> Option<&crate::observability::WorkloadIdentity> {
+        self.stamp.get()
     }
 
     fn add(&self, millis: u64) {
-        if millis > 0 {
-            self.0.fetch_add(millis, Ordering::Relaxed);
+        if millis == 0 {
+            return;
         }
+        self.millis.fetch_add(millis, Ordering::Relaxed);
     }
 }
 

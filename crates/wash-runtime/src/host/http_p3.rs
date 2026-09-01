@@ -10,7 +10,6 @@
 //! [`crate::host::http::OutgoingHandler`] trait via its `send_request_p3` method.
 
 use crate::engine::instance_pool::ComponentInstance;
-use crate::observability::GuestMeter;
 use http_body_util::BodyExt;
 use tracing::Instrument;
 use wasmtime_wasi_http::p3::bindings::Service;
@@ -85,12 +84,11 @@ pub(crate) async fn handle_component_request_p3(
     warm: ComponentInstance,
     req: hyper::Request<hyper::body::Incoming>,
     abandoned: std::sync::Arc<crate::engine::abandon::AbandonFlag>,
-    guest_meter: GuestMeter,
 ) -> anyhow::Result<hyper::Response<P3Body>> {
-    // Not measured here: this path hands its store to `run_concurrent` and
-    // never holds a `&mut Store` around the call, so it has nothing to wrap.
-    let _ = &guest_meter;
-
+    // Named from the store this call was given, the same way `HttpTask` does:
+    // the dispatcher does not have to know whose execution it is.
+    let attributes =
+        crate::host::http::stored_http_attributes(&warm.store.data().executed, req.method());
     // Convert the hyper request body — map error type since hyper::Error doesn't impl Into<ErrorCode>
     let (parts, body) = req.into_parts();
     let body = body
@@ -139,6 +137,11 @@ pub(crate) async fn handle_component_request_p3(
 
             let run = store
                 .run_concurrent(async move |store| {
+                    // The requests that reach this path are the ones a full
+                    // pool turned away; leaving them out would empty the
+                    // histogram exactly when the host is overloaded.
+                    let _sample =
+                        crate::engine::instance_driver::InvocationSample::start(attributes);
                     let mut parts_tx = Some(parts_tx);
                     // `async move` so `handler_fut` owns `frame_tx`: it drops the
                     // instant the response body completes, delivering end-of-stream

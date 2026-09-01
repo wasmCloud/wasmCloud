@@ -1018,16 +1018,6 @@ pub struct ServiceHttpJob {
     pub req: hyper::Request<hyper::body::Incoming>,
     pub resp_tx: tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
     pub abandoned: Arc<AbandonFlag>,
-    /// What this call is measured under, or `None` for a call that cannot be
-    /// measured per request.
-    ///
-    /// Built by the dispatcher, the layer that knows the workload's manifest
-    /// identity — see [`crate::observability::WorkloadIdentity`]. It is `None`
-    /// on the service path: a service is one store serving every request at
-    /// once, and `GuestExecution` counts a *store's* execution, so a per-request
-    /// sample there would report every concurrent request's time as its own.
-    /// The pooled path is bounded by `maxConcurrency` and does measure.
-    pub attributes: Option<Arc<[opentelemetry::KeyValue]>>,
 }
 
 /// The attribute set an inbound HTTP call is measured under: the shared scheme
@@ -1042,7 +1032,35 @@ pub(crate) fn http_attributes(
     identity.attributes_with(
         "wasi-http",
         operation,
-        opentelemetry::KeyValue::new("method", known_method(method)),
+        opentelemetry::KeyValue::new(HTTP_REQUEST_METHOD, known_method(method)),
+    )
+}
+
+/// What a call on an already-built store is measured under, taken from the
+/// store rather than from whoever dispatched to it.
+///
+/// A service's HTTP ingress has no workload handle to resolve an identity from
+/// — `workload_handles` holds only components that export `wasi:http` — and it
+/// does not need one: the store it runs on was stamped when it was built.
+///
+/// Empty when nothing will record it. Only `ExecutionSample` reads this, and
+/// nothing reads that unless the host chose the epoch meter, so on every other
+/// host building it is a `Vec`, an `Arc` and four `String`s per request for a
+/// value that is dropped.
+pub(crate) fn stored_http_attributes(
+    executed: &crate::engine::abandon::GuestExecution,
+    method: &hyper::Method,
+) -> Arc<[opentelemetry::KeyValue]> {
+    if crate::observability::invocation_meter().is_none() {
+        return Arc::from([]);
+    }
+    let Some(identity) = executed.identity() else {
+        return Arc::from([]);
+    };
+    identity.attributes_with(
+        "wasi-http",
+        HTTP_OPERATION_P3,
+        opentelemetry::KeyValue::new(HTTP_REQUEST_METHOD, known_method(method)),
     )
 }
 
@@ -1051,7 +1069,10 @@ pub(crate) fn http_attributes(
 /// `hyper::Method` accepts an arbitrary extension token, so the method a client
 /// sends is caller-invented like the URI is. Folding the unregistered ones into
 /// one bucket is what keeps it usable as an attribute; the exact token stays on
-/// the span. This is the treatment the OTel HTTP semconv prescribes.
+/// the span. This is the treatment the OTel HTTP semconv prescribes, and it is
+/// recorded under the semconv's own key — the same `http.request.method` the
+/// spans here carry, so a histogram and a trace join on it without a relabel,
+/// and so `_OTHER` means what a reader of that convention expects.
 fn known_method(method: &hyper::Method) -> &'static str {
     match *method {
         hyper::Method::GET => "GET",
@@ -1380,13 +1401,17 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         // Only components that export wasi:http are routable HTTP entrypoints.
         // Anything else stays unregistered and routes to a 404.
         if crate::engine::exports_wasi_http(instance_pre.component()) {
+            // Resolved before the write lock is taken: it awaits a read of the
+            // component map, and holding the handles' writer across that stalls
+            // every inbound request, which reads the same lock to route.
+            let identity = resolved_handle.component_identity(component_id).await;
             self.workload_handles.write().await.insert(
                 resolved_handle.id().to_string(),
                 (
                     resolved_handle.clone(),
                     instance_pre,
                     component_id.to_string(),
-                    resolved_handle.component_identity(component_id).await,
+                    identity,
                 ),
             );
         }
@@ -1778,7 +1803,6 @@ async fn handle_http_request<T: Router>(
             req,
             resp_tx,
             abandoned: call.flag(),
-            attributes: None,
         };
         let response = if sender.send(job).await.is_err() {
             error!(host = %workload_id, "service HTTP instance is not running");
@@ -2061,12 +2085,10 @@ async fn invoke_component_handler(
             use crate::engine::instance_pool::Dispatch;
             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
             let call = DispatchedCall::new("HTTP (pooled)", crate::timeouts::http_response());
-            let attributes = Some(http_attributes(identity, req.method(), HTTP_OPERATION_P3));
             let outcome = match pool.try_dispatch(InstanceJob::Http(Box::new(ServiceHttpJob {
                 req,
                 resp_tx,
                 abandoned: call.flag(),
-                attributes,
             }))) {
                 Dispatch::Sent => Ok(()),
                 // The pool has room. Build and instantiate the store out here,
@@ -2121,10 +2143,7 @@ async fn invoke_component_handler(
         let flag = call.flag();
         let (resp, watch) = call
             .await_head(crate::host::http_p3::handle_component_request_p3(
-                cold,
-                req,
-                flag,
-                guest_meter,
+                cold, req, flag,
             ))
             .await
             .ok_or_else(|| anyhow::anyhow!("cold instance produced no response"))?;
