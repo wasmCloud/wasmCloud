@@ -15,9 +15,14 @@
        the ConfigMap this deployment mounts. */}}
 {{- /* A host group's own `resources` replaces the chart-wide block wholesale
        (no merge), and carries the host knobs `defaultHeapMemory`,
-       `coreInstances` and `guestMemoryMode` alongside the Kubernetes
-       requests/limits. */}}
+       `coreInstances`, `guestMemoryMode` and `maxConcurrentStarts` alongside
+       the Kubernetes requests/limits. */}}
 {{- $resources := .resources | default $top.Values.runtime.resources | default dict }}
+{{- /* Probes, unlike `resources`, merge per field: a group naming one timing
+       keeps the chart-wide values for the rest. */}}
+{{- $probeArgs := dict "group" .probes "chart" $top.Values.runtime.probes }}
+{{- $liveness := include "runtime-operator.hostProbe" (merge (dict "name" "liveness") $probeArgs) | fromJson }}
+{{- $readiness := include "runtime-operator.hostProbe" (merge (dict "name" "readiness") $probeArgs) | fromJson }}
 {{- $partition := include "runtime-operator.hostPluginPartition" . | fromJson }}
 {{- $cliPlugins := $partition.cli }}
 {{- $needsConfigFile := $partition.needsConfigFile }}
@@ -175,6 +180,10 @@ spec:
             - name: WASH_GUEST_MEMORY_MODE
               value: "{{ . }}"
             {{- end }}
+            {{- with $resources.maxConcurrentStarts }}
+            - name: WASH_MAX_CONCURRENT_STARTS
+              value: "{{ . }}"
+            {{- end }}
             {{- with $top.Values.runtime.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -303,7 +312,7 @@ spec:
               readOnly: true
             {{- end }}
             {{- end }}
-          {{- with omit $resources "defaultHeapMemory" "coreInstances" "guestMemoryMode" }}
+          {{- with omit $resources "defaultHeapMemory" "coreInstances" "guestMemoryMode" "maxConcurrentStarts" }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -321,17 +330,29 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- if and (.http) (.http.enabled) }}
+          {{- /* A host serves workload routes on this port and nothing else,
+                 so both probes can only ask whether it still accepts
+                 connections. What each one does about that answer, and why
+                 they are timed apart, is documented on `runtime.probes`. */}}
+          {{- /* Every field but `enabled` is passed through as given, so a `0`
+                 reaches the manifest and `runtime.probes` stays the one place
+                 the timings are written down. */}}
+          {{- if $liveness.enabled }}
           livenessProbe:
             tcpSocket:
               port: http
-            initialDelaySeconds: 10
-            periodSeconds: 20
-            failureThreshold: 3
+            {{- range $field, $value := omit $liveness "enabled" }}
+            {{ $field }}: {{ $value }}
+            {{- end }}
+          {{- end }}
+          {{- if $readiness.enabled }}
           readinessProbe:
             tcpSocket:
               port: http
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            {{- range $field, $value := omit $readiness "enabled" }}
+            {{ $field }}: {{ $value }}
+            {{- end }}
+          {{- end }}
           {{- end }}
           securityContext:
             {{- toYaml $top.Values.runtime.securityContext | nindent 12 }}
