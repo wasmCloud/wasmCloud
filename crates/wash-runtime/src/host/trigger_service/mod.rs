@@ -205,6 +205,7 @@ impl PreparedIngress {
                     req,
                     resp_tx,
                     abandoned,
+                    attributes,
                 }) = rx.recv().await
                 {
                     if let Err(e) = accessor.spawn(HttpTask {
@@ -212,6 +213,7 @@ impl PreparedIngress {
                         req,
                         resp_tx,
                         abandoned,
+                        attributes,
                         pool_slot: None,
                     }) {
                         tracing::error!(err = %e, "failed to spawn HTTP invocation task");

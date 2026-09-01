@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use async_nats::Subscriber;
 use futures::stream::StreamExt;
-use opentelemetry::KeyValue;
 use tokio::sync::RwLock;
 use tracing::{Instrument, debug, instrument, trace, warn};
 use wasmtime::error::Context as _;
@@ -573,13 +572,12 @@ impl HostPlugin for NatsMessaging {
 
         let mut messages = futures::stream::select_all(subscriptions);
         let guest_meter = self.meters.read().await.guest();
-        // What a pooled delivery is measured under, built once here rather
-        // than per message. Both are bounded by what is deployed; the subject a
-        // message carries is not, so it stays on the span and the log line.
-        let attributes = vec![
-            KeyValue::new("plugin", PLUGIN_MESSAGING_ID),
-            KeyValue::new("operation", super::MESSAGING_OPERATION),
-        ];
+        // The identity every message on this component is measured under,
+        // resolved once here rather than per delivery.
+        let attributes = workload
+            .component_identity(&component_id)
+            .await
+            .attributes(PLUGIN_MESSAGING_ID, super::MESSAGING_OPERATION);
 
         let span = tracing::Span::current();
         let handle = tokio::spawn(async move {
@@ -789,6 +787,7 @@ impl HostPlugin for NatsMessaging {
                         let abandoned = store.data().abandoned.watch(call.flag());
                         let deadline = call.arm_on_timer();
 
+                        let attributes = std::sync::Arc::clone(&attributes);
                         tokio::spawn(async move {
                             // Released on completion, trap or not — which is
                             // what frees the instance slot this message holds.
@@ -797,10 +796,7 @@ impl HostPlugin for NatsMessaging {
                             let _abandoned = abandoned;
                             let _deadline = deadline;
                             let result = guest_meter.observe(
-                                &[
-                                    KeyValue::new("plugin", PLUGIN_MESSAGING_ID),
-                                    KeyValue::new("subject", msg.subject.to_string()),
-                                ],
+                                &attributes,
                                 &mut store,
                                 async move |store| {
                                     proxy

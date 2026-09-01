@@ -93,7 +93,7 @@ async fn deliver(
     };
     timeout(
         Duration::from_secs(10),
-        ingress.deliver_trigger_service_message(workload_id, msg, Vec::new()),
+        ingress.deliver_trigger_service_message(workload_id, msg, std::sync::Arc::from([])),
     )
     .await
     .context("deliver_trigger_service_message timed out")?
