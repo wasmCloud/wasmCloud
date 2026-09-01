@@ -228,6 +228,17 @@ fn workload_request_with_limits(
     }
 }
 
+/// The same request with a second component, so a subscription that names no
+/// component has two handlers to attach to. Both run the same guest — what
+/// matters is that the workload holds two components exporting the handler.
+fn two_component_request(workload_id: &str, interface: WitInterface) -> WorkloadStartRequest {
+    let mut request = workload_request(workload_id, interface);
+    let mut second = request.workload.components[0].clone();
+    second.name = "nats-handler-2".to_string();
+    request.workload.components.push(second);
+    request
+}
+
 async fn start_host() -> Result<impl HostApi> {
     // `allow`, the `wash dev` posture: these fixtures describe their own
     // bindings, which is what a project manifest does. The tests that declare
@@ -1825,6 +1836,39 @@ async fn an_ephemeral_component_starts_fresh_every_delivery() -> Result<()> {
         got,
         vec!["warm:a:1", "warm:b:1"],
         "an ephemeral component must never see a previous delivery's memory"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn an_unscoped_subscription_names_the_components_it_collided_between() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+
+    // Both components export the core handler and the entry names neither, so
+    // the subscription attaches to both and every message would be handled
+    // twice. The refusal has to name them the way the manifest does: the
+    // runtime ids are a fresh UUID per workload start, so an author told to
+    // add `component: <name>` cannot act on an id.
+    let message = expect_refused(
+        &host,
+        two_component_request(
+            "wl-unscoped",
+            nats_async_interface(&[
+                ("servers", &h.nats_url),
+                ("subject-allow", "test.>"),
+                ("core-subscriptions", "test.orders"),
+            ]),
+        ),
+    )
+    .await?;
+
+    // Backtick-quoted, because `nats-handler-2` contains `nats-handler`: a
+    // bare substring check passes on the second name alone.
+    assert!(
+        message.contains("`nats-handler`") && message.contains("`nats-handler-2`"),
+        "expected the refusal to name both components, got {message}"
     );
     Ok(())
 }

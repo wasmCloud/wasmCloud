@@ -49,6 +49,10 @@ pub struct ComponentData {
     /// the next component of the same workload can tell whether it is about to
     /// pick up the same ones — see [`WasmcloudNats::on_workload_item_bind`].
     pub(super) untargeted_specs: Vec<String>,
+    /// The manifest's `components[].name`. The tracker keys components by the
+    /// runtime id, which is a fresh UUID per start, so the name is kept here to
+    /// name a component in an error the manifest's author can act on.
+    pub(super) name: String,
     pub(super) cancel_token: tokio_util::sync::CancellationToken,
 }
 /// `wasmcloud:nats` host plugin — NATS-native capabilities split by interface.
@@ -943,10 +947,14 @@ impl HostPlugin for WasmcloudNats {
                     .iter()
                     .find(|spec| other.untargeted_specs.contains(spec))
                 {
+                    // Both by manifest name, because that is what the advice
+                    // asks for: the ids here are per-start UUIDs, so naming
+                    // those would point at nothing the author can edit.
+                    let other_name = &other.name;
                     anyhow::bail!(
                         "workload `{workload_id}` declares {spec} without naming a component, so \
-                         it attaches to both `{other_id}` and `{component_id}` and every message \
-                         would be handled twice. Add `component: <name>` to each \
+                         it attaches to both `{other_name}` and `{component_name}` and every \
+                         message would be handled twice. Add `component: <name>` to each \
                          subscription-bearing wasmcloud:nats entry"
                     )
                 }
@@ -961,6 +969,7 @@ impl HostPlugin for WasmcloudNats {
                 core_subs,
                 kv_watches,
                 untargeted_specs,
+                name: component_name,
             },
         );
 
