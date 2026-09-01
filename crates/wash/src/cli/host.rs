@@ -328,6 +328,15 @@ pub struct HostCommand {
     #[arg(long = "oci-cache-dir")]
     pub oci_cache_dir: Option<PathBuf>,
 
+    /// How many workloads this host pulls and compiles at once.
+    ///
+    /// Each start it admits ends in a single-threaded compile, so this is how
+    /// many cores a burst of starts can take from the ones serving HTTP and
+    /// NATS. Defaults to one fewer than the host can see, at most 4; lower it
+    /// on a host that must stay responsive while it starts things.
+    #[arg(long = "max-concurrent-starts", env = "WASH_MAX_CONCURRENT_STARTS")]
+    pub max_concurrent_starts: Option<usize>,
+
     /// Enable WASI OpenTelemetry plugin
     #[arg(long = "wasi-otel", default_value_t = false)]
     pub wasi_otel: bool,
@@ -750,6 +759,10 @@ impl CliCommand for HostCommand {
 
         if let Some(environment) = &self.environment {
             cluster_host_builder = cluster_host_builder.with_environment(environment);
+        }
+
+        if let Some(starts) = self.max_concurrent_starts {
+            cluster_host_builder = cluster_host_builder.with_max_concurrent_starts(starts);
         }
 
         // One publishing context for the whole host: workloads and plugins
