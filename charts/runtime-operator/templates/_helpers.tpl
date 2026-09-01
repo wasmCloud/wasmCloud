@@ -373,6 +373,29 @@ secret.reloader.stakater.com/reload: {{ join "," $partition.secretFromNames | qu
 {{- end }}
 
 {{/*
+One host-group probe, resolved against the chart-wide default. Fields resolve
+one by one, so a group retuning one timing keeps the rest.
+
+Written as a key-by-key overlay rather than `merge` because sprig's merge
+treats every zero as unset: it would drop a group's `enabled: false` and its
+`initialDelaySeconds: 0` alike, in favour of whatever the chart-wide block
+says.
+
+Call with (dict "group" .probes "chart" $top.Values.runtime.probes "name" "liveness")
+and read the result back with `fromJson`.
+*/}}
+{{- define "runtime-operator.hostProbe" -}}
+{{- $probe := dict }}
+{{- range $field, $value := (index (.chart | default dict) .name) | default dict }}
+{{- $_ := set $probe $field $value }}
+{{- end }}
+{{- range $field, $value := (index (.group | default dict) .name) | default dict }}
+{{- $_ := set $probe $field $value }}
+{{- end }}
+{{- $probe | toJson }}
+{{- end }}
+
+{{/*
 Create the imagePullSecrets section for the chart.
 */}}
 {{- define "runtime-operator.imagePullSecrets" -}}
