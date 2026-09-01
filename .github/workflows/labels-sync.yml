@@ -1,0 +1,72 @@
+name: labels-sync
+
+# Reconciles the repository's labels with .github/labels.yml.
+#
+# `pull_request` validates only and never touches the API, so it behaves the
+# same on forks where the token is read-only; `push` to main does the sync.
+# `delete-other-labels` stays false so labels absent from the file -- including
+# any added through the UI -- are left alone.
+
+on:
+  pull_request:
+    paths:
+      - .github/labels.yml
+      - .github/scripts/labels.mjs
+      - .github/workflows/labels-sync.yml
+      - .github/workflows/labeler.yml
+  push:
+    branches:
+      - main
+    paths:
+      - .github/labels.yml
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Report the changes that would be made without applying them
+        type: boolean
+        default: true
+
+permissions: {}
+
+jobs:
+  validate:
+    name: validate labels.yml
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github
+      - name: Validate labels.yml
+        run: node .github/scripts/labels.mjs validate
+      # A render failure on main would break labeling for every later PR.
+      - name: Render both projections
+        run: |
+          node .github/scripts/labels.mjs render-labeler | yq -p=json -P '.'
+          node .github/scripts/labels.mjs render-sync | yq -p=json -P '.' > /dev/null
+
+  sync:
+    name: sync labels
+    needs:
+      - validate
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required: labels are an issues-API resource.
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github
+      - name: Render EndBug/label-sync config from labels.yml
+        run: |
+          node .github/scripts/labels.mjs render-sync > .github/labels.generated.json
+      - uses: EndBug/label-sync@52074158190acb45f3077f9099fea818aa43f97a # v2.3.3
+        with:
+          config-file: .github/labels.generated.json
+          delete-other-labels: false
+          dry-run: ${{ inputs.dry-run || false }}

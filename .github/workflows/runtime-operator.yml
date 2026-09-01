@@ -34,6 +34,9 @@ jobs:
           filters: |
             relevant:
               - '.github/workflows/runtime-operator.yml'
+              - '.github/scripts/crd-diff.mjs'
+              - '.github/crd-diff-config.yaml'
+              - '.github/tool-versions.env'
               - 'runtime-operator/**'
               - 'proto/**'
               - 'charts/runtime-operator/**'
@@ -88,6 +91,52 @@ jobs:
           fixup-command: "(cd runtime-operator && make manifests)"
       - name: Verify Helm chart RBAC parity with controller-gen output
         run: node .github/scripts/runtime-operator-rbac-parity.mjs
+
+  # Blocks CRD schema changes that break someone already running these CRDs.
+  # `manifests` above proves the YAML matches the Go types; this judges whether
+  # the change is safe to ship. A maintainer can apply `crd-diff-override` and
+  # re-run. PR-only: it needs a base commit to compare against.
+  crd-diff:
+    needs:
+      - changes
+    if: needs.changes.outputs.relevant == 'true' || contains(github.event.pull_request.labels.*.name, 'canary')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required: reads this PR's labels to honour crd-diff-override.
+      pull-requests: read
+    steps:
+      # Full history: reads the CRDs as they were on the base commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-go
+      - name: Load pinned tool versions
+        run: grep -vE '^[[:space:]]*(#|$)' .github/tool-versions.env >> "${GITHUB_ENV}"
+      - name: Install crdify
+        run: go install "sigs.k8s.io/crdify@v${CRDIFY_VERSION}"
+      - name: Compare CRDs against the base commit
+        id: crd-diff
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node .github/scripts/crd-diff.mjs
+      - name: Honour crd-diff-override, or fail
+        if: steps.crd-diff.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          OVERRIDE_LABEL: crd-diff-override
+        run: |
+          if gh api "repos/${REPO}/pulls/${PR}" --jq '.labels[].name' \
+              | grep -qx "${OVERRIDE_LABEL}"; then
+            echo "::notice::${OVERRIDE_LABEL} is applied; accepting the incompatible CRD change."
+            exit 0
+          fi
+          echo "::error::Incompatible CRD change. A maintainer can apply the ${OVERRIDE_LABEL} label and re-run this job if the change is intended."
+          exit 1
 
   test:
     needs:
@@ -194,6 +243,7 @@ jobs:
       - lint
       - test
       - manifests
+      - crd-diff
       - build
       - test-e2e
     if: ${{ !cancelled() }}
