@@ -174,7 +174,7 @@ impl AccessorTask<SharedCtx> for MessagingTask {
         });
         // Both delivery shapes — a pooled instance and a long-lived service —
         // land here, so one sample covers both.
-        let _sample = crate::engine::instance_driver::ExecutionSample::start(accessor, attributes);
+        let _sample = crate::engine::instance_driver::InvocationSample::start(attributes);
 
         let deliver = async {
             // The `@0.3.0` body is a native `stream<u8>`; mint one carrying the

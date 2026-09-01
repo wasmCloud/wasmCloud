@@ -418,7 +418,7 @@ impl WasmcloudNats {
         core_subs: Vec<CoreSubscriptionConfig>,
         kv_watches: Vec<KvWatchConfig>,
         cancel_token: tokio_util::sync::CancellationToken,
-        execution_meter: crate::observability::ExecutionTimeMeter,
+        guest_meter: crate::observability::GuestMeter,
         warm_set: Arc<subscriber::JetStreamWarmSet>,
     ) -> anyhow::Result<()> {
         let workload_id = workload.id();
@@ -511,7 +511,7 @@ impl WasmcloudNats {
                 handle.clone(),
                 jetstream_subs,
                 cancel_token.clone(),
-                execution_meter.clone(),
+                guest_meter.clone(),
                 failure_sink.clone(),
                 workload_id,
                 warm_set.clone(),
@@ -989,7 +989,7 @@ impl HostPlugin for WasmcloudNats {
             return Ok(());
         }
 
-        let execution_meter = self.meters.read().await.execution_time.clone();
+        let guest_meter = self.meters.read().await.guest();
 
         // Subscriptions run on the binding they were declared on: two named
         // bindings mean two connections, two grants, and two sets of loops
@@ -1006,6 +1006,24 @@ impl HostPlugin for WasmcloudNats {
         // Per component, not per binding: `poolSize` is the component's, and
         // the parked stores are interchangeable across its bindings.
         let warm_set = subscriber::jetstream_warm_set(workload, component_id).await;
+        // Reported here rather than from the subscription loop, which runs once
+        // per binding: the set is the component's, and a component bridging two
+        // clusters would otherwise be told about it twice. Only JetStream parks
+        // instances, so a component with only core subscriptions or KV watches
+        // is not told about a path it does not take.
+        if !jetstream_subs.is_empty() && warm_set.keeps_instances() {
+            // Resolved out of the macro: holding its `Arguments` across an
+            // await makes the whole hook's future non-`Send`.
+            let policy = workload.warm_instance_policy(component_id).await;
+            debug!(
+                component_id,
+                ?policy,
+                "wasmcloud:nats JetStream deliveries will reuse warm instances; note that on \
+                 this path `maxConcurrency` above 1 is served by additional one-shot stores \
+                 rather than by concurrent calls on one instance. Core and KV deliveries go \
+                 through the engine's pool and do honour it."
+            );
+        }
 
         for binding in bindings {
             let jetstream_subs: Vec<_> = jetstream_subs
@@ -1031,7 +1049,7 @@ impl HostPlugin for WasmcloudNats {
                 core_subs,
                 kv_watches,
                 cancel_token.clone(),
-                execution_meter.clone(),
+                guest_meter.clone(),
                 warm_set.clone(),
             )
             .await?;

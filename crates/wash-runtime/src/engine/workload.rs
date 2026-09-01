@@ -1484,6 +1484,12 @@ impl ResolvedWorkload {
     /// deep-clone its by-value `Linker`, and `pre_instantiate_ref` needs only
     /// read access, so concurrent callers don't serialize on a write lock.
     /// Nothing is retained past the returned store.
+    /// A store for `component_id`, stamped with whose execution it runs.
+    ///
+    /// The stamp is what lets the epoch callback credit `guest.execution.total`
+    /// without a call to hang the number on — the only correct instrument for a
+    /// store several calls share. See
+    /// [`crate::engine::abandon::GuestExecution`].
     pub async fn new_store(
         &self,
         component_id: &str,
@@ -1511,7 +1517,7 @@ impl ResolvedWorkload {
                 linked_instances,
             )
         };
-        new_store_from_templates(
+        let store = new_store_from_templates(
             &engine,
             self.http_handler.clone(),
             &active_template,
@@ -1519,7 +1525,17 @@ impl ResolvedWorkload {
             &linked_instances,
             false,
         )
-        .await
+        .await?;
+        // Skipped when nothing will read it: the p2 HTTP path builds a store
+        // per request and the per-message messaging paths one per message, so
+        // the read lock and the allocations below are on their hot path.
+        if crate::observability::invocation_meter().is_some() {
+            store
+                .data()
+                .executed
+                .set_identity(self.component_identity(component_id).await);
+        }
+        Ok(store)
     }
 
     /// The pool a request store for `component_id` may be parked in, or `None`
@@ -1541,28 +1557,44 @@ impl ResolvedWorkload {
             .map_or(1, |component| component.instances.call_concurrency())
     }
 
-    /// The manifest identity a component's guest-execution measurements carry.
+    /// The manifest identity an item's guest-execution measurements carry.
     ///
     /// Manifest names throughout, never the ids — see
     /// [`crate::observability::WorkloadIdentity`] for why. Resolve it once
     /// where a subscription or a route is set up rather than per call: the
-    /// component name costs a read lock, and it cannot change under a
-    /// resolved workload.
+    /// name costs a read lock, and it cannot change under a resolved workload.
     pub async fn component_identity(
         &self,
-        component_id: &str,
+        item_id: &str,
     ) -> crate::observability::WorkloadIdentity {
+        // The workload's service is bound as an item like any component and its
+        // id arrives here the same way, but it lives outside the component map
+        // — so answer for it explicitly rather than letting the lookup miss.
+        // Every messaging delivery to a trigger service passes a service id,
+        // so a miss here is the steady state for those workloads, not a race.
+        // `service` is the name `wasmcloud:messaging`'s admission counter uses
+        // for the same item, so the two metrics agree.
+        if let Some(service) = &self.service
+            && service.id() == item_id
+        {
+            return crate::observability::WorkloadIdentity::new(
+                self.namespace(),
+                self.name(),
+                "service",
+            );
+        }
         let name = self
             .components
             .read()
             .await
-            .get(component_id)
+            .get(item_id)
             .map(|component| Arc::<str>::from(component.name()));
         crate::observability::WorkloadIdentity::new(
             self.namespace(),
             self.name(),
-            // A component absent from the map is one being torn down; the call
-            // that raced it still has to be measured under something.
+            // Neither a live component nor the service: an item being torn
+            // down. The call that raced it still has to be measured under
+            // something.
             name.as_deref().unwrap_or("unknown"),
         )
     }
@@ -1606,7 +1638,7 @@ impl ResolvedWorkload {
         is_service: bool,
     ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
         let recipe = self.service_store_recipe(metadata).await?;
-        new_store_from_templates(
+        let store = new_store_from_templates(
             &recipe.engine,
             recipe.http_handler.clone(),
             &recipe.active_template,
@@ -1614,7 +1646,36 @@ impl ResolvedWorkload {
             &recipe.linked_instances,
             is_service,
         )
-        .await
+        .await?;
+        // A service's store is the one that most needs this: it serves every
+        // ingress the workload has, concurrently, for the life of the workload,
+        // so no call on it can attribute a delta to itself and
+        // `guest.execution.total` is all there is. See
+        // [`crate::engine::abandon::GuestExecution`].
+        if crate::observability::invocation_meter().is_some() {
+            store
+                .data()
+                .executed
+                .set_identity(self.service_identity(metadata));
+        }
+        Ok(store)
+    }
+
+    /// The identity a service's store runs under.
+    ///
+    /// Named `service` rather than by a component name it does not have — the
+    /// same name `wasmcloud:messaging`'s admission counter gives it, so the two
+    /// metrics join. A component's store is stamped by [`Self::new_store`],
+    /// which resolves its real manifest name.
+    fn service_identity(
+        &self,
+        metadata: &WorkloadMetadata,
+    ) -> crate::observability::WorkloadIdentity {
+        crate::observability::WorkloadIdentity::new(
+            metadata.workload_namespace(),
+            metadata.workload_name(),
+            "service",
+        )
     }
 
     /// Capture everything needed to (re)build this service's store, so the

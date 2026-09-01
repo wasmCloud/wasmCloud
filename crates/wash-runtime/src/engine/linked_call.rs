@@ -387,33 +387,41 @@ pub(crate) async fn new_store_from_templates(
     Ok(store)
 }
 
-/// The warm-instance pool of the component this call targets, or `None` when
-/// this store must not be parked — see [`instance_pool::poolable`], which also
-/// accounts for the linked components instantiated into the same store.
+/// The callee's warm-instance pool, or `None` when this store must not be
+/// parked — see [`instance_pool::poolable`], which also accounts for the linked
+/// components instantiated into the same store.
 ///
 /// Read from the component map per call rather than captured at link time, so
 /// a component whose entry is replaced does not keep serving from a pool that
 /// belongs to the old entry.
-/// The callee's pool, and the manifest identity its calls are measured under.
-///
-/// Both come from one read of the component map, so they cannot disagree about
-/// which snapshot they saw. The identity is the *callee's* because it is the
-/// callee's guest code the histogram times, and it is built only when a pool
-/// exists — an unpooled call is not measured, so resolving it would be three
-/// allocations of pure waste on the default path.
-async fn callee_pool_and_identity(
-    call: &EphemeralLinkedCall,
-) -> Option<(Arc<InstancePool>, crate::observability::WorkloadIdentity)> {
+async fn callee_instance_pool(call: &EphemeralLinkedCall) -> Option<Arc<InstancePool>> {
     let components = call.components.read().await;
     let linked: HashSet<Arc<str>> = call.linked_component_ids.iter().cloned().collect();
-    let pool = instance_pool::poolable(&components, &call.active_component_id, &linked)?;
-    let component = components.get(&call.active_component_id)?;
-    let identity = crate::observability::WorkloadIdentity::new(
-        component.metadata().workload_namespace(),
-        component.metadata().workload_name(),
-        component.name(),
-    );
-    Some((pool, identity))
+    instance_pool::poolable(&components, &call.active_component_id, &linked)
+}
+
+/// What a linked call is measured under, or an empty set when nothing will
+/// record it.
+///
+/// The identity is the *callee's*, because it is the callee's guest code the
+/// histogram times, and every path that runs that code uses this — pooled or in
+/// a store of its own, plain args or relocated ones.
+///
+/// Nothing records unless the host chose the epoch meter, so on every other
+/// host this is a read lock, a `format!` and six allocations per linked call
+/// for a value no one reads. An empty set is what a sample that records nothing
+/// needs.
+async fn linked_attributes(
+    call: &EphemeralLinkedCall,
+    inv: &LinkedExportInvocation,
+) -> Arc<[opentelemetry::KeyValue]> {
+    let Some(identity) = callee_identity(call).await else {
+        return Arc::from([]);
+    };
+    identity.attributes(
+        "linked",
+        &format!("{}#{}", inv.import_name, inv.export_name),
+    )
 }
 
 async fn new_ephemeral_store(
@@ -468,7 +476,7 @@ async fn new_ephemeral_store(
         (active, linked, linked_instances)
     };
 
-    new_store_from_templates(
+    let store = new_store_from_templates(
         &call.engine,
         call.http_handler.clone(),
         &active,
@@ -476,7 +484,28 @@ async fn new_ephemeral_store(
         &linked_instances,
         false,
     )
-    .await
+    .await?;
+    if let Some(identity) = callee_identity(call).await {
+        store.data().executed.set_identity(identity);
+    }
+    Ok(store)
+}
+
+/// The callee's manifest identity, for stamping a store or naming a call.
+///
+/// `None` when nothing will read it, or when the component has left the map —
+/// a call racing a teardown, which is about to fail anyway.
+async fn callee_identity(
+    call: &EphemeralLinkedCall,
+) -> Option<crate::observability::WorkloadIdentity> {
+    crate::observability::invocation_meter()?;
+    let components = call.components.read().await;
+    let component = components.get(&call.active_component_id)?;
+    Some(crate::observability::WorkloadIdentity::new(
+        component.metadata().workload_namespace(),
+        component.metadata().workload_name(),
+        component.name(),
+    ))
 }
 
 #[derive(Clone)]
@@ -567,6 +596,10 @@ async fn invoke_ephemeral_relocated(
     param_tys: Arc<[Type]>,
     result_tys: Arc<[Type]>,
 ) -> wasmtime::Result<()> {
+    // This path runs guest code like the plain one, so it is measured like it:
+    // a signature carrying a `stream` or `future` is not a reason for a call to
+    // be missing from the histogram.
+    let attributes = linked_attributes(ephemeral_call, inv).await;
     // Extract args in the caller store: source-stream pumps run under the
     // caller's (long-lived) runtime, so their drain signals are dropped here.
     let args = accessor.with(|mut access| -> wasmtime::Result<Vec<Relocated>> {
@@ -646,6 +679,8 @@ async fn invoke_ephemeral_relocated(
                         }
                         Ok((func, arg_vals))
                     })?;
+                    let _sample =
+                        crate::engine::instance_driver::InvocationSample::start(attributes);
                     let mut results_buf = vec![Val::Bool(false); result_tys.len()];
                     let call_timeout = crate::timeouts::ephemeral_call();
                     timeout(
@@ -762,14 +797,15 @@ async fn invoke_ephemeral_plain(
         "invoking ephemeral dynamic export"
     );
 
-    let pooled = callee_pool_and_identity(ephemeral_call).await;
+    let pool = callee_instance_pool(ephemeral_call).await;
+    let attributes = linked_attributes(ephemeral_call, inv).await;
 
     // The params travel into the pooled job. A job the pool declines hands
     // them back, so the cold path below reuses that allocation rather than
     // cloning them a second time.
     let mut declined_params = None;
 
-    if let Some((pool, identity)) = pooled.as_ref() {
+    if let Some(pool) = pool.as_ref() {
         let (reply, reply_rx) = tokio::sync::oneshot::channel();
         // Deadline enforced here, in the caller's task, outside the callee's
         // store — where a non-yielding callee cannot block it (see
@@ -786,10 +822,7 @@ async fn invoke_ephemeral_plain(
             export_name: inv.export_name.clone(),
             reply,
             abandoned: call.flag(),
-            attributes: identity.attributes(
-                "linked",
-                &format!("{}#{}", inv.import_name, inv.export_name),
-            ),
+            attributes: Arc::clone(&attributes),
         }));
         let outcome = match pool.try_dispatch(job) {
             Dispatch::Sent => Ok(()),
@@ -870,6 +903,10 @@ async fn invoke_ephemeral_plain(
                         )
                     })
                 })?;
+                // Started once the export resolves, as on the pooled path: a
+                // component that declared no pool is the default, and its calls
+                // belong in the same histogram.
+                let _sample = crate::engine::instance_driver::InvocationSample::start(attributes);
                 let call_timeout = crate::timeouts::ephemeral_call();
                 timeout(
                     call_timeout,

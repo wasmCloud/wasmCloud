@@ -58,23 +58,23 @@ fn a_default_engine_does_not_meter_fuel() -> Result<()> {
     Ok(())
 }
 
-/// Asking for epoch timing must not quietly turn fuel on.
+/// Asking for duration must not quietly turn fuel on.
 ///
-/// This is the point of the choice: `guest.execution.time` is sampled from the
-/// epoch callback every store arms anyway, so it costs the guest nothing at run
-/// time. A host that picked it must not also pay fuel's per-block counters.
+/// This is the point of the choice: timing a call costs two clock reads, so a
+/// host that wants latency must not also pay fuel's per-block counters, which
+/// are compiled into every block of guest code.
 #[test]
-fn epoch_metering_does_not_meter_fuel() -> Result<()> {
+fn duration_metering_does_not_meter_fuel() -> Result<()> {
     assert!(
-        !meters_fuel(&engine_for(MeterKind::Epoch)?),
-        "`epoch` must not compile fuel counters into guests"
+        !meters_fuel(&engine_for(MeterKind::Duration)?),
+        "`duration` must not compile fuel counters into guests"
     );
     // Meters are host state: building them decides which histograms exist,
     // never how guests are compiled.
-    let _meters = Meters::new(MeterKind::Epoch);
+    let _meters = Meters::new(MeterKind::Duration);
     assert!(
         !meters_fuel(&Engine::builder().build()?),
-        "building epoch meters must not turn fuel on for an engine that did not ask"
+        "building duration meters must not turn fuel on for an engine that did not ask"
     );
     Ok(())
 }

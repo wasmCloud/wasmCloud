@@ -51,12 +51,14 @@ struct Cli {
     #[arg(short = 'C', default_value = find_project_root().into_os_string())]
     project_path: PathBuf,
 
-    /// Which guest-execution meter to run: `off`, `epoch`, or `fuel`.
+    /// What to measure about guests: `off`, `duration`, or `fuel`.
     ///
-    /// `epoch` samples the clock the host already arms, so guests pay nothing
-    /// for it. `fuel` counts exactly, at the price of a counter compiled into
-    /// every block of guest code.
-    #[arg(long = "meters", global = true, default_value = "off")]
+    /// `duration` reports how many invocations there were, how many failed and
+    /// how long they took, for two clock reads a call — the default, because it
+    /// is what an operator needs first and costs the guest nothing. `fuel` adds
+    /// an exact count of the operations a guest executed, at the price of a
+    /// counter compiled into every block of its code.
+    #[arg(long = "meters", global = true, default_value = "duration")]
     meters: wash_runtime::observability::MeterKind,
 
     /// Deprecated spelling of `--meters fuel`.
@@ -380,13 +382,16 @@ mod tests {
 
     #[test]
     fn meters_flag_stands_alone() {
-        let cli = Cli::try_parse_from(["wash", "--meters", "epoch", "inspect", "component.wasm"])
+        let cli = Cli::try_parse_from(["wash", "--meters", "off", "inspect", "component.wasm"])
             .expect("--meters should parse");
-        assert_eq!(cli.meters(), MeterKind::Epoch);
+        assert_eq!(cli.meters(), MeterKind::Off);
 
+        // Rate, errors and duration without being asked: they cost the guest
+        // two clock reads, and a host nobody can see is worse than one that is
+        // marginally slower.
         let cli = Cli::try_parse_from(["wash", "inspect", "component.wasm"])
             .expect("no meter flag should parse");
-        assert_eq!(cli.meters(), MeterKind::Off);
+        assert_eq!(cli.meters(), MeterKind::Duration);
     }
 
     #[test]
