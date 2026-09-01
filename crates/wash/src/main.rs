@@ -297,17 +297,6 @@ async fn main() {
         }
     }
 
-    // Since some interactive commands may hide the cursor, we need to ensure it is shown again on exit
-    if let Err(e) = ctrlc::set_handler(move || {
-        let term = dialoguer::console::Term::stdout();
-        let _ = term.show_cursor();
-
-        // Exit with standard SIGINT code (128 + 2)
-        std::process::exit(130);
-    }) {
-        warn!(err = ?e, "failed to set ctrl_c handler, interactive prompts may not restore cursor visibility");
-    }
-
     let command_output = if let Some(command) = cli.command {
         run_command(ctx, command).await
     } else {

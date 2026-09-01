@@ -9,7 +9,7 @@ use wash_runtime::{
     plugin::{self},
 };
 
-use crate::cli::{CliCommand, CliContext, CommandOutput};
+use crate::cli::{CliCommand, CliContext, CommandOutput, signal};
 use crate::config::{HttpClientTrustRoots, load_config};
 
 #[derive(Debug, Clone, Args)]
@@ -552,6 +552,10 @@ impl CliCommand for HostCommand {
         // crypto provider available. Idempotent; also called by Ingress::new.
         wash_runtime::init_crypto();
 
+        // Armed before the plugin pulls below, so a signal during them stops
+        // this process rather than being ignored until the host is up.
+        let shutdown = signal::arm()?;
+
         // Picked up the same way `wash dev` reads its own config file: global
         // config merged with the project-local one, if any. `wash host` has
         // no CLI-flags-as-config-overrides of its own (unlike `wash dev`'s
@@ -887,13 +891,15 @@ impl CliCommand for HostCommand {
         let cluster_host = cluster_host_builder
             .build()
             .context("failed to build cluster host")?;
+
+        // The host is about to start taking work, so from here a signal runs
+        // the shutdown below rather than ending the process.
+        let shutdown = shutdown.ready();
         let host_cleanup = wash_runtime::washlet::run_cluster_host(cluster_host)
             .await
             .context("failed to start cluster node")?;
 
-        tokio::signal::ctrl_c()
-            .await
-            .context("failed to listen for shutdown signal")?;
+        shutdown.await;
 
         info!("Stopping host...");
 
