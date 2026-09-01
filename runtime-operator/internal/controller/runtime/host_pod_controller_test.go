@@ -109,10 +109,10 @@ func TestDeleteHostForPod(t *testing.T) {
 	})
 
 	t.Run("spares a replacement registered inside the grace window", func(t *testing.T) {
-		// The chart pins terminationGracePeriodSeconds to 0, but the
-		// Kubernetes default is 30s and a hand-written manifest or a drain
-		// gets one. DeletionTimestamp then sits in the future, covering the
-		// live hosts a replacement registered while this Pod wound down.
+		// A terminating pod gets a grace period — 30s on the Kubernetes
+		// default, 15s for a host pod from the chart — so DeletionTimestamp
+		// sits that far in the future, covering the live hosts a replacement
+		// registered while this Pod wound down.
 		recycled := hostAt("replacement-host", podIP, condemnedAt.Add(8*time.Second))
 		c := newHostPodClient(t, recycled)
 		r := &HostPodReconciler{Client: c, OperatorNamespace: testNamespace}

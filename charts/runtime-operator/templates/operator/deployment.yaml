@@ -99,5 +99,5 @@ spec:
             {{- toYaml .Values.operator.securityContext | nindent 12 }}
       dnsPolicy: ClusterFirst
       restartPolicy: Always
-      terminationGracePeriodSeconds: 0
+      terminationGracePeriodSeconds: {{ .Values.operator.terminationGracePeriodSeconds }}
 {{- end }}

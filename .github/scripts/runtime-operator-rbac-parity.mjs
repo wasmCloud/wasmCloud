@@ -27,8 +27,9 @@
 // grant in scoped installs, which would silently defeat the watchNamespaces
 // scoping the chart advertises.
 
-import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+
+import { helmTemplate, yamlToDocs } from './lib/helm.mjs';
 
 const CHART_DIR = 'charts/runtime-operator';
 const GENERATED_ROLE = 'runtime-operator/config/rbac/role.yaml';
@@ -78,36 +79,6 @@ const RENDER_MODES = [
     ],
   },
 ];
-
-function yamlToDocs(yamlText) {
-  // yq -I 0 emits one compact JSON object per YAML doc, one per line.
-  const r = spawnSync('yq', ['-o', 'json', '-I', '0'], {
-    input: yamlText,
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  if (r.status !== 0) {
-    throw new Error(`yq failed (exit ${r.status}): ${r.stderr.trim()}`);
-  }
-  // Empty YAML docs (`---` with no body) round-trip through yq as `null`;
-  // drop them so downstream code can assume every doc is an object.
-  return r.stdout
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line))
-    .filter((doc) => doc != null);
-}
-
-function helmTemplate(sets) {
-  const args = ['template', RELEASE_NAME, CHART_DIR];
-  for (const s of sets) {
-    args.push('--set', s);
-  }
-  return execFileSync('helm', args, {
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-  });
-}
 
 // Flat list of every rule the operator SA picks up across all bindings.
 // Scope is intentionally collapsed: tuple coverage doesn't care whether a
@@ -276,7 +247,7 @@ const dedupedNeeded = [...new Map(neededTuples.map((t) => [tupleKey(t), t])).val
 let parityFailed = false;
 let structureFailed = false;
 for (const mode of RENDER_MODES) {
-  const docs = yamlToDocs(helmTemplate(mode.sets));
+  const docs = yamlToDocs(helmTemplate(CHART_DIR, RELEASE_NAME, mode.sets));
   const chartRules = operatorRules(docs);
 
   const missing = dedupedNeeded.filter(

@@ -53,5 +53,5 @@ spec:
             {{- toYaml .Values.gateway.securityContext | nindent 12 }}
       dnsPolicy: ClusterFirst
       restartPolicy: Always
-      terminationGracePeriodSeconds: 0
+      terminationGracePeriodSeconds: {{ .Values.gateway.terminationGracePeriodSeconds }}
 {{- end }}

@@ -97,6 +97,11 @@ nats:
     name: ""
     # -- Annotations to add to the service account
     annotations: {}
+  # -- How long a terminating NATS pod has to shut down before it is killed.
+  # On `SIGTERM` the server closes its client connections and its JetStream
+  # store, so the hosts connected to it see a disconnect rather than a stalled
+  # socket. It exits as soon as that is done; this is only the ceiling.
+  terminationGracePeriodSeconds: 30
 
 operator:
   enabled: true
@@ -201,6 +206,14 @@ operator:
   #   extraArgs:
   #     - "-cpu-backpressure-threshold=75"
   extraArgs: []
+  # -- How long a terminating operator pod has to shut down before it is
+  # killed. On `SIGTERM` the manager stops its controllers and lets the
+  # reconciles already running finish, waiting up to controller-runtime's 30s
+  # for them, so anything at or below that is SIGKILL at the moment it gives
+  # up. It does not release its leader election lease
+  # (`LeaderElectionReleaseOnCancel` is off), so the replacement waits out
+  # `LeaseDuration` either way.
+  terminationGracePeriodSeconds: 45
 
 gateway:
   # -- DEPRECATED: runtime-gateway is being removed. HTTP routing is now handled
@@ -254,6 +267,12 @@ gateway:
     name: ""
     # -- Annotations to add to the service account
     annotations: {}
+  # -- How long a terminating gateway pod has to shut down before it is killed.
+  # On `SIGTERM` the gateway stops accepting connections and gives the requests
+  # already in flight up to 15s to finish, so anything below that hangs up on a
+  # caller mid-response. It runs that drain inside a controller-runtime manager,
+  # which waits up to 30s for it, so the grace clears the longer of the two.
+  terminationGracePeriodSeconds: 45
 
 runtime:
   # -- Extra CA certificate bundles (paths inside the host container) trusted
@@ -362,6 +381,13 @@ runtime:
   # -- Additional CLI args appended to every host group container, for host
   # flags the chart does not template. Merged with per-host-group `extraArgs`.
   extraArgs: []
+  # -- How long a terminating host pod has to shut down before it is killed.
+  # On `SIGTERM` the host stops taking work, waits up to 5s for the commands
+  # already running to finish, then stops itself — unbinding every plugin the
+  # workloads it holds are bound to. Kubernetes sends `SIGKILL` when this
+  # expires, so anything below that 5s drain cuts the shutdown short and leaves
+  # the unbinding to the operator's unreachable-host path instead.
+  terminationGracePeriodSeconds: 15
   hostGroups:
     - name: default
       # -- Namespace to deploy this host group's Deployment, Service, generated
