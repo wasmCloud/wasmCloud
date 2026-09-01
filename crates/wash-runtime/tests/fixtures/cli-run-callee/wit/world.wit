@@ -1,0 +1,11 @@
+package wasmcloud:test-p3@0.1.0;
+
+/// A p3 *component* whose only export is `wasi:cli/run` — what a service or a
+/// host component plugin calls to run a workload.
+///
+/// `RUN_MODE` picks how the run ends, including the two out-of-band exits
+/// `wasi:cli/exit` offers, so a caller's view of each is pinned.
+world cli-run-callee {
+    import wasi:cli/exit@0.3.0;
+    export wasi:cli/run@0.3.0;
+}

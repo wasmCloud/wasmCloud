@@ -365,18 +365,18 @@ impl ComponentHostPlugin {
         // hold by construction here too, not just at the caller.
         let native_plugins = native_only(&native_plugins);
         let (component, base_linker) = engine.prepare_host_component(wasm)?;
-        let (exports, lifecycle) = introspect_capability_exports(id, &component)?;
+        let (exports, lifecycle, exports_cli_run) = introspect_capability_exports(id, &component)?;
         let workload_imports =
             classify_workload_imports(id, &component, &exports, &native_plugins)?;
-        // A plugin has to participate in one direction or the other: serve a
-        // capability a workload imports, or call an interface a workload
-        // exports. A plugin doing only the latter is a legitimate shape — a
-        // trigger that dispatches from its own `wasi:cli/run` and exports no
-        // capability at all.
+        // A plugin has to do something: serve a capability a workload imports,
+        // call an interface a workload exports, or run work of its own off a
+        // co-driven `wasi:cli/run` — a trigger exporting no capability at all.
         anyhow::ensure!(
-            exports.iter().any(|e| !e.funcs.is_empty()) || !workload_imports.is_empty(),
-            "host component plugin '{id}' exports no capability functions to serve and imports \
-             no interface for a workload to export"
+            exports.iter().any(|e| !e.funcs.is_empty())
+                || !workload_imports.is_empty()
+                || exports_cli_run,
+            "host component plugin '{id}' exports no capability functions to serve, imports no \
+             interface for a workload to export, and has no wasi:cli/run of its own to drive"
         );
 
         let state = Arc::new(ComponentHostPluginState {
@@ -917,13 +917,24 @@ impl HostPlugin for ComponentHostPlugin {
 /// `wasi:filesystem`, `wasi:clocks`, `wasi:random`, `wasi:cli`,
 /// `wasi:sockets`), plus `wasi:http` (linked whenever the component uses it).
 /// An import in one of these packages is never a candidate for native-builtin
-/// resolution below — it's already satisfied.
+/// resolution below — it's already satisfied. [`is_cli_run`] is the one
+/// exception within them.
 fn is_base_wasi(wit: &WitInterface) -> bool {
     wit.namespace == "wasi"
         && matches!(
             wit.package.as_str(),
             "io" | "filesystem" | "clocks" | "random" | "cli" | "sockets" | "http"
         )
+        && !is_cli_run(wit)
+}
+
+/// Whether this interface is [`wasi:cli/run`]. For a plugin, an export of it is
+/// its own run loop and an import of it is a call into a workload component —
+/// neither is a capability.
+///
+/// [`wasi:cli/run`]: WitInterface::is_cli_run
+fn is_cli_run(wit: &WitInterface) -> bool {
+    wit.is_cli_run()
 }
 
 /// Resolve a plugin's remaining unsatisfied imports against the host's native
@@ -1026,15 +1037,24 @@ async fn link_native_imports(
 }
 
 /// Partition a plugin component's exports: the reserved `wasmcloud:host`
-/// lifecycle interface is a host-invoked contract, while everything else is a
-/// capability workloads may import.
+/// lifecycle interface is a host-invoked contract and `wasi:cli/run` is the
+/// plugin's own run loop, while everything else is a capability workloads may
+/// import. The flag reports whether that run loop is present.
 fn introspect_capability_exports(
     id: &str,
     component: &Component,
-) -> anyhow::Result<(Vec<ExportedInterface>, Option<LifecycleFuncs>)> {
+) -> anyhow::Result<(Vec<ExportedInterface>, Option<LifecycleFuncs>, bool)> {
     let mut lifecycle = None;
     let mut exports = Vec::new();
+    let mut exports_cli_run = false;
     for export in introspect_exports(component)? {
+        if is_cli_run(&export.wit) {
+            // The plugin's own run loop, not a capability it serves. Advertised
+            // as one it would take the routing that belongs to the workload's
+            // own `run` component.
+            exports_cli_run = true;
+            continue;
+        }
         if is_reserved(&export.wit) {
             // Matched by interface name, not the exact `export.name` string —
             // `wasmcloud:host` is versioned as one package, so a patch bump
@@ -1051,7 +1071,7 @@ fn introspect_capability_exports(
             exports.push(export);
         }
     }
-    Ok((exports, lifecycle))
+    Ok((exports, lifecycle, exports_cli_run))
 }
 
 /// Whether an import is already accounted for by something other than a

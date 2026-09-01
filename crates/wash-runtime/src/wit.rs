@@ -277,6 +277,13 @@ impl WitInterface {
             && self.package == "http"
             && (self.interfaces.contains("incoming-handler") || self.interfaces.contains("handler"))
     }
+
+    /// Returns `true` if this interface is `wasi:cli/run` — the one interface of
+    /// `wasi:cli` the WASI base does not serve, since a component exports `run`
+    /// rather than importing it from the host.
+    pub fn is_cli_run(&self) -> bool {
+        self.namespace == "wasi" && self.package == "cli" && self.interfaces.contains("run")
+    }
 }
 
 impl Display for WitInterface {
