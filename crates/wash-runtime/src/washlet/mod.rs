@@ -29,12 +29,13 @@ pub const COMMAND_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How many starts a host runs at once when nothing sets it.
 ///
-/// Each permitted start ends in a Cranelift compile, and compilation here is
-/// single-threaded, so a permit is a core's worth of work for as long as the
-/// compile runs. `available_parallelism` reads the cgroup quota a container is
-/// limited to, and one core is left out of the count: a host that cannot poll
-/// its HTTP accept loop or drain its NATS socket while it compiles is one
-/// Kubernetes restarts out from under its workloads.
+/// Each permitted start ends in a Cranelift compile, and one compile spreads
+/// itself over rayon's pool, so a permit is a floor on the cores it takes for
+/// as long as it runs, not a ceiling — the pool's own size is what bounds the
+/// rest. `available_parallelism` reads the cgroup quota a container is limited to,
+/// and one core is left out of the count: a host that cannot poll its HTTP
+/// accept loop or drain its NATS socket while it compiles is one Kubernetes
+/// restarts out from under its workloads.
 fn default_max_concurrent_starts() -> usize {
     std::thread::available_parallelism().map_or(1, |cores| starts_for_cores(cores.get()))
 }

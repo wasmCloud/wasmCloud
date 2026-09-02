@@ -959,6 +959,7 @@ pub struct EngineBuilder {
     compilation_cache_size: Option<u64>,
     compilation_cache_ttl: Option<Duration>,
     fuel_consumption: Option<bool>,
+    parallel_compilation: Option<bool>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
     guest_memory_mode: guest_memory::GuestMemoryMode,
@@ -1056,6 +1057,19 @@ impl EngineBuilder {
     /// specifies, rather than being forced off.
     pub fn with_fuel_consumption(mut self, enable: bool) -> Self {
         self.fuel_consumption = Some(enable);
+        self
+    }
+
+    /// Whether Cranelift compiles a component's functions on several threads.
+    ///
+    /// Enabled unless this or `WASMTIME_PARALLEL_COMPILATION` turns it off.
+    /// The threads come from rayon's process-wide pool, which sizes itself to
+    /// every core the process can see — not to `max_concurrent_starts`, and
+    /// not to the CPU a container is requested at. Two ways to hold a host
+    /// down: `RAYON_NUM_THREADS` caps how wide one compile goes, and this
+    /// makes it single-threaded again.
+    pub fn with_parallel_compilation(mut self, enable: bool) -> Self {
+        self.parallel_compilation = Some(enable);
         self
     }
 
@@ -1209,6 +1223,15 @@ impl EngineBuilder {
         // custom base config's setting is otherwise preserved.
         if let Some(fuel) = self.fuel_consumption {
             config.consume_fuel(fuel);
+        }
+
+        // Compiling in parallel is wasmtime's own default, so this only has to
+        // carry an explicit "off" through to the config.
+        if let Some(parallel) = self
+            .parallel_compilation
+            .or_else(|| getenv::<bool>("WASMTIME_PARALLEL_COMPILATION"))
+        {
+            config.parallel_compilation(parallel);
         }
 
         // WASIP3's async ABI requires the component-model async proposal.
@@ -1537,6 +1560,20 @@ mod tests {
         let raw = wasmtime::Error::msg("expected a WebAssembly component");
         let explained = format!("{:#}", explain_compile_failure(raw, 1024 * 1024));
         assert_eq!(explained, "expected a WebAssembly component");
+    }
+
+    // Compiling is parallel unless a host says otherwise, and saying so
+    // reaches the engine rather than being dropped on the builder.
+    #[test]
+    fn parallel_compilation_is_on_and_can_be_turned_off() {
+        let engine = Engine::builder().build().expect("default should build");
+        assert!(engine.inner().get_parallel_compilation());
+
+        let engine = Engine::builder()
+            .with_parallel_compilation(false)
+            .build()
+            .expect("serial compilation should build");
+        assert!(!engine.inner().get_parallel_compilation());
     }
 
     // A custom base config can now be combined with the pooling allocator and

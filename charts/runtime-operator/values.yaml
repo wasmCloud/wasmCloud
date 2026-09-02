@@ -372,13 +372,16 @@ runtime:
     # by overriding `WASH_HOST_MAX_GUEST_MEMORY` below it via `runtime.env`.
     guestMemoryMode: ""
     # -- How many workloads a host pulls and compiles at once. Each start it
-    # admits ends in a single-threaded compile, so this is how many cores a
-    # burst of starts takes from the ones serving HTTP and NATS — a host that
-    # stops accepting connections for long enough fails its liveness probe and
-    # is restarted, taking every workload on it with it. Set it to `1` on a
-    # host that must keep serving through a large redeploy, bearing in mind
-    # that the same permit covers the image pull, so a lower number serializes
-    # network waiting along with the compiling.
+    # admits ends in a compile that spreads over every core the host can see,
+    # so this is a floor on what a burst of starts takes from the cores serving
+    # HTTP and NATS, not a ceiling — a host that stops accepting connections
+    # for long enough fails its liveness probe and is restarted, taking every
+    # workload on it with it. Set it to `1` on a host that must keep serving
+    # through a large redeploy, bearing in mind that the same permit covers the
+    # image pull, so a lower number serializes network waiting along with the
+    # compiling. To bound the compiles themselves, set `RAYON_NUM_THREADS` (how
+    # wide one compile goes) or `WASMTIME_PARALLEL_COMPILATION=false` (one
+    # thread per compile) under `runtime.env`.
     #
     # Empty leaves the host to size itself: one fewer than the cores it can
     # see, at most 4. Note what it sees — the count comes from the cgroup, so
