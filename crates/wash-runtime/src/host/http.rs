@@ -902,6 +902,11 @@ pub trait OutgoingHandler: Send + Sync + 'static {
     /// TLS configuration used for host-mediated egress that bypasses
     /// `send_request` (currently the gRPC fast path).
     /// `None` (the default) means the process-wide default trust roots.
+    ///
+    /// Host-wide, so it carries no per-workload client identity. Only
+    /// handlers that return `None` from [`Self::grpc_transport`] reach it;
+    /// one that pools per workload answers gRPC from that workload's own
+    /// client and keeps its identity.
     fn client_tls_config(&self) -> Option<Arc<rustls::ClientConfig>> {
         None
     }
@@ -971,16 +976,28 @@ impl Default for DefaultOutgoingHandler {
 }
 
 impl DefaultOutgoingHandler {
-    /// Create a handler that verifies outbound TLS against `tls` (see
+    /// Create a handler that verifies outbound TLS against `tls`, and
+    /// presents whatever client identity it carries (see
     /// [`crate::host::http_client::ClientTlsOptions`] for building one with
-    /// extra CA bundles).
+    /// extra CA bundles or a client certificate).
     pub fn with_tls_config(tls: Arc<rustls::ClientConfig>) -> Self {
+        Self::with_tls_resolver(Arc::new(tls))
+    }
+
+    /// Create a handler that resolves outbound TLS per workload, so each can
+    /// present its own client identity.
+    ///
+    /// Otherwise identical to [`Self::with_tls_config`], which is this with a
+    /// resolver that answers every workload the same way.
+    pub fn with_tls_resolver(tls: Arc<dyn crate::host::http_client::ClientConfigResolver>) -> Self {
         let quotas = crate::host::quota::QuotaRegistry::new(Default::default(), None);
         let cell = OnceLock::new();
-        let _ = cell.set(crate::host::http_client::WorkloadClients::with_quotas(
-            tls,
-            Arc::clone(&quotas),
-        ));
+        let _ = cell.set(
+            crate::host::http_client::WorkloadClients::with_config_resolver(
+                tls,
+                Arc::clone(&quotas),
+            ),
+        );
         Self {
             clients: cell,
             quotas,
@@ -1014,10 +1031,15 @@ impl DefaultOutgoingHandler {
     pub fn with_quotas(self, quotas: Arc<crate::host::quota::QuotaRegistry>) -> Self {
         let cell = OnceLock::new();
         if let Some(clients) = self.clients.into_inner() {
-            let _ = cell.set(crate::host::http_client::WorkloadClients::with_quotas(
-                clients.tls_config(),
-                Arc::clone(&quotas),
-            ));
+            // The resolver, not `tls_config()`: taking the host-wide
+            // configuration here would collapse every workload's identity
+            // onto it.
+            let _ = cell.set(
+                crate::host::http_client::WorkloadClients::with_config_resolver(
+                    clients.config_resolver(),
+                    Arc::clone(&quotas),
+                ),
+            );
         }
         Self {
             clients: cell,
@@ -4004,6 +4026,7 @@ mod tests {
         let tls = crate::host::http_client::ClientTlsOptions {
             roots: crate::host::http_client::TrustRoots::ExtraOnly,
             extra_ca_paths: vec![ca_path],
+            ..Default::default()
         }
         .build()
         .unwrap();
