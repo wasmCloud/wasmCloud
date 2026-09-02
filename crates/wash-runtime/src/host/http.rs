@@ -32,7 +32,10 @@ use std::sync::atomic::AtomicBool;
 use crate::engine::abandon::{AbandonFlag, AbandonOnDrop, DispatchedCall};
 use crate::host::allowed_hosts::AllowedHost;
 use crate::host::trigger_service::{BrokerMessage, MessagingJob};
-use crate::{engine::ctx::SharedCtx, observability::Meters};
+use crate::{
+    engine::ctx::SharedCtx,
+    observability::{MeterKind, Meters},
+};
 use crate::{engine::workload::ResolvedWorkload, observability::GuestMeter};
 use anyhow::{Context, ensure};
 use http_body_util::BodyExt;
@@ -1282,7 +1285,7 @@ impl<T: Router, O: OutgoingHandler> IngressBuilder<T, O> {
             tls_acceptor,
             listener: Arc::new(tokio::sync::Mutex::new(Some(listener))),
             connections: ConnectionLimit::new(max_connections),
-            meters: Default::default(),
+            meters: RwLock::new(Meters::new(MeterKind::Off)),
             grpc_tls: OnceLock::new(),
         })
     }

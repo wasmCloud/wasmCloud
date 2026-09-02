@@ -216,7 +216,7 @@ impl std::str::FromStr for MeterKind {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Meters {
     /// Rate, errors and duration. Built for any [`MeterKind`] but `Off`: it
     /// costs the guest two clock reads, and it is the one an operator needs
@@ -388,6 +388,20 @@ pub fn invocation_meter() -> Option<&'static InvocationMeter> {
     INVOCATION.get()
 }
 
+/// [`MeterKind::default()`], so both doors into a host — the enum and
+/// [`crate::host::HostBuilder`] — agree on what a host nobody configured
+/// measures.
+///
+/// Written out rather than derived: field-by-field, every meter's own default
+/// is the inert one, which is `Off` under a type whose default is `Duration`.
+/// Going through [`Meters::new`] also publishes the [`invocation_meter`]
+/// global, which the fields cannot do for themselves.
+impl Default for Meters {
+    fn default() -> Self {
+        Self::new(MeterKind::default())
+    }
+}
+
 impl Meters {
     /// The meter a call path measures through; see [`GuestMeter`].
     pub fn guest(&self) -> GuestMeter {
@@ -425,15 +439,12 @@ pub struct FuelConsumptionMeter {
 ///
 /// A call path that can hand over its `&mut Store` measures through this rather
 /// than naming one of the two meters, so [`MeterKind`] decides *how* the
-/// measurement is taken and the path does not have to know. That is what makes
-/// [`MeterKind::Epoch`] universal: every path that measures at all can measure
-/// by epoch, including the ones that used to count fuel and nothing else.
+/// measurement is taken and the path does not have to know.
 ///
 /// Fuel is the only kind that has to wrap the call: it is read off the store
-/// either side of it. Epoch execution is credited from the callback that
-/// observes it, and duration is timed here for every kind, so a path that
-/// measures through this gets rate, errors and duration whichever kind the host
-/// chose.
+/// either side of it. Duration is timed here for every kind, so a path that
+/// measures through this gets rate, errors and duration whichever kind the
+/// host chose.
 #[derive(Clone, Default)]
 pub struct GuestMeter {
     fuel: FuelConsumptionMeter,
@@ -509,16 +520,21 @@ impl FuelConsumptionMeter {
     where
         F: AsyncFnOnce(&mut wasmtime::Store<T>) -> anyhow::Result<R>,
     {
-        if let Some(fuel_meter) = &self.hist {
-            store.set_fuel(u64::MAX)?;
-            let result = func(store).await?;
-            let consumed_fuel = u64::MAX - store.get_fuel()?;
-            fuel_meter.record(consumed_fuel, attributes);
-
-            Ok(result)
-        } else {
-            func(store).await
+        // `set_fuel` errors on an engine built without `Config::consume_fuel`,
+        // and a call the caller asked for must not fail over a number nobody
+        // can read. `HostBuilder` warns about the mismatch; here it just costs
+        // the measurement.
+        let Some(fuel_meter) = &self.hist else {
+            return func(store).await;
+        };
+        if store.set_fuel(u64::MAX).is_err() {
+            return func(store).await;
         }
+        let result = func(store).await?;
+        let consumed_fuel = u64::MAX - store.get_fuel()?;
+        fuel_meter.record(consumed_fuel, attributes);
+
+        Ok(result)
     }
 }
 
