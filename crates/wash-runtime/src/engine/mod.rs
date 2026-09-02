@@ -1250,6 +1250,13 @@ impl EngineBuilder {
         self.proposals
             .insert(WasmProposal::WasmComponentModelImplements);
 
+        // Name the collector rather than taking `Collector::Auto`. `wasm_gc` is
+        // on by default, so a guest can allocate GC objects on any build, and
+        // `Auto` resolves to whichever collector was compiled in — reaching the
+        // null one, which reclaims nothing, when it is all that is left. Naming
+        // it turns that into an `Engine::new` error naming the missing feature.
+        config.collector(wasmtime::Collector::Copying);
+
         // Compile a deadline check into every guest's loop back-edges, so guest
         // work that never yields can still be ended. Every store must then set a
         // deadline of its own — see [`crate::engine::abandon::arm_epoch_deadline`],
