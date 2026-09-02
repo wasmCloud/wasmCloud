@@ -3397,6 +3397,59 @@ mod tests {
         );
     }
 
+    /// A workload that both publishes and handles names both interfaces on its
+    /// one unnamed `wasmcloud:messaging` entry, which is the only shape a
+    /// manifest can give a package. Each component uses half of it and both
+    /// bind the messaging plugin, so the publisher gets `consumer` in its
+    /// linker and the handler's export is subscribed.
+    ///
+    /// Uses the real plugin, whose world is the split this turns on: `consumer`
+    /// and `types` served, `handler` called back on the workload.
+    #[tokio::test]
+    async fn a_publisher_and_a_handler_share_one_messaging_entry() {
+        let publisher = component_from_wat(
+            "publisher",
+            r#"(component (import "wasmcloud:messaging/consumer@0.2.0" (instance)))"#,
+        );
+        let handler = component_from_wat(
+            "handler",
+            r#"(component
+                 (instance $handler)
+                 (export "wasmcloud:messaging/handler@0.2.0" (instance $handler)))"#,
+        );
+        let publisher_id = publisher.id().to_string();
+        let handler_id = handler.id().to_string();
+
+        let plugin =
+            Arc::new(crate::plugin::wasmcloud_messaging::in_memory::InMemoryMessaging::new());
+        let plugins = HashMap::from([(plugin.id(), plugin as Arc<dyn HostPlugin>)]);
+
+        let mut workload = UnresolvedWorkload::new(
+            "messaging",
+            "messaging",
+            "test-namespace",
+            None,
+            vec![publisher, handler],
+            vec![WitInterface::from(
+                "wasmcloud:messaging/consumer,handler,types@0.2.0",
+            )],
+        );
+        let bound = workload
+            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+            .await
+            .expect("both halves of the entry are served");
+        let bound_ids = bound_component_ids(&bound);
+
+        assert!(
+            bound_ids.contains(&publisher_id),
+            "the publisher needs `consumer` in its linker"
+        );
+        assert!(
+            bound_ids.contains(&handler_id),
+            "nothing subscribes the handler's export unless the plugin binds it"
+        );
+    }
+
     /// A component importing a subset of an entry — the ordinary shape of a
     /// multi-component workload, since one entry covers them all — binds the
     /// plugin serving that entry.
