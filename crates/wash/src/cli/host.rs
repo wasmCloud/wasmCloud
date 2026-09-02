@@ -929,6 +929,7 @@ impl CliCommand for HostCommand {
                     wash_runtime::host::http_client::ClientTlsOptions {
                         roots: self.http_client_trust_roots.into(),
                         extra_ca_paths: self.http_client_ca_paths.clone(),
+                        ..Default::default()
                     },
                 )
                 .context("failed to load --http-client-ca-path CA certificates")?
