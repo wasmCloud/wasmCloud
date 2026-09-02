@@ -607,6 +607,13 @@ impl CliCommand for HostCommand {
         wash_runtime::oci::set_extra_ca_certificates(&host_config.oci_ca_paths)
             .context("failed to load --oci-ca-path CA certificates")?;
 
+        // Before any ceiling below is derived: each is a share of the soft
+        // descriptor limit, and this is what that limit ends up being.
+        match wash_runtime::host::quota::raise_descriptor_limit() {
+            Some(limit) => tracing::debug!(descriptors = limit, "descriptor limit"),
+            None => tracing::debug!("descriptor limit is not known on this platform"),
+        }
+
         let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)
             .with_fuel_consumption(ctx.meters().consumes_fuel());
