@@ -221,24 +221,91 @@ impl<'a> WitInterfaces<'a> {
         self.inner.iter()
     }
 
-    /// Returns the [`crate::wit::WitInterface`] that matches the given namespace, package, and set of interfaces, if one exists.
+    /// Every entry matching the given namespace, package, and set of
+    /// interfaces, ordered by [`entry_order`].
+    ///
+    /// A workload may declare one package across several entries, and all of
+    /// them were matched to this plugin. What a plugin leaves unread here is
+    /// config a workload declared and no component ever sees, so a plugin
+    /// serving one instance folds the whole set rather than picking from it.
+    pub fn matching(
+        &self,
+        namespace: &str,
+        package: &str,
+        interfaces: &[&str],
+    ) -> Vec<&'a crate::wit::WitInterface> {
+        let mut matched: Vec<&crate::wit::WitInterface> = self
+            .inner
+            .iter()
+            .filter(|interface| entry_matches(interface, namespace, package, interfaces))
+            .collect();
+        matched.sort_by_cached_key(|interface| entry_order(interface));
+        matched
+    }
+
+    /// The first entry matching the given namespace, package, and set of
+    /// interfaces — the unnamed entry, a package's default route, when there is
+    /// one.
+    ///
+    /// For a plugin that reads a single entry; one that must see everything a
+    /// workload declared for its package wants [`Self::matching`].
     pub fn get(
         &self,
         namespace: &str,
         package: &str,
         interfaces: &[&str],
-    ) -> Option<&crate::wit::WitInterface> {
-        self.inner.iter().find(|interface| {
-            interface.namespace == namespace
-                && interface.package == package
-                && interfaces.iter().all(|i| interface.interfaces.contains(*i))
-        })
+    ) -> Option<&'a crate::wit::WitInterface> {
+        self.inner
+            .iter()
+            .filter(|interface| entry_matches(interface, namespace, package, interfaces))
+            .min_by_key(|interface| entry_order(interface))
     }
 
     /// Returns `true` if the given namespace, package, and set of interfaces are contained within this collection of [`crate::wit::WitInterface`]s.
     pub fn contains(&self, namespace: &str, package: &str, interfaces: &[&str]) -> bool {
-        self.get(namespace, package, interfaces).is_some()
+        self.inner
+            .iter()
+            .any(|interface| entry_matches(interface, namespace, package, interfaces))
     }
+}
+
+/// Whether one entry answers for `namespace:package` and covers `interfaces`.
+///
+/// An entry naming no interfaces covers its whole package, the rule
+/// [`crate::wit::WitWorld::uses`] matched it to the plugin under. Reading it
+/// more strictly here leaves the plugin bound and its interface unserved.
+fn entry_matches(
+    interface: &crate::wit::WitInterface,
+    namespace: &str,
+    package: &str,
+    interfaces: &[&str],
+) -> bool {
+    interface.namespace == namespace
+        && interface.package == package
+        && (interface.interfaces.is_empty()
+            || interfaces.iter().all(|i| interface.interfaces.contains(*i)))
+}
+
+/// Orders the entries of one package: the unnamed entry — a package's default
+/// route — first, then by name, instance, interfaces, and the keys each entry
+/// configures. Two entries alike in all of those carry the same resolved
+/// config, so their order between themselves does not change what a plugin
+/// reads.
+///
+/// Keys, never values: once bindings resolve, an entry's config carries
+/// whatever `secretFrom` produced.
+fn entry_order(interface: &crate::wit::WitInterface) -> (Option<&str>, String, String, String) {
+    let sorted = |mut items: Vec<&str>| {
+        items.sort_unstable();
+        items.join(",")
+    };
+    (
+        // `None` sorts before `Some`, putting the unnamed entry first.
+        interface.name.as_deref(),
+        interface.instance(),
+        sorted(interface.interfaces.iter().map(String::as_str).collect()),
+        sorted(interface.config.keys().map(String::as_str).collect()),
+    )
 }
 
 /// A workload a plugin has failed out of band (after it was already running),

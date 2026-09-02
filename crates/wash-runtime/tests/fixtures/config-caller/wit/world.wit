@@ -1,0 +1,13 @@
+package wasmcloud:example@0.0.1;
+
+interface reader {
+    /// This component's own `wasi:config/store` view, rendered as a sorted
+    /// `key=value;key=value` string.
+    read: func() -> string;
+}
+
+world component {
+    import wasi:config/store@0.2.0-rc.1;
+    import reader;
+    export wasi:http/incoming-handler@0.2.2;
+}
