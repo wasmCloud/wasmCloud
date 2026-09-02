@@ -250,6 +250,7 @@ impl CliCommand for DevCommand {
             wash_runtime::host::http_client::ClientTlsOptions {
                 roots: dev_config.http_client_trust_roots.into(),
                 extra_ca_paths: dev_config.http_client_ca_paths.clone(),
+                ..Default::default()
             },
         )
         .context("failed to load dev.http_client_ca_paths CA certificates")?

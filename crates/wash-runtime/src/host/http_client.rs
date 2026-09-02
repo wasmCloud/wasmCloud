@@ -49,7 +49,7 @@ use hyper_util::client::legacy::connect::{
     CaptureConnection, Connected, Connection, HttpConnector, capture_connection,
 };
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
-use rustls::pki_types::{CertificateDer, pem::PemObject};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use tokio::net::TcpStream;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
@@ -170,6 +170,55 @@ pub enum TrustRoots {
     ExtraOnly,
 }
 
+/// PEM files holding a client certificate chain and its private key.
+///
+/// The other half of the egress trust store from
+/// [`ClientTlsOptions::extra_ca_paths`]: the bundles there decide which
+/// servers the host will talk to, this decides who it says it is when one
+/// asks. A peer that only *requests* a certificate completes the handshake
+/// either way, so a missing identity surfaces as the upstream rejecting
+/// requests rather than as a TLS error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientIdentity {
+    /// Certificate chain, leaf first.
+    pub cert_path: PathBuf,
+    /// Private key for the leaf certificate.
+    pub key_path: PathBuf,
+}
+
+impl ClientIdentity {
+    /// Read the chain and key.
+    fn load(&self) -> anyhow::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+        let certs = CertificateDer::pem_file_iter(&self.cert_path)
+            .with_context(|| {
+                format!(
+                    "failed to read client certificate {}",
+                    self.cert_path.display()
+                )
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .with_context(|| {
+                format!(
+                    "failed to parse PEM in client certificate {}",
+                    self.cert_path.display()
+                )
+            })?;
+        anyhow::ensure!(
+            !certs.is_empty(),
+            "no certificate found in {}",
+            self.cert_path.display()
+        );
+
+        let key = PrivateKeyDer::from_pem_file(&self.key_path).with_context(|| {
+            format!(
+                "failed to read client private key {}",
+                self.key_path.display()
+            )
+        })?;
+        Ok((certs, key))
+    }
+}
+
 /// Trust-root options for outbound HTTPS from components.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ClientTlsOptions {
@@ -179,25 +228,58 @@ pub struct ClientTlsOptions {
     /// more certificates), layered on top of `roots`. Use this to reach hosts
     /// behind a corporate or otherwise private CA.
     pub extra_ca_paths: Vec<PathBuf>,
+    /// Client certificate the host presents when a peer requests one. `None`
+    /// presents nothing, which is what an unconfigured host does.
+    ///
+    /// Loading this once at build time is deliberate: a credential that only
+    /// fails at handshake time surfaces as a peer rejecting every request,
+    /// which reads like a broken upstream.
+    ///
+    /// Validity is *not* tracked. The pair is checked for consistency when it
+    /// is loaded and then presented for the life of the configuration, so a
+    /// long-running host will keep offering it past `notAfter`. A host that
+    /// needs either rotation or expiry handling should install its own
+    /// [`rustls::client::ResolvesClientCert`] on the built configuration,
+    /// which rustls consults once per handshake and which can decline.
+    pub client_identity: Option<ClientIdentity>,
 }
 
 impl ClientTlsOptions {
     /// Build a rustls client configuration from these options.
     ///
     /// Fails when an entry in `extra_ca_paths` cannot be read or contains no
-    /// usable certificate, or when the options yield an empty trust store
-    /// (e.g. [`TrustRoots::ExtraOnly`] with no bundles); problems loading
-    /// individual native-store certificates are logged and skipped.
+    /// usable certificate, when the options yield an empty trust store
+    /// (e.g. [`TrustRoots::ExtraOnly`] with no bundles), or when
+    /// `client_identity` names an unreadable or mismatched pair; problems
+    /// loading individual native-store certificates are logged and skipped.
     pub fn build(&self) -> anyhow::Result<Arc<rustls::ClientConfig>> {
         // Resolved first: `root_store` installs the crypto provider that
         // `ClientConfig::builder` panics without, and as the receiver the
         // builder would otherwise be evaluated before it.
         let roots = self.root_store()?;
-        Ok(Arc::new(
-            rustls::ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth(),
-        ))
+        let builder = rustls::ClientConfig::builder().with_root_certificates(roots);
+        let config = match &self.client_identity {
+            Some(identity) => {
+                let (certs, key) = identity.load()?;
+                // Checks the key against the leaf certificate's
+                // SubjectPublicKeyInfo, so a crossed pair fails here.
+                let config = builder.with_client_auth_cert(certs, key).with_context(|| {
+                    format!(
+                        "client certificate {} does not match key {}",
+                        identity.cert_path.display(),
+                        identity.key_path.display()
+                    )
+                })?;
+                debug!(
+                    cert_path = %identity.cert_path.display(),
+                    "presenting a client certificate for outbound TLS"
+                );
+                config
+            }
+            None => builder.with_no_client_auth(),
+        };
+
+        Ok(Arc::new(config))
     }
 
     /// The trust store these options describe, without deciding how the client
@@ -665,8 +747,52 @@ impl PooledClient {
     }
 }
 
-/// Per-workload pooled clients sharing one TLS configuration and one
-/// host-wide ceiling.
+/// Supplies the TLS configuration a workload's outbound connections use.
+///
+/// A host that gives each workload its own client identity implements this;
+/// one that does not passes an `Arc<rustls::ClientConfig>`, which implements
+/// it by handing the same configuration to everyone.
+///
+/// Consulted when a workload's [`PooledClient`] is built, not per request, so
+/// a configuration handed out here is the one every connection in that pool
+/// negotiates with. Replace a credential *without* rebuilding the pool by
+/// keeping one configuration per workload whose
+/// [`rustls::client::ResolvesClientCert`] reads swappable state: rustls
+/// consults that on every handshake, so a rotated credential applies to new
+/// connections while established ones keep what they negotiated with.
+///
+/// `workload_id` is the host-assigned identifier described on
+/// [`WorkloadClients::client`], never guest-controlled, which is what makes
+/// it safe to key an identity on.
+pub trait ClientConfigResolver: Send + Sync + 'static {
+    /// The configuration `workload_id`'s connections use.
+    fn config_for(&self, workload_id: &str) -> Arc<rustls::ClientConfig>;
+
+    /// The configuration for egress that belongs to no single workload.
+    ///
+    /// Reached through [`OutgoingHandler::client_tls_config`] on the gRPC
+    /// fallback path, which only handlers that do not pool per workload take:
+    /// [`DefaultOutgoingHandler`] answers gRPC from the workload's own pooled
+    /// client, so it keeps that workload's identity.
+    ///
+    /// [`OutgoingHandler::client_tls_config`]: crate::host::http::OutgoingHandler::client_tls_config
+    /// [`DefaultOutgoingHandler`]: crate::host::http::DefaultOutgoingHandler
+    fn host_config(&self) -> Arc<rustls::ClientConfig>;
+}
+
+/// One configuration for every workload, which is what a host without
+/// per-workload identity wants.
+impl ClientConfigResolver for Arc<rustls::ClientConfig> {
+    fn config_for(&self, _workload_id: &str) -> Arc<rustls::ClientConfig> {
+        Arc::clone(self)
+    }
+
+    fn host_config(&self) -> Arc<rustls::ClientConfig> {
+        Arc::clone(self)
+    }
+}
+
+/// Per-workload pooled clients sharing one host-wide ceiling.
 ///
 /// Each workload gets its own [`PooledClient`] (created lazily on first
 /// request, evicted after [`WORKLOAD_CLIENT_IDLE`] without use), so a
@@ -678,7 +804,7 @@ impl PooledClient {
 /// Cloning is cheap and shares the underlying client cache.
 #[derive(Clone)]
 pub struct WorkloadClients {
-    tls: Arc<rustls::ClientConfig>,
+    tls: Arc<dyn ClientConfigResolver>,
     /// Where each workload's allowance comes from. Held apart from
     /// [`Self::clients`] so that a client rebuilt for a workload draws on the
     /// same quota its predecessor did: a replaced client's connections keep
@@ -724,6 +850,18 @@ impl WorkloadClients {
     /// sockets are bounded by one configured allowance rather than two.
     pub fn with_quotas(
         tls: Arc<rustls::ClientConfig>,
+        quotas: Arc<crate::host::quota::QuotaRegistry>,
+    ) -> Self {
+        Self::with_config_resolver(Arc::new(tls), quotas)
+    }
+
+    /// Create a per-workload client cache that resolves a TLS configuration
+    /// per workload, so each can present its own client identity.
+    ///
+    /// Otherwise identical to [`Self::with_quotas`], which is this with a
+    /// resolver that answers every workload the same way.
+    pub fn with_config_resolver(
+        tls: Arc<dyn ClientConfigResolver>,
         quotas: Arc<crate::host::quota::QuotaRegistry>,
     ) -> Self {
         Self {
@@ -784,7 +922,7 @@ impl WorkloadClients {
                 .copied()
                 .unwrap_or(1);
             PooledClient::bounded(
-                self.tls.clone(),
+                self.tls.config_for(workload_id),
                 Some(Arc::from(workload_id)),
                 quota.outbound_http_permits(),
                 // An unset host-wide ceiling is spelled as an effectively
@@ -821,9 +959,24 @@ impl WorkloadClients {
             .remove(workload_id);
     }
 
-    /// The TLS configuration the per-workload clients verify servers against.
+    /// The TLS configuration for egress belonging to no single workload.
+    ///
+    /// Not necessarily what any given workload's connections use: a host with
+    /// per-workload identities resolves those in [`Self::client`]. See
+    /// [`ClientConfigResolver::host_config`].
     pub fn tls_config(&self) -> Arc<rustls::ClientConfig> {
-        self.tls.clone()
+        self.tls.host_config()
+    }
+
+    /// The resolver these clients draw their configurations from.
+    ///
+    /// Rebuilding a cache (as [`DefaultOutgoingHandler::with_quotas`] does)
+    /// has to carry this over: taking [`Self::tls_config`] instead would
+    /// collapse every workload onto the host-wide configuration.
+    ///
+    /// [`DefaultOutgoingHandler::with_quotas`]: crate::host::http::DefaultOutgoingHandler::with_quotas
+    pub fn config_resolver(&self) -> Arc<dyn ClientConfigResolver> {
+        Arc::clone(&self.tls)
     }
 }
 
@@ -1274,6 +1427,155 @@ mod tests {
         assert_eq!(TrustRoots::default(), TrustRoots::Webpki);
     }
 
+    /// Writes a self-signed certificate and its key, as an operator mounts a
+    /// client credential.
+    fn write_identity(dir: &std::path::Path, stem: &str) -> ClientIdentity {
+        let issued = rcgen::generate_simple_self_signed(vec!["client".to_string()])
+            .expect("failed to generate test certificate");
+        let cert_path = dir.join(format!("{stem}.crt"));
+        let key_path = dir.join(format!("{stem}.key"));
+        std::fs::write(&cert_path, issued.cert.pem()).unwrap();
+        std::fs::write(&key_path, issued.signing_key.serialize_pem()).unwrap();
+        ClientIdentity {
+            cert_path,
+            key_path,
+        }
+    }
+
+    #[test]
+    fn no_client_identity_presents_nothing() {
+        let config = ClientTlsOptions::default()
+            .build()
+            .expect("default options build");
+        assert!(!config.client_auth_cert_resolver.has_certs());
+    }
+
+    #[test]
+    fn a_client_identity_is_presented() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = ClientTlsOptions {
+            client_identity: Some(write_identity(dir.path(), "id")),
+            ..Default::default()
+        };
+        let config = opts.build().expect("a matching pair builds");
+        assert!(config.client_auth_cert_resolver.has_certs());
+    }
+
+    /// A crossed pair fails at build time rather than on every handshake,
+    /// where it would look like the peer rejecting the host.
+    #[test]
+    fn a_mismatched_client_identity_fails_to_build() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = write_identity(dir.path(), "first");
+        let second = write_identity(dir.path(), "second");
+        let opts = ClientTlsOptions {
+            client_identity: Some(ClientIdentity {
+                cert_path: first.cert_path,
+                key_path: second.key_path,
+            }),
+            ..Default::default()
+        };
+        assert!(opts.build().is_err());
+    }
+
+    #[test]
+    fn a_missing_client_identity_fails_to_build() {
+        let opts = ClientTlsOptions {
+            client_identity: Some(ClientIdentity {
+                cert_path: PathBuf::from("/definitely/not/a/real/client.crt"),
+                key_path: PathBuf::from("/definitely/not/a/real/client.key"),
+            }),
+            ..Default::default()
+        };
+        assert!(opts.build().is_err());
+    }
+
+    /// A resolver keyed on the workload, which is what per-workload identity
+    /// needs: two workloads must not collapse onto one configuration.
+    #[derive(Debug)]
+    struct PerWorkload {
+        a: Arc<rustls::ClientConfig>,
+        b: Arc<rustls::ClientConfig>,
+        host: Arc<rustls::ClientConfig>,
+    }
+
+    impl ClientConfigResolver for PerWorkload {
+        fn config_for(&self, workload_id: &str) -> Arc<rustls::ClientConfig> {
+            match workload_id {
+                "a" => Arc::clone(&self.a),
+                "b" => Arc::clone(&self.b),
+                _ => Arc::clone(&self.host),
+            }
+        }
+
+        fn host_config(&self) -> Arc<rustls::ClientConfig> {
+            Arc::clone(&self.host)
+        }
+    }
+
+    fn per_workload_resolver() -> Arc<PerWorkload> {
+        let dir = tempfile::tempdir().unwrap();
+        let build = |stem: &str| {
+            ClientTlsOptions {
+                client_identity: Some(write_identity(dir.path(), stem)),
+                ..Default::default()
+            }
+            .build()
+            .unwrap()
+        };
+        Arc::new(PerWorkload {
+            a: build("a"),
+            b: build("b"),
+            host: default_client_tls_config(),
+        })
+    }
+
+    #[test]
+    fn an_arc_config_answers_every_workload_the_same_way() {
+        let config = default_client_tls_config();
+        let resolver: Arc<dyn ClientConfigResolver> = Arc::new(Arc::clone(&config));
+        assert!(Arc::ptr_eq(&resolver.config_for("a"), &config));
+        assert!(Arc::ptr_eq(&resolver.config_for("b"), &config));
+        assert!(Arc::ptr_eq(&resolver.host_config(), &config));
+    }
+
+    #[test]
+    fn each_workloads_client_gets_its_own_configuration() {
+        let resolver = per_workload_resolver();
+        let clients =
+            WorkloadClients::with_config_resolver(Arc::clone(&resolver) as _, test_quotas(4, 16));
+
+        let a = clients.client("a").tls_config();
+        let b = clients.client("b").tls_config();
+        assert!(Arc::ptr_eq(&a, &resolver.a));
+        assert!(Arc::ptr_eq(&b, &resolver.b));
+        assert!(!Arc::ptr_eq(&a, &b));
+    }
+
+    /// `tls_config` is host-wide by contract: a caller reaching for it must
+    /// not silently receive one workload's identity.
+    #[test]
+    fn the_host_configuration_is_not_a_workloads() {
+        let resolver = per_workload_resolver();
+        let clients =
+            WorkloadClients::with_config_resolver(Arc::clone(&resolver) as _, test_quotas(4, 16));
+        let host = clients.tls_config();
+        assert!(Arc::ptr_eq(&host, &resolver.host));
+        assert!(!Arc::ptr_eq(&host, &resolver.a));
+    }
+
+    /// Rebuilding a cache for new quotas must not flatten per-workload
+    /// identities onto the host-wide configuration.
+    #[test]
+    fn a_rebuilt_cache_keeps_its_resolver() {
+        let resolver = per_workload_resolver();
+        let clients =
+            WorkloadClients::with_config_resolver(Arc::clone(&resolver) as _, test_quotas(4, 16));
+        let rebuilt =
+            WorkloadClients::with_config_resolver(clients.config_resolver(), test_quotas(8, 32));
+        assert!(Arc::ptr_eq(&rebuilt.client("a").tls_config(), &resolver.a));
+    }
+
     #[test]
     fn extra_ca_path_must_exist() {
         let opts = ClientTlsOptions {
@@ -1293,6 +1595,7 @@ mod tests {
         let opts = ClientTlsOptions {
             roots: TrustRoots::ExtraOnly,
             extra_ca_paths: vec![path],
+            ..Default::default()
         };
         opts.build().expect("PEM CA bundle should load");
     }
@@ -1305,6 +1608,7 @@ mod tests {
         let opts = ClientTlsOptions {
             roots: TrustRoots::ExtraOnly,
             extra_ca_paths: vec![path],
+            ..Default::default()
         };
         assert!(opts.build().is_err());
     }
@@ -1314,6 +1618,7 @@ mod tests {
         let opts = ClientTlsOptions {
             roots: TrustRoots::ExtraOnly,
             extra_ca_paths: vec![],
+            ..Default::default()
         };
         let err = opts.build().expect_err("an empty trust store must fail");
         assert!(err.to_string().contains("trust store is empty"), "{err}");
@@ -1324,6 +1629,7 @@ mod tests {
         let opts = ClientTlsOptions {
             roots: TrustRoots::Webpki,
             extra_ca_paths: vec![],
+            ..Default::default()
         };
         opts.build().expect("webpki-only roots should build");
     }
@@ -2137,6 +2443,7 @@ mod tests {
         let tls = ClientTlsOptions {
             roots: TrustRoots::ExtraOnly,
             extra_ca_paths: vec![ca_path],
+            ..Default::default()
         }
         .build()
         .unwrap();
