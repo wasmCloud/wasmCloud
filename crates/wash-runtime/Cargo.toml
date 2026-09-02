@@ -88,7 +88,12 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["sync", "net", "macros"] }
 tracing = { workspace = true }
 zeroize = { workspace = true }
-wasmtime = { workspace = true, features = ["anyhow", "component-model", "component-model-async", "cranelift", "pooling-allocator", "gc", "gc-null", "threads"] }
+# Every wasmtime feature this host relies on is named here rather than left to
+# a transitive dependency's defaults. `wasi-webgpu-wasmtime` takes `wasmtime`
+# with default features, but it is target-gated off Windows and s390x, so
+# anything only it supplies is absent from those two release binaries.
+# `.github/scripts/wasmtime-features.mjs` holds this list to that rule.
+wasmtime = { workspace = true, features = ["addr2line", "anyhow", "backtrace", "component-model", "component-model-async", "cranelift", "demangle", "gc", "gc-copying", "gc-drc", "gc-null", "parallel-compilation", "pooling-allocator", "threads"] }
 wasmtime-wasi = { workspace = true, features = ["p3"] }
 wasmtime-wasi-io = { workspace = true }
 wasmtime-wasi-http = { workspace = true, features = ["default-send-request", "p2", "p3", "component-model-async"] }
