@@ -98,6 +98,7 @@ pub(crate) enum InstanceJob {
     /// plugin keeps its own payload and makes its own typed call. That is what
     /// lets a delivery carry, say, a NATS message's bytes rather than the one
     /// 48-byte [`Val`] per byte a store-independent lowering would cost.
+    #[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
     Plugin(Box<dyn PluginJob>),
 }
 
@@ -110,6 +111,7 @@ pub(crate) enum InstanceJob {
 /// `max_concurrency`.
 pub(crate) trait PluginJob: Send + 'static {
     /// Names this job in a driver log line.
+    #[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
     fn describe(&self) -> &str;
 
     /// Runs the call. Owns replying to whoever is waiting for it, and may

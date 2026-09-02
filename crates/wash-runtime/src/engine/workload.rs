@@ -1624,6 +1624,7 @@ impl ResolvedWorkload {
     /// whose calls carry typed resources no [`InstanceJob`] can).
     ///
     /// [`InstanceJob`]: crate::engine::instance_driver::InstanceJob
+    #[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
     pub(crate) async fn warm_instance_policy(&self, component_id: &str) -> InstancePolicy {
         match self.instance_pool_for_component(component_id).await {
             Some(pool) => pool.policy(),

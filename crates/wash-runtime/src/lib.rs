@@ -48,7 +48,9 @@ pub fn init_crypto() {
     });
 }
 
-#[cfg(test)]
+// The one test here starts a host around the `wasi:config` plugin, so it only
+// exists in a build that has one.
+#[cfg(all(test, feature = "wasi-config"))]
 mod test {
     use std::collections::HashMap;
     use std::sync::Arc;
