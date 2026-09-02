@@ -40,10 +40,11 @@ use hyper_util::{
     rt::{TokioExecutor, TokioTimer},
     server::conn::auto,
 };
+use opentelemetry::KeyValue;
 use opentelemetry::context::FutureExt;
 use opentelemetry_semantic_conventions::attribute::{
-    HTTP_REQUEST_METHOD, HTTP_RESPONSE_BODY_SIZE, HTTP_RESPONSE_STATUS_CODE, OTEL_STATUS_CODE,
-    RPC_GRPC_STATUS_CODE, SERVER_ADDRESS, SERVER_PORT, URL_FULL, URL_PATH,
+    ERROR_TYPE, HTTP_REQUEST_METHOD, HTTP_RESPONSE_BODY_SIZE, HTTP_RESPONSE_STATUS_CODE,
+    OTEL_STATUS_CODE, RPC_GRPC_STATUS_CODE, SERVER_ADDRESS, SERVER_PORT, URL_FULL, URL_PATH,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
@@ -63,7 +64,7 @@ use wasmtime_wasi_http::{
 
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{RwLock, Semaphore, mpsc};
 use tokio_rustls::TlsAcceptor;
 
 /// Validates a hostname according to RFC 1123.
@@ -1139,6 +1140,11 @@ pub struct Ingress<T: Router, O: OutgoingHandler = DefaultOutgoingHandler> {
     shutdown_tx: Arc<RwLock<Option<mpsc::Sender<()>>>>,
     tls_acceptor: Option<TlsAcceptor>,
     listener: Arc<tokio::sync::Mutex<Option<TcpListener>>>,
+    /// Ceiling on the TCP connections this ingress holds at once, and the
+    /// permits enforcing it. Sized from the process's descriptor budget unless
+    /// the operator names a number: see
+    /// [`crate::host::quota::default_max_http_ingress_connections`].
+    connections: ConnectionLimit,
     meters: RwLock<Meters>,
     /// h2 (ALPN) variant of the outgoing handler's client TLS configuration,
     /// derived once on the first gRPC request; see [`Ingress::grpc_tls`].
@@ -1205,6 +1211,7 @@ pub struct IngressBuilder<T: Router, O: OutgoingHandler = DefaultOutgoingHandler
     outgoing_handler: O,
     addr: SocketAddr,
     tls: Option<TlsConfig>,
+    max_connections: Option<usize>,
 }
 
 impl<T: Router> IngressBuilder<T, DefaultOutgoingHandler> {
@@ -1214,6 +1221,7 @@ impl<T: Router> IngressBuilder<T, DefaultOutgoingHandler> {
             outgoing_handler: DefaultOutgoingHandler::default(),
             addr,
             tls: None,
+            max_connections: None,
         }
     }
 }
@@ -1227,12 +1235,20 @@ impl<T: Router, O: OutgoingHandler> IngressBuilder<T, O> {
             outgoing_handler: handler,
             addr: self.addr,
             tls: self.tls,
+            max_connections: self.max_connections,
         }
     }
 
     /// Enable TLS using the given [`TlsConfig`].
     pub fn tls(mut self, tls: TlsConfig) -> Self {
         self.tls = Some(tls);
+        self
+    }
+
+    /// Cap the TCP connections this ingress holds at once, in place of the
+    /// ceiling derived from the process's descriptor budget.
+    pub fn max_connections(mut self, max: usize) -> Self {
+        self.max_connections = Some(max.clamp(1, Semaphore::MAX_PERMITS));
         self
     }
 
@@ -1250,6 +1266,9 @@ impl<T: Router, O: OutgoingHandler> IngressBuilder<T, O> {
 
         let listener = TcpListener::bind(self.addr).await?;
         let addr = listener.local_addr()?;
+        let max_connections = self
+            .max_connections
+            .unwrap_or_else(crate::host::quota::default_max_http_ingress_connections);
 
         Ok(Ingress {
             router: Arc::new(self.router),
@@ -1261,6 +1280,7 @@ impl<T: Router, O: OutgoingHandler> IngressBuilder<T, O> {
             shutdown_tx: Arc::new(RwLock::new(None)),
             tls_acceptor,
             listener: Arc::new(tokio::sync::Mutex::new(Some(listener))),
+            connections: ConnectionLimit::new(max_connections),
             meters: Default::default(),
             grpc_tls: OnceLock::new(),
         })
@@ -1348,6 +1368,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         // to the workload based on host header.
         let handler = self.router.clone();
         let guest_meter = self.meters.read().await.guest();
+        let connections = self.connections.clone();
         tokio::spawn(async move {
             if let Err(e) = run_http_server(
                 listener,
@@ -1357,6 +1378,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 &mut shutdown_rx,
                 tls_acceptor,
                 guest_meter,
+                connections,
             )
             .await
             {
@@ -1630,9 +1652,64 @@ const ACCEPT_FAILURE_WINDOW: Duration = Duration::from_secs(1);
 const ACCEPT_RETRY_MIN: Duration = Duration::from_millis(5);
 const ACCEPT_RETRY_MAX: Duration = Duration::from_secs(1);
 
-/// How long a peer has to finish a TLS handshake before its connection is
-/// dropped. A handshake nobody finishes otherwise holds its socket forever.
+/// How often a saturated ingress says so. Reporting each shed connection would
+/// make the log the load problem.
+const SHED_LOG_INTERVAL: Duration = Duration::from_secs(60);
+
+/// How long a peer has to finish a TLS handshake before its connection slot is
+/// taken back.
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The ingress connection ceiling, the permits enforcing it, and the counter
+/// reporting it.
+///
+/// Together rather than separately because a refusal has to be counted where it
+/// is decided: the accept loop is the only place that knows a connection was
+/// offered and turned away.
+#[derive(Clone)]
+pub(crate) struct ConnectionLimit {
+    max: usize,
+    permits: Arc<Semaphore>,
+    offered: opentelemetry::metrics::Counter<u64>,
+    /// Built once. `error.type` marks the refusals inside the one series, so a
+    /// shed rate is a filter on it rather than a second counter to keep in step.
+    shed: Arc<[KeyValue]>,
+}
+
+impl ConnectionLimit {
+    pub(crate) fn new(max: usize) -> Self {
+        Self {
+            max,
+            permits: Arc::new(Semaphore::new(max)),
+            offered: opentelemetry::global::meter("wash-runtime")
+                .u64_counter("http.ingress.connections")
+                .with_description(
+                    "Connections offered to the host's HTTP ingress, whether held or shed",
+                )
+                .build(),
+            shed: Arc::from(vec![KeyValue::new(ERROR_TYPE, "no_capacity")]),
+        }
+    }
+
+    /// Take a slot for an accepted connection, or `None` at the ceiling.
+    ///
+    /// Counted either way, and with no attribute naming who was refused: a
+    /// connection is turned away before its first request names a workload, and
+    /// its peer address is invented by traffic — so there is nothing bounded to
+    /// split the series by.
+    fn take(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        match Arc::clone(&self.permits).try_acquire_owned() {
+            Ok(permit) => {
+                self.offered.add(1, &[]);
+                Some(permit)
+            }
+            Err(_) => {
+                self.offered.add(1, &self.shed);
+                None
+            }
+        }
+    }
+}
 
 /// Configure a freshly accepted connection before it is served.
 ///
@@ -1648,6 +1725,7 @@ fn prepare_accepted_conn(stream: &TcpStream) {
 }
 
 /// HTTP server implementation that routes to workload components
+#[allow(clippy::too_many_arguments)]
 async fn run_http_server<T: Router>(
     listener: TcpListener,
     handler: Arc<T>,
@@ -1656,10 +1734,13 @@ async fn run_http_server<T: Router>(
     shutdown_rx: &mut mpsc::Receiver<()>,
     tls_acceptor: Option<TlsAcceptor>,
     guest_meter: GuestMeter,
+    connections: ConnectionLimit,
 ) -> anyhow::Result<()> {
     let mut failures: u32 = 0;
     let mut window = std::time::Instant::now();
     let mut retry_delay = ACCEPT_RETRY_MIN;
+    let mut shed = 0u64;
+    let mut shed_reported: Option<std::time::Instant> = None;
     loop {
         // A window that ends without tripping the threshold is the loop working
         // again, and is the only thing that clears the pause.
@@ -1691,6 +1772,25 @@ async fn run_http_server<T: Router>(
             } => {
                 match result {
                     Ok((client, client_addr)) => {
+                        // A connection there is no descriptor budget to hold is
+                        // closed now, while closing it is cheap. Holding it
+                        // instead is what exhausts the process's descriptors,
+                        // and a host that cannot accept is a host nothing can
+                        // reach — including its own liveness probe.
+                        let Some(slot) = connections.take() else {
+                            shed += 1;
+                            if shed_reported.is_none_or(|at| at.elapsed() >= SHED_LOG_INTERVAL) {
+                                warn!(
+                                    max_connections = connections.max, shed,
+                                    "HTTP ingress is at its connection ceiling; shedding new connections"
+                                );
+                                shed_reported = Some(std::time::Instant::now());
+                                shed = 0;
+                            }
+                            drop(client);
+                            continue;
+                        };
+
                         debug!(addr = ?client_addr, "new HTTP client connection");
 
                         prepare_accepted_conn(&client);
@@ -1701,6 +1801,9 @@ async fn run_http_server<T: Router>(
                         let handler_clone = handler.clone();
                         let guest_meter = guest_meter.clone();
                         tokio::spawn(async move {
+                            // Held for the connection's life: its descriptor is
+                            // only given back once hyper is done with it.
+                            let _slot = slot;
                             let service = hyper::service::service_fn(move |req| {
                                 let handles = handles_clone.clone();
                                 let service_handlers = service_handlers_clone.clone();
@@ -1718,8 +1821,8 @@ async fn run_http_server<T: Router>(
                             let mut builder = auto::Builder::new(TokioExecutor::new());
                             // The timer is what arms hyper's header-read
                             // timeout; without one a peer that opens a
-                            // connection and sends nothing holds it for as
-                            // long as it likes.
+                            // connection and sends nothing holds its slot for
+                            // as long as it likes.
                             builder
                                 .http1()
                                 .timer(TokioTimer::new())
@@ -1731,8 +1834,8 @@ async fn run_http_server<T: Router>(
 
                             let result = if let Some(acceptor) = tls_acceptor_clone {
                                 // Handle HTTPS connection. Bounded, because a
-                                // handshake nobody finishes holds a socket no
-                                // request will ever release.
+                                // handshake nobody finishes holds a connection
+                                // slot that no request will ever release.
                                 let handshake = tokio::time::timeout(
                                     TLS_HANDSHAKE_TIMEOUT,
                                     acceptor.accept(client),
@@ -2948,6 +3051,55 @@ mod tests {
             ACCEPT_FAILURES_PER_WINDOW > 1,
             "one dequeued-connection error must not pause the listener"
         );
+    }
+
+    /// A host at its ingress ceiling has to keep accepting and close what it
+    /// cannot serve. Leaving the connections queued instead fills the listen
+    /// backlog, and once that is full the kernel drops new handshakes — so a TCP
+    /// liveness probe times out and a running host is killed as unreachable.
+    #[tokio::test]
+    async fn a_saturated_ingress_keeps_accepting() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+
+        let server = tokio::spawn(async move {
+            run_http_server(
+                listener,
+                Arc::new(DevRouter::default()),
+                WorkloadHandles::default(),
+                ServiceHandlers::default(),
+                &mut shutdown_rx,
+                None,
+                Meters::default().guest(),
+                ConnectionLimit::new(1),
+            )
+            .await
+        });
+
+        // Takes the only permit and holds it: nothing reads or writes, so the
+        // server keeps the connection open.
+        let _held = TcpStream::connect(addr).await.unwrap();
+
+        // A real client has its request in flight by the time the ceiling is
+        // checked, so the shed path has to survive unread bytes.
+        let mut shed = TcpStream::connect(addr).await.unwrap();
+        let _ = shed.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        let closed = tokio::time::timeout(Duration::from_secs(5), shed.read(&mut [0u8; 64])).await;
+        match closed.expect("a connection past the ceiling must be closed, not left hanging") {
+            Ok(0) => {}
+            // The kernel answers unread bytes with an RST rather than a FIN.
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
+            Ok(n) => {
+                panic!("the ceiling was not enforced: the shed connection was served {n} bytes")
+            }
+            Err(e) => panic!("expected the server to close the shed connection, got {e:?}"),
+        }
+
+        let _ = shutdown_tx.send(()).await;
+        let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
     }
 
     // --- check_allowed_hosts tests ---

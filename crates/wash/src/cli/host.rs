@@ -124,6 +124,25 @@ pub struct HostCommand {
     #[arg(long = "max-connections", env = "WASH_MAX_CONNECTIONS")]
     pub max_connections: Option<usize>,
 
+    /// Cap on the TCP connections accepted on `--http-addr` at once.
+    ///
+    /// Connections, not requests: a keep-alive connection counts while it sits
+    /// idle, and one HTTP/2 connection counts once however many streams it
+    /// carries. Separate from `--max-connections`, which is what workloads may
+    /// hold, because which workload an inbound connection belongs to is unknown
+    /// until its first request names one; and from
+    /// `--max-inbound-socket-connections-per-workload`, which is a workload's
+    /// own published ports rather than this listener.
+    ///
+    /// Connections past this are closed as soon as they are accepted, so the
+    /// host keeps answering rather than going silent. Defaults to a quarter of
+    /// the process's descriptor limit.
+    #[arg(
+        long = "max-http-ingress-connections",
+        env = "WASH_MAX_HTTP_INGRESS_CONNECTIONS"
+    )]
+    pub max_http_ingress_connections: Option<usize>,
+
     /// Cap on live pooled HTTP and gRPC connections a single workload may
     /// hold, across all authorities it talks to. Idle keep-alive connections
     /// count, so this is really how large a workload's pool may grow.
@@ -547,6 +566,10 @@ impl CliCommand for HostCommand {
             self.core_instances,
         )
         .map_err(|e| anyhow::anyhow!(e))?;
+        anyhow::ensure!(
+            self.max_http_ingress_connections != Some(0),
+            "max_http_ingress_connections must be at least 1"
+        );
 
         // Installed before connect_nats so TLS-enabled NATS clusters have a
         // crypto provider available. Idempotent; also called by Ingress::new.
@@ -801,6 +824,9 @@ impl CliCommand for HostCommand {
 
             let mut ingress_builder = wash_runtime::host::http::Ingress::builder(http_router, addr)
                 .outgoing_handler(outgoing_handler);
+            if let Some(max) = self.max_http_ingress_connections {
+                ingress_builder = ingress_builder.max_connections(max);
+            }
             if let (Some(cert_path), Some(key_path)) = (&self.tls_cert_path, &self.tls_key_path) {
                 let mut tls = wash_runtime::host::http::TlsConfig::new(cert_path, key_path);
                 if let Some(ca) = self.tls_ca_path.as_deref() {
