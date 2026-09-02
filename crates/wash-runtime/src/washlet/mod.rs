@@ -37,6 +37,16 @@ const MAX_CONCURRENT_STARTS: usize = 4;
 /// they had bound anyway.
 pub const COMMAND_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long an aborted command is given to unwind before the host stops
+/// regardless.
+///
+/// Separate from, and shorter than, [`COMMAND_DRAIN_TIMEOUT`]: that one waits
+/// for commands to *finish*, this one only for already-aborted ones to reach an
+/// await and let go. Together they bound the whole shutdown, which has to fit
+/// inside the pod's termination grace period with room left for
+/// `Host::stop` to unbind the plugins.
+pub const COMMAND_ABORT_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// How many starts a host runs at once when nothing sets it.
 ///
 /// Each permitted start ends in a Cranelift compile, and one compile spreads
@@ -358,7 +368,34 @@ impl ClusterHost {
                                 // reach their next await and unwind, or
                                 // `host.stop()` unbinds plugins underneath one
                                 // still binding them.
-                                while commands.join_next().await.is_some() {}
+                                //
+                                // Bounded: an aborted task cancels at its next
+                                // await, and a command inside a synchronous
+                                // compile has none. Waiting it out holds the
+                                // shutdown past the pod's grace period, so
+                                // `host.stop()` never runs at all.
+                                let unwound = tokio::time::timeout(
+                                    COMMAND_ABORT_TIMEOUT,
+                                    async {
+                                        while let Some(finished) = commands.join_next().await {
+                                            // A panic while unwinding still
+                                            // matters: the task may hold a
+                                            // workload id it never released.
+                                            if let Err(e) = finished
+                                                && !e.is_cancelled()
+                                            {
+                                                error!("aborted command task failed: {e}");
+                                            }
+                                        }
+                                    },
+                                )
+                                .await;
+                                if unwound.is_err() {
+                                    warn!(
+                                        "commands still unwinding {COMMAND_ABORT_TIMEOUT:?} after \
+                                         abort; stopping the host without them"
+                                    );
+                                }
                             }
                             return host.stop().await.context("failed to stop host");
                         }
