@@ -14,9 +14,34 @@ use tracing_subscriber::{
     EnvFilter, Layer, Registry, filter::Directive, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
+/// Flushes the OTel exporters, if [`initialize_observability`] installed any.
+///
+/// **Blocks** for up to five seconds per provider — the SDK's own timeout — so
+/// a signal path has to bound it and keep it off the runtime the exporter
+/// drains over. Runs at most once; a no-op when no exporter was installed.
+pub fn flush() {
+    static FLUSHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    // Not a `Once`: `call_once` poisons, so one exporter panicking here would
+    // turn every later flush — including the one `main` makes — into a panic.
+    if FLUSHED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    if let Some(shutdown) = SHUTDOWN.get() {
+        shutdown();
+    }
+}
+
+/// Set once by [`initialize_observability`], so [`flush`] can reach the
+/// providers it built without every exit path having to be handed them.
+static SHUTDOWN: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
+
 /// Initialize observability, setting up console & OpenTelemetry layers.
 ///
-/// Returns a shutdown function that should be called on process exit to flush any remaining spans/logs
+/// Returns a shutdown function that should be called on process exit to flush
+/// any remaining spans/logs. It is [`flush`], which runs at most once — so a
+/// process that already flushed on its way out of a signal handler does not
+/// shut the providers down twice.
 pub fn initialize_observability(
     log_level: Level,
     ansi_colors: bool,
@@ -49,9 +74,8 @@ pub fn initialize_observability(
     if !otel_enabled {
         Registry::default().with(fmt_layer).init();
 
-        // No-op shutdown function
-        let shutdown_fn = || {};
-        return Ok(Box::new(shutdown_fn));
+        // Nothing to flush: `flush` finds no registered shutdown and returns.
+        return Ok(Box::new(flush));
     }
 
     let resource = Resource::builder()
@@ -130,8 +154,9 @@ pub fn initialize_observability(
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );
 
-    // Return a shutdown function to flush providers on exit
-    let shutdown_fn = move || {
+    // Registered rather than only returned: every way this process can end has
+    // to be able to flush, and `main` is not on all of them.
+    let _ = SHUTDOWN.set(Box::new(move || {
         if let Err(e) = tracer_provider.shutdown() {
             eprintln!("failed to shutdown tracer provider: {e}");
         }
@@ -141,9 +166,9 @@ pub fn initialize_observability(
         if let Err(e) = meter_provider.shutdown() {
             eprintln!("failed to shutdown meter provider: {e}");
         }
-    };
+    }));
 
-    Ok(Box::new(shutdown_fn))
+    Ok(Box::new(flush))
 }
 
 /// Helper function to reduce duplication and code size for parsing directives

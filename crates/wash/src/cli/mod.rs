@@ -537,6 +537,7 @@ fn restore_cursor_on_interrupt() {
     INSTALLED.call_once(|| {
         if let Err(e) = ctrlc::set_handler(|| {
             let _ = dialoguer::console::Term::stdout().show_cursor();
+            wash_runtime::observability::flush();
             // Exit with standard SIGINT code (128 + 2)
             std::process::exit(130);
         }) {
