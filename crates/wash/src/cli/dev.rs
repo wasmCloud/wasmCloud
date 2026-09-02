@@ -208,6 +208,11 @@ impl CliCommand for DevCommand {
 
         let http_handler = wash_runtime::host::http::DevRouter::default();
 
+        // Before the ceilings below, each of which is a share of the soft
+        // descriptor limit this leaves in place. `wash dev` applies it for the
+        // same reason `wash host` does: both own their process.
+        wash_runtime::host::quota::raise_descriptor_limit();
+
         // One registry for every surface: HTTP pool, raw sockets, inbound
         // published ports.
         let quotas = dev_config.connection_quotas()?;
