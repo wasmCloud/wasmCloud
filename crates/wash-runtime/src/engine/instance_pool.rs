@@ -543,6 +543,7 @@ impl InstancePool {
     /// The policy this pool was built with, for a dispatch path that keeps its
     /// own warm set (the `wasmcloud:nats` subscriber) but must honour the same
     /// declaration.
+    #[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
     pub(crate) fn policy(&self) -> InstancePolicy {
         self.policy
     }

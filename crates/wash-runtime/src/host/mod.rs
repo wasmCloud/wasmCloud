@@ -188,6 +188,7 @@ pub(crate) trait WorkloadReservation {
     /// Give back an id claimed by [`WorkloadReservation::workload_reserve`]
     /// whose start never began. Does nothing if the id has moved on to another
     /// owner.
+    #[cfg_attr(not(feature = "washlet"), allow(dead_code))]
     fn workload_release(
         &self,
         workload_id: &str,
@@ -1492,7 +1493,9 @@ impl HostBuilder {
         // Trust roots first, before anything this host builds can pull: the
         // host pulls on behalf of every workload, and a bundle that cannot be
         // read is a startup failure rather than a registry that rejects every
-        // pull much later.
+        // pull much later. A host built without `oci` has no registry client
+        // for them to apply to.
+        #[cfg(feature = "oci")]
         crate::oci::set_extra_ca_certificates(&config.oci_ca_paths)
             .context("failed to load the OCI CA certificates in the host config")?;
 
@@ -1581,6 +1584,7 @@ mod tests {
     /// configured once and used much later, so accepting it here would surface
     /// as every pull from that registry failing to verify, far from the typo
     /// that caused it.
+    #[cfg(feature = "oci")]
     #[test]
     fn an_unreadable_oci_ca_bundle_fails_the_build() {
         let err = Host::builder()
