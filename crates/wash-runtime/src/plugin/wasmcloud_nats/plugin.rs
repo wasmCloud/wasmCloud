@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use crate::engine::workload::{ResolvedWorkload, UnresolvedWorkload, WorkloadItem};
-use crate::observability::Meters;
+use crate::observability::{MeterKind, Meters};
 use crate::plugin::bindings::{UNNAMED_BINDING, describe_binding};
 use crate::plugin::{HostPlugin, WitInterfaces, WorkloadFailureSink, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
@@ -85,7 +85,7 @@ impl WasmcloudNats {
         Self {
             tracker: Arc::new(RwLock::new(WorkloadTracker::default())),
             connections: Arc::new(ConnectionRegistry::default()),
-            meters: Default::default(),
+            meters: Arc::new(RwLock::new(Meters::new(MeterKind::Off))),
             lattice_prefixes: Vec::new(),
             failure_sink: arc_swap::ArcSwapOption::empty(),
             memory_budget: None,
