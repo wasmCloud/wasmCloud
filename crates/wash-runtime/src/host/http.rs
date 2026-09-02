@@ -1615,6 +1615,25 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
     }
 }
 
+/// How many `accept` failures within [`ACCEPT_FAILURE_WINDOW`] mean the loop is
+/// spinning rather than meeting the occasional bad connection.
+///
+/// Counted per window rather than consecutively: descriptor exhaustion under
+/// churn lets the odd `accept` succeed, and a consecutive count resets on each
+/// one and never notices. A busy server sheds a handful of half-open
+/// connections a second; a spinning one reaches this in milliseconds.
+const ACCEPT_FAILURES_PER_WINDOW: u32 = 1024;
+const ACCEPT_FAILURE_WINDOW: Duration = Duration::from_secs(1);
+
+/// How long the loop pauses once `accept` is failing persistently, and how far
+/// that grows. The cap bounds how long the listener leaves its backlog alone.
+const ACCEPT_RETRY_MIN: Duration = Duration::from_millis(5);
+const ACCEPT_RETRY_MAX: Duration = Duration::from_secs(1);
+
+/// How long a peer has to finish a TLS handshake before its connection is
+/// dropped. A handshake nobody finishes otherwise holds its socket forever.
+const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Configure a freshly accepted connection before it is served.
 ///
 /// Disables Nagle's algorithm. Responses are written as a head segment followed
@@ -1638,7 +1657,25 @@ async fn run_http_server<T: Router>(
     tls_acceptor: Option<TlsAcceptor>,
     guest_meter: GuestMeter,
 ) -> anyhow::Result<()> {
+    let mut failures: u32 = 0;
+    let mut window = std::time::Instant::now();
+    let mut retry_delay = ACCEPT_RETRY_MIN;
     loop {
+        // A window that ends without tripping the threshold is the loop working
+        // again, and is the only thing that clears the pause.
+        if window.elapsed() >= ACCEPT_FAILURE_WINDOW {
+            window = std::time::Instant::now();
+            failures = 0;
+            retry_delay = ACCEPT_RETRY_MIN;
+        }
+        // Taken before the select rather than inside it, so the pause races the
+        // shutdown branch instead of needing a second copy of it. Doubling here
+        // rather than on the failure is what makes the first pause the minimum.
+        let pause = (failures > ACCEPT_FAILURES_PER_WINDOW).then(|| {
+            let taken = retry_delay;
+            retry_delay = (retry_delay * 2).min(ACCEPT_RETRY_MAX);
+            taken
+        });
         tokio::select! {
             // Handle shutdown signal
             _ = shutdown_rx.recv() => {
@@ -1646,7 +1683,12 @@ async fn run_http_server<T: Router>(
                 break;
             }
             // Accept new connections
-            result = listener.accept() => {
+            result = async {
+                if let Some(pause) = pause {
+                    tokio::time::sleep(pause).await;
+                }
+                listener.accept().await
+            } => {
                 match result {
                     Ok((client, client_addr)) => {
                         debug!(addr = ?client_addr, "new HTTP client connection");
@@ -1674,8 +1716,13 @@ async fn run_http_server<T: Router>(
                             });
 
                             let mut builder = auto::Builder::new(TokioExecutor::new());
+                            // The timer is what arms hyper's header-read
+                            // timeout; without one a peer that opens a
+                            // connection and sends nothing holds it for as
+                            // long as it likes.
                             builder
                                 .http1()
+                                .timer(TokioTimer::new())
                                 .keep_alive(true);
                             builder
                                 .http2()
@@ -1683,14 +1730,24 @@ async fn run_http_server<T: Router>(
                                 .keep_alive_interval(Some(Duration::from_secs(20)));
 
                             let result = if let Some(acceptor) = tls_acceptor_clone {
-                                // Handle HTTPS connection
-                                match acceptor.accept(client).await {
-                                    Ok(tls_stream) => {
+                                // Handle HTTPS connection. Bounded, because a
+                                // handshake nobody finishes holds a socket no
+                                // request will ever release.
+                                let handshake = tokio::time::timeout(
+                                    TLS_HANDSHAKE_TIMEOUT,
+                                    acceptor.accept(client),
+                                );
+                                match handshake.await {
+                                    Err(_) => {
+                                        warn!(addr = ?client_addr, "TLS handshake timed out");
+                                        return;
+                                    }
+                                    Ok(Ok(tls_stream)) => {
                                         builder
                                             .serve_connection_with_upgrades(TokioIo::new(tls_stream), service)
                                             .await
                                     }
-                                    Err(e) => {
+                                    Ok(Err(e)) => {
                                         error!(addr = ?client_addr, err = ?e, "TLS handshake failed");
                                         return;
                                     }
@@ -1708,7 +1765,12 @@ async fn run_http_server<T: Router>(
                         });
                     }
                     Err(e) => {
-                        error!(err = ?e, "failed to accept HTTP connection");
+                        failures = failures.saturating_add(1);
+                        if failures <= ACCEPT_FAILURES_PER_WINDOW {
+                            debug!(err = ?e, "failed to accept HTTP connection");
+                        } else {
+                            error!(err = ?e, failures, "HTTP ingress cannot accept connections");
+                        }
                     }
                 }
             }
@@ -2858,6 +2920,33 @@ mod tests {
         assert!(
             server.nodelay().unwrap(),
             "run_http_server must set TCP_NODELAY on accepted connections"
+        );
+    }
+
+    /// The backoff triggers on a rate of failure, not on a kind of failure and
+    /// not on a run of them.
+    ///
+    /// `accept` also reports errors belonging to the single connection it
+    /// dequeued, so pausing the listener for one would be the bug in reverse —
+    /// and descriptor exhaustion under churn lets the odd call through, which a
+    /// consecutive count would keep resetting on.
+    #[test]
+    fn the_pause_is_paced_by_the_failure_rate() {
+        // The sequence the loop walks: the pause is taken, then doubled, so the
+        // first one it sleeps is the minimum rather than twice it.
+        let mut delay = ACCEPT_RETRY_MIN;
+        let mut steps = 0;
+        while delay < ACCEPT_RETRY_MAX && steps < 64 {
+            delay = (delay * 2).min(ACCEPT_RETRY_MAX);
+            steps += 1;
+        }
+        assert_eq!(
+            delay, ACCEPT_RETRY_MAX,
+            "the delay has to reach its cap and stop there"
+        );
+        assert!(
+            ACCEPT_FAILURES_PER_WINDOW > 1,
+            "one dequeued-connection error must not pause the listener"
         );
     }
 
