@@ -55,6 +55,7 @@ jobs:
             relevant:
               - '.github/workflows/wash.yml'
               - '.github/tool-versions.env'
+              - '.github/scripts/wasmtime-features.mjs'
               - 'crates/**'
               - 'src/**'
               - 'tests/**'
@@ -201,6 +202,12 @@ jobs:
       - name: Check for unused dependencies
         run: |
           cargo machete
+      # Resolves only, no compiling, so it belongs with the other cheap checks
+      # rather than in a build job. It reads the release matrix below for the
+      # targets it covers.
+      - name: Check wasmtime feature set across release targets
+        run: |
+          node .github/scripts/wasmtime-features.mjs
 
   # Build the shipped wash runtime image (DEFAULT features) on arm64 — the
   # primary arch for the e2e gate and one leg of the canary multi-arch
