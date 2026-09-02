@@ -93,6 +93,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "config-callee"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "config-caller"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "cpu-usage-service"
 version = "0.1.0"
 dependencies = [

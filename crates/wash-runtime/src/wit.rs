@@ -46,9 +46,49 @@ impl WitWorld {
             || self.exports.iter().any(|e| e.contains(interface))
     }
 
+    /// Whether this world imports or exports anything of `interface`'s package
+    /// at a compatible version.
+    fn mentions_package(&self, interface: &WitInterface) -> bool {
+        self.imports.iter().any(|im| interface.same_package(im))
+            || self.exports.iter().any(|ex| interface.same_package(ex))
+    }
+
+    /// Whether this world *uses* `interface` — imports or exports at least one
+    /// of the interfaces the entry names.
+    ///
+    /// The question a workload item asks of a host interface entry. One entry
+    /// is shared by every item, and a manifest may give a package only one
+    /// unnamed entry, so an entry names what the workload *collectively* uses
+    /// and an item that uses a subset of it still needs the plugin serving it.
+    ///
+    /// The provider side asks [`WitWorld::includes_bidirectional`] instead: a
+    /// plugin that serves part of an entry must not claim it, or the rest is
+    /// left bound by nobody.
+    pub fn uses(&self, interface: &WitInterface) -> bool {
+        // An entry naming no interface stands for its whole package, so a world
+        // uses it by using the package at all — never by saying nothing about
+        // it, which would make such an entry everyone's.
+        if interface.interfaces.is_empty() {
+            return self.mentions_package(interface);
+        }
+        interface.interfaces.iter().any(|i| {
+            self.imports
+                .iter()
+                .any(|im| interface.same_package(im) && im.interfaces.contains(i))
+                || self
+                    .exports
+                    .iter()
+                    .any(|ex| interface.same_package(ex) && ex.interfaces.contains(i))
+        })
+    }
+
     /// This function checks if the world includes a specific interface. This is
     /// different than [`WitWorld::includes`] because it considers that in one
     /// [`WitInterface`] there may be both imports and exports.
+    ///
+    /// Every interface the entry names has to be covered. Asked of a plugin's
+    /// world, that is "can this plugin serve the whole entry"; asked of a
+    /// workload item's world it is too strict — see [`WitWorld::uses`].
     pub fn includes_bidirectional(&self, interface: &WitInterface) -> bool {
         // Each requested interface must be covered by *some* import or export of
         // the same package (see [`WitInterface::same_package`]). The label/name
@@ -58,6 +98,13 @@ impl WitWorld {
         // multiple entries (e.g. `wasmcloud:postgres` imports `types` unnamed and
         // `query` under several labels), so check every entry per interface
         // rather than binding to the first package match.
+        //
+        // An entry naming no interface still has to be a package this world
+        // knows: covering everything vacuously would match every plugin, and
+        // the first by id would claim a package it does not serve.
+        if interface.interfaces.is_empty() {
+            return self.mentions_package(interface);
+        }
         interface.interfaces.iter().all(|i| {
             self.imports
                 .iter()
@@ -976,5 +1023,44 @@ mod tests {
         let prepared =
             create_interface_with_version("wasmcloud", "postgres", &["prepared"], "0.1.1");
         assert!(!world.includes_bidirectional(&prepared));
+    }
+
+    /// A host entry names what a whole workload uses, so a component using one
+    /// of its interfaces uses the entry — while a plugin has to serve all of
+    /// them to claim it.
+    #[test]
+    fn uses_asks_for_any_interface_and_includes_asks_for_all() {
+        let component = WitWorld {
+            imports: HashSet::from([create_interface("wasi", "keyvalue", &["store"])]),
+            exports: HashSet::new(),
+        };
+        let entry = create_interface("wasi", "keyvalue", &["store", "atomics"]);
+
+        assert!(
+            component.uses(&entry),
+            "the component imports one of the entry's interfaces"
+        );
+        assert!(
+            !component.includes_bidirectional(&entry),
+            "it does not cover the whole entry, which is what a provider must do"
+        );
+
+        // A package the world never mentions is neither used nor covered.
+        let unrelated = create_interface("wasi", "blobstore", &["blobstore"]);
+        assert!(!component.uses(&unrelated));
+        assert!(!component.includes_bidirectional(&unrelated));
+
+        // An entry naming no interface stands for its whole package.
+        let package_only = create_interface("wasi", "keyvalue", &[]);
+        assert!(component.uses(&package_only));
+
+        // It is still that package's, not everyone's: a world saying nothing
+        // about it neither uses nor covers it. Otherwise such an entry matches
+        // every world it is offered to — every plugin included, where the first
+        // by id would claim a package it does not serve.
+        let elsewhere = create_interface("wasi", "blobstore", &[]);
+        assert!(!component.uses(&elsewhere));
+        assert!(!component.includes_bidirectional(&elsewhere));
+        assert!(component.includes_bidirectional(&package_only));
     }
 }

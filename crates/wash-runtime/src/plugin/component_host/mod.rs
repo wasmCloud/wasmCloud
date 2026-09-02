@@ -522,6 +522,13 @@ impl ComponentHostPlugin {
             if !interfaces.contains(&called.wit.namespace, &called.wit.package, &iface_names) {
                 continue;
             }
+            // An entry naming its package alone matches every interface in it,
+            // this one included, so an item may be here without touching the
+            // interface at all. Only an item that does has anything to answer
+            // for below.
+            if !item.world().uses(&called.wit) {
+                continue;
+            }
             anyhow::ensure!(
                 item.world()
                     .exports
