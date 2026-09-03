@@ -294,6 +294,14 @@ pub struct Engine {
     // wasmtime engine
     pub(crate) inner: wasmtime::Engine,
     pub(crate) cache: Cache<CacheKey, CacheValue>,
+    /// Compiles that actually ran on this engine.
+    ///
+    /// Test-only, and there is no way to do without it: what the digest-keyed
+    /// cache buys is that a herd of replicas shares one compile, and from
+    /// outside, one compile and fifteen racing to insert the same key leave
+    /// exactly the same single cache entry.
+    #[cfg(test)]
+    pub(crate) compiles: Arc<std::sync::atomic::AtomicUsize>,
     /// Host-level socket policy every workload on this engine inherits:
     /// enforcement mode, address ranges, whether the host-loopback door is open,
     /// the host's port table, and the connection budget. The workload-level half
@@ -709,8 +717,12 @@ impl Engine {
                 let bytes_ref = bytes.as_ref();
                 let heap = self.effective_heap_memory();
 
+                #[cfg(test)]
+                let compiles = Arc::clone(&self.compiles);
                 self.cache
                     .try_get_with(key, || {
+                        #[cfg(test)]
+                        compiles.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         Component::new(inner, bytes_ref)
                             .map_err(|e| explain_compile_failure(e, heap))
                             .context("failed to compile component from bytes")
@@ -1289,6 +1301,8 @@ impl EngineBuilder {
         Ok(Engine {
             inner,
             cache,
+            #[cfg(test)]
+            compiles: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             socket_policy: self.socket_policy.unwrap_or_default(),
             host_memory,
             guest_memory: {
@@ -1670,6 +1684,56 @@ mod tests {
 
         let engine = Engine::builder().build().expect("engine should build");
         Component::new(&engine.inner, &bytes).expect("map component should compile");
+    }
+
+    // A scheduler placing N replicas of one image sends N starts carrying one
+    // digest, and the herd is affordable only because they share a compile.
+    // Keying the cache on anything that differs between replicas — a workload
+    // id, a component name — would put a Cranelift compile behind every one of
+    // them, and nothing in a deployment's behaviour would say so.
+    #[test]
+    fn a_herd_of_replicas_shares_one_compiled_component() {
+        const HERD: usize = 15;
+        const DIGEST: &str = "sha256:one-image";
+
+        let bytes = wat::parse_str("(component)").expect("component should assemble");
+        let engine = Engine::builder().build().expect("engine should build");
+
+        std::thread::scope(|scope| {
+            for _ in 0..HERD {
+                scope.spawn(|| {
+                    engine
+                        .load_component_bytes(&bytes, Some(DIGEST))
+                        .map(|_| ())
+                        .expect("every member of the herd should load");
+                });
+            }
+        });
+
+        // The claim is that the herd shares a compile, not merely that it ends
+        // up with one entry: a loader that compiled per caller and let them
+        // race to insert the same key would leave one entry too, and this test
+        // would have said nothing about the cost it exists to prevent.
+        assert_eq!(
+            engine.compiles.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "{HERD} replicas of one image ran more than one compile"
+        );
+
+        engine.cache.run_pending_tasks();
+        assert_eq!(
+            engine.cache.entry_count(),
+            1,
+            "{HERD} replicas of one image left more than one cache entry"
+        );
+
+        // A hit is served without looking at the bytes, so bytes that could
+        // never compile are what prove the entry came back from the cache
+        // rather than from a compile of its own.
+        engine
+            .load_component_bytes(b"definitely not a wasm component", Some(DIGEST))
+            .map(|_| ())
+            .expect("a digest the herd already compiled should be served from the cache");
     }
 
     // A compile failure that goes through the cache reports everything the

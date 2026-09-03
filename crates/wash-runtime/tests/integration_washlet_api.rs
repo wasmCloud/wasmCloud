@@ -572,6 +572,88 @@ async fn concurrent_workload_starts_are_bounded() -> Result<()> {
     harness.shutdown().await
 }
 
+/// The shape a scheduler actually produces: a whole deployment's worth of
+/// `workload.start` messages landing together, several times over the cap. The
+/// permit holds most of them back, and what has to survive the wait is the
+/// host itself — it stays heard from, it answers, and it has claimed every id
+/// in the burst, so a stop arriving for a still-queued workload finds it.
+///
+/// The host's own behaviour once a herd is let through — no permit, every
+/// start running at once — is `integration_thundering_herd`, which drives
+/// `HostApi` directly because this permit is exactly what stops that herd
+/// forming here.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn a_burst_of_starts_keeps_the_host_answering() -> Result<()> {
+    const BURST: usize = 15;
+    const LIMIT: usize = 2;
+    const HEARTBEAT: Duration = Duration::from_millis(200);
+
+    let mut harness = TestHarness::builder()
+        .with_heartbeat_interval(HEARTBEAT)
+        .with_max_concurrent_starts(LIMIT)
+        .start()
+        .await?;
+    let registry = StallingRegistry::bind().await?;
+
+    let ids: Vec<String> = (0..BURST)
+        .map(|i| format!("washlet-api-e2e-burst-{i}"))
+        .collect();
+    // Every one of them hangs on its pull, so the whole burst is outstanding at
+    // once: `LIMIT` holding permits, the rest queued behind them.
+    let inflight: Vec<_> = ids
+        .iter()
+        .map(|id| registry.spawn_start(&harness, id))
+        .collect();
+
+    wait_for(Duration::from_secs(30), || registry.reached() >= LIMIT)
+        .await
+        .context("the permitted starts never reached the registry")?;
+    let reached = registry.reached();
+    assert!(
+        reached <= LIMIT,
+        "{reached} of a {BURST}-start burst reached the registry at once, past the cap of {LIMIT}"
+    );
+
+    // Drop the heartbeats published before the burst: they sit in the
+    // subscriber's buffer and would count toward the window on their own.
+    while let Ok(Some(_)) =
+        tokio::time::timeout(Duration::from_millis(50), harness.heartbeat_sub.next()).await
+    {}
+
+    let window = HEARTBEAT * 6;
+    let deadline = tokio::time::Instant::now() + window;
+    let mut heard = 0usize;
+    while let Ok(Some(_)) = tokio::time::timeout_at(deadline, harness.heartbeat_sub.next()).await {
+        heard += 1;
+    }
+    assert!(
+        heard >= 3,
+        "only {heard} heartbeats in {window:?} while a {BURST}-start burst was outstanding; \
+         the operator reaps a host it stops hearing from"
+    );
+
+    // Queued behind a permit is still claimed. Every id in the burst has to
+    // report as something other than NOT_FOUND, because NOT_FOUND is what tells
+    // the operator a teardown is already complete.
+    for id in &ids {
+        let status = tokio::time::timeout(Duration::from_secs(5), harness.status(id))
+            .await
+            .with_context(|| format!("status for {id} queued behind the burst"))??;
+        assert_ne!(
+            status.workload_state(),
+            v2::WorkloadState::NotFound,
+            "{id} was not claimed while its start was queued: {}",
+            status.message
+        );
+    }
+
+    for task in inflight {
+        task.abort();
+    }
+    harness.shutdown().await
+}
+
 /// A start waiting for a concurrency permit has claimed its id too. The wait is
 /// time like any other in which a stop can arrive, and a stop that finds no
 /// workload tells the operator the teardown is done — so the record goes while
