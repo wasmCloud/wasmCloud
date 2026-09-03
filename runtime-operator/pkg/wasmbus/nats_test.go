@@ -17,6 +17,13 @@ func TestNatsConnect(t *testing.T) {
 		defer nc.Close()
 	})
 	t.Run("error", func(t *testing.T) {
+		// Shortened from the deployment default: with nothing ever going to
+		// answer, this subtest would otherwise sit out the whole startup-race
+		// window. What the window itself does is TestNatsConnectWaitsOutAStartupRace.
+		restore := NatsInitialConnectWindow
+		NatsInitialConnectWindow = 100 * time.Millisecond
+		defer func() { NatsInitialConnectWindow = restore }()
+
 		_, err := NatsConnect(NatsDefaultURL)
 		if err == nil {
 			t.Fatal("expected error")
