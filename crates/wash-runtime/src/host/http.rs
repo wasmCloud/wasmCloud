@@ -27,6 +27,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
+use std::sync::atomic::AtomicBool;
 
 use crate::engine::abandon::{AbandonFlag, AbandonOnDrop, DispatchedCall};
 use crate::host::allowed_hosts::AllowedHost;
@@ -1311,6 +1312,12 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
         self.addr
     }
 
+    /// This ingress's connection ceiling, to register with the probe listener
+    /// as a reason the host may be not-ready.
+    pub fn connection_limit(&self) -> ConnectionLimit {
+        self.connections.clone()
+    }
+
     /// The h2 (ALPN) variant of the outgoing handler's client TLS
     /// configuration, used by the gRPC egress fast path. Derived once on the
     /// first gRPC request so the per-request `ClientConfig` clone is avoided
@@ -1369,6 +1376,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         let handler = self.router.clone();
         let guest_meter = self.meters.read().await.guest();
         let connections = self.connections.clone();
+        let stopped = AcceptingGuard(connections.clone());
         tokio::spawn(async move {
             if let Err(e) = run_http_server(
                 listener,
@@ -1384,6 +1392,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
             {
                 error!(err = ?e, addr = ?addr, "HTTP server error");
             }
+            drop(stopped);
         });
         Ok(())
     }
@@ -1645,6 +1654,13 @@ const SHED_LOG_INTERVAL: Duration = Duration::from_secs(60);
 /// taken back.
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long an accepted connection has to produce its first request.
+///
+/// Generous, because it also covers a client that connects ahead of the traffic
+/// it is about to send. What it is not is unbounded, which is what deciding a
+/// connection's protocol otherwise is.
+const FIRST_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// The ingress connection ceiling, the permits enforcing it, and the counter
 /// reporting it.
 ///
@@ -1652,9 +1668,13 @@ const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// is decided: the accept loop is the only place that knows a connection was
 /// offered and turned away.
 #[derive(Clone)]
-pub(crate) struct ConnectionLimit {
+pub struct ConnectionLimit {
     max: usize,
     permits: Arc<Semaphore>,
+    /// Cleared when the accept loop returns. A ceiling with every permit free is
+    /// indistinguishable from a listener that stopped accepting, and the second
+    /// is the more urgent of the two.
+    accepting: Arc<AtomicBool>,
     offered: opentelemetry::metrics::Counter<u64>,
     /// Built once. `error.type` marks the refusals inside the one series, so a
     /// shed rate is a filter on it rather than a second counter to keep in step.
@@ -1662,10 +1682,11 @@ pub(crate) struct ConnectionLimit {
 }
 
 impl ConnectionLimit {
-    pub(crate) fn new(max: usize) -> Self {
+    pub fn new(max: usize) -> Self {
         Self {
             max,
             permits: Arc::new(Semaphore::new(max)),
+            accepting: Arc::new(AtomicBool::new(true)),
             offered: opentelemetry::global::meter("wash-runtime")
                 .u64_counter("http.ingress.connections")
                 .with_description(
@@ -1676,12 +1697,16 @@ impl ConnectionLimit {
         }
     }
 
+    /// Record that the accept loop is no longer running.
+    fn stopped_accepting(&self) {
+        self.accepting
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Take a slot for an accepted connection, or `None` at the ceiling.
     ///
-    /// Counted either way, and with no attribute naming who was refused: a
-    /// connection is turned away before its first request names a workload, and
-    /// its peer address is invented by traffic — so there is nothing bounded to
-    /// split the series by.
+    /// Counted either way, with no attribute naming who was refused: a
+    /// connection is turned away before its first request names a workload.
     fn take(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
         match Arc::clone(&self.permits).try_acquire_owned() {
             Ok(permit) => {
@@ -1693,6 +1718,49 @@ impl ConnectionLimit {
                 None
             }
         }
+    }
+}
+
+impl std::fmt::Debug for ConnectionLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectionLimit")
+            .field("max", &self.max)
+            .field("available", &self.permits.available_permits())
+            .finish()
+    }
+}
+
+/// A full ingress is a reason to stop being sent work, and not a reason to be
+/// restarted.
+///
+/// Shedding keeps the host reachable, which means it keeps passing a TCP probe
+/// — so without this its endpoint stays in the Service and traffic keeps
+/// arriving for it to refuse. Readiness is what moves that traffic to a replica
+/// with capacity.
+impl crate::host::probes::ReadinessCheck for ConnectionLimit {
+    fn name(&self) -> &'static str {
+        if self.accepting.load(std::sync::atomic::Ordering::Relaxed) {
+            "http_ingress_saturated"
+        } else {
+            "http_ingress_stopped"
+        }
+    }
+
+    fn ready(&self) -> bool {
+        self.accepting.load(std::sync::atomic::Ordering::Relaxed)
+            && self.permits.available_permits() > 0
+    }
+}
+
+/// Clears [`ConnectionLimit`]'s accepting flag however the accept loop ends.
+///
+/// A guard rather than a statement after the await: a panicking task unwinds
+/// past the statement, leaving readiness reporting a healthy idle host.
+struct AcceptingGuard(ConnectionLimit);
+
+impl Drop for AcceptingGuard {
+    fn drop(&mut self) {
+        self.0.stopped_accepting();
     }
 }
 
@@ -1775,7 +1843,10 @@ async fn run_http_server<T: Router>(
                             // Held for the connection's life: its descriptor is
                             // only given back once hyper is done with it.
                             let _slot = slot;
+                            let requested = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                            let first_request = Arc::clone(&requested);
                             let service = hyper::service::service_fn(move |req| {
+                                first_request.store(true, std::sync::atomic::Ordering::Relaxed);
                                 let handles = handles_clone.clone();
                                 let service_handlers = service_handlers_clone.clone();
                                 let handler = handler_clone.clone();
@@ -1790,10 +1861,10 @@ async fn run_http_server<T: Router>(
                             });
 
                             let mut builder = auto::Builder::new(TokioExecutor::new());
-                            // The timer is what arms hyper's header-read
-                            // timeout; without one a peer that opens a
-                            // connection and sends nothing holds its slot for
-                            // as long as it likes.
+                            // Arms hyper's own header-read timeout, which
+                            // bounds a peer dribbling headers once its protocol
+                            // is known. Deciding that protocol is bounded
+                            // separately, below.
                             builder
                                 .http1()
                                 .timer(TokioTimer::new())
@@ -1803,7 +1874,8 @@ async fn run_http_server<T: Router>(
                                 .timer(TokioTimer::new())
                                 .keep_alive_interval(Some(Duration::from_secs(20)));
 
-                            let result = if let Some(acceptor) = tls_acceptor_clone {
+                            let serve = async {
+                            if let Some(acceptor) = tls_acceptor_clone {
                                 // Handle HTTPS connection. Bounded, because a
                                 // handshake nobody finishes holds a connection
                                 // slot that no request will ever release.
@@ -1814,7 +1886,7 @@ async fn run_http_server<T: Router>(
                                 match handshake.await {
                                     Err(_) => {
                                         warn!(addr = ?client_addr, "TLS handshake timed out");
-                                        return;
+                                        Ok(())
                                     }
                                     Ok(Ok(tls_stream)) => {
                                         builder
@@ -1823,7 +1895,7 @@ async fn run_http_server<T: Router>(
                                     }
                                     Ok(Err(e)) => {
                                         error!(addr = ?client_addr, err = ?e, "TLS handshake failed");
-                                        return;
+                                        Ok(())
                                     }
                                 }
                             } else {
@@ -1831,6 +1903,27 @@ async fn run_http_server<T: Router>(
                                 builder
                                     .serve_connection_with_upgrades(TokioIo::new(client), service)
                                     .await
+                            }
+                            };
+
+                            // A connection earns its slot by asking for
+                            // something: sniffing its protocol is bounded by
+                            // nothing, so a peer sending half an HTTP/2 preface
+                            // would hold one forever.
+                            let mut serve = std::pin::pin!(serve);
+                            let mut deadline = std::pin::pin!(tokio::time::sleep(FIRST_REQUEST_TIMEOUT));
+                            let mut expired = false;
+                            let result = loop {
+                                tokio::select! {
+                                    result = &mut serve => break result,
+                                    () = &mut deadline, if !expired => {
+                                        expired = true;
+                                        if !requested.load(std::sync::atomic::Ordering::Relaxed) {
+                                            debug!(addr = ?client_addr, "closing a connection that sent no request");
+                                            return;
+                                        }
+                                    }
+                                }
                             };
 
                             if let Err(e) = result {
@@ -3034,7 +3127,12 @@ mod tests {
         match closed.expect("a connection past the ceiling must be closed, not left hanging") {
             Ok(0) => {}
             // The kernel answers unread bytes with an RST rather than a FIN.
-            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
+            // Windows reports that as `ConnectionAborted` (WSAECONNABORTED).
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                ) => {}
             Ok(n) => {
                 panic!("the ceiling was not enforced: the shed connection was served {n} bytes")
             }
@@ -3043,6 +3141,69 @@ mod tests {
 
         let _ = shutdown_tx.send(()).await;
         let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
+    }
+
+    /// Wait for the ingress to reach `want` free permits, or fail saying what it
+    /// reached instead. Bounded well past `FIRST_REQUEST_TIMEOUT` so a paused
+    /// clock advances through the deadline under test.
+    async fn await_permits(limit: &ConnectionLimit, want: usize, why: &str) {
+        for _ in 0..2_000 {
+            if limit.permits.available_permits() == want {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!(
+            "{why}: permits stayed at {}",
+            limit.permits.available_permits()
+        );
+    }
+
+    /// A connection that never asks for anything must give its slot back.
+    ///
+    /// hyper decides h1 vs h2 by reading up to 24 preface bytes, and that read
+    /// has no timeout of its own — a peer sending nothing, or half a preface,
+    /// parks there. Holding a ceiling slot the whole time turns a handful of
+    /// silent peers into a host that reports itself full, which the readiness
+    /// check then reports to Kubernetes as a reason to take it out of service.
+    #[tokio::test(start_paused = true)]
+    async fn a_connection_that_never_speaks_gives_its_slot_back() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (_shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+        let limit = ConnectionLimit::new(1);
+
+        let served = limit.clone();
+        tokio::spawn(async move {
+            run_http_server(
+                listener,
+                Arc::new(DevRouter::default()),
+                WorkloadHandles::default(),
+                ServiceHandlers::default(),
+                &mut shutdown_rx,
+                None,
+                Meters::default().guest(),
+                served,
+            )
+            .await
+        });
+
+        // Half an HTTP/2 preface: enough that the connection is not idle, not
+        // enough for hyper to decide what it is.
+        let mut silent = TcpStream::connect(addr).await.unwrap();
+        silent.write_all(b"PRI * HTTP/2.0").await.unwrap();
+
+        // Polled rather than slept on: the paused clock advances the moment this
+        // task idles, which can be before the OS has delivered accept readiness.
+        await_permits(&limit, 0, "the silent connection should hold the only slot").await;
+        await_permits(
+            &limit,
+            1,
+            "a connection that sent no request must not hold its slot forever",
+        )
+        .await;
     }
 
     // --- check_allowed_hosts tests ---
