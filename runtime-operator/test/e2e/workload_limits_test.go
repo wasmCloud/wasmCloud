@@ -517,7 +517,7 @@ func probeOnce(host string) (sleeperReply, error) {
 
 func probeWith(client *http.Client, host string) (sleeperReply, error) {
 	var reply sleeperReply
-	req, err := http.NewRequest(http.MethodGet, "http://localhost:80/", nil)
+	req, err := http.NewRequest(http.MethodGet, gatewayURL("/"), nil)
 	if err != nil {
 		return reply, err
 	}
