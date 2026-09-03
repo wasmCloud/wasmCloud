@@ -14,6 +14,16 @@ use tracing::{debug, error, info, instrument, warn};
 pub const HOST_API_PREFIX: &str = "runtime.host";
 pub const OPERATOR_API_PREFIX: &str = "runtime.operator";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+
+/// How long the command loop may go quiet before it counts as stopped rather
+/// than slow.
+///
+/// Three of whatever interval the host actually heartbeats on: the loop turns
+/// at least once per interval, and a restart costs every workload on the host,
+/// so this must not fire on one that is merely behind.
+pub fn liveness_silence(heartbeat_interval: Duration) -> Duration {
+    heartbeat_interval * 3
+}
 /// Most `workload.start` requests a host pulls and compiles at once, however
 /// many cores it has. Past this the images held in memory cost more than the
 /// extra parallelism buys.
@@ -68,9 +78,26 @@ pub struct ClusterHostBuilder {
     cleanup_age: Option<Duration>,
     host_config: Option<HostConfig>,
     max_concurrent_starts: Option<usize>,
+    liveness: Option<Arc<crate::host::probes::Liveness>>,
 }
 
 impl ClusterHostBuilder {
+    /// The interval this host will actually heartbeat on, resolved.
+    ///
+    /// Public so a caller sizing a liveness bound reads the number the host was
+    /// built with rather than restating a default that can move underneath it.
+    pub fn heartbeat_interval(&self) -> Duration {
+        self.heartbeat_interval.unwrap_or(HEARTBEAT_INTERVAL)
+    }
+
+    /// Beat `liveness` every time the command loop turns, so `/livez` answers
+    /// from whether this host is still servicing its control plane rather than
+    /// from whether a socket accepted.
+    pub fn with_liveness(mut self, liveness: Arc<crate::host::probes::Liveness>) -> Self {
+        self.liveness = Some(liveness);
+        self
+    }
+
     pub fn with_host_group(mut self, host_group: impl AsRef<str>) -> Self {
         self.host_group = Some(host_group.as_ref().into());
         self
@@ -221,6 +248,7 @@ impl ClusterHostBuilder {
             max_concurrent_starts: self
                 .max_concurrent_starts
                 .unwrap_or_else(default_max_concurrent_starts),
+            liveness: self.liveness,
         })
     }
 }
@@ -232,6 +260,7 @@ pub struct ClusterHost {
     cleanup_interval: Duration,
     cleanup_age: Duration,
     max_concurrent_starts: usize,
+    liveness: Option<Arc<crate::host::probes::Liveness>>,
 }
 
 impl ClusterHost {
@@ -254,6 +283,7 @@ impl ClusterHost {
         let heartbeat_interval = self.heartbeat_interval;
         let cleanup_interval = self.cleanup_interval;
         let max_concurrent_starts = self.max_concurrent_starts;
+        let liveness = self.liveness.clone();
         let host_id = host.id().to_string();
         let host = host.clone();
 
@@ -293,6 +323,13 @@ impl ClusterHost {
                 let mut oci_cleanup_timer = tokio::time::interval(cleanup_interval);
 
                 loop {
+                    // Every turn, whichever branch woke it. The heartbeat timer
+                    // alone guarantees one per interval, so silence here means
+                    // the loop itself has stopped — which is what `/livez`
+                    // reports and the only thing worth a restart.
+                    if let Some(liveness) = &liveness {
+                        liveness.beat();
+                    }
                     tokio::select! {
                         // Shutdown signal
                         _ = &mut one_shot_rx => {
