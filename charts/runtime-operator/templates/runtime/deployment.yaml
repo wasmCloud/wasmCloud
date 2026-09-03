@@ -231,6 +231,41 @@ spec:
             - "--wasmcloud-nats-url={{ . }}"
             {{- end }}
             - "--oci-cache-dir=/oci-cache"
+            {{- /* `networking` is the host's half of every two-sided grant, plus
+                   the ceilings it enforces alone. A key is rendered only when
+                   the values file sets it, so an unset one keeps the host's own
+                   default rather than having the chart restate it — which
+                   matters for the derived ceilings, where "unset" and "the same
+                   number typed out" mean different things downstream. */}}
+            {{- with .networking }}
+            {{- if .allowHostLoopback }}
+            - "--allow-host-loopback"
+            {{- end }}
+            {{- with .socketEgress }}
+            - "--socket-egress={{ . }}"
+            {{- end }}
+            {{- if hasKey . "denySpecialRanges" }}
+            - "--deny-special-ranges={{ .denySpecialRanges }}"
+            {{- end }}
+            {{- if .denyPrivateRanges }}
+            - "--deny-private-ranges"
+            {{- end }}
+            {{- with .maxConnections }}
+            - "--max-connections={{ . }}"
+            {{- end }}
+            {{- with .maxHttpIngressConnections }}
+            - "--max-http-ingress-connections={{ . }}"
+            {{- end }}
+            {{- with .maxOutboundHttpConnectionsPerWorkload }}
+            - "--max-outbound-http-connections-per-workload={{ . }}"
+            {{- end }}
+            {{- with .maxOutboundSocketConnectionsPerWorkload }}
+            - "--max-outbound-socket-connections-per-workload={{ . }}"
+            {{- end }}
+            {{- with .maxInboundSocketConnectionsPerWorkload }}
+            - "--max-inbound-socket-connections-per-workload={{ . }}"
+            {{- end }}
+            {{- end }}
             {{- if and (.http) (.http.enabled) }}
             - "--http-addr=0.0.0.0:{{ .http.port }}"
             {{- if and ($top.Values.global.tls.enabled) (.http.tls) (.http.tls.enabled) }}
