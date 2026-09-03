@@ -237,7 +237,7 @@ var _ = Describe("Manager", Ordered, func() {
 				cmd := exec.Command("curl", "-s", "-o", "/dev/null",
 					"-w", "%{http_code}",
 					"-H", "Host: hello.localhost.direct",
-					"http://localhost:80")
+					gatewayURL(""))
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(Equal("200"))
@@ -329,7 +329,7 @@ var _ = Describe("Manager", Ordered, func() {
 				cmd := exec.Command("curl", "-s", "-o", "/dev/null",
 					"-w", "%{http_code}",
 					"-H", "Host: hello-workload.default",
-					"http://localhost:80")
+					gatewayURL(""))
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(Equal("200"))
