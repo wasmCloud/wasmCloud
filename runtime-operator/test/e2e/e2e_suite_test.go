@@ -328,6 +328,20 @@ func registryRef(name string) string {
 	return fmt.Sprintf("oci-registry.%s.svc/fixtures/%s:%s", namespace, name, registryImageTag)
 }
 
+// gatewayURL builds a URL for `path` against the gateway's NodePort as
+// published on this host.
+//
+// 80 is what deploy/kind/kind-config.yaml maps and what CI uses. It is a
+// variable because a kind cluster brought up alongside another that already
+// holds 80 has to map it elsewhere, and a hard-coded 80 then sends every HTTP
+// spec to whichever cluster got there first — which answers, so the specs fail
+// against a stranger rather than reporting the collision.
+func gatewayURL(path string) string {
+	return fmt.Sprintf("http://localhost:%s%s", gatewayHostPort, path)
+}
+
+var gatewayHostPort = envOrDefault("E2E_GATEWAY_HOST_PORT", "80")
+
 // envOrDefault returns the env var value, or def when unset/empty.
 func envOrDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
