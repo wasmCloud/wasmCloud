@@ -1637,21 +1637,6 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
     }
 }
 
-/// How many `accept` failures within [`ACCEPT_FAILURE_WINDOW`] mean the loop is
-/// spinning rather than meeting the occasional bad connection.
-///
-/// Counted per window rather than consecutively: descriptor exhaustion under
-/// churn lets the odd `accept` succeed, and a consecutive count resets on each
-/// one and never notices. A busy server sheds a handful of half-open
-/// connections a second; a spinning one reaches this in milliseconds.
-const ACCEPT_FAILURES_PER_WINDOW: u32 = 1024;
-const ACCEPT_FAILURE_WINDOW: Duration = Duration::from_secs(1);
-
-/// How long the loop pauses once `accept` is failing persistently, and how far
-/// that grows. The cap bounds how long the listener leaves its backlog alone.
-const ACCEPT_RETRY_MIN: Duration = Duration::from_millis(5);
-const ACCEPT_RETRY_MAX: Duration = Duration::from_secs(1);
-
 /// How often a saturated ingress says so. Reporting each shed connection would
 /// make the log the load problem.
 const SHED_LOG_INTERVAL: Duration = Duration::from_secs(60);
@@ -1736,27 +1721,13 @@ async fn run_http_server<T: Router>(
     guest_meter: GuestMeter,
     connections: ConnectionLimit,
 ) -> anyhow::Result<()> {
-    let mut failures: u32 = 0;
-    let mut window = std::time::Instant::now();
-    let mut retry_delay = ACCEPT_RETRY_MIN;
+    let mut backoff = crate::host::accept::AcceptBackoff::default();
     let mut shed = 0u64;
     let mut shed_reported: Option<std::time::Instant> = None;
     loop {
-        // A window that ends without tripping the threshold is the loop working
-        // again, and is the only thing that clears the pause.
-        if window.elapsed() >= ACCEPT_FAILURE_WINDOW {
-            window = std::time::Instant::now();
-            failures = 0;
-            retry_delay = ACCEPT_RETRY_MIN;
-        }
         // Taken before the select rather than inside it, so the pause races the
-        // shutdown branch instead of needing a second copy of it. Doubling here
-        // rather than on the failure is what makes the first pause the minimum.
-        let pause = (failures > ACCEPT_FAILURES_PER_WINDOW).then(|| {
-            let taken = retry_delay;
-            retry_delay = (retry_delay * 2).min(ACCEPT_RETRY_MAX);
-            taken
-        });
+        // shutdown branch instead of needing a second copy of it.
+        let pause = backoff.pause();
         tokio::select! {
             // Handle shutdown signal
             _ = shutdown_rx.recv() => {
@@ -1868,11 +1839,10 @@ async fn run_http_server<T: Router>(
                         });
                     }
                     Err(e) => {
-                        failures = failures.saturating_add(1);
-                        if failures <= ACCEPT_FAILURES_PER_WINDOW {
-                            debug!(err = ?e, "failed to accept HTTP connection");
+                        if backoff.failed(&e) {
+                            error!(err = ?e, failures = backoff.failures(), "HTTP ingress cannot accept connections");
                         } else {
-                            error!(err = ?e, failures, "HTTP ingress cannot accept connections");
+                            debug!(err = ?e, "failed to accept HTTP connection");
                         }
                     }
                 }
@@ -3023,33 +2993,6 @@ mod tests {
         assert!(
             server.nodelay().unwrap(),
             "run_http_server must set TCP_NODELAY on accepted connections"
-        );
-    }
-
-    /// The backoff triggers on a rate of failure, not on a kind of failure and
-    /// not on a run of them.
-    ///
-    /// `accept` also reports errors belonging to the single connection it
-    /// dequeued, so pausing the listener for one would be the bug in reverse —
-    /// and descriptor exhaustion under churn lets the odd call through, which a
-    /// consecutive count would keep resetting on.
-    #[test]
-    fn the_pause_is_paced_by_the_failure_rate() {
-        // The sequence the loop walks: the pause is taken, then doubled, so the
-        // first one it sleeps is the minimum rather than twice it.
-        let mut delay = ACCEPT_RETRY_MIN;
-        let mut steps = 0;
-        while delay < ACCEPT_RETRY_MAX && steps < 64 {
-            delay = (delay * 2).min(ACCEPT_RETRY_MAX);
-            steps += 1;
-        }
-        assert_eq!(
-            delay, ACCEPT_RETRY_MAX,
-            "the delay has to reach its cap and stop there"
-        );
-        assert!(
-            ACCEPT_FAILURES_PER_WINDOW > 1,
-            "one dequeued-connection error must not pause the listener"
         );
     }
 
