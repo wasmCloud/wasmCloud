@@ -23,6 +23,14 @@ pub struct HostCommand {
     #[arg(long = "scheduler-nats-url", default_value = "nats://localhost:4222")]
     pub scheduler_nats_url: String,
 
+    /// How long to keep retrying NATS at startup before giving up.
+    ///
+    /// A host brought up beside its NATS has no ordering guarantee against it,
+    /// and exiting on the first refusal makes the pod restart until the race
+    /// happens to go the other way. Zero restores that: fail on first refusal.
+    #[arg(long = "nats-connect-timeout", default_value = "60s", value_parser = humantime::parse_duration)]
+    pub nats_connect_timeout: Duration,
+
     /// Path to TLS CA certificate file for NATS Scheduler connection
     #[arg(long = "scheduler-nats-tls-ca")]
     pub scheduler_nats_tls_ca: Option<PathBuf>,
@@ -629,6 +637,11 @@ impl CliCommand for HostCommand {
             load_config::<crate::config::Config>(&ctx.user_config_path(), Some(project_dir), None)
                 .context("failed to load config for wash host")?;
 
+        // Zero means the flag was used to ask for the old behaviour: give up on
+        // the first refusal.
+        let connect_retry =
+            (!self.nats_connect_timeout.is_zero()).then_some(self.nats_connect_timeout);
+
         let scheduler_nats_client = wash_runtime::washlet::connect_nats(
             self.scheduler_nats_url.clone(),
             wash_runtime::washlet::NatsConnectionOptions {
@@ -637,6 +650,7 @@ impl CliCommand for HostCommand {
                 tls_first: self.scheduler_nats_tls_first,
                 tls_cert: self.scheduler_nats_tls_cert.clone(),
                 tls_key: self.scheduler_nats_tls_key.clone(),
+                connect_retry,
             },
         )
         .await
@@ -650,6 +664,7 @@ impl CliCommand for HostCommand {
                 tls_first: self.data_nats_tls_first,
                 tls_cert: self.data_nats_tls_cert.clone(),
                 tls_key: self.data_nats_tls_key.clone(),
+                connect_retry,
             },
         )
         .await
