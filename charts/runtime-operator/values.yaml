@@ -437,8 +437,9 @@ runtime:
       enabled: true
       port: 8081
       # -- How many 5s attempts the host gets to bind the probe port before the
-      # kubelet gives up. It binds after plugin pulls and compiles, so this is
-      # the startup budget: 60 is five minutes.
+      # kubelet gives up. It binds after the host has waited for NATS (up to
+      # `--nats-connect-timeout`, 60s) and after plugin pulls and compiles, so
+      # this is the startup budget for all three: 60 is five minutes.
       startupFailureThreshold: 60
     readiness:
       enabled: true

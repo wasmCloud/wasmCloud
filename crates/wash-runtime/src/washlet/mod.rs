@@ -507,6 +507,19 @@ pub struct NatsConnectionOptions {
     pub tls_cert: Option<PathBuf>,
     /// Path to NATS TLS private key file
     pub tls_key: Option<PathBuf>,
+    /// How long to keep retrying a refused *initial* connection before giving
+    /// up. `None` gives up on the first refusal.
+    ///
+    /// Only the first connection needs this: once established, async-nats
+    /// reconnects on its own and buffers through the gap. A host deployed
+    /// beside its NATS has no ordering guarantee between the two, so without a
+    /// window here it exits, and the pod restarts until NATS happens to be up
+    /// first — which is a slower, noisier way to wait, and it spends the
+    /// restart count that would otherwise mean something.
+    ///
+    /// Left unset by a command run against a NATS the operator already has up
+    /// (`wash dev`), where a refusal is the answer rather than a race.
+    pub connect_retry: Option<Duration>,
 }
 
 #[instrument(skip_all)]
@@ -555,9 +568,49 @@ pub async fn connect_nats(
         }
     });
 
-    opts.connect(addr)
-        .await
-        .context("failed to connect to NATS")
+    let Some(window) = options.connect_retry else {
+        return opts
+            .connect(addr)
+            .await
+            .context("failed to connect to NATS");
+    };
+
+    // `to_server_addrs` here rather than per attempt: the addresses are what
+    // the retry is over, and resolving them once means a malformed URL is
+    // reported as one instead of being retried for the whole window.
+    let addrs = addr
+        .to_server_addrs()
+        .context("failed to parse NATS server address")?
+        .collect::<Vec<_>>();
+
+    let deadline = tokio::time::Instant::now() + window;
+    let mut backoff = Duration::from_millis(250);
+    loop {
+        let err = match opts.clone().connect(addrs.clone()).await {
+            Ok(client) => return Ok(client),
+            Err(err) => err,
+        };
+        // The window is for a server that is not up yet. A credential the
+        // server refuses, or a TLS setup it will not accept, reads the same on
+        // the last attempt as the first — waiting it out turns an accurate
+        // error into a minute of silence followed by that same error, with the
+        // host looking like it is still starting.
+        use async_nats::ConnectErrorKind;
+        if !matches!(
+            err.kind(),
+            ConnectErrorKind::Io | ConnectErrorKind::TimedOut | ConnectErrorKind::Dns
+        ) {
+            return Err(anyhow::Error::new(err)).context("failed to connect to NATS");
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(anyhow::Error::new(err))
+                .with_context(|| format!("failed to connect to NATS within {window:?}"));
+        }
+        tracing::warn!(%err, retry_in = ?backoff, "NATS is not accepting connections yet");
+        tokio::time::sleep(backoff.min(remaining)).await;
+        backoff = (backoff * 2).min(Duration::from_secs(5));
+    }
 }
 
 pub fn host_subject(host_id: &str) -> String {
@@ -1103,6 +1156,56 @@ mod tests {
     use super::*;
     use crate::host::allowed_hosts::AllowedHost;
     use crate::host::allowed_ip_name::AllowedIpName;
+
+    /// Port 1 is privileged and nothing in a test environment listens on it, so
+    /// a connection there is refused rather than left hanging.
+    const REFUSED: &str = "nats://127.0.0.1:1";
+
+    /// A host and its NATS come up together with no ordering between them, so a
+    /// refusal at startup is a race to wait out. Exiting instead spends a pod
+    /// restart on it, and restarts are the signal that something went wrong.
+    #[tokio::test]
+    async fn a_refused_connection_is_retried_for_the_whole_window() {
+        const WINDOW: Duration = Duration::from_millis(700);
+
+        let started = std::time::Instant::now();
+        let err = connect_nats(
+            REFUSED,
+            NatsConnectionOptions {
+                connect_retry: Some(WINDOW),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("nothing is listening on port 1");
+
+        assert!(
+            started.elapsed() >= WINDOW,
+            "gave up after {:?}, before the {WINDOW:?} window was out",
+            started.elapsed()
+        );
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("within"),
+            "the error should say the window it exhausted: {message}"
+        );
+    }
+
+    /// Waiting is for the deployment that cannot order its own startup. A
+    /// command run against a NATS the operator already has up wants the
+    /// refusal, not a minute of patience.
+    #[tokio::test]
+    async fn without_a_window_a_refused_connection_is_reported_at_once() {
+        let started = std::time::Instant::now();
+        connect_nats(REFUSED, NatsConnectionOptions::default())
+            .await
+            .expect_err("nothing is listening on port 1");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "a refusal with no window took {:?}, so it was retried",
+            started.elapsed()
+        );
+    }
 
     /// A host always keeps a start it can run and a core it can serve on.
     #[test]
