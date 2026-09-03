@@ -382,7 +382,17 @@ pub struct HostCommand {
     /// Deny outbound connections to loopback, link-local (including the cloud
     /// metadata address), multicast, and documentation ranges — including
     /// whatever DNS returned for a permitted name.
-    #[arg(long = "deny-special-ranges", default_value_t = true)]
+    //
+    // Takes an optional value, unlike the default-off toggles above: presence
+    // alone cannot express "off" for something whose default is on. The bare
+    // flag still means `true`.
+    #[arg(
+        long = "deny-special-ranges",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = true,
+        action = clap::ArgAction::Set
+    )]
     pub deny_special_ranges: bool,
 
     /// Deny outbound connections to private ranges (RFC1918, ULA, CGNAT).

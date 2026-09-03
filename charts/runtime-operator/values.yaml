@@ -710,6 +710,13 @@ runtime:
         # -- Host-wide cap on live connections across every workload. Empty
         # derives it from the process's file-descriptor limit.
         maxConnections: ""
+        # -- Cap on the TCP connections the host's own HTTP listener holds at
+        # once. Connections, not requests: an idle keep-alive connection counts,
+        # and one HTTP/2 connection counts once however many streams it carries.
+        # Separate from `maxConnections`, which is what workloads hold — which
+        # workload an inbound connection belongs to is unknown until its first
+        # request names one. Empty derives it from the descriptor limit.
+        maxHttpIngressConnections: ""
         # -- Pooled HTTP and gRPC connections one workload may hold. Idle
         # keep-alive connections count, so this is how large its pool may grow.
         maxOutboundHttpConnectionsPerWorkload: 128
@@ -726,9 +733,12 @@ runtime:
         # published port fails to start rather than coming up silently
         # unreachable. Publishing makes a service reachable by every co-tenant
         # on the machine unless socketEgress is `enforce`.
+        # NOTE: not yet wired to the host — there is no `wash host` flag behind
+        # this key, so setting it changes nothing today.
         publishPorts: false
         # -- Restrict published ports to a range, e.g. "31000-32767". Empty
         # allows any port the OS will grant.
+        # NOTE: not yet wired to the host, as with `publishPorts` above.
         publishPortRange: ""
       http:
         enabled: true
