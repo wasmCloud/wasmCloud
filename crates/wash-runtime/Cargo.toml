@@ -192,6 +192,140 @@ criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
 # run time.
 gungraun = "0.19.1"
 
+# Integration tests that build a host through `tests/common`'s standard
+# plugin set (in-memory blobstore + keyvalue, tracing logger, dynamic
+# config) or import one of those plugins directly. `required-features`
+# lets `--no-default-features` skip these cleanly instead of failing to
+# compile `tests/common/mod.rs`; every name below is already on by default,
+# so this changes nothing for a default or CI (`OPTIONAL_FEATURES`) build.
+[[test]]
+name = "integration_abandoned_calls"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_abandonment_grace_ratio"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_cross_store_bridge"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_http_call_timeout"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_http_counter"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_http_ip_name_lookup"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_http_tls"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_instance_concurrency"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_messaging_async"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_messaging_concurrency"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_p2_p3_matrix"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_p3_ephemeral"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_p3_loopback_service"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_p3_resources"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_p3_streams"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_router_dev"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_router_dynamic"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_secrets_plugin"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_service_http"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_service_no_cli_run"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_trigger_service_messaging"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_warm_instances"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_wasip3"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
+name = "integration_blobstore_span_names"
+required-features = ["wasi-blobstore"]
+
+[[test]]
+name = "integration_http_blobstore"
+required-features = ["wasi-blobstore"]
+
+[[test]]
+name = "integration_nats_blobstore"
+required-features = ["wasi-blobstore"]
+
+[[test]]
+name = "integration_guest_memory_budget"
+required-features = ["wasi-config", "wasi-logging"]
+
+[[test]]
+name = "integration_http_allowed_hosts"
+required-features = ["wasi-config", "wasi-logging"]
+
+[[test]]
+name = "integration_http_egress_pooling"
+required-features = ["wasi-config", "wasi-logging"]
+
+[[test]]
+name = "integration_multi_component_config"
+required-features = ["wasi-config"]
+
+[[test]]
+name = "integration_inter_component_call"
+required-features = ["wasi-config", "wasi-keyvalue"]
+
+[[test]]
+name = "integration_nats_plugin"
+required-features = ["wasmcloud-nats"]
+
 [[bench]]
 name = "http_invoke"
 harness = false
