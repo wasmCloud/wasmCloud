@@ -467,6 +467,25 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
         false
     }
 
+    /// Whether this plugin hands a plain, *unlabeled* import to a
+    /// single-backend plugin that also serves it.
+    ///
+    /// Defaults to [`HostPlugin::supports_named_instances`], which is the rule
+    /// a closed multiplexer wants: it exists to route `(implements ..)` labels
+    /// between backends it names in code, so where a single-backend plugin
+    /// serves the same interface, that one is the better answer for an import
+    /// carrying no label.
+    ///
+    /// A plugin that serves both off one backend — a host component plugin
+    /// answers a labeled and an unlabeled import from the same store —
+    /// overrides this to `false`. Deferring would hand its plain imports to the
+    /// very native an operator deployed it to replace, and it would happen the
+    /// moment they declared a binding, which says which labels this plugin
+    /// answers to and nothing about the imports it already served.
+    fn defers_unnamed_instances(&self) -> bool {
+        self.supports_named_instances()
+    }
+
     /// Injects metrics into the plugin.
     ///
     /// # Arguments

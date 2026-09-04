@@ -2299,7 +2299,7 @@ impl UnresolvedWorkload {
                             !p.supports_named_instances()
                                 && other_plugin_serves(plugins, plugin_id, wit_interface, true)
                         } else {
-                            p.supports_named_instances()
+                            p.defers_unnamed_instances()
                                 && other_plugin_serves(plugins, plugin_id, wit_interface, false)
                         };
                         if defer_to_other {
@@ -3037,6 +3037,9 @@ mod tests {
         on_workload_item_bind_count: Arc<AtomicUsize>,
         on_workload_resolved_count: Arc<AtomicUsize>,
         named_instance_support: bool,
+        /// Serves labeled and unlabeled imports off one backend, so it never
+        /// defers a plain import to a single-backend plugin.
+        serves_unnamed_too: bool,
         /// Minimum version this plugin will claim, mirroring a plugin whose
         /// `world()` cannot express the constraint. `None` claims everything.
         claims_from: Option<semver::Version>,
@@ -3061,6 +3064,7 @@ mod tests {
                 on_workload_item_bind_count: Arc::new(AtomicUsize::new(0)),
                 on_workload_resolved_count: Arc::new(AtomicUsize::new(0)),
                 named_instance_support: false,
+                serves_unnamed_too: false,
                 claims_from: None,
                 host_owned: Vec::new(),
                 bound_interfaces: Arc::new(Mutex::new(Vec::new())),
@@ -3089,6 +3093,13 @@ mod tests {
 
         fn with_named_instance_support(mut self) -> Self {
             self.named_instance_support = true;
+            self
+        }
+
+        /// Serves labeled and unlabeled imports off one backend, the way a host
+        /// component plugin does, so it never defers a plain import.
+        fn serving_unnamed_too(mut self) -> Self {
+            self.serves_unnamed_too = true;
             self
         }
 
@@ -3127,6 +3138,10 @@ mod tests {
 
         fn supports_named_instances(&self) -> bool {
             self.named_instance_support
+        }
+
+        fn defers_unnamed_instances(&self) -> bool {
+            self.named_instance_support && !self.serves_unnamed_too
         }
 
         fn claims(&self, interface: &WitInterface) -> bool {
@@ -4315,6 +4330,54 @@ mod tests {
 
         assert_eq!(bound_plugins.len(), 1);
         assert_eq!(bound_plugins[0].0.id(), "blobstore-a-newer");
+    }
+
+    /// A plugin that serves labeled *and* plain imports off one backend keeps
+    /// its plain imports when a single-backend native serves the same
+    /// interface. A host component plugin is that shape: the operator deployed
+    /// it to answer `wasi:keyvalue`, and declaring a binding on it says which
+    /// labels it answers to — not that it has stopped answering the unlabeled
+    /// import it was already serving.
+    #[tokio::test]
+    async fn test_a_dual_mode_plugin_keeps_its_plain_imports() {
+        let iface = WitInterface::from("wasi:blobstore/container");
+
+        // Sorts first, so ordering alone cannot be what decides this.
+        let dual = Arc::new(
+            MockPlugin::new("blobstore-a-component", vec![iface.clone()], vec![])
+                .with_named_instance_support()
+                .serving_unnamed_too(),
+        );
+        let native = Arc::new(MockPlugin::new(
+            "blobstore-b-native",
+            vec![iface.clone()],
+            vec![],
+        ));
+
+        let mut plugins = HashMap::new();
+        plugins.insert(dual.id(), dual.clone() as Arc<dyn HostPlugin>);
+        plugins.insert(native.id(), native.clone() as Arc<dyn HostPlugin>);
+
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![create_test_component("component1")],
+            vec![iface],
+        );
+
+        let bound_plugins = workload
+            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+            .await
+            .unwrap();
+
+        assert_eq!(bound_plugins.len(), 1);
+        assert_eq!(
+            bound_plugins[0].0.id(),
+            "blobstore-a-component",
+            "a plugin serving both must not hand its unlabeled import to a native"
+        );
     }
 
     /// Tests basic plugin binding with one plugin and one component.
