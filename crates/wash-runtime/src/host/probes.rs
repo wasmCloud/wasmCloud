@@ -31,9 +31,6 @@ use crate::host::accept::AcceptBackoff;
 const LIVEZ: &str = "/livez";
 const READYZ: &str = "/readyz";
 
-/// How long a peer has to send its request line and headers.
-const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// Connections this listener will hold at once.
 ///
 /// It needs a ceiling because its port is reachable from the whole cluster and
@@ -44,6 +41,13 @@ const MAX_PROBE_CONNECTIONS: usize = 512;
 
 /// How long one probe connection may live. Each serves a single request and
 /// closes, so holding a slot open is not something a caller has a reason to do.
+///
+/// The only bound, deliberately. A separate header-read timeout was set on the
+/// hyper builder beside this one and could never fire, because it was the
+/// longer of the two and this wraps the whole connection — it read as a second,
+/// looser limit while contributing nothing. One connection lifetime covers the
+/// case a header timeout is for: a peer that opens a socket and says nothing
+/// still loses its slot here.
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A monotonic "still turning" signal, beaten by whatever owns the host's main
@@ -118,6 +122,19 @@ pub trait ReadinessCheck: Send + Sync + std::fmt::Debug {
 
     /// `true` when this check is satisfied.
     fn ready(&self) -> bool;
+
+    /// Whether a refusal from this check is one the host cannot recover from
+    /// on its own, so `/livez` should fail with it and the host be restarted.
+    ///
+    /// Almost nothing qualifies, and the default says so: failing liveness
+    /// takes every workload on the host and hands the scheduler all of them at
+    /// once, which is far worse than a host that is briefly not taking work.
+    /// It earns its place only where readiness alone leaves a host that will
+    /// never serve again — running, heartbeating, and still being scheduled
+    /// onto, because nothing that places work reads readiness.
+    fn terminal(&self) -> bool {
+        false
+    }
 }
 
 /// The state [`serve`] reports, and the handle a host drives it through.
@@ -166,7 +183,19 @@ impl ProbeState {
     }
 
     fn live(&self) -> bool {
-        self.liveness.as_ref().is_none_or(|l| l.alive())
+        if !self.liveness.as_ref().is_none_or(|l| l.alive()) {
+            return false;
+        }
+        // A draining host stops accepting because it was told to. Reading that
+        // as "restart me" would kill it mid-drain, which is the one thing
+        // `drain` exists to avoid.
+        if self.draining.load(Ordering::Relaxed) {
+            return true;
+        }
+        !self
+            .checks
+            .iter()
+            .any(|check| check.terminal() && !check.ready())
     }
 
     /// The checks currently refusing, empty when the host is ready.
@@ -273,9 +302,9 @@ pub async fn serve(
                     let mut builder = hyper::server::conn::http1::Builder::new();
                     builder
                         .timer(TokioTimer::new())
-                        .header_read_timeout(HEADER_READ_TIMEOUT)
                         // One request per connection: a slot held open is a
-                        // slot the kubelet cannot have.
+                        // slot the kubelet cannot have. `CONNECTION_TIMEOUT`
+                        // below is the only deadline; see its comment.
                         .keep_alive(false);
                     let served = tokio::time::timeout(
                         CONNECTION_TIMEOUT,
@@ -300,6 +329,7 @@ mod tests {
     struct Gate {
         name: &'static str,
         ready: AtomicBool,
+        terminal: bool,
     }
 
     impl ReadinessCheck for Gate {
@@ -309,12 +339,25 @@ mod tests {
         fn ready(&self) -> bool {
             self.ready.load(Ordering::Relaxed)
         }
+        fn terminal(&self) -> bool {
+            self.terminal
+        }
     }
 
     fn gate(name: &'static str, ready: bool) -> Arc<Gate> {
         Arc::new(Gate {
             name,
             ready: AtomicBool::new(ready),
+            terminal: false,
+        })
+    }
+
+    /// A check whose refusal the host cannot recover from.
+    fn terminal_gate(name: &'static str, ready: bool) -> Arc<Gate> {
+        Arc::new(Gate {
+            name,
+            ready: AtomicBool::new(ready),
+            terminal: true,
         })
     }
 
@@ -330,6 +373,44 @@ mod tests {
 
         assert!(state.live(), "saturation is not a reason to restart");
         assert_eq!(state.not_ready(), vec!["http_ingress_saturated"]);
+    }
+
+    /// The other side of that distinction. An accept loop that has ended is
+    /// not coming back, and nothing that places work reads readiness — the
+    /// scheduler goes by the Host CR's heartbeat, which this host still sends.
+    /// Left to readiness alone it keeps taking workloads it can never serve, so
+    /// this is the case where a restart is the lesser loss.
+    #[test]
+    fn a_host_whose_ingress_stopped_is_not_live() {
+        let stopped = terminal_gate("http_ingress_stopped", false);
+        let state = ProbeState::default().with_readiness(stopped);
+        state.started();
+
+        assert!(!state.live(), "an ingress that cannot recover must restart");
+        assert_eq!(state.not_ready(), vec!["http_ingress_stopped"]);
+    }
+
+    /// The same check, satisfied, says nothing about liveness.
+    #[test]
+    fn a_terminal_check_that_is_satisfied_leaves_the_host_live() {
+        let state = ProbeState::default().with_readiness(terminal_gate("ingress", true));
+        state.started();
+        assert!(state.live());
+        assert!(state.not_ready().is_empty());
+    }
+
+    /// A host on its way out stops accepting because it was told to. Reading
+    /// that as "restart me" would kill it mid-drain, which is the one thing
+    /// draining exists to avoid.
+    #[test]
+    fn a_draining_host_stays_live_even_with_its_ingress_stopped() {
+        let state =
+            ProbeState::default().with_readiness(terminal_gate("http_ingress_stopped", false));
+        state.started();
+        state.drain();
+
+        assert!(state.live(), "a draining host must not be restarted");
+        assert_eq!(state.not_ready(), vec!["draining"]);
     }
 
     /// Draining is the same shape and the more common one: leave the Service,
