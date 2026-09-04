@@ -432,6 +432,11 @@ impl InstancePool {
             drivers,
             peak_in_flight,
         } = &mut *state;
+        // The pool this instance was built for is the one being measured
+        // against `pool_size`, so the spent handles go first: a store built
+        // while an instance was trapping or draining would otherwise be
+        // turned away by a pool that has the room for it.
+        reap(drivers);
 
         let sent = 'sent: {
             let mut job = job;
