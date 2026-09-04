@@ -1,4 +1,4 @@
-package wasmcloud:host@0.1.3;
+package wasmcloud:host@0.1.4;
 
 /// Provided by the host to a component plugin that *imports* an interface a
 /// workload exports, so the plugin can call into that workload — the reverse of

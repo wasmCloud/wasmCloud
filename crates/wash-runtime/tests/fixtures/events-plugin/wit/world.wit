@@ -16,10 +16,10 @@ world events-plugin {
     import acme:events/metrics@0.1.0;
     // Names which workload a call goes to, and lists the ones that can be
     // called at all. Unused for `echo`, which inherits its caller.
-    import wasmcloud:host/workload-call@0.1.3;
+    import wasmcloud:host/workload-call@0.1.4;
     export acme:events/control@0.1.0;
     // Lifecycle hooks, used here only to probe what a hook can reach: a
     // workload is callable exactly while it is running, and both hooks land
     // outside that window.
-    export wasmcloud:host/workload-lifecycle@0.1.3;
+    export wasmcloud:host/workload-lifecycle@0.1.4;
 }

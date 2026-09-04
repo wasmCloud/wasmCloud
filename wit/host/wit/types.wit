@@ -1,4 +1,4 @@
-package wasmcloud:host@0.1.3;
+package wasmcloud:host@0.1.4;
 
 /// The identifiers every other `wasmcloud:host` interface names a workload and
 /// its components by, defined once so they mean the same thing in all of them:

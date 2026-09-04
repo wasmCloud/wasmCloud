@@ -15,10 +15,10 @@ world kv-plugin {
     import wasi:clocks/system-clock@0.3.0;
     // Host identity import: lets the plugin partition state by the calling
     // workload (the host answers based on the in-flight capability call).
-    import wasmcloud:host/identity@0.1.3;
+    import wasmcloud:host/identity@0.1.4;
     // Host cancel import: lets the plugin cancel one of its own in-flight
     // invocations by the host-minted job id, exercised by `begin`/`cancel-job`.
-    import wasmcloud:host/cancel@0.1.3;
+    import wasmcloud:host/cancel@0.1.4;
     // Self-import: the plugin depends on its own capability so `recurse` can
     // re-enter across the store boundary. The host wires this back to the
     // plugin itself.
@@ -27,5 +27,5 @@ world kv-plugin {
     // Lifecycle export: the host calls these as workloads bind/unbind, letting
     // the plugin capture per-workload manifest config eagerly (observed through
     // the store interface's `bound-config`/`bind-info`/`lifecycle-log`).
-    export wasmcloud:host/workload-lifecycle@0.1.3;
+    export wasmcloud:host/workload-lifecycle@0.1.4;
 }
