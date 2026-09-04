@@ -1776,10 +1776,17 @@ impl crate::host::probes::ReadinessCheck for ConnectionLimit {
         if !self.accepting.load(Relaxed) {
             return false;
         }
-        // At least one either way, so a ceiling too small to have percentages
-        // still has a gap between the marks rather than collapsing to "empty".
-        let low = (self.max * READY_LOW_WATER_PERCENT / 100).max(1);
-        let high = (self.max * READY_HIGH_WATER_PERCENT / 100).max(low + 1);
+        // A gap either way, so a ceiling too small to have percentages does not
+        // collapse to "ready until empty" — and, at the other end, so a ceiling
+        // of one is not unready from the moment it starts: the low mark has to
+        // leave at least one free connection above it that still counts as
+        // room, or nothing ever clears it.
+        let low = (self.max * READY_LOW_WATER_PERCENT / 100)
+            .max(1)
+            .min(self.max.saturating_sub(1));
+        let high = (self.max * READY_HIGH_WATER_PERCENT / 100)
+            .max(low + 1)
+            .min(self.max);
         let free = self.permits.available_permits();
         let ready = if self.has_headroom.load(Relaxed) {
             free > low
@@ -3274,6 +3281,22 @@ mod tests {
         assert!(!limit.ready(), "one free of two is at the low mark");
         drop(first);
         assert!(limit.ready(), "two free of two clears the high mark");
+    }
+
+    /// The smallest ceiling there is. A low mark that does not leave at least
+    /// one free connection above it is one nothing can ever clear, and a host
+    /// started with a ceiling of one would report not-ready from the moment it
+    /// came up and never join the Service.
+    #[test]
+    fn a_ceiling_of_one_is_ready_when_it_is_idle() {
+        use crate::host::probes::ReadinessCheck as _;
+
+        let limit = ConnectionLimit::new(1);
+        assert!(limit.ready(), "idle with its one connection free");
+        let only = limit.permits.clone().try_acquire_owned().unwrap();
+        assert!(!limit.ready(), "its one connection is in use");
+        drop(only);
+        assert!(limit.ready(), "and free again");
     }
 
     #[tokio::test(start_paused = true)]
