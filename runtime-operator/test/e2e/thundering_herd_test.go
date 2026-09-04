@@ -68,19 +68,31 @@ var herdHostPods = "wasmcloud.com/name=hostgroup,wasmcloud.com/hostgroup=" + her
 // release routinely carries a restart or two that has nothing to do with any
 // workload.
 func hostPodRestarts() map[string]string {
+	// `deletionTimestamp` is read so pods on their way out can be left alone.
+	// A re-run against a live cluster upgrades the release, which rolls this
+	// Deployment, and the outgoing pod serves its drain delay and grace period
+	// after `rollout status` already reports the new one complete. Counted in
+	// the baseline, it disappears mid-herd and reads as the herd having taken
+	// a host pod down.
+	const columns = `jsonpath={range .items[*]}` +
+		`{.metadata.name}{"\t"}` +
+		`{.metadata.deletionTimestamp}{"\t"}` +
+		`{.status.containerStatuses[*].restartCount}{"\t"}` +
+		`{.status.containerStatuses[*].lastState.terminated.reason}` +
+		`{"\n"}{end}`
+
 	out, err := utils.Run(exec.Command("kubectl", "get", "pods", "-n", namespace,
-		"-l", herdHostPods,
-		"-o", `jsonpath={range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[*].restartCount}{"\t"}{.status.containerStatuses[*].lastState.terminated.reason}{"\n"}{end}`))
+		"-l", herdHostPods, "--field-selector=status.phase=Running", "-o", columns))
 	if err != nil {
 		return nil
 	}
 	restarts := map[string]string{}
 	for _, line := range strings.Split(out, "\n") {
-		fields := strings.SplitN(line, "\t", 3)
-		if len(fields) < 3 {
+		fields := strings.SplitN(line, "\t", 4)
+		if len(fields) < 4 || fields[1] != "" {
 			continue
 		}
-		restarts[fields[0]] = fields[1] + " (last termination: " + fields[2] + ")"
+		restarts[fields[0]] = fields[2] + " (last termination: " + fields[3] + ")"
 	}
 	return restarts
 }
@@ -90,9 +102,14 @@ func hostPodRestarts() map[string]string {
 // generate. Nothing labels a Workload with the deployment it came from, and
 // listing the namespace unfiltered would pick up whatever another spec left.
 func herdWorkloads(deployment string) []herdWorkload {
+	const columns = `jsonpath={range .items[*]}` +
+		`{.metadata.name}{"\t"}` +
+		`{.status.conditions[?(@.type=="Ready")].status}{"\t"}` +
+		`{.status.hostID}` +
+		`{"\n"}{end}`
+
 	out, err := utils.Run(exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
-		"-n", namespace,
-		"-o", `jsonpath={range .items[*]}{.metadata.name}{"\t"}{.status.conditions[?(@.type=="Ready")].status}{"\t"}{.status.hostID}{"\n"}{end}`))
+		"-n", namespace, "-o", columns))
 	if err != nil {
 		return nil
 	}
@@ -352,7 +369,10 @@ spec:
 		observed := append([]string(nil), notReady...)
 		mu.Unlock()
 		Expect(observed).To(BeEmpty(),
-			"host %s stopped reporting Ready while the herd was starting. The Host CR going quiet means the operator deletes it and every workload on it; the pod going unready means `/readyz` refused and the endpoint left the Service, so the workloads it just started are unreachable",
+			"host %s stopped reporting Ready while the herd was starting.\n"+
+				"A Host CR going quiet means the operator deletes it and every workload on it.\n"+
+				"A pod going unready means `/readyz` refused and the endpoint left the Service, "+
+				"so the workloads it just started are unreachable.",
 			hostName)
 
 		// Compilation is the memory peak of a start, and the pod is capped at
