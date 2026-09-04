@@ -1662,11 +1662,15 @@ const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// connection's protocol otherwise is.
 const FIRST_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Free connections, as a percentage of the ceiling, at which the host stops
-/// claiming it can take more work — and the higher one at which it starts
-/// claiming so again. The gap between them is the hysteresis.
-const READY_LOW_WATER_PERCENT: usize = 10;
-const READY_HIGH_WATER_PERCENT: usize = 25;
+/// Free connections a saturated host has to get back before it claims capacity
+/// again, as a percentage of its ceiling.
+///
+/// Only the recovery side is a chosen number. What takes a host out of the
+/// Service is having no room at all, which needs no threshold and cannot fire
+/// on a host that is merely busy. This decides how much room is enough to stop
+/// it returning into the same wall, so getting it wrong costs a saturated host
+/// a little longer out of rotation and nothing else.
+const READY_RECOVER_PERCENT: usize = 10;
 
 /// The ingress connection ceiling, the permits enforcing it, and the counter
 /// reporting it.
@@ -1758,40 +1762,32 @@ impl crate::host::probes::ReadinessCheck for ConnectionLimit {
         }
     }
 
-    /// Refuses before the shedding starts, and recovers only once there is real
-    /// room again.
+    /// Not-ready means this host has no room, not that it is busy.
     ///
-    /// Reporting ready down to the last permit means the endpoint is pulled
-    /// only after the host is already turning connections away, and another
-    /// `periodSeconds` × `failureThreshold` of shedding passes before anything
-    /// acts on it. Recovering on one freed permit is the same mistake
-    /// mirrored: a host sitting at its ceiling would re-enter rotation on every
-    /// probe and be full again before the next one.
+    /// A threshold on utilisation would take a healthy host out of the Service:
+    /// a ceiling of 256 and a tenth-free mark pulls it at 231 connections while
+    /// it is still serving every one of them, and replicas at similar load
+    /// cross it together. So the departure is absolute — no permits left, which
+    /// is the host actually turning connections away.
     ///
-    /// The two marks are what separate those. Below the low one it stops
-    /// claiming capacity it is about to run out of; it claims it again only
-    /// above the high one.
+    /// Recovery is the part that needs a margin. Returning on a single freed
+    /// permit puts a saturated host back a probe before it is full again, so it
+    /// waits for [`READY_RECOVER_PERCENT`] of its ceiling to come back.
     fn ready(&self) -> bool {
         use std::sync::atomic::Ordering::Relaxed;
         if !self.accepting.load(Relaxed) {
             return false;
         }
-        // A gap either way, so a ceiling too small to have percentages does not
-        // collapse to "ready until empty" — and, at the other end, so a ceiling
-        // of one is not unready from the moment it starts: the low mark has to
-        // leave at least one free connection above it that still counts as
-        // room, or nothing ever clears it.
-        let low = (self.max * READY_LOW_WATER_PERCENT / 100)
+        // Never above the ceiling, so a host too small for the percentage still
+        // has a reachable recovery mark.
+        let recover = (self.max * READY_RECOVER_PERCENT / 100)
             .max(1)
-            .min(self.max.saturating_sub(1));
-        let high = (self.max * READY_HIGH_WATER_PERCENT / 100)
-            .max(low + 1)
             .min(self.max);
         let free = self.permits.available_permits();
         let ready = if self.has_headroom.load(Relaxed) {
-            free > low
+            free > 0
         } else {
-            free >= high
+            free >= recover
         };
         self.has_headroom.store(ready, Relaxed);
         ready
@@ -3239,60 +3235,52 @@ mod tests {
         );
     }
 
-    /// Readiness has to turn over before the shedding starts and stay turned
-    /// over until there is real room, or the two probe intervals it takes to
-    /// act on it are spent refusing connections — and one freed slot puts the
-    /// host back in rotation to fill again immediately.
+    /// A busy host is not an unready one. The mark that takes it out of the
+    /// Service is having nothing left to give, so a host serving every
+    /// connection it holds stays in rotation however close to the ceiling it
+    /// is — otherwise replicas at similar load leave together and the Service
+    /// empties while every one of them is healthy.
     #[test]
-    fn readiness_leaves_and_returns_at_different_marks() {
+    fn a_host_with_room_stays_ready_however_busy() {
         use crate::host::probes::ReadinessCheck as _;
 
         let limit = ConnectionLimit::new(100);
         let mut held = Vec::new();
-        assert!(limit.ready(), "an idle host takes work");
-
-        // Down to the low mark: still ready at 11 free, refusing at 10.
-        while limit.permits.available_permits() > 11 {
+        while limit.permits.available_permits() > 1 {
             held.push(limit.permits.clone().try_acquire_owned().unwrap());
         }
-        assert!(limit.ready(), "11 free of 100 is above the low mark");
-        held.push(limit.permits.clone().try_acquire_owned().unwrap());
-        assert!(!limit.ready(), "10 free of 100 is the low mark");
-
-        // Back up past the low mark but under the high one: still refusing,
-        // which is the whole point of the gap.
-        while limit.permits.available_permits() < 24 {
-            held.pop();
-        }
         assert!(
-            !limit.ready(),
-            "24 free is over the low mark but under the high one"
+            limit.ready(),
+            "99 of 100 connections in use is busy, not full"
         );
 
-        held.pop();
-        assert!(limit.ready(), "25 free of 100 is the high mark");
+        held.push(limit.permits.clone().try_acquire_owned().unwrap());
+        assert!(!limit.ready(), "no permits left is the host refusing work");
     }
 
-    /// A ceiling too small for percentages still needs the two marks to differ,
-    /// or the hysteresis collapses back to "ready until the last permit".
+    /// Recovery waits for real room. One freed permit would put a saturated
+    /// host back into rotation a probe before it is full again.
     #[test]
-    fn a_tiny_ceiling_still_has_a_gap() {
+    fn a_saturated_host_waits_for_room_before_returning() {
         use crate::host::probes::ReadinessCheck as _;
 
-        let limit = ConnectionLimit::new(2);
-        assert!(limit.ready());
-        let first = limit.permits.clone().try_acquire_owned().unwrap();
-        assert!(!limit.ready(), "one free of two is at the low mark");
-        drop(first);
-        assert!(limit.ready(), "two free of two clears the high mark");
+        let limit = ConnectionLimit::new(100);
+        let mut held = Vec::new();
+        while limit.permits.available_permits() > 0 {
+            held.push(limit.permits.clone().try_acquire_owned().unwrap());
+        }
+        assert!(!limit.ready());
+
+        held.truncate(held.len() - 9);
+        assert!(!limit.ready(), "9 free of 100 is not yet the recovery mark");
+        held.truncate(held.len() - 1);
+        assert!(limit.ready(), "10 free of 100 clears it");
     }
 
-    /// The smallest ceiling there is. A low mark that does not leave at least
-    /// one free connection above it is one nothing can ever clear, and a host
-    /// started with a ceiling of one would report not-ready from the moment it
-    /// came up and never join the Service.
+    /// The smallest ceiling there is. Its recovery mark has to be reachable, or
+    /// a host started with one connection never returns after its first.
     #[test]
-    fn a_ceiling_of_one_is_ready_when_it_is_idle() {
+    fn a_ceiling_of_one_recovers() {
         use crate::host::probes::ReadinessCheck as _;
 
         let limit = ConnectionLimit::new(1);
