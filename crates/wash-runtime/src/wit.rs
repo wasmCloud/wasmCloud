@@ -201,12 +201,22 @@ pub struct WitInterface {
     // TODO: This is a nice way to represent a version, but it doesn't account for
     // compatible versions. We should revisit this and implement https://docs.rs/semver/1.0.27/semver/struct.VersionReq.html
     /// Optional semantic version for the interface
+    #[serde(default)]
     pub version: Option<semver::Version>,
     /// Additional configuration parameters for this interface
+    ///
+    /// Defaulted rather than required: an entry that configures nothing is an
+    /// ordinary shape, and the one an operator-declared binding takes — what
+    /// that binding reads is declared under `host.plugins`, so the manifest
+    /// entry naming it carries only the name. Without a default, writing one in
+    /// a `wash` config file fails to parse with `missing field 'config'`.
+    #[serde(default)]
     pub config: HashMap<String, String>,
     /// Optional name identifying this specific instance when multiple entries
     /// of the same namespace:package exist. Used as the routing key in
-    /// multiplexing plugins (the `identifier` in store::open, etc.).
+    /// multiplexing plugins (the `identifier` in store::open, etc.), and as the
+    /// binding name an operator declares under a `host.plugins` entry.
+    #[serde(default)]
     pub name: Option<String>,
 }
 

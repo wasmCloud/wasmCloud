@@ -252,6 +252,7 @@ mod tests {
         CallerIdentity {
             workload_id: Arc::from(workload),
             component_id: Some(Arc::from(component)),
+            binding: None,
         }
     }
 
