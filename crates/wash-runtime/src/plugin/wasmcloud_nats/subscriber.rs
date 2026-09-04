@@ -199,13 +199,15 @@ impl crate::engine::instance_driver::PluginJob for CoreDeliveryJob {
                     return;
                 }
             };
+            let executed = accessor.with(|mut access| Arc::clone(&access.get().executed));
             // Bounds this task, which the dispatcher's own deadline cannot: a
             // guest subtask is not cancellable from the host, so a delivery
             // that never returns would hold its in-flight slot for the life of
             // the workload. Retiring is what ends it — the driver stops
             // admitting, drains, and the store's teardown takes the stalled
             // work with it. The same contract [`LinkedTask`] follows.
-            let mut sample = crate::engine::instance_driver::InvocationSample::start(attributes);
+            let mut sample =
+                crate::engine::instance_driver::InvocationSample::start(&executed, attributes);
             let outcome = tokio::time::timeout(
                 crate::timeouts::ephemeral_call(),
                 crate::engine::abandon::watch_until_abandoned(
@@ -290,13 +292,15 @@ impl crate::engine::instance_driver::PluginJob for KvDeliveryJob {
                     return;
                 }
             };
+            let executed = accessor.with(|mut access| Arc::clone(&access.get().executed));
             // Bounds this task, which the dispatcher's own deadline cannot: a
             // guest subtask is not cancellable from the host, so a delivery
             // that never returns would hold its in-flight slot for the life of
             // the workload. Retiring is what ends it — the driver stops
             // admitting, drains, and the store's teardown takes the stalled
             // work with it. The same contract [`LinkedTask`] follows.
-            let mut sample = crate::engine::instance_driver::InvocationSample::start(attributes);
+            let mut sample =
+                crate::engine::instance_driver::InvocationSample::start(&executed, attributes);
             let outcome = tokio::time::timeout(
                 crate::timeouts::ephemeral_call(),
                 crate::engine::abandon::watch_until_abandoned(

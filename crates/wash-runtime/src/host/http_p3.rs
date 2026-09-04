@@ -89,6 +89,9 @@ pub(crate) async fn handle_component_request_p3(
     // the dispatcher does not have to know whose execution it is.
     let attributes =
         crate::host::http::stored_http_attributes(&warm.store.data().executed, req.method());
+    // The same store's meter as the attributes, carried in because the closure
+    // below is handed an accessor rather than the store.
+    let executed = std::sync::Arc::clone(&warm.store.data().executed);
     // Convert the hyper request body — map error type since hyper::Error doesn't impl Into<ErrorCode>
     let (parts, body) = req.into_parts();
     let body = body
@@ -140,8 +143,9 @@ pub(crate) async fn handle_component_request_p3(
                     // The requests that reach this path are the ones a full
                     // pool turned away; leaving them out would empty the
                     // histogram exactly when the host is overloaded.
-                    let _sample =
-                        crate::engine::instance_driver::InvocationSample::start(attributes);
+                    let _sample = crate::engine::instance_driver::InvocationSample::start(
+                        &executed, attributes,
+                    );
                     let mut parts_tx = Some(parts_tx);
                     // `async move` so `handler_fut` owns `frame_tx`: it drops the
                     // instant the response body completes, delivering end-of-stream

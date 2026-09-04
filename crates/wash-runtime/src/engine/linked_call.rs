@@ -150,6 +150,9 @@ pub(crate) fn component_ctx_template_from_metadata_with_tls(
 pub(crate) struct EphemeralLinkedCall {
     pub(crate) engine: wasmtime::Engine,
     pub(crate) http_handler: Arc<dyn crate::host::http::HostHandler>,
+    /// The meter of the host this call runs on; see
+    /// [`crate::engine::abandon::StoreMetering`].
+    pub(crate) invocation: crate::observability::InvocationMeter,
     pub(crate) components: Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
     pub(crate) active_component_id: Arc<str>,
     pub(crate) linked_component_ids: Vec<Arc<str>>,
@@ -486,7 +489,10 @@ async fn new_ephemeral_store(
     )
     .await?;
     if let Some(identity) = callee_identity(call).await {
-        store.data().executed.set_identity(identity);
+        store
+            .data()
+            .executed
+            .set_identity(identity, call.invocation.clone());
     }
     Ok(store)
 }
@@ -498,7 +504,9 @@ async fn new_ephemeral_store(
 async fn callee_identity(
     call: &EphemeralLinkedCall,
 ) -> Option<crate::observability::WorkloadIdentity> {
-    crate::observability::invocation_meter()?;
+    if !call.invocation.is_enabled() {
+        return None;
+    }
     let components = call.components.read().await;
     let component = components.get(&call.active_component_id)?;
     Some(crate::observability::WorkloadIdentity::new(
@@ -667,20 +675,24 @@ async fn invoke_ephemeral_relocated(
                 let ready = async {
                     // get_func + arg injection inside run_concurrent: the store is
                     // in async-required mode after instantiate.
-                    let (func, arg_vals) = accessor.with(|mut access| -> wasmtime::Result<_> {
-                        let func = instance.get_func(&mut access, func_idx).with_context(|| {
-                            format!(
-                                "function not found for linked import {import_name}.{export_name}"
-                            )
+                    let (func, arg_vals, executed) =
+                        accessor.with(|mut access| -> wasmtime::Result<_> {
+                            let func =
+                                instance.get_func(&mut access, func_idx).with_context(|| {
+                                    format!(
+                                    "function not found for linked import {import_name}.{export_name}"
+                                )
+                                })?;
+                            let mut arg_vals = Vec::with_capacity(args.len());
+                            for a in args {
+                                arg_vals.push(relocate::inject(access.as_context_mut(), a)?);
+                            }
+                            let executed = Arc::clone(&access.get().executed);
+                            Ok((func, arg_vals, executed))
                         })?;
-                        let mut arg_vals = Vec::with_capacity(args.len());
-                        for a in args {
-                            arg_vals.push(relocate::inject(access.as_context_mut(), a)?);
-                        }
-                        Ok((func, arg_vals))
-                    })?;
-                    let _sample =
-                        crate::engine::instance_driver::InvocationSample::start(attributes);
+                    let _sample = crate::engine::instance_driver::InvocationSample::start(
+                        &executed, attributes,
+                    );
                     let mut results_buf = vec![Val::Bool(false); result_tys.len()];
                     let call_timeout = crate::timeouts::ephemeral_call();
                     timeout(
@@ -916,10 +928,12 @@ async fn invoke_ephemeral_plain(
                         )
                     })
                 })?;
+                let executed = accessor.with(|mut access| Arc::clone(&access.get().executed));
                 // Started once the export resolves, as on the pooled path: a
                 // component that declared no pool is the default, and its calls
                 // belong in the same histogram.
-                let _sample = crate::engine::instance_driver::InvocationSample::start(attributes);
+                let _sample =
+                    crate::engine::instance_driver::InvocationSample::start(&executed, attributes);
                 let call_timeout = crate::timeouts::ephemeral_call();
                 timeout(
                     call_timeout,

@@ -1048,17 +1048,15 @@ pub(crate) fn http_attributes(
 /// — `workload_handles` holds only components that export `wasi:http` — and it
 /// does not need one: the store it runs on was stamped when it was built.
 ///
-/// Empty when nothing will record it. Only `ExecutionSample` reads this, and
-/// nothing reads that unless the host chose the epoch meter, so on every other
-/// host building it is a `Vec`, an `Arc` and four `String`s per request for a
-/// value that is dropped.
+/// Empty when nothing is measuring this store, which is one lookup: the store
+/// is stamped only by a host that meters, so an absent stamp answers both
+/// "whose is this" and "is anyone recording it". Building it regardless would
+/// cost a `Vec`, an `Arc` and four `String`s per request for a value that is
+/// dropped.
 pub(crate) fn stored_http_attributes(
     executed: &crate::engine::abandon::GuestExecution,
     method: &hyper::Method,
 ) -> Arc<[opentelemetry::KeyValue]> {
-    if crate::observability::invocation_meter().is_none() {
-        return Arc::from([]);
-    }
     let Some(identity) = executed.identity() else {
         return Arc::from([]);
     };
