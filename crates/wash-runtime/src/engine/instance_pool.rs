@@ -110,12 +110,41 @@ pub(crate) enum Dispatch {
     Saturated(InstanceJob),
 }
 
+/// A call [`InstancePool::dispatch_on_new`] would not take, and the instance
+/// built for it — so the caller's own store path runs on that rather than
+/// instantiating a second time. `None` when there is none to give back: the
+/// pool parked the instance and the call still did not fit on it, or the call
+/// was declined before one was built.
+pub(crate) struct Declined {
+    pub(crate) job: InstanceJob,
+    pub(crate) instance: Option<ComponentInstance>,
+}
+
+impl Declined {
+    /// A declined call with no instance to give back.
+    pub(crate) fn without_instance(job: InstanceJob) -> Self {
+        Self {
+            job,
+            instance: None,
+        }
+    }
+
+    /// A declined call and the instance the caller built for it.
+    fn with_instance(job: InstanceJob, instance: ComponentInstance) -> Self {
+        Self {
+            job,
+            instance: Some(instance),
+        }
+    }
+}
+
 /// An instantiated component and the store it lives in.
 ///
 /// Built by the caller, where instantiating is allowed to await and a failure
 /// to instantiate can still be returned to whoever asked for the call. It then
 /// either serves that one call and is dropped with it, or is handed to
-/// [`InstancePool::dispatch_on_new`] to be kept warm.
+/// [`InstancePool::dispatch_on_new`] — to be kept warm, or to come back in a
+/// [`Declined`] and serve the call the pool would not take.
 pub(crate) struct ComponentInstance {
     pub(crate) store: wasmtime::Store<SharedCtx>,
     pub(crate) instance: Instance,
@@ -385,13 +414,17 @@ impl InstancePool {
     /// the sweep would retire them a window later, and the next burst would
     /// build them all over again. So an instance whose call fits on one
     /// already warm is dropped instead, after the lock is released.
+    ///
+    /// A call the pool cannot take at all is the other case: there the
+    /// instance comes back in the [`Declined`], and the caller runs the call
+    /// on it rather than instantiating a second time for the same call.
     pub(crate) fn dispatch_on_new(
         self: &Arc<Self>,
         instance: ComponentInstance,
         job: InstanceJob,
-    ) -> Result<(), InstanceJob> {
+    ) -> Result<(), Declined> {
         let Some((pool_size, max_invocations, max_concurrency)) = self.limits() else {
-            return Err(job);
+            return Err(Declined::with_instance(job, instance));
         };
         let reclaims = self.reclaim_policy().is_some();
         let mut state = self.lock_state();
@@ -409,7 +442,7 @@ impl InstancePool {
                 }
             }
             if drivers.len() >= pool_size {
-                break 'sent Err(job);
+                break 'sent Err(Declined::with_instance(job, instance));
             }
             let driver = Arc::new(InstanceDriver::spawn(
                 instance,
@@ -420,7 +453,9 @@ impl InstancePool {
             // Sent under the lock, as `try_dispatch` sends: a sweep landing
             // between the push and the send would find an idle instance
             // nothing had claimed yet and retire it out from under this call.
-            driver.try_send(job)
+            // The instance is parked whether or not it takes the call, so a
+            // refusal here has none to hand back.
+            driver.try_send(job).map_err(Declined::without_instance)
         };
 
         // Sampled again with the call in place: at `try_dispatch` it may have

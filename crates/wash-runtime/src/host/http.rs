@@ -2308,9 +2308,10 @@ async fn invoke_component_handler(
         // alongside whatever else that instance already has in flight. Only
         // when every warm instance is full and the pool is at `pool_size` does
         // the request fall through to a store of its own.
+        let mut reclaimed = None;
         let req = if let Some(pool) = pool.as_ref() {
             use crate::engine::instance_driver::InstanceJob;
-            use crate::engine::instance_pool::Dispatch;
+            use crate::engine::instance_pool::{Declined, Dispatch};
             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
             let call = DispatchedCall::new("HTTP (pooled)", crate::timeouts::http_response());
             let outcome = match pool.try_dispatch(InstanceJob::Http(Box::new(ServiceHttpJob {
@@ -2331,7 +2332,7 @@ async fn invoke_component_handler(
                         job,
                     )
                 }
-                Dispatch::Saturated(job) => Err(job),
+                Dispatch::Saturated(job) => Err(Declined::without_instance(job)),
             };
             match outcome {
                 Ok(()) => {
@@ -2344,10 +2345,16 @@ async fn invoke_component_handler(
                     return Ok(watch_body(resp, watch));
                 }
                 // Every warm instance was busy; serve it cold below.
-                Err(InstanceJob::Http(job)) => job.req,
+                Err(Declined {
+                    job: InstanceJob::Http(job),
+                    instance,
+                }) => {
+                    reclaimed = instance;
+                    job.req
+                }
                 // A job comes back as the variant it went in as, so this is
                 // unreachable — but not worth a panic on a request path.
-                Err(other) => {
+                Err(Declined { job: other, .. }) => {
                     debug_assert!(false, "an HTTP job cannot come back as another kind");
                     anyhow::bail!(
                         "instance pool returned a {} job for an HTTP request",
@@ -2364,9 +2371,14 @@ async fn invoke_component_handler(
             req
         };
 
-        let mut store = workload_handle.new_store(component_id).await?;
-        let instance = instance_pre.instantiate_async(&mut store).await?;
-        let cold = crate::engine::instance_pool::ComponentInstance { store, instance };
+        let cold = match reclaimed {
+            Some(built) => built,
+            None => {
+                let mut store = workload_handle.new_store(component_id).await?;
+                let instance = instance_pre.instantiate_async(&mut store).await?;
+                crate::engine::instance_pool::ComponentInstance { store, instance }
+            }
+        };
         let call = DispatchedCall::new("HTTP (cold store)", crate::timeouts::http_response());
         let flag = call.flag();
         let (resp, watch) = call

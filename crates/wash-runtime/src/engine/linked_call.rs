@@ -36,7 +36,7 @@ use crate::engine::abandon::{AbandonedCallPolicy, arm_epoch_deadline};
 use crate::engine::ctx::SharedTlsProvider;
 use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx, StoreActiveCtxGuard};
 use crate::engine::instance_driver::{InstanceJob, LinkedJob};
-use crate::engine::instance_pool::{self, ComponentInstance, Dispatch, InstancePool};
+use crate::engine::instance_pool::{self, ComponentInstance, Declined, Dispatch, InstancePool};
 use crate::engine::store::relocate::{self, Relocated, bridgeable_element_type};
 use crate::engine::store::stream_pump::Done;
 use crate::engine::value::{carries_cross_store_handle, lift_results, lower_params};
@@ -804,6 +804,9 @@ async fn invoke_ephemeral_plain(
     // them back, so the cold path below reuses that allocation rather than
     // cloning them a second time.
     let mut declined_params = None;
+    // As does an instance built for a pool that then declined the call: the
+    // store of its own below is that instance.
+    let mut reclaimed = None;
 
     if let Some(pool) = pool.as_ref() {
         let (reply, reply_rx) = tokio::sync::oneshot::channel();
@@ -837,7 +840,7 @@ async fn invoke_ephemeral_plain(
                 let instance = inv.pre.instantiate_async(&mut store).await?;
                 pool.dispatch_on_new(ComponentInstance { store, instance }, job)
             }
-            Dispatch::Saturated(job) => Err(job),
+            Dispatch::Saturated(job) => Err(Declined::without_instance(job)),
         };
         match outcome {
             Ok(()) => {
@@ -864,17 +867,27 @@ async fn invoke_ephemeral_plain(
                     fn_name = %inv.export_name,
                     "warm instances saturated; serving this call from a store of its own"
                 );
-                if let InstanceJob::Linked(job) = declined {
+                reclaimed = declined.instance;
+                if let InstanceJob::Linked(job) = declined.job {
                     declined_params = Some(job.params);
                 }
             }
         }
     }
 
-    let mut store = new_ephemeral_store(ephemeral_call)
-        .await
-        .map_err(|e| wasmtime::format_err!("new ephemeral store creation failed: {e:#}"))?;
-    let instance = inv.pre.instantiate_async(&mut store).await?;
+    let ComponentInstance {
+        mut store,
+        instance,
+    } = match reclaimed {
+        Some(built) => built,
+        None => {
+            let mut store = new_ephemeral_store(ephemeral_call)
+                .await
+                .map_err(|e| wasmtime::format_err!("new ephemeral store creation failed: {e:#}"))?;
+            let instance = inv.pre.instantiate_async(&mut store).await?;
+            ComponentInstance { store, instance }
+        }
+    };
 
     let params_buf = declined_params.unwrap_or_else(|| params.to_vec());
     let mut results_buf = vec![Val::Bool(false); results.len()];
