@@ -267,6 +267,10 @@ name = "integration_router_dynamic"
 required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
 
 [[test]]
+name = "integration_thundering_herd"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
 name = "integration_secrets_plugin"
 required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
 
