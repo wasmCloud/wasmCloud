@@ -1972,6 +1972,17 @@ async fn run_http_server<T: Router>(
                             let mut expired = false;
                             let result = loop {
                                 tokio::select! {
+                                    // Biased, so the connection is always polled
+                                    // before the deadline is acted on. `requested`
+                                    // is set from inside the service, which only
+                                    // runs while `serve` is being polled — with
+                                    // the arms chosen at random, a request that
+                                    // arrived in the same instant the deadline
+                                    // fired had not been seen yet, and the
+                                    // connection was dropped with that request
+                                    // unanswered and unread. Polling first is what
+                                    // makes "sent no request" mean it.
+                                    biased;
                                     result = &mut serve => break result,
                                     () = &mut deadline, if !expired => {
                                         expired = true;
@@ -3228,13 +3239,6 @@ mod tests {
         );
     }
 
-    /// A connection that never asks for anything must give its slot back.
-    ///
-    /// hyper decides h1 vs h2 by reading up to 24 preface bytes, and that read
-    /// has no timeout of its own — a peer sending nothing, or half a preface,
-    /// parks there. Holding a ceiling slot the whole time turns a handful of
-    /// silent peers into a host that reports itself full, which the readiness
-    /// check then reports to Kubernetes as a reason to take it out of service.
     /// Readiness has to turn over before the shedding starts and stay turned
     /// over until there is real room, or the two probe intervals it takes to
     /// act on it are spent refusing connections — and one freed slot puts the
@@ -3299,6 +3303,13 @@ mod tests {
         assert!(limit.ready(), "and free again");
     }
 
+    /// A connection that never asks for anything must give its slot back.
+    ///
+    /// hyper decides h1 vs h2 by reading up to 24 preface bytes, and that read
+    /// has no timeout of its own — a peer sending nothing, or half a preface,
+    /// parks there. Holding a ceiling slot the whole time turns a handful of
+    /// silent peers into a host that reports itself full, which the readiness
+    /// check then reports to Kubernetes as a reason to take it out of service.
     #[tokio::test(start_paused = true)]
     async fn a_connection_that_never_speaks_gives_its_slot_back() {
         use tokio::io::AsyncWriteExt;

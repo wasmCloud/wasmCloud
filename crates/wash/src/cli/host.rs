@@ -1239,6 +1239,54 @@ host:
     }
 }
 
+#[cfg(test)]
+mod shutdown_tests {
+    use std::time::Duration;
+
+    use clap::Parser;
+
+    use super::HostCommand;
+
+    #[derive(Debug, Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        host: HostCommand,
+    }
+
+    fn parse(args: &[&str]) -> HostCommand {
+        TestCli::parse_from(std::iter::once("wash-host").chain(args.iter().copied())).host
+    }
+
+    /// The chart renders this in whole seconds with a unit suffix. It has to
+    /// parse as written there.
+    #[test]
+    fn the_chart_spelling_of_the_drain_delay_parses() {
+        assert_eq!(
+            parse(&["--drain-delay=15s"]).drain_delay,
+            Duration::from_secs(15)
+        );
+    }
+
+    /// Nothing is watching a host outside Kubernetes, and the wait would only
+    /// be a person's Ctrl-C taking longer.
+    #[test]
+    fn no_one_waits_for_a_drain_by_default() {
+        assert!(parse(&[]).drain_delay.is_zero());
+    }
+
+    /// The wait is not conditional on the probe listener: a host behind
+    /// something that health-checks it by other means still has traffic to stop
+    /// arriving, and a flag that parsed and then did nothing would say nothing
+    /// about it.
+    #[test]
+    fn a_drain_delay_stands_on_its_own() {
+        assert_eq!(
+            parse(&["--drain-delay=30s"]).drain_delay,
+            Duration::from_secs(30)
+        );
+    }
+}
+
 #[cfg(all(test, feature = "host-component-plugins"))]
 mod tests {
     use super::host_plugin_registry_credentials;
