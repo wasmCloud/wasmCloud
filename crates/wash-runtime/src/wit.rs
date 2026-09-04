@@ -197,6 +197,13 @@ pub struct WitInterface {
     /// The package name (e.g., "http", "blobstore")
     pub package: String,
     /// The specific interfaces within the package (e.g., "incoming-handler", "types")
+    ///
+    /// Defaulted for the same reason `config` is: an entry naming none of them
+    /// stands for its whole package — the shape `entry_matches` and
+    /// [`WitWorld::uses`] already read — and an operator-declared binding is
+    /// written that way, naming only the binding. Required, it would fail to
+    /// parse with `missing field 'interfaces'`.
+    #[serde(default)]
     pub interfaces: HashSet<String>,
     // TODO: This is a nice way to represent a version, but it doesn't account for
     // compatible versions. We should revisit this and implement https://docs.rs/semver/1.0.27/semver/struct.VersionReq.html

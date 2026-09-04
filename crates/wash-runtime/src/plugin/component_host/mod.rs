@@ -310,7 +310,7 @@ pub struct ComponentHostPlugin {
     /// imports — so the declaration is what says which labels this host serves.
     /// Nothing declared means nothing changes: label routing stays off and the
     /// plugin matches exactly what it did before.
-    named_bindings: Arc<AtomicBool>,
+    named_bindings: AtomicBool,
     state: Arc<ComponentHostPluginState>,
 }
 
@@ -467,7 +467,7 @@ impl ComponentHostPlugin {
             direct_binds: Arc::from(direct_binds),
             network: crate::host::ports::NetworkHandle::new(),
             socket_policy: socket_policy.unwrap_or_default(),
-            named_bindings: Arc::new(AtomicBool::new(false)),
+            named_bindings: AtomicBool::new(false),
             state,
         })
     }
@@ -566,14 +566,26 @@ impl ComponentHostPlugin {
             if !interfaces.contains(&exported.wit.namespace, &exported.wit.package, &iface_names) {
                 continue;
             }
-            for binding in import_labels(&world, &exported.wit, self.id) {
+            for label in import_labels(&world, &exported.wit, self.id) {
                 // The component model names an `(implements ..)` import by its
                 // label, so that — not the interface — is the linker instance
                 // that has to be defined for it.
-                let instance = match &binding {
+                let instance = match &label {
                     Some(label) => label.as_ref(),
                     None => exported.name.as_ref(),
                 };
+                // The instance comes from the component's world; the binding
+                // *name* has to come from the entry whose config was resolved,
+                // and the two are not the same question.
+                // [`crate::wit::WitWorld::uses`] ignores labels, so an unnamed
+                // entry matches a labeled import: wire the label, because the
+                // import is unresolved otherwise, but report only a name the
+                // plugin was handed config for at bind time. Reporting the
+                // other would have `get-binding-name` name a binding
+                // `on-workload-bind` never mentioned.
+                let binding = label
+                    .clone()
+                    .filter(|name| entry_named(&interfaces, &exported.wit, name));
                 add_capabilities_to_linker(
                     linker,
                     &self.state,
@@ -584,6 +596,7 @@ impl ComponentHostPlugin {
                 debug!(
                     id = self.id,
                     interface = %exported.name,
+                    instance,
                     binding = binding.as_deref().unwrap_or("<unnamed>"),
                     "wired host component capability"
                 );
@@ -591,6 +604,19 @@ impl ComponentHostPlugin {
         }
         Ok(())
     }
+}
+
+/// Whether a matched entry for `exported`'s package was declared under `name`.
+///
+/// The workload's entries as they reached this bind, so this answers "did the
+/// plugin see a binding called this?" — the one `on-workload-bind` delivered
+/// config for.
+fn entry_named(interfaces: &WitInterfaces<'_>, exported: &WitInterface, name: &str) -> bool {
+    interfaces.iter().any(|entry| {
+        entry.namespace == exported.namespace
+            && entry.package == exported.package
+            && entry.name.as_deref() == Some(name)
+    })
 }
 
 /// The bindings a component imports `exported` under: one entry per distinct
@@ -764,6 +790,22 @@ impl HostPlugin for ComponentHostPlugin {
     /// those names, so it is what turns the routing on.
     fn supports_named_instances(&self) -> bool {
         self.named_bindings.load(Ordering::Relaxed)
+    }
+
+    /// Never: one store answers a labeled and an unlabeled import alike.
+    ///
+    /// The deferral this turns off is for a multiplexer that routes labels
+    /// between backends it names in code and has no plain one — not for a
+    /// plugin an operator deployed to serve an interface. Left at the default
+    /// it follows [`HostPlugin::supports_named_instances`], and declaring a
+    /// single binding would hand every plain import of every package this
+    /// plugin serves to whichever single-backend native serves it too
+    /// (`wasi:keyvalue`, `wasi:blobstore`, `wasi:config` and
+    /// `wasmcloud:messaging` all have one registered by default). A `bindings`
+    /// block says which labels this plugin answers to; it says nothing about
+    /// the imports it was already serving.
+    fn defers_unnamed_instances(&self) -> bool {
+        false
     }
 
     fn set_workload_failure_sink(&self, sink: crate::plugin::WorkloadFailureSink) {
@@ -2243,6 +2285,45 @@ mod tests {
         );
     }
 
+    /// One entry per matched binding, the way `on_workload_item_bind` is
+    /// handed them.
+    fn matched(entries: &[Option<&str>]) -> HashSet<WitInterface> {
+        entries
+            .iter()
+            .map(|name| {
+                let mut wit = WitInterface::from("wasmcloud:secrets/store@2.1.0");
+                wit.name = name.map(str::to_string);
+                wit
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_label_the_workload_declared_is_reported_as_the_binding() {
+        let served = WitInterface::from("wasmcloud:secrets/store@2.1.0");
+        let entries = matched(&[Some("restricted")]);
+        assert!(entry_named(
+            &WitInterfaces::new(&entries),
+            &served,
+            "restricted"
+        ));
+    }
+
+    /// `WitWorld::uses` ignores labels, so a plain entry matches a labeled
+    /// import. The label still has to be wired — the import is unresolved
+    /// otherwise — but it is not a binding the plugin was handed config for, so
+    /// `get-binding-name` must not name it.
+    #[test]
+    fn a_label_no_entry_declared_is_not_a_binding() {
+        let served = WitInterface::from("wasmcloud:secrets/store@2.1.0");
+        let entries = matched(&[None]);
+        assert!(!entry_named(
+            &WitInterfaces::new(&entries),
+            &served,
+            "restricted"
+        ));
+    }
+
     #[test]
     fn a_different_package_wires_nothing() {
         let served = WitInterface::from("acme:kv/store@0.1.0");
@@ -2269,7 +2350,7 @@ mod tests {
     /// The `wasmcloud:host/workload-call` import every opted-in plugin
     /// declares, as a WAT line to paste into a test component.
     const DECLARES_WORKLOAD_CALLS: &str =
-        r#"(import "wasmcloud:host/workload-call@0.1.3" (instance))"#;
+        r#"(import "wasmcloud:host/workload-call@0.1.4" (instance))"#;
 
     /// Only an import nothing else can satisfy becomes the workload's to
     /// export. A native serving the interface wins — so introducing a built-in
