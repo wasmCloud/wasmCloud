@@ -1,4 +1,4 @@
-package wasmcloud:host@0.1.3;
+package wasmcloud:host@0.1.4;
 
 /// Provided by the host to a component plugin so it can partition state by the
 /// workload currently calling it. The host answers based on the in-flight
@@ -31,5 +31,12 @@ interface identity {
     /// hook is delivered about a whole workload rather than on any one
     /// binding's behalf. Read the `interface-binding` list on `workload-info`
     /// there instead.
+    ///
+    /// A name here is always one `on-workload-bind` already delivered. A
+    /// workload may import an interface under a label its manifest never
+    /// declared — the entry matching it carries no name — and the host wires
+    /// that label so the import resolves; but no configuration was resolved
+    /// under it, so it reads as `none` rather than naming a binding this plugin
+    /// was never given.
     get-binding-name: func() -> option<string>;
 }

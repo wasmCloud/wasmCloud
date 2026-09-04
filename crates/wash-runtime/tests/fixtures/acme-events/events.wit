@@ -8,7 +8,7 @@ package acme:events@0.1.0;
 interface handler {
     /// The host's failure type, so a call it could not complete comes back as a
     /// value rather than trapping the plugin that made it.
-    use wasmcloud:host/types@0.1.3.{call-error};
+    use wasmcloud:host/types@0.1.4.{call-error};
 
     /// Handle one event. Exported by a workload; called by the plugin across
     /// the store boundary. The reply carries the handling workload's own tag,
