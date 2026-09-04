@@ -95,14 +95,12 @@ async fn a_labeled_import_reaches_the_plugin_under_its_label() -> Result<()> {
         ("tenant-a", "tenant-a"),
         ("tenant-b", "tenant-b"),
     ] {
-        let (status, body) = req(
-            &client,
-            &addr,
-            host,
-            &format!("/whichbinding?via={via}"),
-        )
-        .await?;
-        assert_eq!(status.as_u16(), 200, "/whichbinding via {via} should be 200");
+        let (status, body) = req(&client, &addr, host, &format!("/whichbinding?via={via}")).await?;
+        assert_eq!(
+            status.as_u16(),
+            200,
+            "/whichbinding via {via} should be 200"
+        );
         assert_eq!(
             body, expected,
             "a call through the {via} import must report {expected} as its binding"
@@ -138,13 +136,8 @@ async fn labeled_imports_share_the_plugins_one_store() -> Result<()> {
     assert!(status.is_success(), "/set via tenant-a should succeed");
 
     for via in ["plain", "tenant-a", "tenant-b"] {
-        let (status, body) = req(
-            &client,
-            &addr,
-            host,
-            &format!("/get?via={via}&key=shared"),
-        )
-        .await?;
+        let (status, body) =
+            req(&client, &addr, host, &format!("/get?via={via}&key=shared")).await?;
         assert_eq!(status.as_u16(), 200, "/get via {via} should find the key");
         assert_eq!(
             body, "written-via-a",
@@ -163,9 +156,8 @@ async fn labeled_imports_share_the_plugins_one_store() -> Result<()> {
 #[tokio::test]
 async fn an_undeclared_label_is_refused() -> Result<()> {
     let host = "kv-implements-undeclared";
-    let only_a = PluginBindings::new().with_plugin(
-        PluginBindingSet::new(PLUGIN_ID).with_binding("tenant-a", HashMap::new()),
-    );
+    let only_a = PluginBindings::new()
+        .with_plugin(PluginBindingSet::new(PLUGIN_ID).with_binding("tenant-a", HashMap::new()));
     let (_addr, h) =
         start_host_with_component_plugin_bindings("127.0.0.1:0", PLUGIN_ID, KV_PLUGIN_WASM, only_a)
             .await?;
@@ -173,7 +165,10 @@ async fn an_undeclared_label_is_refused() -> Result<()> {
     // A refused bind is reported on the status rather than as an `Err`: the
     // request was accepted and the workload failed, which is what an operator
     // reading `workload_state` sees.
-    let status = h.workload_start(caller_workload(host)).await?.workload_status;
+    let status = h
+        .workload_start(caller_workload(host))
+        .await?
+        .workload_status;
     assert_eq!(
         status.workload_state,
         WorkloadState::Error,
@@ -203,7 +198,10 @@ async fn a_plugin_with_no_declaration_does_not_claim_labels() -> Result<()> {
     )
     .await?;
 
-    let status = h.workload_start(caller_workload(host)).await?.workload_status;
+    let status = h
+        .workload_start(caller_workload(host))
+        .await?
+        .workload_status;
     assert_eq!(
         status.workload_state,
         WorkloadState::Error,
