@@ -503,6 +503,15 @@ struct SidecarComponent {
     reclaim_min_instances: Option<i32>,
 }
 
+/// A configured `dev.service` source's loaded inputs, once fetched and its
+/// interfaces extracted. Bundled so [`build_workload`] takes one optional
+/// argument for the service rather than one per field.
+struct LoadedService {
+    bytes: Bytes,
+    digest: Option<String>,
+    interfaces: HashSet<WitInterface>,
+}
+
 /// Thin wrapper around [`build_workload`]: extracts dev-component
 /// interfaces, loads sidecar bytes + interfaces, resolves each sidecar's
 /// overrides over the workload-level base, and (when configured) loads the
@@ -559,7 +568,7 @@ async fn create_workload(
     // isn't itself the service (`dev.service = false`); see `build_workload`.
     // When `dev.service` is true it is ignored, so there's no point fetching it
     // or folding its imports into the workload host interfaces.
-    let (service_bytes, service_digest, service_interfaces) = match dev_config.service_source()? {
+    let configured_service = match dev_config.service_source()? {
         Some(source) if !dev_config.service => {
             let loaded = source
                 .load(oci_config.clone())
@@ -568,9 +577,13 @@ async fn create_workload(
             let interfaces = host
                 .intersect_interfaces(&loaded.bytes)
                 .context("failed to extract service interfaces")?;
-            (Some(loaded.bytes), loaded.digest, Some(interfaces))
+            Some(LoadedService {
+                bytes: loaded.bytes,
+                digest: loaded.digest,
+                interfaces,
+            })
         }
-        _ => (None, None, None),
+        _ => None,
     };
 
     Ok(build_workload(
@@ -578,9 +591,7 @@ async fn create_workload(
         bytes,
         dev_interfaces,
         sidecars,
-        service_bytes,
-        service_digest,
-        service_interfaces,
+        configured_service,
         resolved_workload,
     ))
 }
@@ -605,9 +616,7 @@ fn build_workload(
     bytes: Bytes,
     dev_interfaces: HashSet<WitInterface>,
     sidecars: Vec<SidecarComponent>,
-    service_bytes: Option<Bytes>,
-    service_digest: Option<String>,
-    service_interfaces: Option<HashSet<WitInterface>>,
+    configured_service: Option<LoadedService>,
     resolved_workload: &ResolvedWorkload,
 ) -> Workload {
     let mut volumes = Vec::<Volume>::new();
@@ -634,8 +643,8 @@ fn build_workload(
     for s in &sidecars {
         all_component_interfaces.push(s.interfaces.clone());
     }
-    if let Some(svc_interfaces) = service_interfaces {
-        all_component_interfaces.push(svc_interfaces);
+    if let Some(svc) = &configured_service {
+        all_component_interfaces.push(svc.interfaces.clone());
     }
 
     let host_interfaces = build_workload_host_interfaces(
@@ -676,10 +685,10 @@ fn build_workload(
             reclaim_min_instances: UNSET_LIMIT,
         });
 
-        if let Some(service_bytes) = service_bytes {
+        if let Some(configured_service) = configured_service {
             service = Some(Service {
-                bytes: service_bytes,
-                digest: service_digest,
+                bytes: configured_service.bytes,
+                digest: configured_service.digest,
                 max_restarts: 0,
                 local_resources: local_resources_for(resolved_workload),
             });
@@ -922,8 +931,6 @@ mod tests {
             HashSet::new(),
             sidecars,
             None,
-            None,
-            None,
             &resolved,
         );
 
@@ -978,8 +985,6 @@ mod tests {
             HashSet::new(),
             sidecars,
             None,
-            None,
-            None,
             &resolved,
         );
 
@@ -1015,8 +1020,6 @@ mod tests {
             fake_bytes("dev"),
             HashSet::new(),
             vec![sidecar],
-            None,
-            None,
             None,
             &resolved,
         );
@@ -1078,8 +1081,6 @@ mod tests {
             HashSet::new(),
             sidecars,
             None,
-            None,
-            None,
             &resolved,
         );
 
@@ -1128,8 +1129,6 @@ mod tests {
             HashSet::new(),
             Vec::new(),
             None,
-            None,
-            None,
             &resolved,
         );
 
@@ -1158,9 +1157,11 @@ mod tests {
             fake_bytes("dev"),
             HashSet::new(),
             Vec::new(),
-            Some(fake_bytes("svc-sidecar")),
-            Some("sha256:svc-sidecar-digest".to_string()),
-            None,
+            Some(LoadedService {
+                bytes: fake_bytes("svc-sidecar"),
+                digest: Some("sha256:svc-sidecar-digest".to_string()),
+                interfaces: HashSet::new(),
+            }),
             &resolved,
         );
 
@@ -1196,9 +1197,11 @@ mod tests {
             fake_bytes("dev"),
             HashSet::new(),
             sidecars,
-            Some(fake_bytes("svc")),
-            None,
-            None,
+            Some(LoadedService {
+                bytes: fake_bytes("svc"),
+                digest: None,
+                interfaces: HashSet::new(),
+            }),
             &ResolvedWorkload::default(),
         );
 
@@ -1252,8 +1255,6 @@ mod tests {
             HashSet::from([iface("wasi", "http")]),
             sidecars,
             None,
-            None,
-            None,
             &resolved,
         );
 
@@ -1276,9 +1277,11 @@ mod tests {
             fake_bytes("dev"),
             HashSet::new(),
             Vec::new(),
-            Some(fake_bytes("svc")),
-            None,
-            Some(HashSet::from([iface("wasi", "keyvalue")])),
+            Some(LoadedService {
+                bytes: fake_bytes("svc"),
+                digest: None,
+                interfaces: HashSet::from([iface("wasi", "keyvalue")]),
+            }),
             &ResolvedWorkload::default(),
         );
 
@@ -1311,8 +1314,6 @@ mod tests {
             fake_bytes("dev"),
             HashSet::new(),
             sidecars,
-            None,
-            None,
             None,
             &ResolvedWorkload::default(),
         );
