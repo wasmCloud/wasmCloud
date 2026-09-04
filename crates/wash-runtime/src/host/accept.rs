@@ -202,8 +202,16 @@ mod tests {
     /// unpaced, spinning a core with nothing in the log to say why.
     #[test]
     fn a_listener_that_has_stopped_working_paces_the_loop() {
-        // EBADF, EINVAL, ENOTSOCK: the same three on Linux and macOS.
-        for raw in [9, 22, 38] {
+        // `EBADF` and `EINVAL` are 9 and 22 everywhere; `ENOTSOCK` is not, and
+        // it is the one the classifier's own reasoning names, so it is worth
+        // exercising the number the platform actually uses rather than one that
+        // happens to fall through the same way.
+        #[cfg(target_os = "linux")]
+        const NOTSOCK: i32 = 88;
+        #[cfg(not(target_os = "linux"))]
+        const NOTSOCK: i32 = 38;
+
+        for raw in [9, 22, NOTSOCK] {
             let mut backoff = AcceptBackoff::default();
             let broken = std::io::Error::from_raw_os_error(raw);
             for _ in 0..=FAILURES_BEFORE_BACKOFF {

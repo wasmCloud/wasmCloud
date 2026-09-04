@@ -192,8 +192,15 @@ var _ = Describe("Thundering Herd", Ordered, func() {
 					return
 				}
 			}
-			g.Expect(out).To(BeEmpty(), "no host in the default hostgroup is Ready yet")
+			// Asserted on the name, not on the output: no Host CRs at all
+			// prints nothing and exits 0, so an emptiness check on `out` would
+			// pass on the way in and leave every reading below aimed at a host
+			// that does not exist — with the herd's central assertion satisfied
+			// by having looked at nothing.
+			g.Expect(hostName).NotTo(BeEmpty(),
+				"no host in the default hostgroup is Ready yet, got %q", out)
 		}).WithTimeout(3 * time.Minute).WithPolling(2 * time.Second).Should(Succeed())
+		Expect(hostName).NotTo(BeEmpty())
 
 		// The baseline for the restart check after convergence.
 		restartsBefore := hostPodRestarts()
