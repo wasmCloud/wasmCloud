@@ -82,15 +82,16 @@ spec:
             - name: health
               containerPort: 8082
               protocol: TCP
-          # `mgr.Start` binds this port, and it runs after the operator has
-          # connected to NATS — a wait of up to `NatsInitialConnectWindow`
-          # (60s). This suspends liveness until then; 24 × 5s covers it.
+          {{- with .Values.operator.startupProbe }}
+          {{- if .enabled }}
           startupProbe:
             httpGet:
               path: /healthz
               port: health
-            periodSeconds: 5
-            failureThreshold: 24
+            periodSeconds: {{ .periodSeconds }}
+            failureThreshold: {{ .failureThreshold }}
+          {{- end }}
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

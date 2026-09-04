@@ -128,7 +128,7 @@ pub trait ReadinessCheck: Send + Sync + std::fmt::Debug {
     /// It earns its place only where readiness alone leaves a host that will
     /// never serve again — running, heartbeating, and still being scheduled
     /// onto, because nothing that places work reads readiness.
-    fn terminal(&self) -> bool {
+    fn unrecoverable(&self) -> bool {
         false
     }
 }
@@ -191,7 +191,7 @@ impl ProbeState {
         !self
             .checks
             .iter()
-            .any(|check| check.terminal() && !check.ready())
+            .any(|check| check.unrecoverable() && !check.ready())
     }
 
     /// The checks currently refusing, empty when the host is ready.
@@ -325,7 +325,7 @@ mod tests {
     struct Gate {
         name: &'static str,
         ready: AtomicBool,
-        terminal: bool,
+        unrecoverable: bool,
     }
 
     impl ReadinessCheck for Gate {
@@ -335,8 +335,8 @@ mod tests {
         fn ready(&self) -> bool {
             self.ready.load(Ordering::Relaxed)
         }
-        fn terminal(&self) -> bool {
-            self.terminal
+        fn unrecoverable(&self) -> bool {
+            self.unrecoverable
         }
     }
 
@@ -344,16 +344,16 @@ mod tests {
         Arc::new(Gate {
             name,
             ready: AtomicBool::new(ready),
-            terminal: false,
+            unrecoverable: false,
         })
     }
 
     /// A check whose refusal the host cannot recover from.
-    fn terminal_gate(name: &'static str, ready: bool) -> Arc<Gate> {
+    fn unrecoverable_gate(name: &'static str, ready: bool) -> Arc<Gate> {
         Arc::new(Gate {
             name,
             ready: AtomicBool::new(ready),
-            terminal: true,
+            unrecoverable: true,
         })
     }
 
@@ -378,7 +378,7 @@ mod tests {
     /// this is the case where a restart is the lesser loss.
     #[test]
     fn a_host_whose_ingress_stopped_is_not_live() {
-        let stopped = terminal_gate("http_ingress_stopped", false);
+        let stopped = unrecoverable_gate("http_ingress_stopped", false);
         let state = ProbeState::default().with_readiness(stopped);
         state.started();
 
@@ -388,8 +388,8 @@ mod tests {
 
     /// The same check, satisfied, says nothing about liveness.
     #[test]
-    fn a_terminal_check_that_is_satisfied_leaves_the_host_live() {
-        let state = ProbeState::default().with_readiness(terminal_gate("ingress", true));
+    fn an_unrecoverable_check_that_is_satisfied_leaves_the_host_live() {
+        let state = ProbeState::default().with_readiness(unrecoverable_gate("ingress", true));
         state.started();
         assert!(state.live());
         assert!(state.not_ready().is_empty());
@@ -401,7 +401,7 @@ mod tests {
     #[test]
     fn a_draining_host_stays_live_even_with_its_ingress_stopped() {
         let state =
-            ProbeState::default().with_readiness(terminal_gate("http_ingress_stopped", false));
+            ProbeState::default().with_readiness(unrecoverable_gate("http_ingress_stopped", false));
         state.started();
         state.drain();
 

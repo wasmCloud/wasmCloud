@@ -88,7 +88,7 @@ func NewEmbeddedOperator(
 		cfg.HeartbeatTTL = MinHeartbeatTTL
 	}
 
-	nc, err := wasmbus.NatsConnect(cfg.NatsURL, cfg.NatsOptions...)
+	nc, err := wasmbus.NatsConnectContext(ctx, cfg.NatsURL, cfg.NatsOptions...)
 	if err != nil {
 		return nil, err
 	}
