@@ -186,7 +186,7 @@ mod roster_tests {
 /// decides whether a workload may write over it.
 pub mod bindings;
 pub use bindings::{
-    BindingSchema, KeyOwnership, PluginBindingSet, PluginBindings, WorkloadConfigPolicy,
+    BindingSchema, KeyOwnership, PluginBindingSet, PluginBindings, WorkloadConfigPolicy, binding_of,
 };
 
 /// Shared `(implements ..)` multiplexing core
@@ -467,21 +467,11 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
         false
     }
 
-    /// Whether this plugin hands a plain, *unlabeled* import to a
-    /// single-backend plugin that also serves it.
-    ///
-    /// Defaults to [`HostPlugin::supports_named_instances`], which is the rule
-    /// a closed multiplexer wants: it exists to route `(implements ..)` labels
-    /// between backends it names in code, so where a single-backend plugin
-    /// serves the same interface, that one is the better answer for an import
-    /// carrying no label.
-    ///
-    /// A plugin that serves both off one backend — a host component plugin
-    /// answers a labeled and an unlabeled import from the same store —
-    /// overrides this to `false`. Deferring would hand its plain imports to the
-    /// very native an operator deployed it to replace, and it would happen the
-    /// moment they declared a binding, which says which labels this plugin
-    /// answers to and nothing about the imports it already served.
+    /// Whether a plain, unlabeled import is handed to another plugin that
+    /// serves it plainly. Defaults to [`HostPlugin::supports_named_instances`]:
+    /// a closed multiplexer routes labels between backends it names in code,
+    /// so a single-backend plugin is the better answer for an import with no
+    /// label. A plugin serving both off one backend returns `false`.
     fn defers_unnamed_instances(&self) -> bool {
         self.supports_named_instances()
     }

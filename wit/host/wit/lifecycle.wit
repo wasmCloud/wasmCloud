@@ -77,24 +77,22 @@ interface workload-lifecycle {
         /// same namespace:package, if any. Component-facing: what the component
         /// calls this import.
         ///
-        /// For a **wasm** host component plugin this is live in both
-        /// directions, and the operator's `host.plugins` entry is what turns
-        /// it on: declare a name under that entry's `bindings` and a workload
-        /// may import the plugin's interface under that `(implements ..)`
-        /// label, as many of them as the entry declares. The label reaches the
-        /// hook here with the binding's resolved `config`, and it reaches every
-        /// capability call the label routes as
-        /// `wasmcloud:host/identity#get-binding-name` — so state keyed by
-        /// binding at bind time is reachable from the call that needs it.
+        /// For a **wasm** host component plugin, a label routes here when the
+        /// operator declares it under the plugin's `host.plugins` entry's
+        /// `bindings`. The workload names it on an entry and the component
+        /// imports the interface under that `(implements ..)` label; the name
+        /// then reaches this hook with the binding's resolved `config`, and
+        /// every call the label routes as
+        /// `wasmcloud:host/identity#get-binding-name`. A plain import takes
+        /// the unnamed entry, or the one named entry when that is all the
+        /// workload declared. An import matching no entry — a label no entry
+        /// names, or a plain import beside several named entries — fails the
+        /// bind rather than binding unnamed.
         ///
-        /// Declare nothing and nothing changes: a plugin with no `bindings`
-        /// entry serves plain, unlabeled imports exactly as it did before, and
-        /// this field arrives as `none`.
-        ///
-        /// One gap remains, and it is not specific to wasm plugins: two
-        /// *unnamed* entries of the same namespace:package are one binding, so
-        /// a plugin cannot serve them differently. Give them labels — which is
-        /// what labels are for.
+        /// Declare nothing and the plugin serves plain imports as before, and
+        /// a workload naming more than one binding of a package is refused.
+        /// Two *unnamed* entries of one namespace:package are one binding, for
+        /// any plugin; give them labels.
         name: option<string>,
         /// Platform-facing id the binding was declared with, if any — what the
         /// platform's configuration calls the same instance.

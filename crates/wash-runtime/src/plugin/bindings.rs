@@ -631,15 +631,9 @@ impl PluginBindingSet {
     }
 
     /// The binding name an interface routes under: its `(implements ..)` label,
-    /// or the unnamed binding.
-    ///
-    /// A label equal to the plugin's own id is how a workload routes directly
-    /// to a plugin rather than naming a backend, so it reads as unnamed here.
+    /// or the unnamed binding. See [`binding_of`].
     fn binding_name<'a>(&self, interface: &'a WitInterface) -> &'a str {
-        match interface.name.as_deref() {
-            Some(name) if name != self.plugin_id => name,
-            _ => UNNAMED_BINDING,
-        }
+        binding_of(&self.plugin_id, interface.name.as_deref()).unwrap_or(UNNAMED_BINDING)
     }
 
     /// Fold every entry a workload wrote for one binding into a single config.
@@ -1134,6 +1128,19 @@ fn first_widening_element(
         .into_iter()
         .find(|element| !narrows(key, host, element))
         .map(str::to_string)
+}
+
+/// The binding an `(implements ..)` label names on `plugin_id`, or `None` for
+/// the unnamed binding.
+///
+/// A label equal to the plugin's own id is how a workload routes directly to
+/// a plugin rather than naming a backend, so it reads as unnamed. Every place
+/// that turns a label into a binding — config resolution, the engine's
+/// per-package binding count, a plugin's own linker wiring — goes through
+/// this so they agree.
+#[must_use]
+pub fn binding_of<'a>(plugin_id: &str, label: Option<&'a str>) -> Option<&'a str> {
+    label.filter(|name| *name != plugin_id)
 }
 
 /// How a binding reads in an error message.

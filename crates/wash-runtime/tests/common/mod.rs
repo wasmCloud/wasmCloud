@@ -376,28 +376,6 @@ async fn start_host_with_component_plugin_router(
     plugin_id: &'static str,
     plugin_wasm: &'static [u8],
     max_restarts: Option<u32>,
-) -> Result<(std::net::SocketAddr, impl HostApi)> {
-    start_host_with_component_plugin_router_bindings(
-        addr,
-        router,
-        plugin_id,
-        plugin_wasm,
-        max_restarts,
-        wash_runtime::plugin::PluginBindings::new(),
-    )
-    .await
-}
-
-/// [`start_host_with_component_plugin_router`] plus the operator's
-/// `host.plugins` declaration, which is what turns `(implements ..)` label
-/// routing on for a component plugin.
-#[cfg(feature = "host-component-plugins")]
-async fn start_host_with_component_plugin_router_bindings(
-    addr: &str,
-    router: impl wash_runtime::host::http::Router,
-    plugin_id: &'static str,
-    plugin_wasm: &'static [u8],
-    max_restarts: Option<u32>,
     plugin_bindings: wash_runtime::plugin::PluginBindings,
 ) -> Result<(std::net::SocketAddr, impl HostApi)> {
     let engine = Engine::builder().build()?;
@@ -439,7 +417,7 @@ pub async fn start_host_with_component_plugin_bindings(
     plugin_wasm: &'static [u8],
     plugin_bindings: wash_runtime::plugin::PluginBindings,
 ) -> Result<(std::net::SocketAddr, impl HostApi)> {
-    start_host_with_component_plugin_router_bindings(
+    start_host_with_component_plugin_router(
         addr,
         DevRouter::default(),
         plugin_id,
@@ -465,6 +443,7 @@ pub async fn start_host_with_component_plugin(
         plugin_id,
         plugin_wasm,
         None,
+        wash_runtime::plugin::PluginBindings::new(),
     )
     .await
 }
@@ -485,6 +464,7 @@ pub async fn start_host_with_component_plugin_by_host(
         plugin_id,
         plugin_wasm,
         None,
+        wash_runtime::plugin::PluginBindings::new(),
     )
     .await
 }
@@ -504,6 +484,7 @@ pub async fn start_host_with_component_plugin_max_restarts(
         plugin_id,
         plugin_wasm,
         Some(max_restarts),
+        wash_runtime::plugin::PluginBindings::new(),
     )
     .await
 }

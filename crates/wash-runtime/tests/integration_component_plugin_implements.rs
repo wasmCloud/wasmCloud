@@ -215,19 +215,19 @@ async fn a_plugin_with_no_declaration_does_not_claim_labels() -> Result<()> {
     Ok(())
 }
 
-/// A label the component imports but the *manifest* never named is wired, and
-/// reports no binding.
+/// A label the component imports but the *manifest* never named is refused at
+/// bind, and the refusal names the label.
 ///
 /// `WitWorld::uses` matches an entry to an import by package, ignoring labels,
 /// so a manifest carrying only the plain entry still matches a component that
-/// imports under labels. The labels have to be wired — the import is
-/// unresolved otherwise — but the config was resolved under the unnamed
-/// binding, so naming one here would have `get-binding-name` report a binding
-/// `on-workload-bind` never delivered.
+/// imports under labels. Wiring those labels anyway would let a component
+/// reach the plugin under a name the workload never declared — and the
+/// operator's `bindings` block is checked against declared entries, so that
+/// would sidestep it. The import shape has to match its entry.
 #[tokio::test]
-async fn a_label_the_manifest_never_named_reports_no_binding() -> Result<()> {
+async fn a_label_the_manifest_never_named_is_refused() -> Result<()> {
     let host = "kv-implements-plain-entry";
-    let (addr, h) = start_host_with_component_plugin_bindings(
+    let (_addr, h) = start_host_with_component_plugin_bindings(
         "127.0.0.1:0",
         PLUGIN_ID,
         KV_PLUGIN_WASM,
@@ -253,23 +253,13 @@ async fn a_label_the_manifest_never_named_reports_no_binding() -> Result<()> {
         .workload_status;
     assert_eq!(
         status.workload_state,
-        WorkloadState::Running,
-        "one entry is one binding, so this deploys: {}",
-        status.message
+        WorkloadState::Error,
+        "a component importing under a label its manifest never named must not deploy"
     );
-
-    let client = reqwest::Client::new();
-    for via in ["plain", "tenant-a", "tenant-b"] {
-        let (status, body) = req(&client, &addr, host, &format!("/whichbinding?via={via}")).await?;
-        assert_eq!(
-            status.as_u16(),
-            200,
-            "the {via} import must be wired even though the manifest never named it"
-        );
-        assert_eq!(
-            body, "<none>",
-            "a label no entry declared must not be reported as a binding"
-        );
-    }
+    let msg = status.message;
+    assert!(
+        msg.contains("tenant-a") && msg.contains("name: tenant-a") && msg.contains(PLUGIN_ID),
+        "the refusal must name the label, the entry to add, and the plugin, got: {msg}"
+    );
     Ok(())
 }

@@ -14,29 +14,13 @@ interface identity {
 
     /// The binding this call arrived on: the `(implements <name>)` label the
     /// caller imported this plugin's interface under, or `none` for a plain,
-    /// unlabeled import.
-    ///
-    /// The label is the routing key an operator declares under a `host.plugins`
-    /// entry's `bindings`, so this is what pairs a call with the configuration
-    /// that binding was given — the config delivered as the matching
-    /// `workload-lifecycle.interface-binding`'s `name`/`config` at bind time.
-    /// Without it a plugin serving two bindings of one workload could tell them
-    /// apart at bind and not on the call that needs it.
+    /// unlabeled import. The label is the name an operator declares under a
+    /// `host.plugins` entry's `bindings`, and the name the matching
+    /// `workload-lifecycle.interface-binding` carried at bind time, so it
+    /// pairs a call with that binding's configuration.
     ///
     /// A label equal to the plugin's own id addresses the plugin rather than
-    /// one of its bindings, and reads as `none` here, exactly as it does in the
-    /// host's own binding resolution.
-    ///
-    /// `none` is also what a lifecycle hook and an unresolvable caller get: a
-    /// hook is delivered about a whole workload rather than on any one
-    /// binding's behalf. Read the `interface-binding` list on `workload-info`
-    /// there instead.
-    ///
-    /// A name here is always one `on-workload-bind` already delivered. A
-    /// workload may import an interface under a label its manifest never
-    /// declared — the entry matching it carries no name — and the host wires
-    /// that label so the import resolves; but no configuration was resolved
-    /// under it, so it reads as `none` rather than naming a binding this plugin
-    /// was never given.
+    /// one of its bindings and reads as `none`. A lifecycle hook reads `none`
+    /// too: it is about a whole workload, so read `workload-info` there.
     get-binding-name: func() -> option<string>;
 }

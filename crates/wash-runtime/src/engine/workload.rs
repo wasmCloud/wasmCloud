@@ -2323,11 +2323,23 @@ impl UnresolvedWorkload {
                     if plugin_interfaces.includes_bidirectional(wit_interface)
                         && p.claims(wit_interface)
                     {
-                        // an `(implements ..)` named interface is served only
-                        // by a plugin that supports named instances.
-                        let defer_to_other = if wit_interface.name.is_some() {
-                            !p.supports_named_instances()
-                                && other_plugin_serves(plugins, plugin_id, wit_interface, true)
+                        // An `(implements ..)` label routes to the plugin
+                        // whose `host.plugins` entry declares it; failing
+                        // that, to one that supports named instances. A plain
+                        // import stays with a plugin that serves it plainly.
+                        let defer_to_other = if let Some(label) = wit_interface.name.as_deref() {
+                            match declaring_plugin(plugins, plugin_bindings, label, wit_interface) {
+                                Some(owner) => owner != *plugin_id,
+                                None => {
+                                    !p.supports_named_instances()
+                                        && other_plugin_serves(
+                                            plugins,
+                                            plugin_id,
+                                            wit_interface,
+                                            true,
+                                        )
+                                }
+                            }
                         } else {
                             p.defers_unnamed_instances()
                                 && other_plugin_serves(plugins, plugin_id, wit_interface, false)
@@ -2396,23 +2408,22 @@ impl UnresolvedWorkload {
                 // one package need two backends to route between. A plugin
                 // serving a single instance has one, and collapsing them into
                 // it delivers one binding's configuration under both names.
-                //
-                // A label equal to the plugin's own id addresses the plugin
-                // rather than a backend, and reads as unnamed here exactly as
-                // it does in [`crate::plugin::PluginBindingSet`].
+                // The operator declaring names under the plugin's
+                // `host.plugins` entry says it routes them, whatever it
+                // reports on its own.
+                let routes_names =
+                    p.supports_named_instances() || declared.binding_names().next().is_some();
                 let mut ns_pkg_bindings: BTreeMap<(&str, &str), BTreeSet<&str>> = BTreeMap::new();
                 for iface in &plugin_matched_interfaces {
-                    let binding = match iface.name.as_deref() {
-                        Some(name) if name != *plugin_id => name,
-                        _ => "",
-                    };
+                    let binding =
+                        crate::plugin::binding_of(plugin_id, iface.name.as_deref()).unwrap_or("");
                     ns_pkg_bindings
                         .entry((iface.namespace.as_str(), iface.package.as_str()))
                         .or_default()
                         .insert(binding);
                 }
                 for ((ns, pkg), bindings) in ns_pkg_bindings {
-                    if bindings.len() > 1 && !p.supports_named_instances() {
+                    if bindings.len() > 1 && !routes_names {
                         let named: Vec<&str> =
                             bindings.iter().copied().filter(|b| !b.is_empty()).collect();
                         // Plugins bind in id order, so earlier ones are already
@@ -2913,10 +2924,10 @@ async fn unbind_all(workload_id: &str, bound: &[BoundPluginWithInterfaces], reas
     }
 }
 
-/// Returns whether some *other* registered plugin (not `self_id`) with
-/// `supports_named_instances() == want_named` can serve `iface`.
-/// Used to determine whether a plugin can defer an `(implements ..)`
-///  interface to a named-capable one, and vice versa).
+/// Returns whether some *other* registered plugin (not `self_id`) can take
+/// `iface` off this one's hands: with `want_named`, one that supports named
+/// instances; without, one that serves plain imports itself rather than
+/// deferring them ([`HostPlugin::defers_unnamed_instances`]).
 ///
 /// A plugin that would refuse `iface` via [`HostPlugin::claims`] is not a
 /// deferral target: deferring to it would leave the interface bound by nobody.
@@ -2928,9 +2939,33 @@ fn other_plugin_serves(
 ) -> bool {
     plugins.iter().any(|(id, q)| {
         *id != self_id
-            && q.supports_named_instances() == want_named
+            && (if want_named {
+                q.supports_named_instances()
+            } else {
+                !q.defers_unnamed_instances()
+            })
             && q.world().includes_bidirectional(iface)
             && q.claims(iface)
+    })
+}
+
+/// The plugin whose `host.plugins` entry declares `label` and that serves
+/// `iface`, if any — lowest id first, so the answer is stable. An operator's
+/// declaration is the routing key: it beats id order and whatever the plugins
+/// report for named-instance support.
+fn declaring_plugin(
+    plugins: &HashMap<&'static str, Arc<dyn HostPlugin + 'static>>,
+    plugin_bindings: &crate::plugin::PluginBindings,
+    label: &str,
+    iface: &WitInterface,
+) -> Option<&'static str> {
+    plugin_bindings.plugin_ids().find_map(|id| {
+        let (id, q) = plugins.get_key_value(id)?;
+        let declares = plugin_bindings
+            .for_plugin(id)
+            .binding_names()
+            .any(|name| name == label);
+        (declares && q.world().includes_bidirectional(iface) && q.claims(iface)).then_some(*id)
     })
 }
 
@@ -4410,6 +4445,109 @@ mod tests {
             bound_plugins[0].0.id(),
             "blobstore-a-component",
             "a plugin serving both must not hand its unlabeled import to a native"
+        );
+    }
+
+    /// A multiplexer defers a plain import to any plugin that serves plain
+    /// imports itself — including one that also routes labels. Keying the
+    /// deferral target on named-instance support alone would have the
+    /// multiplexer keep the import the moment the other plugin grew a label.
+    #[tokio::test]
+    async fn test_a_multiplexer_defers_plain_imports_to_a_dual_mode_plugin() {
+        let iface = WitInterface::from("wasi:blobstore/container");
+
+        // Sorts first, so it is offered the import before the dual plugin.
+        let mux = Arc::new(
+            MockPlugin::new("aaa-multiplexed", vec![iface.clone()], vec![])
+                .with_named_instance_support(),
+        );
+        let dual = Arc::new(
+            MockPlugin::new("zzz-component", vec![iface.clone()], vec![])
+                .with_named_instance_support()
+                .serving_unnamed_too(),
+        );
+
+        let mut plugins = HashMap::new();
+        plugins.insert(mux.id(), mux.clone() as Arc<dyn HostPlugin>);
+        plugins.insert(dual.id(), dual.clone() as Arc<dyn HostPlugin>);
+
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![create_test_component("component1")],
+            vec![iface],
+        );
+
+        let bound_plugins = workload
+            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+            .await
+            .unwrap();
+
+        assert_eq!(bound_plugins.len(), 1);
+        assert_eq!(
+            bound_plugins[0].0.id(),
+            "zzz-component",
+            "the multiplexer must hand a plain import to the plugin serving it plainly"
+        );
+    }
+
+    /// An `(implements ..)` label declared under a plugin's `host.plugins`
+    /// entry routes to that plugin: ahead of id order, and whether or not the
+    /// plugin reports named-instance support of its own. The declaration also
+    /// lets it take a named entry beside the unnamed one.
+    #[tokio::test]
+    async fn test_a_declared_label_routes_to_the_declaring_plugin() {
+        let iface = WitInterface::from("wasi:blobstore/container");
+
+        // Sorts first and supports names, so without the declaration it would
+        // claim the label.
+        let mux = Arc::new(
+            MockPlugin::new("aaa-multiplexed", vec![iface.clone()], vec![])
+                .with_named_instance_support(),
+        );
+        let component = Arc::new(MockPlugin::new(
+            "zzz-component",
+            vec![iface.clone()],
+            vec![],
+        ));
+
+        let mut plugins = HashMap::new();
+        plugins.insert(mux.id(), mux.clone() as Arc<dyn HostPlugin>);
+        plugins.insert(component.id(), component.clone() as Arc<dyn HostPlugin>);
+
+        let mut labeled = iface.clone();
+        labeled.name = Some("tenant-a".to_string());
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![create_test_component("component1")],
+            vec![iface, labeled],
+        );
+
+        let declared = crate::plugin::PluginBindings::new().with_plugin(
+            crate::plugin::PluginBindingSet::new("zzz-component")
+                .with_binding("tenant-a", HashMap::new()),
+        );
+        let bound_plugins = workload.bind_plugins(&plugins, &declared).await.unwrap();
+
+        assert_eq!(
+            bound_plugins.len(),
+            1,
+            "both entries must land on the declaring plugin, got {:?}",
+            bound_plugins
+                .iter()
+                .map(|(p, _)| p.id())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(bound_plugins[0].0.id(), "zzz-component");
+        assert_eq!(
+            mux.get_call_count("on_workload_bind"),
+            0,
+            "a label the operator declared elsewhere is not the multiplexer's"
         );
     }
 
