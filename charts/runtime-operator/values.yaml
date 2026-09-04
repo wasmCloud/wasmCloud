@@ -150,6 +150,14 @@ operator:
   service:
     type: ClusterIP
     port: 8443
+  # -- Startup probe for the operator, which suspends the liveness probe until
+  # it passes. `mgr.Start` binds `/healthz`, and it runs only after the operator
+  # has connected to NATS — a wait of up to `NatsInitialConnectWindow`. Size
+  # `periodSeconds` × `failureThreshold` to cover that wait plus manager start.
+  startupProbe:
+    enabled: true
+    periodSeconds: 5
+    failureThreshold: 24
   # -- This section builds out the service account.
   # See the [Kubernetes documentation](https://kubernetes.io/docs/concepts/security/service-accounts/).
   serviceAccount:
@@ -440,9 +448,9 @@ runtime:
       enabled: true
       port: 8081
       # -- How many 5s attempts the host gets to bind the probe port before the
-      # kubelet gives up. It binds after the host has waited for NATS (up to
-      # `--nats-connect-timeout`, 60s) and after plugin pulls and compiles, so
-      # this is the startup budget for all three: 60 is five minutes.
+      # kubelet gives up. It binds after `runtime.natsConnectTimeoutSeconds` of
+      # waiting for NATS and after plugin pulls and compiles, so this is the
+      # startup budget for all three: 60 is five minutes.
       startupFailureThreshold: 60
     readiness:
       enabled: true
@@ -479,6 +487,12 @@ runtime:
   # It has to fit inside `terminationGracePeriodSeconds` alongside the 5s
   # command drain that follows it; the chart refuses to render if it does not.
   drainDelaySeconds: 5
+  # -- How long a starting host keeps retrying NATS before it gives up, across
+  # the scheduler and data connections together. A host pod and its NATS come
+  # up with no ordering between them, so a refusal here is a race to wait out
+  # rather than a reason to exit and spend a pod restart. Zero fails on the
+  # first refusal. `probes.endpoint.startupFailureThreshold` has to cover this.
+  natsConnectTimeoutSeconds: 60
   # -- How long a terminating host pod has to shut down before it is killed.
   #
   # Three numbers in sequence, and this is the budget for all of them:

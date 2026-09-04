@@ -40,12 +40,21 @@ type NatsOption = nats.Option
 // runs forever and reconciles nothing.
 var NatsInitialConnectWindow = 60 * time.Second
 
-// NatsConnect connects to a NATS server at the given URL.
+// NatsConnect connects to a NATS server at the given URL, waiting out a
+// startup race for up to [NatsInitialConnectWindow].
+//
+// Prefer [NatsConnectContext] anywhere a context is in hand: this one cannot be
+// cancelled, so a signal arriving during the wait is not acted on until it ends.
+func NatsConnect(url string, options ...NatsOption) (*nats.Conn, error) {
+	return NatsConnectContext(context.Background(), url, options...)
+}
+
+// NatsConnectContext connects to a NATS server at the given URL.
 // The URL should be in the form of "nats://host:port".
 // This helper function sets some default options and calls `nats.Connect`,
 // retrying a first connection that is refused for up to
-// [NatsInitialConnectWindow].
-func NatsConnect(url string, options ...NatsOption) (*nats.Conn, error) {
+// [NatsInitialConnectWindow] or until `ctx` is done.
+func NatsConnectContext(ctx context.Context, url string, options ...NatsOption) (*nats.Conn, error) {
 	opts := append([]nats.Option{
 		nats.PingInterval(1 * time.Minute),    // default is 2m
 		nats.MaxPingsOutstanding(1),           // default is 2
@@ -75,7 +84,16 @@ func NatsConnect(url string, options ...NatsOption) (*nats.Conn, error) {
 		if remaining <= 0 {
 			return nil, fmt.Errorf("%w: %v (no connection within %s)", ErrTransport, err, NatsInitialConnectWindow)
 		}
-		time.Sleep(min(backoff, remaining))
+		// Selected on rather than slept through: this runs before the manager
+		// starts, so nothing else is watching for a signal, and a plain sleep
+		// outlives a grace period shorter than the window.
+		timer := time.NewTimer(min(backoff, remaining))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("%w: %v (gave up waiting for NATS: %v)", ErrTransport, err, ctx.Err())
+		case <-timer.C:
+		}
 		backoff = min(backoff*2, 5*time.Second)
 	}
 }
@@ -97,9 +115,14 @@ func worthRetrying(err error) bool {
 		errors.Is(err, syscall.ENETUNREACH):
 		return true
 	case errors.As(err, &dnsErr):
-		// A Service's DNS record does not exist until the Service does, which
-		// is the same race one layer down.
-		return true
+		// A Service's record does not exist until the Service does, which is
+		// the same race one layer down, and a resolver that is itself starting
+		// answers temporarily. Anything else from DNS — a name that cannot be
+		// parsed, a refused query — will read the same on the last attempt.
+		//
+		// A misspelt Service is indistinguishable from one that has not been
+		// created yet, so it costs the whole window before it is reported.
+		return dnsErr.IsNotFound || dnsErr.IsTemporary
 	default:
 		return false
 	}
