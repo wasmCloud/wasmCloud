@@ -86,7 +86,7 @@ func TestStartWaitsForInFlightRequests(t *testing.T) {
 			responded <- proxiedResponse{err: err}
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		// Read it out so the connection goes idle and the drain can finish.
 		if _, err := io.Copy(io.Discard, resp.Body); err != nil {
 			responded <- proxiedResponse{err: err}
