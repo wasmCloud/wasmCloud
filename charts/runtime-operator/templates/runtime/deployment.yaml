@@ -32,8 +32,30 @@
        beside it: a group may turn it off or move it without restating the
        chart-wide default. */}}
 {{- $endpoint := include "runtime-operator.hostProbe" (merge (dict "name" "endpoint") $probeArgs) | fromJson }}
-{{- if and $endpoint.enabled .http .http.enabled (eq (int $endpoint.port) (int .http.port)) }}
-{{- fail (printf "host group %s: probes.endpoint.port and http.port are both %v; the host would fail to bind the second" .name $endpoint.port) }}
+{{- /* Every port the chart renders itself, checked against each other and
+       against the group's own `ports`. Two of these are bound by the host and
+       collide at runtime; a third way to collide is re-listing one under
+       `ports`, which renders a duplicate containerPort and is refused by the
+       API server with a message naming an array index rather than a port. All
+       three are the same mistake, so they are caught in one place and named. */}}
+{{- $groupName := .name }}
+{{- $reserved := dict }}
+{{- if and .http .http.enabled }}
+{{- $_ := set $reserved (toString (int .http.port)) "http.port" }}
+{{- end }}
+{{- if $endpoint.enabled }}
+{{- $probePort := toString (int $endpoint.port) }}
+{{- if hasKey $reserved $probePort }}
+{{- fail (printf "host group %s: probes.endpoint.port and http.port are both %v; the host would fail to bind the second" $groupName $endpoint.port) }}
+{{- end }}
+{{- $_ := set $reserved $probePort "probes.endpoint.port" }}
+{{- end }}
+{{- range .ports }}
+{{- $port := toString (int .containerPort) }}
+{{- $clash := index $reserved $port }}
+{{- if $clash }}
+{{- fail (printf "host group %s: ports[] re-lists containerPort %s, which the chart already renders from %s; drop it from ports[]" $groupName $port $clash) }}
+{{- end }}
 {{- end }}
 {{- $liveness := include "runtime-operator.hostProbe" (merge (dict "name" "liveness") $probeArgs) | fromJson }}
 {{- $readiness := include "runtime-operator.hostProbe" (merge (dict "name" "readiness") $probeArgs) | fromJson }}
