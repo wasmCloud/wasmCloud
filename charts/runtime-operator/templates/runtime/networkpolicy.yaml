@@ -2,6 +2,7 @@
 {{- range .Values.runtime.hostGroups }}
 {{- if $top.Values.networkPolicy.enabled }}
 {{- $ns := default $top.Release.Namespace .namespace }}
+{{- $endpoint := include "runtime-operator.hostProbe" (dict "name" "endpoint" "group" .probes "chart" $top.Values.runtime.probes) | fromJson }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -21,9 +22,17 @@ spec:
   ingress:
     # The host's served HTTP port plus any additional container ports the host
     # group declares (e.g. a metrics scrape endpoint).
+    #
+    # The probe port is in this list because the kubelet reaches it from the
+    # node: under a default-deny policy, a CNI that applies NetworkPolicy to
+    # probe traffic would fail every probe and restart every host.
     - ports:
         {{- if and .http .http.enabled }}
         - port: {{ .http.port }}
+          protocol: TCP
+        {{- end }}
+        {{- if $endpoint.enabled }}
+        - port: {{ $endpoint.port }}
           protocol: TCP
         {{- end }}
         {{- range .ports }}

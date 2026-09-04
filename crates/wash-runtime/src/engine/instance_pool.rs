@@ -110,12 +110,41 @@ pub(crate) enum Dispatch {
     Saturated(InstanceJob),
 }
 
+/// A call [`InstancePool::dispatch_on_new`] would not take, and the instance
+/// built for it — so the caller's own store path runs on that rather than
+/// instantiating a second time. `None` when there is none to give back: the
+/// call was declined before one was built, or the driver it was parked on
+/// ended before it could take the call.
+pub(crate) struct Declined {
+    pub(crate) job: InstanceJob,
+    pub(crate) instance: Option<ComponentInstance>,
+}
+
+impl Declined {
+    /// A declined call with no instance to give back.
+    pub(crate) fn without_instance(job: InstanceJob) -> Self {
+        Self {
+            job,
+            instance: None,
+        }
+    }
+
+    /// A declined call and the instance the caller built for it.
+    fn with_instance(job: InstanceJob, instance: ComponentInstance) -> Self {
+        Self {
+            job,
+            instance: Some(instance),
+        }
+    }
+}
+
 /// An instantiated component and the store it lives in.
 ///
 /// Built by the caller, where instantiating is allowed to await and a failure
 /// to instantiate can still be returned to whoever asked for the call. It then
 /// either serves that one call and is dropped with it, or is handed to
-/// [`InstancePool::dispatch_on_new`] to be kept warm.
+/// [`InstancePool::dispatch_on_new`] — to be kept warm, or to come back in a
+/// [`Declined`] and serve the call the pool would not take.
 pub(crate) struct ComponentInstance {
     pub(crate) store: wasmtime::Store<SharedCtx>,
     pub(crate) instance: Instance,
@@ -261,6 +290,11 @@ struct PoolState {
     /// [`InstancePool::dispatch_on_new`], read and reset by
     /// [`InstancePool::sweep`].
     peak_in_flight: usize,
+    /// Whether the workload this pool belongs to has been let go, after which
+    /// nothing is parked again. Guarded by the same lock as `drivers` because
+    /// the race it closes is exactly between a caller finding room and
+    /// filling it.
+    closed: bool,
 }
 
 impl InstancePool {
@@ -269,6 +303,7 @@ impl InstancePool {
             state: Mutex::new(PoolState {
                 drivers: Vec::new(),
                 peak_in_flight: 0,
+                closed: false,
             }),
             policy,
             sweep_started: Once::new(),
@@ -345,7 +380,13 @@ impl InstancePool {
         let PoolState {
             drivers,
             peak_in_flight,
+            closed,
         } = &mut *state;
+        // A closed pool has no room and never will, so say so here rather
+        // than sending the caller off to build a store for it to decline.
+        if *closed {
+            return Dispatch::Saturated(job);
+        }
         reap(drivers);
 
         // This call on top of what the warm instances already hold. A lower
@@ -385,22 +426,40 @@ impl InstancePool {
     /// the sweep would retire them a window later, and the next burst would
     /// build them all over again. So an instance whose call fits on one
     /// already warm is dropped instead, after the lock is released.
+    ///
+    /// A call the pool cannot take at all is the other case: there the
+    /// instance comes back in the [`Declined`], and the caller runs the call
+    /// on it rather than instantiating a second time for the same call.
     pub(crate) fn dispatch_on_new(
         self: &Arc<Self>,
         instance: ComponentInstance,
         job: InstanceJob,
-    ) -> Result<(), InstanceJob> {
+    ) -> Result<(), Declined> {
         let Some((pool_size, max_invocations, max_concurrency)) = self.limits() else {
-            return Err(job);
+            return Err(Declined::with_instance(job, instance));
         };
         let reclaims = self.reclaim_policy().is_some();
         let mut state = self.lock_state();
         let PoolState {
             drivers,
             peak_in_flight,
+            closed,
         } = &mut *state;
+        // The pool this instance was built for is the one being measured
+        // against `pool_size`, so the spent handles go first: a store built
+        // while an instance was trapping or draining would otherwise be
+        // turned away by a pool that has the room for it.
+        reap(drivers);
 
         let sent = 'sent: {
+            // The workload was let go while this instance was being built.
+            // Parking it now would strand it: `close` has already emptied the
+            // pool and nothing empties it again, so the store and the guest
+            // resources it holds would stay parked for as long as the pool is
+            // referenced. The call runs on it instead.
+            if *closed {
+                break 'sent Err(Declined::with_instance(job, instance));
+            }
             let mut job = job;
             for driver in drivers.iter() {
                 match driver.try_send(job) {
@@ -409,18 +468,20 @@ impl InstancePool {
                 }
             }
             if drivers.len() >= pool_size {
-                break 'sent Err(job);
+                break 'sent Err(Declined::with_instance(job, instance));
             }
-            let driver = Arc::new(InstanceDriver::spawn(
-                instance,
-                max_concurrency,
-                max_invocations,
-            ));
+            let driver =
+                match InstanceDriver::spawn(instance, &job, max_concurrency, max_invocations) {
+                    Ok(driver) => Arc::new(driver),
+                    Err(instance) => break 'sent Err(Declined::with_instance(job, instance)),
+                };
             drivers.push(Arc::clone(&driver));
             // Sent under the lock, as `try_dispatch` sends: a sweep landing
             // between the push and the send would find an idle instance
             // nothing had claimed yet and retire it out from under this call.
-            driver.try_send(job)
+            // The instance is parked by now, so a refusal here — the driver's
+            // task ended before it could take the call — has none to hand back.
+            driver.try_send(job).map_err(Declined::without_instance)
         };
 
         // Sampled again with the call in place: at `try_dispatch` it may have
@@ -428,8 +489,13 @@ impl InstancePool {
         if reclaims {
             *peak_in_flight = (*peak_in_flight).max(in_flight_total(drivers));
         }
+        // A pool holding nothing has nothing to reclaim, and an instance the
+        // spawn declined leaves it as empty as it found it.
+        let holds_instances = !drivers.is_empty();
         drop(state);
-        self.start_sweeping();
+        if holds_instances {
+            self.start_sweeping();
+        }
         sent
     }
 
@@ -463,6 +529,14 @@ impl InstancePool {
                     // Nothing holds the pool any more: its workload stopped,
                     // and its instances went with it.
                     let Some(alive) = pool.upgrade() else { return };
+                    // Or the workload was let go while something still holds a
+                    // reference to the pool — which is the case `close` exists
+                    // for. There is nothing left to reclaim and nothing will
+                    // arrive, so stop rather than waking for the life of that
+                    // reference.
+                    if alive.is_closed() {
+                        return;
+                    }
                     alive.sweep();
                 }
             });
@@ -493,6 +567,8 @@ impl InstancePool {
         let PoolState {
             drivers,
             peak_in_flight,
+            // A closed pool holds nothing, so a sweep of it finds no surplus.
+            closed: _,
         } = &mut *state;
         reap(drivers);
 
@@ -548,13 +624,25 @@ impl InstancePool {
         self.policy
     }
 
-    /// Drop every warm instance, e.g. when the component is being shut down.
-    /// Dropping a driver's handle closes its channel, which ends its store's
-    /// run loop. This does not wait for a drain: calls still in flight on
-    /// those instances end with the store they were running on.
-    pub(crate) fn clear(&self) {
+    /// Close the pool and drop every warm instance, when the workload it
+    /// belongs to is let go. Dropping a driver's handle closes its channel,
+    /// which ends its store's run loop. This does not wait for a drain: calls
+    /// still in flight on those instances end with the store they were
+    /// running on.
+    ///
+    /// Closing is what makes emptying it stick. A call that was building an
+    /// instance when this ran would otherwise park it a moment later, into a
+    /// pool nothing empties again — and every path here is one the workload
+    /// does not come back from, so a closed pool stays closed.
+    pub(crate) fn close(&self) {
         let mut state = self.lock_state();
+        state.closed = true;
         drop(std::mem::take(&mut state.drivers));
+    }
+
+    /// Whether the workload this pool belongs to has been let go.
+    fn is_closed(&self) -> bool {
+        self.lock_state().closed
     }
 }
 
@@ -590,7 +678,10 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use super::{Duration, InstancePolicy, InstancePool, NonZeroUsize, sort_least_busy};
+    use super::{
+        ComponentInstance, Dispatch, Duration, InstancePolicy, InstancePool, NonZeroUsize,
+        SharedCtx, sort_least_busy,
+    };
     use crate::engine::instance_driver::{InFlightGuard, InstanceDriver, InstanceJob};
     use crate::types::Component;
 
@@ -772,6 +863,93 @@ mod tests {
         (pool, channels)
     }
 
+    /// A real store with a component instantiated in it, which is what
+    /// [`InstancePool::dispatch_on_new`] takes and the stub drivers cannot
+    /// stand in for. The component is empty, so it exports nothing — which is
+    /// all these need, since the pool's decisions are about where an instance
+    /// goes, and an instance exporting nothing is also the one a job-kind gate
+    /// must refuse.
+    fn built_instance() -> ComponentInstance {
+        // A ctx builds a TLS provider under `wasi-tls`, which needs the
+        // process-wide crypto provider a host installs at startup.
+        #[cfg(feature = "wasi-tls")]
+        crate::init_crypto();
+
+        let mut config = wasmtime::Config::new();
+        config.wasm_component_model(true);
+        let engine = wasmtime::Engine::new(&config).expect("an engine for the component model");
+        let bytes = wat::parse_str("(component)").expect("the empty component parses");
+        let component =
+            wasmtime::component::Component::new(&engine, &bytes).expect("it compiles too");
+        let ctx = crate::engine::ctx::Ctx::builder("workload", "component").build();
+        let mut store = wasmtime::Store::new(&engine, SharedCtx::new(ctx));
+        let instance = wasmtime::component::Linker::new(&engine)
+            .instantiate(&mut store, &component)
+            .expect("an empty component instantiates against an empty linker");
+        ComponentInstance { store, instance }
+    }
+
+    /// A delivery to dispatch. Messaging because it is a kind the driver gates
+    /// on the instance's exports, which is what makes it the job an instance
+    /// exporting nothing has to be refused for.
+    fn messaging_job() -> InstanceJob {
+        let (result_tx, _result_rx) = tokio::sync::oneshot::channel();
+        InstanceJob::Messaging(Box::new(crate::host::trigger_service::MessagingJob {
+            msg: crate::host::trigger_service::BrokerMessage {
+                subject: "subject".into(),
+                body: Vec::new(),
+                reply_to: None,
+            },
+            result_tx,
+            abandoned: crate::engine::abandon::DispatchedCall::new("test", Duration::from_secs(1))
+                .flag(),
+            attributes: Arc::from([]),
+        }))
+    }
+
+    /// An instance that does not export what the job needs is never parked.
+    /// Parking it would leave a warm instance that can only refuse this kind
+    /// of call, and nothing retires an instance that admits nothing: it would
+    /// hold its store for the workload's life, with another spawned beside it
+    /// on the next call of the kind.
+    #[test]
+    fn an_instance_that_cannot_take_the_call_is_not_parked() {
+        let (pool, _channels) = warm_pool(0, &limits(4, 0, 0, 0, 0));
+
+        let declined = pool
+            .dispatch_on_new(built_instance(), messaging_job())
+            .expect_err("an empty component exports no messaging handler");
+        assert!(
+            declined.instance.is_some(),
+            "the instance must come back for the caller's own store, where the \
+             binding is built per call and its error reaches the caller"
+        );
+        assert!(
+            pool.lock_state().drivers.is_empty(),
+            "the pool must not park an instance that can only refuse the call"
+        );
+    }
+
+    /// A job to dispatch, of the one kind that carries no store-bound
+    /// payload. Never run: these tests only ask where the pool would put it.
+    fn plugin_job() -> InstanceJob {
+        struct NeverRun;
+        impl crate::engine::instance_driver::PluginJob for NeverRun {
+            fn describe(&self) -> &str {
+                "test"
+            }
+            fn run<'a>(
+                self: Box<Self>,
+                _: &'a wasmtime::component::Accessor<crate::engine::ctx::SharedCtx>,
+                _: wasmtime::component::Instance,
+                _: Option<crate::engine::instance_driver::PoolSlot>,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+                unreachable!("the pool never runs this job")
+            }
+        }
+        InstanceJob::Plugin(Box::new(NeverRun))
+    }
+
     /// Instances still admitting calls.
     fn live(pool: &InstancePool) -> usize {
         pool.lock_state()
@@ -779,6 +957,49 @@ mod tests {
             .iter()
             .filter(|d| !d.is_retired())
             .count()
+    }
+
+    /// A pool closed with its workload takes no more instances. Without the
+    /// closing, emptying it does not stick: the pool reads as one with room,
+    /// and the next call is told to build an instance for it to park — into a
+    /// pool nothing empties again.
+    #[test]
+    fn a_closed_pool_asks_for_no_more_instances() {
+        let (pool, _channels) = warm_pool(2, &limits(4, 0, 0, 0, 0));
+
+        pool.close();
+        assert!(
+            pool.lock_state().drivers.is_empty(),
+            "closing drops the warm instances rather than retiring them"
+        );
+        assert!(
+            matches!(pool.try_dispatch(plugin_job()), Dispatch::Saturated(_)),
+            "a closed pool must send the call to a store of its own, not ask \
+             for an instance to park in it"
+        );
+    }
+
+    /// The half of closing that the race actually turns on: a call that was
+    /// already building an instance when `close` ran must not park it. The
+    /// pool is emptied once and never again, so an instance parked after that
+    /// holds its store — and the guest sockets and files with it — for as long
+    /// as anything still references the pool.
+    #[test]
+    fn a_closed_pool_hands_back_an_instance_built_before_it_closed() {
+        let (pool, _channels) = warm_pool(0, &limits(4, 0, 0, 0, 0));
+        pool.close();
+
+        let declined = pool
+            .dispatch_on_new(built_instance(), plugin_job())
+            .expect_err("a closed pool must not take the call");
+        assert!(
+            declined.instance.is_some(),
+            "the instance must come back for the caller's own store"
+        );
+        assert!(
+            pool.lock_state().drivers.is_empty(),
+            "a closed pool must stay empty"
+        );
     }
 
     /// A sweep keeps the instances the window's peak concurrency needed and
@@ -947,10 +1168,10 @@ mod tests {
             1,
             "a recovered pool must still hold and serve its warm instances"
         );
-        pool.clear();
+        pool.close();
         assert!(
             pool.lock_state().drivers.is_empty(),
-            "a recovered pool must still clear"
+            "a recovered pool must still close"
         );
     }
 }

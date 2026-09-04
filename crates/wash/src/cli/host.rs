@@ -10,6 +10,7 @@ use wash_runtime::{
 };
 
 use crate::cli::{CliCommand, CliContext, CommandOutput, signal};
+
 use crate::config::{HttpClientTrustRoots, load_config};
 
 #[derive(Debug, Clone, Args)]
@@ -123,6 +124,15 @@ pub struct HostCommand {
     /// concurrency, kept inside the process's file-descriptor limit.
     #[arg(long = "max-connections", env = "WASH_MAX_CONNECTIONS")]
     pub max_connections: Option<usize>,
+
+    /// Address for the probe listener serving `/livez` and `/readyz`.
+    ///
+    /// Point Kubernetes probes here rather than at `--http-addr`. A TCP probe
+    /// against the traffic port cannot tell a wedged host from a busy one — the
+    /// kernel answers the handshake either way — and cannot express "full, send
+    /// work elsewhere" at all. Unset, no probe listener is started.
+    #[arg(long = "probe-addr", env = "WASH_PROBE_ADDR")]
+    pub probe_addr: Option<SocketAddr>,
 
     /// Cap on the TCP connections accepted on `--http-addr` at once.
     ///
@@ -339,6 +349,25 @@ pub struct HostCommand {
     #[arg(long = "oci-ca-path", env = "WASH_OCI_CA_PATHS", value_delimiter = ',')]
     pub oci_ca_paths: Vec<PathBuf>,
 
+    /// How long to keep serving after a shutdown signal, before stopping.
+    ///
+    /// A pod leaves its Service when Kubernetes marks it Terminating, but that
+    /// removal takes time to reach every kube-proxy, and a host that stops the
+    /// moment it is signalled refuses the requests still in flight toward it.
+    /// This is that gap: readiness reports the host as gone, and it keeps
+    /// answering until the delay is up.
+    ///
+    /// Must fit inside `terminationGracePeriodSeconds` alongside the command
+    /// drain that follows it, or the kernel ends the process mid-drain. Zero
+    /// stops immediately, which is what a developer pressing Ctrl-C wants.
+    #[arg(
+        long = "drain-delay",
+        env = "WASH_DRAIN_DELAY",
+        value_parser = humantime::parse_duration,
+        default_value = "0s"
+    )]
+    pub drain_delay: Duration,
+
     /// Timeout for pulling artifacts from OCI registries
     #[arg(long = "registry-pull-timeout", value_parser = humantime::parse_duration, default_value = "30s")]
     pub registry_pull_timeout: Duration,
@@ -382,7 +411,17 @@ pub struct HostCommand {
     /// Deny outbound connections to loopback, link-local (including the cloud
     /// metadata address), multicast, and documentation ranges — including
     /// whatever DNS returned for a permitted name.
-    #[arg(long = "deny-special-ranges", default_value_t = true)]
+    //
+    // Takes an optional value, unlike the default-off toggles above: presence
+    // alone cannot express "off" for something whose default is on. The bare
+    // flag still means `true`.
+    #[arg(
+        long = "deny-special-ranges",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = true,
+        action = clap::ArgAction::Set
+    )]
     pub deny_special_ranges: bool,
 
     /// Deny outbound connections to private ranges (RFC1918, ULA, CGNAT).
@@ -799,10 +838,21 @@ impl CliCommand for HostCommand {
             cluster_host_builder = cluster_host_builder.with_max_concurrent_starts(starts);
         }
 
+        // Sized off the interval this host will actually heartbeat on, not off a
+        // number restated here: the bound decides when a host is restarted, and
+        // it has to move if the interval does.
+        let liveness = wash_runtime::host::probes::Liveness::new(
+            wash_runtime::washlet::liveness_silence(cluster_host_builder.heartbeat_interval()),
+        );
+        cluster_host_builder = cluster_host_builder.with_liveness(Arc::clone(&liveness));
+
         // One publishing context for the whole host: workloads and plugins
         // reserve from the same table, so a collision between them is a start
         // failure naming both rather than two listeners that each think they
         // own the address.
+        // Taken while the ingress is built, so the probe listener below can
+        // report a full ingress as a reason to stop being sent work.
+        let mut ingress_connections = None;
         if let Some(addr) = self.http_addr {
             let http_router = wash_runtime::host::http::DynamicRouter::default();
 
@@ -835,6 +885,7 @@ impl CliCommand for HostCommand {
                 ingress_builder = ingress_builder.tls(tls);
             }
             let ingress = ingress_builder.build().await?;
+            ingress_connections = Some(ingress.connection_limit());
             cluster_host_builder = cluster_host_builder.with_http_handler(Arc::new(ingress));
         }
 
@@ -928,15 +979,59 @@ impl CliCommand for HostCommand {
         // The host is about to start taking work, so from here a signal runs
         // the shutdown below rather than ending the process.
         let shutdown = shutdown.ready();
+
+        let probe = self.probe_addr.map(|addr| {
+            let mut state =
+                wash_runtime::host::probes::ProbeState::default().with_liveness(liveness);
+            if let Some(connections) = ingress_connections {
+                state = state.with_readiness(Arc::new(connections));
+            }
+            (addr, state)
+        });
+        let (probe_stop, probe_stopped) = tokio::sync::oneshot::channel::<()>();
+        let probe_state = probe.as_ref().map(|(_, state)| state.clone());
+        if let Some((addr, state)) = probe {
+            // Bound here rather than inside the task: a port already taken
+            // leaves every probe failing, and a pod restart-looping for a
+            // reason buried in startup output is worse than not starting.
+            let listener = wash_runtime::host::probes::bind(addr).await?;
+            tokio::spawn(async move {
+                let stop = async {
+                    let _ = probe_stopped.await;
+                };
+                wash_runtime::host::probes::serve(listener, state, stop).await;
+            });
+        }
+
         let host_cleanup = wash_runtime::washlet::run_cluster_host(cluster_host)
             .await
             .context("failed to start cluster node")?;
 
+        // Only now: the listener has been answering `/readyz` with "starting"
+        // since it bound, because until this returns the host has no
+        // subscription and no workloads, and a pod that joins the Service in
+        // that window is sent traffic nothing is behind.
+        if let Some(state) = &probe_state {
+            state.started();
+        }
+
         shutdown.await;
+
+        // Reported before the wait, not after: the point of the wait is that
+        // the host is still serving while everything upstream learns it is
+        // going away.
+        if let Some(state) = &probe_state {
+            state.drain();
+        }
+        if !self.drain_delay.is_zero() {
+            info!(delay = ?self.drain_delay, "Draining...");
+            tokio::time::sleep(self.drain_delay).await;
+        }
 
         info!("Stopping host...");
 
         host_cleanup.await?;
+        let _ = probe_stop.send(());
 
         Ok(CommandOutput::ok(
             "Host exited successfully".to_string(),

@@ -258,8 +258,9 @@ pub(crate) fn log_delivery(result: &anyhow::Result<Result<(), String>>) {
 /// never do.
 ///
 /// The same job runs either way: a delivery the pool declines is not rebuilt,
-/// it is handed back and run in a fresh store, so a large payload is never
-/// copied to pay for the attempt.
+/// it is handed back and run in a store of its own — the one built for the
+/// pool, when the pool did not park that — so neither a large payload nor an
+/// instantiation is paid for twice.
 ///
 /// Only `@0.3.0` reaches here. The sync `@0.2.0` handler takes `&mut Store` for
 /// the length of its call, so it cannot share an instance and keeps a store per
@@ -273,7 +274,7 @@ pub(crate) async fn deliver_pooled(
     attributes: std::sync::Arc<[KeyValue]>,
 ) -> anyhow::Result<Result<(), String>> {
     use crate::engine::instance_driver::InstanceJob;
-    use crate::engine::instance_pool::{ComponentInstance, Dispatch};
+    use crate::engine::instance_pool::{ComponentInstance, Declined, Dispatch};
     use crate::host::trigger_service::{MessagingJob, MessagingTask};
 
     let (result_tx, result_rx) = tokio::sync::oneshot::channel();
@@ -301,10 +302,14 @@ pub(crate) async fn deliver_pooled(
             pool.dispatch_on_new(ComponentInstance { store, instance }, job)
                 .err()
         }
-        Dispatch::Saturated(job) => Some(job),
+        Dispatch::Saturated(job) => Some(Declined::without_instance(job)),
     };
 
-    let Some(declined) = declined else {
+    let Some(Declined {
+        job: declined,
+        instance: reclaimed,
+    }) = declined
+    else {
         return call
             .await_reply(result_rx)
             .await
@@ -313,14 +318,23 @@ pub(crate) async fn deliver_pooled(
     };
 
     // Every instance was busy and the pool is full, so run the very same job in
-    // a store of its own.
+    // a store of its own — the one built for the pool, when there is one.
     let InstanceJob::Messaging(job) = declined else {
         anyhow::bail!("instance pool returned the wrong job kind for a message");
     };
     tracing::debug!(component_id, "warm instances saturated; own store");
 
-    let mut store = workload.new_store(component_id).await?;
-    let instance = pre.instantiate_async(&mut store).await?;
+    let ComponentInstance {
+        mut store,
+        instance,
+    } = match reclaimed {
+        Some(built) => built,
+        None => {
+            let mut store = workload.new_store(component_id).await?;
+            let instance = pre.instantiate_async(&mut store).await?;
+            ComponentInstance { store, instance }
+        }
+    };
     let handler = Arc::new(
         crate::host::trigger_service::AsyncMessaging::new(&mut store, &instance).map_err(|e| {
             anyhow::anyhow!("component does not export wasmcloud:messaging/handler@0.3.0: {e:#}")

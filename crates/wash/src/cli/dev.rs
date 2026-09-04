@@ -488,6 +488,10 @@ const UNSET_LIMIT: i32 = -1;
 struct SidecarComponent {
     name: String,
     bytes: Bytes,
+    /// The content/registry digest the source resolved this sidecar's bytes
+    /// to, so it can share the engine's compiled-component cache instead of
+    /// recompiling on every dev reload.
+    digest: Option<String>,
     interfaces: HashSet<WitInterface>,
     workload: ResolvedWorkload,
     /// The warm-instance limits from `dev.components[]`, `None` where the
@@ -497,6 +501,15 @@ struct SidecarComponent {
     max_concurrency: Option<i32>,
     reclaim_window_seconds: Option<i32>,
     reclaim_min_instances: Option<i32>,
+}
+
+/// A configured `dev.service` source's loaded inputs, once fetched and its
+/// interfaces extracted. Bundled so [`build_workload`] takes one optional
+/// argument for the service rather than one per field.
+struct LoadedService {
+    bytes: Bytes,
+    digest: Option<String>,
+    interfaces: HashSet<WitInterface>,
 }
 
 /// Thin wrapper around [`build_workload`]: extracts dev-component
@@ -540,6 +553,7 @@ async fn create_workload(
         sidecars.push(SidecarComponent {
             name: name.clone(),
             bytes: loaded.bytes,
+            digest: loaded.digest,
             interfaces,
             workload,
             pool_size: dev_component.pool_size,
@@ -554,7 +568,7 @@ async fn create_workload(
     // isn't itself the service (`dev.service = false`); see `build_workload`.
     // When `dev.service` is true it is ignored, so there's no point fetching it
     // or folding its imports into the workload host interfaces.
-    let (service_bytes, service_interfaces) = match dev_config.service_source()? {
+    let configured_service = match dev_config.service_source()? {
         Some(source) if !dev_config.service => {
             let loaded = source
                 .load(oci_config.clone())
@@ -563,9 +577,13 @@ async fn create_workload(
             let interfaces = host
                 .intersect_interfaces(&loaded.bytes)
                 .context("failed to extract service interfaces")?;
-            (Some(loaded.bytes), Some(interfaces))
+            Some(LoadedService {
+                bytes: loaded.bytes,
+                digest: loaded.digest,
+                interfaces,
+            })
         }
-        _ => (None, None),
+        _ => None,
     };
 
     Ok(build_workload(
@@ -573,8 +591,7 @@ async fn create_workload(
         bytes,
         dev_interfaces,
         sidecars,
-        service_bytes,
-        service_interfaces,
+        configured_service,
         resolved_workload,
     ))
 }
@@ -599,8 +616,7 @@ fn build_workload(
     bytes: Bytes,
     dev_interfaces: HashSet<WitInterface>,
     sidecars: Vec<SidecarComponent>,
-    service_bytes: Option<Bytes>,
-    service_interfaces: Option<HashSet<WitInterface>>,
+    configured_service: Option<LoadedService>,
     resolved_workload: &ResolvedWorkload,
 ) -> Workload {
     let mut volumes = Vec::<Volume>::new();
@@ -627,8 +643,8 @@ fn build_workload(
     for s in &sidecars {
         all_component_interfaces.push(s.interfaces.clone());
     }
-    if let Some(svc_interfaces) = service_interfaces {
-        all_component_interfaces.push(svc_interfaces);
+    if let Some(svc) = &configured_service {
+        all_component_interfaces.push(svc.interfaces.clone());
     }
 
     let host_interfaces = build_workload_host_interfaces(
@@ -669,10 +685,10 @@ fn build_workload(
             reclaim_min_instances: UNSET_LIMIT,
         });
 
-        if let Some(service_bytes) = service_bytes {
+        if let Some(configured_service) = configured_service {
             service = Some(Service {
-                bytes: service_bytes,
-                digest: None,
+                bytes: configured_service.bytes,
+                digest: configured_service.digest,
                 max_restarts: 0,
                 local_resources: local_resources_for(resolved_workload),
             });
@@ -683,7 +699,7 @@ fn build_workload(
         components.push(Component {
             name: sidecar.name,
             bytes: sidecar.bytes,
-            digest: None,
+            digest: sidecar.digest,
             local_resources: local_resources_for(&sidecar.workload),
             // `Component` carries these as `sint32`, where a negative means
             // "not configured"; the runtime decodes them into an
@@ -875,6 +891,7 @@ mod tests {
         SidecarComponent {
             name: name.into(),
             bytes: fake_bytes(name),
+            digest: None,
             interfaces: HashSet::new(),
             workload,
             pool_size: None,
@@ -913,7 +930,6 @@ mod tests {
             fake_bytes("dev"),
             HashSet::new(),
             sidecars,
-            None,
             None,
             &resolved,
         );
@@ -969,7 +985,6 @@ mod tests {
             HashSet::new(),
             sidecars,
             None,
-            None,
             &resolved,
         );
 
@@ -984,6 +999,33 @@ mod tests {
         assert_eq!(unpooled.max_invocations, UNSET_LIMIT);
         assert_eq!(unpooled.reclaim_window_seconds, UNSET_LIMIT);
         assert_eq!(unpooled.reclaim_min_instances, UNSET_LIMIT);
+    }
+
+    /// The digest `create_workload` resolved when loading a sidecar's bytes
+    /// must reach the sidecar's `Component`, or it can never share the
+    /// engine's compiled-component cache with another workload using the
+    /// same source.
+    #[test]
+    fn build_workload_sidecar_carries_its_resolved_digest() {
+        let resolved = ResolvedWorkload::default();
+        let dev_cfg = DevConfig {
+            components: vec![dev_component_named("sidecar-a")],
+            ..Default::default()
+        };
+        let mut sidecar = loaded_sidecar("sidecar-a", resolved.clone());
+        sidecar.digest = Some("sha256:sidecar-digest".to_string());
+
+        let workload = build_workload(
+            &dev_cfg,
+            fake_bytes("dev"),
+            HashSet::new(),
+            vec![sidecar],
+            None,
+            &resolved,
+        );
+
+        let sidecar = find_component(&workload, "sidecar-a").unwrap();
+        assert_eq!(sidecar.digest.as_deref(), Some("sha256:sidecar-digest"));
     }
 
     /// The config keys are camelCase on the wire and optional, so a component
@@ -1039,7 +1081,6 @@ mod tests {
             HashSet::new(),
             sidecars,
             None,
-            None,
             &resolved,
         );
 
@@ -1088,7 +1129,6 @@ mod tests {
             HashSet::new(),
             Vec::new(),
             None,
-            None,
             &resolved,
         );
 
@@ -1117,8 +1157,11 @@ mod tests {
             fake_bytes("dev"),
             HashSet::new(),
             Vec::new(),
-            Some(fake_bytes("svc-sidecar")),
-            None,
+            Some(LoadedService {
+                bytes: fake_bytes("svc-sidecar"),
+                digest: Some("sha256:svc-sidecar-digest".to_string()),
+                interfaces: HashSet::new(),
+            }),
             &resolved,
         );
 
@@ -1127,6 +1170,10 @@ mod tests {
             .as_ref()
             .expect("service_file should produce a Service");
         assert_eq!(svc.local_resources.environment.get("LOG").unwrap(), "info");
+        // The digest resolved when loading the service's bytes must reach
+        // the Service, or it can never share the engine's compiled-component
+        // cache with another workload using the same source.
+        assert_eq!(svc.digest.as_deref(), Some("sha256:svc-sidecar-digest"));
         let dev = find_component(&workload, "wash-dev-component").unwrap();
         assert_eq!(dev.local_resources.environment.get("LOG").unwrap(), "info");
     }
@@ -1150,8 +1197,11 @@ mod tests {
             fake_bytes("dev"),
             HashSet::new(),
             sidecars,
-            Some(fake_bytes("svc")),
-            None,
+            Some(LoadedService {
+                bytes: fake_bytes("svc"),
+                digest: None,
+                interfaces: HashSet::new(),
+            }),
             &ResolvedWorkload::default(),
         );
 
@@ -1189,6 +1239,7 @@ mod tests {
         let sidecars = vec![SidecarComponent {
             name: "sidecar".into(),
             bytes: fake_bytes("sidecar"),
+            digest: None,
             interfaces: HashSet::from([iface("wasi", "config")]),
             workload: ResolvedWorkload::default(),
             pool_size: None,
@@ -1203,7 +1254,6 @@ mod tests {
             fake_bytes("dev"),
             HashSet::from([iface("wasi", "http")]),
             sidecars,
-            None,
             None,
             &resolved,
         );
@@ -1227,8 +1277,11 @@ mod tests {
             fake_bytes("dev"),
             HashSet::new(),
             Vec::new(),
-            Some(fake_bytes("svc")),
-            Some(HashSet::from([iface("wasi", "keyvalue")])),
+            Some(LoadedService {
+                bytes: fake_bytes("svc"),
+                digest: None,
+                interfaces: HashSet::from([iface("wasi", "keyvalue")]),
+            }),
             &ResolvedWorkload::default(),
         );
 
@@ -1261,7 +1314,6 @@ mod tests {
             fake_bytes("dev"),
             HashSet::new(),
             sidecars,
-            None,
             None,
             &ResolvedWorkload::default(),
         );

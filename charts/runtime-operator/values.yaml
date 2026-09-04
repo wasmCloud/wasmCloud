@@ -390,15 +390,19 @@ runtime:
     # explicitly on a host group that is requested far below the node it lands
     # on.
     maxConcurrentStarts: ""
-  # -- Probes for host containers, rendered only for a host group that serves
-  # HTTP (`hostGroups[].http.enabled`); both connect to its `http` port. A host
-  # group sets its own with `hostGroups[].probes`, and any field left out of
-  # that falls back to the value here.
+  # -- Probes for host containers, rendered for a host group with
+  # `probes.endpoint` enabled or one that serves HTTP
+  # (`hostGroups[].http.enabled`). A host group sets its own with
+  # `hostGroups[].probes`, and any field left out of that falls back to the
+  # value here.
   #
-  # Readiness and liveness are deliberately not tuned alike. Both connect to
-  # the port the host serves workload routes on, which the kernel answers from
-  # the listener's accept queue whether or not the host is polling it — so what
-  # a failure reports is a host busy enough to have let that queue fill.
+  # With `endpoint` on they are HTTP GETs against `/livez` and `/readyz`,
+  # answered from what the host knows about itself. With it off they fall back
+  # to a TCP connect on the workload port, which the kernel answers from the accept queue
+  # whether or not the host is polling it — so what a failure reports there is a
+  # host busy enough to have let that queue fill.
+  #
+  # Readiness and liveness are deliberately not tuned alike.
   # Leaving the Service over that is cheap, which is readiness' job. Restarting
   # is a different trade: the pod loses every workload running on it, and the
   # scheduler places them all again at once, which is the burst that stalled it
@@ -411,6 +415,31 @@ runtime:
   # running whatever it still holds. Disable it only where something else
   # takes that job.
   probes:
+    # -- The port `/livez` and `/readyz` are answered on. The timings below
+    # target it when this is on.
+    #
+    # It exists because a TCP probe against the traffic port answers the wrong
+    # question. The kernel completes a handshake whether or not the host
+    # process is running, so the probe passes against a wedged host until its
+    # backlog fills, and fails against a healthy one briefly behind on accepts.
+    # It also cannot say "full, send work elsewhere": a host shedding every
+    # connection at its ceiling still accepts, so its endpoint stays in the
+    # Service. `/readyz` reports that, and traffic moves to a replica with room.
+    #
+    # Turning it off falls the timings back to a TCP connect on `http.port`.
+    #
+    # Requires a host image carrying `--probe-addr`, which arrived with this
+    # chart's appVersion. A host group pinning an older `image.tag` must set
+    # `probes.endpoint.enabled: false` for that group — `wash host` refuses to
+    # start on an argument it does not know, so leaving it on there is a
+    # CrashLoopBackOff rather than a degraded probe.
+    endpoint:
+      enabled: true
+      port: 8081
+      # -- How many 5s attempts the host gets to bind the probe port before the
+      # kubelet gives up. It binds after plugin pulls and compiles, so this is
+      # the startup budget: 60 is five minutes.
+      startupFailureThreshold: 60
     readiness:
       enabled: true
       initialDelaySeconds: 5
@@ -434,12 +463,26 @@ runtime:
   # -- Additional CLI args appended to every host group container, for host
   # flags the chart does not template. Merged with per-host-group `extraArgs`.
   extraArgs: []
+  # -- How long the host keeps serving after `SIGTERM`, before it starts
+  # stopping.
+  #
+  # A pod leaves its Service the moment Kubernetes marks it Terminating, but
+  # that removal reaches each kube-proxy a beat later. Without this the host
+  # stops first and refuses the requests still on their way to it. Readiness
+  # goes red as the wait starts, so anything reading `/readyz` learns at the
+  # same time.
+  #
+  # It has to fit inside `terminationGracePeriodSeconds` alongside the 5s
+  # command drain that follows it; the chart refuses to render if it does not.
+  drainDelaySeconds: 5
   # -- How long a terminating host pod has to shut down before it is killed.
-  # On `SIGTERM` the host stops taking work, waits up to 5s for the commands
-  # already running to finish, then stops itself — unbinding every plugin the
-  # workloads it holds are bound to. Kubernetes sends `SIGKILL` when this
-  # expires, so anything below that 5s drain cuts the shutdown short and leaves
-  # the unbinding to the operator's unreachable-host path instead.
+  #
+  # Three numbers in sequence, and this is the budget for all of them:
+  # `drainDelaySeconds` serving while the endpoint is withdrawn, then up to 5s for
+  # the commands already running to finish, then the host unbinds every plugin its
+  # workloads are bound to. Kubernetes sends `SIGKILL` when this expires, so a
+  # value under `drainDelaySeconds` + 5s cuts the shutdown short and leaves the
+  # unbinding to the operator's unreachable-host path instead.
   terminationGracePeriodSeconds: 15
   hostGroups:
     - name: default
@@ -710,6 +753,13 @@ runtime:
         # -- Host-wide cap on live connections across every workload. Empty
         # derives it from the process's file-descriptor limit.
         maxConnections: ""
+        # -- Cap on the TCP connections the host's own HTTP listener holds at
+        # once. Connections, not requests: an idle keep-alive connection counts,
+        # and one HTTP/2 connection counts once however many streams it carries.
+        # Separate from `maxConnections`, which is what workloads hold — which
+        # workload an inbound connection belongs to is unknown until its first
+        # request names one. Empty derives it from the descriptor limit.
+        maxHttpIngressConnections: ""
         # -- Pooled HTTP and gRPC connections one workload may hold. Idle
         # keep-alive connections count, so this is how large its pool may grow.
         maxOutboundHttpConnectionsPerWorkload: 128
@@ -726,9 +776,12 @@ runtime:
         # published port fails to start rather than coming up silently
         # unreachable. Publishing makes a service reachable by every co-tenant
         # on the machine unless socketEgress is `enforce`.
+        # NOTE: not yet wired to the host — there is no `wash host` flag behind
+        # this key, so setting it changes nothing today.
         publishPorts: false
         # -- Restrict published ports to a range, e.g. "31000-32767". Empty
         # allows any port the OS will grant.
+        # NOTE: not yet wired to the host, as with `publishPorts` above.
         publishPortRange: ""
       http:
         enabled: true

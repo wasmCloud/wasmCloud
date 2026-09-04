@@ -1912,9 +1912,10 @@ impl ResolvedWorkload {
         for component in self.components.read().await.values() {
             // Warm instances hold guest resources (sockets, open files) for as
             // long as they stay parked, so release them with the rest of the
-            // workload's teardown. Calls still in flight own their own stores
-            // and are unaffected.
-            component.instances.clear();
+            // workload's teardown, and close the pool against a call that is
+            // building one right now. Calls still in flight own their own
+            // stores and are unaffected.
+            component.instances.close();
 
             if let Some(plugins) = component.plugins() {
                 for (plugin_id, plugin) in plugins.iter() {

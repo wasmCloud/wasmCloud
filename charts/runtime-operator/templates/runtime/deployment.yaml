@@ -20,7 +20,21 @@
 {{- $resources := .resources | default $top.Values.runtime.resources | default dict }}
 {{- /* Probes, unlike `resources`, merge per field: a group naming one timing
        keeps the chart-wide values for the rest. */}}
+{{- /* The shutdown budget, checked rather than described: the host serves for
+       `drainDelaySeconds`, then drains commands for up to 5s, and SIGKILL lands
+       at `terminationGracePeriodSeconds` whatever it is doing. */}}
+{{- $drain := int ($top.Values.runtime.drainDelaySeconds | default 0) }}
+{{- if gt (add $drain 5) (int $top.Values.runtime.terminationGracePeriodSeconds) }}
+{{- fail (printf "runtime.terminationGracePeriodSeconds (%v) is under drainDelaySeconds (%v) plus the 5s command drain; the host would be killed mid-shutdown" $top.Values.runtime.terminationGracePeriodSeconds $drain) }}
+{{- end }}
 {{- $probeArgs := dict "group" .probes "chart" $top.Values.runtime.probes }}
+{{- /* The port the probes are answered on, merged per field like the timings
+       beside it: a group may turn it off or move it without restating the
+       chart-wide default. */}}
+{{- $endpoint := include "runtime-operator.hostProbe" (merge (dict "name" "endpoint") $probeArgs) | fromJson }}
+{{- if and $endpoint.enabled .http .http.enabled (eq (int $endpoint.port) (int .http.port)) }}
+{{- fail (printf "host group %s: probes.endpoint.port and http.port are both %v; the host would fail to bind the second" .name $endpoint.port) }}
+{{- end }}
 {{- $liveness := include "runtime-operator.hostProbe" (merge (dict "name" "liveness") $probeArgs) | fromJson }}
 {{- $readiness := include "runtime-operator.hostProbe" (merge (dict "name" "readiness") $probeArgs) | fromJson }}
 {{- $partition := include "runtime-operator.hostPluginPartition" . | fromJson }}
@@ -231,6 +245,47 @@ spec:
             - "--wasmcloud-nats-url={{ . }}"
             {{- end }}
             - "--oci-cache-dir=/oci-cache"
+            {{- with $top.Values.runtime.drainDelaySeconds }}
+            - "--drain-delay={{ . }}s"
+            {{- end }}
+            {{- if $endpoint.enabled }}
+            - "--probe-addr=0.0.0.0:{{ $endpoint.port }}"
+            {{- end }}
+            {{- /* `networking` is the host's half of every two-sided grant, plus
+                   the ceilings it enforces alone. A key is rendered only when
+                   the values file sets it, so an unset one keeps the host's own
+                   default rather than having the chart restate it — which
+                   matters for the derived ceilings, where "unset" and "the same
+                   number typed out" mean different things downstream. */}}
+            {{- with .networking }}
+            {{- if .allowHostLoopback }}
+            - "--allow-host-loopback"
+            {{- end }}
+            {{- with .socketEgress }}
+            - "--socket-egress={{ . }}"
+            {{- end }}
+            {{- if hasKey . "denySpecialRanges" }}
+            - "--deny-special-ranges={{ .denySpecialRanges }}"
+            {{- end }}
+            {{- if .denyPrivateRanges }}
+            - "--deny-private-ranges"
+            {{- end }}
+            {{- with .maxConnections }}
+            - "--max-connections={{ . }}"
+            {{- end }}
+            {{- with .maxHttpIngressConnections }}
+            - "--max-http-ingress-connections={{ . }}"
+            {{- end }}
+            {{- with .maxOutboundHttpConnectionsPerWorkload }}
+            - "--max-outbound-http-connections-per-workload={{ . }}"
+            {{- end }}
+            {{- with .maxOutboundSocketConnectionsPerWorkload }}
+            - "--max-outbound-socket-connections-per-workload={{ . }}"
+            {{- end }}
+            {{- with .maxInboundSocketConnectionsPerWorkload }}
+            - "--max-inbound-socket-connections-per-workload={{ . }}"
+            {{- end }}
+            {{- end }}
             {{- if and (.http) (.http.enabled) }}
             - "--http-addr=0.0.0.0:{{ .http.port }}"
             {{- if and ($top.Values.global.tls.enabled) (.http.tls) (.http.tls.enabled) }}
@@ -322,6 +377,11 @@ spec:
               containerPort: {{ .http.port }}
               protocol: TCP
             {{- end }}
+            {{- if $endpoint.enabled }}
+            - name: probes
+              containerPort: {{ $endpoint.port }}
+              protocol: TCP
+            {{- end }}
             {{- /* Optional additional container ports (e.g. metrics scrape).
                    Do NOT re-list the http port — the chart renders it from
                    `.http.port` above; a duplicate containerPort fails
@@ -329,26 +389,51 @@ spec:
             {{- with .ports }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if and (.http) (.http.enabled) }}
-          {{- /* A host serves workload routes on this port and nothing else,
-                 so both probes can only ask whether it still accepts
-                 connections. What each one does about that answer, and why
-                 they are timed apart, is documented on `runtime.probes`. */}}
-          {{- /* Every field but `enabled` is passed through as given, so a `0`
-                 reaches the manifest and `runtime.probes` stays the one place
-                 the timings are written down. */}}
+          {{- /* With the probe endpoint on, the probes ask the host about
+                 itself: `/livez` is "restart me", `/readyz` is "stop sending me
+                 work". Without it they fall back to a TCP connect on the
+                 traffic port, which cannot tell a wedged host from a busy one
+                 and cannot say "full" at all. Every field
+                 but `enabled` is passed through as given, so a `0` reaches the
+                 manifest and `runtime.probes` stays the one place the timings
+                 are written down. */}}
+          {{- if or $endpoint.enabled (and (.http) (.http.enabled)) }}
+          {{- /* Liveness on the probe port answers only once the host has
+                 bound it, which is late in startup — after the plugin pulls
+                 and compiles. A startup probe gives that as long as it needs
+                 without loosening the liveness timings that follow it. */}}
+          {{- if and $endpoint.enabled $liveness.enabled }}
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: probes
+            periodSeconds: 5
+            failureThreshold: {{ $endpoint.startupFailureThreshold }}
+          {{- end }}
           {{- if $liveness.enabled }}
           livenessProbe:
+            {{- if $endpoint.enabled }}
+            httpGet:
+              path: /livez
+              port: probes
+            {{- else }}
             tcpSocket:
               port: http
+            {{- end }}
             {{- range $field, $value := omit $liveness "enabled" }}
             {{ $field }}: {{ $value }}
             {{- end }}
           {{- end }}
           {{- if $readiness.enabled }}
           readinessProbe:
+            {{- if $endpoint.enabled }}
+            httpGet:
+              path: /readyz
+              port: probes
+            {{- else }}
             tcpSocket:
               port: http
+            {{- end }}
             {{- range $field, $value := omit $readiness "enabled" }}
             {{ $field }}: {{ $value }}
             {{- end }}

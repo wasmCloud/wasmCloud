@@ -428,18 +428,35 @@ impl Accepts {
 }
 
 impl InstanceDriver {
-    /// Build an instantiated store's driver and start it. The caller
-    /// instantiates, so a component that fails to do so reports that failure
-    /// where it can still be returned to whoever asked for the call.
+    /// Build an instantiated store's driver and start it, to serve `job`
+    /// first. The caller instantiates, so a component that fails to do so
+    /// reports that failure where it can still be returned to whoever asked
+    /// for the call.
+    ///
+    /// An instance that does not export what `job` needs comes straight back
+    /// instead: parking it would leave a warm instance that could only ever
+    /// refuse this kind of call, and every later one of the kind would spawn
+    /// another beside it.
     pub(crate) fn spawn(
         instance: ComponentInstance,
+        job: &InstanceJob,
         max_concurrency: usize,
         max_invocations: Option<usize>,
-    ) -> Self {
+    ) -> Result<Self, ComponentInstance> {
         let ComponentInstance {
             mut store,
             instance,
         } = instance;
+
+        // Built before the run loop so admission knows what this instance can
+        // take at all, rather than accepting work it could only drop. The views
+        // move into the run loop; admission keeps only their presence.
+        let bound = BoundExports::bind(&mut store, &instance);
+        let accepts = bound.accepts();
+        if !accepts.takes(job) {
+            return Err(ComponentInstance { store, instance });
+        }
+
         let (tx, mut rx) =
             tokio::sync::mpsc::channel::<(InstanceJob, InFlightGuard)>(max_concurrency.max(1));
         let state = Arc::new(DriverState {
@@ -448,12 +465,6 @@ impl InstanceDriver {
             drained: tokio::sync::Notify::new(),
         });
         let task_state = Arc::clone(&state);
-
-        // Built before the run loop so admission knows what this instance can
-        // take at all, rather than accepting work it could only drop. The views
-        // move into the run loop; admission keeps only their presence.
-        let bound = BoundExports::bind(&mut store, &instance);
-        let accepts = bound.accepts();
 
         tokio::spawn(async move {
             // One `run_concurrent` for the life of the instance. Each call is
@@ -563,14 +574,14 @@ impl InstanceDriver {
             }
         });
 
-        Self {
+        Ok(Self {
             tx,
             state,
             admitted: AtomicUsize::new(0),
             max_concurrency,
             max_invocations,
             accepts,
-        }
+        })
     }
 
     /// Calls in flight on this instance right now.
