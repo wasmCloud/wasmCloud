@@ -190,10 +190,13 @@ pub(super) fn replay_snapshot(
         .map(|(workload_id, info)| LifecycleReplay {
             interface: Arc::clone(&lifecycle.interface),
             func: Arc::clone(&lifecycle.bind.name),
-            // A replayed bind is about the workload, not any component of it.
+            // A replayed bind is about the workload, not any component of it
+            // nor any one of its bindings, which are listed on the
+            // `workload-info` the hook is handed.
             caller: CallerIdentity {
                 workload_id: Arc::clone(workload_id),
                 component_id: None,
+                binding: None,
             },
             args: vec![Relocated::Val(info.clone())],
             result_tys: Arc::clone(&lifecycle.bind.result_tys),
@@ -304,6 +307,7 @@ pub(super) async fn send_lifecycle_job(
         caller: CallerIdentity {
             workload_id: Arc::clone(workload_id),
             component_id: None,
+            binding: None,
         },
         args: vec![Relocated::Val(arg)],
         result_tys: Arc::clone(&func.result_tys),

@@ -103,6 +103,15 @@ pub struct SharedCtx {
 pub struct CallerIdentity {
     pub workload_id: Arc<str>,
     pub component_id: Option<Arc<str>>,
+    /// The binding the call arrived on: the `(implements ..)` label the caller
+    /// imported the plugin's interface under, which is also the name the
+    /// operator declared it by. `None` for a plain import, and for a lifecycle
+    /// hook, which is about a whole workload rather than one binding.
+    ///
+    /// Read by `wasmcloud:host/identity#get-binding-name`, so a plugin serving
+    /// two bindings of one workload can pair a call with the configuration that
+    /// binding was resolved with.
+    pub binding: Option<Arc<str>>,
 }
 
 impl SharedCtx {

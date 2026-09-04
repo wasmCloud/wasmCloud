@@ -66,7 +66,7 @@
 //! to the workload whose capability call is being served.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -300,6 +300,17 @@ pub struct ComponentHostPlugin {
     network: crate::host::ports::NetworkHandle,
     /// The host-level half of this plugin's socket policy.
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
+    /// Whether the operator declared any named binding for this plugin, set
+    /// once from its `host.plugins` entry by
+    /// [`HostPlugin::validate_bindings`] and read by
+    /// [`HostPlugin::supports_named_instances`].
+    ///
+    /// A wasm plugin cannot name its backends in code the way a native
+    /// multiplexer does — it has one store and serves whatever a workload
+    /// imports — so the declaration is what says which labels this host serves.
+    /// Nothing declared means nothing changes: label routing stays off and the
+    /// plugin matches exactly what it did before.
+    named_bindings: Arc<AtomicBool>,
     state: Arc<ComponentHostPluginState>,
 }
 
@@ -456,6 +467,7 @@ impl ComponentHostPlugin {
             direct_binds: Arc::from(direct_binds),
             network: crate::host::ports::NetworkHandle::new(),
             socket_policy: socket_policy.unwrap_or_default(),
+            named_bindings: Arc::new(AtomicBool::new(false)),
             state,
         })
     }
@@ -543,6 +555,9 @@ impl ComponentHostPlugin {
             );
         }
 
+        // Read before the linker is borrowed mutably: the labels below come from
+        // the component's own type, which is what says how it names each import.
+        let world = item.world();
         let linker = item.linker();
         for exported in self.exports.iter() {
             let iface_names: Vec<&str> =
@@ -551,11 +566,79 @@ impl ComponentHostPlugin {
             if !interfaces.contains(&exported.wit.namespace, &exported.wit.package, &iface_names) {
                 continue;
             }
-            add_capabilities_to_linker(linker, &self.state, exported)?;
-            debug!(id = self.id, interface = %exported.name, "wired host component capability");
+            for binding in import_labels(&world, &exported.wit, self.id) {
+                // The component model names an `(implements ..)` import by its
+                // label, so that — not the interface — is the linker instance
+                // that has to be defined for it.
+                let instance = match &binding {
+                    Some(label) => label.as_ref(),
+                    None => exported.name.as_ref(),
+                };
+                add_capabilities_to_linker(
+                    linker,
+                    &self.state,
+                    exported,
+                    instance,
+                    binding.clone(),
+                )?;
+                debug!(
+                    id = self.id,
+                    interface = %exported.name,
+                    binding = binding.as_deref().unwrap_or("<unnamed>"),
+                    "wired host component capability"
+                );
+            }
         }
         Ok(())
     }
+}
+
+/// The bindings a component imports `exported` under: one entry per distinct
+/// `(implements ..)` label, and `None` where it imports the interface plainly.
+///
+/// Taken from the component's own world rather than from the manifest's matched
+/// entries, because the two answer different questions. An entry is the
+/// operator- and manifest-facing declaration of a binding, shared by every item
+/// of the workload; what has to be *defined on this item's linker* is whatever
+/// this component actually imports, under the name it imports it by. A component
+/// that imports plainly while its manifest entry carries a label needs the plain
+/// instance, and would otherwise be left with an unresolved import.
+///
+/// A label equal to the plugin's own id addresses the plugin rather than one of
+/// its bindings, so it reads as unnamed here — the same rule
+/// [`crate::plugin::PluginBindingSet`] applies when it resolves config, and the
+/// two have to agree or a workload would be configured under one binding and
+/// served under another.
+///
+/// Empty only when the component imports nothing of the package, in which case
+/// there is nothing to wire.
+fn import_labels(
+    world: &WitWorld,
+    exported: &WitInterface,
+    plugin_id: &str,
+) -> Vec<Option<Arc<str>>> {
+    let mut labels: Vec<Option<Arc<str>>> = Vec::new();
+    for imported in &world.imports {
+        if !imported.same_package(exported)
+            || !exported
+                .interfaces
+                .iter()
+                .any(|name| imported.interfaces.contains(name))
+        {
+            continue;
+        }
+        let label = match imported.name.as_deref() {
+            Some(name) if name != plugin_id => Some(Arc::from(name)),
+            _ => None,
+        };
+        if !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
+    // Sorted so a component importing one interface under several labels wires
+    // them in the same order every time, and the unnamed instance first.
+    labels.sort();
+    labels
 }
 
 /// Filters `plugins` down to the natives — every entry that is not itself a
@@ -644,6 +727,43 @@ impl HostPlugin for ComponentHostPlugin {
 
     fn world(&self) -> WitWorld {
         self.world.clone()
+    }
+
+    /// Record whether this host serves named bindings of this plugin.
+    ///
+    /// The generic layer has already refused a binding named after the plugin
+    /// itself and any key a closed schema does not know; a component plugin
+    /// declares no schema, so there is nothing else here to parse. What this
+    /// does need from the declaration is the one fact
+    /// [`HostPlugin::supports_named_instances`] cannot ask for on its own:
+    /// whether the operator declared any binding names at all.
+    fn validate_bindings(&self, declared: &crate::plugin::PluginBindingSet) -> anyhow::Result<()> {
+        let named = declared.binding_names().next().is_some();
+        self.named_bindings.store(named, Ordering::Relaxed);
+        if named {
+            debug!(
+                id = self.id,
+                bindings = %declared.binding_names().collect::<Vec<_>>().join(", "),
+                "host component plugin serves named bindings"
+            );
+        }
+        Ok(())
+    }
+
+    /// Whether an `(implements ..)` label routes to this plugin.
+    ///
+    /// True exactly when the operator declared bindings for it. A component
+    /// plugin can always *serve* a label — it wires the labeled linker instance
+    /// to the same store and hands the label to the guest through
+    /// `wasmcloud:host/identity#get-binding-name` — but "can serve" is not the
+    /// question this answers. It decides which plugin a label routes to, and a
+    /// plugin claiming every label unconditionally would take plain, unlabeled
+    /// imports away from the single-backend natives that serve them today
+    /// (`supports_named_instances` defers in both directions). The operator's
+    /// `bindings` block is the statement that this plugin is the one serving
+    /// those names, so it is what turns the routing on.
+    fn supports_named_instances(&self) -> bool {
+        self.named_bindings.load(Ordering::Relaxed)
     }
 
     fn set_workload_failure_sink(&self, sink: crate::plugin::WorkloadFailureSink) {
@@ -1213,12 +1333,17 @@ async fn build_plugin_linker(
     let mut linked = std::collections::HashSet::new();
     for imported in introspect_imports(component)? {
         if exports.iter().any(|e| e.name == imported.name) {
-            add_capabilities_to_linker(&mut linker, state, &imported).with_context(|| {
-                format!(
-                    "failed to wire self-import {} on plugin '{id}'",
-                    imported.name
-                )
-            })?;
+            // A self-import is the plugin calling its own capability, so it
+            // carries no binding: the label an outside caller routed under says
+            // nothing about a call the plugin makes to itself.
+            let instance = Arc::clone(&imported.name);
+            add_capabilities_to_linker(&mut linker, state, &imported, &instance, None)
+                .with_context(|| {
+                    format!(
+                        "failed to wire self-import {} on plugin '{id}'",
+                        imported.name
+                    )
+                })?;
             linked.insert(Arc::clone(&imported.name));
         }
     }
@@ -1326,6 +1451,28 @@ fn install_host_identity(
             },
         )
         .map_err(|e| e.context("failed to define wasmcloud:host/identity#get-component-id"))?;
+    let binding_state = Arc::clone(state);
+    instance
+        .func_new(
+            "get-binding-name",
+            move |mut store, _ty, _params, results| {
+                let root = caller_root_task(&mut store);
+                // `option<string>` rather than the empty string `get-component-id`
+                // is stuck with: a binding genuinely has no name when the caller
+                // imported the interface plainly, and that is the common case
+                // rather than a degradation, so it gets a representation of its
+                // own from the start.
+                let binding = root
+                    .and_then(|task| binding_state.registry()?.caller_for_task(task))
+                    .and_then(|c| c.binding.clone())
+                    .map(|name| Val::String(name.to_string()));
+                if let Some(slot) = results.first_mut() {
+                    *slot = Val::Option(binding.map(Box::new));
+                }
+                Ok(())
+            },
+        )
+        .map_err(|e| e.context("failed to define wasmcloud:host/identity#get-binding-name"))?;
     Ok(())
 }
 
@@ -1409,14 +1556,26 @@ fn install_host_cancel(
 /// plugin's persistent store via the channel held by `state`. Used on a
 /// workload's linker ([`ComponentHostPlugin::on_workload_item_bind`]) and on the
 /// plugin's own linker for self-imports ([`build_plugin_linker`]).
+///
+/// `instance_name` is the name the *caller* imports the interface under, which
+/// is `iface.name` for a plain import and the `(implements ..)` label for a
+/// labeled one — the component model names such an import by its label, so a
+/// definition under the interface's own name would leave it unsatisfied.
+/// `binding` carries that label onward to every call the shims route, so the
+/// plugin can tell one binding's calls from another's
+/// (`wasmcloud:host/identity#get-binding-name`). The interface addressed on the
+/// plugin's own instance is always `iface.name`: the label names a binding of
+/// this plugin, never a different interface.
 fn add_capabilities_to_linker(
     linker: &mut Linker<SharedCtx>,
     state: &Arc<ComponentHostPluginState>,
     iface: &ExportedInterface,
+    instance_name: &str,
+    binding: Option<Arc<str>>,
 ) -> anyhow::Result<()> {
     let mut linker_instance = linker
-        .instance(&iface.name)
-        .map_err(|e| e.context(format!("failed to open linker instance {}", iface.name)))?;
+        .instance(instance_name)
+        .map_err(|e| e.context(format!("failed to open linker instance {instance_name}")))?;
 
     // Register each resource the interface defines as a cross-store proxy. A
     // caller holds an opaque proxy; dropping it here routes a drop of the real
@@ -1435,8 +1594,7 @@ fn add_capabilities_to_linker(
             )
             .map_err(|e| {
                 e.context(format!(
-                    "failed to register proxied resource {}/{}",
-                    iface.name, resource
+                    "failed to register proxied resource {instance_name}/{resource}"
                 ))
             })?;
     }
@@ -1444,6 +1602,7 @@ fn add_capabilities_to_linker(
     for func in &iface.funcs {
         let state = Arc::clone(state);
         let interface = Arc::clone(&iface.name);
+        let call_binding = binding.clone();
         let func_name = Arc::clone(&func.name);
         let param_tys = Arc::clone(&func.param_tys);
         let result_tys = Arc::clone(&func.result_tys);
@@ -1454,13 +1613,14 @@ fn add_capabilities_to_linker(
                 move |accessor, _func_ty, params: &[Val], results: &mut [Val]| {
                     let state = Arc::clone(&state);
                     let interface = Arc::clone(&interface);
+                    let binding = call_binding.clone();
                     let func = Arc::clone(&func_name);
                     let param_tys = Arc::clone(&param_tys);
                     let result_tys = Arc::clone(&result_tys);
                     Box::pin(async move {
                         route_capability_call(
-                            accessor, &state, interface, func, params, &param_tys, result_tys,
-                            results,
+                            accessor, &state, interface, binding, func, params, &param_tys,
+                            result_tys, results,
                         )
                         .await
                     })
@@ -1468,8 +1628,8 @@ fn add_capabilities_to_linker(
             )
             .map_err(|e| {
                 e.context(format!(
-                    "failed to install capability shim for {}/{}",
-                    iface.name, func.name
+                    "failed to install capability shim for {instance_name}/{}",
+                    func.name
                 ))
             })?;
     }
@@ -1520,6 +1680,7 @@ async fn route_capability_call(
     accessor: &Accessor<SharedCtx>,
     state: &ComponentHostPluginState,
     interface: Arc<str>,
+    binding: Option<Arc<str>>,
     func: Arc<str>,
     params: &[Val],
     param_tys: &[Type],
@@ -1539,6 +1700,11 @@ async fn route_capability_call(
                 CallerIdentity {
                     workload_id: Arc::clone(&ctx.workload_id),
                     component_id: Some(Arc::clone(&ctx.component_id)),
+                    // Fixed when the shim was installed, not read from the
+                    // call: one linker instance is one binding, so the label
+                    // the caller imported under is already known here and
+                    // cannot be influenced by anything the guest passes.
+                    binding: binding.clone(),
                 }
             };
             let mut dones = Vec::new();
@@ -2001,6 +2167,86 @@ mod tests {
             *self.seen_id.lock().unwrap() = Some(item.id().to_string());
             Ok(())
         }
+    }
+
+    /// A world importing `wasmcloud:secrets/store` under each of `labels`
+    /// (`None` for a plain import).
+    fn importing(labels: &[Option<&str>]) -> WitWorld {
+        WitWorld {
+            imports: labels
+                .iter()
+                .map(|label| {
+                    let mut wit = WitInterface::from("wasmcloud:secrets/store@2.1.0");
+                    wit.name = label.map(str::to_string);
+                    wit
+                })
+                .collect(),
+            exports: HashSet::new(),
+        }
+    }
+
+    #[test]
+    fn a_plain_import_wires_the_interfaces_own_instance() {
+        let served = WitInterface::from("wasmcloud:secrets/store@2.1.0");
+        assert_eq!(
+            import_labels(&importing(&[None]), &served, "k8s-secrets"),
+            vec![None]
+        );
+    }
+
+    #[test]
+    fn a_labeled_import_wires_the_label() {
+        // The component model names an `(implements ..)` import by its label, so
+        // that is the linker instance the plugin has to define — defining the
+        // interface's own name would leave the import unresolved.
+        let served = WitInterface::from("wasmcloud:secrets/store@2.1.0");
+        assert_eq!(
+            import_labels(&importing(&[Some("restricted")]), &served, "k8s-secrets"),
+            vec![Some(Arc::from("restricted"))]
+        );
+    }
+
+    #[test]
+    fn a_component_importing_both_gets_both_instances() {
+        let served = WitInterface::from("wasmcloud:secrets/store@2.1.0");
+        assert_eq!(
+            import_labels(
+                &importing(&[None, Some("restricted")]),
+                &served,
+                "k8s-secrets"
+            ),
+            vec![None, Some(Arc::from("restricted"))],
+            "the unnamed instance sorts first, and neither displaces the other"
+        );
+    }
+
+    #[test]
+    fn a_label_equal_to_the_plugin_id_is_the_unnamed_binding() {
+        // Addressing the plugin is not naming one of its bindings. This has to
+        // agree with `PluginBindingSet::binding_name`, or a workload would be
+        // configured under one binding and served under another.
+        let served = WitInterface::from("wasmcloud:secrets/store@2.1.0");
+        assert_eq!(
+            import_labels(&importing(&[Some("k8s-secrets")]), &served, "k8s-secrets"),
+            vec![None]
+        );
+    }
+
+    #[test]
+    fn an_interface_the_component_does_not_import_wires_nothing() {
+        // A plugin exporting more than the component uses: an entry naming the
+        // package matches the whole plugin, but only what the component
+        // actually imports may be defined on its linker.
+        let served = WitInterface::from("wasmcloud:secrets/reveal@2.1.0");
+        assert!(
+            import_labels(&importing(&[Some("restricted")]), &served, "k8s-secrets").is_empty()
+        );
+    }
+
+    #[test]
+    fn a_different_package_wires_nothing() {
+        let served = WitInterface::from("acme:kv/store@0.1.0");
+        assert!(import_labels(&importing(&[None]), &served, "k8s-secrets").is_empty());
     }
 
     /// Compile `wat` and classify its imports the way plugin construction

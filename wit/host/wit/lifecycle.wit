@@ -77,20 +77,24 @@ interface workload-lifecycle {
         /// same namespace:package, if any. Component-facing: what the component
         /// calls this import.
         ///
-        /// Two gaps for a **wasm** host component plugin specifically (a
-        /// Rust built-in plugin doesn't have either): a workload with more
-        /// than one *named* binding on the same namespace:package is
-        /// rejected before bind unless the plugin implements
-        /// `supports_named_instances()` — no wasm plugin can opt into that
-        /// today, so this field only ever arrives as at most one populated
-        /// `name` per namespace:package per workload in practice. And even
-        /// where it is populated, it reaches `on-workload-bind` but is not
-        /// threaded through to the capability call itself — nothing on a
-        /// later `store.get`-style call says which binding it's for, only
-        /// `wasmcloud:host/identity`'s workload/component id. A plugin that
-        /// needs to serve two *unnamed* bindings of the same
-        /// namespace:package differently has no way to disambiguate them at
-        /// all today.
+        /// For a **wasm** host component plugin this is live in both
+        /// directions, and the operator's `host.plugins` entry is what turns
+        /// it on: declare a name under that entry's `bindings` and a workload
+        /// may import the plugin's interface under that `(implements ..)`
+        /// label, as many of them as the entry declares. The label reaches the
+        /// hook here with the binding's resolved `config`, and it reaches every
+        /// capability call the label routes as
+        /// `wasmcloud:host/identity#get-binding-name` — so state keyed by
+        /// binding at bind time is reachable from the call that needs it.
+        ///
+        /// Declare nothing and nothing changes: a plugin with no `bindings`
+        /// entry serves plain, unlabeled imports exactly as it did before, and
+        /// this field arrives as `none`.
+        ///
+        /// One gap remains, and it is not specific to wasm plugins: two
+        /// *unnamed* entries of the same namespace:package are one binding, so
+        /// a plugin cannot serve them differently. Give them labels — which is
+        /// what labels are for.
         name: option<string>,
         /// Platform-facing id the binding was declared with, if any — what the
         /// platform's configuration calls the same instance.
