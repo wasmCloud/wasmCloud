@@ -14,6 +14,52 @@ use tracing_subscriber::{
     EnvFilter, Layer, Registry, filter::Directive, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
+/// Env vars that name an OTLP destination. Presence of one of these is what turns exporting on.
+const OTLP_ENDPOINT_VARS: [&str; 4] = [
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+];
+
+fn validate_otlp_endpoint(var: &str, value: &str) -> Option<String> {
+    let Some((scheme, _)) = value.split_once("://") else {
+        return Some(format!(
+            "missing scheme in {var} ({value}): expected http:// or https://"
+        ));
+    };
+
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return Some(format!(
+            "unsupported OTLP endpoint scheme '{scheme}' in {var} ({value}): expected http:// or https://"
+        ));
+    }
+
+    if let Err(e) = value.parse::<http::Uri>() {
+        return Some(format!("invalid OTLP endpoint URL in {var} ({value}): {e}"));
+    }
+
+    None
+}
+
+fn otlp_activation(vars: impl IntoIterator<Item = (String, String)>) -> (bool, Option<String>) {
+    let mut configured = vars
+        .into_iter()
+        .filter(|(key, value)| {
+            OTLP_ENDPOINT_VARS.contains(&key.as_str()) && !value.trim().is_empty()
+        })
+        .peekable();
+
+    if configured.peek().is_none() {
+        return (false, None);
+    }
+
+    match configured.find_map(|(var, value)| validate_otlp_endpoint(&var, &value)) {
+        Some(msg) => (false, Some(msg)),
+        None => (true, None),
+    }
+}
+
 /// Initialize observability, setting up console & OpenTelemetry layers.
 ///
 /// Returns a shutdown function that should be called on process exit to flush any remaining spans/logs
@@ -45,9 +91,13 @@ pub fn initialize_observability(
         .with_ansi(ansi_colors)
         .with_filter(fmt_filter);
 
-    let otel_enabled = std::env::vars().any(|(key, _)| key.starts_with("OTEL_"));
-    if !otel_enabled {
+    let (otlp_enabled, otlp_warning) = otlp_activation(std::env::vars());
+    if !otlp_enabled {
         Registry::default().with(fmt_layer).init();
+
+        if let Some(msg) = otlp_warning {
+            tracing::warn!("{msg}; continuing without OTLP export");
+        }
 
         // No-op shutdown function
         let shutdown_fn = || {};
@@ -69,10 +119,39 @@ pub fn initialize_observability(
         ))
         .build();
 
+    // Build all three exporters up front, before initializing the subscriber, so a
+    // build failure (e.g. an endpoint tonic can't use) degrades to console-only
+    // logging instead of leaving a half-initialized subscriber in place.
+    let exporters = (|| -> anyhow::Result<_> {
+        let log_exporter = opentelemetry_otlp::LogExporter::builder()
+            .with_tonic()
+            .build()
+            .context("failed to create OTLP log exporter")?;
+        let tracer_exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
+            .build()
+            .context("failed to create OTLP span exporter")?;
+        let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
+            .with_tonic()
+            .build()
+            .context("failed to create OTLP metric exporter")?;
+        Ok((log_exporter, tracer_exporter, metric_exporter))
+    })();
+
+    let (log_exporter, tracer_exporter, metric_exporter) = match exporters {
+        Ok(exporters) => exporters,
+        Err(e) => {
+            Registry::default().with(fmt_layer).init();
+            tracing::warn!(
+                "failed to initialize OTLP export: {e:#}; continuing without OTLP export"
+            );
+
+            let shutdown_fn = || {};
+            return Ok(Box::new(shutdown_fn));
+        }
+    };
+
     // OTel logging layer
-    let log_exporter = opentelemetry_otlp::LogExporter::builder()
-        .with_tonic()
-        .build()?;
     let log_provider = opentelemetry_sdk::logs::LoggerProviderBuilder::default()
         .with_batch_exporter(log_exporter)
         .with_resource(resource.clone())
@@ -83,9 +162,6 @@ pub fn initialize_observability(
         OpenTelemetryTracingBridge::new(&log_provider).with_filter(filter_otel_logs);
 
     // OTel tracing layer
-    let tracer_exporter = opentelemetry_otlp::SpanExporter::builder()
-        .with_tonic()
-        .build()?;
     let tracer_provider = opentelemetry_sdk::trace::TracerProviderBuilder::default()
         .with_batch_exporter(tracer_exporter)
         .with_resource(resource.clone())
@@ -107,11 +183,6 @@ pub fn initialize_observability(
         .with(otel_logs_layer)
         .with(otel_tracer_layer)
         .init();
-
-    let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
-        .with_tonic()
-        .build()
-        .context("failed to create OTEL tonic exporter")?;
 
     let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
         .with_periodic_exporter(metric_exporter)
@@ -627,5 +698,107 @@ mod tests {
         // The default is what a serverless host should run: rate, errors and
         // duration, which cost the guest two clock reads.
         assert_eq!(MeterKind::default(), MeterKind::Duration);
+    }
+
+    fn vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn non_endpoint_otel_vars_do_not_configure_otlp() {
+        assert_eq!(
+            otlp_activation(vars(&[
+                ("OTEL_SERVICE_NAME", "my-service"),
+                ("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment=ci"),
+                ("OTEL_LOG_LEVEL", "debug"),
+                ("SOME_OTHER_VAR", "irrelevant"),
+            ])),
+            (false, None)
+        );
+    }
+
+    #[test]
+    fn each_endpoint_var_configures_otlp() {
+        for var in OTLP_ENDPOINT_VARS {
+            assert_eq!(
+                otlp_activation(vars(&[(var, "http://localhost:4317")])),
+                (true, None),
+                "expected {var} to configure OTLP"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_or_whitespace_endpoint_values_do_not_configure_otlp() {
+        assert_eq!(
+            otlp_activation(vars(&[
+                ("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+                ("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "   "),
+            ])),
+            (false, None)
+        );
+    }
+
+    #[test]
+    fn unsupported_scheme_is_rejected_with_actionable_message() {
+        let msg =
+            validate_otlp_endpoint("OTEL_EXPORTER_OTLP_ENDPOINT", "unix:///dev/otel-grpc.sock")
+                .expect("unix scheme should be rejected");
+        assert!(
+            msg.contains("unsupported OTLP endpoint scheme 'unix'"),
+            "message was: {msg}"
+        );
+        assert!(
+            msg.contains("expected http:// or https://"),
+            "message was: {msg}"
+        );
+    }
+
+    #[test]
+    fn http_and_https_schemes_are_accepted() {
+        assert_eq!(
+            validate_otlp_endpoint("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
+            None
+        );
+        assert_eq!(
+            validate_otlp_endpoint("OTEL_EXPORTER_OTLP_ENDPOINT", "https://collector:4317"),
+            None
+        );
+        assert_eq!(
+            validate_otlp_endpoint("OTEL_EXPORTER_OTLP_ENDPOINT", "HTTP://localhost:4317"),
+            None
+        );
+    }
+
+    #[test]
+    fn missing_scheme_is_rejected() {
+        let msg = validate_otlp_endpoint("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317")
+            .expect("value without a scheme should be rejected");
+        assert!(msg.contains("missing scheme"), "message was: {msg}");
+    }
+
+    #[test]
+    fn otlp_activation_enables_export_only_with_configured_endpoint() {
+        assert_eq!(
+            otlp_activation(vars(&[("OTEL_SERVICE_NAME", "my-service")])),
+            (false, None)
+        );
+        assert_eq!(
+            otlp_activation(vars(&[(
+                "OTEL_EXPORTER_OTLP_ENDPOINT",
+                "http://localhost:4317"
+            )])),
+            (true, None)
+        );
+
+        let (enabled, warning) = otlp_activation(vars(&[(
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "unix:///dev/otel-grpc.sock",
+        )]));
+        assert!(!enabled);
+        assert!(warning.is_some());
     }
 }
