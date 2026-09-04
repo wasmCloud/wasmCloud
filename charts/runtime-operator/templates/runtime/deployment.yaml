@@ -57,12 +57,15 @@
 {{- if $portClash }}
 {{- fail (printf "host group %s: ports[] gives containerPort %s, already rendered from %s; drop it" $groupName $port $portClash) }}
 {{- end }}
+{{- $_ := set $reserved $port (printf "ports[].%s" $name) }}
+{{- /* A container port may be unnamed, and two of those are not a clash. */}}
+{{- if .name }}
 {{- $nameClash := index $reservedNames $name }}
 {{- if $nameClash }}
 {{- fail (printf "host group %s: ports[] gives the name %q, already rendered from %s; rename it" $groupName $name $nameClash) }}
 {{- end }}
-{{- $_ := set $reserved $port (printf "ports[].%s" $name) }}
 {{- $_ := set $reservedNames $name (printf "ports[].%s" $name) }}
+{{- end }}
 {{- end }}
 {{- $liveness := include "runtime-operator.hostProbe" (merge (dict "name" "liveness") $probeArgs) | fromJson }}
 {{- $readiness := include "runtime-operator.hostProbe" (merge (dict "name" "readiness") $probeArgs) | fromJson }}

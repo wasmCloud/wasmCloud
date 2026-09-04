@@ -106,7 +106,7 @@ func herdWorkloads(deployment string) []herdWorkload {
 	const columns = `jsonpath={range .items[*]}` +
 		`{.metadata.name}{"\t"}` +
 		`{.status.conditions[?(@.type=="Ready")].status}{"\t"}` +
-		`{.status.hostID}` +
+		`{.status.hostId}` +
 		`{"\n"}{end}`
 
 	out, err := utils.Run(exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
@@ -383,7 +383,15 @@ spec:
 		// which takes every workload on it — and the deployment then converges
 		// anyway on the way back up, so readiness alone would not notice.
 		By("verifying the herd did not restart the host pod")
-		restartsAfter := hostPodRestarts()
+		// Retried, so a kubectl that fails once does not read as the whole host
+		// group having gone: `hostPodRestarts` answers `nil` either way, and the
+		// comparison below cannot tell the two apart.
+		var restartsAfter map[string]string
+		Eventually(func() int {
+			restartsAfter = hostPodRestarts()
+			return len(restartsAfter)
+		}).WithTimeout(30*time.Second).WithPolling(2*time.Second).Should(BeNumerically(">", 0),
+			"no host pods could be read after the herd")
 		// Every pod that was there before must still be there. Ranging over the
 		// second reading alone would report success from an empty map — a
 		// kubectl blip, or a herd that took the whole host group down, both
@@ -408,6 +416,11 @@ spec:
 		hosts := map[string]int{}
 		for _, row := range rows {
 			Expect(row.ready).To(Equal("True"), "%s is not Ready", row.name)
+			// Asserted before counting. An unset field reads as empty rather
+			// than erroring, and an empty key would collapse every replica into
+			// one bucket — making the "all on one host" check below pass
+			// whatever the placement actually was.
+			Expect(row.hostID).NotTo(BeEmpty(), "%s reports no host", row.name)
 			hosts[row.hostID]++
 		}
 		Expect(hosts).To(HaveLen(1),

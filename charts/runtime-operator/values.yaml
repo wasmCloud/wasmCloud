@@ -454,8 +454,9 @@ runtime:
     # start on an argument it does not know, so leaving it on there is a
     # CrashLoopBackOff rather than a degraded probe.
     #
-    # `runtime.drainDelaySeconds` renders `--drain-delay` independently of this
-    # setting, so a group pinned to an older image needs both cleared.
+    # `runtime.drainDelaySeconds` and `runtime.natsConnectTimeoutSeconds` render
+    # their own flags independently of this setting, so a group pinned to an
+    # older image needs all three cleared, not just this one.
     endpoint:
       enabled: true
       port: 8081
