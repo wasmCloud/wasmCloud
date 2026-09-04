@@ -103,4 +103,10 @@ interface store {
     /// `bind:{workload-id}` / `unbind:{workload-id}`. Resets when the plugin
     /// store restarts.
     lifecycle-log: async func() -> list<string>;
+
+    /// The `(implements ..)` label this call arrived on, as the plugin reads it
+    /// from `wasmcloud:host/identity#get-binding-name`; `none` for a plain,
+    /// unlabeled import. Lets a test assert end-to-end that one binding's calls
+    /// are distinguishable from another's on the call itself, not only at bind.
+    whichbinding: async func() -> option<string>;
 }

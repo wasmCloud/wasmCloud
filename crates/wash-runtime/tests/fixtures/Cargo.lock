@@ -549,6 +549,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kv-plugin-implements-caller"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "kv-plugin-service"
 version = "0.0.0"
 dependencies = [

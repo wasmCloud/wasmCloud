@@ -171,6 +171,26 @@ pub fn kv_plugin_caller_host_interfaces_with_config(
     ]
 }
 
+/// Interfaces for the `kv-plugin-implements-caller` workload: HTTP ingress plus
+/// three `acme:kv` entries — the plain one and one per `(implements ..)` label
+/// the component imports. One entry per binding, which is what the operator's
+/// declaration is matched against.
+#[cfg(feature = "host-component-plugins")]
+pub fn kv_plugin_implements_caller_host_interfaces(host_header: &str) -> Vec<WitInterface> {
+    vec![
+        http_incoming_handler_interface(host_header, None),
+        acme_kv_interface(),
+        WitInterface {
+            name: Some("tenant-a".to_string()),
+            ..acme_kv_interface()
+        },
+        WitInterface {
+            name: Some("tenant-b".to_string()),
+            ..acme_kv_interface()
+        },
+    ]
+}
+
 /// The `wasmcloud:secrets` capability (store + reveal), served by the native
 /// `wasmcloud-secrets` plugin.
 pub fn secrets_interface(config: HashMap<String, String>) -> WitInterface {
@@ -357,6 +377,29 @@ async fn start_host_with_component_plugin_router(
     plugin_wasm: &'static [u8],
     max_restarts: Option<u32>,
 ) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    start_host_with_component_plugin_router_bindings(
+        addr,
+        router,
+        plugin_id,
+        plugin_wasm,
+        max_restarts,
+        wash_runtime::plugin::PluginBindings::new(),
+    )
+    .await
+}
+
+/// [`start_host_with_component_plugin_router`] plus the operator's
+/// `host.plugins` declaration, which is what turns `(implements ..)` label
+/// routing on for a component plugin.
+#[cfg(feature = "host-component-plugins")]
+async fn start_host_with_component_plugin_router_bindings(
+    addr: &str,
+    router: impl wash_runtime::host::http::Router,
+    plugin_id: &'static str,
+    plugin_wasm: &'static [u8],
+    max_restarts: Option<u32>,
+    plugin_bindings: wash_runtime::plugin::PluginBindings,
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
     let engine = Engine::builder().build()?;
     let ingress = Ingress::new(router, addr.parse()?).await?;
     let bound_addr = ingress.addr();
@@ -379,9 +422,32 @@ async fn start_host_with_component_plugin_router(
     if let Some(max_restarts) = max_restarts {
         plugin = plugin.with_max_restarts(max_restarts);
     }
-    let host = builder.with_plugin(Arc::new(plugin))?.build()?;
+    let host = builder
+        .with_plugin(Arc::new(plugin))?
+        .with_plugin_bindings(plugin_bindings)
+        .build()?;
     let host = host.start().await.context("Failed to start host")?;
     Ok((bound_addr, host))
+}
+
+/// Start a p3 host with a component plugin whose `host.plugins` entry declares
+/// `bindings`, the way an operator turns label routing on for one.
+#[cfg(feature = "host-component-plugins")]
+pub async fn start_host_with_component_plugin_bindings(
+    addr: &str,
+    plugin_id: &'static str,
+    plugin_wasm: &'static [u8],
+    plugin_bindings: wash_runtime::plugin::PluginBindings,
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    start_host_with_component_plugin_router_bindings(
+        addr,
+        DevRouter::default(),
+        plugin_id,
+        plugin_wasm,
+        None,
+        plugin_bindings,
+    )
+    .await
 }
 
 /// Start a p3 host with the standard plugin set plus a [`ComponentHostPlugin`]
