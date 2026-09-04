@@ -82,19 +82,9 @@ spec:
             - name: health
               containerPort: 8082
               protocol: TCP
-          # Nothing answers on this port until `mgr.Start` binds it, and that
-          # runs after the operator has connected to NATS — which it will wait
-          # up to `wasmbus.NatsInitialConnectWindow` (60s) to do, because a
-          # manager deployed beside its NATS has no ordering against it. The
-          # liveness probe below would reach 3 failures at ~55s and restart the
-          # container mid-wait, so the wait could never be spent: the operator
-          # would be killed for the startup race it was waiting out, on every
-          # install where NATS is slow.
-          #
-          # A startup probe suspends the other two until it passes. 24 × 5s
-          # covers the NATS window with room for the manager's own start; a pod
-          # that never binds is still failed, just on this budget rather than
-          # on liveness's.
+          # `mgr.Start` binds this port, and it runs after the operator has
+          # connected to NATS — a wait of up to `NatsInitialConnectWindow`
+          # (60s). This suspends liveness until then; 24 × 5s covers it.
           startupProbe:
             httpGet:
               path: /healthz

@@ -45,6 +45,7 @@ import (
 // that stops heartbeating is deleted by the operator, and every workload on it
 // goes too — so a herd that silences its own host takes out the very workloads
 // it was placing.
+
 // herdWorkload is one Workload CR of a herd, reduced to what the spec asserts on.
 type herdWorkload struct {
 	name   string

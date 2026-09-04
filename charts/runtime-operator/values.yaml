@@ -434,10 +434,8 @@ runtime:
     # start on an argument it does not know, so leaving it on there is a
     # CrashLoopBackOff rather than a degraded probe.
     #
-    # `runtime.drainDelaySeconds` is the other flag of that vintage and is
-    # rendered independently of this one, so a group pinned to an older image
-    # has to be given both: turning this off alone still leaves
-    # `--drain-delay` on the command line whenever that value is set.
+    # `runtime.drainDelaySeconds` renders `--drain-delay` independently of this
+    # setting, so a group pinned to an older image needs both cleared.
     endpoint:
       enabled: true
       port: 8081
