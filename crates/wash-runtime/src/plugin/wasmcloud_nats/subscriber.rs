@@ -388,10 +388,11 @@ async fn build_instance(
 ///
 /// `cancel_token` ends the delivery at the two awaits that can block on a
 /// workload being torn down: building a store and instantiating into it is work
-/// nobody will see the result of, and an instance built for the pool could
-/// otherwise be installed after the pool was cleared. A delivery carrying an
-/// instance the pool declined reaches neither await, so it is checked against
-/// the token directly.
+/// nobody will see the result of. A delivery carrying an instance the pool
+/// declined reaches neither await, so it is checked against the token directly.
+/// What keeps such an instance from being parked in a pool that teardown has
+/// already emptied is the pool itself, which refuses one once it is closed
+/// (see [`crate::engine::instance_pool::InstancePool::close`]).
 async fn run_delivery(
     workload: &ResolvedWorkload,
     target: &HandlerTarget,
