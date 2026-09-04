@@ -715,9 +715,9 @@ impl HostPluginConfig {
     /// without resolving `configFrom`/`secretFrom` — used where no [`Config`]
     /// is available. Prefer [`HostPluginConfig::to_spec`] when one is.
     ///
-    /// `expectedDigest` on a file source is caught by the loader when it finds
-    /// no digest to check against, so this only has to validate what it can see
-    /// without fetching.
+    /// `expectedDigest` on a file source is caught by the loader, which only
+    /// checks a pin against an `Oci` source, so this only has to validate
+    /// what it can see without fetching.
     pub fn to_spec_unresolved(&self) -> Result<wash_runtime::plugin::ComponentPluginSpec> {
         if self.id.is_empty() {
             bail!("host.plugins entry is missing a non-empty `id`");

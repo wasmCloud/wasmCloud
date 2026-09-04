@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail, ensure};
 use bytes::Bytes;
+use sha2::{Digest, Sha256};
 
 use crate::oci::{OciConfig, OciPullPolicy, pull_component};
 
@@ -41,12 +42,14 @@ pub enum ComponentSource {
 #[derive(Debug, Clone)]
 pub struct LoadedComponent {
     pub bytes: Bytes,
-    /// Registry digest of the pulled image, `None` for a file source.
+    /// Registry digest of the pulled image, or a content hash of the bytes
+    /// for a file source.
     ///
-    /// The engine keys its compilation cache on this. A local path carries no
-    /// such identity. The same path can hold different bytes between two
-    /// reads so a file source declines to be cached rather than offering a
-    /// name that would collide with every other file.
+    /// The engine keys its compiled-component cache on this. A file's path
+    /// carries no identity of its own (the same path can hold different
+    /// bytes between two reads), so this hashes the bytes rather than the
+    /// path, letting repeated loads of identical file content still share
+    /// one cached [`wasmtime::component::Component`].
     pub digest: Option<String>,
 }
 
@@ -54,8 +57,9 @@ impl LoadedComponent {
     /// Check the fetched bytes against a pinned registry digest.
     ///
     /// Callers add their own context (which plugin, which component); this
-    /// supplies the reason. A file source has no digest to check, so pinning
-    /// one is a configuration error rather than a mismatch.
+    /// supplies the reason. A `LoadedComponent` with no digest at all has
+    /// nothing to check, so pinning one is a configuration error rather than
+    /// a mismatch.
     pub fn verify_digest(&self, expected: &str) -> Result<()> {
         match &self.digest {
             Some(digest) if digest == expected => Ok(()),
@@ -133,8 +137,11 @@ impl ComponentSource {
 
     /// Fetch the bytes and check them against a pinned registry digest.
     ///
-    /// A source that carries no digest is rejected before any bytes move, so a
-    /// pin on a file is a configuration error rather than wasted I/O.
+    /// A pin only ever means a registry digest, so it is rejected against a
+    /// file source before any bytes move — even though a file load now
+    /// produces its own content digest, that digest names local bytes, not a
+    /// registry artifact, so pinning one is a configuration error rather than
+    /// wasted I/O.
     pub async fn load_pinned(
         &self,
         oci_config: OciConfig,
@@ -168,12 +175,22 @@ impl ComponentSource {
                 })
             }
             Self::File(path) => {
-                let bytes = tokio::fs::read(path)
+                let bytes: Bytes = tokio::fs::read(path)
                     .await
-                    .with_context(|| format!("failed to read component file {}", path.display()))?;
+                    .with_context(|| format!("failed to read component file {}", path.display()))?
+                    .into();
+                // Off the async runtime: a large component's hash can take
+                // long enough to stall whatever else that worker thread was
+                // driving (e.g. draining a NATS connection).
+                let for_hash = bytes.clone();
+                let digest = tokio::task::spawn_blocking(move || {
+                    format!("sha256:{:x}", Sha256::digest(&for_hash))
+                })
+                .await
+                .context("digest hashing task panicked")?;
                 Ok(LoadedComponent {
-                    bytes: bytes.into(),
-                    digest: None,
+                    bytes,
+                    digest: Some(digest),
                 })
             }
         }
@@ -325,7 +342,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_file_source_loads_bytes_without_a_digest() {
+    async fn a_file_source_loads_bytes_with_a_content_digest() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("kv.wasm");
         std::fs::write(&path, b"\0asm\x0d\0\x01\0").unwrap();
@@ -335,7 +352,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(loaded.bytes.as_ref(), b"\0asm\x0d\0\x01\0");
-        assert!(loaded.digest.is_none());
+        assert!(
+            loaded
+                .digest
+                .as_deref()
+                .is_some_and(|d| d.starts_with("sha256:"))
+        );
+    }
+
+    #[tokio::test]
+    async fn two_file_sources_with_identical_bytes_share_a_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path_a = dir.path().join("a.wasm");
+        let path_b = dir.path().join("b.wasm");
+        std::fs::write(&path_a, b"\0asm\x0d\0\x01\0").unwrap();
+        std::fs::write(&path_b, b"\0asm\x0d\0\x01\0").unwrap();
+
+        let loaded_a = ComponentSource::File(path_a)
+            .load(OciConfig::default())
+            .await
+            .unwrap();
+        let loaded_b = ComponentSource::File(path_b)
+            .load(OciConfig::default())
+            .await
+            .unwrap();
+        assert_eq!(loaded_a.digest, loaded_b.digest);
+
+        let different = ComponentSource::File(dir.path().join("c.wasm"));
+        std::fs::write(dir.path().join("c.wasm"), b"\0asm\x0d\0\x01\x01").unwrap();
+        let loaded_c = different.load(OciConfig::default()).await.unwrap();
+        assert_ne!(loaded_a.digest, loaded_c.digest);
     }
 
     #[tokio::test]
