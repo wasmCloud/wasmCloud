@@ -1662,6 +1662,16 @@ const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// connection's protocol otherwise is.
 const FIRST_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Free connections a saturated host has to get back before it claims capacity
+/// again, as a percentage of its ceiling.
+///
+/// Only the recovery side is a chosen number. What takes a host out of the
+/// Service is having no room at all, which needs no threshold and cannot fire
+/// on a host that is merely busy. This decides how much room is enough to stop
+/// it returning into the same wall, so getting it wrong costs a saturated host
+/// a little longer out of rotation and nothing else.
+const READY_RECOVER_PERCENT: usize = 10;
+
 /// The ingress connection ceiling, the permits enforcing it, and the counter
 /// reporting it.
 ///
@@ -1676,6 +1686,10 @@ pub struct ConnectionLimit {
     /// indistinguishable from a listener that stopped accepting, and the second
     /// is the more urgent of the two.
     accepting: Arc<AtomicBool>,
+    /// Which side of the hysteresis below readiness is currently on. Shared,
+    /// because the probe handler and the accept loop hold separate clones of
+    /// the same limit.
+    has_headroom: Arc<AtomicBool>,
     offered: opentelemetry::metrics::Counter<u64>,
     /// Built once. `error.type` marks the refusals inside the one series, so a
     /// shed rate is a filter on it rather than a second counter to keep in step.
@@ -1688,6 +1702,7 @@ impl ConnectionLimit {
             max,
             permits: Arc::new(Semaphore::new(max)),
             accepting: Arc::new(AtomicBool::new(true)),
+            has_headroom: Arc::new(AtomicBool::new(true)),
             offered: opentelemetry::global::meter("wash-runtime")
                 .u64_counter("http.ingress.connections")
                 .with_description(
@@ -1747,9 +1762,46 @@ impl crate::host::probes::ReadinessCheck for ConnectionLimit {
         }
     }
 
+    /// Not-ready means this host has no room, not that it is busy.
+    ///
+    /// A threshold on utilisation would take a healthy host out of the Service:
+    /// a ceiling of 256 and a tenth-free mark pulls it at 231 connections while
+    /// it is still serving every one of them, and replicas at similar load
+    /// cross it together. So the departure is absolute — no permits left, which
+    /// is the host actually turning connections away.
+    ///
+    /// Recovery is the part that needs a margin. Returning on a single freed
+    /// permit puts a saturated host back a probe before it is full again, so it
+    /// waits for [`READY_RECOVER_PERCENT`] of its ceiling to come back.
     fn ready(&self) -> bool {
-        self.accepting.load(std::sync::atomic::Ordering::Relaxed)
-            && self.permits.available_permits() > 0
+        use std::sync::atomic::Ordering::Relaxed;
+        if !self.accepting.load(Relaxed) {
+            return false;
+        }
+        // Never above the ceiling, so a host too small for the percentage still
+        // has a reachable recovery mark.
+        let recover = (self.max * READY_RECOVER_PERCENT / 100)
+            .max(1)
+            .min(self.max);
+        let free = self.permits.available_permits();
+        let ready = if self.has_headroom.load(Relaxed) {
+            free > 0
+        } else {
+            free >= recover
+        };
+        self.has_headroom.store(ready, Relaxed);
+        ready
+    }
+
+    /// Saturation passes; an accept loop that has ended does not.
+    ///
+    /// Nothing brings the loop back without a restart, and readiness alone does
+    /// not remove this host from anything that places work: the scheduler reads
+    /// the Host CR's heartbeat-driven condition, which a host with a dead
+    /// listener goes on satisfying. Left to readiness, it keeps being given
+    /// workloads that report Ready and are unreachable.
+    fn unrecoverable(&self) -> bool {
+        !self.accepting.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -1916,6 +1968,17 @@ async fn run_http_server<T: Router>(
                             let mut expired = false;
                             let result = loop {
                                 tokio::select! {
+                                    // Biased, so the connection is always polled
+                                    // before the deadline is acted on. `requested`
+                                    // is set from inside the service, which only
+                                    // runs while `serve` is being polled — with
+                                    // the arms chosen at random, a request that
+                                    // arrived in the same instant the deadline
+                                    // fired had not been seen yet, and the
+                                    // connection was dropped with that request
+                                    // unanswered and unread. Polling first is what
+                                    // makes "sent no request" mean it.
+                                    biased;
                                     result = &mut serve => break result,
                                     () = &mut deadline, if !expired => {
                                         expired = true;
@@ -3170,6 +3233,62 @@ mod tests {
             "{why}: permits stayed at {}",
             limit.permits.available_permits()
         );
+    }
+
+    /// A busy host is not an unready one. The mark that takes it out of the
+    /// Service is having nothing left to give, so a host serving every
+    /// connection it holds stays in rotation however close to the ceiling it
+    /// is — otherwise replicas at similar load leave together and the Service
+    /// empties while every one of them is healthy.
+    #[test]
+    fn a_host_with_room_stays_ready_however_busy() {
+        use crate::host::probes::ReadinessCheck as _;
+
+        let limit = ConnectionLimit::new(100);
+        let mut held = Vec::new();
+        while limit.permits.available_permits() > 1 {
+            held.push(limit.permits.clone().try_acquire_owned().unwrap());
+        }
+        assert!(
+            limit.ready(),
+            "99 of 100 connections in use is busy, not full"
+        );
+
+        held.push(limit.permits.clone().try_acquire_owned().unwrap());
+        assert!(!limit.ready(), "no permits left is the host refusing work");
+    }
+
+    /// Recovery waits for real room. One freed permit would put a saturated
+    /// host back into rotation a probe before it is full again.
+    #[test]
+    fn a_saturated_host_waits_for_room_before_returning() {
+        use crate::host::probes::ReadinessCheck as _;
+
+        let limit = ConnectionLimit::new(100);
+        let mut held = Vec::new();
+        while limit.permits.available_permits() > 0 {
+            held.push(limit.permits.clone().try_acquire_owned().unwrap());
+        }
+        assert!(!limit.ready());
+
+        held.truncate(held.len() - 9);
+        assert!(!limit.ready(), "9 free of 100 is not yet the recovery mark");
+        held.truncate(held.len() - 1);
+        assert!(limit.ready(), "10 free of 100 clears it");
+    }
+
+    /// The smallest ceiling there is. Its recovery mark has to be reachable, or
+    /// a host started with one connection never returns after its first.
+    #[test]
+    fn a_ceiling_of_one_recovers() {
+        use crate::host::probes::ReadinessCheck as _;
+
+        let limit = ConnectionLimit::new(1);
+        assert!(limit.ready(), "idle with its one connection free");
+        let only = limit.permits.clone().try_acquire_owned().unwrap();
+        assert!(!limit.ready(), "its one connection is in use");
+        drop(only);
+        assert!(limit.ready(), "and free again");
     }
 
     /// A connection that never asks for anything must give its slot back.

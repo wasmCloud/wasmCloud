@@ -150,6 +150,26 @@ operator:
   service:
     type: ClusterIP
     port: 8443
+  # -- Probes for the operator container, answered by the manager on the health
+  # port. The manager binds them only once it has connected to NATS, so the
+  # startup budget (`periodSeconds` × `failureThreshold`) has to cover
+  # `NatsInitialConnectWindow` plus manager start; while it runs, the other two
+  # are suspended. Each can be turned off on its own.
+  probes:
+    startup:
+      enabled: true
+      periodSeconds: 5
+      failureThreshold: 24
+    liveness:
+      enabled: true
+      initialDelaySeconds: 15
+      periodSeconds: 20
+      failureThreshold: 3
+    readiness:
+      enabled: true
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      failureThreshold: 3
   # -- This section builds out the service account.
   # See the [Kubernetes documentation](https://kubernetes.io/docs/concepts/security/service-accounts/).
   serviceAccount:
@@ -433,12 +453,16 @@ runtime:
     # `probes.endpoint.enabled: false` for that group — `wash host` refuses to
     # start on an argument it does not know, so leaving it on there is a
     # CrashLoopBackOff rather than a degraded probe.
+    #
+    # `runtime.drainDelaySeconds` renders `--drain-delay` independently of this
+    # setting, so a group pinned to an older image needs both cleared.
     endpoint:
       enabled: true
       port: 8081
       # -- How many 5s attempts the host gets to bind the probe port before the
-      # kubelet gives up. It binds after plugin pulls and compiles, so this is
-      # the startup budget: 60 is five minutes.
+      # kubelet gives up. It binds after `runtime.natsConnectTimeoutSeconds` of
+      # waiting for NATS and after plugin pulls and compiles, so this is the
+      # startup budget for all three: 60 is five minutes.
       startupFailureThreshold: 60
     readiness:
       enabled: true
@@ -475,6 +499,12 @@ runtime:
   # It has to fit inside `terminationGracePeriodSeconds` alongside the 5s
   # command drain that follows it; the chart refuses to render if it does not.
   drainDelaySeconds: 5
+  # -- How long a starting host keeps retrying NATS before it gives up, across
+  # the scheduler and data connections together. A host pod and its NATS come
+  # up with no ordering between them, so a refusal here is a race to wait out
+  # rather than a reason to exit and spend a pod restart. Zero fails on the
+  # first refusal. `probes.endpoint.startupFailureThreshold` has to cover this.
+  natsConnectTimeoutSeconds: 60
   # -- How long a terminating host pod has to shut down before it is killed.
   #
   # Three numbers in sequence, and this is the budget for all of them:

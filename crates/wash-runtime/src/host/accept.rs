@@ -17,7 +17,6 @@
 //! their *rate*.
 
 use core::time::Duration;
-#[cfg(any(not(unix), test))]
 use std::io::ErrorKind;
 use std::time::Instant;
 
@@ -31,36 +30,63 @@ const FAILURE_WINDOW: Duration = Duration::from_secs(1);
 const RETRY_MIN: Duration = Duration::from_millis(5);
 const RETRY_MAX: Duration = Duration::from_secs(1);
 
-/// Whether this error is the process's own rather than one connection's.
-///
-/// Named by errno, not by kind: `EMFILE` and the per-connection errors
-/// `accept(2)` says to retry like `EAGAIN` — `EPROTO`, `ENOPROTOOPT`,
-/// `ENETRESET` — all reach Rust as `ErrorKind::Uncategorized`, so a kind cannot
-/// tell them apart. These four leave the connection queued, which is what makes
-/// the next call fail identically.
-#[cfg(unix)]
-fn concerns_the_process(e: &std::io::Error) -> bool {
-    use rustix::io::Errno;
-    e.raw_os_error().is_some_and(|raw| {
-        let errno = Errno::from_raw_os_error(raw);
-        matches!(
-            errno,
-            Errno::MFILE | Errno::NFILE | Errno::NOBUFS | Errno::NOMEM
-        )
-    })
-}
-
-/// Without errnos to name, keep the kinds that are definitely one connection's
-/// and treat the rest as the process's.
-#[cfg(not(unix))]
-fn concerns_the_process(e: &std::io::Error) -> bool {
-    !matches!(
-        e.kind(),
+/// Kinds that are one connection's on any platform, for the errors that reach
+/// Rust with a kind of their own.
+fn kind_concerns_one_connection(kind: ErrorKind) -> bool {
+    matches!(
+        kind,
         ErrorKind::ConnectionAborted
             | ErrorKind::ConnectionReset
             | ErrorKind::Interrupted
             | ErrorKind::WouldBlock
+            | ErrorKind::TimedOut
     )
+}
+
+/// Whether this error is the process's own rather than one connection's.
+///
+/// Named by errno as well as kind: `EMFILE` and the per-connection errors
+/// `accept(2)` says to retry like `EAGAIN` — `EPROTO`, `ENOPROTOOPT`,
+/// `ENETRESET` — all reach Rust as `ErrorKind::Uncategorized`, so a kind alone
+/// cannot tell them apart.
+///
+/// What is listed is what is definitely one connection's; everything else is
+/// the process's. That polarity is the safe one, and it is the only one that
+/// holds for an errno this list has never heard of. A listener whose descriptor
+/// has become invalid returns `EBADF` — or `EINVAL`, or `ENOTSOCK` — on every
+/// call, dequeuing nothing: naming the process's errnos instead would leave
+/// those unpaced, and the loop would spin a core forever without ever reaching
+/// the threshold that logs why. Misjudging the other way costs a bounded pause
+/// on a loop that is already failing.
+#[cfg(unix)]
+fn concerns_the_process(e: &std::io::Error) -> bool {
+    use rustix::io::Errno;
+    if kind_concerns_one_connection(e.kind()) {
+        return false;
+    }
+    let Some(raw) = e.raw_os_error() else {
+        // No errno and no kind that names a connection. Pace it rather than
+        // spin on it.
+        return true;
+    };
+    !matches!(
+        Errno::from_raw_os_error(raw),
+        // The connection is dequeued and done with; the next call proceeds.
+        Errno::CONNABORTED | Errno::CONNRESET | Errno::TIMEDOUT | Errno::AGAIN | Errno::INTR
+        // A firewall verdict on that one connection.
+        | Errno::PERM
+        // Linux reports an error already pending on the new socket through
+        // `accept`; accept(2) says to treat these as `EAGAIN` and carry on.
+        // (`ENONET` belongs here too, but only Linux names it.)
+        | Errno::PROTO | Errno::NOPROTOOPT | Errno::NETDOWN | Errno::NETUNREACH
+        | Errno::NETRESET | Errno::HOSTDOWN | Errno::HOSTUNREACH | Errno::OPNOTSUPP
+    )
+}
+
+/// Without errnos to name, the kinds are all there is to go on.
+#[cfg(not(unix))]
+fn concerns_the_process(e: &std::io::Error) -> bool {
+    !kind_concerns_one_connection(e.kind())
 }
 
 /// Tracks how fast an accept loop is failing, and how long it should wait.
@@ -168,6 +194,39 @@ mod tests {
         }
         assert_eq!(backoff.pause(), None, "a reset storm must not pause anyone");
         assert_eq!(backoff.failures(), 0);
+    }
+
+    /// A listener whose descriptor has stopped being one fails identically on
+    /// every call and dequeues nothing — the exact shape this module paces.
+    /// Naming only the errnos known to be the process's would leave these
+    /// unpaced, spinning a core with nothing in the log to say why.
+    #[test]
+    fn a_listener_that_has_stopped_working_paces_the_loop() {
+        // `EBADF` and `EINVAL` are 9 and 22 everywhere; `ENOTSOCK` is not, and
+        // it is the one the classifier's own reasoning names, so it is worth
+        // exercising the number the platform actually uses rather than one that
+        // happens to fall through the same way.
+        #[cfg(target_os = "linux")]
+        const NOTSOCK: i32 = 88;
+        #[cfg(not(target_os = "linux"))]
+        const NOTSOCK: i32 = 38;
+
+        for raw in [9, 22, NOTSOCK] {
+            let mut backoff = AcceptBackoff::default();
+            let broken = std::io::Error::from_raw_os_error(raw);
+            for _ in 0..=FAILURES_BEFORE_BACKOFF {
+                backoff.failed(&broken);
+            }
+            assert!(
+                backoff.failed(&broken),
+                "errno {raw} repeats forever and must be reported"
+            );
+            assert_eq!(
+                backoff.pause(),
+                Some(RETRY_MIN),
+                "errno {raw} repeats forever and must be paced"
+            );
+        }
     }
 
     #[test]

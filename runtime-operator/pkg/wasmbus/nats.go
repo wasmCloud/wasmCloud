@@ -2,8 +2,11 @@ package wasmbus
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -22,10 +25,36 @@ var _ Bus = (*NatsBus)(nil)
 // NatsOption is an option for configuring a NATS connection.
 type NatsOption = nats.Option
 
-// NatsConnect connects to a NATS server at the given URL.
-// The URL should be in the form of "nats://host:port".
-// This helper function sets some default options and calls `nats.Connect`.
+// NatsInitialConnectWindow is how long [NatsConnect] keeps retrying a refused
+// or timed-out *first* connection before giving up.
+//
+// Only the first one needs this. Once established, the options below reconnect
+// forever and buffer through the gap — but nats.Connect itself fails outright
+// if the server is not there yet, and the operator is deployed beside its NATS
+// with no ordering between them. Without a window the operator exits, and the
+// pod restarts until the race happens to go the other way; that spends the
+// restart count, which is the signal something is actually wrong.
+//
+// A window rather than nats.RetryOnFailedConnect so a genuinely unreachable
+// or misconfigured URL is still reported, instead of leaving an operator that
+// runs forever and reconciles nothing.
+var NatsInitialConnectWindow = 60 * time.Second
+
+// NatsConnect connects to a NATS server at the given URL, waiting out a
+// startup race for up to [NatsInitialConnectWindow].
+//
+// Prefer [NatsConnectContext] anywhere a context is in hand: this one cannot be
+// cancelled, so a signal arriving during the wait is not acted on until it ends.
 func NatsConnect(url string, options ...NatsOption) (*nats.Conn, error) {
+	return NatsConnectContext(context.Background(), url, options...)
+}
+
+// NatsConnectContext connects to a NATS server at the given URL.
+// The URL should be in the form of "nats://host:port".
+// This helper function sets some default options and calls `nats.Connect`,
+// retrying a first connection that is refused for up to
+// [NatsInitialConnectWindow] or until `ctx` is done.
+func NatsConnectContext(ctx context.Context, url string, options ...NatsOption) (*nats.Conn, error) {
 	opts := append([]nats.Option{
 		nats.PingInterval(1 * time.Minute),    // default is 2m
 		nats.MaxPingsOutstanding(1),           // default is 2
@@ -41,12 +70,62 @@ func NatsConnect(url string, options ...NatsOption) (*nats.Conn, error) {
 		nats.ReconnectJitter(100*time.Millisecond, 1*time.Second), // spread reconnect storms
 	}, options...)
 
-	nc, err := nats.Connect(url, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrTransport, err)
+	deadline := time.Now().Add(NatsInitialConnectWindow)
+	backoff := 250 * time.Millisecond
+	for {
+		nc, err := nats.Connect(url, opts...)
+		if err == nil {
+			return nc, nil
+		}
+		if !worthRetrying(err) {
+			return nil, fmt.Errorf("%w: %v", ErrTransport, err)
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, fmt.Errorf("%w: %v (no connection within %s)", ErrTransport, err, NatsInitialConnectWindow)
+		}
+		// Selected on rather than slept through: this runs before the manager
+		// starts, so nothing else is watching for a signal, and a plain sleep
+		// outlives a grace period shorter than the window.
+		timer := time.NewTimer(min(backoff, remaining))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("%w: %v (gave up waiting for NATS: %v)", ErrTransport, err, ctx.Err())
+		case <-timer.C:
+		}
+		backoff = min(backoff*2, 5*time.Second)
 	}
+}
 
-	return nc, nil
+// worthRetrying reports whether a failed connection is the startup race the
+// window exists for, rather than an answer that will not change.
+//
+// Only "the server is not there yet" is waited out. A rejected credential or a
+// URL that does not parse reads the same on the last attempt as the first, and
+// spending the window on it turns an immediate, accurate error into a minute of
+// silence followed by that same error.
+func worthRetrying(err error) bool {
+	var dnsErr *net.DNSError
+	switch {
+	case errors.Is(err, nats.ErrNoServers),
+		errors.Is(err, nats.ErrTimeout),
+		errors.Is(err, syscall.ECONNREFUSED),
+		errors.Is(err, syscall.EHOSTUNREACH),
+		errors.Is(err, syscall.ENETUNREACH):
+		return true
+	case errors.As(err, &dnsErr):
+		// A Service's record does not exist until the Service does, which is
+		// the same race one layer down, and a resolver that is itself starting
+		// answers temporarily. Anything else from DNS — a name that cannot be
+		// parsed, a refused query — will read the same on the last attempt.
+		//
+		// A misspelt Service is indistinguishable from one that has not been
+		// created yet, so it costs the whole window before it is reported.
+		return dnsErr.IsNotFound || dnsErr.IsTemporary
+	default:
+		return false
+	}
 }
 
 func NatsDefaultServerOptions() *server.Options {

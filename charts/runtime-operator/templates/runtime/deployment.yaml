@@ -32,8 +32,37 @@
        beside it: a group may turn it off or move it without restating the
        chart-wide default. */}}
 {{- $endpoint := include "runtime-operator.hostProbe" (merge (dict "name" "endpoint") $probeArgs) | fromJson }}
-{{- if and $endpoint.enabled .http .http.enabled (eq (int $endpoint.port) (int .http.port)) }}
-{{- fail (printf "host group %s: probes.endpoint.port and http.port are both %v; the host would fail to bind the second" .name $endpoint.port) }}
+{{- /* The ports this chart renders itself. Claiming one again — as the other
+       probe port, or under the group's `ports` — is caught here, because the
+       API server rejects a duplicate containerPort by array index. */}}
+{{- $groupName := .name }}
+{{- $reserved := dict }}
+{{- $reservedNames := dict }}
+{{- if and .http .http.enabled }}
+{{- $_ := set $reserved (toString (int .http.port)) "http.port" }}
+{{- $_ := set $reservedNames "http" "http.port" }}
+{{- end }}
+{{- if $endpoint.enabled }}
+{{- $probePort := toString (int $endpoint.port) }}
+{{- with index $reserved $probePort }}
+{{- fail (printf "host group %s: probes.endpoint.port and http.port are both %v; the host would fail to bind the second" $groupName $endpoint.port) }}
+{{- end }}
+{{- $_ := set $reserved $probePort "probes.endpoint.port" }}
+{{- $_ := set $reservedNames "probes" "probes.endpoint.port" }}
+{{- end }}
+{{- range .ports }}
+{{- $port := toString (int .containerPort) }}
+{{- $name := toString .name }}
+{{- $portClash := index $reserved $port }}
+{{- if $portClash }}
+{{- fail (printf "host group %s: ports[] gives containerPort %s, already rendered from %s; drop it" $groupName $port $portClash) }}
+{{- end }}
+{{- $nameClash := index $reservedNames $name }}
+{{- if $nameClash }}
+{{- fail (printf "host group %s: ports[] gives the name %q, already rendered from %s; rename it" $groupName $name $nameClash) }}
+{{- end }}
+{{- $_ := set $reserved $port (printf "ports[].%s" $name) }}
+{{- $_ := set $reservedNames $name (printf "ports[].%s" $name) }}
 {{- end }}
 {{- $liveness := include "runtime-operator.hostProbe" (merge (dict "name" "liveness") $probeArgs) | fromJson }}
 {{- $readiness := include "runtime-operator.hostProbe" (merge (dict "name" "readiness") $probeArgs) | fromJson }}
@@ -253,6 +282,9 @@ spec:
             - "--oci-cache-dir=/oci-cache"
             {{- with $top.Values.runtime.drainDelaySeconds }}
             - "--drain-delay={{ . }}s"
+            {{- end }}
+            {{- with $top.Values.runtime.natsConnectTimeoutSeconds }}
+            - "--nats-connect-timeout={{ . }}s"
             {{- end }}
             {{- if $endpoint.enabled }}
             - "--probe-addr=0.0.0.0:{{ $endpoint.port }}"

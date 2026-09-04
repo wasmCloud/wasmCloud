@@ -23,6 +23,17 @@ pub struct HostCommand {
     #[arg(long = "scheduler-nats-url", default_value = "nats://localhost:4222")]
     pub scheduler_nats_url: String,
 
+    /// How long to keep retrying NATS at startup before giving up, across both
+    /// the scheduler and data connections together.
+    ///
+    /// A host brought up beside its NATS has no ordering against it, and
+    /// exiting on the first refusal makes the pod restart until the race
+    /// happens to go the other way. The chart sets this; zero — the default —
+    /// fails on the first refusal, which is what someone running `wash host`
+    /// against a NATS they start themselves wants to see.
+    #[arg(long = "nats-connect-timeout", default_value = "0s", value_parser = humantime::parse_duration)]
+    pub nats_connect_timeout: Duration,
+
     /// Path to TLS CA certificate file for NATS Scheduler connection
     #[arg(long = "scheduler-nats-tls-ca")]
     pub scheduler_nats_tls_ca: Option<PathBuf>,
@@ -629,6 +640,14 @@ impl CliCommand for HostCommand {
             load_config::<crate::config::Config>(&ctx.user_config_path(), Some(project_dir), None)
                 .context("failed to load config for wash host")?;
 
+        // One budget for both connections below, not one each: the flag says
+        // how long startup may spend waiting for NATS, and two windows in
+        // series would spend twice that with the second URL down. Zero asks to
+        // give up on the first refusal.
+        let connect_deadline = tokio::time::Instant::now() + self.nats_connect_timeout;
+        let connect_retry =
+            (!self.nats_connect_timeout.is_zero()).then_some(self.nats_connect_timeout);
+
         let scheduler_nats_client = wash_runtime::washlet::connect_nats(
             self.scheduler_nats_url.clone(),
             wash_runtime::washlet::NatsConnectionOptions {
@@ -637,6 +656,7 @@ impl CliCommand for HostCommand {
                 tls_first: self.scheduler_nats_tls_first,
                 tls_cert: self.scheduler_nats_tls_cert.clone(),
                 tls_key: self.scheduler_nats_tls_key.clone(),
+                connect_retry,
             },
         )
         .await
@@ -650,6 +670,10 @@ impl CliCommand for HostCommand {
                 tls_first: self.data_nats_tls_first,
                 tls_cert: self.data_nats_tls_cert.clone(),
                 tls_key: self.data_nats_tls_key.clone(),
+                // Whatever the scheduler connection left of the budget.
+                connect_retry: connect_retry.map(|_| {
+                    connect_deadline.saturating_duration_since(tokio::time::Instant::now())
+                }),
             },
         )
         .await
@@ -1221,6 +1245,54 @@ host:
             "host:\n  plugins:\n    - id: wasmcloud-nats\n      workloadConfig: sometimes\n",
         )
         .expect_err("`sometimes` is not a policy");
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use std::time::Duration;
+
+    use clap::Parser;
+
+    use super::HostCommand;
+
+    #[derive(Debug, Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        host: HostCommand,
+    }
+
+    fn parse(args: &[&str]) -> HostCommand {
+        TestCli::parse_from(std::iter::once("wash-host").chain(args.iter().copied())).host
+    }
+
+    /// The chart renders this in whole seconds with a unit suffix. It has to
+    /// parse as written there.
+    #[test]
+    fn the_chart_spelling_of_the_drain_delay_parses() {
+        assert_eq!(
+            parse(&["--drain-delay=15s"]).drain_delay,
+            Duration::from_secs(15)
+        );
+    }
+
+    /// Nothing is watching a host outside Kubernetes, and the wait would only
+    /// be a person's Ctrl-C taking longer.
+    #[test]
+    fn no_one_waits_for_a_drain_by_default() {
+        assert!(parse(&[]).drain_delay.is_zero());
+    }
+
+    /// The wait is not conditional on the probe listener: a host behind
+    /// something that health-checks it by other means still has traffic to stop
+    /// arriving, and a flag that parsed and then did nothing would say nothing
+    /// about it.
+    #[test]
+    fn a_drain_delay_stands_on_its_own() {
+        assert_eq!(
+            parse(&["--drain-delay=30s"]).drain_delay,
+            Duration::from_secs(30)
+        );
     }
 }
 

@@ -211,7 +211,7 @@ spec:
 		Eventually(func(g Gomega) {
 			out, err := utils.Run(exec.Command("curl", "-s", "-o", "/dev/null",
 				"-w", "%{http_code}", "-H", "Host: "+workloadHost,
-				"http://localhost:80/set?key=greeting&value=hello"))
+				gatewayURL("/set?key=greeting&value=hello")))
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(out).To(Equal("200"), "/set should route through the plugin")
 		}).WithTimeout(2 * time.Minute).Should(Succeed())
@@ -219,7 +219,7 @@ spec:
 		By("reading it back (/get) — the value survived in the plugin's store")
 		Eventually(func(g Gomega) {
 			out, err := utils.Run(exec.Command("curl", "-s", "-H", "Host: "+workloadHost,
-				"http://localhost:80/get?key=greeting"))
+				gatewayURL("/get?key=greeting")))
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(strings.TrimSpace(out)).To(Equal("hello"),
 				"the value must round-trip through the component plugin's persistent store")

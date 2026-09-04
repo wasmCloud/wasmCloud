@@ -82,19 +82,38 @@ spec:
             - name: health
               containerPort: 8082
               protocol: TCP
+          {{- with .Values.operator.probes.startup }}
+          {{- if .enabled }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: {{ .periodSeconds }}
+            failureThreshold: {{ .failureThreshold }}
+          {{- end }}
+          {{- end }}
+          {{- with .Values.operator.probes.liveness }}
+          {{- if .enabled }}
           livenessProbe:
             httpGet:
               path: /healthz
               port: health
-            initialDelaySeconds: 15
-            periodSeconds: 20
-            failureThreshold: 3
+            initialDelaySeconds: {{ .initialDelaySeconds }}
+            periodSeconds: {{ .periodSeconds }}
+            failureThreshold: {{ .failureThreshold }}
+          {{- end }}
+          {{- end }}
+          {{- with .Values.operator.probes.readiness }}
+          {{- if .enabled }}
           readinessProbe:
             httpGet:
               path: /readyz
               port: health
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            initialDelaySeconds: {{ .initialDelaySeconds }}
+            periodSeconds: {{ .periodSeconds }}
+            failureThreshold: {{ .failureThreshold }}
+          {{- end }}
+          {{- end }}
           securityContext:
             {{- toYaml .Values.operator.securityContext | nindent 12 }}
       dnsPolicy: ClusterFirst

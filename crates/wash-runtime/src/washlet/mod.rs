@@ -332,6 +332,28 @@ impl ClusterHost {
 
                 let mut oci_cleanup_timer = tokio::time::interval(cleanup_interval);
 
+                // Heartbeats and cache cleanup run as their own tasks, for the
+                // reason commands already do: `select!` runs one branch to
+                // completion, so anything awaited in one stops the loop turning
+                // — and the loop turning is the whole of what `/livez` reports.
+                //
+                // A heartbeat publish ends in a send on async-nats' bounded
+                // command channel, which stops draining while NATS is
+                // unreachable. Awaited here, an outage would hold the loop past
+                // the liveness budget and the kubelet would restart the host:
+                // every workload on it lost, every host in the fleet at once
+                // because they all watch the same NATS, and none of it a thing
+                // a restart can fix. Cache cleanup is a filesystem walk, the
+                // same shape with a slower fuse.
+                //
+                // One at a time each, and a tick that finds the previous still
+                // running is dropped rather than queued: a heartbeat that has
+                // not gone out is not improved by a second behind it, and two
+                // in flight can arrive out of order. The permit lives in the
+                // task, so it comes back however the task ends.
+                let heartbeat_slot = Arc::new(tokio::sync::Semaphore::new(1));
+                let cleanup_slot = Arc::new(tokio::sync::Semaphore::new(1));
+
                 loop {
                     // Every turn, whichever branch woke it. The heartbeat timer
                     // alone guarantees one per interval, so silence here means
@@ -413,30 +435,57 @@ impl ClusterHost {
                         }
                         // OCI cache cleanup
                         _ = oci_cleanup_timer.tick() => {
-                            if let Some(cache_dir) = host.config().oci_cache_dir.as_ref() &&
-                            let Err(e) = oci::cleanup_cache(cache_dir, self.cleanup_age).await {
-                                error!("error during OCI cache cleanup: {e}");
+                            if let Some(cache_dir) = host.config().oci_cache_dir.clone()
+                                && let Ok(slot) = Arc::clone(&cleanup_slot).try_acquire_owned()
+                            {
+                                let age = self.cleanup_age;
+                                tokio::spawn(async move {
+                                    let _slot = slot;
+                                    if let Err(e) = oci::cleanup_cache(&cache_dir, age).await {
+                                        error!("error during OCI cache cleanup: {e}");
+                                    }
+                                });
                             }
                         }
                         // Send heartbeat
                         _ = heartbeat_timer.tick() => {
-                            // Returning here would drop `commands`, aborting
+                            // Dropped rather than queued when the last one is
+                            // still going. Nothing here returns on failure:
+                            // returning would drop `commands`, aborting
                             // in-flight starts after they have reserved their
                             // ids, and skip the `host.stop()` that unbinds
                             // their plugins. A missed heartbeat is worth none
                             // of that; the next tick tries again.
-                            match host_heartbeat(&host).await.and_then(|heartbeat| {
-                                serde_json::to_vec(&heartbeat).context("failed to serialize heartbeat")
-                            }) {
-                                Ok(heartbeat_bytes) => {
-                                    if let Err(e) = nats_client
-                                        .publish(heartbeat_subject.clone(), heartbeat_bytes.into())
-                                        .await
-                                    {
-                                        error!("failed to publish heartbeat: {e}");
-                                    }
+                            match Arc::clone(&heartbeat_slot).try_acquire_owned() {
+                                Ok(slot) => {
+                                    let host = host.clone();
+                                    let nats_client = nats_client.clone();
+                                    let subject = heartbeat_subject.clone();
+                                    tokio::spawn(async move {
+                                        let _slot = slot;
+                                        match host_heartbeat(&host).await.and_then(|heartbeat| {
+                                            serde_json::to_vec(&heartbeat).context("failed to serialize heartbeat")
+                                        }) {
+                                            Ok(heartbeat_bytes) => {
+                                                if let Err(e) = nats_client
+                                                    .publish(subject, heartbeat_bytes.into())
+                                                    .await
+                                                {
+                                                    error!("failed to publish heartbeat: {e}");
+                                                }
+                                            }
+                                            Err(e) => error!("failed to build heartbeat: {e}"),
+                                        }
+                                    });
                                 }
-                                Err(e) => error!("failed to build heartbeat: {e}"),
+                                // Every tick this reports is one the operator
+                                // did not hear, which is what its unreachable
+                                // window is for. Said out loud because the
+                                // cause — a NATS that is not draining — is
+                                // otherwise visible only as a host going quiet.
+                                Err(_) => warn!(
+                                    "previous heartbeat has not finished publishing; skipping this one"
+                                ),
                             }
                         }
                         // Handle API requests
@@ -507,6 +556,19 @@ pub struct NatsConnectionOptions {
     pub tls_cert: Option<PathBuf>,
     /// Path to NATS TLS private key file
     pub tls_key: Option<PathBuf>,
+    /// How long to keep retrying a refused *initial* connection before giving
+    /// up. `None` gives up on the first refusal.
+    ///
+    /// Only the first connection needs this: once established, async-nats
+    /// reconnects on its own and buffers through the gap. A host deployed
+    /// beside its NATS has no ordering guarantee between the two, so without a
+    /// window here it exits, and the pod restarts until NATS happens to be up
+    /// first — which is a slower, noisier way to wait, and it spends the
+    /// restart count that would otherwise mean something.
+    ///
+    /// Left unset by a command run against a NATS the operator already has up
+    /// (`wash dev`), where a refusal is the answer rather than a race.
+    pub connect_retry: Option<Duration>,
 }
 
 #[instrument(skip_all)]
@@ -555,9 +617,49 @@ pub async fn connect_nats(
         }
     });
 
-    opts.connect(addr)
-        .await
-        .context("failed to connect to NATS")
+    let Some(window) = options.connect_retry else {
+        return opts
+            .connect(addr)
+            .await
+            .context("failed to connect to NATS");
+    };
+
+    // `to_server_addrs` here rather than per attempt: the addresses are what
+    // the retry is over, and resolving them once means a malformed URL is
+    // reported as one instead of being retried for the whole window.
+    let addrs = addr
+        .to_server_addrs()
+        .context("failed to parse NATS server address")?
+        .collect::<Vec<_>>();
+
+    let deadline = tokio::time::Instant::now() + window;
+    let mut backoff = Duration::from_millis(250);
+    loop {
+        let err = match opts.clone().connect(addrs.clone()).await {
+            Ok(client) => return Ok(client),
+            Err(err) => err,
+        };
+        // The window is for a server that is not up yet. A credential the
+        // server refuses, or a TLS setup it will not accept, reads the same on
+        // the last attempt as the first — waiting it out turns an accurate
+        // error into a minute of silence followed by that same error, with the
+        // host looking like it is still starting.
+        use async_nats::ConnectErrorKind;
+        if !matches!(
+            err.kind(),
+            ConnectErrorKind::Io | ConnectErrorKind::TimedOut | ConnectErrorKind::Dns
+        ) {
+            return Err(anyhow::Error::new(err)).context("failed to connect to NATS");
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(anyhow::Error::new(err))
+                .with_context(|| format!("failed to connect to NATS within {window:?}"));
+        }
+        tracing::warn!(%err, retry_in = ?backoff, "NATS is not accepting connections yet");
+        tokio::time::sleep(backoff.min(remaining)).await;
+        backoff = (backoff * 2).min(Duration::from_secs(5));
+    }
 }
 
 pub fn host_subject(host_id: &str) -> String {
@@ -1103,6 +1205,56 @@ mod tests {
     use super::*;
     use crate::host::allowed_hosts::AllowedHost;
     use crate::host::allowed_ip_name::AllowedIpName;
+
+    /// Port 1 is privileged and nothing in a test environment listens on it, so
+    /// a connection there is refused rather than left hanging.
+    const REFUSED: &str = "nats://127.0.0.1:1";
+
+    /// A host and its NATS come up together with no ordering between them, so a
+    /// refusal at startup is a race to wait out. Exiting instead spends a pod
+    /// restart on it, and restarts are the signal that something went wrong.
+    #[tokio::test]
+    async fn a_refused_connection_is_retried_for_the_whole_window() {
+        const WINDOW: Duration = Duration::from_millis(700);
+
+        let started = std::time::Instant::now();
+        let err = connect_nats(
+            REFUSED,
+            NatsConnectionOptions {
+                connect_retry: Some(WINDOW),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("nothing is listening on port 1");
+
+        assert!(
+            started.elapsed() >= WINDOW,
+            "gave up after {:?}, before the {WINDOW:?} window was out",
+            started.elapsed()
+        );
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("within"),
+            "the error should say the window it exhausted: {message}"
+        );
+    }
+
+    /// Waiting is for the deployment that cannot order its own startup. A
+    /// command run against a NATS the operator already has up wants the
+    /// refusal, not a minute of patience.
+    #[tokio::test]
+    async fn without_a_window_a_refused_connection_is_reported_at_once() {
+        let started = std::time::Instant::now();
+        connect_nats(REFUSED, NatsConnectionOptions::default())
+            .await
+            .expect_err("nothing is listening on port 1");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "a refusal with no window took {:?}, so it was retried",
+            started.elapsed()
+        );
+    }
 
     /// A host always keeps a start it can run and a core it can serve on.
     #[test]
