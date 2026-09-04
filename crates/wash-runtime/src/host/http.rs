@@ -1662,6 +1662,12 @@ const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// connection's protocol otherwise is.
 const FIRST_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Free connections, as a percentage of the ceiling, at which the host stops
+/// claiming it can take more work — and the higher one at which it starts
+/// claiming so again. The gap between them is the hysteresis.
+const READY_LOW_WATER_PERCENT: usize = 10;
+const READY_HIGH_WATER_PERCENT: usize = 25;
+
 /// The ingress connection ceiling, the permits enforcing it, and the counter
 /// reporting it.
 ///
@@ -1676,6 +1682,10 @@ pub struct ConnectionLimit {
     /// indistinguishable from a listener that stopped accepting, and the second
     /// is the more urgent of the two.
     accepting: Arc<AtomicBool>,
+    /// Which side of the hysteresis below readiness is currently on. Shared,
+    /// because the probe handler and the accept loop hold separate clones of
+    /// the same limit.
+    has_headroom: Arc<AtomicBool>,
     offered: opentelemetry::metrics::Counter<u64>,
     /// Built once. `error.type` marks the refusals inside the one series, so a
     /// shed rate is a filter on it rather than a second counter to keep in step.
@@ -1688,6 +1698,7 @@ impl ConnectionLimit {
             max,
             permits: Arc::new(Semaphore::new(max)),
             accepting: Arc::new(AtomicBool::new(true)),
+            has_headroom: Arc::new(AtomicBool::new(true)),
             offered: opentelemetry::global::meter("wash-runtime")
                 .u64_counter("http.ingress.connections")
                 .with_description(
@@ -1747,9 +1758,47 @@ impl crate::host::probes::ReadinessCheck for ConnectionLimit {
         }
     }
 
+    /// Refuses before the shedding starts, and recovers only once there is real
+    /// room again.
+    ///
+    /// Reporting ready down to the last permit means the endpoint is pulled
+    /// only after the host is already turning connections away, and another
+    /// `periodSeconds` × `failureThreshold` of shedding passes before anything
+    /// acts on it. Recovering on one freed permit is the same mistake
+    /// mirrored: a host sitting at its ceiling would re-enter rotation on every
+    /// probe and be full again before the next one.
+    ///
+    /// The two marks are what separate those. Below the low one it stops
+    /// claiming capacity it is about to run out of; it claims it again only
+    /// above the high one.
     fn ready(&self) -> bool {
-        self.accepting.load(std::sync::atomic::Ordering::Relaxed)
-            && self.permits.available_permits() > 0
+        use std::sync::atomic::Ordering::Relaxed;
+        if !self.accepting.load(Relaxed) {
+            return false;
+        }
+        // At least one either way, so a ceiling too small to have percentages
+        // still has a gap between the marks rather than collapsing to "empty".
+        let low = (self.max * READY_LOW_WATER_PERCENT / 100).max(1);
+        let high = (self.max * READY_HIGH_WATER_PERCENT / 100).max(low + 1);
+        let free = self.permits.available_permits();
+        let ready = if self.has_headroom.load(Relaxed) {
+            free > low
+        } else {
+            free >= high
+        };
+        self.has_headroom.store(ready, Relaxed);
+        ready
+    }
+
+    /// Saturation passes; an accept loop that has ended does not.
+    ///
+    /// Nothing brings the loop back without a restart, and readiness alone does
+    /// not remove this host from anything that places work: the scheduler reads
+    /// the Host CR's heartbeat-driven condition, which a host with a dead
+    /// listener goes on satisfying. Left to readiness, it keeps being given
+    /// workloads that report Ready and are unreachable.
+    fn terminal(&self) -> bool {
+        !self.accepting.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -3179,6 +3228,54 @@ mod tests {
     /// parks there. Holding a ceiling slot the whole time turns a handful of
     /// silent peers into a host that reports itself full, which the readiness
     /// check then reports to Kubernetes as a reason to take it out of service.
+    /// Readiness has to turn over before the shedding starts and stay turned
+    /// over until there is real room, or the two probe intervals it takes to
+    /// act on it are spent refusing connections — and one freed slot puts the
+    /// host back in rotation to fill again immediately.
+    #[test]
+    fn readiness_leaves_and_returns_at_different_marks() {
+        use crate::host::probes::ReadinessCheck as _;
+
+        let limit = ConnectionLimit::new(100);
+        let mut held = Vec::new();
+        assert!(limit.ready(), "an idle host takes work");
+
+        // Down to the low mark: still ready at 11 free, refusing at 10.
+        while limit.permits.available_permits() > 11 {
+            held.push(limit.permits.clone().try_acquire_owned().unwrap());
+        }
+        assert!(limit.ready(), "11 free of 100 is above the low mark");
+        held.push(limit.permits.clone().try_acquire_owned().unwrap());
+        assert!(!limit.ready(), "10 free of 100 is the low mark");
+
+        // Back up past the low mark but under the high one: still refusing,
+        // which is the whole point of the gap.
+        while limit.permits.available_permits() < 24 {
+            held.pop();
+        }
+        assert!(
+            !limit.ready(),
+            "24 free is over the low mark but under the high one"
+        );
+
+        held.pop();
+        assert!(limit.ready(), "25 free of 100 is the high mark");
+    }
+
+    /// A ceiling too small for percentages still needs the two marks to differ,
+    /// or the hysteresis collapses back to "ready until the last permit".
+    #[test]
+    fn a_tiny_ceiling_still_has_a_gap() {
+        use crate::host::probes::ReadinessCheck as _;
+
+        let limit = ConnectionLimit::new(2);
+        assert!(limit.ready());
+        let first = limit.permits.clone().try_acquire_owned().unwrap();
+        assert!(!limit.ready(), "one free of two is at the low mark");
+        drop(first);
+        assert!(limit.ready(), "two free of two clears the high mark");
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_connection_that_never_speaks_gives_its_slot_back() {
         use tokio::io::AsyncWriteExt;
