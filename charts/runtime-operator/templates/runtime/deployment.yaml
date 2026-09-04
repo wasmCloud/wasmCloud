@@ -20,6 +20,13 @@
 {{- $resources := .resources | default $top.Values.runtime.resources | default dict }}
 {{- /* Probes, unlike `resources`, merge per field: a group naming one timing
        keeps the chart-wide values for the rest. */}}
+{{- /* The shutdown budget, checked rather than described: the host serves for
+       `drainDelaySeconds`, then drains commands for up to 5s, and SIGKILL lands
+       at `terminationGracePeriodSeconds` whatever it is doing. */}}
+{{- $drain := int ($top.Values.runtime.drainDelaySeconds | default 0) }}
+{{- if gt (add $drain 5) (int $top.Values.runtime.terminationGracePeriodSeconds) }}
+{{- fail (printf "runtime.terminationGracePeriodSeconds (%v) is under drainDelaySeconds (%v) plus the 5s command drain; the host would be killed mid-shutdown" $top.Values.runtime.terminationGracePeriodSeconds $drain) }}
+{{- end }}
 {{- $probeArgs := dict "group" .probes "chart" $top.Values.runtime.probes }}
 {{- /* The port the probes are answered on, merged per field like the timings
        beside it: a group may turn it off or move it without restating the
@@ -238,6 +245,9 @@ spec:
             - "--wasmcloud-nats-url={{ . }}"
             {{- end }}
             - "--oci-cache-dir=/oci-cache"
+            {{- with $top.Values.runtime.drainDelaySeconds }}
+            - "--drain-delay={{ . }}s"
+            {{- end }}
             {{- if $endpoint.enabled }}
             - "--probe-addr=0.0.0.0:{{ $endpoint.port }}"
             {{- end }}

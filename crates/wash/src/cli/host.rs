@@ -349,6 +349,25 @@ pub struct HostCommand {
     #[arg(long = "oci-ca-path", env = "WASH_OCI_CA_PATHS", value_delimiter = ',')]
     pub oci_ca_paths: Vec<PathBuf>,
 
+    /// How long to keep serving after a shutdown signal, before stopping.
+    ///
+    /// A pod leaves its Service when Kubernetes marks it Terminating, but that
+    /// removal takes time to reach every kube-proxy, and a host that stops the
+    /// moment it is signalled refuses the requests still in flight toward it.
+    /// This is that gap: readiness reports the host as gone, and it keeps
+    /// answering until the delay is up.
+    ///
+    /// Must fit inside `terminationGracePeriodSeconds` alongside the command
+    /// drain that follows it, or the kernel ends the process mid-drain. Zero
+    /// stops immediately, which is what a developer pressing Ctrl-C wants.
+    #[arg(
+        long = "drain-delay",
+        env = "WASH_DRAIN_DELAY",
+        value_parser = humantime::parse_duration,
+        default_value = "0s"
+    )]
+    pub drain_delay: Duration,
+
     /// Timeout for pulling artifacts from OCI registries
     #[arg(long = "registry-pull-timeout", value_parser = humantime::parse_duration, default_value = "30s")]
     pub registry_pull_timeout: Duration,
@@ -998,11 +1017,15 @@ impl CliCommand for HostCommand {
 
         shutdown.await;
 
-        // Before the drain below, not after: readiness has to go red while the
-        // host is still serving, so its endpoint leaves the Service and the
-        // in-flight requests are the last ones it sees.
+        // Reported before the wait, not after: the point of the wait is that
+        // the host is still serving while everything upstream learns it is
+        // going away.
         if let Some(state) = &probe_state {
             state.drain();
+        }
+        if !self.drain_delay.is_zero() {
+            info!(delay = ?self.drain_delay, "Draining...");
+            tokio::time::sleep(self.drain_delay).await;
         }
 
         info!("Stopping host...");
