@@ -670,9 +670,13 @@ impl CliCommand for HostCommand {
                 tls_first: self.data_nats_tls_first,
                 tls_cert: self.data_nats_tls_cert.clone(),
                 tls_key: self.data_nats_tls_key.clone(),
-                // Whatever the scheduler connection left of the budget.
-                connect_retry: connect_retry.map(|_| {
-                    connect_deadline.saturating_duration_since(tokio::time::Instant::now())
+                // Whatever the scheduler connection left of the budget. A
+                // budget already spent becomes `None`, so the failure reads as
+                // the refusal it is rather than as a timeout of no length.
+                connect_retry: connect_retry.and_then(|_| {
+                    let left =
+                        connect_deadline.saturating_duration_since(tokio::time::Instant::now());
+                    (!left.is_zero()).then_some(left)
                 }),
             },
         )

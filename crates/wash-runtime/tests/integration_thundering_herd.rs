@@ -63,6 +63,11 @@ const HERD: usize = 15;
 /// a share to hold anything to.
 const RESPONSIVE_FLOOR: Duration = Duration::from_secs(1);
 
+/// Requests the steady workload has to complete while the herd starts. Healthy
+/// runs are in the hundreds and a runtime the herd has taken over manages
+/// single digits, so anything between them separates the two.
+const STEADY_REQUESTS_FLOOR: u32 = 20;
+
 fn herd_host(i: usize) -> String {
     format!("herd-{i}.local")
 }
@@ -264,13 +269,12 @@ async fn test_concurrent_herd_keeps_a_running_workload_serving() -> Result<()> {
         "{} of {HERD} concurrent starts did not run: {failures:?}",
         failures.len()
     );
-    // How many requests got through is the sharp measure, and it needs no
-    // fixed budget: a slower machine takes longer over the herd, which is more
-    // time to serve, not less. Compiling on the runtime instead drops this to
-    // single digits — the requests that happen to be in flight between one
-    // compile and the next.
+    // How many requests got through is the sharp measure. A floor rather than
+    // anything scaled to the herd, which this has nothing to do with: healthy
+    // runs serve hundreds, and compiling on the runtime instead drops it to the
+    // handful that happen to be in flight between one compile and the next.
     assert!(
-        served as usize >= HERD,
+        served >= STEADY_REQUESTS_FLOOR,
         "the steady workload served only {served} requests across a {herd_took:?} herd"
     );
     // Second reading of the same thing, from the other end: no one request may
