@@ -812,6 +812,7 @@ impl Host {
                 Some(&self.plugins),
                 &self.plugin_bindings,
                 self.http_handler.clone(),
+                &self.meters,
             )
             .await?;
 
@@ -1646,9 +1647,6 @@ mod tests {
     /// [`MeterKind`](crate::observability::MeterKind) says the default is, not
     /// silence. Nothing else exercises it: `wash host` and `wash dev` both pass
     /// their `--meters` choice explicitly, so only embedders reach the default.
-    ///
-    /// That it also publishes the process-wide invocation meter needs its own
-    /// binary to mean anything; see `tests/integration_default_meters.rs`.
     #[test]
     fn a_host_built_without_meters_measures_the_default() {
         let host = Host::builder()

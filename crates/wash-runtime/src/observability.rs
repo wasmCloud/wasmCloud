@@ -405,22 +405,12 @@ impl InvocationMeter {
     }
 }
 
-/// The invocation meter, reachable the same way and for the same reason as the
-/// execution counter below.
-static INVOCATION: std::sync::OnceLock<InvocationMeter> = std::sync::OnceLock::new();
-
-pub fn invocation_meter() -> Option<&'static InvocationMeter> {
-    INVOCATION.get()
-}
-
 /// [`MeterKind::default()`], so both doors into a host — the enum and
 /// [`crate::host::HostBuilder`] — agree on what a host nobody configured
 /// measures.
 ///
 /// Written out rather than derived: field-by-field, every meter's own default
 /// is the inert one, which is `Off` under a type whose default is `Duration`.
-/// Going through [`Meters::new`] also publishes the [`invocation_meter`]
-/// global, which the fields cannot do for themselves.
 impl Default for Meters {
     fn default() -> Self {
         Self::new(MeterKind::default())
@@ -437,21 +427,11 @@ impl Meters {
     }
 
     pub fn new(kind: MeterKind) -> Self {
-        let meters = Self {
+        Self {
             invocation: InvocationMeter::new(kind.records()),
             fuel_consumption: FuelConsumptionMeter::new(kind.consumes_fuel()),
             meters: Default::default(),
-        };
-        // First host that measures wins. A second one in the same process
-        // (tests, an embedder running two) records into the first's histogram,
-        // which is the same instrument OTel would have handed it anyway.
-        // Skipping the ones that measure nothing matters: a host built with
-        // metering off would otherwise claim the slot and silence every call
-        // after it, including calls on a later host that did ask.
-        if kind.records() {
-            let _ = INVOCATION.set(meters.invocation.clone());
         }
-        meters
     }
 }
 

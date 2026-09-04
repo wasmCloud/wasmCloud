@@ -84,20 +84,21 @@ impl AccessorTask<SharedCtx> for HttpTask {
 
         // The epoch deadline measures this call's own execution, so re-arm it
         // here. `watch_until_abandoned` below owns the registration.
-        let calls = accessor.with(|mut access| {
+        // Named and recorded from the store this runs on, stamped with whose
+        // execution it is when it was built: a service's ingress has no
+        // workload handle to look either one up from. An unstamped store is a
+        // host measuring nothing, and costs neither the attributes nor the
+        // sample.
+        let (calls, executed) = accessor.with(|mut access| {
             crate::engine::abandon::rearm_for_call(&mut access);
-            std::sync::Arc::clone(&access.get().abandoned)
+            (
+                std::sync::Arc::clone(&access.get().abandoned),
+                std::sync::Arc::clone(&access.get().executed),
+            )
         });
-        // Named from the store this runs on, which was stamped with whose
-        // execution it is when it was built — a service's ingress has no
-        // workload handle to look one up from. Whether the sample is recorded
-        // is `InvocationSample`'s call, not this one's: a service shares its
-        // store, so its samples are dropped in favour of the store's own
-        // counter, and a pooled instance's are kept when it ran alone.
-        let attributes = accessor.with(|mut access| {
-            crate::host::http::stored_http_attributes(&access.get().executed, req.method())
-        });
-        let _sample = crate::engine::instance_driver::InvocationSample::start(attributes);
+        let attributes = crate::host::http::stored_http_attributes(&executed, req.method());
+        let _sample =
+            crate::engine::instance_driver::InvocationSample::start(&executed, attributes);
 
         let (parts, body) = req.into_parts();
         let body = body
