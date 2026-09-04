@@ -568,6 +568,25 @@ var _ = AfterSuite(func() {
 		}
 	}
 
+	// A Host CR that outlives the release is worse than untidy. The gateway
+	// routes by the pod IP recorded on it, so the next run's gateway can be
+	// handed the address of a pod that no longer exists and send traffic there
+	// — which shows up as a workload that deploys, reports Ready, and cannot be
+	// reached. Their finalizers belong to controllers that are now gone, so
+	// they come off the same way the pods' did.
+	By("clearing Host records the release left behind")
+	out, err := utils.Run(exec.Command("kubectl", "get", "hosts.runtime.wasmcloud.dev",
+		"-n", namespace, "--ignore-not-found",
+		"-o", "jsonpath={range .items[*]}{.metadata.name} {end}"))
+	if err == nil {
+		for _, host := range strings.Fields(out) {
+			_, _ = utils.Run(exec.Command("kubectl", "patch", "hosts.runtime.wasmcloud.dev", host,
+				"-n", namespace, "--type=merge", "-p", `{"metadata":{"finalizers":null}}`))
+		}
+	}
+	_, _ = utils.Run(exec.Command("kubectl", "delete", "hosts.runtime.wasmcloud.dev",
+		"--all", "-n", namespace, "--ignore-not-found=true", "--timeout=60s"))
+
 	By("deleting the namespaces the specs created")
 	for _, ns := range suiteNamespaces {
 		_, _ = utils.Run(exec.Command("kubectl", "delete", "namespace", ns,
