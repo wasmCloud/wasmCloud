@@ -500,10 +500,79 @@ func buildBaseHelmSets() []string {
 	return sets
 }
 
+// suiteNamespaces are the namespaces the specs create for themselves, in
+// addition to the release's own. Torn down with it, or the next run against
+// this cluster fails on `AlreadyExists`.
+var suiteNamespaces = []string{"namespace-a", "scoped-watched", "scoped-unwatched"}
+
 var _ = AfterSuite(func() {
+	// Before the release goes, while the operator is still running to process
+	// them. Its finalizers are on these objects, and `helm delete` takes away
+	// the only thing that can clear them — after which the namespace holding
+	// them wedges in `Terminating` forever, and the next run against this
+	// cluster fails creating a namespace that is still going away.
+	//
+	// WorkloadDeployments only: the ReplicaSets and Workloads under them are
+	// owned, so the cascade reaches them, and Hosts go when their pods do.
+	// Best-effort throughout — this is teardown, and a failure here must not
+	// mask the suite's own result.
+	By("deleting the workloads while the operator can still finalize them")
+	for _, ns := range append([]string{namespace}, suiteNamespaces...) {
+		_, _ = utils.Run(exec.Command("kubectl", "delete", "workloaddeployments.runtime.wasmcloud.dev",
+			"--all", "-n", ns, "--ignore-not-found=true", "--timeout=60s"))
+	}
+	// The host *pods* are what matters here, not the Host CRs. The operator
+	// puts `runtime.wasmcloud.dev/pod-host-finalizer` on each one, and a pod
+	// still carrying it is undeletable content in its namespace — so a
+	// namespace holding one never leaves `Terminating`, however cleanly
+	// everything else went. Waiting for the pods themselves is the only step
+	// that has to finish before the release takes the operator away.
+	By("removing the host groups and waiting for their pods to finalize")
+	for _, ns := range append([]string{namespace}, suiteNamespaces...) {
+		_, _ = utils.Run(exec.Command("kubectl", "delete", "deployments.apps",
+			"-l", "wasmcloud.com/name=hostgroup", "-n", ns,
+			"--ignore-not-found=true", "--timeout=60s"))
+	}
+	for _, ns := range append([]string{namespace}, suiteNamespaces...) {
+		_, _ = utils.Run(exec.Command("kubectl", "wait", "--for=delete",
+			"pod", "-l", "wasmcloud.com/name=hostgroup", "-n", ns, "--timeout=90s"))
+	}
+
 	By("uninstalling the Helm release")
 	cmd := exec.Command("helm", "delete", "-n", namespace, "operator-e2e")
 	_, _ = utils.Run(cmd)
+
+	// Whatever the wait above did not reach. `HostPodReconciler` only clears
+	// its finalizer on pods it can see, and its informer is scoped to
+	// `operator.hostNamespaces` — which a later spec's `helm upgrade` narrows,
+	// leaving the tenant namespace's host pod outside the set. Nothing will
+	// ever clear that one: the operator did not watch it at the end, and now
+	// the operator is gone. A pod still carrying a finalizer is undeletable
+	// content, and its namespace stays in `Terminating` for good.
+	//
+	// So the finalizer comes off by hand, which is what a person does to
+	// recover a wedged cluster. Safe here precisely because the operator is
+	// already uninstalled: there is no reconciler left to race, and nothing
+	// downstream of this suite depends on these pods.
+	By("clearing host pod finalizers nothing is left to reconcile")
+	for _, ns := range append([]string{namespace}, suiteNamespaces...) {
+		out, err := utils.Run(exec.Command("kubectl", "get", "pods", "-n", ns,
+			"-l", "wasmcloud.com/name=hostgroup", "--ignore-not-found",
+			"-o", "jsonpath={range .items[*]}{.metadata.name} {end}"))
+		if err != nil {
+			continue
+		}
+		for _, pod := range strings.Fields(out) {
+			_, _ = utils.Run(exec.Command("kubectl", "patch", "pod", pod, "-n", ns,
+				"--type=merge", "-p", `{"metadata":{"finalizers":null}}`))
+		}
+	}
+
+	By("deleting the namespaces the specs created")
+	for _, ns := range suiteNamespaces {
+		_, _ = utils.Run(exec.Command("kubectl", "delete", "namespace", ns,
+			"--ignore-not-found=true", "--timeout=120s"))
+	}
 
 	// Teardown Prometheus and CertManager after the suite if not skipped and if they were not already installed
 	if !skipPrometheusInstall && !isPrometheusOperatorAlreadyInstalled {
