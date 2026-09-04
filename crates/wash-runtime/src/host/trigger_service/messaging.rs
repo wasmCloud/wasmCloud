@@ -168,13 +168,17 @@ impl AccessorTask<SharedCtx> for MessagingTask {
 
         // The epoch deadline measures this call's own execution, so re-arm it
         // here. `watch_until_abandoned` below owns the registration.
-        let calls = accessor.with(|mut access| {
+        let (calls, executed) = accessor.with(|mut access| {
             crate::engine::abandon::rearm_for_call(&mut access);
-            Arc::clone(&access.get().abandoned)
+            (
+                Arc::clone(&access.get().abandoned),
+                Arc::clone(&access.get().executed),
+            )
         });
         // Both delivery shapes — a pooled instance and a long-lived service —
         // land here, so one sample covers both.
-        let _sample = crate::engine::instance_driver::InvocationSample::start(attributes);
+        let _sample =
+            crate::engine::instance_driver::InvocationSample::start(&executed, attributes);
 
         let deliver = async {
             // The `@0.3.0` body is a native `stream<u8>`; mint one carrying the

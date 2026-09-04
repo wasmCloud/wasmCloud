@@ -141,16 +141,29 @@ pub(crate) trait PluginJob: Send + 'static {
 /// Costs nothing on a host that is not metering: the meter is looked up once at
 /// the start, and finding none skips the clock as well as the record.
 pub(crate) struct InvocationSample {
-    /// `None` when nothing will record this, which is the default host.
+    /// Both `None` when nothing is measuring this store, which is what a host
+    /// metering nothing gives every call on it.
+    meter: Option<crate::observability::InvocationMeter>,
     started: Option<std::time::Instant>,
     attributes: Arc<[opentelemetry::KeyValue]>,
     error: Option<&'static str>,
 }
 
 impl InvocationSample {
-    pub(crate) fn start(attributes: Arc<[opentelemetry::KeyValue]>) -> Self {
+    /// Measure one call on a store, through the meter of the host that built
+    /// it. `executed` is the store's own — taken from a process-wide meter
+    /// instead, a host metering nothing would record into whichever host in the
+    /// process published itself first.
+    pub(crate) fn start(
+        executed: &crate::engine::abandon::GuestExecution,
+        attributes: Arc<[opentelemetry::KeyValue]>,
+    ) -> Self {
+        // A stamp is only ever set with a recording meter, so its presence is
+        // the whole test.
+        let meter = executed.metering().map(|m| m.invocation().clone());
         Self {
-            started: crate::observability::invocation_meter().map(|_| std::time::Instant::now()),
+            started: meter.as_ref().map(|_| std::time::Instant::now()),
+            meter,
             attributes,
             error: None,
         }
@@ -165,12 +178,10 @@ impl InvocationSample {
 
 impl Drop for InvocationSample {
     fn drop(&mut self) {
-        let Some(started) = self.started else {
+        let (Some(started), Some(meter)) = (self.started, self.meter.as_ref()) else {
             return;
         };
-        if let Some(meter) = crate::observability::invocation_meter() {
-            meter.record(&self.attributes, started.elapsed(), self.error);
-        }
+        meter.record(&self.attributes, started.elapsed(), self.error);
     }
 }
 
@@ -268,9 +279,12 @@ impl AccessorTask<SharedCtx> for LinkedTask {
 
         // The epoch deadline measures this call's own execution, so re-arm it
         // here. `watch_until_abandoned` below owns the registration.
-        let calls = accessor.with(|mut access| {
+        let (calls, executed) = accessor.with(|mut access| {
             crate::engine::abandon::rearm_for_call(&mut access);
-            Arc::clone(&access.get().abandoned)
+            (
+                Arc::clone(&access.get().abandoned),
+                Arc::clone(&access.get().executed),
+            )
         });
         let func = accessor.with(|mut access| {
             instance
@@ -284,7 +298,7 @@ impl AccessorTask<SharedCtx> for LinkedTask {
                 return Ok(());
             }
         };
-        let _sample = InvocationSample::start(attributes);
+        let _sample = InvocationSample::start(&executed, attributes);
 
         let mut results = vec![Val::Bool(false); results_len];
         let call_timeout = crate::timeouts::ephemeral_call();

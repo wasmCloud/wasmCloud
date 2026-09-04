@@ -57,7 +57,7 @@ super::messaging_handler_dispatch! {
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::{ResolvedWorkload, WorkloadItem};
-use crate::observability::Meters;
+use crate::observability::{MeterKind, Meters};
 use crate::plugin::wasmcloud_messaging::Admitted;
 use crate::plugin::{HostPlugin, WitInterfaces, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
@@ -136,7 +136,7 @@ impl NatsMessaging {
         Self {
             client,
             tracker: Arc::new(RwLock::new(WorkloadTracker::default())),
-            meters: Default::default(),
+            meters: Arc::new(RwLock::new(Meters::new(MeterKind::Off))),
             limits,
         }
     }

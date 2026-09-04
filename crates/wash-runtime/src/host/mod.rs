@@ -54,7 +54,7 @@ use wasmtime::component::Component;
 
 use crate::engine::workload::ResolvedWorkload;
 use crate::engine::{Engine, uses_wasi_http};
-use crate::observability::Meters;
+use crate::observability::{FuelConsumptionMeter, Meters};
 use crate::plugin::{HostPlugin, WorkloadFailure, WorkloadFailureSink};
 use crate::types::*;
 use crate::wit::{WitInterface, WitWorld};
@@ -812,6 +812,7 @@ impl Host {
                 Some(&self.plugins),
                 &self.plugin_bindings,
                 self.http_handler.clone(),
+                &self.meters,
             )
             .await?;
 
@@ -1299,7 +1300,11 @@ pub struct HostBuilder {
     labels: HashMap<String, String>,
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
     config: Option<HostConfig>,
-    meters: Meters,
+    /// Unset until [`HostBuilder::with_meters`], resolved in
+    /// [`HostBuilder::build`]. An option because [`Meters::new`] binds its
+    /// instruments to the OTel provider global *at that moment*, and one built
+    /// before `set_meter_provider` is a no-op for good.
+    meters: Option<Meters>,
 }
 
 impl Default for HostBuilder {
@@ -1407,7 +1412,7 @@ impl HostBuilder {
     }
 
     pub fn with_meters(mut self, meters: Meters) -> Self {
-        self.meters = meters;
+        self.meters = Some(meters);
         self
     }
 
@@ -1507,6 +1512,31 @@ impl HostBuilder {
             Engine::builder().build()?
         };
 
+        // Resolved here, not in `HostBuilder::default`, so the histograms come
+        // from the meter provider an embedder installed rather than whatever
+        // was global when it started building.
+        let mut meters = self.meters.unwrap_or_default();
+
+        // Fuel is the one meter the engine has to cooperate on, and nothing
+        // makes the two knobs agree. Either way round costs something the
+        // operator did not ask for, so say which way it went.
+        match (meters.fuel_consumption.is_enabled(), engine.consumes_fuel()) {
+            (true, false) => {
+                warn!(
+                    "fuel metering was asked for, but this host's engine compiles no fuel \
+                     counters; recording invocation duration only. Pass the same choice to both \
+                     `EngineBuilder::with_fuel_consumption` and `HostBuilder::with_meters`"
+                );
+                meters.fuel_consumption = FuelConsumptionMeter::new(false);
+            }
+            (false, true) => warn!(
+                "this host's engine compiles fuel counters into every guest, but no meter reads \
+                 them. Guests pay for the counting either way — pass the same choice to both \
+                 `EngineBuilder::with_fuel_consumption` and `HostBuilder::with_meters`"
+            ),
+            (true, true) | (false, false) => {}
+        }
+
         // Get hostname from system if not provided
         let hostname = self.hostname.unwrap_or_else(|| {
             hostname::get()
@@ -1572,7 +1602,7 @@ impl HostBuilder {
             system_monitor: Arc::new(RwLock::new(SystemMonitor::new())),
             http_handler,
             config,
-            meters: self.meters,
+            meters,
         })
     }
 }
@@ -1601,6 +1631,107 @@ mod tests {
             msg.contains("/definitely/not/a/ca.pem"),
             "the error should name the bundle it could not read: {msg}"
         );
+    }
+
+    /// These assertions only read `host.meters`, so they have no use for a
+    /// pooling allocator's address-space reservation.
+    fn frugal_engine(fuel: bool) -> Engine {
+        Engine::builder()
+            .with_pooling_allocator(false)
+            .with_fuel_consumption(fuel)
+            .build()
+            .expect("a minimal engine must build")
+    }
+
+    /// An embedder that never calls `with_meters` gets what
+    /// [`MeterKind`](crate::observability::MeterKind) says the default is, not
+    /// silence. Nothing else exercises it: `wash host` and `wash dev` both pass
+    /// their `--meters` choice explicitly, so only embedders reach the default.
+    #[test]
+    fn a_host_built_without_meters_measures_the_default() {
+        let host = Host::builder()
+            .with_engine(frugal_engine(false))
+            .build()
+            .expect("a host with nothing configured must build");
+        assert!(
+            host.meters.invocation.is_enabled(),
+            "a host built without `with_meters` must measure what `MeterKind::default()` names"
+        );
+        assert!(
+            !host.meters.fuel_consumption.is_enabled(),
+            "the default is `Duration`; fuel costs the guest and must stay opt-in"
+        );
+    }
+
+    /// An explicit choice still wins, including the one that measures nothing.
+    #[test]
+    fn with_meters_overrides_the_default() {
+        let host = Host::builder()
+            .with_engine(frugal_engine(false))
+            .with_meters(Meters::new(crate::observability::MeterKind::Off))
+            .build()
+            .expect("a host metering nothing must build");
+        assert!(
+            !host.meters.invocation.is_enabled(),
+            "`MeterKind::Off` asked for no measurement and must get none"
+        );
+    }
+
+    /// A fuel meter an engine cannot answer is dropped rather than kept: the
+    /// duration half of the same kind still records.
+    #[test]
+    fn fuel_metering_gives_way_to_an_engine_that_counts_no_fuel() {
+        let host = Host::builder()
+            .with_engine(frugal_engine(false))
+            .with_meters(Meters::new(crate::observability::MeterKind::Fuel))
+            .build()
+            .expect("a host asking for fuel on a fuel-less engine must still build");
+        assert!(
+            !host.meters.fuel_consumption.is_enabled(),
+            "a fuel meter belongs only on an engine that compiles fuel counters"
+        );
+        assert!(
+            host.meters.invocation.is_enabled(),
+            "giving up fuel must not give up the duration the same kind asked for"
+        );
+    }
+
+    /// The pair an embedder has to set together, set together.
+    #[test]
+    fn fuel_metering_survives_an_engine_that_counts_fuel() {
+        let host = Host::builder()
+            .with_engine(frugal_engine(true))
+            .with_meters(Meters::new(crate::observability::MeterKind::Fuel))
+            .build()
+            .expect("a host must build on a fuel-consuming engine");
+        assert!(
+            host.meters.fuel_consumption.is_enabled(),
+            "an engine that counts fuel must keep the meter that reads it"
+        );
+    }
+
+    /// A `Meters` the caller kept a copy of must not fail calls either: the
+    /// builder can only repair the copy it consumed, so the guard that matters
+    /// is the one in `FuelConsumptionMeter::observe`.
+    #[tokio::test]
+    async fn a_retained_fuel_meter_still_runs_calls_on_a_fuel_less_engine() {
+        let engine = frugal_engine(false);
+        let meters = Meters::new(crate::observability::MeterKind::Fuel);
+        let _host = Host::builder()
+            .with_engine(engine.clone())
+            .with_meters(meters.clone())
+            .build()
+            .expect("a host must build");
+
+        let ctx = crate::engine::ctx::Ctx::builder("workload", "component").build();
+        let mut store =
+            wasmtime::Store::new(engine.inner(), crate::engine::ctx::SharedCtx::new(ctx));
+        let measured = meters
+            .guest()
+            .observe(&[], &mut store, async |_| Ok(7))
+            .await
+            .expect("a call must not fail because its fuel cannot be read");
+        assert_eq!(measured, 7, "the measured call's own value must come back");
     }
 
     fn empty_workload_start_request(workload_id: &str) -> WorkloadStartRequest {

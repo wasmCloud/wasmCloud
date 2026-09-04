@@ -194,9 +194,15 @@ spec:
             - name: WASH_GUEST_MEMORY_MODE
               value: "{{ . }}"
             {{- end }}
-            {{- with $resources.maxConcurrentStarts }}
+            {{- /* Not `with`: Go templates treat the integer 0 as empty, and
+                   `0` is the most serialized setting a host can be given (it
+                   clamps to one start at a time). Tested for a number instead,
+                   so nil, "" and a mistyped bool all skip rather than reaching
+                   the host as an argument it cannot parse. */}}
+            {{- $starts := $resources.maxConcurrentStarts }}
+            {{- if or (kindIs "int64" $starts) (kindIs "float64" $starts) (and (kindIs "string" $starts) (ne $starts "")) }}
             - name: WASH_MAX_CONCURRENT_STARTS
-              value: "{{ . }}"
+              value: "{{ $starts }}"
             {{- end }}
             {{- with $top.Values.runtime.env }}
             {{- toYaml . | nindent 12 }}

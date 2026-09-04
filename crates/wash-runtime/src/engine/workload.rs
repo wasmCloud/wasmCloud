@@ -586,6 +586,10 @@ pub struct ResolvedWorkload {
     components: Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
     /// The HTTP handler for outgoing HTTP requests
     http_handler: Arc<dyn crate::host::http::HostHandler>,
+    /// The meter of the host running this workload, stamped onto every store
+    /// built for it. Reaches the engine the same way `http_handler` does,
+    /// because a store has no other way back to the host that owns it.
+    invocation: crate::observability::InvocationMeter,
     /// An optional service component that runs once to completion or for the duration of the workload
     service: Option<WorkloadService>,
     /// The requested host [`WitInterface`]s to resolve this workload
@@ -628,13 +632,19 @@ struct ServiceStoreRecipe {
     active_template: ComponentCtxTemplate,
     linked_templates: Vec<ComponentCtxTemplate>,
     linked_instances: Vec<(Arc<str>, wasmtime::component::InstancePre<SharedCtx>)>,
+    /// Stamped onto every incarnation's store, so a restart is measured like
+    /// the start was. `None` on a host that measures nothing.
+    metering: Option<(
+        crate::observability::WorkloadIdentity,
+        crate::observability::InvocationMeter,
+    )>,
 }
 
 impl ServiceStoreRecipe {
     /// Build a fresh service store (`is_service = true` so `cli/run` may bind
     /// its loopback socket).
     async fn build(&self) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
-        new_store_from_templates(
+        let store = new_store_from_templates(
             &self.engine,
             self.http_handler.clone(),
             &self.active_template,
@@ -642,7 +652,19 @@ impl ServiceStoreRecipe {
             &self.linked_instances,
             true,
         )
-        .await
+        .await?;
+        // Every store a call is measured on has to be stamped, this one
+        // included: a trigger service's deliveries are recorded through the
+        // store they run on, and its messaging attributes are built by the
+        // plugin rather than from the stamp — so an unstamped store loses
+        // fully attributed data points rather than empty ones.
+        if let Some((identity, invocation)) = &self.metering {
+            store
+                .data()
+                .executed
+                .set_identity(identity.clone(), invocation.clone());
+        }
+        Ok(store)
     }
 }
 
@@ -1307,6 +1329,7 @@ impl ResolvedWorkload {
                                         EphemeralCallMode::PlainValue
                                     };
                                     Some(Arc::new(EphemeralLinkedCall {
+                                        invocation: self.invocation.clone(),
                                         engine: plugin_engine.clone(),
                                         http_handler: self.http_handler.clone(),
                                         components: self.components.clone(),
@@ -1526,14 +1549,16 @@ impl ResolvedWorkload {
             false,
         )
         .await?;
-        // Skipped when nothing will read it: the p2 HTTP path builds a store
-        // per request and the per-message messaging paths one per message, so
-        // the read lock and the allocations below are on their hot path.
-        if crate::observability::invocation_meter().is_some() {
-            store
-                .data()
-                .executed
-                .set_identity(self.component_identity(component_id).await);
+        // This host's own meter, not a process-wide one: the read lock and the
+        // allocations below are on the hot path of the p2 HTTP path, which
+        // builds a store per request, and of the per-message messaging paths.
+        // A host asked to measure nothing must not pay for them because some
+        // other host in the process measures.
+        if self.invocation.is_enabled() {
+            store.data().executed.set_identity(
+                self.component_identity(component_id).await,
+                self.invocation.clone(),
+            );
         }
         Ok(store)
     }
@@ -1653,11 +1678,11 @@ impl ResolvedWorkload {
         // so no call on it can attribute a delta to itself and
         // `guest.execution.total` is all there is. See
         // [`crate::engine::abandon::GuestExecution`].
-        if crate::observability::invocation_meter().is_some() {
+        if self.invocation.is_enabled() {
             store
                 .data()
                 .executed
-                .set_identity(self.service_identity(metadata));
+                .set_identity(self.service_identity(metadata), self.invocation.clone());
         }
         Ok(store)
     }
@@ -1724,6 +1749,10 @@ impl ResolvedWorkload {
             active_template,
             linked_templates,
             linked_instances,
+            metering: self
+                .invocation
+                .is_enabled()
+                .then(|| (self.service_identity(metadata), self.invocation.clone())),
         })
     }
 
@@ -1881,6 +1910,7 @@ impl ResolvedWorkload {
                     func_idx,
                     param_tys: Arc::default(),
                     ephemeral_call: Some(Arc::new(EphemeralLinkedCall {
+                        invocation: self.invocation.clone(),
                         engine: engine.clone(),
                         http_handler: self.http_handler.clone(),
                         components: self.components.clone(),
@@ -2594,6 +2624,7 @@ impl UnresolvedWorkload {
         plugins: Option<&HashMap<&'static str, Arc<dyn HostPlugin + 'static>>>,
         plugin_bindings: &crate::plugin::PluginBindings,
         http_handler: Arc<dyn crate::host::http::HostHandler>,
+        meters: &crate::observability::Meters,
     ) -> anyhow::Result<ResolvedWorkload> {
         // Bind to plugins
         let bound_plugins = if let Some(plugins) = plugins {
@@ -2627,6 +2658,7 @@ impl UnresolvedWorkload {
             service: self.service,
             host_interfaces: self.host_interfaces,
             http_handler: http_handler.clone(),
+            invocation: meters.invocation.clone(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
         };
@@ -3800,6 +3832,7 @@ mod tests {
                 Some(&plugin.registered()),
                 &crate::plugin::PluginBindings::new(),
                 Arc::new(crate::host::http::NullServer::default()),
+                &crate::observability::Meters::new(crate::observability::MeterKind::Off),
             )
             .await
             .expect_err("the volume mount cannot be canonicalized");

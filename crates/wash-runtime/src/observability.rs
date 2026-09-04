@@ -14,9 +14,34 @@ use tracing_subscriber::{
     EnvFilter, Layer, Registry, filter::Directive, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
+/// Flushes the OTel exporters, if [`initialize_observability`] installed any.
+///
+/// **Blocks** for up to five seconds per provider — the SDK's own timeout — so
+/// a signal path has to bound it and keep it off the runtime the exporter
+/// drains over. Runs at most once; a no-op when no exporter was installed.
+pub fn flush() {
+    static FLUSHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    // Not a `Once`: `call_once` poisons, so one exporter panicking here would
+    // turn every later flush — including the one `main` makes — into a panic.
+    if FLUSHED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    if let Some(shutdown) = SHUTDOWN.get() {
+        shutdown();
+    }
+}
+
+/// Set once by [`initialize_observability`], so [`flush`] can reach the
+/// providers it built without every exit path having to be handed them.
+static SHUTDOWN: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
+
 /// Initialize observability, setting up console & OpenTelemetry layers.
 ///
-/// Returns a shutdown function that should be called on process exit to flush any remaining spans/logs
+/// Returns a shutdown function that should be called on process exit to flush
+/// any remaining spans/logs. It is [`flush`], which runs at most once — so a
+/// process that already flushed on its way out of a signal handler does not
+/// shut the providers down twice.
 pub fn initialize_observability(
     log_level: Level,
     ansi_colors: bool,
@@ -49,9 +74,8 @@ pub fn initialize_observability(
     if !otel_enabled {
         Registry::default().with(fmt_layer).init();
 
-        // No-op shutdown function
-        let shutdown_fn = || {};
-        return Ok(Box::new(shutdown_fn));
+        // Nothing to flush: `flush` finds no registered shutdown and returns.
+        return Ok(Box::new(flush));
     }
 
     let resource = Resource::builder()
@@ -130,8 +154,9 @@ pub fn initialize_observability(
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );
 
-    // Return a shutdown function to flush providers on exit
-    let shutdown_fn = move || {
+    // Registered rather than only returned: every way this process can end has
+    // to be able to flush, and `main` is not on all of them.
+    let _ = SHUTDOWN.set(Box::new(move || {
         if let Err(e) = tracer_provider.shutdown() {
             eprintln!("failed to shutdown tracer provider: {e}");
         }
@@ -141,9 +166,9 @@ pub fn initialize_observability(
         if let Err(e) = meter_provider.shutdown() {
             eprintln!("failed to shutdown meter provider: {e}");
         }
-    };
+    }));
 
-    Ok(Box::new(shutdown_fn))
+    Ok(Box::new(flush))
 }
 
 /// Helper function to reduce duplication and code size for parsing directives
@@ -216,7 +241,7 @@ impl std::str::FromStr for MeterKind {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Meters {
     /// Rate, errors and duration. Built for any [`MeterKind`] but `Off`: it
     /// costs the guest two clock reads, and it is the one an operator needs
@@ -380,12 +405,16 @@ impl InvocationMeter {
     }
 }
 
-/// The invocation meter, reachable the same way and for the same reason as the
-/// execution counter below.
-static INVOCATION: std::sync::OnceLock<InvocationMeter> = std::sync::OnceLock::new();
-
-pub fn invocation_meter() -> Option<&'static InvocationMeter> {
-    INVOCATION.get()
+/// [`MeterKind::default()`], so both doors into a host — the enum and
+/// [`crate::host::HostBuilder`] — agree on what a host nobody configured
+/// measures.
+///
+/// Written out rather than derived: field-by-field, every meter's own default
+/// is the inert one, which is `Off` under a type whose default is `Duration`.
+impl Default for Meters {
+    fn default() -> Self {
+        Self::new(MeterKind::default())
+    }
 }
 
 impl Meters {
@@ -398,21 +427,11 @@ impl Meters {
     }
 
     pub fn new(kind: MeterKind) -> Self {
-        let meters = Self {
+        Self {
             invocation: InvocationMeter::new(kind.records()),
             fuel_consumption: FuelConsumptionMeter::new(kind.consumes_fuel()),
             meters: Default::default(),
-        };
-        // First host that measures wins. A second one in the same process
-        // (tests, an embedder running two) records into the first's histogram,
-        // which is the same instrument OTel would have handed it anyway.
-        // Skipping the ones that measure nothing matters: a host built with
-        // metering off would otherwise claim the slot and silence every call
-        // after it, including calls on a later host that did ask.
-        if kind.records() {
-            let _ = INVOCATION.set(meters.invocation.clone());
         }
-        meters
     }
 }
 
@@ -425,15 +444,12 @@ pub struct FuelConsumptionMeter {
 ///
 /// A call path that can hand over its `&mut Store` measures through this rather
 /// than naming one of the two meters, so [`MeterKind`] decides *how* the
-/// measurement is taken and the path does not have to know. That is what makes
-/// [`MeterKind::Epoch`] universal: every path that measures at all can measure
-/// by epoch, including the ones that used to count fuel and nothing else.
+/// measurement is taken and the path does not have to know.
 ///
 /// Fuel is the only kind that has to wrap the call: it is read off the store
-/// either side of it. Epoch execution is credited from the callback that
-/// observes it, and duration is timed here for every kind, so a path that
-/// measures through this gets rate, errors and duration whichever kind the host
-/// chose.
+/// either side of it. Duration is timed here for every kind, so a path that
+/// measures through this gets rate, errors and duration whichever kind the
+/// host chose.
 #[derive(Clone, Default)]
 pub struct GuestMeter {
     fuel: FuelConsumptionMeter,
@@ -509,16 +525,21 @@ impl FuelConsumptionMeter {
     where
         F: AsyncFnOnce(&mut wasmtime::Store<T>) -> anyhow::Result<R>,
     {
-        if let Some(fuel_meter) = &self.hist {
-            store.set_fuel(u64::MAX)?;
-            let result = func(store).await?;
-            let consumed_fuel = u64::MAX - store.get_fuel()?;
-            fuel_meter.record(consumed_fuel, attributes);
-
-            Ok(result)
-        } else {
-            func(store).await
+        // `set_fuel` errors on an engine built without `Config::consume_fuel`,
+        // and a call the caller asked for must not fail over a number nobody
+        // can read. `HostBuilder` warns about the mismatch; here it just costs
+        // the measurement.
+        let Some(fuel_meter) = &self.hist else {
+            return func(store).await;
+        };
+        if store.set_fuel(u64::MAX).is_err() {
+            return func(store).await;
         }
+        let result = func(store).await?;
+        let consumed_fuel = u64::MAX - store.get_fuel()?;
+        fuel_meter.record(consumed_fuel, attributes);
+
+        Ok(result)
     }
 }
 

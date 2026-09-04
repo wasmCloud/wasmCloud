@@ -488,6 +488,12 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
 
     /// Injects metrics into the plugin.
     ///
+    /// A plugin holding meters starts out at
+    /// [`MeterKind::Off`](crate::observability::MeterKind::Off), not
+    /// [`Meters::default`](crate::observability::Meters::default): until the
+    /// host hands its own over here, the plugin must not build instruments from
+    /// whichever OTel provider happened to exist when it was constructed.
+    ///
     /// # Arguments
     /// * `meters` - A `Meters` object containing the metrics to inject.
     async fn inject_meters(&self, _meters: &crate::observability::Meters) {}

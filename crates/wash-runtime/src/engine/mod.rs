@@ -471,6 +471,16 @@ impl Engine {
         &self.inner
     }
 
+    /// Whether this engine compiles fuel counters into its guests, and so
+    /// whether a store it builds can be metered by fuel at all.
+    ///
+    /// Read back from the config wasmtime resolved rather than from
+    /// [`EngineBuilder::with_fuel_consumption`], so a base config supplied
+    /// through [`EngineBuilder::with_config`] is answered for too.
+    pub fn consumes_fuel(&self) -> bool {
+        self.inner.get_consume_fuel()
+    }
+
     /// Initializes a workload by validating and preparing all its components.
     ///
     /// This function takes a workload definition and prepares it for execution by:

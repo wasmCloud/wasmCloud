@@ -32,7 +32,10 @@ use std::sync::atomic::AtomicBool;
 use crate::engine::abandon::{AbandonFlag, AbandonOnDrop, DispatchedCall};
 use crate::host::allowed_hosts::AllowedHost;
 use crate::host::trigger_service::{BrokerMessage, MessagingJob};
-use crate::{engine::ctx::SharedCtx, observability::Meters};
+use crate::{
+    engine::ctx::SharedCtx,
+    observability::{MeterKind, Meters},
+};
 use crate::{engine::workload::ResolvedWorkload, observability::GuestMeter};
 use anyhow::{Context, ensure};
 use http_body_util::BodyExt;
@@ -1045,17 +1048,15 @@ pub(crate) fn http_attributes(
 /// — `workload_handles` holds only components that export `wasi:http` — and it
 /// does not need one: the store it runs on was stamped when it was built.
 ///
-/// Empty when nothing will record it. Only `ExecutionSample` reads this, and
-/// nothing reads that unless the host chose the epoch meter, so on every other
-/// host building it is a `Vec`, an `Arc` and four `String`s per request for a
-/// value that is dropped.
+/// Empty when nothing is measuring this store, which is one lookup: the store
+/// is stamped only by a host that meters, so an absent stamp answers both
+/// "whose is this" and "is anyone recording it". Building it regardless would
+/// cost a `Vec`, an `Arc` and four `String`s per request for a value that is
+/// dropped.
 pub(crate) fn stored_http_attributes(
     executed: &crate::engine::abandon::GuestExecution,
     method: &hyper::Method,
 ) -> Arc<[opentelemetry::KeyValue]> {
-    if crate::observability::invocation_meter().is_none() {
-        return Arc::from([]);
-    }
     let Some(identity) = executed.identity() else {
         return Arc::from([]);
     };
@@ -1282,7 +1283,7 @@ impl<T: Router, O: OutgoingHandler> IngressBuilder<T, O> {
             tls_acceptor,
             listener: Arc::new(tokio::sync::Mutex::new(Some(listener))),
             connections: ConnectionLimit::new(max_connections),
-            meters: Default::default(),
+            meters: RwLock::new(Meters::new(MeterKind::Off)),
             grpc_tls: OnceLock::new(),
         })
     }
