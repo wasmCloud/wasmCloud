@@ -562,14 +562,14 @@ impl ComponentHostPlugin {
                 .iter()
                 .map(|entry| binding_of(self.id, entry.name.as_deref()))
                 .collect();
-            let named: Vec<&str> = declared.iter().flatten().copied().collect();
             for label in import_labels(&world, &exported.wit) {
                 // The binding a call through this import carries: the matched
                 // entry of the same shape. A labeled import needs an entry
-                // naming its label; a plain import takes the unnamed entry, or
-                // the one named entry when that is all the workload declared.
-                // Anything else is an import the plugin was handed no config
-                // for, refused here rather than left as an unresolved import.
+                // naming its label and a plain import needs the unnamed entry.
+                // A named entry says nothing about a plain import — the host
+                // cannot vouch for a binding the component never asked for by
+                // name — so a mismatch is refused here rather than bound
+                // unnamed or left as an unresolved import.
                 let binding = match binding_of(self.id, label.as_deref()) {
                     Some(name) if declared.contains(&Some(name)) => Some(name),
                     Some(name) => anyhow::bail!(
@@ -584,21 +584,23 @@ impl ComponentHostPlugin {
                         self.id,
                     ),
                     None if declared.contains(&None) => None,
-                    None => match named[..] {
-                        [only] => Some(only),
-                        _ => anyhow::bail!(
-                            "component '{}' imports {} plainly, but every {}:{} entry of workload \
-                             '{}' is named ({}); import it under one of those labels or add an \
-                             unnamed entry (host component plugin '{}')",
-                            item.id(),
-                            exported.name,
-                            exported.wit.namespace,
-                            exported.wit.package,
-                            item.workload_id(),
-                            named.join(", "),
-                            self.id,
-                        ),
-                    },
+                    None => anyhow::bail!(
+                        "component '{}' imports {} plainly, but every {}:{} entry of workload \
+                         '{}' is named ({}); import it under one of those labels or add an \
+                         unnamed entry (host component plugin '{}')",
+                        item.id(),
+                        exported.name,
+                        exported.wit.namespace,
+                        exported.wit.package,
+                        item.workload_id(),
+                        declared
+                            .iter()
+                            .flatten()
+                            .copied()
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        self.id,
+                    ),
                 }
                 .map(Arc::<str>::from);
                 add_capabilities_to_linker(

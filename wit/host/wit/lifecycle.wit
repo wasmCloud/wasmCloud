@@ -83,11 +83,10 @@ interface workload-lifecycle {
         /// imports the interface under that `(implements ..)` label; the name
         /// then reaches this hook with the binding's resolved `config`, and
         /// every call the label routes as
-        /// `wasmcloud:host/identity#get-binding-name`. A plain import takes
-        /// the unnamed entry, or the one named entry when that is all the
-        /// workload declared. An import matching no entry — a label no entry
-        /// names, or a plain import beside several named entries — fails the
-        /// bind rather than binding unnamed.
+        /// `wasmcloud:host/identity#get-binding-name`. An import matching no
+        /// entry of its shape — a label no entry names, or a plain import
+        /// where every entry is named — fails the bind rather than binding
+        /// unnamed.
         ///
         /// Declare nothing and the plugin serves plain imports as before, and
         /// a workload naming more than one binding of a package is refused.
