@@ -330,7 +330,38 @@ impl ClusterHost {
                 // a service nothing tears down.
                 let mut commands = tokio::task::JoinSet::new();
 
-                let mut oci_cleanup_timer = tokio::time::interval(cleanup_interval);
+                // Read once. Nothing changes the host's config after it is
+                // built, so a host with no cache directory has none for its
+                // whole life and gets no timer at all rather than one that
+                // wakes to reach the same answer. The path is behind an `Arc`
+                // so each tick hands it to a task without copying it.
+                let mut oci_cleanup = host
+                    .config()
+                    .oci_cache_dir
+                    .clone()
+                    .map(|dir| (Arc::new(dir), tokio::time::interval(cleanup_interval)));
+
+                // Heartbeats and cache cleanup run as their own tasks, for the
+                // reason commands already do: `select!` runs one branch to
+                // completion, so anything awaited in one stops the loop turning
+                // — and the loop turning is the whole of what `/livez` reports.
+                //
+                // A heartbeat publish ends in a send on async-nats' bounded
+                // command channel, which stops draining while NATS is
+                // unreachable. Awaited here, an outage would hold the loop past
+                // the liveness budget and the kubelet would restart the host:
+                // every workload on it lost, every host in the fleet at once
+                // because they all watch the same NATS, and none of it a thing
+                // a restart can fix. Cache cleanup is a filesystem walk, the
+                // same shape with a slower fuse.
+                //
+                // One at a time each, and a tick that finds the previous still
+                // running is dropped rather than queued: a heartbeat that has
+                // not gone out is not improved by a second behind it, and two
+                // in flight can arrive out of order. The permit lives in the
+                // task, so it comes back however the task ends.
+                let heartbeat_slot = Arc::new(tokio::sync::Semaphore::new(1));
+                let cleanup_slot = Arc::new(tokio::sync::Semaphore::new(1));
 
                 loop {
                     // Every turn, whichever branch woke it. The heartbeat timer
@@ -412,31 +443,56 @@ impl ClusterHost {
                             }
                         }
                         // OCI cache cleanup
-                        _ = oci_cleanup_timer.tick() => {
-                            if let Some(cache_dir) = host.config().oci_cache_dir.as_ref() &&
-                            let Err(e) = oci::cleanup_cache(cache_dir, self.cleanup_age).await {
-                                error!("error during OCI cache cleanup: {e}");
+                        cache_dir = next_cache_cleanup(&mut oci_cleanup) => {
+                            if let Ok(slot) = Arc::clone(&cleanup_slot).try_acquire_owned() {
+                                let age = self.cleanup_age;
+                                tokio::spawn(async move {
+                                    let _slot = slot;
+                                    if let Err(e) = oci::cleanup_cache(&*cache_dir, age).await {
+                                        error!("error during OCI cache cleanup: {e}");
+                                    }
+                                });
                             }
                         }
                         // Send heartbeat
                         _ = heartbeat_timer.tick() => {
-                            // Returning here would drop `commands`, aborting
+                            // Dropped rather than queued when the last one is
+                            // still going. Nothing here returns on failure:
+                            // returning would drop `commands`, aborting
                             // in-flight starts after they have reserved their
                             // ids, and skip the `host.stop()` that unbinds
                             // their plugins. A missed heartbeat is worth none
                             // of that; the next tick tries again.
-                            match host_heartbeat(&host).await.and_then(|heartbeat| {
-                                serde_json::to_vec(&heartbeat).context("failed to serialize heartbeat")
-                            }) {
-                                Ok(heartbeat_bytes) => {
-                                    if let Err(e) = nats_client
-                                        .publish(heartbeat_subject.clone(), heartbeat_bytes.into())
-                                        .await
-                                    {
-                                        error!("failed to publish heartbeat: {e}");
-                                    }
+                            match Arc::clone(&heartbeat_slot).try_acquire_owned() {
+                                Ok(slot) => {
+                                    let host = host.clone();
+                                    let nats_client = nats_client.clone();
+                                    let subject = heartbeat_subject.clone();
+                                    tokio::spawn(async move {
+                                        let _slot = slot;
+                                        match host_heartbeat(&host).await.and_then(|heartbeat| {
+                                            serde_json::to_vec(&heartbeat).context("failed to serialize heartbeat")
+                                        }) {
+                                            Ok(heartbeat_bytes) => {
+                                                if let Err(e) = nats_client
+                                                    .publish(subject, heartbeat_bytes.into())
+                                                    .await
+                                                {
+                                                    error!("failed to publish heartbeat: {e}");
+                                                }
+                                            }
+                                            Err(e) => error!("failed to build heartbeat: {e}"),
+                                        }
+                                    });
                                 }
-                                Err(e) => error!("failed to build heartbeat: {e}"),
+                                // Every tick this reports is one the operator
+                                // did not hear, which is what its unreachable
+                                // window is for. Said out loud because the
+                                // cause — a NATS that is not draining — is
+                                // otherwise visible only as a host going quiet.
+                                Err(_) => warn!(
+                                    "previous heartbeat has not finished publishing; skipping this one"
+                                ),
                             }
                         }
                         // Handle API requests
@@ -611,6 +667,23 @@ pub async fn connect_nats(
         tokio::time::sleep(backoff.min(remaining)).await;
         backoff = (backoff * 2).min(Duration::from_secs(5));
     }
+}
+
+/// The directory to clean when the next cleanup falls due, or never for a host
+/// with no cache directory.
+///
+/// A `select!` branch needs a future whether or not there is anything to wait
+/// for. This gives the branch one that simply never completes, which is what a
+/// host with nothing to clean should do, rather than arming a timer and testing
+/// a condition that was settled before the loop began.
+async fn next_cache_cleanup(
+    cleanup: &mut Option<(Arc<PathBuf>, tokio::time::Interval)>,
+) -> Arc<PathBuf> {
+    let Some((cache_dir, timer)) = cleanup else {
+        return std::future::pending().await;
+    };
+    timer.tick().await;
+    Arc::clone(cache_dir)
 }
 
 pub fn host_subject(host_id: &str) -> String {
