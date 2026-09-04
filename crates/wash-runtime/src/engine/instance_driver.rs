@@ -171,6 +171,7 @@ impl InvocationSample {
 
     /// Mark what went wrong, for a call site that knows. The value is a short
     /// bounded name — `trap`, `timeout` — never anything a caller supplies.
+    #[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
     pub(crate) fn failed(&mut self, error: &'static str) {
         self.error = Some(error);
     }
