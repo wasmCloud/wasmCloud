@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, warn};
 
 use crate::engine::instance_driver::InstanceJob;
-use crate::engine::instance_pool::{ComponentInstance, Dispatch};
+use crate::engine::instance_pool::{ComponentInstance, Declined, Dispatch};
 use crate::engine::workload::ResolvedWorkload;
 use crate::wasmtime::component::{Accessor, InstancePre, Resource};
 
@@ -377,8 +377,9 @@ async fn build_instance(
 /// of the call.
 ///
 /// The same job runs either way: a delivery the pool declines is not rebuilt,
-/// it is handed back and run in a fresh store, so a large payload is never
-/// copied to pay for the attempt.
+/// it is handed back and run in a store of its own — the one built for the
+/// pool, when the pool did not park that — so neither a large payload nor an
+/// instantiation is paid for twice.
 ///
 /// JetStream stays on the warm set. Its call carries a `message-handle`
 /// resource — an index into one store's table — so its argument cannot exist
@@ -388,7 +389,9 @@ async fn build_instance(
 /// `cancel_token` ends the delivery at the two awaits that can block on a
 /// workload being torn down: building a store and instantiating into it is work
 /// nobody will see the result of, and an instance built for the pool could
-/// otherwise be installed after the pool was cleared.
+/// otherwise be installed after the pool was cleared. A delivery carrying an
+/// instance the pool declined reaches neither await, so it is checked against
+/// the token directly.
 async fn run_delivery(
     workload: &ResolvedWorkload,
     target: &HandlerTarget,
@@ -399,6 +402,9 @@ async fn run_delivery(
 ) -> anyhow::Result<Result<(), String>> {
     let component_id = target.component_id.as_ref();
     let mut job = job;
+    // An instance built for a pool that then declined the delivery: the store
+    // of its own below is that instance.
+    let mut reclaimed = None;
 
     if let Some(pool) = workload.instance_pool_for_component(component_id).await {
         let outcome = match pool.try_dispatch(InstanceJob::Plugin(job)) {
@@ -414,7 +420,7 @@ async fn run_delivery(
                 };
                 pool.dispatch_on_new(ComponentInstance { store, instance }, pending)
             }
-            Dispatch::Saturated(pending) => Err(pending),
+            Dispatch::Saturated(pending) => Err(Declined::without_instance(pending)),
         };
         match outcome {
             Ok(()) => {
@@ -427,7 +433,7 @@ async fn run_delivery(
             // Every instance was busy and the pool is full, so run the very
             // same job in a store of its own.
             Err(declined) => {
-                let InstanceJob::Plugin(returned) = declined else {
+                let InstanceJob::Plugin(returned) = declined.job else {
                     return Err(anyhow::anyhow!("pool returned the wrong job kind"));
                 };
                 debug!(
@@ -435,14 +441,33 @@ async fn run_delivery(
                     "warm instances saturated; own store"
                 );
                 job = returned;
+                reclaimed = declined.instance;
             }
         }
     }
 
-    let Some((mut store, instance)) =
-        build_instance(workload, target, component_id, cancel_token).await?
-    else {
-        return Ok(Ok(()));
+    let ComponentInstance {
+        mut store,
+        instance,
+    } = match reclaimed {
+        // A reclaimed instance reaches neither await `build_instance` gives
+        // up at, so the teardown it gives up for is checked here instead.
+        Some(_) if cancel_token.is_cancelled() => {
+            debug!(
+                job = job.describe(),
+                "workload torn down before the delivery ran; abandoning it"
+            );
+            return Ok(Ok(()));
+        }
+        Some(built) => built,
+        None => {
+            let Some((store, instance)) =
+                build_instance(workload, target, component_id, cancel_token).await?
+            else {
+                return Ok(Ok(()));
+            };
+            ComponentInstance { store, instance }
+        }
     };
     // Awaited through the same `DispatchedCall` the pooled path uses:
     // `arm_after` runs inside `await_reply`, so a cold delivery that skipped it
