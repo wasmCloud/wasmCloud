@@ -463,12 +463,26 @@ runtime:
   # -- Additional CLI args appended to every host group container, for host
   # flags the chart does not template. Merged with per-host-group `extraArgs`.
   extraArgs: []
+  # -- How long the host keeps serving after `SIGTERM`, before it starts
+  # stopping.
+  #
+  # A pod leaves its Service the moment Kubernetes marks it Terminating, but
+  # that removal reaches each kube-proxy a beat later. Without this the host
+  # stops first and refuses the requests still on their way to it. Readiness
+  # goes red as the wait starts, so anything reading `/readyz` learns at the
+  # same time.
+  #
+  # It has to fit inside `terminationGracePeriodSeconds` alongside the 5s
+  # command drain that follows it; the chart refuses to render if it does not.
+  drainDelaySeconds: 5
   # -- How long a terminating host pod has to shut down before it is killed.
-  # On `SIGTERM` the host stops taking work, waits up to 5s for the commands
-  # already running to finish, then stops itself — unbinding every plugin the
-  # workloads it holds are bound to. Kubernetes sends `SIGKILL` when this
-  # expires, so anything below that 5s drain cuts the shutdown short and leaves
-  # the unbinding to the operator's unreachable-host path instead.
+  #
+  # Three numbers in sequence, and this is the budget for all of them:
+  # `drainDelaySeconds` serving while the endpoint is withdrawn, then up to 5s for
+  # the commands already running to finish, then the host unbinds every plugin its
+  # workloads are bound to. Kubernetes sends `SIGKILL` when this expires, so a
+  # value under `drainDelaySeconds` + 5s cuts the shutdown short and leaves the
+  # unbinding to the operator's unreachable-host path instead.
   terminationGracePeriodSeconds: 15
   hostGroups:
     - name: default
