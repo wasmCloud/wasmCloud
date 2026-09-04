@@ -150,14 +150,26 @@ operator:
   service:
     type: ClusterIP
     port: 8443
-  # -- Startup probe for the operator, which suspends the liveness probe until
-  # it passes. `mgr.Start` binds `/healthz`, and it runs only after the operator
-  # has connected to NATS — a wait of up to `NatsInitialConnectWindow`. Size
-  # `periodSeconds` × `failureThreshold` to cover that wait plus manager start.
-  startupProbe:
-    enabled: true
-    periodSeconds: 5
-    failureThreshold: 24
+  # -- Probes for the operator container, answered by the manager on the health
+  # port. The manager binds them only once it has connected to NATS, so the
+  # startup budget (`periodSeconds` × `failureThreshold`) has to cover
+  # `NatsInitialConnectWindow` plus manager start; while it runs, the other two
+  # are suspended. Each can be turned off on its own.
+  probes:
+    startup:
+      enabled: true
+      periodSeconds: 5
+      failureThreshold: 24
+    liveness:
+      enabled: true
+      initialDelaySeconds: 15
+      periodSeconds: 20
+      failureThreshold: 3
+    readiness:
+      enabled: true
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      failureThreshold: 3
   # -- This section builds out the service account.
   # See the [Kubernetes documentation](https://kubernetes.io/docs/concepts/security/service-accounts/).
   serviceAccount:
