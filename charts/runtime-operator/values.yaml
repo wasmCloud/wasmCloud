@@ -428,11 +428,13 @@ runtime:
     #
     # Turning it off falls the timings back to a TCP connect on `http.port`.
     #
-    # Requires a host image carrying `--probe-addr`, which arrived with this
-    # chart's appVersion. A host group pinning an older `image.tag` must set
+    # Requires a host image carrying `--probe-addr` *and* `--drain-delay`, both
+    # of which arrived with this chart's appVersion and both of which this
+    # setting renders. A host group pinning an older `image.tag` must set
     # `probes.endpoint.enabled: false` for that group — `wash host` refuses to
     # start on an argument it does not know, so leaving it on there is a
-    # CrashLoopBackOff rather than a degraded probe.
+    # CrashLoopBackOff rather than a degraded probe. Turning it off drops both
+    # arguments, so there is one switch to find rather than two.
     endpoint:
       enabled: true
       port: 8081
