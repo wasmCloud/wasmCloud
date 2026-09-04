@@ -637,8 +637,7 @@ impl CliCommand for HostCommand {
             load_config::<crate::config::Config>(&ctx.user_config_path(), Some(project_dir), None)
                 .context("failed to load config for wash host")?;
 
-        // Zero means the flag was used to ask for the old behaviour: give up on
-        // the first refusal.
+        // Zero asks to give up on the first refusal.
         let connect_retry =
             (!self.nats_connect_timeout.is_zero()).then_some(self.nats_connect_timeout);
 

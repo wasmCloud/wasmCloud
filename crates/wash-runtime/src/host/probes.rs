@@ -42,12 +42,8 @@ const MAX_PROBE_CONNECTIONS: usize = 512;
 /// How long one probe connection may live. Each serves a single request and
 /// closes, so holding a slot open is not something a caller has a reason to do.
 ///
-/// The only bound, deliberately. A separate header-read timeout was set on the
-/// hyper builder beside this one and could never fire, because it was the
-/// longer of the two and this wraps the whole connection — it read as a second,
-/// looser limit while contributing nothing. One connection lifetime covers the
-/// case a header timeout is for: a peer that opens a socket and says nothing
-/// still loses its slot here.
+/// The only deadline here, and it wraps the whole connection: a peer that opens
+/// a socket and says nothing loses its slot on this alone.
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A monotonic "still turning" signal, beaten by whatever owns the host's main
