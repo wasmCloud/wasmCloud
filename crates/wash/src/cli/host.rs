@@ -23,12 +23,15 @@ pub struct HostCommand {
     #[arg(long = "scheduler-nats-url", default_value = "nats://localhost:4222")]
     pub scheduler_nats_url: String,
 
-    /// How long to keep retrying NATS at startup before giving up.
+    /// How long to keep retrying NATS at startup before giving up, across both
+    /// the scheduler and data connections together.
     ///
-    /// A host brought up beside its NATS has no ordering guarantee against it,
-    /// and exiting on the first refusal makes the pod restart until the race
-    /// happens to go the other way. Zero restores that: fail on first refusal.
-    #[arg(long = "nats-connect-timeout", default_value = "60s", value_parser = humantime::parse_duration)]
+    /// A host brought up beside its NATS has no ordering against it, and
+    /// exiting on the first refusal makes the pod restart until the race
+    /// happens to go the other way. The chart sets this; zero — the default —
+    /// fails on the first refusal, which is what someone running `wash host`
+    /// against a NATS they start themselves wants to see.
+    #[arg(long = "nats-connect-timeout", default_value = "0s", value_parser = humantime::parse_duration)]
     pub nats_connect_timeout: Duration,
 
     /// Path to TLS CA certificate file for NATS Scheduler connection
@@ -637,7 +640,11 @@ impl CliCommand for HostCommand {
             load_config::<crate::config::Config>(&ctx.user_config_path(), Some(project_dir), None)
                 .context("failed to load config for wash host")?;
 
-        // Zero asks to give up on the first refusal.
+        // One budget for both connections below, not one each: the flag says
+        // how long startup may spend waiting for NATS, and two windows in
+        // series would spend twice that with the second URL down. Zero asks to
+        // give up on the first refusal.
+        let connect_deadline = tokio::time::Instant::now() + self.nats_connect_timeout;
         let connect_retry =
             (!self.nats_connect_timeout.is_zero()).then_some(self.nats_connect_timeout);
 
@@ -663,7 +670,10 @@ impl CliCommand for HostCommand {
                 tls_first: self.data_nats_tls_first,
                 tls_cert: self.data_nats_tls_cert.clone(),
                 tls_key: self.data_nats_tls_key.clone(),
-                connect_retry,
+                // Whatever the scheduler connection left of the budget.
+                connect_retry: connect_retry.map(|_| {
+                    connect_deadline.saturating_duration_since(tokio::time::Instant::now())
+                }),
             },
         )
         .await

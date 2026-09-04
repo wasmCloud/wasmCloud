@@ -1800,7 +1800,7 @@ impl crate::host::probes::ReadinessCheck for ConnectionLimit {
     /// the Host CR's heartbeat-driven condition, which a host with a dead
     /// listener goes on satisfying. Left to readiness, it keeps being given
     /// workloads that report Ready and are unreachable.
-    fn terminal(&self) -> bool {
+    fn unrecoverable(&self) -> bool {
         !self.accepting.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
