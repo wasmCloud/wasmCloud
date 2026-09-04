@@ -113,8 +113,8 @@ pub(crate) enum Dispatch {
 /// A call [`InstancePool::dispatch_on_new`] would not take, and the instance
 /// built for it — so the caller's own store path runs on that rather than
 /// instantiating a second time. `None` when there is none to give back: the
-/// pool parked the instance and the call still did not fit on it, or the call
-/// was declined before one was built.
+/// call was declined before one was built, or the driver it was parked on
+/// ended before it could take the call.
 pub(crate) struct Declined {
     pub(crate) job: InstanceJob,
     pub(crate) instance: Option<ComponentInstance>,
@@ -449,17 +449,17 @@ impl InstancePool {
             if drivers.len() >= pool_size {
                 break 'sent Err(Declined::with_instance(job, instance));
             }
-            let driver = Arc::new(InstanceDriver::spawn(
-                instance,
-                max_concurrency,
-                max_invocations,
-            ));
+            let driver =
+                match InstanceDriver::spawn(instance, &job, max_concurrency, max_invocations) {
+                    Ok(driver) => Arc::new(driver),
+                    Err(instance) => break 'sent Err(Declined::with_instance(job, instance)),
+                };
             drivers.push(Arc::clone(&driver));
             // Sent under the lock, as `try_dispatch` sends: a sweep landing
             // between the push and the send would find an idle instance
             // nothing had claimed yet and retire it out from under this call.
-            // The instance is parked whether or not it takes the call, so a
-            // refusal here has none to hand back.
+            // The instance is parked by now, so a refusal here — the driver's
+            // task ended before it could take the call — has none to hand back.
             driver.try_send(job).map_err(Declined::without_instance)
         };
 
@@ -468,8 +468,13 @@ impl InstancePool {
         if reclaims {
             *peak_in_flight = (*peak_in_flight).max(in_flight_total(drivers));
         }
+        // A pool holding nothing has nothing to reclaim, and an instance the
+        // spawn declined leaves it as empty as it found it.
+        let holds_instances = !drivers.is_empty();
         drop(state);
-        self.start_sweeping();
+        if holds_instances {
+            self.start_sweeping();
+        }
         sent
     }
 
@@ -630,7 +635,10 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use super::{Duration, InstancePolicy, InstancePool, NonZeroUsize, sort_least_busy};
+    use super::{
+        ComponentInstance, Duration, InstancePolicy, InstancePool, NonZeroUsize, SharedCtx,
+        sort_least_busy,
+    };
     use crate::engine::instance_driver::{InFlightGuard, InstanceDriver, InstanceJob};
     use crate::types::Component;
 
@@ -810,6 +818,73 @@ mod tests {
             channels.push(rx);
         }
         (pool, channels)
+    }
+
+    /// A real store with a component instantiated in it, which is what
+    /// [`InstancePool::dispatch_on_new`] takes and the stub drivers cannot
+    /// stand in for. The component is empty, so it exports nothing — which is
+    /// all these need, since the pool's decisions are about where an instance
+    /// goes, and an instance exporting nothing is also the one a job-kind gate
+    /// must refuse.
+    fn built_instance() -> ComponentInstance {
+        // A ctx builds a TLS provider under `wasi-tls`, which needs the
+        // process-wide crypto provider a host installs at startup.
+        #[cfg(feature = "wasi-tls")]
+        crate::init_crypto();
+
+        let mut config = wasmtime::Config::new();
+        config.wasm_component_model(true);
+        let engine = wasmtime::Engine::new(&config).expect("an engine for the component model");
+        let bytes = wat::parse_str("(component)").expect("the empty component parses");
+        let component =
+            wasmtime::component::Component::new(&engine, &bytes).expect("it compiles too");
+        let ctx = crate::engine::ctx::Ctx::builder("workload", "component").build();
+        let mut store = wasmtime::Store::new(&engine, SharedCtx::new(ctx));
+        let instance = wasmtime::component::Linker::new(&engine)
+            .instantiate(&mut store, &component)
+            .expect("an empty component instantiates against an empty linker");
+        ComponentInstance { store, instance }
+    }
+
+    /// A delivery to dispatch. Messaging because it is a kind the driver gates
+    /// on the instance's exports, which is what makes it the job an instance
+    /// exporting nothing has to be refused for.
+    fn messaging_job() -> InstanceJob {
+        let (result_tx, _result_rx) = tokio::sync::oneshot::channel();
+        InstanceJob::Messaging(Box::new(crate::host::trigger_service::MessagingJob {
+            msg: crate::host::trigger_service::BrokerMessage {
+                subject: "subject".into(),
+                body: Vec::new(),
+                reply_to: None,
+            },
+            result_tx,
+            abandoned: crate::engine::abandon::DispatchedCall::new("test", Duration::from_secs(1))
+                .flag(),
+            attributes: Arc::from([]),
+        }))
+    }
+
+    /// An instance that does not export what the job needs is never parked.
+    /// Parking it would leave a warm instance that can only refuse this kind
+    /// of call, and nothing retires an instance that admits nothing: it would
+    /// hold its store for the workload's life, with another spawned beside it
+    /// on the next call of the kind.
+    #[test]
+    fn an_instance_that_cannot_take_the_call_is_not_parked() {
+        let (pool, _channels) = warm_pool(0, &limits(4, 0, 0, 0, 0));
+
+        let declined = pool
+            .dispatch_on_new(built_instance(), messaging_job())
+            .expect_err("an empty component exports no messaging handler");
+        assert!(
+            declined.instance.is_some(),
+            "the instance must come back for the caller's own store, where the \
+             binding is built per call and its error reaches the caller"
+        );
+        assert!(
+            pool.lock_state().drivers.is_empty(),
+            "the pool must not park an instance that can only refuse the call"
+        );
     }
 
     /// Instances still admitting calls.
