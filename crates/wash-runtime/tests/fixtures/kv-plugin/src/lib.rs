@@ -152,6 +152,10 @@ impl Guest for Component {
         format!("{workload}|{component}")
     }
 
+    async fn whichbinding() -> Option<String> {
+        bindings::wasmcloud::host::identity::get_binding_name()
+    }
+
     async fn slow(millis: u64) -> u64 {
         // Await a timer so this task YIELDS the store's cooperative executor.
         // A concurrent fast call spawned as its own task can therefore run to

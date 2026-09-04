@@ -1,0 +1,19 @@
+package acme:kvimplementscaller@0.1.0;
+
+/// Workload component importing ONE host component plugin's capability three
+/// ways at once: plainly, and under two `(implements ..)` labels. The component
+/// model names a labeled import by its label, so each of these is a distinct
+/// linker instance the plugin has to define — the labeled ones under the label,
+/// never under the interface's own name.
+///
+/// Both labels reach the same plugin store, so what separates them is not the
+/// data but the binding: each call carries the label it arrived on, which the
+/// plugin reads back through `wasmcloud:host/identity#get-binding-name` and
+/// returns from `whichbinding`.
+world implements-caller {
+    import wasi:http/types@0.3.0;
+    import acme:kv/store@0.1.0;
+    import tenant-a: acme:kv/store@0.1.0;
+    import tenant-b: acme:kv/store@0.1.0;
+    export wasi:http/handler@0.3.0;
+}
