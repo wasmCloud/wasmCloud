@@ -495,6 +495,7 @@ func buildBaseHelmSets() []string {
 			// branch's own host and exercises them.
 			"runtime.probes.endpoint.enabled=false",
 			"runtime.drainDelaySeconds=0",
+			"runtime.natsConnectTimeoutSeconds=0",
 		)
 	}
 	return sets
