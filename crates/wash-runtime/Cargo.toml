@@ -85,7 +85,12 @@ semver = { workspace = true }
 sysinfo = { workspace = true }
 uuid = { workspace = true, features = ["v4", "v7"] }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["sync", "net", "macros"] }
+# Every tokio feature this library relies on is named here, for the reason the
+# `wasmtime` list below gives: `time`, `rt`, `fs` and `io-util` all reach this
+# crate today through `tokio-util`, `async-nats` and `hyper-util`, and would
+# leave with any of them. `[dev-dependencies]` takes `full`, so a test build
+# cannot show the gap either.
+tokio = { workspace = true, features = ["sync", "net", "macros", "time", "rt", "fs", "io-util"] }
 tracing = { workspace = true }
 zeroize = { workspace = true }
 # Every wasmtime feature this host relies on is named here rather than left to
