@@ -1991,7 +1991,20 @@ async fn run_http_server<T: Router>(
                             };
 
                             if let Err(e) = result {
-                                error!(addr = ?client_addr, err = ?e, "error serving HTTP client");
+                                // A timeout is the peer not sending, which is
+                                // what the deadline above closes connections
+                                // for. Both bound that same condition, so
+                                // whichever fires first decides nothing about
+                                // what happened — and `ERROR` here would put a
+                                // probe, a port scan or a forwarded port whose
+                                // far end went away beside real serving
+                                // failures, in the one place an operator looks
+                                // for them.
+                                if ended_in_timeout(&*e) {
+                                    debug!(addr = ?client_addr, err = ?e, "closing a connection that sent no request");
+                                } else {
+                                    error!(addr = ?client_addr, err = ?e, "error serving HTTP client");
+                                }
                             }
                         });
                     }
@@ -2008,6 +2021,17 @@ async fn run_http_server<T: Router>(
     }
 
     Ok(())
+}
+
+/// Whether a served connection ended because the peer stopped sending.
+///
+/// The connection future is boxed by the protocol-detecting builder, so the
+/// hyper error carrying that answer can be at any depth of the chain.
+fn ended_in_timeout(e: &(dyn std::error::Error + 'static)) -> bool {
+    if let Some(hyper) = e.downcast_ref::<hyper::Error>() {
+        return hyper.is_timeout();
+    }
+    e.source().is_some_and(ended_in_timeout)
 }
 
 /// Build an error response with the given status code.
@@ -3289,6 +3313,37 @@ mod tests {
         assert!(!limit.ready(), "its one connection is in use");
         drop(only);
         assert!(limit.ready(), "and free again");
+    }
+
+    /// The connection future is boxed, and a real serving failure has to stay
+    /// an `ERROR` however deep the chain gets. Only the hyper error at the
+    /// bottom of it decides, and a chain that has none is not a timeout.
+    #[test]
+    fn a_served_error_that_is_not_a_timeout_stays_an_error() {
+        #[derive(Debug)]
+        struct Wrapped(std::io::Error);
+        impl std::fmt::Display for Wrapped {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "wrapped")
+            }
+        }
+        impl std::error::Error for Wrapped {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let reset = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
+        assert!(!ended_in_timeout(&reset), "a reset is not a timeout");
+        assert!(
+            !ended_in_timeout(&Wrapped(std::io::Error::from(
+                std::io::ErrorKind::ConnectionReset
+            ))),
+            "and neither is one behind a wrapper"
+        );
+        // A chain with no hyper error in it must terminate rather than recurse
+        // on itself.
+        assert!(!ended_in_timeout(&Wrapped(std::io::Error::other("x"))));
     }
 
     /// A connection that never asks for anything must give its slot back.
