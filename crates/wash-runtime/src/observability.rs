@@ -17,8 +17,8 @@ use tracing_subscriber::{
 /// Flushes the OTel exporters, if [`initialize_observability`] installed any.
 ///
 /// **Blocks** for up to five seconds per provider — the SDK's own timeout — so
-/// a signal path has to bound it and keep it off the runtime the exporter
-/// drains over. Runs at most once; a no-op when no exporter was installed.
+/// an async exit path calls [`flush_within`] instead of this. Runs at most
+/// once; a no-op when no exporter was installed.
 pub fn flush() {
     static FLUSHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -30,6 +30,26 @@ pub fn flush() {
     if let Some(shutdown) = SHUTDOWN.get() {
         shutdown();
     }
+}
+
+/// What a process leaving on a signal gives the exporters before it goes
+/// without them. Only ever spent when one was configured.
+///
+/// Not the SDK's own five seconds per provider: three providers would be the
+/// whole 15s grace period a terminating host pod gets, and
+/// [`crate::host::Host::stop`] still has to unbind its workloads inside it.
+pub const FLUSH_BUDGET: Duration = Duration::from_secs(2);
+
+/// [`flush`], bounded: hands the exporters at most `budget` to deliver what
+/// they were still batching, and answers whether they finished.
+///
+/// A blocking thread, because `flush` blocks: the OTLP exporter drains over the
+/// connection this runtime has to keep polling. `false` covers both a budget
+/// that ran out and an exporter that panicked on its way out — either way the
+/// caller is leaving without the telemetry.
+pub async fn flush_within(budget: Duration) -> bool {
+    let flushed = tokio::task::spawn_blocking(flush);
+    matches!(tokio::time::timeout(budget, flushed).await, Ok(Ok(())))
 }
 
 /// Set once by [`initialize_observability`], so [`flush`] can reach the
@@ -574,6 +594,16 @@ mod tests {
             .iter()
             .map(|kv| (kv.key.to_string(), kv.value.to_string()))
             .collect()
+    }
+
+    /// The budget bounds the flush; it is not spent waiting on one. A process
+    /// that configured no exporter — every `wash` invocation without `OTEL_*`
+    /// set — has nothing to hand over and leaves on a signal at once.
+    #[tokio::test]
+    async fn flushing_without_an_exporter_does_not_spend_the_budget() {
+        let started = std::time::Instant::now();
+        assert!(flush_within(FLUSH_BUDGET).await);
+        assert!(started.elapsed() < FLUSH_BUDGET);
     }
 
     /// The scheme every guest-execution measurement shares, pinned by key.

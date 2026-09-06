@@ -1,10 +1,10 @@
 //! Shutdown signals for the commands that run until they are told to stop.
 
 use std::future::Future;
-use std::time::Duration;
 
 use anyhow::Context as _;
 use tokio::sync::oneshot;
+use wash_runtime::observability::{FLUSH_BUDGET, flush_within};
 
 /// What a process leaving on the signal it was given exits with.
 const INTERRUPTED: i32 = 130;
@@ -16,22 +16,14 @@ pub struct Shutdown {
     ready: oneshot::Sender<()>,
 }
 
-/// What a signal will wait for the OTel exporters before leaving without them.
-///
-/// Only ever spent when an exporter was configured. The host's termination
-/// grace period is 15s and `Host::stop` needs most of it, so this cannot be the
-/// SDK's own 5s-per-provider budget.
-const FLUSH_BUDGET: Duration = Duration::from_secs(2);
-
 /// Ends this process, giving the OTel exporters a bounded chance to hand over
 /// what they were still batching — the spans and logs that say what the signal
 /// interrupted.
 ///
-/// `flush` blocks, so it goes to a blocking thread: the OTLP exporter drains
-/// over a connection this runtime has to keep polling.
+/// Ending the process is this binary's own decision, so it stays here; how long
+/// the exporters get, and why, belongs to the runtime that configured them.
 async fn exit(code: i32) -> ! {
-    let flushed = tokio::task::spawn_blocking(wash_runtime::observability::flush);
-    if tokio::time::timeout(FLUSH_BUDGET, flushed).await.is_err() {
+    if !flush_within(FLUSH_BUDGET).await {
         eprintln!("observability did not flush within {FLUSH_BUDGET:?}; exiting without it");
     }
     std::process::exit(code)
