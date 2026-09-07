@@ -7,7 +7,7 @@ use crate::host::{Host, HostApi, HostConfig, WorkloadReservation};
 use crate::oci::{self, OciConfig};
 use crate::plugin::HostPlugin;
 use anyhow::{Context as _, anyhow};
-use futures::StreamExt as _;
+use futures::{FutureExt as _, StreamExt as _};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -263,6 +263,15 @@ impl ClusterHostBuilder {
     }
 }
 
+/// Why the command loop stopped turning. Both run the same shutdown; they
+/// differ only in what the host reports afterwards.
+enum Ended {
+    /// The cleanup future was awaited.
+    Requested,
+    /// The HTTP ingress' accept loop returned.
+    IngressStopped,
+}
+
 pub struct ClusterHost {
     prepared_host: Host,
     nats_client: Arc<async_nats::Client>,
@@ -363,7 +372,14 @@ impl ClusterHost {
                 let heartbeat_slot = Arc::new(tokio::sync::Semaphore::new(1));
                 let cleanup_slot = Arc::new(tokio::sync::Semaphore::new(1));
 
-                loop {
+                // Built once and pinned rather than rebuilt every turn, over an
+                // owned handle so the shutdown after the loop can still consume
+                // `host`.
+                let http_handler = Arc::clone(&host.http_handler);
+                let mut ingress_stopped =
+                    std::pin::pin!(async move { http_handler.stopped().await });
+
+                let ended = loop {
                     // Every turn, whichever branch woke it. The heartbeat timer
                     // alone guarantees one per interval, so silence here means
                     // the loop itself has stopped — which is what `/livez`
@@ -373,63 +389,13 @@ impl ClusterHost {
                     }
                     tokio::select! {
                         // Shutdown signal
-                        _ = &mut one_shot_rx => {
-                            if let Err(e) = api_subscription.unsubscribe().await {
-                                error!("failed to unsubscribe from API requests: {e}");
-                            }
-                            // Anything still queued gives its workload id back
-                            // and returns rather than starting something this
-                            // host is about to tear down.
-                            starts.close();
-                            let drained = tokio::time::timeout(COMMAND_DRAIN_TIMEOUT, async {
-                                while let Some(finished) = commands.join_next().await {
-                                    if let Err(e) = finished {
-                                        error!("command task failed during shutdown: {e}");
-                                    }
-                                }
-                            })
-                            .await;
-                            if drained.is_err() {
-                                warn!(
-                                    "commands still running after {COMMAND_DRAIN_TIMEOUT:?}; \
-                                     abandoning them to stop the host"
-                                );
-                                commands.abort_all();
-                                // `abort_all` only asks. Wait for the tasks to
-                                // reach their next await and unwind, or
-                                // `host.stop()` unbinds plugins underneath one
-                                // still binding them.
-                                //
-                                // Bounded: an aborted task cancels at its next
-                                // await, and a command inside a synchronous
-                                // compile has none. Waiting it out holds the
-                                // shutdown past the pod's grace period, so
-                                // `host.stop()` never runs at all.
-                                let unwound = tokio::time::timeout(
-                                    COMMAND_ABORT_TIMEOUT,
-                                    async {
-                                        while let Some(finished) = commands.join_next().await {
-                                            // A panic while unwinding still
-                                            // matters: the task may hold a
-                                            // workload id it never released.
-                                            if let Err(e) = finished
-                                                && !e.is_cancelled()
-                                            {
-                                                error!("aborted command task failed: {e}");
-                                            }
-                                        }
-                                    },
-                                )
-                                .await;
-                                if unwound.is_err() {
-                                    warn!(
-                                        "commands still unwinding {COMMAND_ABORT_TIMEOUT:?} after \
-                                         abort; stopping the host without them"
-                                    );
-                                }
-                            }
-                            return host.stop().await.context("failed to stop host");
-                        }
+                        _ = &mut one_shot_rx => break Ended::Requested,
+                        // The accept loop returned and nothing restarts it, so
+                        // this host would hold every workload it was given,
+                        // keep heartbeating, and serve no HTTP for as long as
+                        // it runs. Stopping is what puts those workloads on a
+                        // host that can serve them; they are lost either way.
+                        () = &mut ingress_stopped => break Ended::IngressStopped,
                         // Reaps finished commands. A panicked one is fatal: it
                         // may have died holding a workload id it claimed and
                         // never committed or released, and no later stop can
@@ -526,6 +492,82 @@ impl ClusterHost {
                                 }
                             });
                         }
+                    }
+                };
+
+                // `wash host` watches the same accept loop and asks for a
+                // shutdown the moment it ends, so both branches above can be
+                // ready at once and `select!` picks between them at random.
+                // Which one fired is therefore not evidence of anything; the
+                // ingress itself is. Only checked on the `Requested` path, so
+                // the future is never polled after it has already completed.
+                let ended = match ended {
+                    Ended::Requested if ingress_stopped.as_mut().now_or_never().is_some() => {
+                        Ended::IngressStopped
+                    }
+                    ended => ended,
+                };
+
+                if let Err(e) = api_subscription.unsubscribe().await {
+                    error!("failed to unsubscribe from API requests: {e}");
+                }
+                // Anything still queued gives its workload id back and returns
+                // rather than starting something this host is about to tear
+                // down.
+                starts.close();
+                let drained = tokio::time::timeout(COMMAND_DRAIN_TIMEOUT, async {
+                    while let Some(finished) = commands.join_next().await {
+                        if let Err(e) = finished {
+                            error!("command task failed during shutdown: {e}");
+                        }
+                    }
+                })
+                .await;
+                if drained.is_err() {
+                    warn!(
+                        "commands still running after {COMMAND_DRAIN_TIMEOUT:?}; \
+                         abandoning them to stop the host"
+                    );
+                    commands.abort_all();
+                    // `abort_all` only asks. Wait for the tasks to reach their
+                    // next await and unwind, or `host.stop()` unbinds plugins
+                    // underneath one still binding them.
+                    //
+                    // Bounded: an aborted task cancels at its next await, and a
+                    // command inside a synchronous compile has none. Waiting it
+                    // out holds the shutdown past the pod's grace period, so
+                    // `host.stop()` never runs at all.
+                    let unwound = tokio::time::timeout(COMMAND_ABORT_TIMEOUT, async {
+                        while let Some(finished) = commands.join_next().await {
+                            // A panic while unwinding still matters: the task
+                            // may hold a workload id it never released.
+                            if let Err(e) = finished
+                                && !e.is_cancelled()
+                            {
+                                error!("aborted command task failed: {e}");
+                            }
+                        }
+                    })
+                    .await;
+                    if unwound.is_err() {
+                        warn!(
+                            "commands still unwinding {COMMAND_ABORT_TIMEOUT:?} after \
+                             abort; stopping the host without them"
+                        );
+                    }
+                }
+                let stopped = host.stop().await.context("failed to stop host");
+                match ended {
+                    Ended::Requested => stopped,
+                    Ended::IngressStopped => {
+                        // Stopped first either way, so the workloads unbind
+                        // cleanly; the error is what tells whoever owns this
+                        // host that it did not stop because it was asked to.
+                        stopped?;
+                        Err(anyhow!(
+                            "HTTP ingress stopped accepting connections; \
+                             the host can no longer serve traffic"
+                        ))
                     }
                 }
             }

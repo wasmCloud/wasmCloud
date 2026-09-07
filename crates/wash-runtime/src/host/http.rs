@@ -18,6 +18,7 @@
 //! 4. Managing the request/response lifecycle through WASI-HTTP
 //! ```
 
+use std::sync::atomic::AtomicBool;
 use std::{
     collections::{BTreeSet, HashMap},
     net::SocketAddr,
@@ -27,7 +28,6 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use std::sync::atomic::AtomicBool;
 
 use crate::engine::abandon::{AbandonFlag, AbandonOnDrop, DispatchedCall};
 use crate::host::allowed_hosts::AllowedHost;
@@ -756,6 +756,22 @@ pub trait HostHandler: Send + Sync + 'static {
     async fn start(&self) -> anyhow::Result<()>;
     /// Stop the HTTP server
     async fn stop(&self) -> anyhow::Result<()>;
+
+    /// Resolves once this handler's accept loop has stopped and will not run
+    /// again — whether it returned an error, returned cleanly, or panicked.
+    ///
+    /// The loop is spawned detached, so without this its exit is one log line:
+    /// the host keeps every workload it was given, keeps answering its control
+    /// plane, and serves no HTTP for as long as it runs. Whoever owns the host
+    /// watches this so the failure is acted on rather than only recorded; see
+    /// [`crate::washlet::ClusterHost`], which ends the host on it.
+    ///
+    /// Default: pending forever, which is right for a handler with no accept
+    /// loop to lose ([`NullServer`]).
+    async fn stopped(&self) {
+        std::future::pending().await
+    }
+
     /// Get the port on which the HTTP server is listening
     fn port(&self) -> u16;
 
@@ -1407,6 +1423,10 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         Ok(())
     }
 
+    async fn stopped(&self) {
+        self.connections.stopped().await;
+    }
+
     fn port(&self) -> u16 {
         self.addr.port()
     }
@@ -1682,10 +1702,14 @@ const READY_RECOVER_PERCENT: usize = 10;
 pub struct ConnectionLimit {
     max: usize,
     permits: Arc<Semaphore>,
-    /// Cleared when the accept loop returns. A ceiling with every permit free is
+    /// Set when the accept loop returns. A ceiling with every permit free is
     /// indistinguishable from a listener that stopped accepting, and the second
     /// is the more urgent of the two.
-    accepting: Arc<AtomicBool>,
+    ///
+    /// A watch rather than a flag because both questions get asked: `/readyz`
+    /// polls it per probe, and [`Self::stopped`] waits on it so the host can
+    /// act on an accept loop that ended without being asked to.
+    stopped: Arc<tokio::sync::watch::Sender<bool>>,
     /// Which side of the hysteresis below readiness is currently on. Shared,
     /// because the probe handler and the accept loop hold separate clones of
     /// the same limit.
@@ -1701,7 +1725,7 @@ impl ConnectionLimit {
         Self {
             max,
             permits: Arc::new(Semaphore::new(max)),
-            accepting: Arc::new(AtomicBool::new(true)),
+            stopped: Arc::new(tokio::sync::watch::Sender::new(false)),
             has_headroom: Arc::new(AtomicBool::new(true)),
             offered: opentelemetry::global::meter("wash-runtime")
                 .u64_counter("http.ingress.connections")
@@ -1715,8 +1739,29 @@ impl ConnectionLimit {
 
     /// Record that the accept loop is no longer running.
     fn stopped_accepting(&self) {
-        self.accepting
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.stopped.send_replace(true);
+    }
+
+    /// Whether the accept loop is still running.
+    ///
+    /// An embedder that runs no probe listener reads this — or waits on
+    /// [`Self::stopped`] — to learn what the host otherwise only logs.
+    pub fn accepting(&self) -> bool {
+        !*self.stopped.borrow()
+    }
+
+    /// Resolves once the accept loop has stopped, immediately if it already
+    /// has.
+    ///
+    /// The loop is spawned detached and nothing restarts it, so this resolving
+    /// means the host will serve no more HTTP for as long as it runs. See
+    /// [`crate::host::http::HostHandler::stopped`], which is how that reaches
+    /// the host.
+    pub async fn stopped(&self) {
+        let mut stopped = self.stopped.subscribe();
+        // `Err` is the sender dropped, which cannot happen through a `&self`
+        // holding it — and would mean the same thing if it could.
+        let _ = stopped.wait_for(|stopped| *stopped).await;
     }
 
     /// Take a slot for an accepted connection, or `None` at the ceiling.
@@ -1755,7 +1800,7 @@ impl std::fmt::Debug for ConnectionLimit {
 /// with capacity.
 impl crate::host::probes::ReadinessCheck for ConnectionLimit {
     fn name(&self) -> &'static str {
-        if self.accepting.load(std::sync::atomic::Ordering::Relaxed) {
+        if self.accepting() {
             "http_ingress_saturated"
         } else {
             "http_ingress_stopped"
@@ -1775,7 +1820,7 @@ impl crate::host::probes::ReadinessCheck for ConnectionLimit {
     /// waits for [`READY_RECOVER_PERCENT`] of its ceiling to come back.
     fn ready(&self) -> bool {
         use std::sync::atomic::Ordering::Relaxed;
-        if !self.accepting.load(Relaxed) {
+        if !self.accepting() {
             return false;
         }
         // Never above the ceiling, so a host too small for the percentage still
@@ -1801,11 +1846,11 @@ impl crate::host::probes::ReadinessCheck for ConnectionLimit {
     /// listener goes on satisfying. Left to readiness, it keeps being given
     /// workloads that report Ready and are unreachable.
     fn unrecoverable(&self) -> bool {
-        !self.accepting.load(std::sync::atomic::Ordering::Relaxed)
+        !self.accepting()
     }
 }
 
-/// Clears [`ConnectionLimit`]'s accepting flag however the accept loop ends.
+/// Marks [`ConnectionLimit`] stopped however the accept loop ends.
 ///
 /// A guard rather than a statement after the await: a panicking task unwinds
 /// past the statement, leaving readiness reporting a healthy idle host.
@@ -3187,6 +3232,45 @@ mod tests {
             server.nodelay().unwrap(),
             "run_http_server must set TCP_NODELAY on accepted connections"
         );
+    }
+
+    /// However the accept loop ends, it has to be findable. It is spawned
+    /// detached and nothing restarts it, so a host that only logged the exit
+    /// holds every workload it was given, keeps answering its control plane,
+    /// and serves no HTTP for the rest of its life.
+    #[tokio::test]
+    async fn a_stopped_accept_loop_is_observable_and_unrecoverable() {
+        use crate::host::probes::ReadinessCheck as _;
+
+        let ingress = Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
+            .build()
+            .await
+            .unwrap();
+        let limit = ingress.connection_limit();
+
+        assert!(limit.accepting());
+        assert!(limit.ready(), "a fresh ingress has room");
+        assert!(!limit.unrecoverable());
+
+        ingress.start().await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), ingress.stopped())
+                .await
+                .is_err(),
+            "a running accept loop must not report itself stopped"
+        );
+
+        ingress.stop().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), ingress.stopped())
+            .await
+            .expect("the accept loop's exit has to reach whoever is watching for it");
+
+        assert!(!limit.accepting());
+        assert!(!limit.ready());
+        assert_eq!(limit.name(), "http_ingress_stopped");
+        // The distinction from saturation: a full ingress empties, this does
+        // not — so it is a reason to be replaced, not only to leave the Service.
+        assert!(limit.unrecoverable());
     }
 
     /// A host at its ingress ceiling has to keep accepting and close what it

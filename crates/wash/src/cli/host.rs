@@ -1011,7 +1011,9 @@ impl CliCommand for HostCommand {
         let probe = self.probe_addr.map(|addr| {
             let mut state =
                 wash_runtime::host::probes::ProbeState::default().with_liveness(liveness);
-            if let Some(connections) = ingress_connections {
+            // Cloned, not moved: the ingress is also what this command watches
+            // for an accept loop that ends on its own, below.
+            if let Some(connections) = ingress_connections.clone() {
                 state = state.with_readiness(Arc::new(connections));
             }
             (addr, state)
@@ -1043,7 +1045,24 @@ impl CliCommand for HostCommand {
             state.started();
         }
 
-        shutdown.await;
+        // A signal is not the only way this ends. An ingress accept loop that
+        // returns stops the host from under this — every workload unbound —
+        // and waiting for a signal that is never coming would leave a live
+        // process holding nothing and serving nothing. `host_cleanup` cannot be
+        // raced here instead: awaiting it is what *asks* for the shutdown.
+        let ingress_stopped = async {
+            match &ingress_connections {
+                Some(connections) => connections.stopped().await,
+                None => std::future::pending().await,
+            }
+        };
+        let stopped_itself = tokio::select! {
+            () = shutdown => false,
+            () = ingress_stopped => {
+                tracing::error!("HTTP ingress stopped accepting connections; stopping the host");
+                true
+            }
+        };
 
         // Reported before the wait, not after: the point of the wait is that
         // the host is still serving while everything upstream learns it is
@@ -1051,7 +1070,10 @@ impl CliCommand for HostCommand {
         if let Some(state) = &probe_state {
             state.drain();
         }
-        if !self.drain_delay.is_zero() {
+        // Nothing to keep serving while the endpoint is withdrawn: the ingress
+        // that would have served it is the thing that died, and the host has
+        // already stopped itself.
+        if !stopped_itself && !self.drain_delay.is_zero() {
             info!(delay = ?self.drain_delay, "Draining...");
             tokio::time::sleep(self.drain_delay).await;
         }

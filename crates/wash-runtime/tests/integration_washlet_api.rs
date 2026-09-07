@@ -37,6 +37,7 @@ use testcontainers::{
     core::{IntoContainerPort, WaitFor},
     runners::AsyncRunner,
 };
+use wash_runtime::host::http::{DevRouter, HostHandler, Ingress};
 use wash_runtime::washlet::{
     COMMAND_DRAIN_TIMEOUT, ClusterHostBuilder, heartbeat_subject, rpc_subject, types::v2,
 };
@@ -54,6 +55,8 @@ struct TestHarness {
     /// washlet publishes on its immediate first tick.
     heartbeat_sub: async_nats::Subscriber,
     shutdown: Pin<Box<dyn Future<Output = Result<()>> + Send>>,
+    /// Present only under [`TestHarnessBuilder::with_ingress`].
+    ingress: Option<Arc<dyn HostHandler>>,
     _container: ContainerAsync<GenericImage>,
 }
 
@@ -64,6 +67,7 @@ struct TestHarness {
 struct TestHarnessBuilder {
     heartbeat_interval: Option<Duration>,
     max_concurrent_starts: Option<usize>,
+    ingress: bool,
 }
 
 impl TestHarnessBuilder {
@@ -74,6 +78,13 @@ impl TestHarnessBuilder {
 
     fn with_max_concurrent_starts(mut self, starts: usize) -> Self {
         self.max_concurrent_starts = Some(starts);
+        self
+    }
+
+    /// Give the host an HTTP ingress on an ephemeral port, kept on
+    /// [`TestHarness::ingress`] so a test can stop it out from under the host.
+    fn with_ingress(mut self) -> Self {
+        self.ingress = true;
         self
     }
 
@@ -116,6 +127,17 @@ impl TestHarnessBuilder {
         if let Some(starts) = self.max_concurrent_starts {
             builder = builder.with_max_concurrent_starts(starts);
         }
+        let mut ingress = None;
+        if self.ingress {
+            let handler = Arc::new(
+                Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse()?)
+                    .build()
+                    .await
+                    .context("failed to bind the test ingress")?,
+            );
+            builder = builder.with_http_handler(Arc::clone(&handler) as Arc<dyn HostHandler>);
+            ingress = Some(handler as Arc<dyn HostHandler>);
+        }
         let cluster_host = builder.build().context("failed to build cluster host")?;
         let host_id = cluster_host.host().id().to_string();
 
@@ -140,6 +162,7 @@ impl TestHarnessBuilder {
             host_id,
             heartbeat_sub,
             shutdown: Box::pin(shutdown),
+            ingress,
             _container: container,
         };
         harness.wait_for_api().await?;
@@ -790,6 +813,110 @@ async fn heartbeat_reports_identity_and_workload_count() -> Result<()> {
     assert_eq!(refreshed.workload_count, 1);
 
     harness.shutdown().await
+}
+
+/// An ingress accept loop that ends has to end the host with it.
+///
+/// The loop is spawned detached and nothing restarts it, so a host that only
+/// logged the exit would hold every workload it was given and keep
+/// heartbeating — the operator sees a healthy host — while serving no HTTP for
+/// the rest of its life. Stopping is what gets those workloads onto a host that
+/// can serve them; they are lost either way.
+///
+/// Stopping the ingress directly is the same exit an error or a panic takes:
+/// `AcceptingGuard` drops however the loop ends.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn a_stopped_ingress_stops_the_host() -> Result<()> {
+    let mut harness = TestHarness::builder().with_ingress().start().await?;
+    let ingress = harness
+        .ingress
+        .clone()
+        .context("the harness was built with an ingress")?;
+
+    // Serving normally first, so what follows is the ingress dying and not a
+    // host that never came up.
+    harness.heartbeat().await?;
+    ingress.stop().await.context("failed to stop the ingress")?;
+
+    // Nothing here asks the host to shut down — awaiting the cleanup future
+    // would. It has to end on its own, and it unsubscribes from its API subject
+    // on the way out, so an unanswered request is the host gone rather than the
+    // host busy.
+    tokio::time::timeout(COMMAND_DRAIN_TIMEOUT + ABANDON_MARGIN, async {
+        loop {
+            let probe = v2::WorkloadStatusRequest {
+                workload_id: "washlet-api-e2e-ingress-probe".to_string(),
+            };
+            let answered: Result<v2::WorkloadStatusResponse> = rpc(
+                &harness.api_client,
+                harness.subject("workload.status"),
+                &probe,
+            )
+            .await;
+            if answered.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .context("the host kept serving its API after its ingress stopped accepting")?;
+
+    // Only now, so this joins the finished loop rather than racing a shutdown
+    // request against it.
+    let stopped = tokio::time::timeout(
+        COMMAND_DRAIN_TIMEOUT + ABANDON_MARGIN,
+        &mut harness.shutdown,
+    )
+    .await
+    .context("the host did not finish stopping after its ingress stopped accepting")?;
+
+    let err = stopped.expect_err("a host that lost its ingress must not report a clean stop");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("ingress"),
+        "the error has to name what ended the host, got: {message}"
+    );
+    Ok(())
+}
+
+/// A shutdown asked for at the same moment must not mask a dead ingress.
+///
+/// `wash host` watches the same accept loop, so it requests a shutdown as soon
+/// as the loop ends — both `select!` branches in the command loop go ready at
+/// once, and it picks between them at random. Reporting a clean stop for a host
+/// that lost its ingress is the one thing this must not do, and it would do it
+/// about half the time if the branch that fired were the evidence.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn a_shutdown_racing_a_dead_ingress_still_reports_the_ingress() -> Result<()> {
+    let mut harness = TestHarness::builder().with_ingress().start().await?;
+    let ingress = harness
+        .ingress
+        .clone()
+        .context("the harness was built with an ingress")?;
+
+    harness.heartbeat().await?;
+    ingress.stop().await.context("failed to stop the ingress")?;
+
+    // Deliberately no wait: awaiting the cleanup future is what asks for the
+    // shutdown, so this is the race itself rather than a test around it.
+    let stopped = tokio::time::timeout(
+        COMMAND_DRAIN_TIMEOUT + ABANDON_MARGIN,
+        &mut harness.shutdown,
+    )
+    .await
+    .context("the host did not stop after its ingress stopped accepting")?;
+
+    let err = stopped
+        .expect_err("a shutdown racing a dead ingress must still report the ingress, not success");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("ingress"),
+        "the error has to name what ended the host, got: {message}"
+    );
+    Ok(())
 }
 
 /// Shutdown waits for the commands already running — but a start stalled on an
