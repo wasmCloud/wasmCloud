@@ -1,0 +1,37 @@
+package acme:clirun@0.1.0;
+
+/// The control surface a host component plugin exports so a test can drive its
+/// `wasi:cli/run` dispatching from an ordinary request. The dispatch itself
+/// goes over `wasi:cli/run`, so this package carries none of it.
+/// A workload-facing interface whose failure arm carries no payload while its
+/// success arm does — the component model's `result<T>` form. The host has to
+/// be able to report a failure through it, which means writing an `err` with
+/// nothing in it into a slot typed to hold a `string` on the `ok` side.
+interface probe {
+    /// Answer with something, or trap. Exported by a workload component and
+    /// called by the plugin across the store boundary.
+    check: async func() -> result<string>;
+}
+
+interface control {
+    /// Run the `wasi:cli/run` export of the workload `id`, named with a
+    /// `wasmcloud:host/workload-call` target handle. Answers `"ok"`, `"err"`
+    /// (the component's own failure), or `"unroutable:{id}"` when nothing of
+    /// that workload exports `run`.
+    run-workload: async func(id: string) -> string;
+
+    /// The same, with no target handle held, so the run goes to the workload
+    /// whose `control` call this is.
+    run-inherited: async func() -> string;
+
+    /// What the plugin's OWN `wasi:cli/run` loop has dispatched so far, one
+    /// entry per workload as `"{id}={count}"`. Non-empty proves the host
+    /// co-drives a plugin's run loop and that the loop can reach a workload
+    /// from outside any inbound call.
+    dispatched: async func() -> list<string>;
+
+    /// Call `probe.check` on the workload `id`. Answers `"ok:{value}"` or
+    /// `"err"` — the latter is the host reporting a failure through a
+    /// `result<T>`, as a value rather than a trap.
+    probe-workload: async func(id: string) -> string;
+}

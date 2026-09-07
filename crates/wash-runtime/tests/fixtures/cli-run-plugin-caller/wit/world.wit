@@ -1,0 +1,12 @@
+package acme:cliruncaller@0.1.0;
+
+/// Workload component that drives the plugin's control surface over HTTP. It
+/// exports no `wasi:cli/run` itself — the workload's *other* component
+/// (`cli-run-callee`) does, which is what the plugin's calls reach. The split
+/// makes routing pick a component by its export rather than land on the caller.
+world caller {
+    import wasi:http/types@0.3.0;
+    import acme:clirun/control@0.1.0;
+    export acme:clirun/probe@0.1.0;
+    export wasi:http/handler@0.3.0;
+}

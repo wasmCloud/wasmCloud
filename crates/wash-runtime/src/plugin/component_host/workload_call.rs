@@ -21,6 +21,11 @@
 //!   whose *lifetime* is the routing scope, which is what lets a plugin's own
 //!   `wasi:cli/run` dispatch to a workload with no inbound call to inherit.
 //!
+//! `wasi:cli/run` is a workload-facing import like any other: a plugin
+//! importing it runs the component of a workload that exports `run`. It is the
+//! one interface of `wasi:cli` the WASI base does not serve, so it alone
+//! escapes [`super::is_base_wasi`] — see [`super::is_cli_run`].
+//!
 //! The call itself reuses the workload↔workload machinery unchanged: each
 //! function resolves to a [`LinkedExportInvocation`] pinned to the ephemeral
 //! path, so a call runs on one of the callee's warm instances (or a store built
@@ -202,6 +207,22 @@ impl WorkloadCalls {
             let (component_name, export_name) =
                 match workload.item_exporting(item_id, &import.wit).await {
                     ItemExport::Component { name, export } => (name, export),
+                    // Every service exports `wasi:cli/run` — that is what makes
+                    // it a service — so warning would fire for each one a
+                    // run-importing plugin binds, on the normal shape where a
+                    // component of the same workload is the real target. It is
+                    // still the whole story when no component exports `run`, so
+                    // the case stays traceable rather than silent.
+                    ItemExport::Service if import.wit.is_cli_run() => {
+                        debug!(
+                            id = self.plugin_id,
+                            workload_id = workload.id(),
+                            service = item_id,
+                            "skipping a workload's service for wasi:cli/run; only a component's \
+                             run export is callable from a plugin"
+                        );
+                        continue;
+                    }
                     ItemExport::Service => {
                         // Loudly, not silently: the workload deploys and reports
                         // healthy either way, so without this the only symptom
@@ -501,6 +522,10 @@ pub(super) enum ErrorShape {
     /// the reason is simply lost. Prefer `call-error` when you own the
     /// interface.
     Borrowed(BorrowedCase),
+    /// An error arm carrying no payload — `result<T>` or a bare `result` — so
+    /// the plugin learns only that the call did not succeed. `wasi:cli/run` is
+    /// shaped this way.
+    Empty,
 }
 
 /// The case of an interface's own error type the host builds, and how.
@@ -539,20 +564,32 @@ const PREFERRED_BORROWED_CASES: &[&str] = &["internal-error", "internal", "unkno
 ///
 /// A workload-facing import must return exactly one `result` whose error arm the
 /// host can build a value of, because the host answers a failed call with a
-/// value rather than a trap. Three ways that holds, in descending order of how
+/// value rather than a trap. Four ways that holds, in descending order of how
 /// much the plugin learns:
 ///
 /// 1. the `call-error` variant, recognised structurally — by its case names and
 ///    their `option<string>` payloads — so a plugin may `use` the host's
 ///    definition or restate it and either links;
-/// 2. a plain `string`; or
+/// 2. a plain `string`;
 /// 3. the interface's own error type, if any one of its cases is something the
-///    host knows how to construct ([`borrowed_case`]).
+///    host knows how to construct ([`borrowed_case`]); or
+/// 4. an error arm with no payload, which says only that the call failed — the
+///    shape `wasi:cli/run`'s `run: async func() -> result` has.
+///
+/// All four `result` forms the component model spells are accepted:
+/// `result<T, E>` and `result<_, E>` through rungs 1-3 by their error type,
+/// `result<T>` and a bare `result` through rung 4.
 pub(super) fn error_shape(result_tys: &[Type]) -> Option<ErrorShape> {
     let [Type::Result(result)] = result_tys else {
         return None;
     };
-    match result.err()? {
+    // `result<T>` and a bare `result` both have an error arm; it just carries
+    // no payload. Whether an ok type is present says nothing about the host's
+    // ability to report a failure.
+    let Some(err) = result.err() else {
+        return Some(ErrorShape::Empty);
+    };
+    match err {
         Type::String => Some(ErrorShape::Message),
         Type::Variant(variant) => {
             let cases: Vec<(&str, Option<Type>)> =
@@ -640,12 +677,33 @@ fn report_failure(
     detail: String,
 ) -> wasmtime::Result<()> {
     let err = match shape {
-        ErrorShape::Message => Val::String(format!("{HOST_FAILURE_PREFIX}{detail}")),
-        ErrorShape::Structured => Val::Variant(
+        // Nowhere to put the reason: every other shape hands the plugin the
+        // detail, so this log is the only record. A call that could not be
+        // routed at all is a deploy the operator can fix, and the plugin cannot
+        // tell it from a run that genuinely failed — so say so loudly, and
+        // leave the failures the callee itself produced at debug.
+        ErrorShape::Empty => {
+            match failure {
+                CallFailure::NoTarget | CallFailure::NotExported | CallFailure::NotRunning => {
+                    warn!(
+                        %detail,
+                        case = failure.case(),
+                        "workload-facing call could not be routed, and its signature has no room \
+                         to say why"
+                    );
+                }
+                CallFailure::Failed | CallFailure::Other => {
+                    debug!(%detail, case = failure.case(), "workload-facing call failed");
+                }
+            }
+            None
+        }
+        ErrorShape::Message => Some(Val::String(format!("{HOST_FAILURE_PREFIX}{detail}"))),
+        ErrorShape::Structured => Some(Val::Variant(
             failure.case().to_string(),
             Some(Box::new(Val::Option(Some(Box::new(Val::String(detail)))))),
-        ),
-        ErrorShape::Borrowed(BorrowedCase { case, build }) => {
+        )),
+        ErrorShape::Borrowed(BorrowedCase { case, build }) => Some({
             let case = case.to_string();
             // The prefix is built only for a case with room for it; the others
             // drop the reason entirely, which is the cost of borrowing a type
@@ -660,12 +718,12 @@ fn report_failure(
                     Some(Box::new(Val::Option(Some(Box::new(Val::String(detail())))))),
                 ),
             }
-        }
+        }),
     };
     let slot = results.first_mut().ok_or_else(|| {
         wasmtime::format_err!("workload-facing call has no result slot to report a failure through")
     })?;
-    *slot = Val::Result(Err(Some(Box::new(err))));
+    *slot = Val::Result(Err(err.map(Box::new)));
     Ok(())
 }
 
@@ -1342,6 +1400,34 @@ mod tests {
         assert!(
             shape_of("(result (result string (error u32)))").is_none(),
             "the host cannot synthesise an error type it does not know how to build"
+        );
+
+        // All four `result` forms the component model spells, each carrying an
+        // error arm the host can build — the payload-less two through `Empty`.
+        assert!(
+            matches!(
+                shape_of("(result (result string (error string)))"),
+                Some(ErrorShape::Message)
+            ),
+            "result<T, E>"
+        );
+        assert!(
+            matches!(
+                shape_of("(result (result (error string)))"),
+                Some(ErrorShape::Message)
+            ),
+            "result<_, E>"
+        );
+        assert!(
+            matches!(
+                shape_of("(result (result string))"),
+                Some(ErrorShape::Empty)
+            ),
+            "result<T> — the error arm is there, it just carries nothing"
+        );
+        assert!(
+            matches!(shape_of("(result (result))"), Some(ErrorShape::Empty)),
+            "a bare result — what `wasi:cli/run` returns"
         );
     }
 
