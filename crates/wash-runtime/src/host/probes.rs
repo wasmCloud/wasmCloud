@@ -139,23 +139,41 @@ pub struct ProbeState {
     liveness: Option<Arc<Liveness>>,
     started: Arc<AtomicBool>,
     draining: Arc<AtomicBool>,
-    checks: Vec<Arc<dyn ReadinessCheck>>,
+    /// Shared with every clone, and appendable after cloning: a host hands one
+    /// clone to [`serve`] and keeps another, so a check registered on either
+    /// afterwards has to be one the listener answers from.
+    checks: Arc<arc_swap::ArcSwap<Vec<Arc<dyn ReadinessCheck>>>>,
 }
 
 impl ProbeState {
     /// Watch `liveness` for `/livez`. Without one, `/livez` reports alive
     /// whenever the listener can answer at all — still stronger than a TCP
     /// probe, which the kernel answers whether or not the runtime is running.
+    ///
+    /// Per-instance, unlike [`Self::register`]: this writes a field rather than
+    /// the shared check list, so set it before handing a clone to [`serve`].
+    /// Calling it on a clone afterwards leaves that listener answering `/livez`
+    /// from nothing at all.
     #[must_use]
     pub fn with_liveness(mut self, liveness: Arc<Liveness>) -> Self {
         self.liveness = Some(liveness);
         self
     }
 
-    /// Add a reason the host may be not-ready.
+    /// Add a reason the host may be not-ready, on this state and every clone
+    /// of it.
+    pub fn register(&self, check: Arc<dyn ReadinessCheck>) {
+        self.checks.rcu(|current| {
+            let mut checks = (**current).clone();
+            checks.push(Arc::clone(&check));
+            checks
+        });
+    }
+
+    /// [`Self::register`], for a caller still building the state up.
     #[must_use]
-    pub fn with_readiness(mut self, check: Arc<dyn ReadinessCheck>) -> Self {
-        self.checks.push(check);
+    pub fn with_readiness(self, check: Arc<dyn ReadinessCheck>) -> Self {
+        self.register(check);
         self
     }
 
@@ -190,6 +208,7 @@ impl ProbeState {
         }
         !self
             .checks
+            .load()
             .iter()
             .any(|check| check.unrecoverable() && !check.ready())
     }
@@ -203,6 +222,7 @@ impl ProbeState {
             return vec!["starting"];
         }
         self.checks
+            .load()
             .iter()
             .filter(|check| !check.ready())
             .map(|check| check.name())
@@ -407,6 +427,19 @@ mod tests {
 
         assert!(state.live(), "a draining host must not be restarted");
         assert_eq!(state.not_ready(), vec!["draining"]);
+    }
+
+    /// A host hands one clone to [`serve`] and keeps another to register on.
+    /// A check the listener cannot see is one that never fails a probe, which
+    /// is the silent half of getting this wrong.
+    #[test]
+    fn a_check_registered_after_a_clone_is_visible_to_it() {
+        let serving = ProbeState::default();
+        let held = serving.clone();
+        held.started();
+
+        held.register(gate("late", false));
+        assert_eq!(serving.not_ready(), vec!["late"]);
     }
 
     /// Draining is the same shape and the more common one: leave the Service,
