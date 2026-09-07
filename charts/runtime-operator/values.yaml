@@ -429,6 +429,18 @@ runtime:
   # in the first place. So liveness waits a good deal longer before calling a
   # host dead.
   #
+  # The body of a failed probe names the condition, so `kubectl describe pod`
+  # says which one without reaching for the host's logs. Readiness reports
+  # `starting`, `draining`, and `http_ingress_saturated` for a host at its
+  # connection ceiling. Liveness reports `stalled` for a host whose command loop
+  # has stopped turning.
+  #
+  # There is a second liveness condition, `http_ingress_stopped`, that a host
+  # pod will rarely show: an accept loop that returned is not coming back, so
+  # `wash host` notices and stops itself, and the pod is usually replaced by the
+  # process exiting before a probe is next polled. It is the backstop for a
+  # runtime embedded in something that does not watch its own ingress.
+  #
   # `liveness.enabled: false` leaves nothing to recycle a wedged host: the
   # operator deletes the *Host* of a host it stops hearing from, and its
   # workloads move, but the pod is not the operator's to delete and keeps

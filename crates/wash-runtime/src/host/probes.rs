@@ -4,10 +4,15 @@
 //! the listen backlog, which the kernel answers whether or not the process is
 //! running. This listener answers from what the host knows about itself.
 //!
-//! `/livez` is "restart me" and fails only when the command loop has stopped —
-//! the cure costs every workload on the host. `/readyz` is "stop sending me
-//! work" and fails while starting, while draining, and while the ingress is at
-//! its ceiling, which a TCP probe cannot express at all.
+//! `/livez` is "restart me" and the cure costs every workload on the host, so
+//! it fails for two things only: the command loop has stopped, or a readiness
+//! check calls itself [unrecoverable](ReadinessCheck::unrecoverable) — one that
+//! leaves the host out of rotation with nothing to put it back, where holding
+//! the workloads costs them the same and buys nothing.
+//!
+//! `/readyz` is "stop sending me work" and fails while starting, while
+//! draining, and for every registered check — the ingress at its ceiling —
+//! which a TCP probe cannot express at all.
 
 use core::time::Duration;
 use std::net::SocketAddr;
@@ -196,21 +201,28 @@ impl ProbeState {
         self.draining.store(true, Ordering::Relaxed);
     }
 
-    fn live(&self) -> bool {
-        if !self.liveness.as_ref().is_none_or(|l| l.alive()) {
-            return false;
-        }
-        // A draining host stops accepting because it was told to. Reading that
-        // as "restart me" would kill it mid-drain, which is the one thing
-        // `drain` exists to avoid.
+    /// Why this host should be restarted, or `None` while it should not.
+    ///
+    /// Named for the same reason [`Self::not_ready`] names its refusals: a
+    /// restart is the expensive answer, and an operator reading one should not
+    /// have to correlate it with the logs to learn which condition asked for it.
+    fn not_live(&self) -> Option<&'static str> {
+        // First, so it covers every condition below rather than only the ones
+        // that happen to follow it. A draining host stops accepting because it
+        // was told to, and its command loop stops beating the moment it starts
+        // unbinding plugins — reading either as "restart me" would kill it
+        // mid-drain, which is the one thing `drain` exists to avoid.
         if self.draining.load(Ordering::Relaxed) {
-            return true;
+            return None;
         }
-        !self
-            .checks
+        if self.liveness.as_ref().is_some_and(|l| !l.alive()) {
+            return Some("stalled");
+        }
+        self.checks
             .load()
             .iter()
-            .any(|check| check.unrecoverable() && !check.ready())
+            .find(|check| !check.ready() && check.unrecoverable())
+            .map(|check| check.name())
     }
 
     /// The checks currently refusing, empty when the host is ready.
@@ -238,8 +250,10 @@ fn text(status: StatusCode, body: impl Into<Bytes>) -> Response<Full<Bytes>> {
 
 fn answer(state: &ProbeState, req: &Request<hyper::body::Incoming>) -> Response<Full<Bytes>> {
     match req.uri().path() {
-        LIVEZ if state.live() => text(StatusCode::OK, "ok\n"),
-        LIVEZ => text(StatusCode::SERVICE_UNAVAILABLE, "stalled\n"),
+        LIVEZ => match state.not_live() {
+            None => text(StatusCode::OK, "ok\n"),
+            Some(reason) => text(StatusCode::SERVICE_UNAVAILABLE, format!("{reason}\n")),
+        },
         READYZ => match state.not_ready() {
             reasons if reasons.is_empty() => text(StatusCode::OK, "ok\n"),
             reasons => text(
@@ -387,7 +401,10 @@ mod tests {
         let state = ProbeState::default().with_readiness(saturated);
         state.started();
 
-        assert!(state.live(), "saturation is not a reason to restart");
+        assert!(
+            state.not_live().is_none(),
+            "saturation is not a reason to restart"
+        );
         assert_eq!(state.not_ready(), vec!["http_ingress_saturated"]);
     }
 
@@ -402,7 +419,11 @@ mod tests {
         let state = ProbeState::default().with_readiness(stopped);
         state.started();
 
-        assert!(!state.live(), "an ingress that cannot recover must restart");
+        assert_eq!(
+            state.not_live(),
+            Some("http_ingress_stopped"),
+            "an ingress that cannot recover must restart, and name why"
+        );
         assert_eq!(state.not_ready(), vec!["http_ingress_stopped"]);
     }
 
@@ -411,7 +432,7 @@ mod tests {
     fn an_unrecoverable_check_that_is_satisfied_leaves_the_host_live() {
         let state = ProbeState::default().with_readiness(unrecoverable_gate("ingress", true));
         state.started();
-        assert!(state.live());
+        assert!(state.not_live().is_none());
         assert!(state.not_ready().is_empty());
     }
 
@@ -425,8 +446,35 @@ mod tests {
         state.started();
         state.drain();
 
-        assert!(state.live(), "a draining host must not be restarted");
+        assert!(
+            state.not_live().is_none(),
+            "a draining host must not be restarted"
+        );
         assert_eq!(state.not_ready(), vec!["draining"]);
+    }
+
+    /// The other condition a drain has to survive, and the one that arrives on
+    /// its own: the command loop stops beating the moment it breaks out to
+    /// unbind plugins, so a host still inside its own shutdown goes stale by
+    /// definition. Restarting it there is the mid-drain kill `drain` exists to
+    /// prevent, so the drain has to be checked before the beat and not after.
+    #[test]
+    fn a_stale_beat_while_draining_is_the_shutdown_working() {
+        let liveness = Liveness::new(Duration::from_millis(50));
+        let state = ProbeState::default().with_liveness(Arc::clone(&liveness));
+        liveness.beat();
+        std::thread::sleep(Duration::from_millis(120));
+        assert_eq!(
+            state.not_live(),
+            Some("stalled"),
+            "precondition: the beat has gone stale"
+        );
+
+        state.drain();
+        assert!(
+            state.not_live().is_none(),
+            "a host inside its own shutdown must not be restarted for going quiet"
+        );
     }
 
     /// A host hands one clone to [`serve`] and keeps another to register on.
@@ -452,7 +500,10 @@ mod tests {
 
         state.drain();
         assert_eq!(state.not_ready(), vec!["draining"]);
-        assert!(state.live(), "a draining host must not be restarted");
+        assert!(
+            state.not_live().is_none(),
+            "a draining host must not be restarted"
+        );
     }
 
     /// Every refusing check is named, so a probe failure says which without
@@ -479,7 +530,10 @@ mod tests {
     fn a_host_that_has_not_started_is_not_ready() {
         let state = ProbeState::default().with_readiness(gate("ingress", true));
         assert_eq!(state.not_ready(), vec!["starting"]);
-        assert!(state.live(), "starting is not a reason to restart");
+        assert!(
+            state.not_live().is_none(),
+            "starting is not a reason to restart"
+        );
 
         state.started();
         assert!(state.not_ready().is_empty());
@@ -537,6 +591,16 @@ mod tests {
         assert!(ready.starts_with("HTTP/1.1 503"), "{ready}");
         assert!(ready.contains("http_ingress_saturated"), "{ready}");
 
+        // An unrecoverable refusal is the one that reaches `/livez`, and it
+        // names itself there the same way `/readyz` does. Registered on the
+        // state the test kept rather than the one `serve` was handed, which is
+        // how the cluster host registers its own — the listener has to answer
+        // from it.
+        state.register(unrecoverable_gate("http_ingress_stopped", false));
+        let live = get(addr, LIVEZ).await;
+        assert!(live.starts_with("HTTP/1.1 503"), "{live}");
+        assert!(live.contains("http_ingress_stopped"), "{live}");
+
         // A mistyped probe path must fail rather than pass against nothing.
         assert!(get(addr, "/healthz").await.starts_with("HTTP/1.1 404"));
 
@@ -550,26 +614,29 @@ mod tests {
     fn liveness_goes_stale_without_a_beat() {
         let liveness = Liveness::new(Duration::from_millis(50));
         let state = ProbeState::default().with_liveness(Arc::clone(&liveness));
-        assert!(state.live(), "a fresh signal starts alive");
+        assert!(state.not_live().is_none(), "a fresh signal starts alive");
 
         // Still starting, not yet stalled: a host slow to bind plugins and pull
         // images has not failed, and restarting it for that is how a slow start
         // becomes a crash loop.
         std::thread::sleep(Duration::from_millis(120));
         assert!(
-            state.live(),
+            state.not_live().is_none(),
             "a loop that has not started yet is not stalled"
         );
 
         liveness.beat();
         std::thread::sleep(Duration::from_millis(120));
-        assert!(!state.live(), "silence past the bound is a stalled host");
+        assert!(
+            state.not_live().is_some(),
+            "silence past the bound is a stalled host"
+        );
 
         liveness.beat();
-        assert!(state.live(), "a beat brings it back");
+        assert!(state.not_live().is_none(), "a beat brings it back");
 
         assert!(
-            ProbeState::default().live(),
+            ProbeState::default().not_live().is_none(),
             "with nothing to watch, answering at all is the signal"
         );
     }
