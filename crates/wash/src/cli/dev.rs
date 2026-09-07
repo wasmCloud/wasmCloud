@@ -87,6 +87,15 @@ impl CliCommand for DevCommand {
                 .with_context(|| format!("invalid dev.wasm_proposals entry {name:?}"))?;
             engine_builder = engine_builder.with_wasm_proposal(proposal);
         }
+        // `wash host` needs both an operator flag and the workload's
+        // `allowedHostLoopbackPorts`. In a dev session the developer is
+        // both parties, so the flag is redundant: the port list alone gates
+        // it, and an empty list still denies.
+        let socket_policy = Arc::new(wash_runtime::sockets::policy::SocketPolicy {
+            host_loopback_enabled: true,
+            ..Default::default()
+        });
+        engine_builder = engine_builder.with_socket_policy(socket_policy);
         let engine = engine_builder.build()?;
 
         let mut host_builder = Host::builder()
