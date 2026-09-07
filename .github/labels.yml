@@ -1,0 +1,322 @@
+# Single source of truth for this repo's labels: color, description, aliases,
+# and the path rules that apply them. labels-sync.yml reconciles the label set,
+# labeler.yml renders `rules` for actions/labeler, and labels.mjs validates
+# this file. A label with no `rules` is applied by hand; `aliases` renames an
+# existing label in place, keeping the issues and PRs already tagged with it.
+
+'upgrade-impact':
+  color: 'd8709f'
+  description: 'This PR has potential upgrade or downgrade impact for operators'
+  rules:
+    - changed-files:
+        - any-glob-to-any-file:
+            - 'runtime-operator/api/**/*_types.go'
+            - 'runtime-operator/api/**/groupversion_info.go'
+            - 'runtime-operator/api/**/zz_generated.deepcopy.go'
+            - 'runtime-operator/config/**'
+            - 'charts/**'
+            - '.github/scripts/runtime-operator-rbac-parity.mjs'
+            - 'deploy/**'
+            - 'runtime-operator/cmd/main.go'
+            - 'runtime-gateway/main.go'
+            # Host policy, quota, and observability knobs an operator tunes.
+            - 'crates/wash-runtime/src/observability.rs'
+            - 'crates/wash-runtime/src/timeouts.rs'
+            - 'crates/wash-runtime/src/config_source.rs'
+            - 'crates/wash-runtime/src/host/allowed_*.rs'
+            - 'crates/wash-runtime/src/host/egress_policy.rs'
+            - 'crates/wash-runtime/src/host/quota.rs'
+            - 'crates/wash-runtime/src/host/ports.rs'
+            - 'crates/wash-runtime/src/host/declared_port.rs'
+
+# Escape hatch for the crd-diff job in runtime-operator.yml.
+'crd-diff-override':
+  color: 'ff8c00'
+  description: 'Bypass the crd-diff CRD compatibility check on this PR'
+
+# Whether the schema change is COMPATIBLE is enforced separately, by
+# the crd-diff job in runtime-operator.yml.
+'area/crd':
+  color: '0b7285'
+  description: 'CRD schema; may require re-applying CRDs on upgrade'
+  rules:
+    - changed-files:
+        - any-glob-to-any-file:
+            - 'runtime-operator/api/**/*_types.go'
+            - 'runtime-operator/api/**/groupversion_info.go'
+            - 'runtime-operator/api/**/zz_generated.deepcopy.go'
+            - 'runtime-operator/config/crd/**'
+            - 'charts/runtime-operator/crds/**'
+
+# Overlaps area/crd on charts/runtime-operator/crds/ on purpose:
+# `helm upgrade` does not update CRDs under a chart's crds/ dir, so a
+# CRD bump is a chart concern too -- someone must apply it by hand.
+'area/helm':
+  color: '4b55df'
+  description: 'Impacts the Helm chart and user deployment experience'
+  aliases: ['helm']
+  rules:
+    - changed-files:
+        - any-glob-to-any-file:
+            - 'charts/**'
+
+# config/rbac is controller-gen output; the chart hand-maps it.
+'area/rbac':
+  color: 'a10d5c'
+  description: 'RBAC roles and bindings; may require re-applying on upgrade'
+  rules:
+    - changed-files:
+        - any-glob-to-any-file:
+            - 'runtime-operator/config/rbac/**'
+            - 'charts/runtime-operator/templates/**/*role*.yaml'
+            - 'charts/runtime-operator/templates/**/serviceaccount.yaml'
+            - '.github/scripts/runtime-operator-rbac-parity.mjs'
+
+'type:ci':
+  color: 'FBCA04'
+  description: 'This PR contains updates to GitHub CI'
+
+'type:docs':
+  color: 'EB8492'
+  description: 'This PR contains an update to documentation'
+
+'type:feature':
+  color: '8E611A'
+  description: 'This PR contains a new feature'
+
+'type:fix':
+  color: '7BD03B'
+  description: 'This PR contains a bug fix'
+
+'scope:control-interface':
+  color: 'd93f0b'
+  description: 'This PR contains a change to the control-interface'
+
+'scope:wash':
+  color: '26B4F1'
+  description: 'This PR contains a change to wash'
+
+'scope:wasmcloud':
+  color: '00C389'
+  description: 'This PR contains an update to wasmCloud or its libraries'
+
+'impact:breaking':
+  color: 'B60205'
+  description: 'This PR contains a breaking change'
+
+'RFC':
+  color: '105c6d'
+
+'rfc-accepted':
+  color: '0E8A16'
+  description: 'This RFC gathered consensus from maintainers and is accepted to begin work'
+
+'rfc-discussion-needed':
+  color: 'FBCA04'
+
+'rfc-proposed':
+  color: 'FEF2C0'
+  description: 'This issue is a newly proposed RFC and is awaiting comments, questions, and approval'
+
+'blocked/resource-support':
+  color: 'B60205'
+  description: 'Issues that are blocked on WIT resource supoprt in the Host'
+
+'blocked/wasi-p3':
+  color: 'B60205'
+  description: 'Issues blocked on WASI Preview3 specs/implementation'
+
+'blocked/wasi-standards':
+  color: 'B60205'
+  description: 'Issues blocked on WASI standard development/progress'
+
+'platform/windows':
+  color: '1D76DB'
+
+'provider-archive':
+  color: 'B4AC9F'
+  description: 'Issues pertaining to the provider-archive crate'
+
+'provider-sdk':
+  color: 'A76497'
+  description: 'Related to the provider-sdk'
+
+'provider-sqldb-postgres':
+  color: 'aaaaaa'
+
+'provider-wit-bindgen':
+  color: '9E7091'
+  description: 'Issues related to the provider-wit-bingen crate'
+
+'provider/blobstore-s3':
+  color: 'AAAAAA'
+
+'provider/lattice-controller':
+  color: '333333'
+
+'plugin-postgres':
+  color: 'aaaaaa'
+
+'plugin/messaging':
+  color: 'aaaaaa'
+
+'blocked':
+  color: 'F45E75'
+
+'blocking':
+  color: 'E3081F'
+
+'bug':
+  color: 'd73a4a'
+  description: 'Something isn''t working'
+
+'canary':
+  color: 'E5B952'
+
+'capability-providers':
+  color: '1AA156'
+  description: 'Issues related to in-tree capability providers'
+
+'ci':
+  color: '000000'
+
+'dependencies':
+  color: '0366d6'
+  description: 'Pull requests that update a dependency file'
+
+'do-not-merge':
+  color: 'B60205'
+  description: 'PR is not ready to be merged'
+
+'docker':
+  color: '21ceff'
+  description: 'Pull requests that update docker code'
+
+'documentation':
+  color: '0075ca'
+  description: 'Improvements or additions to documentation'
+
+'duplicate':
+  color: 'cfd3d7'
+  description: 'This issue or pull request already exists'
+
+'enhancement':
+  color: 'a2eeef'
+  description: 'New feature or request'
+
+'examples':
+  color: '3CEB35'
+  description: 'Related to example project(s)'
+
+'github-actions':
+  color: 'ededed'
+
+'github_actions':
+  color: '000000'
+  description: 'Pull requests that update GitHub Actions code'
+
+'go':
+  color: '16e2e2'
+  description: 'Pull requests that update Go code'
+
+'good first issue':
+  color: '7057ff'
+  description: 'Good for newcomers'
+
+'hacktoberfest':
+  color: 'eb6123'
+  description: 'This issue is specifically designated as a good issue for Hacktoberfest'
+
+'hacktoberfest-accepted':
+  color: 'eb6123'
+  description: 'This PR is specifically designated as a part of Hacktoberfest'
+
+'help wanted':
+  color: '008672'
+  description: 'Extra attention is needed'
+
+'host':
+  color: 'AAC98A'
+  description: 'Issues pertaining to the host runtime'
+
+'javascript':
+  color: '168700'
+  description: 'Pull requests that update Javascript code'
+
+'perf':
+  color: '74e0ac'
+
+'pinned':
+  color: '4F86DE'
+
+'question':
+  color: 'd876e3'
+  description: 'Further information is requested'
+
+'release-train':
+  color: 'e966e1'
+  description: 'Release automation'
+
+'roadmap':
+  color: '5471B6'
+  description: 'Issue is prioritized on the wasmCloud roadmap and should not be closed'
+
+'robustness':
+  color: '226EE6'
+  description: 'Issues related to robustness'
+
+'rust':
+  color: '000000'
+  description: 'Pull requests that update Rust code'
+
+'security':
+  color: 'B60205'
+
+'spike':
+  color: '22AF72'
+  description: 'Requires more investigation'
+
+'stale':
+  color: 'ffffff'
+
+'triage':
+  color: 'D93F0B'
+  description: 'Issue is awaiting maintainer triage to determine priority and scope'
+
+'ux':
+  color: '0706A1'
+  description: 'Issues related to User eXperience'
+
+'v1':
+  color: '6B7280'
+  description: 'wasmCloud v1'
+
+'v2':
+  color: '10B981'
+  description: 'wasmCloud v2'
+
+'wadm':
+  color: '4D7E66'
+  description: 'Related to WADM'
+
+'wascap':
+  color: 'B60205'
+
+'wash-cli':
+  color: '0E8A16'
+  description: 'Issues pertaining to the wash CLI'
+
+'washboard-ui':
+  color: 'FBCA04'
+
+'wasi-http':
+  color: 'BFDADC'
+  description: 'Issues related to WASI http'
+
+'wasmcloud-control-interface':
+  color: 'E8774A'
+  description: 'Issues pertaining to the control interface'
+
+'wontfix':
+  color: 'ffffff'
+  description: 'This will not be worked on'

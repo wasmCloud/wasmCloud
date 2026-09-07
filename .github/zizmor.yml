@@ -12,3 +12,12 @@ rules:
       # deliberate (idempotent re-runs, glob fail-on-empty, prerelease
       # detection); see the comment above the `uses:` line.
       - release-tag.yml
+
+  dangerous-triggers:
+    ignore:
+      # labeler.yml needs `pull_request_target` because GITHUB_TOKEN is
+      # read-only for fork PRs on `pull_request`, leaving exactly the PRs that
+      # need triage labels unlabeled. Its checkout has no `ref:`, so it takes
+      # the base ref: no PR-authored code is fetched or run, and the only write
+      # scope is `pull-requests: write`. Remove this if it ever checks out HEAD.
+      - labeler.yml

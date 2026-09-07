@@ -1,0 +1,55 @@
+name: labeler
+
+# Applies the path labels declared in .github/labels.yml, rendering the
+# actions/labeler view of that file at run time.
+#
+# `pull_request_target` because a fork PR's token is read-only on
+# `pull_request`, leaving exactly the PRs that need triage labels unlabeled.
+# The checkout takes the base ref, so no PR-authored code runs here; see
+# .github/zizmor.yml for the full rationale. Rules therefore come from the
+# base ref too, so a PR editing them is labeled with the old ones.
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+permissions: {}
+
+# A rapid push sequence only needs the labels from the final state.
+concurrency:
+  group: labeler-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  label:
+    name: apply path labels
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required: the action adds and removes labels on the PR. This is the
+      # only write scope the job holds, and it cannot reach code or secrets.
+      pull-requests: write
+    steps:
+      # No `ref:` on purpose: under pull_request_target this is the base ref.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github
+      # In-workspace, not RUNNER_TEMP: actions/labeler falls back to fetching
+      # the config over the API when it cannot read the path, and that fallback
+      # would look for a file this layout deleted.
+      - name: Render actions/labeler config from labels.yml
+        run: |
+          node .github/scripts/labels.mjs render-labeler \
+            | yq -p=json -P '.' > .github/labeler.generated.yml
+          cat .github/labeler.generated.yml
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        with:
+          configuration-path: .github/labeler.generated.yml
+          # Keeps labels tracking the current diff. Only labels in the rendered
+          # config are touched; hand-applied ones are left alone.
+          sync-labels: true
