@@ -287,7 +287,10 @@ pub struct ComponentHostPlugin {
     /// handler a workload's outgoing calls use. `None` traps every call with
     /// "http client not available", matching today's behavior for a plugin
     /// that imports `wasi:http/outgoing-handler` with no handler configured.
-    http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+    ///
+    /// Weak — a bound plugin is reached from every workload that binds it, and
+    /// the ingress holds those. See [`crate::host::http::live_handler`].
+    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
     max_restarts: u32,
     /// Ports this plugin declared, as the operator wrote them.
     /// The subset of `ports` this plugin binds for real itself, precomputed for
@@ -343,7 +346,7 @@ impl ComponentHostPlugin {
         #[builder(default)] allowed_ip_name_lookups: Arc<
             [crate::host::allowed_ip_name::AllowedIpName],
         >,
-        http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+        http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
         #[builder(default)] ports: Arc<[crate::host::declared_port::DeclaredPort]>,
         socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     ) -> anyhow::Result<Self> {
@@ -698,7 +701,7 @@ pub async fn load_component_plugin(
     engine: &Engine,
     oci_config: OciConfig,
     native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
-    http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
 ) -> anyhow::Result<Arc<ComponentHostPlugin>> {
     let loaded = spec
@@ -1774,7 +1777,7 @@ async fn run_supervisor(
     mut rx: tokio::sync::mpsc::Receiver<CapabilityJob>,
     allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
     allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
-    http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
     network: crate::host::ports::NetworkHandle,
     direct_binds: Arc<[crate::sockets::policy::DirectBind]>,
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
@@ -1964,7 +1967,7 @@ fn build_plugin_store(
     native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
     allowed_hosts: &Arc<[crate::host::allowed_hosts::AllowedHost]>,
     allowed_ip_name_lookups: &Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
-    http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
     network: &crate::host::ports::NetworkHandle,
     direct_binds: &Arc<[crate::sockets::policy::DirectBind]>,
     socket_policy: &Arc<crate::sockets::policy::SocketPolicy>,
@@ -2009,8 +2012,10 @@ fn build_plugin_store(
         )
         .with_sockets(sockets_ctx)
         .with_allowed_hosts(Arc::clone(allowed_hosts));
-    if let Some(http_handler) = http_handler {
-        ctx_builder = ctx_builder.with_http_handler(http_handler);
+    // A store built after the host went away gets no handler, which its egress
+    // already reports; there is nothing left to send through.
+    if let Some(http_handler) = http_handler.as_ref().and_then(std::sync::Weak::upgrade) {
+        ctx_builder = ctx_builder.with_http_handler(&http_handler);
     }
     let ctx = ctx_builder.build();
     // The registry marks this as the plugin (real) side of the resource bridge

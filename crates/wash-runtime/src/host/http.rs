@@ -745,6 +745,27 @@ impl Router for DevRouter {
     }
 }
 
+/// Take a live handle on a handler that something the handler owns holds
+/// weakly, and the one error they all report when it is gone.
+///
+/// An ingress keeps every routable workload so an inbound request can find one,
+/// so anything reachable from a workload holds the handler back weakly or the
+/// two pin each other: the workload itself, an ephemeral linked call (which
+/// lives in a linker closure, hence in the `InstancePre` the ingress keeps), a
+/// service's store recipe, a store's egress hooks, and a bound host component
+/// plugin. Strong handles exist for the length of one call and are taken here.
+///
+/// Callers split two ways, deliberately. A path that cannot proceed without a
+/// handler propagates this error; a teardown path asks the `Weak` directly and
+/// skips, because a handler that is already gone has nothing left to unbind.
+pub(crate) fn live_handler(
+    handler: &std::sync::Weak<dyn HostHandler>,
+) -> anyhow::Result<Arc<dyn HostHandler>> {
+    handler
+        .upgrade()
+        .ok_or_else(|| anyhow::anyhow!("host HTTP handler is no longer available"))
+}
+
 /// Trait defining the behavior of a Host HTTP Extension
 /// Allows for custom handling of incoming and outgoing HTTP requests
 /// Use this trait to implement custom HTTP server transport
@@ -1420,6 +1441,15 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         if let Some(tx) = shutdown_guard.take() {
             let _ = tx.send(()).await;
         }
+        // Let go of what the routing tables hold. A stopped ingress serves
+        // nothing, so keeping them would pin every routed workload's
+        // `InstancePre` — its compiled components, and the engine behind them —
+        // for as long as anything still holds the ingress itself. A workload
+        // stopped after this finds nothing to unbind, which is the right
+        // answer.
+        self.workload_handles.write().await.clear();
+        self.service_handlers.write().await.clear();
+        self.messaging_handlers.write().await.clear();
         Ok(())
     }
 

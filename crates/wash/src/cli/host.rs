@@ -981,7 +981,7 @@ impl CliCommand for HostCommand {
                     &engine,
                     plugin_oci_config.clone(),
                     &native_plugins,
-                    http_handler.clone(),
+                    http_handler.as_ref().map(Arc::downgrade),
                     Some(Arc::clone(&socket_policy)),
                 )
                 .await

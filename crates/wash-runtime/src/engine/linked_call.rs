@@ -159,7 +159,8 @@ pub(crate) struct EphemeralLinkedCall {
     /// this call ends up running in.
     pub(crate) pre: InstancePre<SharedCtx>,
     pub(crate) engine: wasmtime::Engine,
-    pub(crate) http_handler: Arc<dyn crate::host::http::HostHandler>,
+    /// See [`crate::host::http::live_handler`] for why this is weak.
+    pub(crate) http_handler: std::sync::Weak<dyn crate::host::http::HostHandler>,
     /// The meter of the host this call runs on; see
     /// [`crate::engine::abandon::StoreMetering`].
     pub(crate) invocation: crate::observability::InvocationMeter,
@@ -312,7 +313,7 @@ async fn build_ctx_from_template(
     }
 
     let mut ctx_builder = Ctx::builder(template.workload_id.clone(), template.component_id.clone())
-        .with_http_handler(http_handler)
+        .with_http_handler(&http_handler)
         .with_wasi_ctx(wasi_ctx_builder.build())
         .with_sockets(sockets_ctx)
         .with_allowed_hosts(template.local_resources.allowed_hosts.clone());
@@ -491,7 +492,7 @@ async fn new_ephemeral_store(
 
     let store = new_store_from_templates(
         &call.engine,
-        call.http_handler.clone(),
+        crate::host::http::live_handler(&call.http_handler)?,
         &active,
         &linked,
         &linked_instances,
