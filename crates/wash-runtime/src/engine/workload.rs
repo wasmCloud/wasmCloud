@@ -2010,7 +2010,22 @@ impl ResolvedWorkload {
             }
             return match export_named(service.component_exports().ok(), interface) {
                 Some(export) => ItemExport::Service { export },
-                None => ItemExport::None,
+                // The world says it serves this and the component does not name
+                // it so: a version the two spell differently, or exports that
+                // would not parse. Loudly, because everything downstream reads
+                // the same as a service that simply does not export it — the
+                // workload deploys healthy and every call naming it fails with
+                // nothing to connect that to the service.
+                None => {
+                    tracing::warn!(
+                        workload_id = %self.id,
+                        service = item_id,
+                        %interface,
+                        "the workload\'s service declares this interface but exports no \
+                         instance matching it; deploying without that route"
+                    );
+                    ItemExport::None
+                }
             };
         }
         let components = self.components.read().await;

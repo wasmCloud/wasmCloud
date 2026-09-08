@@ -58,8 +58,14 @@ use crate::engine::workload::ResolvedWorkload;
 
 /// Invocations one of a service's ingresses may have queued before its driver
 /// takes them — dispatched calls here, and the HTTP and messaging ingresses
-/// built beside them (see `build_trigger_ingresses`). A dispatcher that fills it
-/// waits, which is the back-pressure a plugin reading an external stream wants.
+/// built beside them (see `build_trigger_ingresses`).
+///
+/// This bounds the queue, not the work: the serve loop takes a job and spawns it
+/// straight away, so the channel only fills while the driver itself is stalled.
+/// What bounds concurrent calls on a service's one instance is
+/// [`MAX_INFLIGHT_GUEST_CALLS`].
+///
+/// [`MAX_INFLIGHT_GUEST_CALLS`]: crate::host::trigger_service::MAX_INFLIGHT_GUEST_CALLS
 pub(crate) const INGRESS_BACKLOG: usize = 256;
 
 /// A future borrowing the accessor a [`GuestCall`] was handed.
@@ -192,6 +198,15 @@ impl GuestJob {
             abandoned,
             attributes,
         }
+    }
+
+    /// Turn this job away without running it, and tell its dispatcher why.
+    ///
+    /// For an ingress at its ceiling: a dispatcher waiting on a call the host
+    /// will not admit has to be told, or it waits out the call's whole deadline
+    /// for a reply that was never coming.
+    pub(crate) fn refuse(self, err: anyhow::Error) {
+        let _ = self.reply.send(Err(err));
     }
 
     /// Run this job on an instance in a store built for it alone, and answer
@@ -496,19 +511,6 @@ impl ServiceClaim {
             .swap(true, std::sync::atomic::Ordering::SeqCst)
         {
             self.calls.release_claim();
-        }
-    }
-}
-
-impl Clone for ServiceClaim {
-    /// A copy of a claim is a claim of its own, so the ingress outlives whichever
-    /// of them is dropped first. Never refused: an existing claim is proof the
-    /// service was claimed in time, whatever it has done since.
-    fn clone(&self) -> Self {
-        self.calls.lock().claims += 1;
-        Self {
-            calls: Arc::clone(&self.calls),
-            released: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }

@@ -32,6 +32,9 @@ struct Component;
 
 impl RunnerGuest for Component {
     async fn run(message: String) -> String {
+        // A dispatched call that does not complete, so a test can ask what
+        // becomes of the instance that was serving it.
+        assert!(message != "trap", "deliberate runner.run trap");
         let served = SERVED.fetch_add(1, Ordering::SeqCst) + 1;
         format!("{message}:{served}")
     }
@@ -43,8 +46,12 @@ impl RunGuest for Component {
         // still serving dispatched calls — the case where a workload's
         // `maxRestarts` has to mean the same thing whether or not a plugin
         // pushes into the service.
-        if std::env::var("RUN_EXIT").as_deref() == Ok("error") {
-            return Err(());
+        match std::env::var("RUN_EXIT").as_deref() {
+            Ok("error") => return Err(()),
+            // The same failure the guest reports by trapping rather than by
+            // answering, which a plain p3 service spends a restart on too.
+            Ok("trap") => panic!("deliberate cli/run trap"),
+            _ => {}
         }
         // Otherwise services are long-lived: park instead of returning, so the
         // workload stays deployed for as long as the test needs it.
