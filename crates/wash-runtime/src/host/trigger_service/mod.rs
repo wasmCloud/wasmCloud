@@ -135,6 +135,7 @@ impl Ingress {
             Ingress::Guest(rx) => Ok(PreparedIngress::Guest {
                 instance: *instance,
                 rx,
+                in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             }),
             #[cfg(feature = "host-component-plugins")]
             Ingress::Capability {
@@ -191,6 +192,10 @@ enum PreparedIngress {
     Guest {
         instance: Instance,
         rx: tokio::sync::mpsc::Receiver<GuestJob>,
+        /// Calls this incarnation has in flight, against
+        /// [`MAX_INFLIGHT_GUEST_CALLS`]. Fresh per incarnation, like the
+        /// channel beside it.
+        in_flight: Arc<std::sync::atomic::AtomicUsize>,
     },
     #[cfg(feature = "host-component-plugins")]
     Capability {
@@ -265,15 +270,41 @@ impl PreparedIngress {
                 }
                 ServeOutcome::Shutdown
             }
-            PreparedIngress::Guest { instance, rx } => {
+            PreparedIngress::Guest {
+                instance,
+                rx,
+                in_flight,
+            } => {
                 while let Some(job) = rx.recv().await {
+                    // Taking a job off the channel and spawning it is what the
+                    // queue depth cannot bound: the loop never blocks, so
+                    // without this a plugin dispatching from many tasks at once
+                    // piles calls onto the one service instance without limit.
+                    // Refused rather than awaited, for the reason
+                    // `MAX_INFLIGHT_CAPABILITY_CALLS` gives: a dispatched call
+                    // may re-enter the service, and a slot held by an ancestor
+                    // waiting on it would deadlock.
+                    if in_flight.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                        >= MAX_INFLIGHT_GUEST_CALLS
+                    {
+                        in_flight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        job.refuse(anyhow::anyhow!(
+                            "the workload\'s service is at its in-flight dispatched-call \
+                             ceiling ({MAX_INFLIGHT_GUEST_CALLS})"
+                        ));
+                        continue;
+                    }
                     // No pool slot: a service's instance is the workload's one
                     // long-lived item, not one of a pool's to retire.
-                    if let Err(e) = accessor.spawn(GuestTask {
-                        instance: *instance,
-                        job,
-                        pool_slot: None,
-                    }) {
+                    let spawned = accessor.spawn(GuestServeTask {
+                        task: GuestTask {
+                            instance: *instance,
+                            job,
+                            pool_slot: None,
+                        },
+                        in_flight: InFlightGuard::new(Arc::clone(in_flight)),
+                    });
+                    if let Err(e) = spawned {
                         tracing::error!(err = %e, "failed to spawn dispatched call task");
                     }
                 }
@@ -547,6 +578,54 @@ pub(crate) enum CliRunError {
     /// Report it and keep serving. What a service whose handlers are the point
     /// gets, and what a host component plugin's incidental `cli/run` gets.
     Logged,
+}
+
+/// Releases one in-flight slot when the call holding it ends, however it ends —
+/// normally, by trapping, or by being dropped.
+///
+/// Backs both non-blocking admission ceilings on a long-lived instance:
+/// [`MAX_INFLIGHT_GUEST_CALLS`] on a service, and the capability-call ceiling on
+/// a host component plugin's store. See the latter for why a plain atomic
+/// rather than a [`tokio::sync::Semaphore`].
+pub(super) struct InFlightGuard(Arc<std::sync::atomic::AtomicUsize>);
+
+impl InFlightGuard {
+    pub(super) fn new(counter: Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        Self(counter)
+    }
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// How many plugin-dispatched calls a service serves at once.
+///
+/// A service has no `maxConcurrency` of its own — it is one instance, sized by
+/// the workload rather than by a pool — so this is the only ceiling on what a
+/// push-mode plugin can pile onto it. Matched to the capability ingress's
+/// ceiling, which bounds the other unbounded ingress on the same instance for
+/// the same reason, and enforced the same way: a non-blocking reservation that
+/// *refuses* over the ceiling, never an awaited permit, so a dispatched call
+/// that re-enters the service cannot deadlock on a slot its own ancestor holds.
+pub(crate) const MAX_INFLIGHT_GUEST_CALLS: usize = 512;
+
+/// Serves one dispatched call and gives its in-flight slot back, however it
+/// ends.
+struct GuestServeTask {
+    task: GuestTask,
+    in_flight: InFlightGuard,
+}
+
+impl AccessorTask<SharedCtx> for GuestServeTask {
+    async fn run(self, accessor: &Accessor<SharedCtx>) -> wasmtime::Result<()> {
+        let GuestServeTask { task, in_flight } = self;
+        let outcome = task.run(accessor).await;
+        drop(in_flight);
+        outcome
+    }
 }
 
 /// Drives the service's `wasi:cli/run` export (its long-running work).

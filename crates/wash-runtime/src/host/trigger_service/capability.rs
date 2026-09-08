@@ -13,6 +13,7 @@ use wasmtime::component::types::Type;
 use wasmtime::component::{Accessor, AccessorTask, ComponentExportIndex, Instance, Val};
 use wasmtime::error::Context as _;
 
+use super::InFlightGuard;
 use crate::engine::ctx::{CallerIdentity, SharedCtx};
 use crate::engine::store::relocate::{self, Relocated};
 use crate::host::job_registry::{JobGuard, JobRegistry};
@@ -210,24 +211,6 @@ pub(super) struct CapabilityTask {
     /// completes or the task is otherwise dropped (e.g. store teardown). Held
     /// across the `.await` so the retire runs however the task ends.
     pub(super) job_guard: JobGuard,
-}
-
-/// Decrements a plugin store's in-flight capability-call counter on drop, so a
-/// slot is reclaimed whether the task completes normally or is cancelled. Backs
-/// the non-blocking admission ceiling (see [`MAX_INFLIGHT_CAPABILITY_CALLS`] for
-/// why a plain atomic rather than a [`tokio::sync::Semaphore`]).
-pub(super) struct InFlightGuard(Arc<AtomicUsize>);
-
-impl InFlightGuard {
-    pub(super) fn new(counter: Arc<AtomicUsize>) -> Self {
-        Self(counter)
-    }
-}
-
-impl Drop for InFlightGuard {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-    }
 }
 
 /// Free every resource whose proxy a caller has dropped since the last flush,

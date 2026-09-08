@@ -262,8 +262,29 @@ impl WorkloadCalls {
                         // claim is what will make the service run with an
                         // ingress at all. It travels with the route, and goes
                         // back if this route loses or resolving fails.
-                        let claim = workload.claim_service_dispatch()?;
-                        (Arc::from(SERVICE_ROUTE_NAME), export, Some(claim))
+                        //
+                        // Refused the same way as the p2 case above, and for the
+                        // same reason: past `service_can_dispatch` the only
+                        // refusal left is a service that has already started, so
+                        // this is a route that arrived too late — not grounds to
+                        // fail a workload that ran fine before the plugin was
+                        // loaded.
+                        match workload.claim_service_dispatch() {
+                            Ok(claim) => (Arc::from(SERVICE_ROUTE_NAME), export, Some(claim)),
+                            Err(e) => {
+                                warn!(
+                                    id = self.plugin_id,
+                                    workload_id = workload.id(),
+                                    service = item_id,
+                                    interface = %import.name,
+                                    err = %e,
+                                    "a workload\'s service exports an interface this plugin calls, \
+                                     but can no longer be claimed as a dispatch target; deploying \
+                                     without that route"
+                                );
+                                continue;
+                            }
+                        }
                     }
                     ItemExport::None => continue,
                 };

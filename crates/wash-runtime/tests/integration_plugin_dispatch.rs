@@ -13,7 +13,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
@@ -97,14 +97,17 @@ impl GuestCall for RunCall {
                         "dispatch target is missing its acme:tasks/runner export: {e:#}"
                     )
                 })?;
-            let reply = view
+            // A trap is a call that did not complete, so it is the host's
+            // `Err` — which is what retires the instance it ran on. Only an
+            // answer the guest actually gave goes back on the plugin's own
+            // channel.
+            let answer = view
                 .acme_tasks_runner()
                 .call_run(accessor, self.message)
                 .await
-                .map_err(|e| anyhow::anyhow!("runner.run trapped: {e:#}"));
-            let refused = reply.is_err().then_some("trap");
-            let _ = self.reply.send(reply);
-            Ok(refused)
+                .map_err(|e| anyhow::anyhow!("runner.run trapped: {e:#}"))?;
+            let _ = self.reply.send(Ok(answer));
+            Ok(None)
         })
     }
 }
@@ -115,7 +118,7 @@ impl GuestCall for RunCall {
 struct TaskPusher {
     /// One dispatch target per workload, resolved while the workload resolved
     /// and held for as long as it runs.
-    targets: Mutex<HashMap<String, DispatchTarget>>,
+    targets: Mutex<BTreeMap<String, DispatchTarget>>,
 }
 
 impl TaskPusher {
@@ -316,6 +319,34 @@ async fn test_a_dispatched_call_spends_the_instances_invocation_budget() -> Resu
     Ok(())
 }
 
+/// A dispatched call that traps takes the warm instance it ran on with it: the
+/// next call is served by a fresh one, counting from zero again.
+///
+/// The trap faults the whole store, so the driver ends and the pool reaps its
+/// handle — a `GuestCall` returning `Err` retires the instance for the failures
+/// that do *not* fault it, and reporting the trap that way is what keeps the two
+/// consistent.
+#[tokio::test]
+async fn test_a_trapping_dispatch_takes_its_warm_instance_with_it() -> Result<()> {
+    let (plugin, host) = start_host().await?;
+    host.workload_start(component_workload("trapped", 1, 1))
+        .await?;
+
+    assert_eq!(plugin.run("trapped", "a").await?, "a:1");
+    assert!(
+        plugin.run("trapped", "trap").await.is_err(),
+        "a trapped call must be reported to the dispatcher, not answered"
+    );
+    assert_eq!(
+        plugin.run("trapped", "b").await?,
+        "b:1",
+        "the next call must land on a fresh instance, not the one that trapped"
+    );
+
+    stop(&host, "trapped").await;
+    Ok(())
+}
+
 /// A component that asked for no warm instances still gets its calls, each on
 /// an instance built and dropped for it — the count restarts every time.
 #[tokio::test]
@@ -410,6 +441,37 @@ async fn test_a_dispatch_only_service_still_spends_its_restart_budget() -> Resul
     }
 
     stop(&host, "svc-run-fails").await;
+    Ok(())
+}
+
+/// The same, for a `cli/run` that *traps* rather than answering with an error.
+/// A plain p3 service spends a restart on either, so a dispatch-only one — which
+/// reaches the trigger driver only because a plugin claimed it — has to as well.
+#[tokio::test]
+async fn test_a_dispatch_only_service_spends_its_budget_on_a_cli_run_trap() -> Result<()> {
+    let (plugin, host) = start_host().await?;
+    host.workload_start(service_workload_with(
+        "svc-run-traps",
+        HashMap::from([("RUN_EXIT".to_string(), "trap".to_string())]),
+        0,
+    ))
+    .await?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match plugin.run("svc-run-traps", "x").await {
+            Err(_) => break,
+            Ok(_) if std::time::Instant::now() >= deadline => {
+                panic!(
+                    "service kept serving dispatched calls after cli/run trapped with no \
+                     restarts left"
+                )
+            }
+            Ok(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+        }
+    }
+
+    stop(&host, "svc-run-traps").await;
     Ok(())
 }
 

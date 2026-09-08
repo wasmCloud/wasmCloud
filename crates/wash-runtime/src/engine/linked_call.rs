@@ -842,11 +842,16 @@ async fn invoke_ephemeral_plain(
             abandoned: call.flag(),
             attributes: Arc::clone(&attributes),
         }));
-        let outcome = instance_pool::offer_or_install(pool, &ephemeral_call.pre, job, || {
+        // The label belongs to store creation alone: a component that will not
+        // instantiate fails inside `offer_or_install` too, and reporting that as
+        // a store failure points an operator at the wrong thing.
+        let outcome = instance_pool::offer_or_install(pool, &ephemeral_call.pre, job, || async {
             new_ephemeral_store(ephemeral_call)
+                .await
+                .map_err(|e| anyhow::anyhow!("new pooled store creation failed: {e:#}"))
         })
         .await
-        .map_err(|e| wasmtime::format_err!("new pooled store creation failed: {e:#}"))?;
+        .map_err(|e| wasmtime::format_err!("{e:#}"))?;
         match outcome {
             Ok(()) => {
                 let vals = call
@@ -1049,11 +1054,11 @@ async fn invoke_service_export(
             inv.export_name
         )
     })?;
-    // The dispatch above returns once the call has run, so its outcome is
-    // already here.
+    // The dispatch above returns once the call has run, and reports a call that
+    // did not — so anything waiting here is a success.
     let relocated = reply_rx
         .await
-        .map_err(|_| wasmtime::format_err!("the service dropped the call before replying"))??;
+        .map_err(|_| wasmtime::format_err!("the service dropped the call before replying"))?;
 
     accessor.with(|mut access| inject_results(access.as_context_mut(), relocated, results))?;
 
@@ -1070,9 +1075,9 @@ async fn invoke_service_export(
 /// service store, calls the export on the running instance, and relocates the
 /// results back out.
 ///
-/// A trap here is reported to the caller *and* faults the service store, which
-/// the service supervisor restarts — the same outcome an inbound HTTP request
-/// that trapped has.
+/// A trap here is reported to the caller as the host's own `Err` — the call did
+/// not complete — *and* faults the service store, which the service supervisor
+/// restarts. The same outcome an inbound HTTP request that trapped has.
 #[cfg(feature = "host-component-plugins")]
 struct ServiceExportTask {
     func_idx: ComponentExportIndex,
@@ -1084,7 +1089,10 @@ struct ServiceExportTask {
     result_tys: Arc<[Type]>,
     /// See [`ServiceExportCall::plain`].
     plain: bool,
-    reply: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<Relocated>>>,
+    /// The results, when the call completed. A call that did not says so by
+    /// returning `Err`, which is what the caller reads instead — so nothing but
+    /// a success ever travels here.
+    reply: tokio::sync::oneshot::Sender<Vec<Relocated>>,
 }
 
 #[cfg(feature = "host-component-plugins")]
@@ -1122,10 +1130,10 @@ impl crate::engine::dispatch::GuestCall for ServiceExportTask {
             });
             let (func, arg_vals) = match prepared {
                 Ok(prepared) => prepared,
-                Err(e) => {
-                    let _ = reply.send(Err(e));
-                    return Ok(Some("host"));
-                }
+                // Reported by returning rather than on `reply`: a call that did
+                // not complete is the host's `Err`, and the caller reads that
+                // instead of the results channel.
+                Err(e) => return Err(anyhow::anyhow!("{e:#}")),
             };
 
             let mut results = vec![Val::Bool(false); result_tys.len()];
@@ -1137,10 +1145,9 @@ impl crate::engine::dispatch::GuestCall for ServiceExportTask {
                 .call_concurrent(accessor, &arg_vals, &mut results)
                 .await
             {
-                let _ = reply.send(Err(
-                    e.context(format!("{import_name}.{export_name} trapped"))
+                return Err(anyhow::anyhow!(
+                    "{import_name}.{export_name} trapped: {e:#}"
                 ));
-                return Ok(Some("trap"));
             }
 
             // Extracted in the service store, whose own `run_concurrent` keeps
@@ -1158,9 +1165,8 @@ impl crate::engine::dispatch::GuestCall for ServiceExportTask {
                     )
                 })
             };
-            let refused = extracted.is_err().then_some("host");
-            let _ = reply.send(extracted);
-            Ok(refused)
+            let _ = reply.send(extracted.map_err(|e| anyhow::anyhow!("{e:#}"))?);
+            Ok(None)
         })
     }
 }
