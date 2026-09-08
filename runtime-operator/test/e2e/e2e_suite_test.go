@@ -506,7 +506,23 @@ func buildBaseHelmSets() []string {
 // this cluster fails on `AlreadyExists`.
 var suiteNamespaces = []string{"namespace-a", "scoped-watched", "scoped-unwatched"}
 
+// skipTeardown leaves the cluster as the suite found it, for a caller that is
+// about to throw the cluster away.
+//
+// Everything below exists so a second run against the same cluster starts from
+// a clean one, and none of it is asserted on. A GitHub runner destroys the
+// cluster with the VM the moment the job ends, so there it is a minute and a
+// half spent tidying something nothing will look at again. It also empties the
+// namespace before the workflow's `if: failure()` diagnostics can read it.
+var skipTeardown = os.Getenv("E2E_SKIP_TEARDOWN") == envBoolTrue
+
 var _ = AfterSuite(func() {
+	if skipTeardown {
+		_, _ = fmt.Fprintf(GinkgoWriter,
+			"E2E_SKIP_TEARDOWN is set; leaving the release and its namespaces in place\n")
+		return
+	}
+
 	// Before the release goes, while the operator is still running to process
 	// them. Its finalizers are on these objects, and `helm delete` takes away
 	// the only thing that can clear them — after which the namespace holding

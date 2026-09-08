@@ -170,6 +170,10 @@ jobs:
           SKIP_IMAGE_BUILD: "true"
           PROMETHEUS_INSTALL_SKIP: "true"
           CERT_MANAGER_INSTALL_SKIP: "true"
+          # The runner takes the cluster with it, so the suite's teardown has
+          # nothing to leave clean for. It also empties the namespace before the
+          # diagnostics below can read it.
+          E2E_SKIP_TEARDOWN: "true"
           KIND_CLUSTER_NAME: wasmcloud-e2e
       - name: Dump diagnostics
         if: failure()
