@@ -2444,29 +2444,19 @@ async fn invoke_component_handler(
         let mut reclaimed = None;
         let req = if let Some(pool) = pool.as_ref() {
             use crate::engine::instance_driver::InstanceJob;
-            use crate::engine::instance_pool::{Declined, Dispatch};
+            use crate::engine::instance_pool::Declined;
             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
             let call = DispatchedCall::new("HTTP (pooled)", crate::timeouts::http_response());
-            let outcome = match pool.try_dispatch(InstanceJob::Http(Box::new(ServiceHttpJob {
+            let job = InstanceJob::Http(Box::new(ServiceHttpJob {
                 req,
                 resp_tx,
                 abandoned: call.flag(),
-            }))) {
-                Dispatch::Sent => Ok(()),
-                // The pool has room. Build and instantiate the store out here,
-                // where awaiting is allowed and where a component that fails
-                // to instantiate reports that failure to this request rather
-                // than only to the log.
-                Dispatch::NeedsInstance(job) => {
-                    let mut store = workload_handle.new_store(component_id).await?;
-                    let instance = instance_pre.instantiate_async(&mut store).await?;
-                    pool.dispatch_on_new(
-                        crate::engine::instance_pool::ComponentInstance { store, instance },
-                        job,
-                    )
-                }
-                Dispatch::Saturated(job) => Err(Declined::without_instance(job)),
-            };
+            }));
+            let outcome =
+                crate::engine::instance_pool::offer_or_install(pool, &instance_pre, job, || {
+                    workload_handle.new_store(component_id)
+                })
+                .await?;
             match outcome {
                 Ok(()) => {
                     let (resp, watch) = call
@@ -2495,6 +2485,7 @@ async fn invoke_component_handler(
                             InstanceJob::Linked(_) => "linked",
                             InstanceJob::Messaging(_) => "messaging",
                             InstanceJob::Plugin(_) => "plugin",
+                            InstanceJob::Guest(_) => "dispatched",
                             InstanceJob::Http(_) => "http",
                         }
                     );

@@ -131,6 +131,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dispatch-target"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "ephemeral-callee-p3"
 version = "0.0.0"
 dependencies = [
@@ -159,6 +166,13 @@ dependencies = [
 
 [[package]]
 name = "events-plugin"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "events-service"
 version = "0.0.0"
 dependencies = [
  "wit-bindgen 0.60.0",

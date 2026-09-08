@@ -154,6 +154,8 @@ const P3_FIXTURES: &[&str] = &[
     "http-egress-plugin-caller",
     "events-plugin",
     "events-caller",
+    "events-service",
+    "dispatch-target",
 ];
 
 fn build_fixtures(workspace: &Path) -> Result<()> {

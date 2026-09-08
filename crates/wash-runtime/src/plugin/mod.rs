@@ -563,6 +563,14 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// has been successfully bound and resolved. The default implementation
     /// does nothing.
     ///
+    /// A plugin that *calls into* the workload — pushing an event stream at an
+    /// interface the workload exports, rather than serving one it imports —
+    /// resolves its [`ResolvedWorkload::dispatch_target`] here and holds it for
+    /// the life of the binding. Here specifically: the workload has not started
+    /// yet, which is what lets a target naming its long-lived service reserve
+    /// the ingress the service will serve calls on. See
+    /// [`crate::engine::dispatch`].
+    ///
     /// # Arguments
     /// * `workload` - The fully resolved workload
     /// * `component_id` - The ID of the specific component within the workload

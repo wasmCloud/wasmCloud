@@ -253,7 +253,7 @@ pub enum HostWorkload {
 /// [`Reservation`] over the whole call. See [`HostApi::workload_stop`] for the
 /// ownership rules that guarantee it.
 async fn release(workload_id: &str, resolved: &ResolvedWorkload) {
-    resolved.stop_service();
+    resolved.begin_teardown();
     if let Err(e) = resolved.unbind_all_plugins().await {
         warn!(
             workload_id,

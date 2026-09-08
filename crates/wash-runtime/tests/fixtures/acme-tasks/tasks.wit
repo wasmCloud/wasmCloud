@@ -1,0 +1,15 @@
+package acme:tasks@0.1.0;
+
+/// A bespoke work package in the direction a plugin *calls*: nothing on the
+/// host serves `runner`, so a workload that exports it is the implementation
+/// the host routes a plugin's calls to.
+///
+/// Every function is an `async func` over primitives, so a call crosses the
+/// store boundary as plain values.
+interface runner {
+    /// Handle one unit of work. The reply carries how many calls this
+    /// *instance* has served, so a caller can tell a reused warm instance from
+    /// a freshly built one — and a workload's long-lived service (which serves
+    /// every call on the one instance it is) from either.
+    run: async func(message: string) -> string;
+}
