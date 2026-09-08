@@ -1,0 +1,5 @@
+package wasmcloud:local-ingress-callee;
+
+world callee {
+   export wasi:http/incoming-handler@0.2.2;
+}

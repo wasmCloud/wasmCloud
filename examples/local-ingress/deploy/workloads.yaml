@@ -1,0 +1,144 @@
+# Same-host local routing example: a caller and a callee workload.
+#
+# Same-host routing takes two keys. The host operator turns the capability on
+# (`--http-local-routing`; chart value
+# `runtime.hostGroups[].http.localRouting`), and each workload declares what it
+# offers co-located callers via `localRoute` on its wasi:http/incoming-handler
+# interface. Neither alone routes anything, so neither the workload author nor
+# the operator can open that door by themselves.
+#
+# With both set, an outgoing request from a co-located workload matching one of
+# the callee's `localRoute` entries is served in-memory — it never leaves the
+# host pod. `functiona.internal` deliberately resolves nowhere in DNS, so a 200
+# from the caller proves the request took the local route.
+#
+# Both workloads target the same hostgroup; with more than one host replica in
+# the group, local routing only applies when the scheduler happens to co-locate
+# them. Pin `spec.replicas: 1` on the hostgroup (or use a dedicated hostgroup)
+# to make co-location deterministic.
+#
+# Replace the images with your own registry if you have not published these
+# components (see the README's "Building and pushing the components" section).
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: local-ingress-callee
+spec:
+  replicas: 1
+  template:
+    spec:
+      hostSelector:
+        hostgroup: default
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            # Regular ingress hostname (public dns alias for 127.0.0.1). This,
+            # and anything in `host-aliases`, is what the *network* reaches —
+            # every path on it, unaffected by localRoute below.
+            host: functiona.localhost.cosmonic.sh
+            # What this workload offers to co-located callers, in-memory. Two
+            # forms, comma-separated:
+            #   functiona.internal        — the whole hostname, any path
+            #   functiona.internal/hello  — that prefix and below
+            #
+            # Matching is on `/` segment boundaries, so `/hello` and
+            # `/hello/items` resolve here while `/hello-world` and `/` do not.
+            #
+            # This is the workload half of a two-key opt-in: it does nothing
+            # unless the host also runs with `--http-local-routing` (chart:
+            # `runtime.hostGroups[].http.localRouting`). The two scopes stay
+            # separate — the public `host` above is never short-circuited for a
+            # co-located caller, and this name is never reachable from the
+            # network, so `functiona.internal` cannot be hit by anyone dialing
+            # the host pod with a forged Host header.
+            localRoute: functiona.internal/hello
+      components:
+        - name: callee
+          image: oci-registry.default.svc:80/local-ingress-callee:0.1.0
+          # Pushed to the in-cluster registry instead (README step 3d)? The
+          # explicit :80 is the port the registry Service publishes.
+          # image: oci-registry.default.svc:80/local-ingress-callee:0.1.0
+---
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: local-ingress-caller
+spec:
+  replicas: 1
+  kubernetes:
+    service:
+      # Ties the Service below to this workload: the operator maintains its
+      # EndpointSlice, pointing at the host pods running the caller, so the
+      # Traefik Ingress can route to it without a port-forward.
+      name: local-ingress-caller
+  template:
+    spec:
+      hostSelector:
+        hostgroup: default
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            host: hello.localhost.cosmonic.sh
+      components:
+        - name: caller
+          image: oci-registry.default.svc:80/local-ingress-caller:0.1.0
+          # Pushed to the in-cluster registry instead (README step 3d)? The
+          # explicit :80 is the port the registry Service publishes.
+          # image: oci-registry.default.svc:80/local-ingress-caller:0.1.0
+          localResources:
+            # allowed_hosts is enforced before local routing: the caller must
+            # still be permitted to reach the callee's authority. It is an
+            # authority-level policy, so no path appears here even though the
+            # callee's localRoute is path-scoped. Note the caller declares
+            # nothing about local routing — only the callee does, by offering
+            # the route.
+            allowedHosts:
+              - functiona.internal
+            environment:
+              config:
+                # Must fall under the callee's localRoute prefix. Point this at
+                # `http://functiona.internal/` instead and the request stops
+                # matching, falls through to the network, and fails — the
+                # quickest way to see path scoping actually working.
+                CALLEE_URL: http://functiona.internal/hello
+---
+# Laptop-facing entry point for the caller: Traefik routes
+# hello.localhost.cosmonic.sh (public wildcard DNS for 127.0.0.1; laptop :80 →
+# node :30950 → Traefik) to this Service, whose EndpointSlice the operator
+# points at the host pods running the caller.
+apiVersion: v1
+kind: Service
+metadata:
+  name: local-ingress-caller
+spec:
+  # No selector: the runtime-operator manages the EndpointSlice (see the
+  # caller WorkloadDeployment's spec.kubernetes.service.name).
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: local-ingress-caller
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: hello.localhost.cosmonic.sh
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: local-ingress-caller
+                port:
+                  number: 80
