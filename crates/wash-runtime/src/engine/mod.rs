@@ -219,6 +219,7 @@ pub fn targets_wasip3_http(component: &Component) -> bool {
 
 pub mod abandon;
 pub mod ctx;
+pub mod dispatch;
 pub mod guest_memory;
 pub(crate) mod instance_driver;
 pub(crate) mod instance_pool;

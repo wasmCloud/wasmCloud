@@ -50,6 +50,7 @@
 //!    down with the call should not be pooled.
 
 use std::collections::{BTreeMap, HashSet};
+use std::future::Future;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, MutexGuard, Once};
 use std::time::Duration;
@@ -95,6 +96,41 @@ pub(crate) fn poolable(
         }
     }
     Some(pool)
+}
+
+/// Offer `job` to `pool`'s warm instances, building one more when the pool has
+/// room for it.
+///
+/// `Ok(Ok(()))` means an instance took the call. `Ok(Err(declined))` hands it
+/// back because every warm instance was busy and the pool is full — the caller
+/// runs it in a store of its own, which is what an unpooled component pays for
+/// every call, and on the instance the decline handed back where there is one.
+/// `Err` is a component that would not instantiate.
+///
+/// The store is built out here rather than inside [`InstancePool::try_dispatch`],
+/// which runs under the pool's lock: awaiting is allowed here, a request a warm
+/// instance can already serve does not pay for a store it will not use, and a
+/// component that fails to instantiate reports that to the caller rather than
+/// only to the log.
+pub(crate) async fn offer_or_install<F, S>(
+    pool: &Arc<InstancePool>,
+    pre: &wasmtime::component::InstancePre<SharedCtx>,
+    job: InstanceJob,
+    new_store: F,
+) -> anyhow::Result<Result<(), Declined>>
+where
+    F: FnOnce() -> S,
+    S: Future<Output = anyhow::Result<wasmtime::Store<SharedCtx>>>,
+{
+    match pool.try_dispatch(job) {
+        Dispatch::Sent => Ok(Ok(())),
+        Dispatch::NeedsInstance(job) => {
+            let mut store = new_store().await?;
+            let instance = pre.instantiate_async(&mut store).await?;
+            Ok(pool.dispatch_on_new(ComponentInstance { store, instance }, job))
+        }
+        Dispatch::Saturated(job) => Ok(Err(Declined::without_instance(job))),
+    }
 }
 
 /// What [`InstancePool::try_dispatch`] did with a call.

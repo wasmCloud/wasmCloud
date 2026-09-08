@@ -20,14 +20,17 @@ use wasmtime_wasi::p2::bindings::CommandPre;
 #[cfg(feature = "wasi-tls")]
 use crate::engine::ctx::SharedTlsProvider;
 #[cfg(feature = "host-component-plugins")]
-use crate::engine::linked_call::{types_are_bridge_safe, types_are_ephemeral_safe};
+use crate::engine::linked_call::{
+    ServiceExportCall, types_are_bridge_safe, types_are_ephemeral_safe,
+};
 use crate::{
     engine::{
         ctx::SharedCtx,
+        dispatch::{DispatchTarget, INGRESS_BACKLOG, ServiceCalls, ServiceClaim},
         instance_pool::{self, InstancePolicy, InstancePool},
         linked_call::{
             ComponentCtxTemplate, EphemeralCallMode, EphemeralLinkedCall, LinkedExportInvocation,
-            func_is_bridge_safe, func_is_ephemeral_safe, invoke_linked_async_export,
+            LinkedTarget, func_is_bridge_safe, func_is_ephemeral_safe, invoke_linked_async_export,
             invoke_linked_sync_export, new_store_from_templates,
         },
         volumes::{ResolvedVolumeMount, resolve_component_volume_mounts_in_map},
@@ -50,8 +53,7 @@ pub(crate) struct ExternalCallFunc<'a> {
 
 /// What [`ResolvedWorkload::item_exporting`] found about the one item it was
 /// asked about: whether that item exports an interface a host component plugin
-/// imports, and — for a component, the only kind a plugin can call — how to
-/// address the export.
+/// imports, and how to address the export.
 #[cfg(feature = "host-component-plugins")]
 pub(crate) enum ItemExport {
     /// A component exports it.
@@ -67,14 +69,32 @@ pub(crate) enum ItemExport {
         /// by the plugin's name misses it.
         export: Arc<str>,
     },
-    /// The workload's long-lived service exports it. A plugin cannot call it:
-    /// reaching the *running* service means routing into its live instance, the
-    /// way inbound messaging does, and a call built like a component's would
-    /// instead instantiate a second copy whose state is not the one the service
-    /// has been accumulating.
-    Service,
+    /// The workload's long-lived service exports it. Reached by routing into
+    /// the instance already running, the way inbound HTTP and messaging are —
+    /// never by instantiating a second copy, whose state would not be the one
+    /// the service has been accumulating.
+    Service {
+        /// The service's own name for the export, as for a component.
+        export: Arc<str>,
+    },
     /// Neither — this item bound to the plugin for a capability it imports.
     None,
+}
+
+/// The item's own name for the export serving `interface`, if it has one.
+///
+/// Not the plugin's name for the import: the two agree except where matching
+/// tolerated a version on one side only, and addressing the export on an
+/// instance needs the name the item actually used.
+#[cfg(feature = "host-component-plugins")]
+fn export_named(
+    exports: Option<Vec<(String, ComponentItem)>>,
+    interface: &WitInterface,
+) -> Option<Arc<str>> {
+    exports?
+        .into_iter()
+        .find(|(name, _)| WitInterface::from(name.as_str()).contains(interface))
+        .map(|(name, _)| Arc::from(name))
 }
 
 /// Type alias for tracking bound plugins with their matched interfaces during binding.
@@ -592,6 +612,15 @@ pub struct ResolvedWorkload {
     invocation: crate::observability::InvocationMeter,
     /// An optional service component that runs once to completion or for the duration of the workload
     service: Option<WorkloadService>,
+    /// The ingress plugin-dispatched calls reach the service on, once one has
+    /// claimed it as a [`DispatchTarget`]. Present whether or not the workload
+    /// has a service — an unclaimed one costs a lock and an empty option.
+    service_calls: Arc<ServiceCalls>,
+    /// Set when the workload is being torn down. A [`DispatchTarget`] outlives
+    /// the workload it names — a plugin holds one until it is unbound, and is
+    /// unbound only after teardown has begun — so a dispatch already on its way
+    /// checks this rather than instantiating into a workload that is going away.
+    released: Arc<std::sync::atomic::AtomicBool>,
     /// The requested host [`WitInterface`]s to resolve this workload
     host_interfaces: Vec<WitInterface>,
     /// TLS provider override for `wasi:tls` client connections in this workload.
@@ -672,23 +701,32 @@ impl ServiceStoreRecipe {
 /// paired senders to register with the host-side HTTP/messaging ingresses. Called
 /// once per incarnation (start and each restart) so a restarted service gets fresh
 /// channels whose senders replace the stale registrations.
+///
+/// The plugin-dispatch ingress is built the same way, but its sender is swapped
+/// inside [`ServiceCalls`] rather than returned: dispatchers hold the ingress
+/// itself, so a restart replaces the channel under them with nothing to
+/// re-register.
 #[allow(clippy::type_complexity)]
 fn build_trigger_ingresses(
     serves_http: bool,
     serves_messaging: bool,
+    service_calls: &ServiceCalls,
 ) -> (
     Vec<crate::host::trigger_service::Ingress>,
     Option<tokio::sync::mpsc::Sender<crate::host::http::ServiceHttpJob>>,
     Option<tokio::sync::mpsc::Sender<crate::host::trigger_service::MessagingJob>>,
 ) {
     let mut ingresses = Vec::new();
+    if let Some(rx) = service_calls.next_incarnation() {
+        ingresses.push(crate::host::trigger_service::Ingress::Guest(rx));
+    }
     let http_tx = serves_http.then(|| {
-        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        let (tx, rx) = tokio::sync::mpsc::channel(INGRESS_BACKLOG);
         ingresses.push(crate::host::trigger_service::Ingress::Http(rx));
         tx
     });
     let messaging_tx = serves_messaging.then(|| {
-        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        let (tx, rx) = tokio::sync::mpsc::channel(INGRESS_BACKLOG);
         ingresses.push(crate::host::trigger_service::Ingress::Messaging(rx));
         tx
     });
@@ -699,18 +737,25 @@ impl ResolvedWorkload {
     /// Executes the service, if present, and returns whether it was run.
     #[instrument(name="execute_service", skip_all, fields(workload.id = self.id.as_ref(), workload.name = self.name.as_ref(), workload.namespace = self.namespace.as_ref()))]
     pub(crate) async fn execute_service(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
+        // Which ingresses the service runs with is settled here, so a plugin
+        // claiming it as a dispatch target from now on is refused rather than
+        // handed a channel nothing would ever serve.
+        self.service_calls.mark_started();
         if self
             .service
             .as_ref()
             .is_some_and(|s| s.metadata.targets_p3())
         {
-            // A p3 service that also exports a host-invoked handler (today
-            // `wasi:http/handler`) co-drives it with `cli/run` on one instance
-            // (see the `trigger service` module).
-            if self.service.as_ref().is_some_and(|s| {
-                crate::engine::exports_wasi_http(&s.metadata.component)
-                    || crate::engine::exports_messaging_handler(&s.metadata.component)
-            }) {
+            // A p3 service that also serves something the host delivers to it —
+            // a host-invoked handler export (today `wasi:http/handler`), or
+            // calls a plugin dispatches to it — co-drives that with `cli/run`
+            // on one instance (see the `trigger service` module).
+            if self.service_calls.claimed()
+                || self.service.as_ref().is_some_and(|s| {
+                    crate::engine::exports_wasi_http(&s.metadata.component)
+                        || crate::engine::exports_messaging_handler(&s.metadata.component)
+                })
+            {
                 return self.execute_trigger_service().await;
             }
             return self.execute_service_p3().await;
@@ -871,8 +916,20 @@ impl ResolvedWorkload {
         // instantiating a component per request/message. The first registration is
         // synchronous (before the driver spawns) so a delivery immediately after
         // start finds the handler; restarts re-register from inside the supervisor.
+        // What a failing `cli/run` costs this service. A service the host only
+        // *dispatches* to would, without that ingress, run as a plain p3
+        // service — where a `cli/run` error ends the incarnation and spends a
+        // restart. Keep that: which plugins a workload binds must not change
+        // what its `maxRestarts` means. A service whose handler exports are the
+        // point keeps the standing behavior, where the handlers go on serving.
+        let cli_run_error = if serves_http || serves_messaging {
+            crate::host::trigger_service::CliRunError::Logged
+        } else {
+            crate::host::trigger_service::CliRunError::Fatal
+        };
+        let service_calls = Arc::clone(&self.service_calls);
         let (ingresses, http_tx, messaging_tx) =
-            build_trigger_ingresses(serves_http, serves_messaging);
+            build_trigger_ingresses(serves_http, serves_messaging, &service_calls);
         if let Some(http_tx) = http_tx {
             self.http_handler
                 .on_service_http_resolved(self.id(), &ingress_hostnames, http_tx)
@@ -900,7 +957,7 @@ impl ResolvedWorkload {
                     Some(ingresses) => ingresses,
                     None => {
                         let (ingresses, http_tx, messaging_tx) =
-                            build_trigger_ingresses(serves_http, serves_messaging);
+                            build_trigger_ingresses(serves_http, serves_messaging, &service_calls);
                         if let Some(http_tx) = http_tx
                             && let Err(e) = http_handler
                                 .on_service_http_resolved(&workload_id, &ingress_hostnames, http_tx)
@@ -918,8 +975,13 @@ impl ResolvedWorkload {
                         ingresses
                     }
                 };
-                match crate::host::trigger_service::run_trigger_driver(&mut store, &pre, ingresses)
-                    .await
+                match crate::host::trigger_service::run_trigger_driver(
+                    &mut store,
+                    &pre,
+                    ingresses,
+                    cli_run_error,
+                )
+                .await
                 {
                     Ok(()) => {
                         info!("trigger service exited");
@@ -953,8 +1015,25 @@ impl ResolvedWorkload {
         Ok(Some(handle))
     }
 
+    /// Let go of everything this workload is running, as the first step of
+    /// tearing it down (see `crate::host::release`, the one funnel every
+    /// teardown path goes through).
+    ///
+    /// Dispatch stops here rather than when the plugins are unbound: a plugin
+    /// still holding a [`DispatchTarget`] must not build — or park — an
+    /// instance in a workload that is going away.
+    pub(crate) fn begin_teardown(&self) {
+        self.released
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        // Close the dispatch ingress too, so a plugin mid-delivery to the
+        // service is told now rather than waiting on a reply from a driver that
+        // is about to be aborted.
+        self.service_calls.shutdown();
+        self.stop_service();
+    }
+
     /// Aborts the running service [`JoinHandle`] if it exists.
-    pub(crate) fn stop_service(&self) {
+    fn stop_service(&self) {
         if let Some(service) = &self.service
             && let Some(handle) = &service.handle
         {
@@ -1318,8 +1397,7 @@ impl ResolvedWorkload {
                                 let relocate = !plain_safe
                                     && is_service_workload
                                     && func_is_bridge_safe(&func_ty);
-                                let ephemeral_call = if export_is_async && (plain_safe || relocate)
-                                {
+                                let target = if export_is_async && (plain_safe || relocate) {
                                     let mode = if relocate {
                                         EphemeralCallMode::Relocated {
                                             param_tys: func_ty.params().map(|(_, ty)| ty).collect(),
@@ -1328,7 +1406,8 @@ impl ResolvedWorkload {
                                     } else {
                                         EphemeralCallMode::PlainValue
                                     };
-                                    Some(Arc::new(EphemeralLinkedCall {
+                                    LinkedTarget::Ephemeral(Arc::new(EphemeralLinkedCall {
+                                        pre: pre.clone(),
                                         invocation: self.invocation.clone(),
                                         engine: plugin_engine.clone(),
                                         http_handler: self.http_handler.clone(),
@@ -1340,17 +1419,16 @@ impl ResolvedWorkload {
                                         mode,
                                     }))
                                 } else {
-                                    None
+                                    LinkedTarget::SharedStore
                                 };
 
                                 let inv = LinkedExportInvocation {
                                     import_name: import_name.into(),
                                     export_name: export_name.into(),
-                                    pre: pre.clone(),
                                     plugin_component_id: plugin_component.id.clone(),
                                     func_idx,
                                     param_tys: Arc::default(),
-                                    ephemeral_call,
+                                    target,
                                 };
 
                                 linked_components.insert(inv.plugin_component_id.clone());
@@ -1495,6 +1573,13 @@ impl ResolvedWorkload {
         &self.namespace
     }
 
+    /// Id of this workload's long-lived service, if it has one. A plugin is
+    /// handed item ids without being told which kind each is; this is how one
+    /// tells the service apart from a component.
+    pub fn service_id(&self) -> Option<&str> {
+        self.service.as_ref().map(|s| s.id())
+    }
+
     /// Returns the number of components in this workload.
     /// Does not include the service component if one is defined.
     pub async fn component_count(&self) -> usize {
@@ -1513,6 +1598,12 @@ impl ResolvedWorkload {
     /// without a call to hang the number on — the only correct instrument for a
     /// store several calls share. See
     /// [`crate::engine::abandon::GuestExecution`].
+    ///
+    /// This is the raw store, and a store of its own is what the component asked
+    /// *not* to have when it set `poolSize`. A host plugin calling into a
+    /// workload should go through [`Self::dispatch_target`] instead, which
+    /// serves the call on a warm instance where there is one — and reaches the
+    /// workload's service, which has no store to build at all.
     pub async fn new_store(
         &self,
         component_id: &str,
@@ -1622,6 +1713,115 @@ impl ResolvedWorkload {
             // something.
             name.as_deref().unwrap_or("unknown"),
         )
+    }
+
+    /// Whether this workload is being torn down, and so must take no more
+    /// dispatched calls.
+    pub(crate) fn released(&self) -> bool {
+        self.released.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Resolve one of this workload's items — a component, or its service — as
+    /// something a host plugin can dispatch work to.
+    ///
+    /// This is how a plugin that drives an external event stream reaches the
+    /// workload's guest code: it resolves a target for each item it was told
+    /// about, from [`HostPlugin::on_workload_resolved`], and dispatches through
+    /// it for as long as the workload runs. Where the call ends up running —
+    /// a warm instance, a store built for it, or the running service — is the
+    /// host's to decide; see [`crate::engine::dispatch`].
+    ///
+    /// # What it changes for a service
+    ///
+    /// A claimed service is run with an ingress for those calls, so it outlives
+    /// its own `cli/run`: a push-mode handler whose `run` returns — or which has
+    /// no long-running work at all — stays up to keep receiving. Its restart
+    /// budget still means what the workload said it means, though: a `cli/run`
+    /// that *fails* ends the incarnation and spends one restart, exactly as it
+    /// would without any of this.
+    ///
+    /// # Errors
+    ///
+    /// - the workload has no such item, or
+    /// - the item is a service that cannot serve dispatched calls: a p2 service
+    ///   has no concurrent driver to run one alongside its `cli/run`, and a
+    ///   service already running cannot have an ingress added to it — which is
+    ///   why this belongs in `on_workload_resolved`, before the workload
+    ///   starts.
+    ///
+    /// [`HostPlugin::on_workload_resolved`]: crate::plugin::HostPlugin::on_workload_resolved
+    pub async fn dispatch_target(&self, item_id: &str) -> anyhow::Result<DispatchTarget> {
+        DispatchTarget::resolve(self, item_id).await
+    }
+
+    /// Whether `item_id` names this workload's service rather than one of its
+    /// components.
+    ///
+    /// Says nothing about whether that service *can* serve dispatched calls —
+    /// see [`Self::service_can_dispatch`], which the callers ask separately
+    /// because they answer a refusal differently.
+    pub(crate) fn is_service_item(&self, item_id: &str) -> bool {
+        self.service.as_ref().is_some_and(|s| s.id() == item_id)
+    }
+
+    /// Claim this workload's service as a dispatch target, refusing when it
+    /// could never serve one. The claim keeps the service's ingress in place
+    /// (see [`ServiceClaim`]); dropping or releasing it before the service
+    /// starts takes the ingress back.
+    pub(crate) fn claim_service_dispatch(&self) -> anyhow::Result<ServiceClaim> {
+        self.service_can_dispatch()?;
+        self.service_calls.claim()
+    }
+
+    /// Whether this workload's service could serve a call dispatched to it.
+    ///
+    /// A p2 service drives `wasi:cli/run` and nothing else: it has no
+    /// concurrent driver for a call to run alongside that, so there is nowhere
+    /// to deliver one. Asking for such a target is an error; *finding* one while
+    /// binding a plugin is not, and leaves the workload deploying without that
+    /// route.
+    pub(crate) fn service_can_dispatch(&self) -> anyhow::Result<()> {
+        let service = self
+            .service
+            .as_ref()
+            .context("workload has no service to dispatch to")?;
+        ensure!(
+            service.metadata.targets_p3(),
+            "workload '{}' runs a p2 service, which drives `wasi:cli/run` alone and cannot serve \
+             a call dispatched to it; a service a plugin calls into must target wasip3",
+            self.id
+        );
+        Ok(())
+    }
+
+    /// What dispatching to `component_id` needs, resolved once: this workload's
+    /// own key for it (so a caller holding one does not keep a second copy of
+    /// the id), the component pre-linked against its linker, and the warm set
+    /// its calls run on.
+    ///
+    /// All three under one read lock, so a dispatch takes none: what they answer
+    /// is settled when the workload resolves (see
+    /// [`WorkloadComponent::pre_instantiate_ref`] and [`instance_pool::poolable`]).
+    pub(crate) async fn component_dispatch(
+        &self,
+        component_id: &str,
+    ) -> anyhow::Result<(Arc<str>, InstancePre<SharedCtx>, Option<Arc<InstancePool>>)> {
+        let components = self.components.read().await;
+        let (id, component) = components.get_key_value(component_id).with_context(|| {
+            format!(
+                "workload '{}' has no item '{component_id}' to dispatch to",
+                self.id
+            )
+        })?;
+        let pre = component.pre_instantiate_ref().with_context(|| {
+            format!("component '{component_id}' cannot be pre-instantiated to dispatch to")
+        })?;
+        let pool = instance_pool::poolable(
+            &components,
+            component_id,
+            &component.metadata.linked_components,
+        );
+        Ok((Arc::clone(id), pre, pool))
     }
 
     pub(crate) async fn instance_pool_for_component(
@@ -1756,6 +1956,13 @@ impl ResolvedWorkload {
         })
     }
 
+    /// Pre-link `component_id` against its linker, ready to instantiate into a
+    /// store the caller owns.
+    ///
+    /// Only a *component* has one: the workload's service is already
+    /// instantiated, so a plugin that would call into either goes through
+    /// [`Self::dispatch_target`], which covers both and keeps warm instances in
+    /// play.
     pub async fn instantiate_pre(
         &self,
         component_id: &str,
@@ -1788,29 +1995,19 @@ impl ResolvedWorkload {
         if let Some(service) = &self.service
             && service.id() == item_id
         {
-            return if exports(&service.world()) {
-                ItemExport::Service
-            } else {
-                ItemExport::None
+            if !exports(&service.world()) {
+                return ItemExport::None;
+            }
+            return match export_named(service.component_exports().ok(), interface) {
+                Some(export) => ItemExport::Service { export },
+                None => ItemExport::None,
             };
         }
         let components = self.components.read().await;
         let Some(component) = components.get(item_id) else {
             return ItemExport::None;
         };
-        // The export's own name, not the plugin's name for the import: the two
-        // agree except where matching tolerated a version on one side only, and
-        // addressing the instance needs the name the component actually used.
-        let Some(export) = component
-            .component_exports()
-            .ok()
-            .and_then(|exports| {
-                exports
-                    .into_iter()
-                    .find(|(name, _)| WitInterface::from(name.as_str()).contains(interface))
-            })
-            .map(|(name, _)| Arc::from(name))
-        else {
+        let Some(export) = export_named(component.component_exports().ok(), interface) else {
             return ItemExport::None;
         };
         ItemExport::Component {
@@ -1824,9 +2021,10 @@ impl ResolvedWorkload {
     /// where the plugin serves what a workload imports.
     ///
     /// A plugin runs in a store of its own, so such a call can never share one
-    /// with the callee: every invocation returned takes the ephemeral path,
-    /// which builds a store for the callee per call (or reuses one of its warm
-    /// instances) and moves arguments and results across the boundary.
+    /// with the callee: arguments and results always move across the boundary.
+    /// A component is called in a store of its own — one of its warm instances,
+    /// or one built for the call — and the workload's service on the instance
+    /// it already runs as.
     ///
     /// A function the callee does not export, or whose signature carries a
     /// `resource` or `error-context` handle that cannot cross, fails the
@@ -1905,11 +2103,11 @@ impl ResolvedWorkload {
                 LinkedExportInvocation {
                     import_name: Arc::from(interface),
                     export_name: Arc::from(func.name),
-                    pre: pre.clone(),
                     plugin_component_id: Arc::clone(&component_id),
                     func_idx,
                     param_tys: Arc::default(),
-                    ephemeral_call: Some(Arc::new(EphemeralLinkedCall {
+                    target: LinkedTarget::Ephemeral(Arc::new(EphemeralLinkedCall {
+                        pre: pre.clone(),
                         invocation: self.invocation.clone(),
                         engine: engine.clone(),
                         http_handler: self.http_handler.clone(),
@@ -1919,6 +2117,83 @@ impl ResolvedWorkload {
                         #[cfg(feature = "wasi-tls")]
                         tls_provider: self.tls_provider.clone(),
                         mode,
+                    })),
+                },
+            );
+        }
+        Ok(invocations)
+    }
+
+    /// [`Self::external_export_invocations`] for the workload's service.
+    ///
+    /// The service already runs; a call reaches it over the ingress `claim`
+    /// holds open, on the instance driving `cli/run`, so there is no store to
+    /// build and no `InstancePre` to instantiate.
+    ///
+    /// The caller brings the claim rather than one being taken here, because the
+    /// claim is what makes the service run with an ingress at all: a caller that
+    /// resolves these invocations and then discards them — a plugin routing to a
+    /// component instead — must be able to take that back.
+    ///
+    /// Every argument and result crosses as a relocated value, so the same
+    /// signatures a component may serve are exactly the ones a service may:
+    /// plain values, `stream<T>` and `future<T>`, and nothing carrying a
+    /// `resource` handle.
+    #[cfg(feature = "host-component-plugins")]
+    pub(crate) fn service_export_invocations(
+        &self,
+        claim: &ServiceClaim,
+        interface: &str,
+        funcs: &[ExternalCallFunc<'_>],
+    ) -> anyhow::Result<BTreeMap<Arc<str>, LinkedExportInvocation>> {
+        // No `service_can_dispatch` check here: holding a claim is proof of it,
+        // since `claim_service_dispatch` refuses to mint one otherwise.
+        let service = self
+            .service
+            .as_ref()
+            .context("workload has no service to call into")?;
+        let component = &service.metadata.component;
+        let Some((ComponentItem::ComponentInstance(_), instance_idx)) =
+            component.get_export(None, interface)
+        else {
+            bail!("the workload's service does not export {interface}");
+        };
+        let service_id: Arc<str> = Arc::from(service.id());
+
+        let mut invocations = BTreeMap::new();
+        for func in funcs {
+            let Some((ComponentItem::ComponentFunc(_), func_idx)) =
+                component.get_export(Some(&instance_idx), func.name)
+            else {
+                bail!(
+                    "the workload's service exports {interface} but not {}, which a host \
+                     component plugin imports; the workload's copy of the interface disagrees \
+                     with the plugin's",
+                    func.name
+                );
+            };
+            ensure!(
+                types_are_bridge_safe(func.param_tys) && types_are_bridge_safe(func.result_tys),
+                "{interface}#{} carries a handle that cannot cross the boundary between a \
+                 plugin's store and a workload's; only plain values, `stream<T>`, and \
+                 `future<T>` can",
+                func.name
+            );
+            let plain = types_are_ephemeral_safe(func.param_tys)
+                && types_are_ephemeral_safe(func.result_tys);
+            invocations.insert(
+                Arc::from(func.name),
+                LinkedExportInvocation {
+                    import_name: Arc::from(interface),
+                    export_name: Arc::from(func.name),
+                    plugin_component_id: Arc::clone(&service_id),
+                    func_idx,
+                    param_tys: Arc::default(),
+                    target: LinkedTarget::Service(Arc::new(ServiceExportCall {
+                        calls: Arc::clone(claim.calls()),
+                        param_tys: func.param_tys.into(),
+                        result_tys: func.result_tys.into(),
+                        plain,
                     })),
                 },
             );
@@ -2667,6 +2942,8 @@ impl UnresolvedWorkload {
             namespace: self.namespace.clone(),
             components: Arc::new(RwLock::new(self.components)),
             service: self.service,
+            service_calls: Arc::default(),
+            released: Arc::default(),
             host_interfaces: self.host_interfaces,
             http_handler: http_handler.clone(),
             invocation: meters.invocation.clone(),

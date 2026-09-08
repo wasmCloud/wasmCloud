@@ -28,13 +28,14 @@ mod bindings {
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use bindings::acme::events::{handler, metrics};
+use bindings::acme::events::{bulk, handler, metrics};
 use bindings::wasmcloud::host::types::CallError;
 use bindings::exports::acme::events::control::Guest;
 use bindings::exports::wasmcloud::host::workload_lifecycle::{
     Guest as LifecycleGuest, WorkloadInfo,
 };
 use bindings::wasmcloud::host::workload_call::{self, Target};
+use wit_bindgen::StreamResult;
 
 /// Workload id -> what each lifecycle hook saw when it tried to open a target
 /// for that workload. Instance memory, so it is empty again after a restart.
@@ -45,6 +46,12 @@ static PROBE: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
 /// workload alone — the pairing is what makes a handle proof the call routes.
 const HANDLER: &str = "acme:events/handler@0.1.0";
 const METRICS: &str = "acme:events/metrics@0.1.0";
+const BULK: &str = "acme:events/bulk@0.1.0";
+
+/// Bytes per write, and per read on the way back. Small enough that a test
+/// payload takes several of each, so a single-chunk transfer cannot pass for a
+/// working pump.
+const CHUNK: usize = 256;
 
 /// Try to open a target for `id` from inside a hook and append what happened.
 fn probe(id: &str, phase: &str) {
@@ -175,6 +182,51 @@ impl Guest for EventsPlugin {
             Ok(reply) => reply,
             Err(err) => metrics_failure(err),
         }
+    }
+
+    /// Opens a stream in THIS store and hands it to the callee, so the host has
+    /// to pump it across: the bytes are produced here, in the plugin, and read
+    /// there, in whatever store serves the call.
+    async fn bulk_absorb(id: String, bytes: u64) -> String {
+        let Some(_target) = Target::open(&id, BULK) else {
+            return format!("unroutable:{id}");
+        };
+        let (mut tx, rx) = bindings::wit_stream::new();
+        wit_bindgen::spawn_local(async move {
+            let chunk = vec![b'x'; CHUNK];
+            let mut written: u64 = 0;
+            while written < bytes {
+                let n = ((bytes - written) as usize).min(chunk.len());
+                tx.write_all(chunk[..n].to_vec()).await;
+                written += n as u64;
+            }
+            drop(tx);
+        });
+        match bulk::absorb(rx).await {
+            Ok(counted) => format!("absorbed:{counted}"),
+            Err(err) => failed(err),
+        }
+    }
+
+    /// Drains a stream the callee opened, which is the other direction: the
+    /// bytes are produced in its store and read here, after the call returned.
+    async fn bulk_emit(id: String, count: u64) -> String {
+        let Some(_target) = Target::open(&id, BULK) else {
+            return format!("unroutable:{id}");
+        };
+        let mut data = match bulk::emit(count).await {
+            Ok(data) => data,
+            Err(err) => return failed(err),
+        };
+        let mut total: u64 = 0;
+        loop {
+            let (result, chunk) = data.read(Vec::with_capacity(CHUNK)).await;
+            total += chunk.len() as u64;
+            if matches!(result, StreamResult::Dropped) {
+                break;
+            }
+        }
+        format!("emitted:{total}")
     }
 
     async fn lifecycle_probe(id: String) -> String {

@@ -37,6 +37,29 @@ interface metrics {
     report: async func(measurement: string) -> result<string, metrics-error>;
 }
 
+/// A third interface in the plugin's *calling* direction, carrying a
+/// `stream<u8>` each way. A call on it cannot cross the store boundary by
+/// copying — the host has to relocate the stream — so this is what exercises
+/// that path into a *running* service, where neither store is built for the
+/// call and neither is torn down after it.
+///
+/// Only the service fixture exports it. The component fixture beside it does
+/// not, which keeps the two shapes of callee distinguishable in one workload.
+interface bulk {
+    use wasmcloud:host/types@0.1.4.{call-error};
+
+    /// Drain a stream the plugin opened and answer how many bytes it carried:
+    /// the argument direction, pumped out of the plugin's store and into the
+    /// service's.
+    absorb: async func(data: stream<u8>) -> result<u64, call-error>;
+
+    /// Answer with a stream of `count` bytes for the plugin to drain: the
+    /// result direction, extracted in the service's own store. Wrapped in a
+    /// `result` like everything else here, so a call the host cannot complete
+    /// comes back as a value rather than trapping the plugin.
+    emit: async func(count: u64) -> result<stream<u8>, call-error>;
+}
+
 interface control {
     /// Call `handler.notify` back on the CALLING workload, naming no target —
     /// the host routes it to whichever workload's capability call this is.
@@ -70,6 +93,14 @@ interface control {
     /// where the host still has to report `not-exported`, and it has to say so
     /// through this interface's own error type.
     report-inherited: async func(measurement: string) -> string;
+
+    /// Send `bytes` bytes to `id`'s `bulk.absorb` as a stream, and report what
+    /// it counted — the argument direction of a relocated call.
+    bulk-absorb: async func(id: string, bytes: u64) -> string;
+
+    /// Drain `count` bytes from `id`'s `bulk.emit` and report how many
+    /// arrived — the result direction.
+    bulk-emit: async func(id: string, count: u64) -> string;
 
     /// What the plugin saw when it tried to open a target for `id` from inside
     /// each `wasmcloud:host/workload-lifecycle` hook, as

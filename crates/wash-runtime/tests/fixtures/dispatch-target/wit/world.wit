@@ -1,0 +1,14 @@
+package acme:dispatchtarget@0.1.0;
+
+/// A workload item a host plugin dispatches work to, deployable BOTH ways: as
+/// an ordinary component (where a call runs on one of its warm instances, or on
+/// a store built for that call alone) and as the workload's long-lived service
+/// (where every call runs on the single instance the service already is).
+///
+/// It exports `wasi:cli/run` so it is a conventional service in the second
+/// shape; deployed as a component, that export is simply never called.
+world target {
+    import wasi:clocks/monotonic-clock@0.3.0;
+    export acme:tasks/runner@0.1.0;
+    export wasi:cli/run@0.3.0;
+}

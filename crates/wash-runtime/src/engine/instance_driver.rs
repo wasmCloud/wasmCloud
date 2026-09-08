@@ -53,6 +53,7 @@ use wasmtime::error::Context as _;
 use wasmtime_wasi_http::p3::bindings::Service;
 
 use crate::engine::ctx::SharedCtx;
+use crate::engine::dispatch::{GuestJob, GuestTask};
 use crate::engine::instance_pool::ComponentInstance;
 use crate::host::http::ServiceHttpJob;
 use crate::host::trigger_service::HttpTask;
@@ -77,7 +78,7 @@ pub(crate) struct LinkedJob {
 
 /// Work an instance can be given. Every shape runs as a concurrent task on the
 /// same instance, so a component reached several ways shares one warm set
-/// rather than keeping one per trigger.
+/// rather than keeping one per way in.
 pub(crate) enum InstanceJob {
     /// An inbound HTTP request (`wasi:http/handler@0.3`). Boxed to keep the
     /// variants a similar size; a declined job carries the whole request back.
@@ -100,6 +101,10 @@ pub(crate) enum InstanceJob {
     /// 48-byte [`Val`] per byte a store-independent lowering would cost.
     #[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
     Plugin(Box<dyn PluginJob>),
+    /// Work a host plugin dispatched into this component (see
+    /// [`crate::engine::dispatch`]). Unboxed: it is two pointers, and the call
+    /// it carries is already behind one.
+    Guest(GuestJob),
 }
 
 /// A call a plugin hands to the pool, run on whichever instance is free.
@@ -437,7 +442,7 @@ impl Accepts {
         match job {
             InstanceJob::Http(_) => self.http,
             InstanceJob::Messaging(_) => self.messaging,
-            InstanceJob::Linked(_) | InstanceJob::Plugin(_) => true,
+            InstanceJob::Linked(_) | InstanceJob::Plugin(_) | InstanceJob::Guest(_) => true,
         }
     }
 }
@@ -500,6 +505,13 @@ impl InstanceDriver {
                             // timed-out call left running.
                             _ = task_state.drained.notified() => break,
                         };
+                        // One slot for whichever arm runs: it holds this call's
+                        // in-flight guard, so it is moved exactly once and the
+                        // arm that declines a job drops it right here.
+                        let slot = PoolSlot {
+                            state: Arc::clone(&task_state),
+                            _in_flight: guard,
+                        };
                         let spawned = match job {
                             InstanceJob::Http(job) => {
                                 let ServiceHttpJob {
@@ -522,10 +534,7 @@ impl InstanceDriver {
                                     req,
                                     resp_tx,
                                     abandoned,
-                                    pool_slot: Some(PoolSlot {
-                                        state: Arc::clone(&task_state),
-                                        _in_flight: guard,
-                                    }),
+                                    pool_slot: Some(slot),
                                 })
                             }
                             InstanceJob::Messaging(job) => {
@@ -552,27 +561,23 @@ impl InstanceDriver {
                                     result_tx,
                                     abandoned,
                                     attributes,
-                                    pool_slot: Some(PoolSlot {
-                                        state: Arc::clone(&task_state),
-                                        _in_flight: guard,
-                                    }),
+                                    pool_slot: Some(slot),
                                 })
                             }
                             InstanceJob::Linked(job) => accessor.spawn(LinkedTask {
                                 instance,
                                 job,
-                                slot: PoolSlot {
-                                    state: Arc::clone(&task_state),
-                                    _in_flight: guard,
-                                },
+                                slot,
                             }),
                             InstanceJob::Plugin(job) => accessor.spawn(PluginTask {
                                 instance,
                                 job,
-                                slot: PoolSlot {
-                                    state: Arc::clone(&task_state),
-                                    _in_flight: guard,
-                                },
+                                slot,
+                            }),
+                            InstanceJob::Guest(job) => accessor.spawn(GuestTask {
+                                instance,
+                                job,
+                                pool_slot: Some(slot),
                             }),
                         };
                         if let Err(e) = spawned {

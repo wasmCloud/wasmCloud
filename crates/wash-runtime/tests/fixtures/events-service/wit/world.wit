@@ -1,0 +1,18 @@
+package acme:eventsservice@0.1.0;
+
+/// The workload SERVICE half of `acme:events`: it exports `handler` for the
+/// host component plugin to call back into, and nothing else of the package.
+///
+/// A service is the workload's long-lived item, so every call the plugin makes
+/// runs on the instance already running `cli/run` rather than on one built for
+/// the call — which is the whole reason a push-mode handler would be written as
+/// a service instead of a component.
+world event-service {
+    import wasi:clocks/monotonic-clock@0.3.0;
+    export acme:events/handler@0.1.0;
+    /// The stream-carrying half of the same direction: a call on this cannot be
+    /// copied across the store boundary, so it is what exercises relocation
+    /// into an instance that is already running.
+    export acme:events/bulk@0.1.0;
+    export wasi:cli/run@0.3.0;
+}

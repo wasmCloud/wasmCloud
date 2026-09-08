@@ -19,7 +19,7 @@ use anyhow::Result;
 
 use wash_runtime::host::HostApi;
 use wash_runtime::types::{
-    Component, LocalResources, Workload, WorkloadStartRequest, WorkloadStopRequest,
+    Component, LocalResources, Service, Workload, WorkloadStartRequest, WorkloadStopRequest,
 };
 use wash_runtime::wit::WitInterface;
 
@@ -28,6 +28,7 @@ use common::{http_incoming_handler_interface, req, start_host_with_component_plu
 
 const EVENTS_PLUGIN_WASM: &[u8] = include_bytes!("wasm/events_plugin.wasm");
 const EVENTS_CALLER_WASM: &[u8] = include_bytes!("wasm/events_caller.wasm");
+const EVENTS_SERVICE_WASM: &[u8] = include_bytes!("wasm/events_service.wasm");
 const PLUGIN_ID: &str = "acme-events-plugin";
 
 /// The `acme:events` binding: `control` the plugin serves, `handler` the
@@ -419,6 +420,138 @@ async fn test_callable_reports_each_workloads_callable_interfaces() -> Result<()
     assert_eq!(
         body, "wl-alpha=acme:events/handler@0.1.0",
         "a stopped workload should no longer be callable"
+    );
+
+    Ok(())
+}
+
+/// The `handler` half of `acme:events` alone: a workload whose SERVICE exports
+/// it imports nothing else of the package, so its manifest entry names only
+/// what the service's own world has.
+fn acme_events_handler_interface() -> WitInterface {
+    WitInterface {
+        namespace: "acme".to_string(),
+        package: "events".to_string(),
+        interfaces: ["handler".to_string()].into_iter().collect(),
+        version: Some(semver::Version::parse("0.1.0").unwrap()),
+        config: HashMap::new(),
+        name: None,
+    }
+}
+
+/// A workload whose only item is a SERVICE exporting `acme:events/handler`.
+fn events_service_workload(workload_id: &str, tag: &str) -> WorkloadStartRequest {
+    WorkloadStartRequest {
+        workload_id: workload_id.to_string(),
+        workload: Workload {
+            namespace: "test".to_string(),
+            name: workload_id.to_string(),
+            annotations: HashMap::new(),
+            service: Some(Service {
+                digest: None,
+                bytes: bytes::Bytes::from_static(EVENTS_SERVICE_WASM),
+                local_resources: LocalResources {
+                    environment: HashMap::from([("EVENT_TAG".to_string(), tag.to_string())]),
+                    ..LocalResources::default()
+                },
+                max_restarts: 0,
+            }),
+            components: vec![],
+            host_interfaces: vec![acme_events_handler_interface()],
+            volumes: vec![],
+        },
+    }
+}
+
+/// A plugin can call a workload whose exporting item is its long-lived SERVICE
+/// rather than a component, and the call lands on the instance already running
+/// — the only place a service's accumulated state lives.
+///
+/// The reply counts the calls that instance has served, so the second call
+/// answering `2` is what separates "reached the running service" from "quietly
+/// instantiated a second copy of it".
+#[tokio::test]
+async fn test_plugin_dispatches_to_a_service() -> Result<()> {
+    let (addr, h) =
+        start_host_with_component_plugin_by_host("127.0.0.1:0", PLUGIN_ID, EVENTS_PLUGIN_WASM)
+            .await?;
+    h.workload_start(events_workload("wl-alpha", "alpha", "alpha"))
+        .await?;
+    h.workload_start(events_service_workload("wl-svc", "svc"))
+        .await?;
+    let client = reqwest::Client::new();
+
+    let (status, body) = req(&client, &addr, "alpha", "/dispatch?id=wl-svc&msg=one").await?;
+    assert_eq!(status.as_u16(), 200, "/dispatch should succeed");
+    assert_eq!(
+        body, "svc:dispatch:wl-svc:one:1",
+        "a target naming a service-only workload should reach its service's handler export"
+    );
+
+    let (_status, body) = req(&client, &addr, "alpha", "/dispatch?id=wl-svc&msg=two").await?;
+    assert_eq!(
+        body, "svc:dispatch:wl-svc:two:2",
+        "the second call should be served by the same running instance, not a fresh one"
+    );
+
+    // A service is callable exactly while it runs, as a component is.
+    h.workload_stop(WorkloadStopRequest {
+        workload_id: "wl-svc".to_string(),
+    })
+    .await?;
+    let (_status, body) = req(&client, &addr, "alpha", "/dispatch?id=wl-svc&msg=gone").await?;
+    assert_eq!(
+        body, "unroutable:wl-svc",
+        "a stopped service should no longer be callable"
+    );
+
+    Ok(())
+}
+
+/// A `stream<u8>` crosses into a running service and back out of it.
+///
+/// `handler.notify` carries only plain values, which the host copies; `bulk`
+/// carries a stream each way, which it cannot — the host pumps it between two
+/// stores that both go on running, neither built for this call nor dropped
+/// after it. `absorb` is the argument direction (opened in the plugin's store,
+/// read in the service's) and `emit` the result direction (opened in the
+/// service's store and drained in the plugin's *after* the call returned), so
+/// between them every relocation site on this path is exercised.
+///
+/// The byte counts are what carry the assertion: several chunks each way, so a
+/// pump that delivered only its first would be caught.
+#[tokio::test]
+async fn test_a_stream_crosses_into_a_running_service() -> Result<()> {
+    let (addr, h) =
+        start_host_with_component_plugin_by_host("127.0.0.1:0", PLUGIN_ID, EVENTS_PLUGIN_WASM)
+            .await?;
+    h.workload_start(events_workload("wl-alpha", "alpha", "alpha"))
+        .await?;
+    h.workload_start(events_service_workload("wl-svc", "svc"))
+        .await?;
+    let client = reqwest::Client::new();
+
+    let (status, body) = req(&client, &addr, "alpha", "/bulk-absorb?id=wl-svc&n=1000").await?;
+    assert_eq!(status.as_u16(), 200, "/bulk-absorb should succeed");
+    assert_eq!(
+        body, "absorbed:1000",
+        "every byte the plugin wrote should reach the running service"
+    );
+
+    let (status, body) = req(&client, &addr, "alpha", "/bulk-emit?id=wl-svc&n=1000").await?;
+    assert_eq!(status.as_u16(), 200, "/bulk-emit should succeed");
+    assert_eq!(
+        body, "emitted:1000",
+        "every byte the service wrote should reach the plugin, after the call returned"
+    );
+
+    // The service is still serving both interfaces afterwards: a relocated call
+    // leaves its store running, unlike the ephemeral path's, which is dropped
+    // once its result streams drain.
+    let (_status, body) = req(&client, &addr, "alpha", "/dispatch?id=wl-svc&msg=after").await?;
+    assert_eq!(
+        body, "svc:dispatch:wl-svc:after:1",
+        "the service should still answer plain calls once the streams are done"
     );
 
     Ok(())

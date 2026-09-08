@@ -71,6 +71,8 @@ members = [
     "http-egress-plugin-caller",
     "events-plugin",
     "events-caller",
+    "events-service",
+    "dispatch-target",
 ]
 
 [workspace.dependencies]

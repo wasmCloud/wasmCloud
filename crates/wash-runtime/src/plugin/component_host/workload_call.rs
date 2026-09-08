@@ -43,6 +43,7 @@ use wasmtime::component::types::Type;
 use wasmtime::component::{Accessor, GuestTaskId, Linker, Resource, ResourceType, Val};
 
 use crate::engine::ctx::SharedCtx;
+use crate::engine::dispatch::ServiceClaim;
 use crate::engine::linked_call::{LinkedExportInvocation, invoke_linked_async_export};
 use crate::engine::workload::{ExternalCallFunc, ItemExport, ResolvedWorkload};
 
@@ -54,6 +55,14 @@ use super::{ComponentHostPluginState, ExportedInterface, caller_root_task};
 /// `wasmcloud:host` against this definition, so the constant does not move when
 /// the package version does.
 pub(super) const HOST_WORKLOAD_CALL_INTERFACE: &str = "wasmcloud:host/workload-call@0.1.2";
+
+/// The name a workload's service is routed and logged under. It has no manifest
+/// name of its own — a workload names its components, not its service — and a
+/// route is reported by name, so the service needs one. Angle brackets keep it
+/// from reading as a component's (a manifest name is a Kubernetes-style label,
+/// which cannot contain them). Which route wins does not depend on it; see
+/// [`InterfaceRoute::precedence`].
+const SERVICE_ROUTE_NAME: &str = "<service>";
 
 /// A live `target` handle, as the guest holds it: the workload it names and the
 /// task it was opened on. The routes it directs calls to live on that task's
@@ -68,16 +77,43 @@ struct TargetHandle {
     task: Option<GuestTaskId>,
 }
 
-/// The one component of a workload serving an interface this plugin imports,
-/// with a resolved invocation per function of that interface.
-#[derive(Clone)]
+/// The one item of a workload serving an interface this plugin imports, with a
+/// resolved invocation per function of that interface.
 struct InterfaceRoute {
-    /// Manifest name of the serving component. The tie-break when several
-    /// components of one workload export the same interface — the host
-    /// dispatches to one, and picking by name keeps that choice stable across
-    /// deploys, where component ids (fresh UUIDs) would not.
+    /// Manifest name of the serving component, or [`SERVICE_ROUTE_NAME`] for the
+    /// workload's service. Half of the tie-break when several items of one
+    /// workload export the same interface — the host dispatches to one, and
+    /// picking by name keeps that choice stable across deploys, where component
+    /// ids (fresh UUIDs) would not.
     component_name: Arc<str>,
+    /// The claim on the service's dispatch ingress, when this route is the
+    /// workload's service. Its presence is the other half of the tie-break, and
+    /// it comes first: a component wins over the service whatever the two are
+    /// called. That is deliberate rather than a consequence of how the names
+    /// sort — before a service could be called at all, a component was the only
+    /// thing this could route to, and a workload that has both keeps going where
+    /// it always went.
+    ///
+    /// Holding the claim *here* is what keeps the service's ingress in step with
+    /// the routing: a service route that loses gives its claim back, so the
+    /// service is not run with an ingress nothing will ever send on.
+    service_claim: Option<ServiceClaim>,
     funcs: BTreeMap<Arc<str>, Arc<LinkedExportInvocation>>,
+}
+
+impl InterfaceRoute {
+    /// Order two routes for the same interface, lowest wins.
+    fn precedence(&self) -> (bool, &str) {
+        (self.service_claim.is_some(), &self.component_name)
+    }
+
+    /// Give back the service ingress this route claimed, if it is the service's
+    /// and it lost.
+    fn release_service_claim(&self) {
+        if let Some(claim) = &self.service_claim {
+            claim.release();
+        }
+    }
 }
 
 /// Every interface of one workload this plugin can call, keyed by the plugin's
@@ -199,25 +235,35 @@ impl WorkloadCalls {
         item_id: &str,
     ) -> anyhow::Result<()> {
         for import in &self.imports {
-            let (component_name, export_name) =
+            let (component_name, export_name, service_claim) =
                 match workload.item_exporting(item_id, &import.wit).await {
-                    ItemExport::Component { name, export } => (name, export),
-                    ItemExport::Service => {
-                        // Loudly, not silently: the workload deploys and reports
-                        // healthy either way, so without this the only symptom
-                        // is the plugin never seeing it in `callable` and every
-                        // call naming it failing, with nothing to connect that
-                        // to the service.
-                        warn!(
-                            id = self.plugin_id,
-                            workload_id = workload.id(),
-                            service = item_id,
-                            interface = %import.name,
-                            "a workload's long-lived service exports an interface this plugin \
-                             calls, but a service is not callable from a plugin yet; move the \
-                             export to a component to make it reachable"
-                        );
-                        continue;
+                    ItemExport::Component { name, export } => (name, export, None),
+                    ItemExport::Service { export } => {
+                        // A service that could never be dispatched to (a p2 one,
+                        // which drives `cli/run` and nothing else) is skipped
+                        // with a warning rather than failing the deploy: the
+                        // workload did not ask for this route, the plugin's
+                        // presence is what discovered it, and refusing to start
+                        // over it would take down a workload that ran fine
+                        // before the plugin was loaded.
+                        if let Err(e) = workload.service_can_dispatch() {
+                            warn!(
+                                id = self.plugin_id,
+                                workload_id = workload.id(),
+                                service = item_id,
+                                interface = %import.name,
+                                err = %e,
+                                "a workload's service exports an interface this plugin calls, \
+                                 but cannot be dispatched to; deploying without that route"
+                            );
+                            continue;
+                        }
+                        // Taken before the invocations are resolved, because the
+                        // claim is what will make the service run with an
+                        // ingress at all. It travels with the route, and goes
+                        // back if this route loses or resolving fails.
+                        let claim = workload.claim_service_dispatch()?;
+                        (Arc::from(SERVICE_ROUTE_NAME), export, Some(claim))
                     }
                     ItemExport::None => continue,
                 };
@@ -232,17 +278,25 @@ impl WorkloadCalls {
                 .collect();
             // Addressed by the component's own export name, which matching may
             // have accepted despite differing from the plugin's import name.
-            let invocations = workload
-                .external_export_invocations(item_id, &export_name, &funcs)
-                .await
-                .with_context(|| {
-                    format!(
-                        "component '{item_id}' cannot serve {} for host component plugin '{}'",
-                        import.name, self.plugin_id
-                    )
-                })?;
+            // A service is called on the instance already running it; a
+            // component is called in a store of its own.
+            let invocations = match &service_claim {
+                Some(claim) => workload.service_export_invocations(claim, &export_name, &funcs),
+                None => {
+                    workload
+                        .external_export_invocations(item_id, &export_name, &funcs)
+                        .await
+                }
+            }
+            .with_context(|| {
+                format!(
+                    "item '{item_id}' cannot serve {} for host component plugin '{}'",
+                    import.name, self.plugin_id
+                )
+            })?;
             let route = InterfaceRoute {
                 component_name,
+                service_claim,
                 funcs: invocations
                     .into_iter()
                     .map(|(name, inv)| (name, Arc::new(inv)))
@@ -279,21 +333,28 @@ impl WorkloadCalls {
                 slot.insert(Arc::new(route));
             }
             Entry::Occupied(mut slot) => {
-                // The host dispatches this interface to one component per
-                // workload, so a second exporter is ignored — deterministically,
-                // by name, mirroring how the HTTP entrypoint picks among several
-                // components carrying the same export.
-                let (selected, ignored) = if route.component_name < slot.get().component_name {
+                // The host dispatches this interface to one item per workload,
+                // so a second exporter is ignored — deterministically, by
+                // precedence, mirroring how the HTTP entrypoint picks among
+                // several components carrying the same export.
+                let (selected, ignored, loser) = if route.precedence() < slot.get().precedence() {
                     let ignored = Arc::clone(&slot.get().component_name);
                     let selected = Arc::clone(&route.component_name);
-                    slot.insert(Arc::new(route));
-                    (selected, ignored)
+                    let displaced = slot.insert(Arc::new(route));
+                    (selected, ignored, displaced)
                 } else {
                     (
                         Arc::clone(&slot.get().component_name),
                         Arc::clone(&route.component_name),
+                        Arc::new(route),
                     )
                 };
+                // One funnel, so neither branch can forget: the route that lost
+                // gives back the service ingress it claimed, and a service
+                // nothing routes to is not run with one. Released here rather
+                // than left to the losing route's drop, which an open `target`
+                // handle can delay.
+                loser.release_service_claim();
                 warn!(
                     id = self.plugin_id,
                     %workload_id,
@@ -1082,6 +1143,7 @@ mod tests {
             generation: 0,
             route: Arc::new(InterfaceRoute {
                 component_name: Arc::from("test-component"),
+                service_claim: None,
                 funcs: BTreeMap::new(),
             }),
             job,
@@ -1195,6 +1257,7 @@ mod tests {
             Arc::from(IFACE),
             InterfaceRoute {
                 component_name: Arc::from("events-caller"),
+                service_claim: None,
                 funcs: BTreeMap::new(),
             },
         );
@@ -1215,6 +1278,58 @@ mod tests {
         );
     }
 
+    /// Where a component and the workload's service both export the interface,
+    /// the component is routed to — whichever order they are claimed in, and
+    /// whatever they are called. A component was the only thing this could route
+    /// to before a service could be called at all, so a workload with both keeps
+    /// going where it always went.
+    ///
+    /// The service also gives its dispatch ingress back when it loses. Keeping
+    /// it would run the service with an ingress nothing will ever send on, and a
+    /// service that runs to completion would never finish serving it.
+    #[test]
+    fn a_component_wins_the_route_over_the_service() {
+        // `<service>` sorts before a letter but after a digit, so a name-only
+        // tie-break would answer these two cases differently.
+        for component in ["events-caller", "0-caller"] {
+            for service_first in [true, false] {
+                // A real ingress, so a route carries exactly what a resolved one
+                // carries — including the claim the loser must give back.
+                let ingress = Arc::new(crate::engine::dispatch::ServiceCalls::default());
+                let route = |name: &str, is_service: bool| InterfaceRoute {
+                    component_name: Arc::from(name),
+                    service_claim: is_service
+                        .then(|| ingress.claim().expect("the service is claimable")),
+                    funcs: BTreeMap::new(),
+                };
+                let calls = WorkloadCalls::new("test-plugin", Vec::new());
+                let claimed = if service_first {
+                    [route(SERVICE_ROUTE_NAME, true), route(component, false)]
+                } else {
+                    [route(component, false), route(SERVICE_ROUTE_NAME, true)]
+                };
+                for route in claimed {
+                    calls.insert_route("wl-a", Arc::from(IFACE), route);
+                }
+
+                let (_generation, routed) =
+                    calls.route_for("wl-a", IFACE).expect("a route is claimed");
+                let order = if service_first { "first" } else { "second" };
+                assert_eq!(
+                    routed.component_name.as_ref(),
+                    component,
+                    "component '{component}' should serve it (service claimed \
+                     {order}): {SERVICE_ROUTE_NAME} won instead"
+                );
+                assert!(
+                    !ingress.claimed(),
+                    "the service lost the route (claimed {order}), so it must not be run \
+                     with a dispatch ingress"
+                );
+            }
+        }
+    }
+
     /// A `target` handle names one *deployment*, not a workload id. Held across
     /// a stop and a redeploy under the same id, its routes still name components
     /// of the workload that went away, so the generation it captured has to read
@@ -1228,6 +1343,7 @@ mod tests {
                 Arc::from("acme:events/handler@0.1.0"),
                 InterfaceRoute {
                     component_name: Arc::from("events-caller"),
+                    service_claim: None,
                     funcs: BTreeMap::new(),
                 },
             );

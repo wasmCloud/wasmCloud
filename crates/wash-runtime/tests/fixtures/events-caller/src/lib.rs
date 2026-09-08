@@ -10,6 +10,8 @@
 //! - `GET /echo?msg=M`           -> `control.echo(M)`          -> handling tag
 //! - `GET /dispatch?id=W&msg=M`  -> `control.dispatch(W, M)`   -> W's tag + W
 //! - `GET /nested?id=W&msg=M`    -> `control.nested(W, M)`     -> `W|self`
+//! - `GET /bulk-absorb?id=W&n=N` -> `control.bulk-absorb(W, N)` -> bytes W read
+//! - `GET /bulk-emit?id=W&n=N`   -> `control.bulk-emit(W, N)`   -> bytes W sent
 //! - `GET /callable`             -> `control.callable()`       -> `id=iface,…` a line
 //! - `GET /report?id=W&m=M`      -> `control.report(W, M)`     -> no target for it
 //! - `GET /report-inherited?m=M` -> `control.report-inherited(M)` -> borrowed error case
@@ -71,6 +73,18 @@ impl HttpGuest for Component {
             let id = query_get(query, "id").unwrap_or_default();
             let msg = query_get(query, "msg").unwrap_or_default();
             let reply = control::nested(id, msg).await;
+            return Ok(make_response(200, reply.into_bytes()));
+        }
+        if route.starts_with("/bulk-absorb") {
+            let id = query_get(query, "id").unwrap_or_default();
+            let n = query_get(query, "n").and_then(|n| n.parse().ok()).unwrap_or(0);
+            let reply = control::bulk_absorb(id, n).await;
+            return Ok(make_response(200, reply.into_bytes()));
+        }
+        if route.starts_with("/bulk-emit") {
+            let id = query_get(query, "id").unwrap_or_default();
+            let n = query_get(query, "n").and_then(|n| n.parse().ok()).unwrap_or(0);
+            let reply = control::bulk_emit(id, n).await;
             return Ok(make_response(200, reply.into_bytes()));
         }
         if route.starts_with("/callable") {

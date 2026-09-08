@@ -20,6 +20,14 @@
 //! [`capability`]); this module holds the shared [`Ingress`] enum, the
 //! `prepare`/`serve` dispatch, and the [`run_trigger_driver`] loop.
 //!
+//! The [`Ingress::Guest`] variant is the one that carries no interface of its
+//! own: a host plugin dispatching work into the service supplies the call
+//! itself, and the ingress only resolves the instance to run it on (see
+//! [`crate::engine::dispatch`]). That is what makes a service reachable on an
+//! interface the host has never heard of — without it, a service exporting a
+//! plugin's interface deploys and then never receives anything, because a
+//! service has no per-call instantiation to fall back on.
+//!
 //! The [`Ingress::Capability`] variant generalizes this to *host component
 //! plugins*: instead of HTTP requests or messages, the host pushes cross-store
 //! capability calls (a workload importing `acme:kv/store`, `wasi:keyvalue`, ...)
@@ -41,6 +49,7 @@ use wasmtime_wasi::p3::bindings::Command;
 use wasmtime_wasi_http::p3::bindings::Service;
 
 use crate::engine::ctx::SharedCtx;
+use crate::engine::dispatch::{GuestJob, GuestTask};
 use crate::host::http::ServiceHttpJob;
 #[cfg(feature = "host-component-plugins")]
 use crate::host::job_registry::JobRegistry;
@@ -74,6 +83,12 @@ pub enum Ingress {
     /// `wasmcloud:messaging/handler@0.3.0` — the messaging subscriber delivers
     /// received messages here. Trigger services are p3-only.
     Messaging(tokio::sync::mpsc::Receiver<MessagingJob>),
+    /// Work a host plugin dispatched to this service, whatever interface it
+    /// exports (see [`crate::engine::dispatch`]). Unlike the ingresses above,
+    /// which each name one interface the host knows, this one carries the
+    /// plugin's own call and only resolves the instance for it — which is what
+    /// lets a service serve an interface the host has never heard of.
+    Guest(tokio::sync::mpsc::Receiver<GuestJob>),
     /// Cross-store capability calls for a host component plugin. `funcs` lists
     /// every exported function to resolve up front; `rx` delivers the calls;
     /// `registry` tracks each served call as a cancellable job; `replay` holds
@@ -115,6 +130,12 @@ impl Ingress {
                     rx,
                 })
             }
+            // Nothing to bind up front: a dispatched call brings its own
+            // bindings and resolves them against the instance itself.
+            Ingress::Guest(rx) => Ok(PreparedIngress::Guest {
+                instance: *instance,
+                rx,
+            }),
             #[cfg(feature = "host-component-plugins")]
             Ingress::Capability {
                 funcs,
@@ -166,6 +187,10 @@ enum PreparedIngress {
     Messaging {
         handler: Arc<messaging::AsyncMessaging>,
         rx: tokio::sync::mpsc::Receiver<MessagingJob>,
+    },
+    Guest {
+        instance: Instance,
+        rx: tokio::sync::mpsc::Receiver<GuestJob>,
     },
     #[cfg(feature = "host-component-plugins")]
     Capability {
@@ -236,6 +261,20 @@ impl PreparedIngress {
                         pool_slot: None,
                     }) {
                         tracing::error!(err = %e, "failed to spawn messaging invocation task");
+                    }
+                }
+                ServeOutcome::Shutdown
+            }
+            PreparedIngress::Guest { instance, rx } => {
+                while let Some(job) = rx.recv().await {
+                    // No pool slot: a service's instance is the workload's one
+                    // long-lived item, not one of a pool's to retire.
+                    if let Err(e) = accessor.spawn(GuestTask {
+                        instance: *instance,
+                        job,
+                        pool_slot: None,
+                    }) {
+                        tracing::error!(err = %e, "failed to spawn dispatched call task");
                     }
                 }
                 ServeOutcome::Shutdown
@@ -397,7 +436,12 @@ impl TriggerService {
         ingresses: Vec<Ingress>,
     ) -> Self {
         let driver = tokio::spawn(async move {
-            if let Err(e) = run_trigger_driver(&mut store, &pre, ingresses).await {
+            // A host component plugin's `cli/run`, where it has one at all, is
+            // incidental to the capabilities it serves: an error there is
+            // reported, and the plugin goes on serving.
+            if let Err(e) =
+                run_trigger_driver(&mut store, &pre, ingresses, CliRunError::Logged).await
+            {
                 tracing::error!(err = %e, "trigger service driver faulted");
             }
         });
@@ -415,6 +459,7 @@ pub(crate) async fn run_trigger_driver(
     store: &mut Store<SharedCtx>,
     pre: &InstancePre<SharedCtx>,
     ingresses: Vec<Ingress>,
+    cli_run_error: CliRunError,
 ) -> anyhow::Result<()> {
     let instance = pre
         .instantiate_async(&mut *store)
@@ -453,7 +498,10 @@ pub(crate) async fn run_trigger_driver(
             .run_concurrent(async |accessor| {
                 // Spawn the cli/run co-driver once (first entry only).
                 if let Some(command) = command.take()
-                    && let Err(e) = accessor.spawn(RunTask { command })
+                    && let Err(e) = accessor.spawn(RunTask {
+                        command,
+                        on_error: cli_run_error,
+                    })
                 {
                     tracing::error!(err = %e, "failed to spawn cli/run co-driver task");
                 }
@@ -487,16 +535,38 @@ pub(crate) async fn run_trigger_driver(
     Ok(())
 }
 
+/// What a `wasi:cli/run` that returns an error does to the incarnation running
+/// it. The caller states this rather than the driver inferring it, because what
+/// it turns on is whether the workload asked for this run loop to be supervised
+/// — not which ingresses happen to be attached.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CliRunError {
+    /// End the incarnation, leaving the restart decision to the supervisor.
+    /// What a service gets when `cli/run` is the work it was deployed to do.
+    Fatal,
+    /// Report it and keep serving. What a service whose handlers are the point
+    /// gets, and what a host component plugin's incidental `cli/run` gets.
+    Logged,
+}
+
 /// Drives the service's `wasi:cli/run` export (its long-running work).
 struct RunTask {
     command: Command,
+    on_error: CliRunError,
 }
 
 impl AccessorTask<SharedCtx> for RunTask {
     async fn run(self, accessor: &Accessor<SharedCtx>) -> wasmtime::Result<()> {
         match self.command.wasi_cli_run().call_run(accessor).await {
             Ok(Ok(())) => tracing::info!("service cli/run exited successfully"),
-            Ok(Err(())) => tracing::error!("service cli/run exited with error"),
+            Ok(Err(())) => {
+                tracing::error!("service cli/run exited with error");
+                // Returning the error faults `run_concurrent`, which is what
+                // ends the incarnation and hands the restart decision over.
+                if self.on_error == CliRunError::Fatal {
+                    return Err(wasmtime::format_err!("service cli/run exited with error"));
+                }
+            }
             Err(e) => tracing::error!(err = %e, "service cli/run trapped"),
         }
         Ok(())
