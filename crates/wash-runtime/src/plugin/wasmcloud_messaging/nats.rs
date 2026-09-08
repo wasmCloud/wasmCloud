@@ -607,11 +607,21 @@ impl HostPlugin for NatsMessaging {
                         let reply_to = msg.reply.as_ref().map(|r| r.to_string());
                         let body: Vec<u8> = msg.payload.into();
 
+                        // The workload holds the handler weakly, so losing it
+                        // means the host this subscriber delivers into is gone
+                        // and no later message can be served either.
+                        let http_handler = match workload.http_handler() {
+                            Ok(handler) => handler,
+                            Err(e) => {
+                                warn!(parent: &span, error = %e, "stopping NATS subscriber loop");
+                                break;
+                            }
+                        };
+
                         // If this workload runs a long-lived trigger service for
                         // messaging, deliver to it (preserving its in-memory
                         // state) rather than instantiating a component per message.
-                        if workload
-                            .http_handler()
+                        if http_handler
                             .has_trigger_service_messaging(workload.id())
                             .await
                         {
@@ -620,8 +630,7 @@ impl HostPlugin for NatsMessaging {
                                 body,
                                 reply_to,
                             };
-                            match workload
-                                .http_handler()
+                            match http_handler
                                 .deliver_trigger_service_message(
                                     workload.id(),
                                     broker,

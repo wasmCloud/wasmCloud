@@ -480,7 +480,7 @@ async fn start_host_with_component_plugin_router(
         .wasm(plugin_wasm)
         .engine(engine.clone())
         .native_plugins(native_plugins)
-        .maybe_http_handler(http_handler)
+        .maybe_http_handler(http_handler.as_ref().map(Arc::downgrade))
         .build()
         .await
         .context("failed to build host component plugin")?;

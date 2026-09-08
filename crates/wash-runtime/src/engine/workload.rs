@@ -604,8 +604,10 @@ pub struct ResolvedWorkload {
     /// All components in the workload. This is behind a `RwLock` to support mutable
     /// access to the component linkers.
     components: Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
-    /// The HTTP handler for outgoing HTTP requests
-    http_handler: Arc<dyn crate::host::http::HostHandler>,
+    /// The HTTP handler for outgoing HTTP requests. See
+    /// [`crate::host::http::live_handler`] for why this is weak and how the
+    /// two kinds of caller differ.
+    http_handler: std::sync::Weak<dyn crate::host::http::HostHandler>,
     /// The meter of the host running this workload, stamped onto every store
     /// built for it. Reaches the engine the same way `http_handler` does,
     /// because a store has no other way back to the host that owns it.
@@ -657,7 +659,9 @@ impl std::fmt::Debug for ResolvedWorkload {
 /// leave every restarted incarnation permanently broken.
 struct ServiceStoreRecipe {
     engine: wasmtime::Engine,
-    http_handler: Arc<dyn crate::host::http::HostHandler>,
+    /// Weak, like the workload's own; the supervisor holds this recipe for as
+    /// long as the service runs.
+    http_handler: std::sync::Weak<dyn crate::host::http::HostHandler>,
     active_template: ComponentCtxTemplate,
     linked_templates: Vec<ComponentCtxTemplate>,
     linked_instances: Vec<(Arc<str>, wasmtime::component::InstancePre<SharedCtx>)>,
@@ -670,12 +674,13 @@ struct ServiceStoreRecipe {
 }
 
 impl ServiceStoreRecipe {
-    /// Build a fresh service store (`is_service = true` so `cli/run` may bind
-    /// its loopback socket).
+    /// Build a fresh service store. Always a service store: the flag it passes
+    /// is what lets `cli/run` bind its loopback socket, and every store built
+    /// from this recipe is an incarnation of a service that may want one.
     async fn build(&self) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
         let store = new_store_from_templates(
             &self.engine,
-            self.http_handler.clone(),
+            crate::host::http::live_handler(&self.http_handler)?,
             &self.active_template,
             &self.linked_templates,
             &self.linked_instances,
@@ -771,9 +776,7 @@ impl ResolvedWorkload {
         let Some(service) = self.service.as_ref() else {
             bail!("service unexpectedly missing during execution");
         };
-        let mut store = self
-            .new_store_from_metadata(&service.metadata, true)
-            .await?;
+        let mut store = self.new_store_from_metadata(&service.metadata).await?;
         let instance = pre.instantiate_async(&mut store).await?;
         let handle = tokio::spawn(async move {
             loop {
@@ -904,6 +907,10 @@ impl ResolvedWorkload {
         let mut store = recipe.build().await?;
         let http_handler = self.http_handler.clone();
         let workload_id: Arc<str> = Arc::from(self.id());
+        // Carried for the supervisor's own logs: the id alone does not say
+        // which workload's service a restart decision is about.
+        let workload_name: Arc<str> = self.name.clone();
+        let workload_namespace: Arc<str> = self.namespace.clone();
         // The hostnames this service serves HTTP on, derived once from the
         // workload's declared interfaces. Passed to every HTTP registration
         // (the first below and each restart re-registration in the supervisor)
@@ -931,13 +938,13 @@ impl ResolvedWorkload {
         let (ingresses, http_tx, messaging_tx) =
             build_trigger_ingresses(serves_http, serves_messaging, &service_calls);
         if let Some(http_tx) = http_tx {
-            self.http_handler
+            self.http_handler()?
                 .on_service_http_resolved(self.id(), &ingress_hostnames, http_tx)
                 .await
                 .map_err(|e| anyhow::anyhow!("failed to register service HTTP handler: {e:#}"))?;
         }
         if let Some(messaging_tx) = messaging_tx {
-            self.http_handler
+            self.http_handler()?
                 .on_trigger_service_messaging_resolved(self.id(), messaging_tx)
                 .await
                 .map_err(|e| {
@@ -956,6 +963,20 @@ impl ResolvedWorkload {
                 let ingresses = match first.take() {
                     Some(ingresses) => ingresses,
                     None => {
+                        // The handler is held weakly, so a host that went away
+                        // while this service was faulting ends the supervisor:
+                        // there is nothing left to re-register the restarted
+                        // incarnation's ingresses with.
+                        let Some(http_handler) = http_handler.upgrade() else {
+                            error!(
+                                workload.id = %workload_id,
+                                workload.namespace = %workload_namespace,
+                                workload.name = %workload_name,
+                                "host HTTP handler is no longer available; \
+                                 not restarting this workload's service"
+                            );
+                            break;
+                        };
                         let (ingresses, http_tx, messaging_tx) =
                             build_trigger_ingresses(serves_http, serves_messaging, &service_calls);
                         if let Some(http_tx) = http_tx
@@ -963,14 +984,26 @@ impl ResolvedWorkload {
                                 .on_service_http_resolved(&workload_id, &ingress_hostnames, http_tx)
                                 .await
                         {
-                            error!(err = %e, "failed to re-register service HTTP handler on restart");
+                            error!(
+                                workload.id = %workload_id,
+                                workload.namespace = %workload_namespace,
+                                workload.name = %workload_name,
+                                err = %e,
+                                "failed to re-register service HTTP handler on restart"
+                            );
                         }
                         if let Some(messaging_tx) = messaging_tx
                             && let Err(e) = http_handler
                                 .on_trigger_service_messaging_resolved(&workload_id, messaging_tx)
                                 .await
                         {
-                            error!(err = %e, "failed to re-register trigger service messaging handler on restart");
+                            error!(
+                                workload.id = %workload_id,
+                                workload.namespace = %workload_namespace,
+                                workload.name = %workload_name,
+                                err = %e,
+                                "failed to re-register trigger service messaging handler on restart"
+                            );
                         }
                         ingresses
                     }
@@ -1559,8 +1592,12 @@ impl ResolvedWorkload {
     /// the messaging subscriber) deliver an inbound message to a long-lived
     /// trigger-service instance instead of instantiating a component per
     /// message.
-    pub fn http_handler(&self) -> &Arc<dyn crate::host::http::HostHandler> {
-        &self.http_handler
+    ///
+    /// Held weakly, so this fails once the host that owns the handler is gone
+    /// — which is the answer every caller wants: there is nothing left to
+    /// register with, deliver to, or send an outbound request through.
+    pub fn http_handler(&self) -> anyhow::Result<Arc<dyn crate::host::http::HostHandler>> {
+        crate::host::http::live_handler(&self.http_handler)
     }
 
     /// Gets the name of the workload
@@ -1633,7 +1670,7 @@ impl ResolvedWorkload {
         };
         let store = new_store_from_templates(
             &engine,
-            self.http_handler.clone(),
+            self.http_handler()?,
             &active_template,
             &linked_templates,
             &linked_instances,
@@ -1868,33 +1905,17 @@ impl ResolvedWorkload {
     }
 
     /// Creates a new wasmtime Store for multiple components from the given workload metadata.
+    ///
+    /// The recipe carries the metering stamp a service's store needs — it
+    /// serves every ingress the workload has, concurrently, for the life of the
+    /// workload, so no call on it can attribute a delta to itself and
+    /// `guest.execution.total` is all there is. See
+    /// [`crate::engine::abandon::GuestExecution`].
     async fn new_store_from_metadata(
         &self,
         metadata: &WorkloadMetadata,
-        is_service: bool,
     ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
-        let recipe = self.service_store_recipe(metadata).await?;
-        let store = new_store_from_templates(
-            &recipe.engine,
-            recipe.http_handler.clone(),
-            &recipe.active_template,
-            &recipe.linked_templates,
-            &recipe.linked_instances,
-            is_service,
-        )
-        .await?;
-        // A service's store is the one that most needs this: it serves every
-        // ingress the workload has, concurrently, for the life of the workload,
-        // so no call on it can attribute a delta to itself and
-        // `guest.execution.total` is all there is. See
-        // [`crate::engine::abandon::GuestExecution`].
-        if self.invocation.is_enabled() {
-            store
-                .data()
-                .executed
-                .set_identity(self.service_identity(metadata), self.invocation.clone());
-        }
-        Ok(store)
+        self.service_store_recipe(metadata).await?.build().await
     }
 
     /// The identity a service's store runs under.
@@ -2287,9 +2308,13 @@ impl ResolvedWorkload {
                 }
             }
 
-            if component.exports_wasi_http() {
+            // A handler that is already gone has nothing left to unbind from,
+            // so teardown treats that as done rather than as a failure.
+            if component.exports_wasi_http()
+                && let Some(http_handler) = self.http_handler.upgrade()
+            {
                 anyhow::Context::context(
-                    self.http_handler.on_workload_unbind(self.id()).await,
+                    http_handler.on_workload_unbind(self.id()).await,
                     "failed to notify HTTP handler of workload",
                 )?;
             }
@@ -2329,12 +2354,13 @@ impl ResolvedWorkload {
         // A trigger service registered its HTTP/messaging handlers at start
         // (`execute_trigger_service`); drop those registrations on stop so it no
         // longer receives host-invoked deliveries on a torn-down instance.
-        if self.service.is_some() {
-            if let Err(e) = self.http_handler.on_service_http_unbind(self.id()).await {
+        if self.service.is_some()
+            && let Some(http_handler) = self.http_handler.upgrade()
+        {
+            if let Err(e) = http_handler.on_service_http_unbind(self.id()).await {
                 tracing::error!(workload.id = %self.id(), err = %e, "failed to unbind service HTTP handler, continuing");
             }
-            if let Err(e) = self
-                .http_handler
+            if let Err(e) = http_handler
                 .on_trigger_service_messaging_unbind(self.id())
                 .await
             {
@@ -2974,7 +3000,7 @@ impl UnresolvedWorkload {
             service_calls: Arc::default(),
             released: Arc::default(),
             host_interfaces: self.host_interfaces,
-            http_handler: http_handler.clone(),
+            http_handler: Arc::downgrade(&http_handler),
             invocation: meters.invocation.clone(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,

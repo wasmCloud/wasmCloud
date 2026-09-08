@@ -384,7 +384,7 @@ impl CliCommand for DevCommand {
                     &engine,
                     oci_config.clone(),
                     &native_plugins,
-                    http_handler.clone(),
+                    http_handler.as_ref().map(Arc::downgrade),
                     None,
                 )
                 .await

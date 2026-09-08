@@ -134,7 +134,7 @@ async fn start_host_with_egress_plugin(
         .engine(engine)
         .native_plugins(native_plugins)
         .allowed_hosts(allowed_hosts.into())
-        .maybe_http_handler(http_handler)
+        .maybe_http_handler(http_handler.as_ref().map(Arc::downgrade))
         .build()
         .await
         .context("http-egress-plugin should link cleanly")?;

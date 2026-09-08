@@ -678,11 +678,31 @@ impl HostPlugin for InMemoryMessaging {
 
                         debug!(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>"), "Processing message");
 
+                        // The workload holds the handler weakly, so losing it
+                        // means the host this drains into is gone: nothing
+                        // queued now or later can be served, so the task ends
+                        // rather than the drain pass. This message is already
+                        // popped, so a requester waiting on it is failed here
+                        // for the same reason the shed path below does it.
+                        let http_handler = match workload.http_handler() {
+                            Ok(handler) => handler,
+                            Err(e) => {
+                                warn!(error = %e, "ending in-memory receive loop");
+                                if sole_subscriber
+                                    && let (Some(reply_to), Some(pending)) =
+                                        (&msg.reply_to, &pending_requests)
+                                    && let Some(sender) = pending.write().await.remove(reply_to)
+                                {
+                                    let _ = sender.send(Err(super::shed_error()));
+                                }
+                                break 'task;
+                            }
+                        };
+
                         // If this workload runs a long-lived trigger service for
                         // messaging, deliver to it (preserving its in-memory
                         // state) rather than instantiating a component per message.
-                        if workload
-                            .http_handler()
+                        if http_handler
                             .has_trigger_service_messaging(workload.id())
                             .await
                         {
@@ -691,8 +711,7 @@ impl HostPlugin for InMemoryMessaging {
                                 body: msg.body.clone(),
                                 reply_to: msg.reply_to.clone(),
                             };
-                            match workload
-                                .http_handler()
+                            match http_handler
                                 .deliver_trigger_service_message(
                                     workload.id(),
                                     broker,

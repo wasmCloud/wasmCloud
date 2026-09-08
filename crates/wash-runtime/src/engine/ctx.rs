@@ -415,7 +415,8 @@ impl wasmtime_wasi_http::p3::WasiHttpView for SharedCtx {
 
 /// HTTP hooks implementation that delegates to a [`HostHandler`](crate::host::http::HostHandler).
 struct CtxHttpHooks {
-    http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+    /// See [`crate::host::http::live_handler`] for why this is weak.
+    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
     workload_id: Arc<str>,
     allowed_hosts: Arc<[AllowedHost]>,
 }
@@ -427,13 +428,25 @@ impl WasiHttpHooks for CtxHttpHooks {
         config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
     ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
     {
+        // A store with no handler at all and a store whose host has gone away
+        // under it are different failures, and the guest is told which: the
+        // first is how this host was configured, the second is a store
+        // outliving the host that built it.
         match &self.http_handler {
-            Some(handler) => {
-                handler.outgoing_request(&self.workload_id, request, config, &self.allowed_hosts)
-            }
             None => Err(wasmtime_wasi_http::p2::HttpError::trap(
                 wasmtime::format_err!("http client not available"),
             )),
+            Some(handler) => match crate::host::http::live_handler(handler) {
+                Ok(handler) => handler.outgoing_request(
+                    &self.workload_id,
+                    request,
+                    config,
+                    &self.allowed_hosts,
+                ),
+                Err(e) => Err(wasmtime_wasi_http::p2::HttpError::trap(
+                    wasmtime::format_err!("{e:#}"),
+                )),
+            },
         }
     }
 }
@@ -443,7 +456,8 @@ impl WasiHttpHooks for CtxHttpHooks {
 /// (allowed-hosts policy, alternate transports, etc.) applies uniformly to
 /// both P2 and P3 components.
 struct CtxHttpHooksP3 {
-    http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+    /// See [`crate::host::http::live_handler`] for why this is weak.
+    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
     workload_id: Arc<str>,
     allowed_hosts: Arc<[AllowedHost]>,
 }
@@ -490,17 +504,23 @@ impl wasmtime_wasi_http::p3::WasiHttpHooks for CtxHttpHooksP3 {
     > {
         use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode as P3ErrorCode;
 
-        match &self.http_handler {
-            Some(handler) => handler.outgoing_request_p3(
+        // As in [`CtxHttpHooks::send_request`], an unconfigured handler and a
+        // host that has gone away are reported apart.
+        let handler = match &self.http_handler {
+            None => Err("http client not available".to_string()),
+            Some(handler) => crate::host::http::live_handler(handler).map_err(|e| format!("{e:#}")),
+        };
+        match handler {
+            Ok(handler) => handler.outgoing_request_p3(
                 &self.workload_id,
                 request,
                 options,
                 fut,
                 &self.allowed_hosts,
             ),
-            None => Box::new(async move {
+            Err(message) => Box::new(async move {
                 Err(wasmtime_wasi::TrappableError::from(
-                    P3ErrorCode::InternalError(Some("http client not available".to_string())),
+                    P3ErrorCode::InternalError(Some(message)),
                 ))
             }),
         }
@@ -516,7 +536,7 @@ pub struct CtxBuilder {
     ctx: Option<WasiCtx>,
     sockets: Option<crate::sockets::WasiSocketsCtx>,
     plugins: HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>,
-    http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
     allowed_hosts: Arc<[AllowedHost]>,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
@@ -562,11 +582,18 @@ impl CtxBuilder {
         self
     }
 
+    /// Point this store's outgoing HTTP at `http_handler`.
+    ///
+    /// Borrowed, not owned, because the store keeps only a
+    /// [`Weak`](std::sync::Weak) — see [`crate::host::http::live_handler`]. The
+    /// caller therefore has to keep the handler alive itself; taking it by
+    /// reference is what says so, rather than accepting an `Arc` whose last
+    /// strong count this call would quietly drop.
     pub fn with_http_handler(
         mut self,
-        http_handler: Arc<dyn crate::host::http::HostHandler>,
+        http_handler: &Arc<dyn crate::host::http::HostHandler>,
     ) -> Self {
-        self.http_handler = Some(http_handler);
+        self.http_handler = Some(Arc::downgrade(http_handler));
         self
     }
 
