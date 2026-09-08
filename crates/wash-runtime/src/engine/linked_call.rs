@@ -979,6 +979,11 @@ pub(crate) struct ServiceExportCall {
     /// looking for one before falling back to a clone, and for a signature that
     /// cannot hold one — a batch of records, say — that walk is the whole cost.
     pub(crate) plain: bool,
+    /// What calls on this export are measured under, built where the route was
+    /// wired: neither the identity nor the operation can change under a
+    /// resolved workload, and rebuilding the set per call would allocate a
+    /// vector and five strings to arrive at the same answer every time.
+    pub(crate) attributes: Arc<[opentelemetry::KeyValue]>,
 }
 
 /// Run a call on the workload's service, on the instance already running it.
@@ -1025,20 +1030,25 @@ async fn invoke_service_export(
         func_idx: inv.func_idx,
         import_name: inv.import_name.clone(),
         export_name: inv.export_name.clone(),
+        operation: Arc::from(format!("{}#{}", inv.import_name, inv.export_name)),
         args,
         result_tys: Arc::clone(&service_call.result_tys),
         plain: service_call.plain,
         reply,
     };
-    crate::engine::dispatch::dispatch_to_service(&service_call.calls, Box::new(call))
-        .await
-        .map_err(|e| {
-            wasmtime::format_err!(
-                "{}.{} could not be delivered to the workload's service: {e:#}",
-                inv.import_name,
-                inv.export_name
-            )
-        })?;
+    crate::engine::dispatch::dispatch_to_service(
+        &service_call.calls,
+        Box::new(call),
+        Arc::clone(&service_call.attributes),
+    )
+    .await
+    .map_err(|e| {
+        wasmtime::format_err!(
+            "{}.{} could not be delivered to the workload's service: {e:#}",
+            inv.import_name,
+            inv.export_name
+        )
+    })?;
     // The dispatch above returns once the call has run, so its outcome is
     // already here.
     let relocated = reply_rx
@@ -1068,6 +1078,8 @@ struct ServiceExportTask {
     func_idx: ComponentExportIndex,
     import_name: Arc<str>,
     export_name: Arc<str>,
+    /// `interface#func`, what this call is named in the host's logs and metrics.
+    operation: Arc<str>,
     args: Vec<Relocated>,
     result_tys: Arc<[Type]>,
     /// See [`ServiceExportCall::plain`].
@@ -1077,6 +1089,10 @@ struct ServiceExportTask {
 
 #[cfg(feature = "host-component-plugins")]
 impl crate::engine::dispatch::GuestCall for ServiceExportTask {
+    fn describe(&self) -> &str {
+        &self.operation
+    }
+
     fn call<'a>(
         self: Box<Self>,
         accessor: &'a Accessor<SharedCtx>,
@@ -1091,6 +1107,7 @@ impl crate::engine::dispatch::GuestCall for ServiceExportTask {
                 result_tys,
                 plain,
                 reply,
+                ..
             } = *self;
 
             let prepared = accessor.with(|mut access| -> wasmtime::Result<_> {
@@ -1107,35 +1124,23 @@ impl crate::engine::dispatch::GuestCall for ServiceExportTask {
                 Ok(prepared) => prepared,
                 Err(e) => {
                     let _ = reply.send(Err(e));
-                    return Ok(());
+                    return Ok(Some("host"));
                 }
             };
 
             let mut results = vec![Val::Bool(false); result_tys.len()];
-            let call_timeout = crate::timeouts::ephemeral_call();
-            match timeout(
-                call_timeout,
-                func.call_concurrent(accessor, &arg_vals, &mut results),
-            )
-            .await
+            // Unbounded here: the deadline is the host's, enforced around this
+            // call and from the dispatcher's own task, which a non-yielding
+            // guest cannot block. A trap is reported to the caller *and* faults
+            // the service store, which the supervisor restarts.
+            if let Err(e) = func
+                .call_concurrent(accessor, &arg_vals, &mut results)
+                .await
             {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    let _ = reply.send(Err(
-                        e.context(format!("{import_name}.{export_name} trapped"))
-                    ));
-                    return Ok(());
-                }
-                // The guest work is still running on the service's instance: a
-                // guest subtask cannot be cancelled from the host, and the
-                // service is the workload's one instance, so there is nothing to
-                // retire. The caller is told, and the service keeps serving.
-                Err(e) => {
-                    let _ = reply.send(Err(wasmtime::format_err!(
-                        "{import_name}.{export_name} timed out after {call_timeout:?}: {e}"
-                    )));
-                    return Ok(());
-                }
+                let _ = reply.send(Err(
+                    e.context(format!("{import_name}.{export_name} trapped"))
+                ));
+                return Ok(Some("trap"));
             }
 
             // Extracted in the service store, whose own `run_concurrent` keeps
@@ -1153,8 +1158,9 @@ impl crate::engine::dispatch::GuestCall for ServiceExportTask {
                     )
                 })
             };
+            let refused = extracted.is_err().then_some("host");
             let _ = reply.send(extracted);
-            Ok(())
+            Ok(refused)
         })
     }
 }

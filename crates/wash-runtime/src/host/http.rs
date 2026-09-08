@@ -2484,7 +2484,6 @@ async fn invoke_component_handler(
                         match other {
                             InstanceJob::Linked(_) => "linked",
                             InstanceJob::Messaging(_) => "messaging",
-                            InstanceJob::Plugin(_) => "plugin",
                             InstanceJob::Guest(_) => "dispatched",
                             InstanceJob::Http(_) => "http",
                         }

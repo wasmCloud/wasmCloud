@@ -1731,6 +1731,11 @@ impl ResolvedWorkload {
     /// a warm instance, a store built for it, or the running service — is the
     /// host's to decide; see [`crate::engine::dispatch`].
     ///
+    /// `plugin` is the dispatcher's own [`HostPlugin::id`], which names it in
+    /// the guest-execution metrics its calls produce. It is `'static` because a
+    /// plugin id is fixed for the life of the build, and the attribute would
+    /// otherwise be a dimension traffic could invent.
+    ///
     /// # What it changes for a service
     ///
     /// A claimed service is run with an ingress for those calls, so it outlives
@@ -1750,8 +1755,12 @@ impl ResolvedWorkload {
     ///   starts.
     ///
     /// [`HostPlugin::on_workload_resolved`]: crate::plugin::HostPlugin::on_workload_resolved
-    pub async fn dispatch_target(&self, item_id: &str) -> anyhow::Result<DispatchTarget> {
-        DispatchTarget::resolve(self, item_id).await
+    pub async fn dispatch_target(
+        &self,
+        item_id: &str,
+        plugin: &'static str,
+    ) -> anyhow::Result<DispatchTarget> {
+        DispatchTarget::resolve(self, item_id, plugin).await
     }
 
     /// Whether `item_id` names this workload's service rather than one of its
@@ -1844,13 +1853,14 @@ impl ResolvedWorkload {
     /// store holds the whole linked set, so keeping it warm keeps all of them
     /// warm.
     ///
-    /// For a dispatch path that keeps its own warm set rather than going
-    /// through the shared [`InstancePool`] (the `wasmcloud:nats` subscriber,
-    /// whose calls carry typed resources no [`InstanceJob`] can).
-    ///
-    /// [`InstanceJob`]: crate::engine::instance_driver::InstanceJob
-    #[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
-    pub(crate) async fn warm_instance_policy(&self, component_id: &str) -> InstancePolicy {
+    /// For a plugin that has to keep a warm set of its own rather than
+    /// dispatching through [`Self::dispatch_target`] — the `wasmcloud:nats`
+    /// subscriber's JetStream deliveries, whose call carries a typed `resource`
+    /// handle that is an index into the very store table it must run in, so its
+    /// argument cannot exist before the store is chosen. Anything that *can*
+    /// take the dispatch path should, and get the pool itself rather than only
+    /// the numbers describing it.
+    pub async fn warm_instance_policy(&self, component_id: &str) -> InstancePolicy {
         match self.instance_pool_for_component(component_id).await {
             Some(pool) => pool.policy(),
             None => InstancePolicy::Ephemeral,
@@ -2159,6 +2169,8 @@ impl ResolvedWorkload {
             bail!("the workload's service does not export {interface}");
         };
         let service_id: Arc<str> = Arc::from(service.id());
+        let service_identity =
+            crate::observability::WorkloadIdentity::new(self.namespace(), self.name(), "service");
 
         let mut invocations = BTreeMap::new();
         for func in funcs {
@@ -2194,6 +2206,8 @@ impl ResolvedWorkload {
                         param_tys: func.param_tys.into(),
                         result_tys: func.result_tys.into(),
                         plain,
+                        attributes: service_identity
+                            .attributes("linked", &format!("{interface}#{}", func.name)),
                     })),
                 },
             );

@@ -43,8 +43,6 @@
 //! with it, so every call in flight on that instance fails rather than just
 //! one. That is bounded by `max_concurrency`, and by `1/pool_size` of the pool.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -93,41 +91,16 @@ pub(crate) enum InstanceJob {
     /// `max_concurrency`; the sync `@0.2.0` export holds `&mut Store` for the
     /// length of its call and keeps its per-message store.
     Messaging(Box<crate::host::trigger_service::MessagingJob>),
-    /// A call a host plugin supplies, made on a pooled instance.
+    /// A call a host plugin dispatched into this component (see
+    /// [`crate::engine::dispatch`]).
     ///
     /// The engine routes it like any other job and never looks inside: the
     /// plugin keeps its own payload and makes its own typed call. That is what
     /// lets a delivery carry, say, a NATS message's bytes rather than the one
     /// 48-byte [`Val`] per byte a store-independent lowering would cost.
-    #[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
-    Plugin(Box<dyn PluginJob>),
-    /// Work a host plugin dispatched into this component (see
-    /// [`crate::engine::dispatch`]). Unboxed: it is two pointers, and the call
-    /// it carries is already behind one.
+    /// Unboxed: it is a handful of pointers, and the call it carries is already
+    /// behind one.
     Guest(GuestJob),
-}
-
-/// A call a plugin hands to the pool, run on whichever instance is free.
-///
-/// Implemented by the plugin so the engine needs none of its types. The
-/// plugin's own bindgen call takes an [`Accessor`] rather than a `&mut Store`,
-/// so it runs inside the driver's long-lived `run_concurrent` exactly as a
-/// linked call does — several at a time on one instance, up to
-/// `max_concurrency`.
-pub(crate) trait PluginJob: Send + 'static {
-    /// Names this job in a driver log line.
-    #[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
-    fn describe(&self) -> &str;
-
-    /// Runs the call. Owns replying to whoever is waiting for it, and may
-    /// retire the instance through `slot` when it ends leaving guest state
-    /// indeterminate — the same contract [`LinkedTask`] follows.
-    fn run<'a>(
-        self: Box<Self>,
-        accessor: &'a Accessor<SharedCtx>,
-        instance: Instance,
-        slot: Option<PoolSlot>,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 }
 
 /// Times one guest invocation, and records it when dropped.
@@ -176,7 +149,6 @@ impl InvocationSample {
 
     /// Mark what went wrong, for a call site that knows. The value is a short
     /// bounded name — `trap`, `timeout` — never anything a caller supplies.
-    #[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
     pub(crate) fn failed(&mut self, error: &'static str) {
         self.error = Some(error);
     }
@@ -188,20 +160,6 @@ impl Drop for InvocationSample {
             return;
         };
         meter.record(&self.attributes, started.elapsed(), self.error);
-    }
-}
-
-/// Drives one [`PluginJob`] as an ordinary pooled task.
-struct PluginTask {
-    instance: Instance,
-    job: Box<dyn PluginJob>,
-    slot: PoolSlot,
-}
-
-impl AccessorTask<SharedCtx> for PluginTask {
-    async fn run(self, accessor: &Accessor<SharedCtx>) -> wasmtime::Result<()> {
-        self.job.run(accessor, self.instance, Some(self.slot)).await;
-        Ok(())
     }
 }
 
@@ -436,13 +394,13 @@ impl Accepts {
     /// Whether this instance can be given `job` at all.
     ///
     /// A linked call names the export index it resolved against this very
-    /// component, and a plugin job binds its own view when it runs, so neither
-    /// is gated here.
+    /// component, and a dispatched call binds its own view when it runs, so
+    /// neither is gated here.
     fn takes(self, job: &InstanceJob) -> bool {
         match job {
             InstanceJob::Http(_) => self.http,
             InstanceJob::Messaging(_) => self.messaging,
-            InstanceJob::Linked(_) | InstanceJob::Plugin(_) | InstanceJob::Guest(_) => true,
+            InstanceJob::Linked(_) | InstanceJob::Guest(_) => true,
         }
     }
 }
@@ -565,11 +523,6 @@ impl InstanceDriver {
                                 })
                             }
                             InstanceJob::Linked(job) => accessor.spawn(LinkedTask {
-                                instance,
-                                job,
-                                slot,
-                            }),
-                            InstanceJob::Plugin(job) => accessor.spawn(PluginTask {
                                 instance,
                                 job,
                                 slot,
