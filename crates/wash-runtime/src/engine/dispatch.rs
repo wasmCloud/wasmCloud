@@ -16,9 +16,10 @@
 //!    — in which case the call runs on one of them, alongside whatever that
 //!    instance already has in flight, exactly as an inbound HTTP request or a
 //!    call from another component does (see the `instance_pool` module).
-//!    That is what makes `poolSize`/`maxConcurrency` mean something here: a
-//!    burst of dispatches fans out across the warm set rather than paying for a
-//!    store apiece.
+//!    That is what makes `poolSize`, `maxInvocations` and `maxConcurrency` mean
+//!    something here: a burst of dispatches fans out across the warm set rather
+//!    than paying for a store apiece, and an instance that has served its
+//!    budget is replaced under the plugin without it noticing.
 //!  * a **service** is the workload's one long-lived instance and is never
 //!    instantiated again. Its calls are delivered to the instance that is
 //!    already running, over the ingress its trigger-service driver serves (see
@@ -30,6 +31,14 @@
 //! being driven under. A plugin therefore keeps using its generated bindings
 //! for the call itself — the host decides *where* the call runs, not *what* it
 //! is — and carries results back over a channel of its own.
+//!
+//! Everything a shared instance owes a call it did not build is the host's, and
+//! is why a plugin dispatching here behaves better than one keeping a warm set
+//! of its own: the epoch deadline is re-armed so it measures the call rather
+//! than the instance's whole life, the call is registered with its store's
+//! abandonment set for as long as it runs, it is bounded by
+//! [`GuestCall::deadline`], an instance it leaves in an indeterminate state is
+//! retired, and its guest execution is recorded under the plugin that drove it.
 //!
 //! [`HostPlugin::on_workload_resolved`]: crate::plugin::HostPlugin::on_workload_resolved
 
@@ -43,7 +52,7 @@ use tokio_util::task::AbortOnDropHandle;
 use wasmtime::component::{Accessor, AccessorTask, Instance, InstancePre};
 
 use crate::engine::ctx::SharedCtx;
-use crate::engine::instance_driver::{InstanceJob, PoolSlot};
+use crate::engine::instance_driver::{InstanceJob, InvocationSample, PoolSlot};
 use crate::engine::instance_pool::{self, ComponentInstance, Declined, InstancePool};
 use crate::engine::workload::ResolvedWorkload;
 
@@ -54,16 +63,32 @@ use crate::engine::workload::ResolvedWorkload;
 pub(crate) const INGRESS_BACKLOG: usize = 256;
 
 /// A future borrowing the accessor a [`GuestCall`] was handed.
-pub type GuestCallFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
+pub type GuestCallFuture<'a> = Pin<Box<dyn Future<Output = GuestCallOutcome> + Send + 'a>>;
+
+/// What a [`GuestCall`] reports back to the host.
+///
+///  * `Ok(None)` — the guest ran and answered. Whatever it answered is the
+///    plugin's to interpret and to report on its own channel.
+///  * `Ok(Some(label))` — the guest ran and answered with a failure the plugin
+///    counts as one: a handler returning its interface's own error. `label` is
+///    what the call is recorded under, and must be a short bounded name (the
+///    host uses `trap` and `timeout`), never anything a caller supplies.
+///  * `Err` — the call did not complete, so a pooled instance that was serving
+///    it is retired rather than left holding guest state no one can account
+///    for.
+pub type GuestCallOutcome = anyhow::Result<Option<&'static str>>;
 
 /// Work a host plugin runs on a live instance of a workload item.
 ///
 /// The host resolves the instance — a warm one, one built for this call, or the
-/// running service — and drives its store; the call itself is the plugin's,
-/// made through whatever bindings it generated for the interface:
+/// running service — drives its store, and owns everything a shared instance
+/// needs around the call: the epoch deadline is re-armed so it measures this
+/// call rather than the instance's whole life, the call is registered with the
+/// store's abandonment set for as long as it runs, it is bounded by
+/// [`Self::deadline`], and its guest execution is recorded. The call itself is
+/// the plugin's, made through whatever bindings it generated for the interface:
 ///
 /// ```no_run
-/// # use std::sync::Arc;
 /// # use wasmtime::component::{Accessor, Instance};
 /// # use wash_runtime::engine::ctx::SharedCtx;
 /// # use wash_runtime::engine::dispatch::{GuestCall, GuestCallFuture};
@@ -71,14 +96,18 @@ pub type GuestCallFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> +
 /// # struct Handler;
 /// # impl Handler {
 /// #     fn new(_: &mut impl wasmtime::AsContextMut, _: &Instance) -> anyhow::Result<Self> { todo!() }
-/// #     async fn call_handle(&self, _: &Accessor<SharedCtx>, _: Records) -> anyhow::Result<()> { todo!() }
+/// #     async fn call_handle(&self, _: &Accessor<SharedCtx>, _: Records) -> anyhow::Result<Result<(), String>> { todo!() }
 /// # }
 /// struct Deliver {
 ///     records: Records,
-///     reply: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+///     reply: tokio::sync::oneshot::Sender<anyhow::Result<Result<(), String>>>,
 /// }
 ///
 /// impl GuestCall for Deliver {
+///     fn describe(&self) -> &str {
+///         "acme:events/handler#handle"
+///     }
+///
 ///     fn call<'a>(
 ///         self: Box<Self>,
 ///         accessor: &'a Accessor<SharedCtx>,
@@ -86,22 +115,36 @@ pub type GuestCallFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> +
 ///     ) -> GuestCallFuture<'a> {
 ///         Box::pin(async move {
 ///             let handler = accessor.with(|mut access| Handler::new(&mut access, &instance))?;
-///             let outcome = handler.call_handle(accessor, self.records).await;
-///             let _ = self.reply.send(outcome);
-///             Ok(())
+///             let answered = handler.call_handle(accessor, self.records).await?;
+///             let refused = answered.is_err().then_some("handler");
+///             let _ = self.reply.send(Ok(answered));
+///             Ok(refused)
 ///         })
 ///     }
 /// }
 /// ```
-///
-/// # Errors
-///
-/// The `Err` a call returns is reported to whoever dispatched it, and means the
-/// call did not complete: a pooled instance that was serving it is retired
-/// rather than left holding guest state no one can account for. A guest that
-/// answers with its interface's own error type has *completed* — report that
-/// through the plugin's own channel, as above, and return `Ok`.
 pub trait GuestCall: Send + 'static {
+    /// Names this call in the host's log lines, and is the `operation` its
+    /// guest execution is recorded under.
+    ///
+    /// The WIT export being invoked, so it is bounded by the interface set a
+    /// component declares — one metric series per export, never one per
+    /// message.
+    fn describe(&self) -> &str;
+
+    /// How long the host waits for the guest before it stops wanting the
+    /// result and retires the instance serving it.
+    ///
+    /// The default is the host's own ephemeral-call timeout, which is generous
+    /// enough for a batch handler. It exists at all because a guest subtask
+    /// cannot be cancelled from the host: on a *shared* instance — a warm one,
+    /// or the service — a call that never returns would otherwise hold its
+    /// in-flight slot for the life of the workload, and retiring the instance
+    /// is what ends it.
+    fn deadline(&self) -> std::time::Duration {
+        crate::timeouts::ephemeral_call()
+    }
+
     /// Run this call on `instance`, under the store `accessor` is driving.
     fn call<'a>(
         self: Box<Self>,
@@ -110,14 +153,72 @@ pub trait GuestCall: Send + 'static {
     ) -> GuestCallFuture<'a>;
 }
 
-/// A [`GuestCall`] with the channel its outcome goes back on, as it travels to
-/// the instance that will serve it.
+/// A [`GuestCall`] as it travels to the instance that will serve it: the
+/// channel its outcome goes back on, the flag its dispatcher arms when it stops
+/// wanting the result, and what its guest execution is recorded under.
 ///
 /// Opaque: a job is minted by [`DispatchTarget::dispatch`] and is only ever
 /// handed to the instance that runs it.
 pub struct GuestJob {
     call: Box<dyn GuestCall>,
     reply: oneshot::Sender<anyhow::Result<()>>,
+    /// The abandonment flag of the dispatched call enforcing this job's
+    /// deadline (see [`crate::engine::abandon`]).
+    abandoned: Arc<crate::engine::abandon::AbandonFlag>,
+    /// Built where the target was resolved: the identity a dispatched call is
+    /// measured under cannot change under a resolved workload, and resolving it
+    /// costs a read lock.
+    attributes: Arc<[opentelemetry::KeyValue]>,
+}
+
+impl GuestJob {
+    /// Mint a job for a dispatcher that runs the pool dance itself rather than
+    /// through a [`DispatchTarget`] — the `wasmcloud:nats` subscriber, whose
+    /// deliveries carry a cancellation of their own.
+    ///
+    /// `abandoned` comes from the [`DispatchedCall`] enforcing this job's
+    /// deadline, which is what makes the field proof that some dispatcher does.
+    ///
+    /// [`DispatchedCall`]: crate::engine::abandon::DispatchedCall
+    pub(crate) fn new(
+        call: Box<dyn GuestCall>,
+        reply: oneshot::Sender<anyhow::Result<()>>,
+        abandoned: Arc<crate::engine::abandon::AbandonFlag>,
+        attributes: Arc<[opentelemetry::KeyValue]>,
+    ) -> Self {
+        Self {
+            call,
+            reply,
+            abandoned,
+            attributes,
+        }
+    }
+
+    /// Run this job on an instance in a store built for it alone, and answer
+    /// what it did.
+    ///
+    /// The outcome is returned rather than sent on the job's reply channel: the
+    /// dispatcher is right here awaiting this future, so there is nothing to
+    /// deliver it to. The store is dropped with the call, so there is no pooled
+    /// instance to retire either — what the call leaves behind goes with it.
+    pub(crate) async fn run_on_store(
+        self,
+        store: &mut wasmtime::Store<SharedCtx>,
+        instance: Instance,
+    ) -> anyhow::Result<()> {
+        let GuestJob {
+            call,
+            reply: _,
+            abandoned,
+            attributes,
+        } = self;
+        store
+            .run_concurrent(async move |accessor| {
+                serve(accessor, instance, call, abandoned, attributes, None).await
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("dispatched call store faulted: {e:#}"))?
+    }
 }
 
 /// Serves one plugin-dispatched call on an instance: the workload's service, or
@@ -133,7 +234,8 @@ pub struct GuestJob {
 pub(crate) struct GuestTask {
     pub(crate) instance: Instance,
     pub(crate) job: GuestJob,
-    /// This call's tether to a pooled instance. `None` for a service.
+    /// This call's tether to a pooled instance. `None` for a service, and for a
+    /// store built to serve this call alone.
     pub(crate) pool_slot: Option<PoolSlot>,
 }
 
@@ -144,21 +246,102 @@ impl AccessorTask<SharedCtx> for GuestTask {
             job,
             pool_slot,
         } = self;
-        let GuestJob { call, reply } = job;
-        let outcome = call.call(accessor, instance).await;
-        if let Err(e) = &outcome
-            && let Some(slot) = &pool_slot
-        {
-            tracing::warn!(
-                err = ?e,
-                "dispatched call failed; retiring the instance that served it"
-            );
-            slot.retire_instance();
-        }
+        let GuestJob {
+            call,
+            reply,
+            abandoned,
+            attributes,
+        } = job;
+        let outcome = serve(accessor, instance, call, abandoned, attributes, pool_slot).await;
         // The dispatcher may have gone; the call still ran, because a guest
         // subtask cannot be cancelled from the host.
         let _ = reply.send(outcome);
         Ok(())
+    }
+}
+
+/// Run one dispatched call on `instance`, under everything a store owes a call
+/// it did not build itself: the epoch deadline re-armed so it measures this
+/// call rather than the instance's whole life, the call registered with the
+/// store's abandonment set for as long as it runs, its own deadline, and the
+/// record of what it cost.
+///
+/// `pool_slot` is the call's tether to a warm instance, and `None` for an
+/// instance nothing else will use — the service's, which is not the pool's to
+/// retire, and a store built for this call alone, which is dropped either way.
+async fn serve(
+    accessor: &Accessor<SharedCtx>,
+    instance: Instance,
+    call: Box<dyn GuestCall>,
+    abandoned: Arc<crate::engine::abandon::AbandonFlag>,
+    attributes: Arc<[opentelemetry::KeyValue]>,
+    pool_slot: Option<PoolSlot>,
+) -> anyhow::Result<()> {
+    let what = Arc::<str>::from(call.describe());
+    let deadline = call.deadline();
+
+    // Re-armed here, and registered below, rather than left to the plugin: the
+    // instance it dispatches to is one it shares with calls it cannot see.
+    let (calls, executed) = accessor.with(|mut access| {
+        crate::engine::abandon::rearm_for_call(&mut access);
+        (
+            Arc::clone(&access.get().abandoned),
+            Arc::clone(&access.get().executed),
+        )
+    });
+    let mut sample = InvocationSample::start(&executed, attributes);
+
+    // This bound ends the wait of a dispatcher that is still there; keeping a
+    // slow guest out of the epoch callback's reach is `watch_until_abandoned`'s
+    // job.
+    match tokio::time::timeout(
+        deadline,
+        crate::engine::abandon::watch_until_abandoned(
+            &calls,
+            abandoned,
+            call.call(accessor, instance),
+        ),
+    )
+    .await
+    {
+        Ok(Ok(refused)) => {
+            if let Some(label) = refused {
+                sample.failed(label);
+            }
+            Ok(())
+        }
+        // A host failure mid-call leaves guest state indeterminate.
+        Ok(Err(e)) => {
+            sample.failed("trap");
+            tracing::warn!(
+                err = ?e,
+                what = %what,
+                "dispatched call failed; retiring the instance that served it"
+            );
+            if let Some(slot) = &pool_slot {
+                slot.retire_instance();
+            }
+            Err(e)
+        }
+        // A guest subtask cannot be cancelled from the host, so the timed out
+        // work is still running on this store. Retiring the instance is what
+        // ends it: the driver stops admitting, drains, ends its run loop, and
+        // the store's teardown takes the stalled work with it.
+        Err(_) => {
+            sample.failed("timeout");
+            tracing::warn!(
+                what = %what,
+                ?deadline,
+                "dispatched call did not return within its deadline; retiring the instance \
+                 that served it"
+            );
+            if let Some(slot) = &pool_slot {
+                slot.retire_instance();
+            }
+            Err(anyhow::anyhow!(
+                "dispatched call '{what}' did not return within {deadline:?}"
+            ))
+        }
     }
 }
 
@@ -350,6 +533,40 @@ impl Drop for ServiceClaim {
 pub struct DispatchTarget {
     workload: Arc<ResolvedWorkload>,
     item: TargetItem,
+    /// What this item's guest execution is recorded under. Resolved with the
+    /// target rather than per call: the identity costs a read lock and cannot
+    /// change under a resolved workload, and the attribute set is rebuilt only
+    /// when a call names an operation this target has not carried before.
+    metrics: Arc<DispatchMetrics>,
+}
+
+/// The attribute sets a target's dispatches are recorded under, one per
+/// operation.
+///
+/// Keyed by [`GuestCall::describe`], which names a WIT export, so the map is
+/// bounded by the interface set the item declares — never by traffic. Built
+/// lazily because a target learns its operations only from the calls that
+/// arrive on it, and cached because rebuilding a set costs the vector and five
+/// strings on a delivery hot path to arrive at the same answer every time.
+struct DispatchMetrics {
+    identity: crate::observability::WorkloadIdentity,
+    plugin: &'static str,
+    by_operation: Mutex<std::collections::BTreeMap<Arc<str>, Arc<[opentelemetry::KeyValue]>>>,
+}
+
+impl DispatchMetrics {
+    fn attributes(&self, operation: &str) -> Arc<[opentelemetry::KeyValue]> {
+        let mut cached = self
+            .by_operation
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(attributes) = cached.get(operation) {
+            return Arc::clone(attributes);
+        }
+        let attributes = self.identity.attributes(self.plugin, operation);
+        cached.insert(Arc::from(operation), Arc::clone(&attributes));
+        attributes
+    }
 }
 
 #[derive(Clone)]
@@ -394,6 +611,7 @@ impl DispatchTarget {
     pub(crate) async fn resolve(
         workload: &ResolvedWorkload,
         item_id: &str,
+        plugin: &'static str,
     ) -> anyhow::Result<Self> {
         let item = if workload.is_service_item(item_id) {
             // Asked for by name, so a service that can never serve a dispatched
@@ -403,12 +621,18 @@ impl DispatchTarget {
             let (id, pre, pool) = workload.component_dispatch(item_id).await?;
             TargetItem::Component { id, pre, pool }
         };
+        let metrics = Arc::new(DispatchMetrics {
+            identity: workload.component_identity(item_id).await,
+            plugin,
+            by_operation: Mutex::default(),
+        });
         Ok(Self {
             // Copied once per target: cloning a `ResolvedWorkload` copies the
             // service's `Linker` by value, so it is worth paying here rather
             // than on every clone of the target.
             workload: Arc::new(workload.clone()),
             item,
+            metrics,
         })
     }
 
@@ -426,14 +650,14 @@ impl DispatchTarget {
     ///
     /// # How long it may take
     ///
-    /// No host timeout bounds the call: the host cannot know what the plugin
-    /// asked the guest to do, and a batch handler that takes minutes is the
-    /// point of this interface. A caller that wants a deadline imposes its own
-    /// by dropping this future, which reclaims a store built for the call alone.
-    /// It cannot end guest work already running on a *shared* instance, though —
-    /// a warm one or the service — because a guest subtask cannot be cancelled
-    /// from the host: that call runs to completion on the instance, with nowhere
-    /// left to report its outcome.
+    /// Up to the call's own [`GuestCall::deadline`], which defaults to the
+    /// host's ephemeral-call timeout — long enough for a batch handler, and
+    /// bounded because a call on a *shared* instance that never returns would
+    /// otherwise hold its in-flight slot for the life of the workload. Dropping
+    /// this future gives up on the result sooner and reclaims a store built for
+    /// the call alone; it cannot end guest work already running on a warm
+    /// instance or the service, because a guest subtask cannot be cancelled
+    /// from the host.
     ///
     /// [module docs]: self
     pub async fn dispatch(&self, call: impl GuestCall) -> anyhow::Result<()> {
@@ -447,12 +671,16 @@ impl DispatchTarget {
                 self.workload.id()
             );
         }
-        let call = Box::new(call);
+        let call: Box<dyn GuestCall> = Box::new(call);
+        let attributes = self.metrics.attributes(call.describe());
         match &self.item {
             TargetItem::Component { id, pre, pool } => {
-                dispatch_to_component(&self.workload, id, pre, pool.as_ref(), call).await
+                dispatch_to_component(&self.workload, id, pre, pool.as_ref(), call, attributes)
+                    .await
             }
-            TargetItem::Service(claim) => dispatch_to_service(claim.calls(), call).await,
+            TargetItem::Service(claim) => {
+                dispatch_to_service(claim.calls(), call, attributes).await
+            }
         }
     }
 }
@@ -461,17 +689,16 @@ impl DispatchTarget {
 pub(crate) async fn dispatch_to_service(
     calls: &ServiceCalls,
     call: Box<dyn GuestCall>,
+    attributes: Arc<[opentelemetry::KeyValue]>,
 ) -> anyhow::Result<()> {
     let tx = calls
         .sender()
         .context("the workload's service is not accepting dispatched calls")?;
-    let (reply, reply_rx) = oneshot::channel();
-    tx.send(GuestJob { call, reply })
+    let (job, reply_rx, dispatched) = mint(call, attributes);
+    tx.send(job)
         .await
         .map_err(|_| anyhow::anyhow!("the workload's service is no longer running"))?;
-    reply_rx
-        .await
-        .map_err(|_| anyhow::anyhow!("the workload's service dropped the dispatched call"))?
+    await_outcome(dispatched, reply_rx).await
 }
 
 /// Run a call on `component_id`: on one of its warm instances when it keeps
@@ -483,23 +710,22 @@ async fn dispatch_to_component(
     pre: &InstancePre<SharedCtx>,
     pool: Option<&Arc<InstancePool>>,
     call: Box<dyn GuestCall>,
+    attributes: Arc<[opentelemetry::KeyValue]>,
 ) -> anyhow::Result<()> {
+    let (job, reply_rx, dispatched) = mint(call, attributes);
     // An instance built for a pool that then declined the call: the store of
     // its own below is that instance, rather than a second one beside it.
     let mut reclaimed = None;
-    let call = if let Some(pool) = pool {
-        let (reply, reply_rx) = oneshot::channel();
-        let job = InstanceJob::Guest(GuestJob { call, reply });
-        let outcome =
-            instance_pool::offer_or_install(pool, pre, job, || workload.new_store(component_id))
-                .await?;
+    let job = if let Some(pool) = pool {
+        let outcome = instance_pool::offer_or_install(pool, pre, InstanceJob::Guest(job), || {
+            workload.new_store(component_id)
+        })
+        .await?;
         match outcome {
-            Ok(()) => {
-                return reply_rx
-                    .await
-                    .map_err(|_| anyhow::anyhow!("pooled instance dropped the dispatched call"))?;
-            }
-            // Every warm instance was busy; run it in a store of its own.
+            Ok(()) => return await_outcome(dispatched, reply_rx).await,
+            // Every warm instance was busy; run the very same job in a store of
+            // its own, so neither its payload nor an instantiation is paid for
+            // twice.
             Err(Declined {
                 job: InstanceJob::Guest(job),
                 instance,
@@ -509,7 +735,7 @@ async fn dispatch_to_component(
                     "warm instances saturated; dispatching to a store of its own"
                 );
                 reclaimed = instance;
-                job.call
+                job
             }
             // A job comes back as the variant it went in as, so this is
             // unreachable — but not worth a panic on a dispatch path.
@@ -519,7 +745,7 @@ async fn dispatch_to_component(
             }
         }
     } else {
-        call
+        job
     };
 
     let ComponentInstance {
@@ -534,14 +760,53 @@ async fn dispatch_to_component(
         }
     };
     // The store travels into the task, so a dispatcher cancelled mid-call drops
-    // it with the task rather than leaving it running.
-    let mut task = AbortOnDropHandle::new(tokio::spawn(async move {
-        store
-            .run_concurrent(async move |accessor| call.call(accessor, instance).await)
-            .await
-            .map_err(|e| anyhow::anyhow!("dispatched call store faulted: {e:#}"))?
+    // it with the task rather than leaving it running. The task's own result is
+    // the call's outcome, so `reply_rx` has nothing to carry here.
+    drop(reply_rx);
+    let task = AbortOnDropHandle::new(tokio::spawn(async move {
+        job.run_on_store(&mut store, instance).await
     }));
-    (&mut task).await.context("dispatched call task failed")?
+    dispatched
+        .await_reply(task)
+        .await
+        .context("dispatched call produced no outcome within its deadline")?
+        .context("dispatched call task failed")?
+}
+
+/// A job and what its dispatcher waits on: the outcome channel, and the
+/// [`DispatchedCall`] enforcing the call's own deadline.
+///
+/// The deadline is enforced out here, in the dispatcher's task, as well as
+/// inside the callee's store — a non-yielding guest can block the store-side
+/// timer but not this one (see [`crate::engine::abandon`]).
+///
+/// [`DispatchedCall`]: crate::engine::abandon::DispatchedCall
+fn mint(
+    call: Box<dyn GuestCall>,
+    attributes: Arc<[opentelemetry::KeyValue]>,
+) -> (
+    GuestJob,
+    oneshot::Receiver<anyhow::Result<()>>,
+    crate::engine::abandon::DispatchedCall,
+) {
+    let dispatched =
+        crate::engine::abandon::DispatchedCall::new("plugin dispatch", call.deadline());
+    let (reply, reply_rx) = oneshot::channel();
+    let job = GuestJob::new(call, reply, dispatched.flag(), attributes);
+    (job, reply_rx, dispatched)
+}
+
+/// Wait for a call already handed to an instance the dispatcher does not own —
+/// a warm one, or the service — and report what it did.
+async fn await_outcome(
+    dispatched: crate::engine::abandon::DispatchedCall,
+    reply_rx: oneshot::Receiver<anyhow::Result<()>>,
+) -> anyhow::Result<()> {
+    dispatched
+        .await_reply(reply_rx)
+        .await
+        .context("dispatched call produced no outcome within its deadline")?
+        .map_err(|_| anyhow::anyhow!("the instance serving the dispatched call went away"))?
 }
 
 #[cfg(test)]

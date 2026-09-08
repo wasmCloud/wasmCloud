@@ -11,9 +11,8 @@
 //! The engine already has an opt-in for exactly this — `poolSize`,
 //! `maxInvocations`, `maxConcurrency` on the component, decoded once into
 //! [`InstancePolicy`] — and core and KV deliveries take it: they cross as an
-//! [`InstanceJob::Plugin`] and the pool routes them like any other call.
-//! **JetStream
-//! cannot.** Its call carries a `message-handle` resource, which is an index
+//! [`InstanceJob::Guest`] and the pool routes them like any other call.
+//! **JetStream cannot.** Its call carries a `message-handle` resource, which is an index
 //! into one store's resource table, so the argument cannot be built until the
 //! store is chosen — and a job the pool hands back has already been pushed
 //! into a table it no longer belongs to. Its settle-ack ownership and its

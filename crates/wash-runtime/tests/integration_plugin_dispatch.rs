@@ -80,6 +80,10 @@ struct RunCall {
 }
 
 impl GuestCall for RunCall {
+    fn describe(&self) -> &str {
+        "acme:tasks/runner#run"
+    }
+
     fn call<'a>(
         self: Box<Self>,
         accessor: &'a Accessor<SharedCtx>,
@@ -98,8 +102,9 @@ impl GuestCall for RunCall {
                 .call_run(accessor, self.message)
                 .await
                 .map_err(|e| anyhow::anyhow!("runner.run trapped: {e:#}"));
+            let refused = reply.is_err().then_some("trap");
             let _ = self.reply.send(reply);
-            Ok(())
+            Ok(refused)
         })
     }
 }
@@ -154,7 +159,7 @@ impl HostPlugin for TaskPusher {
     ) -> anyhow::Result<()> {
         // Resolving the target here, while the workload resolves, is what
         // reserves a service's ingress before it starts running.
-        let target = workload.dispatch_target(item_id).await?;
+        let target = workload.dispatch_target(item_id, "acme-tasks").await?;
         self.targets
             .lock()
             .await
@@ -193,6 +198,16 @@ fn component_workload(
     pool_size: i32,
     max_concurrency: i32,
 ) -> WorkloadStartRequest {
+    component_workload_with(workload_id, pool_size, max_concurrency, 0)
+}
+
+/// As [`component_workload`], with an invocation budget per instance.
+fn component_workload_with(
+    workload_id: &str,
+    pool_size: i32,
+    max_concurrency: i32,
+    max_invocations: i32,
+) -> WorkloadStartRequest {
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
@@ -206,7 +221,7 @@ fn component_workload(
                 bytes: bytes::Bytes::from_static(DISPATCH_TARGET_WASM),
                 local_resources: LocalResources::default(),
                 pool_size,
-                max_invocations: 0,
+                max_invocations,
                 max_concurrency,
                 ..Default::default()
             }],
@@ -273,6 +288,31 @@ async fn test_dispatch_runs_on_a_warm_component_instance() -> Result<()> {
     assert_eq!(plugin.run("warm", "c").await?, "c:3");
 
     stop(&host, "warm").await;
+    Ok(())
+}
+
+/// An instance stops taking dispatched calls once it has served
+/// `maxInvocations` of them, and the one that replaces it starts over.
+///
+/// Read through the replacement rather than the retired instance: a retired
+/// instance is drained and dropped, so nothing can ask it what it served. The
+/// third call answering `1` is the whole proof — the budget was spent, and the
+/// component the plugin drives is not one long-lived instance forever.
+#[tokio::test]
+async fn test_a_dispatched_call_spends_the_instances_invocation_budget() -> Result<()> {
+    let (plugin, host) = start_host().await?;
+    host.workload_start(component_workload_with("budget", 1, 1, 2))
+        .await?;
+
+    assert_eq!(plugin.run("budget", "a").await?, "a:1");
+    assert_eq!(plugin.run("budget", "b").await?, "b:2");
+    assert_eq!(
+        plugin.run("budget", "c").await?,
+        "c:1",
+        "the third call must land on a fresh instance, not the one whose budget is spent"
+    );
+
+    stop(&host, "budget").await;
     Ok(())
 }
 
@@ -430,7 +470,7 @@ async fn test_an_unknown_item_is_refused() -> Result<()> {
     drop(target);
 
     let err = workload
-        .dispatch_target("no-such-item")
+        .dispatch_target("no-such-item", "acme-tasks")
         .await
         .expect_err("a missing item must not resolve as a dispatch target");
     assert!(

@@ -970,20 +970,24 @@ mod tests {
     /// payload. Never run: these tests only ask where the pool would put it.
     fn plugin_job() -> InstanceJob {
         struct NeverRun;
-        impl crate::engine::instance_driver::PluginJob for NeverRun {
+        impl crate::engine::dispatch::GuestCall for NeverRun {
             fn describe(&self) -> &str {
                 "test"
             }
-            fn run<'a>(
+            fn call<'a>(
                 self: Box<Self>,
                 _: &'a wasmtime::component::Accessor<crate::engine::ctx::SharedCtx>,
                 _: wasmtime::component::Instance,
-                _: Option<crate::engine::instance_driver::PoolSlot>,
-            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+            ) -> crate::engine::dispatch::GuestCallFuture<'a> {
                 unreachable!("the pool never runs this job")
             }
         }
-        InstanceJob::Plugin(Box::new(NeverRun))
+        InstanceJob::Guest(crate::engine::dispatch::GuestJob::new(
+            Box::new(NeverRun),
+            tokio::sync::oneshot::channel().0,
+            crate::engine::abandon::DispatchedCall::new("test", std::time::Duration::MAX).flag(),
+            Arc::from([]),
+        ))
     }
 
     /// Instances still admitting calls.

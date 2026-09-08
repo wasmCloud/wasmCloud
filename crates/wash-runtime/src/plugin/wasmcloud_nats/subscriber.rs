@@ -13,6 +13,7 @@ use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, warn};
 
+use crate::engine::dispatch::{GuestCall, GuestCallFuture};
 use crate::engine::instance_driver::InstanceJob;
 use crate::engine::instance_pool::{ComponentInstance, Declined, Dispatch};
 use crate::engine::workload::ResolvedWorkload;
@@ -137,16 +138,6 @@ struct HandlerTarget {
 /// `result<_, string>`, or a host failure that kept it from being reached.
 type DeliveryReply = tokio::sync::oneshot::Sender<anyhow::Result<Result<(), String>>>;
 
-/// Re-arms this call's epoch deadline and hands back the store's abandon set,
-/// the way [`LinkedTask`] does — a pooled store is reused, so the countdown has
-/// to measure this call rather than the instance's whole life.
-fn call_guard(accessor: &Accessor<SharedCtx>) -> Arc<crate::engine::abandon::AbandonedCalls> {
-    accessor.with(|mut access| {
-        crate::engine::abandon::rearm_for_call(&mut access);
-        Arc::clone(&access.get().abandoned)
-    })
-}
-
 /// The WIT export each delivery flavour invokes, and what its measurements are
 /// grouped by. Bounded by the interface set, so it is safe as an attribute.
 const CORE_OPERATION: &str = "wasmcloud:nats/core-handler#handle-message";
@@ -161,30 +152,21 @@ const JETSTREAM_OPERATION: &str = "wasmcloud:nats/jetstream-handler#handle-messa
 /// `subscription-capacity-bytes` exists to prevent.
 struct CoreDeliveryJob {
     msg: core_bindings::wasmcloud::nats::types::NatsMessage,
-    abandoned: Arc<crate::engine::abandon::AbandonFlag>,
     reply: DeliveryReply,
-    attributes: Arc<[opentelemetry::KeyValue]>,
 }
 
-impl crate::engine::instance_driver::PluginJob for CoreDeliveryJob {
+impl GuestCall for CoreDeliveryJob {
     fn describe(&self) -> &str {
         CORE_OPERATION
     }
 
-    fn run<'a>(
+    fn call<'a>(
         self: Box<Self>,
         accessor: &'a Accessor<SharedCtx>,
         instance: crate::wasmtime::component::Instance,
-        slot: Option<crate::engine::instance_driver::PoolSlot>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+    ) -> GuestCallFuture<'a> {
         Box::pin(async move {
-            let Self {
-                msg,
-                abandoned,
-                reply,
-                attributes,
-            } = *self;
-            let calls = call_guard(accessor);
+            let Self { msg, reply } = *self;
             let proxy = accessor.with(|mut access| {
                 core_bindings::Subscriber::new(&mut access, &instance).map_err(|e| {
                     anyhow::anyhow!(
@@ -196,54 +178,28 @@ impl crate::engine::instance_driver::PluginJob for CoreDeliveryJob {
                 Ok(p) => p,
                 Err(e) => {
                     let _ = reply.send(Err(e));
-                    return;
+                    return Ok(Some("host"));
                 }
             };
-            let executed = accessor.with(|mut access| Arc::clone(&access.get().executed));
-            // Bounds this task, which the dispatcher's own deadline cannot: a
-            // guest subtask is not cancellable from the host, so a delivery
-            // that never returns would hold its in-flight slot for the life of
-            // the workload. Retiring is what ends it — the driver stops
-            // admitting, drains, and the store's teardown takes the stalled
-            // work with it. The same contract [`LinkedTask`] follows.
-            let mut sample =
-                crate::engine::instance_driver::InvocationSample::start(&executed, attributes);
-            let outcome = tokio::time::timeout(
-                crate::timeouts::ephemeral_call(),
-                crate::engine::abandon::watch_until_abandoned(
-                    &calls,
-                    abandoned,
-                    proxy
-                        .wasmcloud_nats_core_handler()
-                        .call_handle_message(accessor, msg),
-                ),
-            )
-            .await;
-            let _ = reply.send(match outcome {
-                Ok(Ok(inner)) => {
+            match proxy
+                .wasmcloud_nats_core_handler()
+                .call_handle_message(accessor, msg)
+                .await
+            {
+                Ok(inner) => {
                     // The guest's own `result<_, string>`: it ran and said no,
                     // which is a failed delivery even though nothing trapped.
-                    if inner.is_err() {
-                        sample.failed("handler");
-                    }
-                    Ok(inner)
+                    let refused = inner.is_err().then_some("handler");
+                    let _ = reply.send(Ok(inner));
+                    Ok(refused)
                 }
-                // A host failure mid-call leaves guest state indeterminate.
-                Ok(Err(e)) => {
-                    sample.failed("trap");
-                    if let Some(slot) = slot {
-                        slot.retire_instance();
-                    }
+                // A host failure mid-call leaves guest state indeterminate, so
+                // the engine retires the instance that served it.
+                Err(e) => {
+                    let _ = reply.send(Err(anyhow::anyhow!("{e:#}")));
                     Err(anyhow::anyhow!("{e:#}"))
                 }
-                Err(e) => {
-                    sample.failed("timeout");
-                    if let Some(slot) = slot {
-                        slot.retire_instance();
-                    }
-                    Err(anyhow::anyhow!("delivery timed out: {e}"))
-                }
-            });
+            }
         })
     }
 }
@@ -253,31 +209,25 @@ impl crate::engine::instance_driver::PluginJob for CoreDeliveryJob {
 struct KvDeliveryJob {
     bucket: String,
     entry: kv_bindings::wasmcloud::nats::kv::Entry,
-    abandoned: Arc<crate::engine::abandon::AbandonFlag>,
     reply: DeliveryReply,
-    attributes: Arc<[opentelemetry::KeyValue]>,
 }
 
-impl crate::engine::instance_driver::PluginJob for KvDeliveryJob {
+impl GuestCall for KvDeliveryJob {
     fn describe(&self) -> &str {
         KV_OPERATION
     }
 
-    fn run<'a>(
+    fn call<'a>(
         self: Box<Self>,
         accessor: &'a Accessor<SharedCtx>,
         instance: crate::wasmtime::component::Instance,
-        slot: Option<crate::engine::instance_driver::PoolSlot>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+    ) -> GuestCallFuture<'a> {
         Box::pin(async move {
             let Self {
                 bucket,
                 entry,
-                abandoned,
                 reply,
-                attributes,
             } = *self;
-            let calls = call_guard(accessor);
             let proxy = accessor.with(|mut access| {
                 kv_bindings::KvWatcher::new(&mut access, &instance).map_err(|e| {
                     anyhow::anyhow!(
@@ -289,54 +239,28 @@ impl crate::engine::instance_driver::PluginJob for KvDeliveryJob {
                 Ok(p) => p,
                 Err(e) => {
                     let _ = reply.send(Err(e));
-                    return;
+                    return Ok(Some("host"));
                 }
             };
-            let executed = accessor.with(|mut access| Arc::clone(&access.get().executed));
-            // Bounds this task, which the dispatcher's own deadline cannot: a
-            // guest subtask is not cancellable from the host, so a delivery
-            // that never returns would hold its in-flight slot for the life of
-            // the workload. Retiring is what ends it — the driver stops
-            // admitting, drains, and the store's teardown takes the stalled
-            // work with it. The same contract [`LinkedTask`] follows.
-            let mut sample =
-                crate::engine::instance_driver::InvocationSample::start(&executed, attributes);
-            let outcome = tokio::time::timeout(
-                crate::timeouts::ephemeral_call(),
-                crate::engine::abandon::watch_until_abandoned(
-                    &calls,
-                    abandoned,
-                    proxy
-                        .wasmcloud_nats_kv_handler()
-                        .call_handle_event(accessor, bucket, entry),
-                ),
-            )
-            .await;
-            let _ = reply.send(match outcome {
-                Ok(Ok(inner)) => {
+            match proxy
+                .wasmcloud_nats_kv_handler()
+                .call_handle_event(accessor, bucket, entry)
+                .await
+            {
+                Ok(inner) => {
                     // The guest's own `result<_, string>`: it ran and said no,
                     // which is a failed delivery even though nothing trapped.
-                    if inner.is_err() {
-                        sample.failed("handler");
-                    }
-                    Ok(inner)
+                    let refused = inner.is_err().then_some("handler");
+                    let _ = reply.send(Ok(inner));
+                    Ok(refused)
                 }
-                // A host failure mid-call leaves guest state indeterminate.
-                Ok(Err(e)) => {
-                    sample.failed("trap");
-                    if let Some(slot) = slot {
-                        slot.retire_instance();
-                    }
+                // A host failure mid-call leaves guest state indeterminate, so
+                // the engine retires the instance that served it.
+                Err(e) => {
+                    let _ = reply.send(Err(anyhow::anyhow!("{e:#}")));
                     Err(anyhow::anyhow!("{e:#}"))
                 }
-                Err(e) => {
-                    sample.failed("timeout");
-                    if let Some(slot) = slot {
-                        slot.retire_instance();
-                    }
-                    Err(anyhow::anyhow!("delivery timed out: {e}"))
-                }
-            });
+            }
         })
     }
 }
@@ -373,7 +297,7 @@ async fn build_instance(
 /// Runs one delivery: through the workload's instance pool when the component
 /// opted into pooling, and in a store of its own otherwise.
 ///
-/// The job crosses as [`InstanceJob::Plugin`], so a core or KV delivery takes
+/// The job crosses as [`InstanceJob::Guest`], so a core or KV delivery takes
 /// the same path as inbound HTTP and linked calls and honours the same
 /// `poolSize`, `maxInvocations` and `maxConcurrency` the component declared —
 /// including several deliveries in flight on one instance, which the plugin's
@@ -400,19 +324,29 @@ async fn build_instance(
 async fn run_delivery(
     workload: &ResolvedWorkload,
     target: &HandlerTarget,
-    job: Box<dyn crate::engine::instance_driver::PluginJob>,
+    guest_call: Box<dyn GuestCall>,
     reply_rx: tokio::sync::oneshot::Receiver<anyhow::Result<Result<(), String>>>,
     call: crate::engine::abandon::DispatchedCall,
     cancel_token: &CancellationToken,
 ) -> anyhow::Result<Result<(), String>> {
     let component_id = target.component_id.as_ref();
-    let mut job = job;
+    let what = Arc::<str>::from(guest_call.describe());
+    // The engine's own outcome for the delivery — whether the call completed at
+    // all. What the *handler* answered comes back on `reply_rx`, which is the
+    // job's own, because only the plugin can read its interface's error type.
+    let (ran_tx, ran_rx) = tokio::sync::oneshot::channel();
+    let mut job = crate::engine::dispatch::GuestJob::new(
+        guest_call,
+        ran_tx,
+        call.flag(),
+        Arc::clone(&target.attributes),
+    );
     // An instance built for a pool that then declined the delivery: the store
     // of its own below is that instance.
     let mut reclaimed = None;
 
     if let Some(pool) = workload.instance_pool_for_component(component_id).await {
-        let outcome = match pool.try_dispatch(InstanceJob::Plugin(job)) {
+        let outcome = match pool.try_dispatch(InstanceJob::Guest(job)) {
             Dispatch::Sent => Ok(()),
             // Built out here, where awaiting is allowed and where a component
             // that fails to instantiate reports it to this delivery rather
@@ -429,22 +363,21 @@ async fn run_delivery(
         };
         match outcome {
             Ok(()) => {
-                return call
-                    .await_reply(reply_rx)
+                call.await_reply(ran_rx)
                     .await
                     .ok_or_else(|| anyhow::anyhow!("pooled instance produced no reply in time"))?
+                    .map_err(|_| anyhow::anyhow!("pooled instance dropped the delivery"))??;
+                return reply_rx
+                    .await
                     .map_err(|_| anyhow::anyhow!("pooled instance dropped the delivery"))?;
             }
             // Every instance was busy and the pool is full, so run the very
             // same job in a store of its own.
             Err(declined) => {
-                let InstanceJob::Plugin(returned) = declined.job else {
+                let InstanceJob::Guest(returned) = declined.job else {
                     return Err(anyhow::anyhow!("pool returned the wrong job kind"));
                 };
-                debug!(
-                    job = returned.describe(),
-                    "warm instances saturated; own store"
-                );
+                debug!(job = %what, "warm instances saturated; own store");
                 job = returned;
                 reclaimed = declined.instance;
             }
@@ -459,7 +392,7 @@ async fn run_delivery(
         // up at, so the teardown it gives up for is checked here instead.
         Some(_) if cancel_token.is_cancelled() => {
             debug!(
-                job = job.describe(),
+                job = %what,
                 "workload torn down before the delivery ran; abandoning it"
             );
             return Ok(Ok(()));
@@ -478,13 +411,9 @@ async fn run_delivery(
     // `arm_after` runs inside `await_reply`, so a cold delivery that skipped it
     // would be unbounded while looking bounded. Giving up here drops the
     // future, and with it the store, which is what ends the guest's work.
-    call.await_reply(store.run_concurrent(async move |accessor| {
-        // No pool slot: nothing to retire, the store goes when this ends.
-        job.run(accessor, instance, None).await;
-    }))
-    .await
-    .ok_or_else(|| anyhow::anyhow!("delivery produced no reply in time"))?
-    .map_err(|e| anyhow::anyhow!("{e:#}"))?;
+    call.await_reply(job.run_on_store(&mut store, instance))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("delivery produced no reply in time"))??;
     reply_rx
         .await
         .map_err(|_| anyhow::anyhow!("delivery task dropped the reply"))?
@@ -2142,13 +2071,7 @@ pub(super) async fn spawn_core_subscriptions(
                             "wasmcloud:nats core delivery",
                             crate::timeouts::ephemeral_call(),
                         );
-                        let job: Box<dyn crate::engine::instance_driver::PluginJob> =
-                            Box::new(CoreDeliveryJob {
-                                msg,
-                                abandoned: call.flag(),
-                                reply,
-                                attributes: Arc::clone(&target.attributes),
-                            });
+                        let job: Box<dyn GuestCall> = Box::new(CoreDeliveryJob { msg, reply });
                         let span = tracing::span!(
                             tracing::Level::INFO,
                             "incoming_nats_core_message",
@@ -2424,14 +2347,11 @@ pub(super) async fn spawn_kv_watches(
                                 "wasmcloud:nats kv delivery",
                                 crate::timeouts::ephemeral_call(),
                             );
-                            let job: Box<dyn crate::engine::instance_driver::PluginJob> =
-                                Box::new(KvDeliveryJob {
-                                    bucket: bucket_for_label.clone(),
-                                    entry: kv_entry_to_kv_handler_wit(&entry),
-                                    abandoned: call.flag(),
-                                    reply,
-                                    attributes: Arc::clone(&target.attributes),
-                                });
+                            let job: Box<dyn GuestCall> = Box::new(KvDeliveryJob {
+                                bucket: bucket_for_label.clone(),
+                                entry: kv_entry_to_kv_handler_wit(&entry),
+                                reply,
+                            });
                             let span = tracing::span!(
                                 tracing::Level::INFO,
                                 "incoming_nats_kv_event",
