@@ -82,7 +82,7 @@ impl hyper::body::Body for ChannelBody {
 /// memory.
 pub(crate) async fn handle_component_request_p3(
     warm: ComponentInstance,
-    req: hyper::Request<hyper::body::Incoming>,
+    req: hyper::Request<wasmtime_wasi_http::p2::body::HyperIncomingBody>,
     abandoned: std::sync::Arc<crate::engine::abandon::AbandonFlag>,
 ) -> anyhow::Result<hyper::Response<P3Body>> {
     // Named from the store this call was given, the same way `HttpTask` does:
@@ -95,7 +95,7 @@ pub(crate) async fn handle_component_request_p3(
     // Convert the hyper request body — map error type since hyper::Error doesn't impl Into<ErrorCode>
     let (parts, body) = req.into_parts();
     let body = body
-        .map_err(|e| ErrorCode::InternalError(Some(e.to_string())))
+        .map_err(|e| ErrorCode::InternalError(Some(format!("{e:?}"))))
         .boxed_unsync();
     let req = hyper::Request::from_parts(parts, body);
     let (wasi_req, req_io) = wasmtime_wasi_http::p3::Request::from_http(req);
