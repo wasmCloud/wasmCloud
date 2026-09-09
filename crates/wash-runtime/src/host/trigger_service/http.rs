@@ -59,7 +59,7 @@ impl hyper::body::Body for ChannelBody {
 /// re-registers) a fresh instance. See `test_trigger_service_http_restarts_on_fault`.
 pub(crate) struct HttpTask {
     pub(crate) service: Arc<Service>,
-    pub(crate) req: hyper::Request<wasmtime_wasi_http::p2::body::HyperIncomingBody>,
+    pub(crate) req: hyper::Request<crate::host::http::HyperIncomingBody>,
     pub(crate) resp_tx:
         tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
     /// Armed by the dispatcher once it has stopped waiting for this response.

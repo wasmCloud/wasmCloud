@@ -46,6 +46,11 @@ use wash_runtime::{
 
 const CALLER_WASM: &[u8] = include_bytes!("wasm/http_allowed_hosts.wasm");
 const CALLEE_WASM: &[u8] = include_bytes!("wasm/http_handler_p2.wasm");
+/// The p3 caller: same routes, same three-way status oracle, but its outgoing
+/// request goes through `outgoing_request_p3` rather than `outgoing_request`.
+const CALLER_P3_WASM: &[u8] = include_bytes!("wasm/http_local_caller_p3.wasm");
+/// A p3 callee, so one test has p3 on both ends of the short-circuit.
+const CALLEE_P3_WASM: &[u8] = include_bytes!("wasm/http_handler_p3.wasm");
 
 /// Test [`OutgoingHandler`] that refuses every network send. Any 200 the
 /// caller reports therefore proves the request never reached the network.
@@ -527,6 +532,213 @@ async fn test_local_dispatch_draws_on_the_outbound_http_quota() -> Result<()> {
     assert_eq!(
         status, 200,
         "the slot must be released when the response is drained: {body}"
+    );
+
+    Ok(())
+}
+
+// =============================================================================
+// P3
+//
+// The tests above drive `outgoing_request`; these drive `outgoing_request_p3`,
+// which is a separate branch with its own body conversions, its own quota slot
+// and its own timeout handling. Everything the two-key contract promises has to
+// hold on both, so the cases here mirror the p2 ones rather than inventing new
+// ground.
+// =============================================================================
+
+/// The base case on the p3 egress path: a declared `localRoute` is served
+/// in-memory, an undeclared authority still egresses.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_local_routing_declared_route_p3() -> Result<()> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+
+    let (addr, host) = start_host(true).await?;
+
+    host.workload_start(http_workload(
+        "caller",
+        CALLER_P3_WASM,
+        "caller.test",
+        &[],
+        &["*"],
+    ))
+    .await
+    .context("Failed to start p3 caller")?;
+    host.workload_start(http_workload(
+        "callee",
+        CALLEE_WASM,
+        "callee.test",
+        &[("localRoute", "example.com")],
+        &[],
+    ))
+    .await
+    .context("Failed to start callee")?;
+
+    let (status, body) = call(addr, "/example").await?;
+    assert_eq!(
+        status, 200,
+        "a p3 egress to a declared localRoute should be served in-memory: {body}"
+    );
+    assert!(
+        body.contains("upstream 200"),
+        "the p3 caller should observe the callee's 200: {body}"
+    );
+
+    let (status, body) = call(addr, "/org").await?;
+    assert_eq!(
+        status, 502,
+        "a p3 egress to an undeclared authority must still hit the network: {body}"
+    );
+
+    Ok(())
+}
+
+/// p3 on both ends: the caller's p3 egress is dispatched to a p3 callee, which
+/// is the pooled-instance incoming path rather than the per-request one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_local_routing_p3_caller_to_p3_callee() -> Result<()> {
+    let (addr, host) = start_host(true).await?;
+
+    host.workload_start(http_workload(
+        "caller",
+        CALLER_P3_WASM,
+        "caller.test",
+        &[],
+        &["*"],
+    ))
+    .await?;
+    host.workload_start(http_workload(
+        "callee",
+        CALLEE_P3_WASM,
+        "callee.test",
+        &[("localRoute", "example.com")],
+        &[],
+    ))
+    .await?;
+
+    let (status, body) = call(addr, "/example").await?;
+    assert_eq!(
+        status, 200,
+        "a p3 caller must reach a p3 callee in-memory: {body}"
+    );
+    assert!(
+        body.contains("upstream 200"),
+        "the p3 callee's 200 should reach the p3 caller: {body}"
+    );
+
+    Ok(())
+}
+
+/// The two-key contract, host half, on p3: a declared `localRoute` is inert
+/// unless the host enables local routing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_local_routing_disabled_by_default_p3() -> Result<()> {
+    let (addr, host) = start_host(false).await?;
+
+    host.workload_start(http_workload(
+        "caller",
+        CALLER_P3_WASM,
+        "caller.test",
+        &[],
+        &["*"],
+    ))
+    .await?;
+    host.workload_start(http_workload(
+        "callee",
+        CALLEE_WASM,
+        "callee.test",
+        &[("localRoute", "example.com")],
+        &[],
+    ))
+    .await?;
+
+    let (status, body) = call(addr, "/example").await?;
+    assert_eq!(
+        status, 502,
+        "a localRoute must not short-circuit p3 egress on a host that did not \
+         enable local routing: {body}"
+    );
+
+    Ok(())
+}
+
+/// Ordering on the p3 path: `allowed_hosts` is checked before the local route,
+/// so a co-located callee cannot widen the caller's egress policy.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_local_routing_p3_respects_allowed_hosts() -> Result<()> {
+    let (addr, host) = start_host(true).await?;
+
+    // The caller may reach example.org, and nothing else.
+    host.workload_start(http_workload(
+        "caller",
+        CALLER_P3_WASM,
+        "caller.test",
+        &[],
+        &["example.org"],
+    ))
+    .await?;
+    // The callee offers both names locally — including the one policy denies.
+    host.workload_start(http_workload(
+        "callee",
+        CALLEE_WASM,
+        "callee.test",
+        &[("localRoute", "example.com, example.org")],
+        &[],
+    ))
+    .await?;
+
+    let (status, body) = call(addr, "/example").await?;
+    assert_eq!(
+        status, 403,
+        "a localRoute must not let a p3 caller past its own allowed_hosts: {body}"
+    );
+
+    let (status, body) = call(addr, "/org").await?;
+    assert_eq!(
+        status, 200,
+        "the permitted name is still short-circuited: {body}"
+    );
+
+    Ok(())
+}
+
+/// Path scoping on the p3 path: `host/path` serves that prefix and below, and
+/// nothing outside it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_local_routing_p3_matches_a_path_scoped_route() -> Result<()> {
+    let (addr, host) = start_host(true).await?;
+
+    host.workload_start(http_workload(
+        "caller",
+        CALLER_P3_WASM,
+        "caller.test",
+        &[],
+        &["*"],
+    ))
+    .await?;
+    // The caller's `/path` route dials http://gateway.test/functiona/items.
+    host.workload_start(http_workload(
+        "callee",
+        CALLEE_WASM,
+        "callee.test",
+        &[("localRoute", "gateway.test/functiona")],
+        &[],
+    ))
+    .await?;
+
+    let (status, body) = call(addr, "/path").await?;
+    assert_eq!(
+        status, 200,
+        "a p3 egress under the declared prefix should be served in-memory: {body}"
+    );
+
+    // The same authority at the root claims nothing, so it egresses.
+    let (status, body) = call(addr, "/example").await?;
+    assert_eq!(
+        status, 502,
+        "a p3 egress to an authority outside the prefix must egress: {body}"
     );
 
     Ok(())

@@ -830,7 +830,7 @@ runtime:
         enabled: true
         port: 9191
         # -- Enable same-host local routing: an outgoing HTTP request matching a
-        # co-located workload's `localRoute` config is served in-memory by that
+        # co-located workload's `localRoute` config is served in-process by that
         # workload instead of leaving the pod.
         #
         # This is one of two keys. Enabling it here makes no workload locally

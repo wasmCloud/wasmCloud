@@ -12,7 +12,8 @@ ingress in between.
 - [`callee/`](./callee/) — HTTP handler that answers with a greeting echoing
   the path and `Host` header it received.
 
-Same-host routing takes **two keys**, and neither works alone:
+Same-host routing requires setting two pieces of configuration, and neither
+works alone:
 
 1. The **host operator** enables the capability — `--http-local-routing`, or
    `runtime.hostGroups[].http.localRouting` in the chart.
@@ -149,17 +150,22 @@ scheduler may place the workloads on different hosts, in which case the call
 falls back to the network path (and fails for `functiona.internal`) — use a
 dedicated hostgroup if you need determinism at scale.
 
-### 2. Build and push the components (optional)
+### 2. Build and push the components
 
-The manifest references `ghcr.io/wasmcloud/components/local-ingress-{caller,callee}`.
-To use your own registry:
+These components are not published anywhere, so this step is not optional: you
+have to build them and push them to a registry the hosts can pull from.
+[`deploy/workloads.yaml`](./deploy/workloads.yaml) is written against the
+in-cluster registry that step 3d sets up
+(`oci-registry.default.svc:80/local-ingress-{caller,callee}:0.1.0`), which is
+the path of least resistance on kind.
 
 ```shell
 wash -C callee build && wash oci push <your-registry>/local-ingress-callee:0.1.0 callee/target/wasm32-wasip2/release/local_ingress_callee.wasm
 wash -C caller build && wash oci push <your-registry>/local-ingress-caller:0.1.0 caller/target/wasm32-wasip2/release/local_ingress_caller.wasm
 ```
 
-…and update the `image:` fields in [`deploy/workloads.yaml`](./deploy/workloads.yaml).
+If you push somewhere other than the in-cluster registry, update the `image:`
+fields in [`deploy/workloads.yaml`](./deploy/workloads.yaml) to match.
 
 
 ### 3. Setup Kind cluster
@@ -180,16 +186,41 @@ helm upgrade --install traefik traefik/traefik \
   --set ports.web.nodePort=30950
 ```
 
-#### 3b. load local wash build
+#### 3b. Build the host image from this working tree and load it
+
+`localRouting` renders `--http-local-routing`, and a host binary that predates
+this feature exits on an argument it does not know. So the image has to be
+built from the tree that carries it, not pulled:
+
 ```bash
+# From the repository root. COPYFILE_DISABLE keeps macOS from writing `._`
+# resource-fork files into the build context, which break WIT bindgen.
+COPYFILE_DISABLE=1 docker build -t wash:local-ingress .
 kind load docker-image wash:local-ingress
 ```
 
+`deploy/values.local-ingress.yaml` already points `runtime.image` at that tag
+with `pull_policy: Never`, so the kind nodes use the image you just loaded.
 
-#### 3c. install wasmCloud with local build
+#### 3c. Install wasmCloud from this repository's chart
+
+From the repository root, and from the chart *in this tree* — a published chart
+release does not know the `http.localRouting` key yet, and Helm drops values a
+chart does not template, so installing one of those silently leaves local
+routing off:
+
 ```bash
-helm install wasmcloud --version 2.5.2 oci://ghcr.io/wasmcloud/charts/runtime-operator \
-  --namespace wasmcloud --create-namespace -f ./deploy/values.local-ingress.yaml
+helm upgrade --install wasmcloud ./charts/runtime-operator \
+  --namespace wasmcloud --create-namespace \
+  -f ./examples/local-ingress/deploy/values.local-ingress.yaml
+```
+
+Check the flag actually landed before going further — this is the single thing
+most likely to be wrong:
+
+```bash
+kubectl -n wasmcloud get deploy -l app.kubernetes.io/component=host \
+  -o jsonpath='{.items[*].spec.template.spec.containers[*].args}' | tr ' ' '\n' | grep local-routing
 ```
 
 #### 3d. Deploy an in-cluster OCI registry (optional)

@@ -36,6 +36,23 @@ use crate::{
     engine::ctx::SharedCtx,
     observability::{MeterKind, Meters},
 };
+use url::Url;
+
+/// The request-body type every ingress path carries, whichever WASI HTTP
+/// version serves it.
+///
+/// Spelled by wasmtime's `p2` module because that is where the `ErrorCode` a
+/// boxed body reports lives, but it is not a P2-only type and nothing here
+/// treats it as one: [`ServiceHttpJob`], [`handle_component_request`] and
+/// [`crate::host::http_p3::handle_component_request_p3`] all take it, which is
+/// what lets a P2 component and a P3 service be reached over one channel by
+/// both real network ingress (`hyper::body::Incoming`, boxed on the way in) and
+/// a locally routed call, whose body was never on a socket at all.
+///
+/// Re-exported so the rest of the crate names it here rather than reaching
+/// into `wasmtime_wasi_http::p2` for a type it uses on both paths.
+pub use wasmtime_wasi_http::p2::body::HyperIncomingBody;
+
 use crate::{engine::workload::ResolvedWorkload, observability::GuestMeter};
 use anyhow::{Context, ensure};
 use http_body_util::BodyExt;
@@ -60,7 +77,7 @@ use wasmtime_wasi_http::{
     p2::{
         WasiHttpView,
         bindings::{ProxyPre, http::types::Scheme},
-        body::{HyperIncomingBody, HyperOutgoingBody},
+        body::HyperOutgoingBody,
         hyper_request_error,
         types::{HostFutureIncomingResponse, IncomingResponse, OutgoingRequestConfig},
     },
@@ -86,32 +103,61 @@ fn is_valid_hostname(host: &str) -> bool {
         })
 }
 
-/// Normalize a configured `path` prefix into the form the routing table stores:
-/// no trailing slash, and a leading slash supplied if the author omitted one.
-/// An absent, empty, or `"/"` value normalizes to the empty prefix, which is a
-/// catch-all matching every path.
-fn normalize_path_prefix(path: &str) -> String {
-    let path = path.trim().trim_end_matches('/');
-    if path.is_empty() {
-        return String::new();
+/// A URL path prefix in the single form the routing table stores: no trailing
+/// slash, and a leading slash supplied if the author omitted one. An absent,
+/// empty or `"/"` value is the empty prefix, a catch-all matching every path.
+///
+/// A newtype rather than a bare `String` because registration and lookup have
+/// to normalize identically: a route registered as `hello` that never matches
+/// a request for `/hello` is silent, and a value that can only be built through
+/// [`Self::new`] makes agreement a property of the type instead of a
+/// convention two call sites have to keep.
+///
+/// The derived `Ord` is plain lexicographic. Most-specific-first is a property
+/// of a *bucket*, not of a path, and lives on [`PathBucket`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NormalizedPathPrefix(String);
+
+impl NormalizedPathPrefix {
+    /// Normalize `path` into the stored form.
+    pub fn new(path: impl AsRef<str>) -> Self {
+        let path = path.as_ref().trim().trim_end_matches('/');
+        if path.is_empty() {
+            Self(String::new())
+        } else if path.starts_with('/') {
+            Self(path.to_string())
+        } else {
+            Self(format!("/{path}"))
+        }
     }
-    if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{path}")
+
+    /// The prefix as it is stored, `""` for the catch-all.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether this is the catch-all, matching every path.
+    pub fn is_catch_all(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Whether `path` falls under this prefix, matching on `/` segment
+    /// boundaries so `/fn` covers `/fn` and `/fn/x` but not `/fnord`. The
+    /// catch-all matches everything.
+    pub fn matches(&self, path: &str) -> bool {
+        if self.is_catch_all() {
+            return true;
+        }
+        match path.strip_prefix(self.as_str()) {
+            Some(rest) => rest.is_empty() || rest.starts_with('/'),
+            None => false,
+        }
     }
 }
 
-/// Whether `path` falls under `prefix`, matching on `/` segment boundaries so
-/// `/fn` covers `/fn` and `/fn/x` but not `/fnord`. The empty prefix is the
-/// catch-all and matches everything.
-fn path_prefix_matches(prefix: &str, path: &str) -> bool {
-    if prefix.is_empty() {
-        return true;
-    }
-    match path.strip_prefix(prefix) {
-        Some(rest) => rest.is_empty() || rest.starts_with('/'),
-        None => false,
+impl std::fmt::Display for NormalizedPathPrefix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
@@ -124,7 +170,7 @@ fn path_prefix_matches(prefix: &str, path: &str) -> bool {
 /// enabled, so neither the workload author nor the operator can open that door
 /// alone (the same two-key shape as `allowedHostLoopback` +
 /// `--allow-host-loopback`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RouteScope {
     /// Declared by `host`/`host-aliases`: served for requests arriving on the
     /// host's HTTP listener. Never short-circuits a co-located caller's egress.
@@ -149,9 +195,8 @@ pub enum RouteScope {
 pub struct IngressRoute {
     /// RFC 1123 hostname, stored lowercased and without any port.
     pub host: String,
-    /// Path prefix scoping this route; empty is a catch-all. Normalized by
-    /// [`normalize_path_prefix`].
-    pub path_prefix: String,
+    /// Path prefix scoping this route; the catch-all serves every path.
+    pub path_prefix: NormalizedPathPrefix,
     /// Who may reach this route.
     pub scope: RouteScope,
 }
@@ -174,8 +219,17 @@ impl IngressRoute {
             // HTTP port, so neither case nor port carries routing information.
             // Normalizing here means every lookup can normalize the same way and
             // the two sides are guaranteed to agree.
+            //
+            // `split_host_port` rather than `Url`, deliberately: the value this
+            // has to agree with is a raw `Host` header, split by
+            // `select_workload` on the per-request path, and a header is an
+            // authority rather than a URL. Parsing the two sides with two
+            // grammars is how a name registered one way stops matching a
+            // request spelled the other. `localRoute` entries, which are
+            // authored rather than received, go through `Url` in
+            // `parse_local_route` before they reach here.
             host: split_host_port(host.as_ref()).0.to_ascii_lowercase(),
-            path_prefix: normalize_path_prefix(path_prefix.as_ref()),
+            path_prefix: NormalizedPathPrefix::new(path_prefix),
             scope,
         }
     }
@@ -198,25 +252,52 @@ pub fn parse_local_route(entry: &str) -> Option<IngressRoute> {
     if entry.is_empty() {
         return None;
     }
-    // A URL is the likeliest thing to write here, and splitting one on `/`
-    // yields a scheme as the "hostname" (`http://svc/x` -> host `http`, path
-    // `/svc/x`) which is a perfectly valid-looking route that matches nothing.
-    // Refuse it outright rather than registering the misparse.
-    if entry.contains("://") {
+    // Anything that already parses on its own carries a scheme, and a scheme
+    // has no meaning here: dispatch is in-memory, so there is nothing for
+    // `http://` or `https://` to select. Splitting such an entry by hand reads
+    // the scheme as the hostname (`http://svc/x` -> host `http`, path
+    // `/svc/x`), a route that looks perfectly valid and matches nothing, so
+    // refuse it rather than register the misparse. A ported entry
+    // (`svc.internal:8080/x`) lands here too — the URL parser reads
+    // `svc.internal` as the scheme — which is the right answer for the reason
+    // below.
+    if Url::parse(entry).is_ok() {
         return None;
     }
-    let (host, path) = match entry.split_once('/') {
-        Some((host, path)) => (host, path),
-        None => (entry, ""),
-    };
+    // A bare path names no authority, and "any authority, this path" would let
+    // one workload intercept a co-located caller's traffic to any destination.
+    // Checked before the parse below rather than after it, because the URL
+    // grammar is tolerant of extra leading slashes for a special scheme: it
+    // reads `http:///hello` as the authority `hello`, which is the opposite of
+    // what `/hello` says.
+    if entry.starts_with('/') {
+        return None;
+    }
+    // Parsed under a scheme the entry does not have, so the authority is read
+    // by the same URL grammar a request URI is read by: IPv6 brackets,
+    // percent-encoding, userinfo and an empty host are all the parser's
+    // problem rather than this function's.
+    let url = Url::parse(&format!("http://{entry}")).ok()?;
     // A port is not part of the contract. A local route is served in-memory,
     // where no port is listened on, and matching one against a request's port
-    // would promise a distinction the dispatch cannot honour. `is_valid_hostname`
-    // rejects a `:` on its own, but say why explicitly.
-    if host.contains(':') {
+    // would promise a distinction dispatch cannot honour.
+    if url.port().is_some() {
         return None;
     }
-    is_valid_hostname(host).then(|| IngressRoute::local(host, path))
+    // Credentials, a query or a fragment carry no routing meaning, and
+    // accepting them would quietly discard whatever the author meant by them.
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    // `Url` also accepts IP literals and IDN, which the route table does not:
+    // it is keyed by the RFC 1123 names `host`/`host-aliases` register, and a
+    // name it cannot hold is better refused loudly than stored unmatched.
+    let host = url.host_str()?;
+    is_valid_hostname(host).then(|| IngressRoute::local(host, url.path()))
 }
 
 /// Collect the routes a workload's HTTP handler serves:
@@ -472,10 +553,51 @@ struct Routes {
 /// by the same workload or by different ones, and those are different routes.
 #[derive(Clone)]
 struct PathBucket {
-    prefix: String,
+    prefix: NormalizedPathPrefix,
     scope: RouteScope,
     workloads: BTreeSet<String>,
 }
+
+/// Most-specific-first: a longer prefix sorts before a shorter one, and the
+/// catch-all sorts last, which is what makes it a fallback rather than a shadow
+/// over every scoped route registered under the same hostname.
+/// [`DynamicRouter::select_workload`] relies on that order, so it lives here
+/// rather than in a `sort_by` closure a later edit would have to keep in step.
+///
+/// `workloads` is deliberately outside the ordering: it is mutated in place as
+/// replicas come and go, and an order that shifted underneath a container would
+/// be a bug in any container holding one. That is also why the buckets stay in
+/// a sorted `Vec` rather than the `BTreeSet` this `Ord` would otherwise allow —
+/// a `BTreeSet` hands out no `&mut` to its elements, so every register and
+/// unbind would have to remove the bucket and reinsert it just to add or drop
+/// one replica.
+impl Ord for PathBucket {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other
+            .prefix
+            .as_str()
+            .len()
+            .cmp(&self.prefix.as_str().len())
+            .then_with(|| self.prefix.cmp(&other.prefix))
+            .then_with(|| self.scope.cmp(&other.scope))
+    }
+}
+
+impl PartialOrd for PathBucket {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Two buckets are the same bucket when they key the same route, whatever
+/// replicas each currently holds — the same identity `Ord` compares on.
+impl PartialEq for PathBucket {
+    fn eq(&self, other: &Self) -> bool {
+        self.prefix == other.prefix && self.scope == other.scope
+    }
+}
+
+impl Eq for PathBucket {}
 
 impl DynamicRouter {
     /// Register `workload_id` under every route in `routes`, updating both the
@@ -507,16 +629,8 @@ impl DynamicRouter {
                             scope: route.scope,
                             workloads: BTreeSet::from([workload_id.to_string()]),
                         });
-                        // Longest prefix first, so the most specific route that
-                        // matches is the first one found. The catch-all (empty
-                        // prefix) sorts last, which is what makes it a fallback
-                        // rather than a shadow over every scoped route.
-                        buckets.sort_by(|a, b| {
-                            b.prefix
-                                .len()
-                                .cmp(&a.prefix.len())
-                                .then_with(|| a.prefix.cmp(&b.prefix))
-                        });
+                        // Most specific first — see `PathBucket`'s `Ord`.
+                        buckets.sort();
                     }
                 }
             }
@@ -570,7 +684,7 @@ impl DynamicRouter {
         }
         // Buckets are sorted longest-prefix-first, so the first match is the
         // most specific one.
-        let Some(bucket) = visible.find(|b| path_prefix_matches(&b.prefix, path)) else {
+        let Some(bucket) = visible.find(|b| b.prefix.matches(path)) else {
             // The hostname is served at this scope, but only under prefixes that
             // do not cover this path — a routing-config mistake worth naming
             // separately from an entirely unserved hostname.
@@ -721,6 +835,15 @@ impl Router for DynamicRouter {
     /// to the network is *not* short-circuited: a workload opts into being
     /// reachable in-memory by declaring `localRoute`, and nothing else.
     fn route_local_egress(&self, uri: &hyper::Uri) -> Option<String> {
+        // Only HTTP(S) is served in-memory. `wasi:http` lets a guest name any
+        // scheme it likes, and a request for one the incoming path does not
+        // speak (`ws://`, an invented one) has to reach the network, where
+        // whatever does speak it lives — answering it here with an HTTP handler
+        // would be a protocol swap the caller never asked for. An absent scheme
+        // is the outgoing default of `http`.
+        if !matches!(uri.scheme_str(), None | Some("http") | Some("https")) {
+            return None;
+        }
         // A local route names no port (see `parse_local_route`), so a request
         // asking for one other than the scheme's default is asking for
         // something in-memory dispatch cannot promise — a sidecar on :9187, say.
@@ -1507,9 +1630,10 @@ pub struct Ingress<T: Router, O: OutgoingHandler = DefaultOutgoingHandler> {
     local_routing: bool,
     /// Where a locally dispatched call draws its outbound allowance from, so a
     /// workload's in-memory fan-out is bounded by the same number as its
-    /// network fan-out. `None` leaves local dispatch unmetered — the default,
-    /// since a host that configured no registry has no ceiling to enforce.
-    quotas: Option<Arc<crate::host::quota::QuotaRegistry>>,
+    /// network fan-out. Always present: an ingress the builder was given no
+    /// registry for gets one on the default limits, because an unbounded local
+    /// path is also an unbounded cycle (see [`Self::take_local_slot`]).
+    quotas: Arc<crate::host::quota::QuotaRegistry>,
 }
 
 impl<T: Router, O: OutgoingHandler> std::fmt::Debug for Ingress<T, O> {
@@ -1657,8 +1781,11 @@ impl<T: Router, O: OutgoingHandler> IngressBuilder<T, O> {
     ///
     /// Pass the host's one registry — the same one given to
     /// [`DefaultOutgoingHandler::with_quotas`] — or local dispatch and pooled
-    /// HTTP will each enforce a private ceiling. Without it, local dispatch is
-    /// unmetered.
+    /// HTTP will each enforce a private ceiling. Without it, local dispatch
+    /// falls back to a registry of its own on the default limits: the ceiling
+    /// is then unrelated to the one an operator set for network egress, but it
+    /// exists, which is what keeps a cycle of locally routed calls from
+    /// growing without bound (see [`Ingress::take_local_slot`]).
     #[must_use]
     pub fn quotas(mut self, quotas: Arc<crate::host::quota::QuotaRegistry>) -> Self {
         self.quotas = Some(quotas);
@@ -1697,7 +1824,11 @@ impl<T: Router, O: OutgoingHandler> IngressBuilder<T, O> {
             meters: RwLock::new(Meters::new(MeterKind::Off)),
             grpc_tls: OnceLock::new(),
             local_routing: self.local_routing,
-            quotas: self.quotas,
+            // Always a registry: see `take_local_slot` for why an unbounded
+            // local-dispatch path is not an option.
+            quotas: self.quotas.unwrap_or_else(|| {
+                crate::host::quota::QuotaRegistry::new(Default::default(), None)
+            }),
         })
     }
 }
@@ -1808,27 +1939,37 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
     /// call, so its in-memory fan-out is bounded by the same number as its
     /// network fan-out.
     ///
-    /// `Ok(None)` when the host configured no registry — nothing to enforce.
     /// `Err(())` when the caller is at its ceiling; the call is refused rather
-    /// than queued (see [`crate::host::quota::GuestConnectionQuota::try_acquire_outbound_http`]).
-    fn take_local_slot(
-        &self,
-        caller: &str,
-    ) -> Result<Option<crate::host::quota::ConnectionSlot>, ()> {
-        let Some(quotas) = &self.quotas else {
-            return Ok(None);
-        };
-        match quotas.for_guest(caller).try_acquire_outbound_http() {
-            Some(slot) => Ok(Some(slot)),
-            None => Err(()),
-        }
+    /// than queued (see
+    /// [`crate::host::quota::GuestConnectionQuota::try_acquire_outbound_http`]).
+    ///
+    /// This is also what bounds a cycle. Local routing has no per-chain hop
+    /// counter — the guest builds its outgoing request itself, so nothing the
+    /// host attaches to one request survives into the next — and a cycle such
+    /// as `A -> B -> A` is, from here, each workload calling out again before
+    /// its previous call has returned. Every hop holds its caller's slot until
+    /// the response body drains, which in a cycle is never, so both workloads
+    /// reach their ceiling within `outbound_http` hops and the innermost call
+    /// is refused; the refusal then unwinds the whole chain instead of it
+    /// growing until something upstream times out.
+    ///
+    /// The slot is therefore taken from a registry that always exists: an
+    /// ingress built without [`IngressBuilder::quotas`] falls back to the
+    /// default limits rather than dispatching unbounded, because "no registry
+    /// configured" must not mean "no bound on recursion".
+    fn take_local_slot(&self, caller: &str) -> Result<crate::host::quota::ConnectionSlot, ()> {
+        self.quotas
+            .for_guest(caller)
+            .try_acquire_outbound_http()
+            .ok_or(())
     }
 
-    /// Whether `target` can actually serve a locally dispatched request right
-    /// now: it has a long-lived service handler, or a registered component
-    /// handle.
+    /// The destination a locally routed request would be dispatched to, taken
+    /// out of the handler maps at the moment the route is chosen — the
+    /// long-lived service instance when one is registered, else the registered
+    /// component handle, the same priority order the inbound path uses.
     ///
-    /// Consulted *before* committing to the local route, because a route is
+    /// Resolved *before* committing to the local route, because a route is
     /// registered earlier than the handle it needs. `on_workload_resolved`
     /// registers routes, then awaits `instantiate_pre`, then inserts the handle
     /// — and only for a component that exports `wasi:http`. So a workload can
@@ -1836,19 +1977,34 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
     /// a `localRoute` without exporting the handler. Neither should turn a
     /// caller's request into an error when the network was there all along.
     ///
+    /// Returning the destination rather than a yes/no answer is what keeps the
+    /// two halves from disagreeing: a workload can be unbound between a check
+    /// and the dispatch that trusted it, and by then the request body has been
+    /// handed over and there is no going back to the network. Resolving once
+    /// means the destination that was validated is the destination that is
+    /// used.
+    ///
+    /// Shutdown is safe in the other direction too. `on_workload_unbind`
+    /// removes the routes before the handle goes, so a stopping workload stops
+    /// being *matched* first and its callers egress as they did before it
+    /// existed; a handle still present under a withdrawn route is simply never
+    /// reached from here.
+    ///
     /// `try_read`, not `read`: this runs on the sync egress path. The maps are
     /// written only on workload start/stop, so contention is rare; treating it
-    /// as "not ready" costs one request the short-circuit and never correctness.
-    fn local_target_ready(&self, target: &str) -> bool {
-        let has_service = self
-            .service_handlers
-            .try_read()
-            .is_ok_and(|handlers| handlers.contains_key(target));
-        has_service
-            || self
-                .workload_handles
-                .try_read()
-                .is_ok_and(|handles| handles.contains_key(target))
+    /// as "not resolvable" costs one request the short-circuit and never
+    /// correctness.
+    fn resolve_local_target(&self, target: &str) -> Option<LocalTarget> {
+        if let Ok(handlers) = self.service_handlers.try_read()
+            && let Some(sender) = handlers.get(target)
+        {
+            return Some(LocalTarget::Service(sender.clone()));
+        }
+        let handles = self.workload_handles.try_read().ok()?;
+        handles
+            .get(target)
+            .cloned()
+            .map(|handle| LocalTarget::Component(Box::new(handle)))
     }
 
     /// Serve a P2 outgoing request by dispatching it to co-located workload
@@ -1858,14 +2014,13 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
         &self,
         caller: &str,
         target: String,
+        destination: LocalTarget,
         request: hyper::Request<HyperOutgoingBody>,
         config: OutgoingRequestConfig,
     ) -> HostFutureIncomingResponse {
         let span = outbound_client_span(request.method(), request.uri());
         span.record("wasmcloud.http.route", "local");
         let slot = self.take_local_slot(caller);
-        let workload_handles = self.workload_handles.clone();
-        let service_handlers = self.service_handlers.clone();
         let guest_meter = self.local_guest_meter();
         let handle = wasmtime_wasi::runtime::spawn(
             async move {
@@ -1876,13 +2031,7 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
                 };
                 let result = tokio::time::timeout(
                     config.first_byte_timeout,
-                    dispatch_local(
-                        &target,
-                        request,
-                        workload_handles,
-                        service_handlers,
-                        guest_meter,
-                    ),
+                    dispatch_local(&target, request, destination, guest_meter),
                 )
                 .await
                 .map_err(|_| ErrorCode::ConnectionReadTimeout)
@@ -1917,11 +2066,11 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
         &self,
         caller: &str,
         target: String,
+        destination: LocalTarget,
         request: hyper::Request<crate::host::http_p3::P3Body>,
         options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+        fut: crate::host::http_p3::P3RequestErrorFuture,
     ) -> crate::host::http_p3::P3SendFuture {
-        let workload_handles = self.workload_handles.clone();
-        let service_handlers = self.service_handlers.clone();
         let guest_meter = self.local_guest_meter();
         let slot = self.take_local_slot(caller);
         Box::new(async move {
@@ -1935,6 +2084,9 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
             let first_byte_timeout = options
                 .and_then(|o| o.first_byte_timeout)
                 .unwrap_or(Duration::from_secs(600));
+            let between_bytes_timeout = options
+                .and_then(|o| o.between_bytes_timeout)
+                .unwrap_or(Duration::from_secs(600));
             // The local incoming path carries the p2 `ErrorCode`.
             let request = request.map(|body| {
                 HyperIncomingBody::new(
@@ -1943,13 +2095,7 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
             });
             let response = tokio::time::timeout(
                 first_byte_timeout,
-                dispatch_local(
-                    &target,
-                    request,
-                    workload_handles,
-                    service_handlers,
-                    guest_meter,
-                ),
+                dispatch_local(&target, request, destination, guest_meter),
             )
             .await
             .map_err(|_| wasmtime_wasi::TrappableError::from(ErrorCode::ConnectionReadTimeout))?
@@ -1960,14 +2106,24 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
                 ))))
             })?;
             // ...and back to the p3 `ErrorCode` for the response body. The slot
-            // rides along so it is released when the body is drained.
+            // rides along so it is released when the body is drained, and the
+            // caller's `between_bytes_timeout` is applied here because nothing
+            // else on this path will: the P2 local response carries the option
+            // on its `IncomingResponse` for the runtime to enforce, but a P3
+            // body goes straight back to the guest.
             let response = attach_slot(response, slot);
             let response = response.map(|body| {
-                body.map_err(|e| ErrorCode::InternalError(Some(format!("{e:?}"))))
-                    .boxed_unsync()
+                BetweenBytesTimeout::new(
+                    body.map_err(|e| ErrorCode::InternalError(Some(format!("{e:?}")))),
+                    between_bytes_timeout,
+                )
+                .boxed_unsync()
             });
-            let io: crate::host::http_p3::P3RequestErrorFuture = Box::new(async move { Ok(()) });
-            Ok((response, io))
+            // The runtime's own request-side future, rather than an
+            // unconditional `Ok(())` claiming the request body was delivered
+            // when nothing here observed that. It is the same future the
+            // network path is handed for the same purpose.
+            Ok((response, fut))
         })
     }
 }
@@ -2010,25 +2166,112 @@ impl hyper::body::Body for SlotBody {
     }
 }
 
-/// Wrap a response body so `slot` lives until the body is drained. A `None`
-/// slot (host configured no quota registry) passes the response through.
+/// Response body that fails if more than `timeout` passes between frames.
+///
+/// A locally dispatched P3 response is handed to the guest as a body, not as an
+/// `IncomingResponse` the runtime can apply `between_bytes_timeout` to, so the
+/// option the caller set has to be honoured here. Without it a co-located
+/// callee that stalls mid-body holds its caller open indefinitely — the one
+/// thing a caller setting that option asked not to happen — while the same call
+/// over the network would have failed.
+///
+/// The clock starts when a frame is first awaited and restarts on every frame
+/// delivered, so it measures the gap between bytes rather than the length of
+/// the body.
+struct BetweenBytesTimeout<B> {
+    inner: B,
+    timeout: Duration,
+    idle: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
+}
+
+impl<B> BetweenBytesTimeout<B> {
+    fn new(inner: B, timeout: Duration) -> Self {
+        Self {
+            inner,
+            timeout,
+            idle: None,
+        }
+    }
+}
+
+impl<B> hyper::body::Body for BetweenBytesTimeout<B>
+where
+    B: hyper::body::Body<
+            Data = bytes::Bytes,
+            Error = wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
+        > + Unpin,
+{
+    type Data = bytes::Bytes;
+    type Error = wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+        let this = self.get_mut();
+        match std::pin::Pin::new(&mut this.inner).poll_frame(cx) {
+            std::task::Poll::Ready(frame) => {
+                // A frame arrived, so the gap this was measuring is over.
+                this.idle = None;
+                std::task::Poll::Ready(frame)
+            }
+            std::task::Poll::Pending => {
+                let deadline = this
+                    .idle
+                    .get_or_insert_with(|| Box::pin(tokio::time::sleep(this.timeout)));
+                match deadline.as_mut().poll(cx) {
+                    std::task::Poll::Ready(()) => std::task::Poll::Ready(Some(Err(
+                        wasmtime_wasi_http::p3::bindings::http::types::ErrorCode::ConnectionReadTimeout,
+                    ))),
+                    std::task::Poll::Pending => std::task::Poll::Pending,
+                }
+            }
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        self.inner.size_hint()
+    }
+}
+
+/// Wrap a response body so `slot` lives until the body is drained.
 fn attach_slot(
     resp: hyper::Response<HyperOutgoingBody>,
-    slot: Option<crate::host::quota::ConnectionSlot>,
+    slot: crate::host::quota::ConnectionSlot,
 ) -> hyper::Response<HyperOutgoingBody> {
-    let Some(slot) = slot else { return resp };
     resp.map(|inner| HyperOutgoingBody::new(SlotBody { inner, _slot: slot }))
 }
 
-/// Dispatch a locally routed request to `workload_id`'s incoming HTTP path:
-/// the long-lived service instance when one is registered, else a fresh
-/// per-request component instance — the same priority order as
-/// [`handle_http_request`].
+/// Where a locally routed request is delivered, resolved out of the handler
+/// maps by [`Ingress::resolve_local_target`] before the caller commits to the
+/// short-circuit.
+enum LocalTarget {
+    /// The workload's long-lived service instance, which serves the request on
+    /// the instance it already keeps warm.
+    Service(tokio::sync::mpsc::Sender<ServiceHttpJob>),
+    /// The workload's registered component handle, from which a per-request
+    /// instance is built. Boxed because it is much the larger of the two and
+    /// this enum is moved into the dispatch future.
+    Component(
+        Box<(
+            ResolvedWorkload,
+            InstancePre<SharedCtx>,
+            String,
+            crate::observability::WorkloadIdentity,
+        )>,
+    ),
+}
+
+/// Dispatch a locally routed request to `workload_id` through the destination
+/// [`Ingress::resolve_local_target`] already picked for it.
 async fn dispatch_local(
     workload_id: &str,
     mut request: hyper::Request<HyperIncomingBody>,
-    workload_handles: WorkloadHandles,
-    service_handlers: ServiceHandlers,
+    target: LocalTarget,
     guest_meter: GuestMeter,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
     // Mirror the wire: a network send would carry the request authority as its
@@ -2040,34 +2283,36 @@ async fn dispatch_local(
         request.headers_mut().insert(hyper::header::HOST, value);
     }
 
-    let service_sender = service_handlers.read().await.get(workload_id).cloned();
-    if let Some(sender) = service_sender {
-        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-        // The deadline is enforced out here, outside the service's store, for
-        // the same reason `handle_http_request` enforces it out here: a guest
-        // that never yields blocks every host future on its own store, so only
-        // a waiter outside it can abandon the call.
-        let call = DispatchedCall::new("HTTP (local, service)", crate::timeouts::http_response());
-        let job = ServiceHttpJob {
-            req: request,
-            resp_tx,
-            abandoned: call.flag(),
-        };
-        if sender.send(job).await.is_err() {
-            anyhow::bail!("service HTTP instance for workload {workload_id} is not running");
-        }
-        return match call.await_head(resp_rx).await {
-            Some((Ok(resp), watch)) => resp.map(|resp| watch_body(resp, watch)),
-            Some((Err(_), _)) => {
-                anyhow::bail!("service HTTP instance dropped the response")
+    let (handle, instance_pre, component_id, identity) = match target {
+        LocalTarget::Service(sender) => {
+            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+            // The deadline is enforced out here, outside the service's store,
+            // for the same reason `handle_http_request` enforces it out here: a
+            // guest that never yields blocks every host future on its own
+            // store, so only a waiter outside it can abandon the call.
+            let call =
+                DispatchedCall::new("HTTP (local, service)", crate::timeouts::http_response());
+            let job = ServiceHttpJob {
+                req: request,
+                resp_tx,
+                abandoned: call.flag(),
+            };
+            // The one window `resolve_local_target` cannot close: the service
+            // can stop between being resolved and being sent to, and by now the
+            // request body has been moved into the job, so there is no
+            // falling back to the network with it.
+            if sender.send(job).await.is_err() {
+                anyhow::bail!("service HTTP instance for workload {workload_id} is not running");
             }
-            None => anyhow::bail!("service HTTP instance produced no response"),
-        };
-    }
-
-    let workload_handle = workload_handles.read().await.get(workload_id).cloned();
-    let Some((handle, instance_pre, component_id, identity)) = workload_handle else {
-        anyhow::bail!("no workload handle registered for locally routed workload {workload_id}");
+            return match call.await_head(resp_rx).await {
+                Some((Ok(resp), watch)) => resp.map(|resp| watch_body(resp, watch)),
+                Some((Err(_), _)) => {
+                    anyhow::bail!("service HTTP instance dropped the response")
+                }
+                None => anyhow::bail!("service HTTP instance produced no response"),
+            };
+        }
+        LocalTarget::Component(handle) => *handle,
     };
     let req_span = tracing::span!(
         tracing::Level::INFO,
@@ -2362,9 +2607,15 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         if self.local_routing
             && let Some(target) = self.router.route_local_egress(request.uri())
         {
-            if self.local_target_ready(&target) {
+            if let Some(destination) = self.resolve_local_target(&target) {
                 debug!(workload_id, target, uri = %request.uri(), "routing outgoing request to co-located workload");
-                return Ok(self.send_local_request(workload_id, target, request, config));
+                return Ok(self.send_local_request(
+                    workload_id,
+                    target,
+                    destination,
+                    request,
+                    config,
+                ));
             }
             debug!(
                 workload_id,
@@ -2407,15 +2658,17 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 }),
                 None => send_grpc_request_p3(request, options, self.grpc_tls()),
             }
-        } else if self.local_routing
-            && let Some(target) = self.router.route_local_egress(request.uri())
-            && self.local_target_ready(&target)
+        } else if let Some((target, destination)) = self
+            .local_routing
+            .then(|| self.router.route_local_egress(request.uri()))
+            .flatten()
+            .and_then(|target| Some((target.clone(), self.resolve_local_target(&target)?)))
         {
             // Same-host short-circuit; see `outgoing_request` for ordering
             // rationale (after allowed_hosts and the gRPC branch).
             debug!(workload_id, target, uri = %request.uri(), "routing P3 outgoing request to co-located workload");
             span.record("wasmcloud.http.route", "local");
-            self.send_local_request_p3(workload_id, target, request, options)
+            self.send_local_request_p3(workload_id, target, destination, request, options, fut)
         } else {
             self.outgoing_handler
                 .send_request_p3(workload_id, request, options, fut)
@@ -4738,6 +4991,83 @@ mod tests {
         assert_eq!(parse_local_route(""), None);
     }
 
+    /// The URL grammar decides what an authority is, so the entries a hand
+    /// split would have waved through are refused for the reason each is wrong
+    /// rather than by accident.
+    #[test]
+    fn local_route_entries_are_read_by_the_url_grammar() {
+        // A port promises a distinction in-memory dispatch cannot honour.
+        assert_eq!(parse_local_route("svc.internal:8080"), None);
+        assert_eq!(parse_local_route("svc.internal:8080/hello"), None);
+        // Credentials, a query and a fragment carry no routing meaning, and
+        // accepting them would silently discard whatever they were meant to do.
+        assert_eq!(parse_local_route("user@svc.internal/hello"), None);
+        assert_eq!(parse_local_route("user:pw@svc.internal"), None);
+        assert_eq!(parse_local_route("svc.internal/hello?a=1"), None);
+        assert_eq!(parse_local_route("svc.internal/hello#frag"), None);
+        // An IPv4 literal is label-valid RFC 1123 and registers like any other
+        // name, the same way `host`/`host-aliases` accept one — the table holds
+        // one kind of key and both sides agree on it. A bracketed IPv6 literal
+        // is not a name and is refused.
+        assert_eq!(
+            parse_local_route("127.0.0.1/hello"),
+            Some(IngressRoute::local("127.0.0.1", "/hello"))
+        );
+        assert_eq!(parse_local_route("[::1]/hello"), None);
+        // The parser tolerates extra leading slashes for a special scheme, so a
+        // bare path must not reach it.
+        assert_eq!(parse_local_route("//hello"), None);
+        // And the ordinary forms still parse, with the path percent-encoded the
+        // way a request URI's path is.
+        assert_eq!(
+            parse_local_route("SVC.Internal/Hello"),
+            Some(IngressRoute::local("svc.internal", "/Hello")),
+            "the hostname is case-folded, the path is not"
+        );
+    }
+
+    /// Local dispatch answers with an HTTP handler, so it may only claim a
+    /// request that asked for HTTP. A scheme the incoming path cannot speak has
+    /// to reach the network, where whatever does speak it lives.
+    #[tokio::test]
+    async fn only_http_schemes_are_short_circuited() {
+        let router = DynamicRouter::default();
+        router.register_routes("callee", &[IngressRoute::local("svc.internal", "")]);
+        let local = |uri: &str| router.route_local_egress(&uri.parse::<hyper::Uri>().unwrap());
+
+        assert_eq!(local("http://svc.internal/x"), Some("callee".to_string()));
+        assert_eq!(local("https://svc.internal/x"), Some("callee".to_string()));
+        assert_eq!(local("ws://svc.internal/x"), None);
+        assert_eq!(local("wss://svc.internal/x"), None);
+        assert_eq!(local("gopher://svc.internal/x"), None);
+    }
+
+    /// The order `select_workload` walks is a property of the bucket type, so
+    /// pin it there: most specific first, catch-all last.
+    #[test]
+    fn buckets_sort_most_specific_first() {
+        let bucket = |prefix: &str| PathBucket {
+            prefix: NormalizedPathPrefix::new(prefix),
+            scope: RouteScope::Local,
+            workloads: BTreeSet::new(),
+        };
+        let mut buckets = [
+            bucket(""),
+            bucket("/a"),
+            bucket("/a/b/c"),
+            bucket("/a/b"),
+            bucket("/z"),
+        ];
+        buckets.sort();
+        let order: Vec<&str> = buckets.iter().map(|b| b.prefix.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["/a/b/c", "/a/b", "/a", "/z", ""],
+            "longest first, ties broken lexicographically, catch-all last so it \
+             is a fallback rather than a shadow over every scoped route"
+        );
+    }
+
     /// Writing a URL is the likeliest mistake here, and it used to *succeed*:
     /// splitting `http://svc.internal/hello` on `/` yields hostname `http` with
     /// prefix `/svc.internal/hello` — a valid-looking route matching nothing,
@@ -5106,9 +5436,10 @@ mod tests {
             "the route matches — this is precisely the trap"
         );
         assert!(
-            !server.local_target_ready("unservable"),
-            "with no service handler and no workload handle it cannot serve, so \
-             the caller must egress instead of getting a local-dispatch error"
+            server.resolve_local_target("unservable").is_none(),
+            "with no service handler and no workload handle there is nothing to \
+             dispatch to, so the caller must egress instead of getting a \
+             local-dispatch error"
         );
 
         // A registered service handler is what makes it dispatchable.
@@ -5117,7 +5448,13 @@ mod tests {
             .on_service_http_resolved("unservable", &[IngressRoute::local("svc.internal", "")], tx)
             .await
             .unwrap();
-        assert!(server.local_target_ready("unservable"));
+        assert!(
+            matches!(
+                server.resolve_local_target("unservable"),
+                Some(LocalTarget::Service(_))
+            ),
+            "a registered service handler is the destination local dispatch resolves to"
+        );
     }
 
     // --- the Ingress/Local partition ---
@@ -5197,23 +5534,23 @@ mod tests {
     /// does not swallow `/fnord`. The empty prefix is the catch-all.
     #[test]
     fn path_prefixes_match_on_segment_boundaries() {
-        assert!(path_prefix_matches("", "/anything"));
-        assert!(path_prefix_matches("/fn", "/fn"));
-        assert!(path_prefix_matches("/fn", "/fn/x"));
-        assert!(!path_prefix_matches("/fn", "/fnord"));
-        assert!(!path_prefix_matches("/fn", "/"));
-        assert!(!path_prefix_matches("/fn", "/other/fn"));
+        assert!(NormalizedPathPrefix::new("").matches("/anything"));
+        assert!(NormalizedPathPrefix::new("/fn").matches("/fn"));
+        assert!(NormalizedPathPrefix::new("/fn").matches("/fn/x"));
+        assert!(!NormalizedPathPrefix::new("/fn").matches("/fnord"));
+        assert!(!NormalizedPathPrefix::new("/fn").matches("/"));
+        assert!(!NormalizedPathPrefix::new("/fn").matches("/other/fn"));
     }
 
     /// Whatever an author writes, the table stores one canonical form, so the
     /// two sides of a lookup cannot disagree over a slash.
     #[test]
     fn path_prefixes_are_normalized_to_one_form() {
-        assert_eq!(normalize_path_prefix("/api"), "/api");
-        assert_eq!(normalize_path_prefix("/api/"), "/api");
-        assert_eq!(normalize_path_prefix(" api "), "/api");
-        assert_eq!(normalize_path_prefix("/"), "");
-        assert_eq!(normalize_path_prefix(""), "");
+        assert_eq!(NormalizedPathPrefix::new("/api").as_str(), "/api");
+        assert_eq!(NormalizedPathPrefix::new("/api/").as_str(), "/api");
+        assert_eq!(NormalizedPathPrefix::new(" api ").as_str(), "/api");
+        assert_eq!(NormalizedPathPrefix::new("/").as_str(), "");
+        assert_eq!(NormalizedPathPrefix::new("").as_str(), "");
     }
 
     /// Two workloads declaring the same local hostname under different prefixes
