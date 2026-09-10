@@ -607,23 +607,36 @@ impl HostPlugin for NatsMessaging {
                         let reply_to = msg.reply.as_ref().map(|r| r.to_string());
                         let body: Vec<u8> = msg.payload.into();
 
-                        // The workload holds the handler weakly, so losing it
-                        // means the host this subscriber delivers into is gone
-                        // and no later message can be served either.
-                        let http_handler = match workload.http_handler() {
-                            Ok(handler) => handler,
-                            Err(e) => {
-                                warn!(parent: &span, error = %e, "stopping NATS subscriber loop");
-                                break;
-                            }
-                        };
+                        // Only the trigger-service branch below needs the
+                        // handler; a per-message component is delivered to
+                        // without it. A gone handler therefore skips that
+                        // branch rather than ending the loop — the message is
+                        // already consumed, and tearing the subscriptions down
+                        // here would drop it with nothing able to redeliver.
+                        let http_handler = workload.try_http_handler();
+
+                        // Unless nothing else can serve it either. A workload
+                        // whose handler is its trigger service has no
+                        // per-message instance to fall back to, so going on
+                        // would win this component's share of a queue group
+                        // forever and drop every message in it.
+                        if http_handler.is_none() && pre.is_none() {
+                            warn!(
+                                parent: &span,
+                                component_id = %component_id,
+                                "host is gone and this component has no per-message \
+                                 instance; ending the NATS subscriber loop"
+                            );
+                            break;
+                        }
 
                         // If this workload runs a long-lived trigger service for
                         // messaging, deliver to it (preserving its in-memory
                         // state) rather than instantiating a component per message.
-                        if http_handler
-                            .has_trigger_service_messaging(workload.id())
-                            .await
+                        if let Some(http_handler) = &http_handler
+                            && http_handler
+                                .has_trigger_service_messaging(workload.id())
+                                .await
                         {
                             let broker = crate::host::trigger_service::BrokerMessage {
                                 subject: subject.clone(),

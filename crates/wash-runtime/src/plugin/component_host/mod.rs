@@ -1792,7 +1792,7 @@ async fn run_supervisor(
             &state.native_plugins,
             &allowed_hosts,
             &allowed_ip_name_lookups,
-            http_handler.clone(),
+            http_handler.as_ref(),
             &network,
             &direct_binds,
             &socket_policy,
@@ -1967,7 +1967,7 @@ fn build_plugin_store(
     native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
     allowed_hosts: &Arc<[crate::host::allowed_hosts::AllowedHost]>,
     allowed_ip_name_lookups: &Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
-    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
+    http_handler: Option<&std::sync::Weak<dyn crate::host::http::HostHandler>>,
     network: &crate::host::ports::NetworkHandle,
     direct_binds: &Arc<[crate::sockets::policy::DirectBind]>,
     socket_policy: &Arc<crate::sockets::policy::SocketPolicy>,
@@ -2012,10 +2012,8 @@ fn build_plugin_store(
         )
         .with_sockets(sockets_ctx)
         .with_allowed_hosts(Arc::clone(allowed_hosts));
-    // A store built after the host went away gets no handler, which its egress
-    // already reports; there is nothing left to send through.
-    if let Some(http_handler) = http_handler.as_ref().and_then(std::sync::Weak::upgrade) {
-        ctx_builder = ctx_builder.with_http_handler(&http_handler);
+    if let Some(http_handler) = http_handler {
+        ctx_builder = ctx_builder.with_http_handler(http_handler);
     }
     let ctx = ctx_builder.build();
     // The registry marks this as the plugin (real) side of the resource bridge

@@ -1345,6 +1345,50 @@ impl<T: Router> Ingress<T, DefaultOutgoingHandler> {
 }
 
 impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
+    /// Empty the routing tables once this ingress has drained, so a host that
+    /// is stopped but still held lets go of the workloads it routed. Detached
+    /// because a drain outlasts this call, bounded by
+    /// [`crate::timeouts::ingress_drain`] because it may never finish, and
+    /// holding the tables rather than the ingress so it pins neither.
+    fn release_when_drained(&self) {
+        let connections = self.connections.clone();
+        let workload_handles = Arc::clone(&self.workload_handles);
+        let service_handlers = Arc::clone(&self.service_handlers);
+        let messaging_handlers = Arc::clone(&self.messaging_handlers);
+        let addr = self.addr;
+        tokio::spawn(async move {
+            let budget = crate::timeouts::ingress_drain();
+            if tokio::time::timeout(budget, connections.drained())
+                .await
+                .is_err()
+            {
+                warn!(
+                    addr = ?addr,
+                    budget_secs = budget.as_secs(),
+                    "ingress still had connections at the end of its drain; \
+                     releasing its routes anyway"
+                );
+            }
+            workload_handles.write().await.clear();
+            service_handlers.write().await.clear();
+            messaging_handlers.write().await.clear();
+        });
+    }
+
+    /// How many workloads this ingress can currently route an inbound message
+    /// or request to. Zero once [`HostHandler::stop`] has drained, and what an
+    /// embedder without a probe listener can report about routing state.
+    ///
+    /// All three tables, because a workload reaches routing by more than one
+    /// door: a service-only workload registers through
+    /// [`HostHandler::on_service_http_resolved`] and never appears among the
+    /// component handles.
+    pub async fn routed_workloads(&self) -> usize {
+        self.workload_handles.read().await.len()
+            + self.service_handlers.read().await.len()
+            + self.messaging_handlers.read().await.len()
+    }
+
     /// Returns the actual bound address (useful when binding to port 0).
     pub fn addr(&self) -> SocketAddr {
         self.addr
@@ -1435,21 +1479,30 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         Ok(())
     }
 
+    /// Ends the accept loop, and lets go of the routing tables once the drain
+    /// it starts has finished — not before, because connections already
+    /// established are served from their own handles on those tables, and
+    /// emptying them here would 404 every request still arriving over one.
     async fn stop(&self) -> anyhow::Result<()> {
         info!(addr = ?self.addr, "HTTP server stopping");
-        let mut shutdown_guard = self.shutdown_tx.write().await;
-        if let Some(tx) = shutdown_guard.take() {
-            let _ = tx.send(()).await;
+        // Scoped, so the release below is arranged without this guard held
+        // across the locks it takes.
+        let was_accepting = {
+            let mut shutdown_guard = self.shutdown_tx.write().await;
+            match shutdown_guard.take() {
+                Some(tx) => {
+                    let _ = tx.send(()).await;
+                    true
+                }
+                None => false,
+            }
+        };
+        // An ingress that never started has no drain to wait on, and waiting
+        // would be forever: nothing will mark an accept loop stopped that never
+        // ran.
+        if was_accepting {
+            self.release_when_drained();
         }
-        // Let go of what the routing tables hold. A stopped ingress serves
-        // nothing, so keeping them would pin every routed workload's
-        // `InstancePre` — its compiled components, and the engine behind them —
-        // for as long as anything still holds the ingress itself. A workload
-        // stopped after this finds nothing to unbind, which is the right
-        // answer.
-        self.workload_handles.write().await.clear();
-        self.service_handlers.write().await.clear();
-        self.messaging_handlers.write().await.clear();
         Ok(())
     }
 
@@ -1792,6 +1845,20 @@ impl ConnectionLimit {
         // `Err` is the sender dropped, which cannot happen through a `&self`
         // holding it — and would mean the same thing if it could.
         let _ = stopped.wait_for(|stopped| *stopped).await;
+    }
+
+    /// Resolves once the accept loop has stopped *and* every connection it
+    /// accepted has finished — the end of a drain, not the start of one.
+    ///
+    /// [`Self::stopped`] is weaker: connections are served by tasks outliving
+    /// the loop, each holding the permit [`Self::take`] gave it, so holding
+    /// every permit at once is what says none of them is still serving.
+    pub async fn drained(&self) {
+        self.stopped().await;
+        let all = u32::try_from(self.max).unwrap_or(u32::MAX);
+        // `Err` is a closed semaphore, which this never closes; either way
+        // there is nothing left to wait for.
+        let _ = self.permits.acquire_many(all).await;
     }
 
     /// Take a slot for an accepted connection, or `None` at the ceiling.

@@ -311,6 +311,13 @@ pub struct Host {
     /// owns. Monotonic for the life of the host, so a reservation identifies one
     /// occupant of a workload id and never a later one.
     reservations: std::sync::atomic::AtomicU64,
+    /// Set by [`Self::stop`], and read by [`Self::workload_reserve`] under the
+    /// `workloads` write lock that both take — so a start either reserves
+    /// before the stop or is refused by it, never lands between the two. A
+    /// stopped host is on its way out: its ingress has stopped accepting and
+    /// its plugins are stopping, so a workload started onto one would be
+    /// unroutable and, once the ingress drain ends, silently unregistered.
+    stopped: std::sync::atomic::AtomicBool,
     /// Plugins in a map from their ID to the plugin itself
     plugins: HashMap<&'static str, Arc<dyn HostPlugin>>,
     /// What the operator declared about each plugin's bindings — the host layer
@@ -575,6 +582,14 @@ impl Host {
     /// # Returns
     /// Ok if the shutdown process completes (even with plugin errors).
     pub async fn stop(self: Arc<Self>) -> anyhow::Result<()> {
+        // Before anything else stops, and under the lock `workload_reserve`
+        // takes, so no start can be admitted from here on.
+        {
+            let _workloads = self.workloads.write().await;
+            self.stopped
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+
         self.http_handler
             .stop()
             .await
@@ -811,7 +826,7 @@ impl Host {
             .resolve(
                 Some(&self.plugins),
                 &self.plugin_bindings,
-                self.http_handler.clone(),
+                &self.http_handler,
                 &self.meters,
             )
             .await?;
@@ -1093,6 +1108,11 @@ impl WorkloadReservation for Host {
         // start claimed.
         let reservation = self.reserve();
         let mut workloads = self.workloads.write().await;
+        if self.stopped.load(std::sync::atomic::Ordering::SeqCst) {
+            let message = format!("Host [{}] is stopped and accepts no new workloads", self.id);
+            tracing::warn!(workload_id, reason = message, "refused to start workload");
+            return Err(message);
+        }
         if workloads.contains_key(workload_id) {
             let message = format!(
                 "Workload ID [{workload_id}] already exists (the exising workload must be stopped to reuse the ID)"
@@ -1590,6 +1610,7 @@ impl HostBuilder {
             engine,
             workloads: Arc::default(),
             reservations: std::sync::atomic::AtomicU64::default(),
+            stopped: std::sync::atomic::AtomicBool::new(false),
             plugins: self.plugins,
             plugin_bindings: Arc::new(self.plugin_bindings),
             id: self.id,
@@ -2198,6 +2219,39 @@ mod tests {
         assert!(
             host.workloads.read().await.is_empty(),
             "stopping should drop the id"
+        );
+    }
+
+    /// A stopped host takes no new workloads. Its ingress has stopped
+    /// accepting and its plugins are stopping, so one started onto it would be
+    /// unroutable — and would be unregistered without a word when the ingress
+    /// finishes draining.
+    #[tokio::test]
+    async fn test_a_stopped_host_refuses_to_start_a_workload() {
+        let host = Arc::new(host_with(Arc::new(BindRecordingPlugin::default())));
+        Arc::clone(&host)
+            .stop()
+            .await
+            .expect("stopping the host should succeed");
+
+        let refused = host
+            .workload_start(marker_request("after-stop"))
+            .await
+            .expect("a refusal is a response, not a transport failure");
+        assert_eq!(
+            refused.workload_status.workload_state,
+            WorkloadState::Error,
+            "a stopped host must refuse a start, got {:?}",
+            refused.workload_status
+        );
+        assert!(
+            refused.workload_status.message.contains("stopped"),
+            "the refusal must say why, got {:?}",
+            refused.workload_status.message
+        );
+        assert!(
+            !host.workloads.read().await.contains_key("after-stop"),
+            "a refused start must leave no reservation behind"
         );
     }
 

@@ -85,6 +85,15 @@ declare_timeouts! {
     http_response = ("WASH_HTTP_RESPONSE_TIMEOUT_SECS", 600);
     /// Max wall-clock for a trigger service to acknowledge a delivered message.
     messaging_deliver = ("WASH_MESSAGING_DELIVER_TIMEOUT_SECS", 600);
+    /// How long a stopped ingress waits for its connections to finish before
+    /// letting go of the workloads it routed anyway.
+    ///
+    /// A bound rather than a wait, because a connection need never close: h2
+    /// keep-alive pings hold an idle one open indefinitely, and a stream has no
+    /// deadline of its own. Past this the routes serve nobody worth keeping
+    /// them for, and holding them pins every routed workload's `InstancePre`,
+    /// its components and the engine behind them for the life of the process.
+    ingress_drain = ("WASH_INGRESS_DRAIN_TIMEOUT_SECS", 60);
     /// How long an abandoned call may keep running before its store acts on the
     /// abandonment (see [`crate::engine::abandon`]). This is what makes
     /// abandonment safe to signal on every disconnect: a healthy guest finishes
