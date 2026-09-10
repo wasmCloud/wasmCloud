@@ -35,7 +35,6 @@ const (
 	// the host finalizer can fan out to assigned workloads without
 	// scanning every Workload in the cluster.
 	workloadByHostIDIndex = "status.hostId"
-	statusUnknown         = "unknown"
 )
 
 // HostReconciler reconciles a Host object
