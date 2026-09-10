@@ -390,26 +390,6 @@ func hostSpecChanged(existing, next *runtimev1alpha1.Host) bool {
 // that always refreshes LastSeen.
 func hostStatusPatch(status *runtimev1alpha1.HostStatus) ([]byte, error) {
 	s := map[string]any{"lastSeen": metav1.Now()}
-	if status.Version == "" {
-		s["version"] = statusUnknown
-	}
-	if status.OSName == "" {
-		s["osName"] = statusUnknown
-	}
-	if status.OSArch == "" {
-		s["osArch"] = statusUnknown
-	}
-	if status.OSKernel == "" {
-		s["osKernel"] = statusUnknown
-	}
-	if status.SystemCPUUsage == "" {
-		s["systemCPUUsage"] = "0"
-	}
-	if status.SystemMemoryTotal == 0 {
-		s["systemMemoryTotal"] = 0
-	}
-	if status.SystemMemoryFree == 0 {
-		s["systemMemoryFree"] = 0
-	}
+
 	return json.Marshal(map[string]any{"status": s})
 }
