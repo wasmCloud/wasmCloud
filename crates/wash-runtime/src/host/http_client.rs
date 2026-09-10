@@ -192,6 +192,23 @@ impl ClientTlsOptions {
     /// (e.g. [`TrustRoots::ExtraOnly`] with no bundles); problems loading
     /// individual native-store certificates are logged and skipped.
     pub fn build(&self) -> anyhow::Result<Arc<rustls::ClientConfig>> {
+        // Resolved first: `root_store` installs the crypto provider that
+        // `ClientConfig::builder` panics without, and as the receiver the
+        // builder would otherwise be evaluated before it.
+        let roots = self.root_store()?;
+        Ok(Arc::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        ))
+    }
+
+    /// The trust store these options describe, without deciding how the client
+    /// authenticates itself.
+    ///
+    /// Split out for the OTLP exporters, which trust a collector the same way
+    /// but may also present a client certificate to it.
+    pub(crate) fn root_store(&self) -> anyhow::Result<rustls::RootCertStore> {
         crate::init_crypto();
         let mut roots = match self.roots {
             TrustRoots::WebpkiAndNative | TrustRoots::Webpki => rustls::RootCertStore {
@@ -233,11 +250,7 @@ impl ClientTlsOptions {
             self.extra_ca_paths.len()
         );
 
-        Ok(Arc::new(
-            rustls::ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth(),
-        ))
+        Ok(roots)
     }
 }
 
@@ -554,9 +567,30 @@ async fn send_head(
 /// Which protocol a connector negotiates, over ALPN for HTTPS and by prior
 /// knowledge for cleartext.
 #[derive(Clone, Copy)]
-enum Alpn {
+pub(crate) enum Alpn {
     Http1,
     H2,
+}
+
+/// The HTTPS connector every outbound connection this host makes is built on.
+/// A plain `HttpConnector` with `nodelay`, wrapped so it also speaks TLS.
+pub(crate) fn https_connector(
+    tls: &rustls::ClientConfig,
+    alpn: Alpn,
+) -> hyper_rustls::HttpsConnector<HttpConnector> {
+    crate::init_crypto();
+    let mut http = HttpConnector::new();
+    // The inner connector sees https URIs too; scheme handling belongs
+    // to the wrapping HttpsConnector.
+    http.enforce_http(false);
+    http.set_nodelay(true);
+    let builder = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_tls_config(tls.clone())
+        .https_or_http();
+    match alpn {
+        Alpn::Http1 => builder.enable_http1().wrap_connector(http),
+        Alpn::H2 => builder.enable_http2().wrap_connector(http),
+    }
 }
 
 /// A pooled outbound HTTP client with configurable TLS trust roots.
@@ -610,27 +644,13 @@ impl PooledClient {
         // both protocols: they belong to the workload, not to a pool.
         let tls_config = isolated_resumption(&tls);
         let last_permit_warning = Arc::new(std::sync::Mutex::new(None));
-        let connector = |alpn: Alpn| {
-            let mut http = HttpConnector::new();
-            // The inner connector sees https URIs too; scheme handling belongs
-            // to the wrapping HttpsConnector.
-            http.enforce_http(false);
-            http.set_nodelay(true);
-            let builder = hyper_rustls::HttpsConnectorBuilder::new()
-                .with_tls_config(tls_config.clone())
-                .https_or_http();
-            let inner = match alpn {
-                Alpn::Http1 => builder.enable_http1().wrap_connector(http),
-                Alpn::H2 => builder.enable_http2().wrap_connector(http),
-            };
-            BoundedConnector {
-                inner,
-                workload: workload.clone(),
-                workload_permits: workload_permits.clone(),
-                global_permits: global_permits.clone(),
-                permit_wait,
-                last_permit_warning: last_permit_warning.clone(),
-            }
+        let connector = |alpn: Alpn| BoundedConnector {
+            inner: https_connector(&tls_config, alpn),
+            workload: workload.clone(),
+            workload_permits: workload_permits.clone(),
+            global_permits: global_permits.clone(),
+            permit_wait,
+            last_permit_warning: last_permit_warning.clone(),
         };
         let pool = || {
             let mut builder = hyper_util::client::legacy::Client::builder(TokioExecutor::new());

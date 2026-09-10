@@ -25,19 +25,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use opentelemetry_otlp::{LogExporter, MetricExporter, SpanExporter};
-
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::plugin::{HostPlugin, WitInterfaces, WorkloadItem, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
 pub(crate) const WASI_OTEL_ID: &str = "wasi-otel";
-
-/// OTel gRPC default per the OTLP/gRPC spec. Matches what
-/// `opentelemetry_otlp::SpanExporter::builder().with_tonic()` falls back to
-/// when no `OTEL_EXPORTER_OTLP_*_ENDPOINT` is set; duplicated here only so
-/// the log line at plugin start reflects what the exporter actually used.
-const DEFAULT_OTLP_GRPC_ENDPOINT: &str = "http://localhost:4317";
 
 mod bindings {
     wasmtime::component::bindgen!({
@@ -125,85 +117,77 @@ impl HostPlugin for WasiOtel {
     }
 
     async fn start(&self) -> anyhow::Result<()> {
-        // The exporter resolves its endpoint from `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
-        // then `OTEL_EXPORTER_OTLP_ENDPOINT`, falling back to the OTel gRPC default
-        // ([`DEFAULT_OTLP_GRPC_ENDPOINT`]). Protocol is fixed to gRPC because we use
-        // `with_tonic()` below; tracking richer per-target endpoint configuration as a
-        // follow-up to this PR (see TODO below).
-        let endpoint = std::env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
-            .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
-            .unwrap_or_else(|_| DEFAULT_OTLP_GRPC_ENDPOINT.to_string());
-        tracing::info!(
-            endpoint = %endpoint,
-            protocol = "grpc",
-            "Starting WASI OTel plugin"
-        );
+        use crate::observability::otel;
 
         // TODO: thread per-target endpoints (host vs workload) through `WasiOtelConfig`
         // so platform telemetry and application telemetry can ship to different backends.
 
-        // set up the grpc span exporter
-        let span_exporter = SpanExporter::builder()
-            .with_tonic()
-            .build()
-            .map_err(|e| anyhow::anyhow!("Failed to create span exporter: {e}"))?;
-
-        // set up the grpc log exporter
-        let log_exporter = LogExporter::builder()
-            .with_tonic()
-            //.with_endpoint("http://localhost:5318")
-            //.with_protocol(opentelemetry_otlp::Protocol::Grpc)
-            .build()?;
-
-        // set up metric exporter
-        let metric_exporter = MetricExporter::builder()
-            .with_tonic()
-            //.with_endpoint("http://localhost:5318")
-            //.with_protocol(opentelemetry_otlp::Protocol::Grpc)
-            .build()
-            .map_err(|e| anyhow::anyhow!("Failed to create metric exporter: {e}"))?;
-
-        // processor
-        let processor = BatchLogProcessor::builder(log_exporter).build();
-
-        // Initialize all providers
-        let tracer_provider = opentelemetry_sdk::trace::TracerProviderBuilder::default()
-            .with_batch_exporter(span_exporter)
-            .with_resource(
-                opentelemetry_sdk::Resource::builder_empty()
-                    .with_attributes([KeyValue::new(
-                        "service.name",
-                        self.config.service_name.clone(),
-                    )])
-                    .build(),
-            )
-            .build();
-        let logger_provider = opentelemetry_sdk::logs::LoggerProviderBuilder::default()
-            .with_log_processor(processor)
-            .with_resource(
-                opentelemetry_sdk::Resource::builder_empty()
-                    .with_attributes([KeyValue::new(
-                        "service.name",
-                        self.config.service_name.clone(),
-                    )])
-                    .build(),
-            )
-            .build();
-        let meter_provider = SdkMeterProvider::builder()
-            .with_periodic_exporter(metric_exporter)
-            .with_resource(
-                opentelemetry_sdk::Resource::builder_empty()
-                    .with_attributes([KeyValue::new(
-                        "service.name",
-                        self.config.service_name.clone(),
-                    )])
-                    .build(),
-            )
+        // Per signal, on the same rule the host's own providers follow: a signal
+        // with no endpoint configured gets no exporter, rather than a batch
+        // processor retrying against the OTLP default for the life of the
+        // process. A guest's `wasi:otel` calls for that signal become no-ops,
+        // which is what an unconfigured host should do with them.
+        //
+        // Built through the shared builders, so a workload's telemetry honors
+        // `OTEL_EXPORTER_OTLP_PROTOCOL` and reaches the same collector the
+        // host's own does.
+        let resource = opentelemetry_sdk::Resource::builder_empty()
+            .with_attributes([KeyValue::new(
+                "service.name",
+                self.config.service_name.clone(),
+            )])
             .build();
 
-        *self.tracer_provider.write().await = Some(tracer_provider);
-        *self.logger_provider.write().await = Some(logger_provider);
-        *self.meter_provider.write().await = Some(meter_provider);
+        let tracer_provider = if otel::otel_traces_enabled() {
+            let exporter = otel::build_span_exporter()
+                .map_err(|e| anyhow::anyhow!("Failed to create span exporter: {e}"))?;
+            Some(
+                opentelemetry_sdk::trace::TracerProviderBuilder::default()
+                    .with_batch_exporter(exporter)
+                    .with_resource(resource.clone())
+                    .build(),
+            )
+        } else {
+            None
+        };
+        let logger_provider = if otel::otel_logs_enabled() {
+            let exporter = otel::build_log_exporter()
+                .map_err(|e| anyhow::anyhow!("Failed to create log exporter: {e}"))?;
+            Some(
+                opentelemetry_sdk::logs::LoggerProviderBuilder::default()
+                    .with_log_processor(BatchLogProcessor::builder(exporter).build())
+                    .with_resource(resource.clone())
+                    .build(),
+            )
+        } else {
+            None
+        };
+        let meter_provider = if otel::otel_metrics_enabled() {
+            let exporter = otel::build_metric_exporter()
+                .map_err(|e| anyhow::anyhow!("Failed to create metric exporter: {e}"))?;
+            Some(
+                SdkMeterProvider::builder()
+                    .with_periodic_exporter(exporter)
+                    .with_resource(resource)
+                    .build(),
+            )
+        } else {
+            None
+        };
+
+        // Which signals a workload can export, on the same per-signal rule the
+        // host's own providers follow. Where each one goes is reported once, by
+        // `observability::log_configuration`, for the same endpoints.
+        tracing::info!(
+            traces = tracer_provider.is_some(),
+            logs = logger_provider.is_some(),
+            metrics = meter_provider.is_some(),
+            "Starting WASI OTel plugin"
+        );
+
+        *self.tracer_provider.write().await = tracer_provider;
+        *self.logger_provider.write().await = logger_provider;
+        *self.meter_provider.write().await = meter_provider;
 
         tracing::info!("WASI OTel plugin started");
         Ok(())
