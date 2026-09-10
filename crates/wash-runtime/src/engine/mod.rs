@@ -983,6 +983,7 @@ pub struct EngineBuilder {
     compilation_cache_ttl: Option<Duration>,
     fuel_consumption: Option<bool>,
     parallel_compilation: Option<bool>,
+    native_unwind_info: Option<bool>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
     guest_memory_mode: guest_memory::GuestMemoryMode,
@@ -1093,6 +1094,18 @@ impl EngineBuilder {
     /// makes it single-threaded again.
     pub fn with_parallel_compilation(mut self, enable: bool) -> Self {
         self.parallel_compilation = Some(enable);
+        self
+    }
+
+    /// Whether compiled code registers unwind tables with the system unwinder,
+    /// which only native debuggers and profilers that unwind by DWARF read.
+    ///
+    /// On, as in wasmtime, unless this or `WASMTIME_NATIVE_UNWIND_INFO` turns
+    /// it off. Under LLVM's libunwind (macOS; musl and zig-built Linux
+    /// binaries) every component drop scans a process-wide table of them, so
+    /// a host holding many components wants it off. Windows requires them.
+    pub fn with_native_unwind_info(mut self, enable: bool) -> Self {
+        self.native_unwind_info = Some(enable);
         self
     }
 
@@ -1285,6 +1298,16 @@ impl EngineBuilder {
         // deadline of its own — see [`crate::engine::abandon::arm_epoch_deadline`],
         // which is what decides when one is acted on.
         config.epoch_interruption(true);
+
+        // Unwind tables are wasmtime's own default, so this only carries an
+        // explicit choice through. Windows refuses to drop them, so an "off"
+        // is ignored there instead of failing `build`.
+        if let Some(unwind) = self
+            .native_unwind_info
+            .or_else(|| getenv::<bool>("WASMTIME_NATIVE_UNWIND_INFO"))
+        {
+            config.native_unwind_info(unwind || cfg!(windows));
+        }
 
         for proposal in &self.proposals {
             proposal.apply(&mut config);
@@ -1606,6 +1629,20 @@ mod tests {
             .build()
             .expect("serial compilation should build");
         assert!(!engine.inner().get_parallel_compilation());
+    }
+
+    // Unwind tables are on unless a host turns them off, and turning them off
+    // reaches the engine everywhere but Windows, which requires them.
+    #[test]
+    fn native_unwind_info_is_on_and_can_be_turned_off() {
+        let engine = Engine::builder().build().expect("default should build");
+        assert_eq!(engine.inner().get_native_unwind_info(), Some(true));
+
+        let engine = Engine::builder()
+            .with_native_unwind_info(false)
+            .build()
+            .expect("turning unwind info off should build");
+        assert_eq!(engine.inner().get_native_unwind_info(), Some(cfg!(windows)));
     }
 
     // A custom base config can now be combined with the pooling allocator and
