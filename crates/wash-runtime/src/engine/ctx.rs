@@ -584,16 +584,16 @@ impl CtxBuilder {
 
     /// Point this store's outgoing HTTP at `http_handler`.
     ///
-    /// Borrowed, not owned, because the store keeps only a
-    /// [`Weak`](std::sync::Weak) — see [`crate::host::http::live_handler`]. The
-    /// caller therefore has to keep the handler alive itself; taking it by
-    /// reference is what says so, rather than accepting an `Arc` whose last
-    /// strong count this call would quietly drop.
+    /// Weak, and taken weak: building a store must not depend on the host
+    /// still being there, because a store is built on paths — a message
+    /// delivery, a service restart — that have nothing to do with egress. Only
+    /// an actual outbound call needs a live handler, and the hooks report it
+    /// per call. See [`crate::host::http::live_handler`].
     pub fn with_http_handler(
         mut self,
-        http_handler: &Arc<dyn crate::host::http::HostHandler>,
+        http_handler: &std::sync::Weak<dyn crate::host::http::HostHandler>,
     ) -> Self {
-        self.http_handler = Some(Arc::downgrade(http_handler));
+        self.http_handler = Some(http_handler.clone());
         self
     }
 

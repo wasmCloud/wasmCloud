@@ -680,7 +680,7 @@ impl ServiceStoreRecipe {
     async fn build(&self) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
         let store = new_store_from_templates(
             &self.engine,
-            crate::host::http::live_handler(&self.http_handler)?,
+            &self.http_handler,
             &self.active_template,
             &self.linked_templates,
             &self.linked_instances,
@@ -776,7 +776,11 @@ impl ResolvedWorkload {
         let Some(service) = self.service.as_ref() else {
             bail!("service unexpectedly missing during execution");
         };
-        let mut store = self.new_store_from_metadata(&service.metadata).await?;
+        let mut store = self
+            .service_store_recipe(&service.metadata)
+            .await?
+            .build()
+            .await?;
         let instance = pre.instantiate_async(&mut store).await?;
         let handle = tokio::spawn(async move {
             loop {
@@ -956,6 +960,8 @@ impl ResolvedWorkload {
         // handler), re-instantiate into the same store, rebuild the ingresses, and
         // re-register their handlers (swapping the stale senders) until the restart
         // budget is exhausted. A clean exit (every channel closed) stops it.
+        // A property of what the component exports, not of an incarnation.
+        let needs_handler = serves_http || serves_messaging;
         let handle = tokio::spawn(async move {
             let mut first = Some(ingresses);
             let mut restarts = max_restarts;
@@ -963,47 +969,55 @@ impl ResolvedWorkload {
                 let ingresses = match first.take() {
                     Some(ingresses) => ingresses,
                     None => {
-                        // The handler is held weakly, so a host that went away
-                        // while this service was faulting ends the supervisor:
-                        // there is nothing left to re-register the restarted
-                        // incarnation's ingresses with.
-                        let Some(http_handler) = http_handler.upgrade() else {
-                            error!(
-                                workload.id = %workload_id,
-                                workload.namespace = %workload_namespace,
-                                workload.name = %workload_name,
-                                "host HTTP handler is no longer available; \
-                                 not restarting this workload's service"
-                            );
-                            break;
-                        };
                         let (ingresses, http_tx, messaging_tx) =
                             build_trigger_ingresses(serves_http, serves_messaging, &service_calls);
-                        if let Some(http_tx) = http_tx
-                            && let Err(e) = http_handler
-                                .on_service_http_resolved(&workload_id, &ingress_hostnames, http_tx)
-                                .await
-                        {
-                            error!(
-                                workload.id = %workload_id,
-                                workload.namespace = %workload_namespace,
-                                workload.name = %workload_name,
-                                err = %e,
-                                "failed to re-register service HTTP handler on restart"
-                            );
-                        }
-                        if let Some(messaging_tx) = messaging_tx
-                            && let Err(e) = http_handler
-                                .on_trigger_service_messaging_resolved(&workload_id, messaging_tx)
-                                .await
-                        {
-                            error!(
-                                workload.id = %workload_id,
-                                workload.namespace = %workload_namespace,
-                                workload.name = %workload_name,
-                                err = %e,
-                                "failed to re-register trigger service messaging handler on restart"
-                            );
+                        // A service with ingresses cannot come back without a
+                        // handler to re-register them with. One the host merely
+                        // dispatches to has none, and restarts either way.
+                        if needs_handler {
+                            let Some(http_handler) = http_handler.upgrade() else {
+                                error!(
+                                    workload.id = %workload_id,
+                                    workload.namespace = %workload_namespace,
+                                    workload.name = %workload_name,
+                                    "host HTTP handler is no longer available; \
+                                     not restarting this workload's service"
+                                );
+                                break;
+                            };
+                            if let Some(http_tx) = http_tx
+                                && let Err(e) = http_handler
+                                    .on_service_http_resolved(
+                                        &workload_id,
+                                        &ingress_hostnames,
+                                        http_tx,
+                                    )
+                                    .await
+                            {
+                                error!(
+                                    workload.id = %workload_id,
+                                    workload.namespace = %workload_namespace,
+                                    workload.name = %workload_name,
+                                    err = %e,
+                                    "failed to re-register service HTTP handler on restart"
+                                );
+                            }
+                            if let Some(messaging_tx) = messaging_tx
+                                && let Err(e) = http_handler
+                                    .on_trigger_service_messaging_resolved(
+                                        &workload_id,
+                                        messaging_tx,
+                                    )
+                                    .await
+                            {
+                                error!(
+                                    workload.id = %workload_id,
+                                    workload.namespace = %workload_namespace,
+                                    workload.name = %workload_name,
+                                    err = %e,
+                                    "failed to re-register trigger service messaging handler on restart"
+                                );
+                            }
                         }
                         ingresses
                     }
@@ -1593,11 +1607,19 @@ impl ResolvedWorkload {
     /// trigger-service instance instead of instantiating a component per
     /// message.
     ///
-    /// Held weakly, so this fails once the host that owns the handler is gone
-    /// — which is the answer every caller wants: there is nothing left to
-    /// register with, deliver to, or send an outbound request through.
+    /// Held weakly, so this fails once the host that owns the handler is gone.
+    /// For a caller that would rather skip than fail, see
+    /// [`Self::try_http_handler`].
     pub fn http_handler(&self) -> anyhow::Result<Arc<dyn crate::host::http::HostHandler>> {
-        crate::host::http::live_handler(&self.http_handler)
+        self.try_http_handler()
+            .ok_or_else(|| anyhow::anyhow!("host HTTP handler is no longer available"))
+    }
+
+    /// [`Self::http_handler`] for a path that has something else to do when the
+    /// host is gone — a message still deliverable to a component of its own,
+    /// say. No error is built for an answer the caller only branches on.
+    pub fn try_http_handler(&self) -> Option<Arc<dyn crate::host::http::HostHandler>> {
+        self.http_handler.upgrade()
     }
 
     /// Gets the name of the workload
@@ -1670,7 +1692,7 @@ impl ResolvedWorkload {
         };
         let store = new_store_from_templates(
             &engine,
-            self.http_handler()?,
+            &self.http_handler,
             &active_template,
             &linked_templates,
             &linked_instances,
@@ -1902,20 +1924,6 @@ impl ResolvedWorkload {
             Some(pool) => pool.policy(),
             None => InstancePolicy::Ephemeral,
         }
-    }
-
-    /// Creates a new wasmtime Store for multiple components from the given workload metadata.
-    ///
-    /// The recipe carries the metering stamp a service's store needs — it
-    /// serves every ingress the workload has, concurrently, for the life of the
-    /// workload, so no call on it can attribute a delta to itself and
-    /// `guest.execution.total` is all there is. See
-    /// [`crate::engine::abandon::GuestExecution`].
-    async fn new_store_from_metadata(
-        &self,
-        metadata: &WorkloadMetadata,
-    ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
-        self.service_store_recipe(metadata).await?.build().await
     }
 
     /// The identity a service's store runs under.
@@ -2964,7 +2972,7 @@ impl UnresolvedWorkload {
         mut self,
         plugins: Option<&HashMap<&'static str, Arc<dyn HostPlugin + 'static>>>,
         plugin_bindings: &crate::plugin::PluginBindings,
-        http_handler: Arc<dyn crate::host::http::HostHandler>,
+        http_handler: &Arc<dyn crate::host::http::HostHandler>,
         meters: &crate::observability::Meters,
     ) -> anyhow::Result<ResolvedWorkload> {
         // Bind to plugins
@@ -3000,7 +3008,7 @@ impl UnresolvedWorkload {
             service_calls: Arc::default(),
             released: Arc::default(),
             host_interfaces: self.host_interfaces,
-            http_handler: Arc::downgrade(&http_handler),
+            http_handler: Arc::downgrade(http_handler),
             invocation: meters.invocation.clone(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
@@ -4193,12 +4201,15 @@ mod tests {
 
         let plugin = Arc::new(RollbackPlugin::new(None));
         let workload = marker_workload(vec![importer]);
+        // Bound, not a temporary: the resolved workload keeps only a `Weak`.
+        let http_handler: Arc<dyn crate::host::http::HostHandler> =
+            Arc::new(crate::host::http::NullServer::default());
 
         workload
             .resolve(
                 Some(&plugin.registered()),
                 &crate::plugin::PluginBindings::new(),
-                Arc::new(crate::host::http::NullServer::default()),
+                &http_handler,
                 &crate::observability::Meters::new(crate::observability::MeterKind::Off),
             )
             .await

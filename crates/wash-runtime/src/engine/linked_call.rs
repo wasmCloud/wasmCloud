@@ -260,7 +260,7 @@ pub(crate) fn func_is_bridge_safe(func_ty: &ComponentFunc) -> bool {
 
 async fn build_ctx_from_template(
     template: &ComponentCtxTemplate,
-    http_handler: Arc<dyn crate::host::http::HostHandler>,
+    http_handler: &std::sync::Weak<dyn crate::host::http::HostHandler>,
     all_volume_mounts: &[ResolvedVolumeMount],
     store_id: &str,
     is_service: bool,
@@ -313,7 +313,7 @@ async fn build_ctx_from_template(
     }
 
     let mut ctx_builder = Ctx::builder(template.workload_id.clone(), template.component_id.clone())
-        .with_http_handler(&http_handler)
+        .with_http_handler(http_handler)
         .with_wasi_ctx(wasi_ctx_builder.build())
         .with_sockets(sockets_ctx)
         .with_allowed_hosts(template.local_resources.allowed_hosts.clone());
@@ -334,7 +334,7 @@ async fn build_ctx_from_template(
 
 pub(crate) async fn new_store_from_templates(
     engine: &wasmtime::Engine,
-    http_handler: Arc<dyn crate::host::http::HostHandler>,
+    http_handler: &std::sync::Weak<dyn crate::host::http::HostHandler>,
     active: &ComponentCtxTemplate,
     linked: &[ComponentCtxTemplate],
     linked_instances: &[(Arc<str>, InstancePre<SharedCtx>)],
@@ -347,7 +347,7 @@ pub(crate) async fn new_store_from_templates(
         .collect::<Vec<_>>();
     let active_ctx = build_ctx_from_template(
         active,
-        http_handler.clone(),
+        http_handler,
         &all_volume_mounts,
         &store_id,
         is_service,
@@ -356,14 +356,9 @@ pub(crate) async fn new_store_from_templates(
     let mut shared_ctx = SharedCtx::new(active_ctx).with_guest_memory(&active.guest_memory);
 
     for linked in linked {
-        let linked_ctx = build_ctx_from_template(
-            linked,
-            http_handler.clone(),
-            &all_volume_mounts,
-            &store_id,
-            false,
-        )
-        .await?;
+        let linked_ctx =
+            build_ctx_from_template(linked, http_handler, &all_volume_mounts, &store_id, false)
+                .await?;
         shared_ctx
             .contexts
             .insert(linked.component_id.clone(), linked_ctx);
@@ -492,7 +487,7 @@ async fn new_ephemeral_store(
 
     let store = new_store_from_templates(
         &call.engine,
-        crate::host::http::live_handler(&call.http_handler)?,
+        &call.http_handler,
         &active,
         &linked,
         &linked_instances,
