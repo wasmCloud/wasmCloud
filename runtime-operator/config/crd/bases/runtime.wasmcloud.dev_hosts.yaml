@@ -135,14 +135,6 @@ spec:
                 type: string
               workloadCount:
                 type: integer
-            required:
-            - osArch
-            - osKernel
-            - osName
-            - systemCPUUsage
-            - systemMemoryFree
-            - systemMemoryTotal
-            - version
             type: object
         required:
         - hostId
