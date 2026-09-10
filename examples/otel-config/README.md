@@ -41,7 +41,7 @@ wash dev
 In a second terminal:
 
 ```bash
-curl http://localhost:8000/
+curl http://localhost:8001/
 ```
 
 Expected behavior on the first request:
@@ -144,7 +144,10 @@ docker run --rm -it \
 - `18889` — OTLP gRPC ingest endpoint
 
 In a second terminal, point `wash dev` at the dashboard's OTLP endpoint. wash-runtime's
-exporter activates whenever any `OTEL_*` env var is set and uses gRPC by default:
+exporter activates when an OTLP endpoint variable is set — `OTEL_EXPORTER_OTLP_ENDPOINT`
+or a signal-specific `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT` — and speaks
+gRPC over `http://` or `https://` by default. Other `OTEL_*` vars (e.g. `OTEL_SERVICE_NAME`)
+do not by themselves turn on export:
 
 ```shell
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:18889 wash dev
@@ -157,7 +160,7 @@ so it stays on the command line. The Resource identity is sourced from
 In a third terminal, trigger a request:
 
 ```shell
-curl http://localhost:8000/
+curl http://localhost:8001/
 ```
 
 Open the dashboard at [http://localhost:18888](http://localhost:18888). You should see:

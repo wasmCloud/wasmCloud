@@ -389,10 +389,12 @@ pub struct HostCommand {
 
     /// How many workloads this host pulls and compiles at once.
     ///
-    /// Each start it admits ends in a single-threaded compile, so this is how
-    /// many cores a burst of starts can take from the ones serving HTTP and
-    /// NATS. Defaults to one fewer than the host can see, at most 4; lower it
-    /// on a host that must stay responsive while it starts things.
+    /// Each start it admits ends in a compile that spreads over every core the
+    /// host can see, so this is a floor on what a burst of starts takes from
+    /// the cores serving HTTP and NATS, not a ceiling. Cap the compiles
+    /// themselves with `RAYON_NUM_THREADS` or `WASMTIME_PARALLEL_COMPILATION=false`.
+    /// Defaults to one fewer than the host can see, at most 4; lower it on a
+    /// host that must stay responsive while it starts things.
     #[arg(long = "max-concurrent-starts", env = "WASH_MAX_CONCURRENT_STARTS")]
     pub max_concurrent_starts: Option<usize>,
 
