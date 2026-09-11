@@ -79,13 +79,16 @@ func (h *HTTPGateway) Start(ctx context.Context) error {
 }
 
 func (h *HTTPGateway) rewrite(req *httputil.ProxyRequest) {
-	// X-Forwarded-For handling
-	clientIP := req.In.RemoteAddr
+	// Derive X-Real-IP from the TCP peer, not client-controlled headers.
+	if clientIP, _, err := net.SplitHostPort(req.In.RemoteAddr); err == nil {
+		req.Out.Header.Set("X-Real-IP", clientIP)
+	} else {
+		req.Out.Header.Del("X-Real-IP")
+	}
+
 	if xff := req.In.Header.Get("X-Forwarded-For"); xff != "" {
-		clientIP = xff
 		req.Out.Header.Set("X-Forwarded-For", xff)
 	}
-	req.Out.Header.Set("X-Real-IP", clientIP)
 	req.SetXForwarded()
 
 	// Preserve Connection header from the original request
