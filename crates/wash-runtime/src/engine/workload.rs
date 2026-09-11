@@ -2694,6 +2694,12 @@ impl UnresolvedWorkload {
                         }
                     };
 
+                // What the policy decided, carried to the plugin so it can
+                // apply the same answer to configuration that arrives as a
+                // call argument rather than in the manifest — which is the
+                // only place the runtime cannot check.
+                let ownership = declared.ownership(&schema);
+
                 let resolved_component_bindings: Vec<HashSet<WitInterface>> =
                     plugin_component_bindings
                         .iter()
@@ -2761,7 +2767,10 @@ impl UnresolvedWorkload {
 
                 // Call on_workload_bind with the workload and all matched interfaces
                 if let Err(e) = p
-                    .on_workload_bind(self, WitInterfaces::new(&plugin_matched_interfaces))
+                    .on_workload_bind(
+                        self,
+                        WitInterfaces::new(&plugin_matched_interfaces).with_ownership(&ownership),
+                    )
                     .instrument(bind_span)
                     .await
                 {
@@ -2826,7 +2835,7 @@ impl UnresolvedWorkload {
                     if let Err(e) = p
                         .on_workload_item_bind(
                             &mut workload_item,
-                            WitInterfaces::new(&matching_interfaces),
+                            WitInterfaces::new(&matching_interfaces).with_ownership(&ownership),
                         )
                         .instrument(item_bind_span)
                         .await

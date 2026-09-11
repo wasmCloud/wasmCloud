@@ -571,6 +571,65 @@ pub struct PluginBindingSet {
     default_bundles: Vec<DefaultBundle>,
 }
 
+/// What an operator's declaration decided for a binding, handed to the plugin
+/// so it can apply the same answer where the runtime cannot reach.
+///
+/// Binding policy governs a *manifest*: the runtime reads a workload's config
+/// map, compares it against the schema and the operator's declaration, and
+/// refuses what the operator owns. That covers every key that arrives as
+/// configuration.
+///
+/// It does not cover a key that arrives as a *call argument*. A plugin whose
+/// WIT takes a config list — `cosmonic:kafka`'s `producer.open(config)`, or
+/// any interface shaped like it — is handed keys at runtime, by guest code,
+/// through an argument the runtime cannot interpret: it does not know which of
+/// a component's arguments are configuration, and it must not guess. So
+/// `hostOwnedKeys` stops at the manifest, and a key an operator claimed can be
+/// supplied by the component instead.
+///
+/// This is what the runtime knows and the plugin needs: the policy in force
+/// and the keys the host owns, under the plugin's own notion of key identity,
+/// so [`BindingOwnership::owns`] answers for every spelling the plugin reads.
+#[derive(Debug, Clone, Default)]
+pub struct BindingOwnership {
+    workload_config: WorkloadConfigPolicy,
+    /// Canonical spellings — see [`BindingSchema::canonical`].
+    host_owned: BTreeSet<String>,
+    schema: BindingSchema,
+}
+
+impl BindingOwnership {
+    /// The policy in force for this binding.
+    #[must_use]
+    pub fn workload_config(&self) -> WorkloadConfigPolicy {
+        self.workload_config
+    }
+
+    /// Whether `key`, in any spelling this plugin reads it under, belongs to
+    /// the host.
+    ///
+    /// Independent of the policy on purpose. A plugin deciding what to do
+    /// about a key a *component* passed is not asking who may write the
+    /// manifest; the answer under `allow` is still that the operator claimed
+    /// the key. What to do about it is the plugin's call — see
+    /// [`BindingOwnership::workload_config`] for the policy if it wants it.
+    #[must_use]
+    pub fn owns(&self, key: &str) -> bool {
+        self.host_owned.contains(&self.schema.canonical(key))
+    }
+
+    /// Every key the host owns, canonical spelling, sorted.
+    pub fn host_owned_keys(&self) -> impl Iterator<Item = &str> {
+        self.host_owned.iter().map(String::as_str)
+    }
+
+    /// Whether the host owns nothing here, so a plugin can skip the check.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.host_owned.is_empty()
+    }
+}
+
 /// A set of defaults that applies only when nobody set its anchor key.
 ///
 /// The case it exists for is TLS material, which is valid only for the address
@@ -691,6 +750,17 @@ impl PluginBindingSet {
     /// The names the operator declared, sorted.
     pub fn binding_names(&self) -> impl Iterator<Item = &str> {
         self.bindings.keys().map(String::as_str)
+    }
+
+    /// What this declaration decided, in the form a plugin can enforce for
+    /// itself. See [`BindingOwnership`].
+    #[must_use]
+    pub fn ownership(&self, schema: &BindingSchema) -> BindingOwnership {
+        BindingOwnership {
+            workload_config: self.workload_config,
+            host_owned: self.effective_host_owned(schema),
+            schema: schema.clone(),
+        }
     }
 
     /// The operator's config for `binding`: the base with the named entry
@@ -2403,6 +2473,41 @@ mod tests {
             )
             .expect_err("widening is still widening under the other spelling");
         assert!(format!("{err:#}").contains("billing.>"));
+    }
+
+    /// What the runtime hands a plugin is the union of both sources, asked
+    /// under the plugin's own key identity — so a plugin checking a key a
+    /// component passed gets the same answer the manifest check would have.
+    #[test]
+    fn ownership_carries_both_sources_under_the_plugins_key_identity() {
+        let schema = BindingSchema::with_host_owned_keys(["plugin-library-paths"])
+            .and_aliases([("bootstrap.servers", "metadata.broker.list")]);
+        let ownership = PluginBindingSet::new("kafka")
+            .with_host_owned_keys(["bootstrap.servers"])
+            .with_workload_config(WorkloadConfigPolicy::Allow)
+            .ownership(&schema);
+
+        // The operator's list, under either spelling.
+        assert!(ownership.owns("bootstrap.servers"));
+        assert!(ownership.owns("METADATA.BROKER.LIST"));
+        // The schema's own claim, which the operator never mentioned.
+        assert!(ownership.owns("plugin_library_paths"));
+        // Anything else.
+        assert!(!ownership.owns("acks"));
+
+        // Reported, not applied: `allow` is about the manifest, and a plugin
+        // asking about a call argument still needs the true answer.
+        assert_eq!(ownership.workload_config(), WorkloadConfigPolicy::Allow);
+    }
+
+    /// A plugin nobody declared anything for owns nothing, so the check a
+    /// plugin runs on its own call arguments costs nothing and refuses
+    /// nothing.
+    #[test]
+    fn ownership_of_an_undeclared_plugin_is_empty() {
+        let ownership = PluginBindingSet::new("kafka").ownership(&BindingSchema::empty());
+        assert!(ownership.is_empty());
+        assert!(!ownership.owns("bootstrap.servers"));
     }
 
     /// A binding that resolves without a required key is refused, whoever was
