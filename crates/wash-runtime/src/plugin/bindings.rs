@@ -176,6 +176,20 @@ impl KeyOwnership {
     }
 }
 
+/// The safer answer when two declarations that turn out to name one key
+/// disagree. An alias must never turn a host-owned key back into a
+/// workload-owned one merely because that spelling was chosen as the group's
+/// representative.
+fn stricter_ownership(left: KeyOwnership, right: KeyOwnership) -> KeyOwnership {
+    match (left, right) {
+        (KeyOwnership::Host, _) | (_, KeyOwnership::Host) => KeyOwnership::Host,
+        (KeyOwnership::HostCeiling, _) | (_, KeyOwnership::HostCeiling) => {
+            KeyOwnership::HostCeiling
+        }
+        _ => KeyOwnership::Workload,
+    }
+}
+
 /// What a plugin declares about its own config keys: who each belongs to, and
 /// — optionally — the complete set it reads at all.
 ///
@@ -198,13 +212,12 @@ impl KeyOwnership {
 /// nothing, and it refuses the other spelling as unknown. (Case, whitespace,
 /// and `_` vs `-` need no separate entries — see [`canonical_key`].)
 ///
-/// Enumerating spellings settles the keys a plugin classifies, and where it is
-/// available it stays the simpler answer. It cannot settle the rest, which is
-/// what [`BindingSchema::and_aliases`] is for: an operator's `hostOwnedKeys`
-/// names keys no plugin classified, and classifying a key purely to record its
-/// other name would refuse it to every workload. A schema that declares its
-/// aliases answers "are these one key?" for keys it says nothing else about,
-/// which is the question every comparison here actually asks.
+/// For classified keys, list every spelling under the same ownership class.
+/// Some aliases cannot be expressed that way. For example, an operator may
+/// name an otherwise unclassified key in `hostOwnedKeys`. Classifying that key
+/// only to record an alias would also make it host-owned for every operator.
+/// [`BindingSchema::and_aliases`] records that two spellings identify the same
+/// key without assigning ownership to it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BindingSchema {
     ownership: BTreeMap<String, KeyOwnership>,
@@ -263,24 +276,14 @@ impl BindingSchema {
         self
     }
 
-    /// Declare that each pair of spellings is one key, so everything that
-    /// compares two keys treats them as the same one.
+    /// Declare pairs of spellings as the same key.
     ///
-    /// Classifying both spellings says the same thing about the keys a plugin
-    /// *claims*, and where that is available it stays the simpler answer. This
-    /// is for the identity a plugin cannot express that way: an operator's
-    /// `hostOwnedKeys` names keys the plugin does not classify at all, and a
-    /// key claimed only to be renamed is a key refused to every workload that
-    /// writes it. librdkafka reads a dozen properties under two names apiece
-    /// and `cosmonic:kafka` classifies none of them, so `bootstrap.servers`
-    /// and `metadata.broker.list` are one key only if something says so here.
+    /// Aliases define key identity only; they do not assign ownership or
+    /// precedence. This is useful for keys a plugin reads under multiple names
+    /// without classifying them, such as an operator's `hostOwnedKeys`.
     ///
-    /// The left spelling of each pair is the representative. Which one it is
-    /// does not matter, only that it is the same one every time — and it is
-    /// not a precedence rule: neither side of a pair outranks the other.
-    ///
-    /// Pairs sharing a spelling join one group, so `(a, b)` and `(b, c)` make
-    /// three names for one key rather than two groups that disagree.
+    /// The first spelling is used as the representative. Pairs may overlap:
+    /// `(a, b)` and `(b, c)` make all three spellings one key.
     #[must_use]
     pub fn and_aliases<I, S>(mut self, pairs: I) -> Self
     where
@@ -295,6 +298,12 @@ impl BindingSchema {
             let keep = self.canonical(&left);
             let absorbed = self.canonical(&right);
             if keep == absorbed {
+                // The fold itself can make two explicitly declared spellings
+                // equal (`some_key` and `some-key`). Keep a self-mapping so
+                // the declaration still marks this as a key the schema
+                // identifies; otherwise alias-only schemas silently become
+                // empty and resolution compares the spellings verbatim.
+                self.aliases.insert(left, keep);
                 continue;
             }
             for spelling in self.aliases.values_mut() {
@@ -311,7 +320,12 @@ impl BindingSchema {
             // Re-key anything already classified under the absorbed spelling,
             // so a schema is the same whichever order it was built in.
             if let Some(ownership) = self.ownership.remove(&absorbed) {
-                self.ownership.entry(keep).or_insert(ownership);
+                self.ownership
+                    .entry(keep)
+                    .and_modify(|existing| {
+                        *existing = stricter_ownership(*existing, ownership);
+                    })
+                    .or_insert(ownership);
             }
         }
         self
@@ -373,6 +387,14 @@ impl BindingSchema {
         self.aliases.contains_key(&folded) || self.ownership.contains_key(&self.canonical(key))
     }
 
+    /// Classify `keys`, keeping the strictest answer where one is already
+    /// there.
+    ///
+    /// Strictest rather than last: two spellings a plugin classified
+    /// separately land on one slot once an alias joins them, and which of them
+    /// is the group's representative must not decide whether the key is the
+    /// host's. Declaring one key under two ownerships is a plugin bug either
+    /// way; this is which way it fails.
     fn classify<I, S>(mut self, keys: I, ownership: KeyOwnership) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -380,7 +402,10 @@ impl BindingSchema {
     {
         for key in keys {
             let key = self.canonical(key.as_ref());
-            self.ownership.insert(key, ownership);
+            self.ownership
+                .entry(key)
+                .and_modify(|existing| *existing = stricter_ownership(*existing, ownership))
+                .or_insert(ownership);
         }
         self
     }
@@ -708,11 +733,15 @@ impl PluginBindingSet {
     /// plugin to pick between.
     #[must_use]
     fn host_layer_with(&self, binding: &str, schema: &BindingSchema) -> HashMap<String, String> {
-        let mut layer = self.base.clone();
+        // Normalize each operator layer on its own before applying precedence
+        // between them. Besides collapsing aliases written within `base`, the
+        // ordering makes the result stable if a caller reaches this helper
+        // without first running the conflict validation performed at startup
+        // and by `resolve`.
+        let mut layer = HashMap::new();
+        extend_layer(&mut layer, &self.base, schema);
         if let Some(named) = self.bindings.get(binding) {
-            for (key, value) in named {
-                layer_insert(&mut layer, key, value, schema);
-            }
+            extend_layer(&mut layer, named, schema);
         }
         layer
     }
@@ -968,6 +997,22 @@ impl PluginBindingSet {
         schema: &BindingSchema,
         narrows: NarrowsFn<'_>,
     ) -> anyhow::Result<HashMap<String, String>> {
+        reject_conflicting_spellings(
+            &self.base,
+            schema,
+            &format!("`host.plugins` entry `{}`", self.plugin_id),
+        )?;
+        if let Some(named) = self.bindings.get(binding) {
+            reject_conflicting_spellings(
+                named,
+                schema,
+                &format!(
+                    "`host.plugins` entry `{}` binding `{binding}`",
+                    self.plugin_id
+                ),
+            )?;
+        }
+
         let mut resolved = self.host_layer_with(binding, schema);
         if self.workload_config.reports() {
             let findings = self.findings(binding, workload, &resolved, schema, narrows);
@@ -1210,20 +1255,33 @@ impl PluginBindingSet {
         Ok(())
     }
 
-    /// Refuse any key the operator wrote that the plugin does not read.
+    /// Refuse any key the operator wrote that the plugin does not read, or two
+    /// spellings of one key that disagree within the same layer.
     ///
     /// The operator's half of [`BindingSchema::reject_unknown_keys`], checked
-    /// once at host startup rather than per workload. A no-op on an open schema.
+    /// once at host startup rather than per workload. The unknown-key check is
+    /// a no-op on an open schema; conflicting spellings are still rejected for
+    /// every identity the schema declares.
     ///
     /// # Errors
     ///
-    /// Names the entry or binding the unknown key was written on.
+    /// Names the entry or binding the invalid key was written on.
     pub fn reject_unknown_keys(&self, schema: &BindingSchema) -> anyhow::Result<()> {
+        reject_conflicting_spellings(
+            &self.base,
+            schema,
+            &format!("`host.plugins` entry `{}`", self.plugin_id),
+        )?;
         schema.reject_unknown_keys(
             &self.base,
             &format!("`host.plugins` entry `{}`", self.plugin_id),
         )?;
         for (name, config) in &self.bindings {
+            reject_conflicting_spellings(
+                config,
+                schema,
+                &format!("`host.plugins` entry `{}` binding `{name}`", self.plugin_id),
+            )?;
             schema.reject_unknown_keys(
                 config,
                 &format!("`host.plugins` entry `{}` binding `{name}`", self.plugin_id),
@@ -1250,6 +1308,52 @@ impl PluginBindingSet {
         let names: Vec<String> = self.bindings.keys().map(|n| format!("`{n}`")).collect();
         format!("; it serves {}", names.join(", "))
     }
+}
+
+/// Add one configuration layer in a stable order, collapsing every spelling
+/// the schema identifies before the next layer is applied.
+fn extend_layer(
+    layer: &mut HashMap<String, String>,
+    entries: &HashMap<String, String>,
+    schema: &BindingSchema,
+) {
+    let mut pairs: Vec<(&String, &String)> = entries.iter().collect();
+    pairs.sort_by_key(|(key, _)| *key);
+    for (key, value) in pairs {
+        layer_insert(layer, key, value, schema);
+    }
+}
+
+/// Refuse a single layer that gives two values to one key. Values are omitted
+/// from the error because they may be credentials.
+fn reject_conflicting_spellings(
+    config: &HashMap<String, String>,
+    schema: &BindingSchema,
+    owner: &str,
+) -> anyhow::Result<()> {
+    let mut pairs: Vec<(&String, &String)> = config.iter().collect();
+    pairs.sort_by_key(|(key, _)| *key);
+
+    let mut seen: BTreeMap<String, (&str, &str)> = BTreeMap::new();
+    for (key, value) in pairs {
+        if !schema.identifies(key) {
+            continue;
+        }
+        let identity = schema.canonical(key);
+        match seen.get(&identity) {
+            Some((existing_key, existing_value)) if *existing_value != value => {
+                anyhow::bail!(
+                    "{owner} sets `{existing_key}` and `{key}`, which this plugin identifies as \
+                     one key, to conflicting values; choose one spelling or make the values agree"
+                )
+            }
+            Some(_) => {}
+            None => {
+                seen.insert(identity, (key, value));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Write `key` into `layer`, replacing whatever spelling of it is already
@@ -2559,5 +2663,108 @@ mod tests {
             aliased_schema().ownership("bootstrap.servers"),
             KeyOwnership::Workload
         );
+    }
+
+    /// An explicit alias declaration remains meaningful when the ordinary key
+    /// fold already makes its two spellings equal. Alias-only schemas rely on
+    /// the declaration itself to opt these keys into merging.
+    #[test]
+    fn canonically_equal_aliases_still_mark_the_key_as_identified() {
+        let schema = BindingSchema::empty().and_aliases([("client_id", "client-id")]);
+        assert!(!schema.is_empty());
+        assert!(schema.identifies("client_id"));
+        assert!(schema.identifies("CLIENT-ID"));
+
+        let resolved = PluginBindingSet::new("p")
+            .with_base(map(&[("client_id", "operator")]))
+            .with_workload_config(WorkloadConfigPolicy::Allow)
+            .resolve(
+                UNNAMED_BINDING,
+                &map(&[("client-id", "workload")]),
+                &schema,
+                never_narrows(),
+            )
+            .expect("the explicit pair is one key");
+        assert_eq!(resolved.len(), 1, "one key, not two: {resolved:?}");
+        assert_eq!(resolved["client-id"], "workload");
+    }
+
+    /// The same, reached the other way: a key classified *after* the alias
+    /// that joined it to another lands on the shared slot through `classify`,
+    /// which must not overwrite the stricter answer already there.
+    #[test]
+    fn classifying_after_an_alias_keeps_the_stricter_ownership() {
+        let closed_last = BindingSchema::with_host_owned_keys(["host-name"])
+            .and_aliases([("host-name", "other-name")])
+            .and_workload_owned_keys(["other-name"]);
+        let ceiling_last = BindingSchema::with_host_owned_keys(["host-name"])
+            .and_aliases([("host-name", "other-name")])
+            .and_host_ceiling_keys(["other-name"]);
+
+        for schema in [closed_last, ceiling_last] {
+            assert_eq!(schema.ownership("host-name"), KeyOwnership::Host);
+            assert_eq!(schema.ownership("other-name"), KeyOwnership::Host);
+        }
+    }
+
+    /// A representative chooses a spelling, not the weaker ownership of two
+    /// declarations which turn out to describe one key.
+    #[test]
+    fn joining_aliases_keeps_the_stricter_ownership() {
+        let workload_first = BindingSchema::with_host_owned_keys(["host-name"])
+            .and_workload_owned_keys(["workload-name"])
+            .and_aliases([("workload-name", "host-name")]);
+        let host_first = BindingSchema::with_host_owned_keys(["host-name"])
+            .and_workload_owned_keys(["workload-name"])
+            .and_aliases([("host-name", "workload-name")]);
+
+        for schema in [workload_first, host_first] {
+            assert_eq!(schema.ownership("host-name"), KeyOwnership::Host);
+            assert_eq!(schema.ownership("workload-name"), KeyOwnership::Host);
+        }
+    }
+
+    /// Two values for one aliased key in an operator layer are ambiguous in
+    /// exactly the same way as two workload entries that disagree.
+    #[test]
+    fn conflicting_aliases_in_one_operator_layer_are_refused() {
+        let set = PluginBindingSet::new("kafka").with_base(map(&[
+            ("bootstrap.servers", "one:9092"),
+            ("metadata.broker.list", "two:9092"),
+        ]));
+        let schema = aliased_schema();
+
+        let startup = set
+            .reject_unknown_keys(&schema)
+            .expect_err("startup validation must reject the conflict")
+            .to_string();
+        assert!(startup.contains("bootstrap.servers"), "{startup}");
+        assert!(startup.contains("metadata.broker.list"), "{startup}");
+        assert!(
+            !startup.contains("one:9092"),
+            "must not expose values: {startup}"
+        );
+
+        let resolution = set
+            .resolve(UNNAMED_BINDING, &HashMap::new(), &schema, never_narrows())
+            .expect_err("direct resolution must reject the same conflict");
+        assert!(format!("{resolution:#}").contains("conflicting values"));
+    }
+
+    /// Agreeing aliases in one operator layer are harmless, but only one may
+    /// reach a reader that resolves the pair itself.
+    #[test]
+    fn agreeing_aliases_in_one_operator_layer_collapse_to_one_entry() {
+        let set = PluginBindingSet::new("kafka").with_base(map(&[
+            ("bootstrap.servers", "same:9092"),
+            ("metadata.broker.list", "same:9092"),
+        ]));
+        let schema = aliased_schema();
+
+        set.reject_unknown_keys(&schema).unwrap();
+        let resolved = set
+            .resolve(UNNAMED_BINDING, &HashMap::new(), &schema, never_narrows())
+            .unwrap();
+        assert_eq!(resolved.len(), 1, "one broker key: {resolved:?}");
     }
 }
