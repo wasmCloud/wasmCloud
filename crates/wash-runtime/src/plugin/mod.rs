@@ -186,7 +186,8 @@ mod roster_tests {
 /// decides whether a workload may write over it.
 pub mod bindings;
 pub use bindings::{
-    BindingSchema, KeyOwnership, PluginBindingSet, PluginBindings, WorkloadConfigPolicy, binding_of,
+    BindingOwnership, BindingSchema, KeyOwnership, PluginBindingSet, PluginBindings,
+    WorkloadConfigPolicy, binding_of,
 };
 
 /// Shared `(implements ..)` multiplexing core
@@ -208,12 +209,38 @@ pub mod wasi_webgpu;
 #[derive(Debug)]
 pub struct WitInterfaces<'a> {
     inner: &'a std::collections::HashSet<crate::wit::WitInterface>,
+    ownership: Option<&'a crate::plugin::bindings::BindingOwnership>,
 }
 
 impl<'a> WitInterfaces<'a> {
     /// Wraps a borrowed set of [`crate::wit::WitInterface`]s.
     pub fn new(inner: &'a std::collections::HashSet<crate::wit::WitInterface>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            ownership: None,
+        }
+    }
+
+    /// Carry what the operator's declaration decided, for a plugin that has to
+    /// enforce it somewhere the runtime cannot see. See [`BindingOwnership`].
+    #[must_use]
+    pub fn with_ownership(
+        mut self,
+        ownership: &'a crate::plugin::bindings::BindingOwnership,
+    ) -> Self {
+        self.ownership = Some(ownership);
+        self
+    }
+
+    /// What the operator's declaration decided, where the caller supplied it.
+    ///
+    /// `None` means nobody said — a set built by hand in a test or a bench,
+    /// never the host's own bind path, which always supplies it. A plugin
+    /// treating `None` as "the host owns nothing" behaves exactly as it did
+    /// before this existed.
+    #[must_use]
+    pub fn ownership(&self) -> Option<&'a crate::plugin::bindings::BindingOwnership> {
+        self.ownership
     }
 
     /// Returns an iterator over the wrapped [`crate::wit::WitInterface`]s.
