@@ -212,6 +212,9 @@ pub struct BindingSchema {
     /// already folded by [`canonical_key`]. See
     /// [`BindingSchema::and_aliases`].
     aliases: BTreeMap<String, String>,
+    /// Keys a resolved binding must carry a value for, whoever supplied it.
+    /// See [`BindingSchema::and_required_keys`].
+    required: BTreeSet<String>,
     closed: bool,
 }
 
@@ -314,6 +317,38 @@ impl BindingSchema {
         self
     }
 
+    /// Keys a binding must resolve a value for, from any layer.
+    ///
+    /// Not an ownership class: this says nothing about *who* may write the
+    /// key, only that somebody must. The case it exists for is an address. A
+    /// binding that resolves without one either fails later with a worse
+    /// message, or — where a plugin's WIT takes configuration as a call
+    /// argument rather than from the manifest — is quietly completed by the
+    /// guest, which puts untrusted component code in charge of where the host
+    /// process connects.
+    ///
+    /// Checked against the fully resolved binding, after every layer and
+    /// default bundle, so an operator's base, a named binding, or the
+    /// workload's own entry all satisfy it. Refused under every policy: a
+    /// binding with no address is not a thing `allow` should be able to permit.
+    #[must_use]
+    pub fn and_required_keys<I, S>(mut self, keys: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        for key in keys {
+            let key = self.canonical(key.as_ref());
+            self.required.insert(key);
+        }
+        self
+    }
+
+    /// The keys [`BindingSchema::and_required_keys`] declared, sorted.
+    pub fn required_keys(&self) -> impl Iterator<Item = &str> {
+        self.required.iter().map(String::as_str)
+    }
+
     /// The identity of `key` for this plugin: the [`canonical_key`] fold, then
     /// whatever [`BindingSchema::and_aliases`] declared.
     ///
@@ -379,10 +414,19 @@ impl BindingSchema {
         self.closed
     }
 
-    /// Whether this schema classifies nothing at all.
+    /// Whether this schema says nothing at all.
+    ///
+    /// Load-bearing: [`PluginBindingSet::is_passthrough`] skips resolution
+    /// entirely for a plugin nobody has said anything about, so every way of
+    /// saying something has to count here. A schema that declared only aliases
+    /// or only required keys and still read as empty would have those
+    /// declarations silently skipped.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.ownership.is_empty() && !self.closed
+        self.ownership.is_empty()
+            && self.aliases.is_empty()
+            && self.required.is_empty()
+            && !self.closed
     }
 
     /// Whether `key` (any spelling) is one this plugin reads.
@@ -945,6 +989,26 @@ impl PluginBindingSet {
             layer_insert(&mut resolved, key, value, schema);
         }
         self.apply_default_bundles(binding, &mut resolved, schema);
+
+        // After the bundles, so a default that supplies the address counts,
+        // and outside the policy branch above, because this is not a question
+        // about who wrote the key.
+        let missing: Vec<String> = schema
+            .required_keys()
+            .filter(|key| lookup(&resolved, key, schema).is_none())
+            .map(|key| format!("`{key}`"))
+            .collect();
+        anyhow::ensure!(
+            missing.is_empty(),
+            "binding {} resolves without {}, which this plugin requires. Set {} under this \
+             plugin's `host.plugins` entry, or in the workload's own entry for it; a binding \
+             that resolves without {} would leave the plugin to be told at call time, by the \
+             component",
+            describe_binding(binding),
+            missing.join(", "),
+            if missing.len() == 1 { "it" } else { "them" },
+            if missing.len() == 1 { "it" } else { "them" },
+        );
         Ok(resolved)
     }
 
@@ -2339,6 +2403,84 @@ mod tests {
             )
             .expect_err("widening is still widening under the other spelling");
         assert!(format!("{err:#}").contains("billing.>"));
+    }
+
+    /// A binding that resolves without a required key is refused, whoever was
+    /// supposed to supply it.
+    #[test]
+    fn a_binding_missing_a_required_key_is_refused() {
+        let schema = BindingSchema::empty().and_required_keys(["bootstrap.servers"]);
+        let set = PluginBindingSet::new("kafka").with_workload_config(WorkloadConfigPolicy::Allow);
+
+        let err = set
+            .resolve(UNNAMED_BINDING, &map(&[]), &schema, never_narrows())
+            .expect_err("a binding with no address is incomplete");
+        let err = format!("{err:#}");
+        assert!(err.contains("bootstrap.servers"), "{err}");
+    }
+
+    /// `allow` is about who may write a key, not about whether the binding is
+    /// complete, so it cannot wave this through.
+    #[test]
+    fn a_required_key_is_enforced_under_every_policy() {
+        let schema = BindingSchema::empty().and_required_keys(["bootstrap.servers"]);
+        for policy in [
+            WorkloadConfigPolicy::Allow,
+            WorkloadConfigPolicy::Warn,
+            WorkloadConfigPolicy::Deny,
+        ] {
+            let set = PluginBindingSet::new("kafka").with_workload_config(policy);
+            assert!(
+                set.resolve(UNNAMED_BINDING, &map(&[]), &schema, never_narrows())
+                    .is_err(),
+                "`{}` must not permit an incomplete binding",
+                policy.as_str()
+            );
+        }
+    }
+
+    /// Any layer satisfies it: the operator's, or the workload's own entry.
+    #[test]
+    fn a_required_key_is_satisfied_from_any_layer() {
+        let schema = BindingSchema::empty().and_required_keys(["bootstrap.servers"]);
+
+        let from_operator = PluginBindingSet::new("kafka")
+            .with_base(map(&[("bootstrap.servers", "operator:9092")]))
+            .resolve(UNNAMED_BINDING, &map(&[]), &schema, never_narrows());
+        assert!(from_operator.is_ok(), "{from_operator:?}");
+
+        let from_workload = PluginBindingSet::new("kafka")
+            .with_workload_config(WorkloadConfigPolicy::Allow)
+            .resolve(
+                UNNAMED_BINDING,
+                &map(&[("bootstrap.servers", "workload:9092")]),
+                &schema,
+                never_narrows(),
+            );
+        assert!(from_workload.is_ok(), "{from_workload:?}");
+    }
+
+    /// The other spelling of a required key satisfies it, or the requirement
+    /// is a demand for one particular name rather than for a value.
+    #[test]
+    fn a_required_key_is_satisfied_by_its_alias() {
+        let schema = BindingSchema::empty()
+            .and_aliases([("bootstrap.servers", "metadata.broker.list")])
+            .and_required_keys(["bootstrap.servers"]);
+
+        let resolved = PluginBindingSet::new("kafka")
+            .with_base(map(&[("metadata.broker.list", "operator:9092")]))
+            .resolve(UNNAMED_BINDING, &map(&[]), &schema, never_narrows());
+        assert!(resolved.is_ok(), "{resolved:?}");
+    }
+
+    /// Passthrough skips resolution outright, so a schema that says anything
+    /// at all has to read as non-empty or its declarations are skipped with it.
+    #[test]
+    fn a_schema_declaring_only_aliases_or_required_keys_is_not_empty() {
+        assert!(BindingSchema::empty().is_empty());
+        assert!(!BindingSchema::empty().and_aliases([("a", "b")]).is_empty());
+        assert!(!BindingSchema::empty().and_required_keys(["a"]).is_empty());
     }
 
     /// Pairs that share a spelling are one group, not two. A plugin listing
