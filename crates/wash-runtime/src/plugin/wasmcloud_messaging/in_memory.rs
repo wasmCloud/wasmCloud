@@ -36,7 +36,7 @@ struct QueuedMessage {
     /// rather than recomputed in the drain loop: by then the subscriber set may
     /// have changed, and the answer that matters is the one that was true when
     /// the message fanned out.
-    sole_subscriber: bool,
+    was_sole_subscriber: bool,
 }
 
 mod bindings {
@@ -157,7 +157,7 @@ async fn route_to_subscribers(
             .collect()
     };
 
-    let sole_subscriber = targets.len() == 1;
+    let was_sole_subscriber = targets.len() == 1;
     for (inbox, notify) in targets {
         {
             let mut queue = inbox.write().await;
@@ -168,7 +168,7 @@ async fn route_to_subscribers(
             }
             queue.push_back(QueuedMessage {
                 msg: msg.clone(),
-                sole_subscriber,
+                was_sole_subscriber,
             });
         }
         notify.notify_one();
@@ -548,7 +548,7 @@ impl HostPlugin for InMemoryMessaging {
             component_handle
                 .local_resources()
                 .config
-                .get(super::ADMISSION_WAIT_CONFIG)
+                .get(super::SHED_INCOMING_AFTER_CONFIG)
                 .map(String::as_str),
         );
 
@@ -672,7 +672,7 @@ impl HostPlugin for InMemoryMessaging {
                         loop {
                         let queued = inbox.write().await.pop_front();
 
-                        let Some(QueuedMessage { msg, sole_subscriber }) = queued else {
+                        let Some(QueuedMessage { msg, was_sole_subscriber }) = queued else {
                             break;
                         };
 
@@ -693,7 +693,7 @@ impl HostPlugin for InMemoryMessaging {
                                 "host is gone and this component has no per-message \
                                  instance; ending the in-memory receive loop"
                             );
-                            if sole_subscriber
+                            if was_sole_subscriber
                                 && let (Some(reply_to), Some(pending)) =
                                     (&msg.reply_to, &pending_requests)
                                 && let Some(sender) = pending.write().await.remove(reply_to)
@@ -748,7 +748,7 @@ impl HostPlugin for InMemoryMessaging {
                         // built and held until the handler returns. Mirrors
                         // the NATS backend exactly; see `Admission::acquire`
                         // for why the component level is taken before the host
-                        // one, and `DEFAULT_ADMISSION_WAIT` for why the wait is
+                        // one, and `DEFAULT_SHED_AFTER` for why the wait is
                         // bounded. Here the bound also keeps the inbox draining:
                         // a loop parked forever lets the inbox reach
                         // `MAX_QUEUE_SIZE`, at which point a guest's `publish`
@@ -770,7 +770,7 @@ impl HostPlugin for InMemoryMessaging {
                                     // request here would fail a request that
                                     // was about to succeed.
                                     super::Admitted::Shed => {
-                                        if sole_subscriber
+                                        if was_sole_subscriber
                                             && let (Some(reply_to), Some(pending)) =
                                                 (&msg.reply_to, &pending_requests)
                                             && let Some(sender) =
@@ -995,7 +995,7 @@ mod tests {
             .await
             .expect("routes");
         assert!(
-            inboxes[0].read().await[0].sole_subscriber,
+            inboxes[0].read().await[0].was_sole_subscriber,
             "one matching component must be marked as the sole subscriber"
         );
 
@@ -1006,7 +1006,7 @@ mod tests {
             .expect("routes");
         for (i, inbox) in inboxes.iter().enumerate() {
             assert!(
-                !inbox.read().await[0].sole_subscriber,
+                !inbox.read().await[0].was_sole_subscriber,
                 "component {i} shares the message and must not fail the requester"
             );
         }
@@ -1016,7 +1016,7 @@ mod tests {
         route_to_subscribers(&plugin, &workload_id, &broker("tasks.new"))
             .await
             .expect("routes");
-        assert!(inboxes[0].read().await[0].sole_subscriber);
+        assert!(inboxes[0].read().await[0].was_sole_subscriber);
         assert!(
             inboxes[1].read().await.is_empty(),
             "a non-matching component must not receive the message at all"

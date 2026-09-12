@@ -12,14 +12,14 @@
 //! | `subscriptions` | Comma-separated subjects, NATS wildcards allowed (`orders.*`, `audit.>`) | Receive everything |
 //! | `consumer_group` | Queue-group name, or `broadcast` for no grouping (NATS only) | A name derived from namespace/workload/component |
 //! | `max_in_flight` | Messages this component may process at once, across every replica of it on this host | The host's per-component default |
-//! | `admission_wait` | How long to wait for a slot before shedding (`45s`, `2m`, or bare seconds) | [`DEFAULT_ADMISSION_WAIT`] |
+//! | `shed_incoming_after` | How long to wait for a slot before shedding (`45s`, `2m`, or bare seconds) | [`DEFAULT_SHED_AFTER`] |
 //!
 //! ```yaml
 //! localResources:
 //!   config:
 //!     subscriptions: "orders.*.created,audit.>"
 //!     max_in_flight: "64"
-//!     admission_wait: "5m"     # this handler is slow on purpose
+//!     shed_incoming_after: "5m"     # this handler is slow on purpose
 //! ```
 //!
 //! # Instance limits
@@ -36,7 +36,7 @@
 //! see [`MessagingLimits`]. It is a total for the *component*, not for one
 //! replica of it: replicas of a deployment that land on the same host share
 //! one ceiling rather than getting one apiece, so `replicas: 4` with
-//! `max_in_flight: "32"` admits 32 messages on a host, not 128. `admission_wait`
+//! `max_in_flight: "32"` admits 32 messages on a host, not 128. `shed_incoming_after`
 //! is per component rather than per host because the right answer depends on
 //! the handler: minutes-long work wants to queue, interactive work wants to
 //! shed and stay responsive.
@@ -640,9 +640,9 @@ pub const DEFAULT_MAX_IN_FLIGHT_HOST: usize = 128;
 /// waited this long is behind work that is not clearing — and well past typical
 /// guest `timeout_ms` values, so the guest's own deadline fires first in the
 /// request/reply case and this one only catches genuine saturation.
-pub const DEFAULT_ADMISSION_WAIT: Duration = Duration::from_secs(30);
+pub const DEFAULT_SHED_AFTER: Duration = Duration::from_secs(30);
 
-/// The longest [`ADMISSION_WAIT_CONFIG`] may set the wait to.
+/// The longest [`SHED_INCOMING_AFTER_CONFIG`] may set the wait to.
 ///
 /// Waiting is a real choice — a handler whose work legitimately takes minutes
 /// wants its messages queued, not shed — but it is bought with the transport's
@@ -668,12 +668,13 @@ pub const MAX_ADMISSION_WAIT: Duration = Duration::from_secs(600);
 /// the pool can hold" into "messages we may admit".
 const WORST_CASE_CORE_INSTANCES_PER_COMPONENT: u32 = 5;
 
-/// Share of the pool's component capacity messaging may claim. The remainder is
-/// what HTTP-triggered work, warm pools, and long-lived services draw on — the
-/// workloads that otherwise fail to *start* when a messaging burst drains the
-/// pool.
-const MESSAGING_POOL_SHARE_NUM: u32 = 2;
-const MESSAGING_POOL_SHARE_DEN: u32 = 3;
+/// Share of the pool's component capacity messaging may claim, as
+/// `(numerator, denominator)` — the two are only ever meaningful together as
+/// one fraction, so they are one constant rather than two that must be kept
+/// in sync by hand. The remainder is what HTTP-triggered work, warm pools,
+/// and long-lived services draw on — the workloads that otherwise fail to
+/// *start* when a messaging burst drains the pool.
+const MESSAGING_POOL_SHARE: (u32, u32) = (2, 3);
 
 /// Simultaneously-saturated components a host should fit before the host-wide
 /// ceiling is what binds. Deriving the per-component default from the host
@@ -709,7 +710,8 @@ fn derive_host_ceiling(total_core_instances: Option<u32>) -> usize {
     // No overflow: `capacity` is at most `u32::MAX / 5`, so the multiply stays
     // inside `u32`.
     let capacity = total / WORST_CASE_CORE_INSTANCES_PER_COMPONENT;
-    let share = capacity * MESSAGING_POOL_SHARE_NUM / MESSAGING_POOL_SHARE_DEN;
+    let (share_num, share_den) = MESSAGING_POOL_SHARE;
+    let share = capacity * share_num / share_den;
     let capacity = usize::try_from(capacity).unwrap_or(MAX_DERIVED_IN_FLIGHT);
     let share = usize::try_from(share).unwrap_or(MAX_DERIVED_IN_FLIGHT);
     // The floor may not raise the ceiling past what the pool actually holds.
@@ -854,7 +856,7 @@ impl ComponentGates {
             return;
         };
         entry.bindings = entry.bindings.saturating_sub(1);
-        if entry.bindings == 0 {
+        if entry.bindings == 0 && entry.semaphore.available_permits() == entry.limit {
             entry.semaphore.close();
             gates.remove(identity);
         }
@@ -940,14 +942,14 @@ impl MessagingLimits {
             host: Arc::new(Semaphore::new(host_total)),
             host_total,
             per_component_default,
-            admission_wait: DEFAULT_ADMISSION_WAIT,
+            admission_wait: DEFAULT_SHED_AFTER,
             timeouts: AdmissionTimeouts::new(),
             gates: ComponentGates::default(),
         }
     }
 
     /// Override how long a subscriber loop waits for a slot before shedding the
-    /// message it is holding. See [`DEFAULT_ADMISSION_WAIT`].
+    /// message it is holding. See [`DEFAULT_SHED_AFTER`].
     ///
     /// Held to [`MAX_ADMISSION_WAIT`], the same bound the per-component config
     /// key takes. Clamping only at the config layer would leave this — the way
@@ -1291,7 +1293,7 @@ impl Admission {
     }
 
     /// Override how long this component's loop waits before shedding, from its
-    /// [`ADMISSION_WAIT_CONFIG`] entry. `None` leaves the host default in
+    /// [`SHED_INCOMING_AFTER_CONFIG`] entry. `None` leaves the host default in
     /// place.
     ///
     /// Clamped to [`MAX_ADMISSION_WAIT`] like every other way of setting a
@@ -1402,7 +1404,7 @@ pub(crate) const MAX_IN_FLIGHT_CONFIG: &str = "max_in_flight";
 /// component whose work legitimately takes minutes wants to wait, and one
 /// serving interactive traffic wants to shed early and stay responsive. A
 /// single host-wide number cannot be right for both, and
-/// [`DEFAULT_ADMISSION_WAIT`] alone would turn a slow handler's queued messages
+/// [`DEFAULT_SHED_AFTER`] alone would turn a slow handler's queued messages
 /// into dropped ones with no way to say otherwise.
 ///
 /// **What raising it costs.** A loop waiting for a slot is not draining its
@@ -1412,14 +1414,14 @@ pub(crate) const MAX_IN_FLIGHT_CONFIG: &str = "max_in_flight";
 /// trade for a handler that genuinely needs minutes and the wrong one as a
 /// reflex against shed warnings, where the answer is `max_in_flight` or fewer
 /// messages. Bounded by [`MAX_ADMISSION_WAIT`] so it cannot become "forever".
-pub(crate) const ADMISSION_WAIT_CONFIG: &str = "admission_wait";
+pub(crate) const SHED_INCOMING_AFTER_CONFIG: &str = "shed_incoming_after";
 
-/// Parses an [`ADMISSION_WAIT_CONFIG`] value into a wait duration.
+/// Parses an [`SHED_INCOMING_AFTER_CONFIG`] value into a wait duration.
 ///
 /// Accepts what `humantime` accepts — `30s`, `5m`, `1m30s`, `500ms` — and a
 /// bare integer as seconds, since that is what an operator used to plain
 /// numeric knobs is most likely to write. `None` for absent, empty, or
-/// unparseable; the caller falls back to [`DEFAULT_ADMISSION_WAIT`].
+/// unparseable; the caller falls back to [`DEFAULT_SHED_AFTER`].
 ///
 /// A zero wait is honored rather than treated as unset: "shed immediately if no
 /// slot is free" is a coherent policy for latency-sensitive work, and unlike a
@@ -1438,10 +1440,10 @@ pub(crate) fn parse_admission_wait(raw: Option<&str>) -> Option<Duration> {
         Ok(d) => Some(clamp_admission_wait(d)),
         Err(_) => {
             tracing::warn!(
-                config_key = ADMISSION_WAIT_CONFIG,
+                config_key = SHED_INCOMING_AFTER_CONFIG,
                 value = raw,
-                default = ?DEFAULT_ADMISSION_WAIT,
-                "messaging admission_wait is not a duration (expected e.g. `45s`, `2m`, \
+                default = ?DEFAULT_SHED_AFTER,
+                "messaging shed_incoming_after is not a duration (expected e.g. `45s`, `2m`, \
                  or a bare number of seconds); falling back to the default"
             );
             None
@@ -1454,10 +1456,10 @@ pub(crate) fn parse_admission_wait(raw: Option<&str>) -> Option<Duration> {
 fn clamp_admission_wait(wait: Duration) -> Duration {
     if wait > MAX_ADMISSION_WAIT {
         tracing::warn!(
-            config_key = ADMISSION_WAIT_CONFIG,
+            config_key = SHED_INCOMING_AFTER_CONFIG,
             requested = ?wait,
             max = ?MAX_ADMISSION_WAIT,
-            "messaging admission_wait exceeds the maximum; clamping. Waiting longer does not \
+            "messaging shed_incoming_after exceeds the maximum; clamping. Waiting longer does not \
              preserve the backlog — a parked subscriber stops draining its subscription, and \
              the transport drops on buffer overflow without counting it"
         );
@@ -1660,8 +1662,6 @@ mod tests {
         );
         assert!(parse_subscriptions(None).is_empty());
     }
-
-    // --- Admission ceilings -------------------------------------------------
 
     use super::{
         Admitted, DEFAULT_MAX_IN_FLIGHT_HOST, DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT, MessagingLimits,
@@ -2428,7 +2428,7 @@ mod tests {
         let limits = MessagingLimits::default();
         assert_eq!(
             limits.admission(&unique_identity(), None).wait(),
-            super::DEFAULT_ADMISSION_WAIT
+            super::DEFAULT_SHED_AFTER
         );
         assert_eq!(
             limits
@@ -2444,7 +2444,7 @@ mod tests {
                 .admission(&unique_identity(), None)
                 .with_admission_wait(None)
                 .wait(),
-            super::DEFAULT_ADMISSION_WAIT
+            super::DEFAULT_SHED_AFTER
         );
     }
 
