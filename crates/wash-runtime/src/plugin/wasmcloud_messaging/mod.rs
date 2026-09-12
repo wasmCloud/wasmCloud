@@ -668,12 +668,13 @@ pub const MAX_ADMISSION_WAIT: Duration = Duration::from_secs(600);
 /// the pool can hold" into "messages we may admit".
 const WORST_CASE_CORE_INSTANCES_PER_COMPONENT: u32 = 5;
 
-/// Share of the pool's component capacity messaging may claim. The remainder is
-/// what HTTP-triggered work, warm pools, and long-lived services draw on — the
-/// workloads that otherwise fail to *start* when a messaging burst drains the
-/// pool.
-const MESSAGING_POOL_SHARE_NUM: u32 = 2;
-const MESSAGING_POOL_SHARE_DEN: u32 = 3;
+/// Share of the pool's component capacity messaging may claim, as
+/// `(numerator, denominator)` — the two are only ever meaningful together as
+/// one fraction, so they are one constant rather than two that must be kept
+/// in sync by hand. The remainder is what HTTP-triggered work, warm pools,
+/// and long-lived services draw on — the workloads that otherwise fail to
+/// *start* when a messaging burst drains the pool.
+const MESSAGING_POOL_SHARE: (u32, u32) = (2, 3);
 
 /// Simultaneously-saturated components a host should fit before the host-wide
 /// ceiling is what binds. Deriving the per-component default from the host
@@ -709,7 +710,8 @@ fn derive_host_ceiling(total_core_instances: Option<u32>) -> usize {
     // No overflow: `capacity` is at most `u32::MAX / 5`, so the multiply stays
     // inside `u32`.
     let capacity = total / WORST_CASE_CORE_INSTANCES_PER_COMPONENT;
-    let share = capacity * MESSAGING_POOL_SHARE_NUM / MESSAGING_POOL_SHARE_DEN;
+    let (share_num, share_den) = MESSAGING_POOL_SHARE;
+    let share = capacity * share_num / share_den;
     let capacity = usize::try_from(capacity).unwrap_or(MAX_DERIVED_IN_FLIGHT);
     let share = usize::try_from(share).unwrap_or(MAX_DERIVED_IN_FLIGHT);
     // The floor may not raise the ceiling past what the pool actually holds.
@@ -854,7 +856,7 @@ impl ComponentGates {
             return;
         };
         entry.bindings = entry.bindings.saturating_sub(1);
-        if entry.bindings == 0 {
+        if entry.bindings == 0 && entry.semaphore.available_permits() == entry.limit {
             entry.semaphore.close();
             gates.remove(identity);
         }
