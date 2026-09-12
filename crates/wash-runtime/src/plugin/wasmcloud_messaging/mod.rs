@@ -1663,8 +1663,6 @@ mod tests {
         assert!(parse_subscriptions(None).is_empty());
     }
 
-    // --- Admission ceilings -------------------------------------------------
-
     use super::{
         Admitted, DEFAULT_MAX_IN_FLIGHT_HOST, DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT, MessagingLimits,
     };
