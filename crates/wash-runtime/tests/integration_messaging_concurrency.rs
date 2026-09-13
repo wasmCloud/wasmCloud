@@ -27,6 +27,10 @@
 //! overlap on one instance. The sync `@0.2.0` export holds `&mut Store` for the
 //! length of its call and keeps its store per message.
 //!
+//! The last two cases bound a different thing: `max_in_flight` caps deliveries
+//! in flight across the component, where `maxConcurrency` caps how many share
+//! one instance.
+//!
 //! The in-memory backend is used, so these need no Docker and run in the
 //! default CI leg.
 
@@ -41,7 +45,7 @@ use anyhow::{Context, Result};
 use wash_runtime::engine::Engine;
 use wash_runtime::host::http::{DevRouter, Ingress};
 use wash_runtime::host::{HostApi, HostBuilder};
-use wash_runtime::plugin::wasmcloud_messaging::InMemoryMessaging;
+use wash_runtime::plugin::wasmcloud_messaging::{InMemoryMessaging, MessagingLimits};
 use wash_runtime::plugin::{
     wasi_blobstore::InMemoryBlobstore, wasi_config::DynamicConfig, wasi_keyvalue::InMemoryKeyValue,
     wasi_logging::TracingLogger,
@@ -86,13 +90,18 @@ struct Harness<H: HostApi> {
 }
 
 /// Start the sleeper as a *component* (not a service) subscribed to `subject`,
-/// with the instance limits under test.
+/// with the limits under test: `pool_size` / `max_concurrency` /
+/// `max_invocations` are the instance ones, `limits` the host's admission
+/// ceilings and `max_in_flight` the component's own.
+#[allow(clippy::too_many_arguments)]
 async fn start_msg_sleeper(
     host_header: &'static str,
     subject: &'static str,
     pool_size: i32,
     max_concurrency: i32,
     max_invocations: i32,
+    limits: MessagingLimits,
+    max_in_flight: Option<usize>,
 ) -> Result<Harness<impl HostApi>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -100,7 +109,7 @@ async fn start_msg_sleeper(
     let engine = Engine::builder().build()?;
     let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
     let addr = ingress.addr();
-    let messaging = Arc::new(InMemoryMessaging::new());
+    let messaging = Arc::new(InMemoryMessaging::with_limits(limits));
     let host = HostBuilder::new()
         .with_engine(engine)
         .with_http_handler(Arc::new(ingress))
@@ -137,7 +146,14 @@ async fn start_msg_sleeper(
                 digest: None,
                 bytes: bytes::Bytes::from_static(MSG_SLEEPER_WASM),
                 local_resources: LocalResources {
-                    config: HashMap::from([("subscriptions".to_string(), subject.to_string())]),
+                    config: {
+                        let mut config =
+                            HashMap::from([("subscriptions".to_string(), subject.to_string())]);
+                        if let Some(max_in_flight) = max_in_flight {
+                            config.insert("max_in_flight".to_string(), max_in_flight.to_string());
+                        }
+                        config
+                    },
                     ..Default::default()
                 },
                 pool_size,
@@ -218,7 +234,7 @@ impl<H: HostApi> Harness<H> {
 /// own, so no instance ever sees two at once.
 #[tokio::test]
 async fn without_max_concurrency_deliveries_do_not_overlap_on_an_instance() -> Result<()> {
-    let h = start_msg_sleeper("msg-conc-off", "conc.off", 1, 1, 0).await?;
+    let h = start_msg_sleeper("msg-conc-off", "conc.off", 1, 1, 0, MessagingLimits::default(), None).await?;
 
     h.publish_burst(4).await?;
     h.settle().await;
@@ -237,7 +253,7 @@ async fn without_max_concurrency_deliveries_do_not_overlap_on_an_instance() -> R
 /// setup, rather than three of them on fresh stores paying it again.
 #[tokio::test]
 async fn max_concurrency_overlaps_deliveries_on_one_instance() -> Result<()> {
-    let h = start_msg_sleeper("msg-conc-on", "conc.on", 1, 8, 0).await?;
+    let h = start_msg_sleeper("msg-conc-on", "conc.on", 1, 8, 0, MessagingLimits::default(), None).await?;
 
     h.publish_burst(4).await?;
     h.settle().await;
@@ -260,7 +276,7 @@ async fn max_concurrency_overlaps_deliveries_on_one_instance() -> Result<()> {
 /// own limit.
 #[tokio::test]
 async fn concurrency_is_bounded_per_instance() -> Result<()> {
-    let h = start_msg_sleeper("msg-conc-bounded", "conc.bounded", 2, 2, 0).await?;
+    let h = start_msg_sleeper("msg-conc-bounded", "conc.bounded", 2, 2, 0, MessagingLimits::default(), None).await?;
 
     h.publish_burst(4).await?;
     h.settle().await;
@@ -282,7 +298,7 @@ async fn concurrency_is_bounded_per_instance() -> Result<()> {
 /// reuse this is about.
 #[tokio::test]
 async fn pool_size_keeps_guest_state_between_messages() -> Result<()> {
-    let h = start_msg_sleeper("msg-warm", "warm.state", 1, 1, 0).await?;
+    let h = start_msg_sleeper("msg-warm", "warm.state", 1, 1, 0, MessagingLimits::default(), None).await?;
 
     h.publish().await?;
     h.settle().await;
@@ -316,7 +332,7 @@ async fn pool_size_keeps_guest_state_between_messages() -> Result<()> {
 async fn a_delivery_counts_against_max_invocations() -> Result<()> {
     // Control: no budget, so the instance the first probe warms serves the
     // delivery too and is still there for the second probe.
-    let unlimited = start_msg_sleeper("msg-budget-off", "budget.off", 1, 1, 0).await?;
+    let unlimited = start_msg_sleeper("msg-budget-off", "budget.off", 1, 1, 0, MessagingLimits::default(), None).await?;
     let warmed = unlimited.probe().await?;
     assert_eq!(
         warmed.served, 1,
@@ -334,7 +350,7 @@ async fn a_delivery_counts_against_max_invocations() -> Result<()> {
 
     // Two calls apiece. The probe and the delivery spend the budget between
     // them, so the instance retires and the next probe gets a replacement.
-    let limited = start_msg_sleeper("msg-budget-on", "budget.on", 1, 1, 2).await?;
+    let limited = start_msg_sleeper("msg-budget-on", "budget.on", 1, 1, 2, MessagingLimits::default(), None).await?;
     let warmed = limited.probe().await?;
     assert_eq!(
         warmed.served, 1,
@@ -349,6 +365,70 @@ async fn a_delivery_counts_against_max_invocations() -> Result<()> {
         (1, 0),
         "the delivery should have spent the instance's last invocation, leaving \
          this probe to a replacement counting from one, saw {after:?}"
+    );
+    Ok(())
+}
+
+/// The per-component ceiling caps how many handlers run at once: a burst of 15
+/// against a ceiling of 5 runs 5 at a time.
+#[tokio::test]
+async fn max_in_flight_caps_handlers_running_at_once() -> Result<()> {
+    const CEILING: usize = 5;
+    const BURST: usize = 15;
+
+    // `max_concurrency` far above the ceiling, so the deliveries the gate admits
+    // share one instance rather than spilling into stores of their own. Host
+    // total above the component ceiling so it is the component level under test.
+    let h = start_msg_sleeper(
+        "msg-admission",
+        "admission.component",
+        1,
+        32,
+        0,
+        MessagingLimits::new(64, 32),
+        Some(CEILING),
+    )
+    .await?;
+
+    h.publish_burst(BURST).await?;
+    h.settle().await;
+
+    let seen = h.probe().await?;
+    assert_eq!(
+        seen.msg_peak, CEILING as u64,
+        "a burst of {BURST} against a ceiling of {CEILING} must never have more \
+         than {CEILING} handlers live at once, and must reach {CEILING} for the \
+         assertion to mean anything, saw {seen:?}"
+    );
+    Ok(())
+}
+
+/// The host-wide ceiling caps live handlers too: a component asking for 32 on a
+/// host whose total is 2 runs 2 at a time.
+#[tokio::test]
+async fn the_host_ceiling_caps_handlers_running_at_once() -> Result<()> {
+    const HOST_TOTAL: usize = 2;
+    const BURST: usize = 8;
+
+    let h = start_msg_sleeper(
+        "msg-admission-host",
+        "admission.host",
+        1,
+        32,
+        0,
+        MessagingLimits::new(HOST_TOTAL, 32),
+        Some(32),
+    )
+    .await?;
+
+    h.publish_burst(BURST).await?;
+    h.settle().await;
+
+    let seen = h.probe().await?;
+    assert_eq!(
+        seen.msg_peak, HOST_TOTAL as u64,
+        "a component asking for 32 on a host whose total is {HOST_TOTAL} must be \
+         held to {HOST_TOTAL} live handlers, saw {seen:?}"
     );
     Ok(())
 }
