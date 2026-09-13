@@ -360,7 +360,10 @@ impl HostPlugin for NatsMessaging {
         let interface_subscriptions = interface.config.get("subscriptions").cloned();
         let interface_consumer_group = interface.config.get(CONSUMER_GROUP_CONFIG).cloned();
         let interface_max_in_flight = interface.config.get(super::MAX_IN_FLIGHT_CONFIG).cloned();
-        let interface_admission_wait = interface.config.get(super::SHED_INCOMING_AFTER_CONFIG).cloned();
+        let interface_admission_wait = interface
+            .config
+            .get(super::SHED_INCOMING_AFTER_CONFIG)
+            .cloned();
 
         // Bind only the revision(s) the workload actually declared: the two
         // surfaces are separate linker instances, and binding one a component
