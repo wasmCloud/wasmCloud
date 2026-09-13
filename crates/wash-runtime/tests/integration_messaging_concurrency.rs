@@ -234,7 +234,16 @@ impl<H: HostApi> Harness<H> {
 /// own, so no instance ever sees two at once.
 #[tokio::test]
 async fn without_max_concurrency_deliveries_do_not_overlap_on_an_instance() -> Result<()> {
-    let h = start_msg_sleeper("msg-conc-off", "conc.off", 1, 1, 0, MessagingLimits::default(), None).await?;
+    let h = start_msg_sleeper(
+        "msg-conc-off",
+        "conc.off",
+        1,
+        1,
+        0,
+        MessagingLimits::default(),
+        None,
+    )
+    .await?;
 
     h.publish_burst(4).await?;
     h.settle().await;
@@ -253,7 +262,16 @@ async fn without_max_concurrency_deliveries_do_not_overlap_on_an_instance() -> R
 /// setup, rather than three of them on fresh stores paying it again.
 #[tokio::test]
 async fn max_concurrency_overlaps_deliveries_on_one_instance() -> Result<()> {
-    let h = start_msg_sleeper("msg-conc-on", "conc.on", 1, 8, 0, MessagingLimits::default(), None).await?;
+    let h = start_msg_sleeper(
+        "msg-conc-on",
+        "conc.on",
+        1,
+        8,
+        0,
+        MessagingLimits::default(),
+        None,
+    )
+    .await?;
 
     h.publish_burst(4).await?;
     h.settle().await;
@@ -276,7 +294,16 @@ async fn max_concurrency_overlaps_deliveries_on_one_instance() -> Result<()> {
 /// own limit.
 #[tokio::test]
 async fn concurrency_is_bounded_per_instance() -> Result<()> {
-    let h = start_msg_sleeper("msg-conc-bounded", "conc.bounded", 2, 2, 0, MessagingLimits::default(), None).await?;
+    let h = start_msg_sleeper(
+        "msg-conc-bounded",
+        "conc.bounded",
+        2,
+        2,
+        0,
+        MessagingLimits::default(),
+        None,
+    )
+    .await?;
 
     h.publish_burst(4).await?;
     h.settle().await;
@@ -298,7 +325,16 @@ async fn concurrency_is_bounded_per_instance() -> Result<()> {
 /// reuse this is about.
 #[tokio::test]
 async fn pool_size_keeps_guest_state_between_messages() -> Result<()> {
-    let h = start_msg_sleeper("msg-warm", "warm.state", 1, 1, 0, MessagingLimits::default(), None).await?;
+    let h = start_msg_sleeper(
+        "msg-warm",
+        "warm.state",
+        1,
+        1,
+        0,
+        MessagingLimits::default(),
+        None,
+    )
+    .await?;
 
     h.publish().await?;
     h.settle().await;
@@ -332,7 +368,16 @@ async fn pool_size_keeps_guest_state_between_messages() -> Result<()> {
 async fn a_delivery_counts_against_max_invocations() -> Result<()> {
     // Control: no budget, so the instance the first probe warms serves the
     // delivery too and is still there for the second probe.
-    let unlimited = start_msg_sleeper("msg-budget-off", "budget.off", 1, 1, 0, MessagingLimits::default(), None).await?;
+    let unlimited = start_msg_sleeper(
+        "msg-budget-off",
+        "budget.off",
+        1,
+        1,
+        0,
+        MessagingLimits::default(),
+        None,
+    )
+    .await?;
     let warmed = unlimited.probe().await?;
     assert_eq!(
         warmed.served, 1,
@@ -350,7 +395,16 @@ async fn a_delivery_counts_against_max_invocations() -> Result<()> {
 
     // Two calls apiece. The probe and the delivery spend the budget between
     // them, so the instance retires and the next probe gets a replacement.
-    let limited = start_msg_sleeper("msg-budget-on", "budget.on", 1, 1, 2, MessagingLimits::default(), None).await?;
+    let limited = start_msg_sleeper(
+        "msg-budget-on",
+        "budget.on",
+        1,
+        1,
+        2,
+        MessagingLimits::default(),
+        None,
+    )
+    .await?;
     let warmed = limited.probe().await?;
     assert_eq!(
         warmed.served, 1,
