@@ -2260,6 +2260,78 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_rebind_shares_the_ceiling_with_handlers_the_old_binding_left_running() {
+        // Teardown does not wait for in-flight handlers. Each one owns its
+        // permit for the length of its guest call, and both backends'
+        // `component_cleanup` only cancels the subscriber loop — the handler
+        // tasks it already spawned are detached and run on. So a component can
+        // be unbound with handlers still against its gate, and a rebind under
+        // the same identity (a rolling redeploy, a restart, a crash loop) can
+        // land before they drain. Minting a fresh semaphore there would leave
+        // the stragglers holding permits from the old one, and old plus new
+        // could then run past `max_in_flight` until the stragglers finished.
+        const LIMIT: usize = 4;
+        let limits = MessagingLimits::new(64, LIMIT);
+        let identity = super::AdmissionIdentity::new("team-a", "ingester", "worker");
+
+        // Admit up to the ceiling and keep every permit: handlers that have
+        // not returned.
+        let binding = limits.admission(&identity, Some(LIMIT));
+        let mut stragglers = Vec::new();
+        for _ in 0..LIMIT {
+            stragglers.push(binding.acquire().await.expect("admits up to its ceiling"));
+        }
+
+        // Tear the binding down with all of them still running.
+        binding.close();
+
+        // The same identity binds again before any of them finish.
+        let rebound = limits.admission(&identity, Some(LIMIT));
+        assert_eq!(rebound.limit(), LIMIT);
+
+        // Everything the new binding can take right now — which must be
+        // nothing, because the ceiling is already spent by the old handlers.
+        let mut admitted = Vec::new();
+        while let Ok(permit) = Arc::clone(&rebound.component).try_acquire_owned() {
+            admitted.push(permit);
+        }
+        assert_eq!(
+            stragglers.len() + admitted.len(),
+            LIMIT,
+            "handlers left over from the old binding and work admitted under the \
+             new one must not exceed max_in_flight together; the rebind was handed \
+             {} slots of its own on a second semaphore",
+            admitted.len()
+        );
+
+        // The handover: each straggler that finishes frees exactly one slot for
+        // the new binding, and the total never moves off the ceiling.
+        for _ in 0..LIMIT {
+            drop(stragglers.pop());
+            admitted.push(
+                Arc::clone(&rebound.component)
+                    .try_acquire_owned()
+                    .expect("a drained straggler must free a slot for the new binding"),
+            );
+            assert_eq!(
+                stragglers.len() + admitted.len(),
+                LIMIT,
+                "the ceiling must hold through the whole handover"
+            );
+        }
+
+        // And the gate is still bookkept, not leaked: once the last binding
+        // goes away with its permits back, the entry goes with it.
+        drop(admitted);
+        rebound.close();
+        assert_eq!(
+            limits.gates.bindings(&identity),
+            0,
+            "the gate must not outlive the last binding once its permits are back"
+        );
+    }
+
     #[test]
     fn only_the_component_gate_closes_not_the_shared_host_one() {
         // Closing the host semaphore would take every other component on the

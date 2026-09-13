@@ -1062,4 +1062,70 @@ mod tests {
         assert!(subscriptions_match(&subs, "tasks.leet"));
         assert!(!subscriptions_match(&subs, "tasks.reverse"));
     }
+
+    /// Cleanup cancels the receive loop but leaves its handler tasks running:
+    /// they are detached and hold their permits until the guest call returns.
+    /// A rebind under the same identity must share what is left of the ceiling
+    /// with those stragglers rather than open a second gate, which would let
+    /// old and new run past `max_in_flight` together.
+    #[tokio::test]
+    async fn unbinding_leaves_the_gate_for_handlers_still_holding_permits() {
+        const LIMIT: usize = 2;
+        let limits = super::super::MessagingLimits::new(64, LIMIT);
+        let identity = super::super::AdmissionIdentity::new("test-ns", "ingester", "worker");
+        let plugin = InMemoryMessaging::with_limits(limits.clone());
+        let workload_id = "workload-1".to_string();
+
+        // The state `on_workload_resolved` leaves behind, minus the engine it
+        // would need to build a real workload.
+        let admission = limits.admission(&identity, None);
+        let mut item = WorkloadTrackerItem {
+            workload_data: Some(WorkloadData::default()),
+            components: HashMap::new(),
+        };
+        item.components.insert(
+            "component-0".to_string(),
+            ComponentData {
+                cancel_token: tokio_util::sync::CancellationToken::new(),
+                task_handle: None,
+                subscriptions: vec!["tasks.new".to_string()],
+                inbox: Arc::default(),
+                notify: Arc::new(Notify::new()),
+                admission: admission.clone(),
+            },
+        );
+        plugin
+            .tracker
+            .try_write()
+            .expect("fresh tracker")
+            .workloads
+            .insert(workload_id.clone(), item);
+
+        // Handlers that have not returned, holding every slot the ceiling
+        // allows.
+        let mut stragglers = Vec::new();
+        for _ in 0..LIMIT {
+            stragglers.push(admission.acquire().await.expect("admits up to its ceiling"));
+        }
+
+        plugin
+            .on_workload_unbind(&workload_id, WitInterfaces::new(&HashSet::new()))
+            .await
+            .expect("unbind should succeed");
+
+        // The same identity binds again before any straggler drains.
+        let rebound = limits.admission(&identity, None);
+        let mut admitted = Vec::new();
+        while let Ok(permit) = Arc::clone(&rebound.component).try_acquire_owned() {
+            admitted.push(permit);
+        }
+        assert_eq!(
+            stragglers.len() + admitted.len(),
+            LIMIT,
+            "handlers left running by the unbind and work admitted under the rebind \
+             must not exceed max_in_flight together; the rebind was handed {} slots \
+             of its own",
+            admitted.len()
+        );
+    }
 }
