@@ -89,6 +89,31 @@ pub struct SharedCtx {
     /// here is what makes the release exact: dropping the store drops this and
     /// hands the bytes back.
     pub memory_limiter: crate::engine::guest_memory::StoreMemoryLimiter,
+    /// Notifies waiters after all other store data is dropped.
+    ///
+    /// Wasmtime disposes guest fibers and host tasks before dropping store data.
+    pub dropped: StoreDropped,
+}
+
+/// Lazily creates a token and cancels it when dropped.
+#[derive(Default)]
+pub struct StoreDropped(std::sync::OnceLock<tokio_util::sync::CancellationToken>);
+
+impl StoreDropped {
+    /// Returns a token canceled when this value drops.
+    pub fn token(&self) -> tokio_util::sync::CancellationToken {
+        self.0
+            .get_or_init(tokio_util::sync::CancellationToken::new)
+            .clone()
+    }
+}
+
+impl Drop for StoreDropped {
+    fn drop(&mut self) {
+        if let Some(token) = self.0.get() {
+            token.cancel();
+        }
+    }
 }
 
 /// The identity of whoever is invoking a host component plugin, used to
@@ -125,6 +150,7 @@ impl SharedCtx {
             abandoned: Arc::default(),
             executed: Arc::default(),
             memory_limiter: Default::default(),
+            dropped: StoreDropped::default(),
         }
     }
 

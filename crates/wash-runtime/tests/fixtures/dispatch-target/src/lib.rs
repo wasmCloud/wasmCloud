@@ -10,6 +10,9 @@
 //!   serving them all), and
 //! - a service answers the same way, on the one instance it already is.
 //!
+//! `hold` waits forever. `hold:<ms>` waits for the given duration. Both yield
+//! while waiting.
+//!
 //! `wasi:cli/run` parks rather than returning, so deployed as a service this
 //! stays the workload's long-lived item for as long as a test needs it.
 
@@ -32,9 +35,17 @@ struct Component;
 
 impl RunnerGuest for Component {
     async fn run(message: String) -> String {
-        // A dispatched call that does not complete, so a test can ask what
-        // becomes of the instance that was serving it.
+        // Trap before updating instance state.
         assert!(message != "trap", "deliberate runner.run trap");
+        if message == "hold" {
+            loop {
+                monotonic_clock::wait_for(60_000_000_000).await;
+            }
+        }
+        if let Some(ms) = message.strip_prefix("hold:") {
+            let ms: u64 = ms.parse().expect("hold:<milliseconds>");
+            monotonic_clock::wait_for(ms * 1_000_000).await;
+        }
         let served = SERVED.fetch_add(1, Ordering::SeqCst) + 1;
         format!("{message}:{served}")
     }

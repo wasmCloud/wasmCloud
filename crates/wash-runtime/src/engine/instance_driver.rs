@@ -51,7 +51,7 @@ use wasmtime::error::Context as _;
 use wasmtime_wasi_http::p3::bindings::Service;
 
 use crate::engine::ctx::SharedCtx;
-use crate::engine::dispatch::{GuestJob, GuestTask};
+use crate::engine::dispatch::{GuestJob, GuestTask, Placement};
 use crate::engine::instance_pool::ComponentInstance;
 use crate::host::http::ServiceHttpJob;
 use crate::host::trigger_service::HttpTask;
@@ -200,20 +200,10 @@ pub(crate) struct PoolSlot {
 }
 
 impl PoolSlot {
-    /// Stop this instance admitting: it drains what it took, ends its run loop,
-    /// and its store's teardown ends any guest work still running on it.
+    /// Stops admissions and drops the store after active calls drain.
     ///
-    /// Only as far as the last call returning, though: every path to `drained`
-    /// runs through a call's task ending, so a guest that never yields holds the
-    /// store open regardless. That one is ended by its abandoned call instead
-    /// (see [`crate::engine::abandon`]).
-    ///
-    /// TODO: retirement is a stand-in for cancelling the one bad call. The
-    /// host cannot cancel a guest `call_concurrent` subtask
-    /// (bytecodealliance/wasmtime#11833), so ending a wedged call's work means
-    /// condemning the whole instance and every warm state it held. Once that
-    /// API exists, a timed-out call should cancel just its own task and leave
-    /// the instance serving.
+    /// Wasmtime cannot cancel one `call_concurrent` task, so a wedged task
+    /// requires retiring its instance (bytecodealliance/wasmtime#11833).
     pub(crate) fn retire_instance(&self) {
         self.state.retire();
     }
@@ -530,7 +520,7 @@ impl InstanceDriver {
                             InstanceJob::Guest(job) => accessor.spawn(GuestTask {
                                 instance,
                                 job,
-                                pool_slot: Some(slot),
+                                placement: Placement::Pooled(slot),
                             }),
                         };
                         if let Err(e) = spawned {
