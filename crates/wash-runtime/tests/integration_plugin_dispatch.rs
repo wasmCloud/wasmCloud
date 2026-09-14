@@ -10,19 +10,25 @@
 //!   which is what `poolSize`/`maxConcurrency` are for;
 //! - a component that keeps no instances gets a fresh one per call (`1, 1, 1`);
 //! - a service serves them on the single instance it already is, concurrently.
+//!
+//! `hold` calls keep work active for cancellation tests.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
+use futures::FutureExt as _;
 use tokio::sync::{Mutex, oneshot};
 use wasmtime::component::{Accessor, Instance};
 
 use wash_runtime::engine::Engine;
 use wash_runtime::engine::ctx::SharedCtx;
-use wash_runtime::engine::dispatch::{DispatchTarget, GuestCall, GuestCallFuture};
+use wash_runtime::engine::dispatch::{
+    DispatchCancelled, DispatchTarget, GuestCall, GuestCallFuture,
+};
 use wash_runtime::engine::workload::ResolvedWorkload;
 use wash_runtime::host::http::{DevRouter, Ingress};
 use wash_runtime::host::{HostApi, HostBuilder};
@@ -77,6 +83,8 @@ fn acme_tasks_interface() -> WitInterface {
 struct RunCall {
     message: String,
     reply: oneshot::Sender<Result<String>>,
+    /// Signals when the call starts.
+    started: Option<oneshot::Sender<()>>,
 }
 
 impl GuestCall for RunCall {
@@ -90,6 +98,11 @@ impl GuestCall for RunCall {
         instance: Instance,
     ) -> GuestCallFuture<'a> {
         Box::pin(async move {
+            let RunCall {
+                message,
+                reply,
+                started,
+            } = *self;
             let view = accessor
                 .with(|mut access| bindings::RunnerView::new(&mut access, &instance))
                 .map_err(|e| {
@@ -97,16 +110,19 @@ impl GuestCall for RunCall {
                         "dispatch target is missing its acme:tasks/runner export: {e:#}"
                     )
                 })?;
+            if let Some(started) = started {
+                let _ = started.send(());
+            }
             // A trap is a call that did not complete, so it is the host's
             // `Err` — which is what retires the instance it ran on. Only an
             // answer the guest actually gave goes back on the plugin's own
             // channel.
             let answer = view
                 .acme_tasks_runner()
-                .call_run(accessor, self.message)
+                .call_run(accessor, message)
                 .await
                 .map_err(|e| anyhow::anyhow!("runner.run trapped: {e:#}"))?;
-            let _ = self.reply.send(Ok(answer));
+            let _ = reply.send(Ok(answer));
             Ok(None)
         })
     }
@@ -136,9 +152,20 @@ impl TaskPusher {
             .dispatch(RunCall {
                 message: message.to_string(),
                 reply,
+                started: None,
             })
             .await?;
         reply_rx.await.context("dispatched call sent no reply")?
+    }
+
+    /// The target the plugin holds for `workload_id`.
+    async fn target(&self, workload_id: &str) -> DispatchTarget {
+        self.targets
+            .lock()
+            .await
+            .get(workload_id)
+            .cloned()
+            .expect("plugin bound the workload")
     }
 }
 
@@ -504,6 +531,7 @@ async fn test_dispatch_after_the_workload_stops_is_refused() -> Result<()> {
         .dispatch(RunCall {
             message: "after".to_string(),
             reply,
+            started: None,
         })
         .await
         .expect_err("a stopped workload must take no more dispatched calls");
@@ -541,5 +569,320 @@ async fn test_an_unknown_item_is_refused() -> Result<()> {
     );
 
     stop(&host, "unknown-item").await;
+    Ok(())
+}
+
+/// Maximum wait for quiescence.
+const QUIESCE: Duration = Duration::from_secs(10);
+
+/// Builds a call that signals when it starts.
+fn tracked(message: &str) -> (RunCall, oneshot::Receiver<()>) {
+    let (reply, _) = oneshot::channel();
+    let (started, started_rx) = oneshot::channel();
+    let call = RunCall {
+        message: message.to_string(),
+        reply,
+        started: Some(started),
+    };
+    (call, started_rx)
+}
+
+/// Cancels a call before the single-threaded test runtime can start it.
+async fn cancel_before_it_starts(plugin: &TaskPusher, workload_id: &str) -> Result<()> {
+    let target = plugin.target(workload_id).await;
+    let (call, started) = tracked("never");
+    let handle = target.start(call);
+    let cancel = handle.cancel_handle();
+    handle.cancel();
+    assert!(
+        cancel.is_quiesced(),
+        "a call cancelled before it started has nothing to wait for"
+    );
+    // Allow the canceled job to drop before checking its outcome.
+    tokio::task::yield_now().await;
+
+    let err = handle
+        .outcome()
+        .await
+        .expect_err("a cancelled call must not report success");
+    assert!(err.is::<DispatchCancelled>(), "unexpected error: {err:#}");
+    assert!(
+        started.await.is_err(),
+        "the call must never have reached an instance"
+    );
+    Ok(())
+}
+
+/// Canceling a queued warm call prevents execution without retiring the instance.
+#[tokio::test]
+async fn test_a_call_cancelled_before_a_warm_instance_takes_it_never_runs() -> Result<()> {
+    let (plugin, host) = start_host().await?;
+    host.workload_start(component_workload("cancel-queued-warm", 1, 1))
+        .await?;
+    assert_eq!(plugin.run("cancel-queued-warm", "a").await?, "a:1");
+
+    cancel_before_it_starts(&plugin, "cancel-queued-warm").await?;
+    assert_eq!(
+        plugin.run("cancel-queued-warm", "b").await?,
+        "b:2",
+        "the warm instance must serve on because the cancelled call never ran in the guest"
+    );
+
+    stop(&host, "cancel-queued-warm").await;
+    Ok(())
+}
+
+/// A queued call spends `maxInvocations` when admitted, even if canceled.
+#[tokio::test]
+async fn test_a_queued_cancellation_still_spends_the_instances_invocation_budget() -> Result<()> {
+    let (plugin, host) = start_host().await?;
+    host.workload_start(component_workload_with("cancel-queued-budget", 1, 1, 2))
+        .await?;
+    assert_eq!(plugin.run("cancel-queued-budget", "a").await?, "a:1");
+
+    let target = plugin.target("cancel-queued-budget").await;
+    let (call, started) = tracked("never");
+    let handle = target.start(call);
+    handle.cancel();
+    let err = handle
+        .outcome()
+        .await
+        .expect_err("a cancelled call must not report success");
+    assert!(err.is::<DispatchCancelled>(), "unexpected error: {err:#}");
+    assert!(
+        started.await.is_err(),
+        "the cancelled call must never have reached the guest"
+    );
+    assert_eq!(
+        plugin.run("cancel-queued-budget", "b").await?,
+        "b:1",
+        "the cancelled admission spent the old instance's budget, so it cannot serve this call"
+    );
+
+    // `probe:2` shows that the replacement instance is warm.
+    let deadline = Instant::now() + QUIESCE;
+    loop {
+        match plugin.run("cancel-queued-budget", "probe").await?.as_str() {
+            "probe:2" => break,
+            "probe:1" => assert!(
+                Instant::now() < deadline,
+                "the budget-retired instance was never replaced"
+            ),
+            other => panic!("unexpected replacement-instance count: {other}"),
+        }
+    }
+
+    stop(&host, "cancel-queued-budget").await;
+    Ok(())
+}
+
+/// Canceling during store creation prevents execution.
+#[tokio::test]
+async fn test_a_call_cancelled_before_its_store_is_built_never_runs() -> Result<()> {
+    let (plugin, host) = start_host().await?;
+    host.workload_start(component_workload("cancel-queued-cold", 0, 0))
+        .await?;
+
+    cancel_before_it_starts(&plugin, "cancel-queued-cold").await?;
+    assert_eq!(plugin.run("cancel-queued-cold", "a").await?, "a:1");
+
+    stop(&host, "cancel-queued-cold").await;
+    Ok(())
+}
+
+/// Canceling a queued service call prevents execution.
+#[tokio::test]
+async fn test_a_call_cancelled_before_the_service_takes_it_never_runs() -> Result<()> {
+    let (plugin, host) = start_host().await?;
+    host.workload_start(service_workload("cancel-queued-svc"))
+        .await?;
+    assert_eq!(plugin.run("cancel-queued-svc", "a").await?, "a:1");
+
+    cancel_before_it_starts(&plugin, "cancel-queued-svc").await?;
+    assert_eq!(
+        plugin.run("cancel-queued-svc", "b").await?,
+        "b:2",
+        "the service must serve on, never having counted the cancelled call"
+    );
+
+    stop(&host, "cancel-queued-svc").await;
+    Ok(())
+}
+
+/// Canceling a warm call retires its instance.
+#[tokio::test]
+async fn test_cancelling_a_call_on_a_warm_instance_retires_the_instance() -> Result<()> {
+    let (plugin, host) = start_host().await?;
+    host.workload_start(component_workload("cancel-warm", 1, 1))
+        .await?;
+    assert_eq!(plugin.run("cancel-warm", "a").await?, "a:1");
+
+    let (call, started) = tracked("hold");
+    let handle = plugin.target("cancel-warm").await.start(call);
+    let cancel = handle.cancel_handle();
+    started
+        .await
+        .context("the held call never reached an instance")?;
+    assert!(
+        !cancel.is_quiesced(),
+        "a call still running on its instance has not quiesced"
+    );
+
+    handle.cancel();
+    let err = handle
+        .outcome()
+        .await
+        .expect_err("a cancelled call must not report success");
+    assert!(err.is::<DispatchCancelled>(), "unexpected error: {err:#}");
+    tokio::time::timeout(QUIESCE, cancel.quiesced())
+        .await
+        .context("`hold` never returns, so only its instance's store dropping can quiesce it")?;
+
+    assert_eq!(
+        plugin.run("cancel-warm", "b").await?,
+        "b:1",
+        "the held instance was retired, so the next call must land on a fresh one"
+    );
+    assert_eq!(
+        plugin.run("cancel-warm", "c").await?,
+        "c:2",
+        "and the fresh one stays warm"
+    );
+
+    stop(&host, "cancel-warm").await;
+    Ok(())
+}
+
+/// Canceling a dedicated call drops its store.
+#[tokio::test]
+async fn test_cancelling_a_call_on_its_own_store_drops_the_store() -> Result<()> {
+    let (plugin, host) = start_host().await?;
+    host.workload_start(component_workload("cancel-cold", 0, 0))
+        .await?;
+
+    let (call, started) = tracked("hold");
+    let handle = plugin.target("cancel-cold").await.start(call);
+    let cancel = handle.cancel_handle();
+    started
+        .await
+        .context("the held call never reached an instance")?;
+
+    handle.cancel();
+    let err = handle
+        .outcome()
+        .await
+        .expect_err("a cancelled call must not report success");
+    assert!(err.is::<DispatchCancelled>(), "unexpected error: {err:#}");
+    tokio::time::timeout(QUIESCE, cancel.quiesced())
+        .await
+        .context("`hold` never returns, so only its store dropping can quiesce it")?;
+
+    stop(&host, "cancel-cold").await;
+    Ok(())
+}
+
+/// A canceled service call quiesces only after the guest returns.
+#[tokio::test]
+async fn test_cancelling_a_call_on_the_service_waits_for_the_guest_to_return() -> Result<()> {
+    let (plugin, host) = start_host().await?;
+    host.workload_start(service_workload("cancel-svc")).await?;
+
+    let (call, started) = tracked("hold:1500");
+    let handle = plugin.target("cancel-svc").await.start(call);
+    let cancel = handle.cancel_handle();
+    started
+        .await
+        .context("the held call never reached the service")?;
+
+    handle.cancel();
+    let err = handle
+        .outcome()
+        .await
+        .expect_err("a cancelled call must not report success");
+    assert!(err.is::<DispatchCancelled>(), "unexpected error: {err:#}");
+    assert!(
+        !cancel.is_quiesced(),
+        "the guest is still holding, so the call has not quiesced"
+    );
+    tokio::time::timeout(QUIESCE, cancel.quiesced())
+        .await
+        .context("a cancelled call on the service must quiesce once its guest returns")?;
+
+    assert_eq!(
+        plugin.run("cancel-svc", "b").await?,
+        "b:2",
+        "the held call ran to completion on the service, which serves on"
+    );
+
+    stop(&host, "cancel-svc").await;
+    Ok(())
+}
+
+/// Dropping a queued dispatch prevents guest execution.
+#[tokio::test]
+async fn test_dropping_a_dispatch_before_the_instance_takes_the_call_means_it_never_runs()
+-> Result<()> {
+    let (plugin, host) = start_host().await?;
+    host.workload_start(component_workload("drop-queued", 1, 1))
+        .await?;
+    assert_eq!(plugin.run("drop-queued", "a").await?, "a:1");
+
+    let target = plugin.target("drop-queued").await;
+    let (call, started) = tracked("never");
+    let mut dispatch = Box::pin(target.dispatch(call));
+    // One poll queues the call without yielding to the instance driver.
+    assert!(
+        dispatch.as_mut().now_or_never().is_none(),
+        "the call is handed over, not answered"
+    );
+    drop(dispatch);
+
+    assert!(
+        started.await.is_err(),
+        "the call must never have reached an instance"
+    );
+    assert_eq!(
+        plugin.run("drop-queued", "b").await?,
+        "b:2",
+        "the warm instance must serve on, never having counted the dropped call"
+    );
+
+    stop(&host, "drop-queued").await;
+    Ok(())
+}
+
+/// Dropping a running dispatch retires its warm instance.
+#[tokio::test]
+async fn test_dropping_a_dispatch_retires_the_warm_instance_it_ran_on() -> Result<()> {
+    let (plugin, host) = start_host().await?;
+    host.workload_start(component_workload("drop-warm", 1, 1))
+        .await?;
+    for (message, expected) in [("a", "a:1"), ("b", "b:2"), ("c", "c:3")] {
+        assert_eq!(plugin.run("drop-warm", message).await?, expected);
+    }
+
+    let target = plugin.target("drop-warm").await;
+    let (call, started) = tracked("hold");
+    let mut dispatch = Box::pin(target.dispatch(call));
+    tokio::select! {
+        ran = &mut dispatch => panic!("a held call cannot finish: {ran:?}"),
+        started = started => started.context("the held call never reached an instance")?,
+    }
+    drop(dispatch);
+
+    let deadline = Instant::now() + QUIESCE;
+    // `probe:2` shows that the replacement instance is warm.
+    loop {
+        match plugin.run("drop-warm", "probe").await?.as_str() {
+            "probe:2" => break,
+            "probe:1" => assert!(
+                Instant::now() < deadline,
+                "the instance the dropped call was running on was never retired"
+            ),
+            other => panic!("the held instance served on after its call was dropped: {other}"),
+        }
+    }
+
+    stop(&host, "drop-warm").await;
     Ok(())
 }
