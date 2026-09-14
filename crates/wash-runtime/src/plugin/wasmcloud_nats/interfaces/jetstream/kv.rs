@@ -1,12 +1,21 @@
 //! `wasmcloud:nats/kv@0.1.0` — the JetStream KV store, and the `bucket`
 //! resource an `open` hands back.
 
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use std::time::Duration;
 
 use async_nats::jetstream;
+use async_nats::jetstream::consumer::pull::MessagesError;
+use futures::stream::BoxStream;
 use futures::StreamExt as _;
+use tokio::sync::oneshot;
 use tracing::{debug, warn};
-use wasmtime::component::{Accessor, Resource};
+use wasmtime::StoreContextMut;
+use wasmtime::component::{
+    Accessor, Destination, FutureReader, Resource, StreamProducer, StreamReader, StreamResult,
+    VecBuffer,
+};
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx};
 
@@ -20,6 +29,9 @@ use crate::plugin::wasmcloud_nats::jetstream::BucketHandle;
 const MAX_HISTORY_DURATION: Duration = Duration::from_secs(10);
 /// Cap on keys returned by one `keys` call.
 const KV_KEYS_BATCH: usize = 1000;
+/// Entries one `select` poll will gather before handing them to the guest.
+/// Bounds host memory per poll; the drain as a whole stays unbounded.
+const DEFAULT_SELECT_BATCH: usize = 1024;
 
 /// Refuses a `keys` filter that could not be a KV subject pattern.
 ///
@@ -40,6 +52,23 @@ fn validate_key_filter(filter: &str) -> Result<(), types::NatsError> {
 
 /// Whether a KV message is a delete or purge tombstone rather than a live
 /// value. The operation rides in a header; anything else is a put.
+/// The KV operation a raw stream message represents. The op rides in a
+/// header; anything else is a put. `kv_entry_to_wit` reads the same thing off
+/// a decoded `jetstream::kv::Entry`, which `select` does not have -- it reads
+/// the consumer directly.
+fn kv_operation(message: &async_nats::Message) -> kv::KvOperation {
+    match message
+        .headers
+        .as_ref()
+        .and_then(|h| h.get("KV-Operation"))
+        .map(|op| op.as_str())
+    {
+        Some("DEL") => kv::KvOperation::Delete,
+        Some("PURGE") => kv::KvOperation::Purge,
+        _ => kv::KvOperation::Put,
+    }
+}
+
 fn is_tombstone(message: &async_nats::Message) -> bool {
     message
         .headers
@@ -131,6 +160,181 @@ impl<T: 'static + Send> labeled_kv::HostWithStore<T> for SharedCtx {
 }
 
 impl kv::Host for ActiveCtx<'_> {}
+
+/// Streams live KV entries off one ordered `last-per-subject` consumer.
+///
+/// This is `keys()`'s consumer with `headers_only` left off, so the values
+/// ride along instead of costing a `get()` each. Nothing is buffered beyond
+/// the item being handed over: the guest's read rate is the flow control,
+/// which is what lets a drain be unbounded without bounding host memory.
+struct KvSelectProducer {
+    messages: BoxStream<'static, Result<jetstream::Message, MessagesError>>,
+    prefix: String,
+    include_tombstones: bool,
+    include_values: bool,
+    /// Caller's own ceiling. 0 is unbounded — the host imposes none here.
+    max_entries: u64,
+    emitted: u64,
+    /// Messages the consumer reported pending when it was created.
+    ///
+    /// This is the deterministic end-of-drain signal. Relying only on a
+    /// message's `pending == 0` is not reliable: when that observation is
+    /// missed the stream stops yielding and the drain blocks until the
+    /// consumer times out, which showed up as a 40k read taking 10.4s
+    /// instead of 350ms — the same read, quantised to the timeout.
+    expected: u64,
+    /// Messages taken off the consumer, tombstones included. `emitted` counts
+    /// only what reached the guest, so it undercounts against `expected`
+    /// whenever a tombstone is skipped.
+    consumed: u64,
+    /// Resolves once, carrying the terminal status. A stream that ends
+    /// because the consumer went away must not read as a completed drain, so
+    /// this is the only thing that says which happened.
+    result: Option<oneshot::Sender<Result<(), types::NatsError>>>,
+    finished: bool,
+}
+
+impl KvSelectProducer {
+    /// Reports the terminal status exactly once; later calls are no-ops.
+    fn finish(&mut self, outcome: Result<(), types::NatsError>) {
+        debug!(
+            expected = self.expected,
+            consumed = self.consumed,
+            emitted = self.emitted,
+            ok = outcome.is_ok(),
+            "kv select drain finished"
+        );
+        if let Some(tx) = self.result.take() {
+            let _ = tx.send(outcome);
+        }
+        self.finished = true;
+    }
+}
+
+impl<D> StreamProducer<D> for KvSelectProducer
+where
+    D: 'static,
+{
+    type Item = kv::Entry;
+    /// A vector, not `Option<Entry>`: handing entries over one per
+    /// `poll_produce` costs a full round trip through the stream machinery
+    /// per entry, which is what made a 40k drain take 11s while 10k took
+    /// 234ms. Batching makes the cost linear again.
+    type Buffer = VecBuffer<Self::Item>;
+
+    fn poll_produce<'a>(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut store: StoreContextMut<'a, D>,
+        mut dst: Destination<'a, Self::Item, Self::Buffer>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        if self.finished {
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        }
+        if dst.remaining(&mut store) == Some(0) {
+            return Poll::Ready(Ok(StreamResult::Completed));
+        }
+        if self.max_entries != 0 && self.emitted >= self.max_entries {
+            self.finish(Ok(()));
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        }
+
+        // Fill up to whatever the current read can take, bounded so a huge
+        // read window cannot make one poll unbounded.
+        let cap = dst.remaining(&mut store).unwrap_or(DEFAULT_SELECT_BATCH).min(DEFAULT_SELECT_BATCH);
+        let mut batch: Vec<kv::Entry> = Vec::with_capacity(cap.min(1024));
+        let mut ended = false;
+        let mut failure: Option<types::NatsError> = None;
+
+        while batch.len() < cap {
+            if self.max_entries != 0 && self.emitted + batch.len() as u64 >= self.max_entries {
+                ended = true;
+                break;
+            }
+            let next = match self.messages.poll_next_unpin(cx) {
+                Poll::Ready(next) => next,
+                Poll::Pending => {
+                    if batch.is_empty() {
+                        // Nothing to hand over yet. `finish` means the guest
+                        // is going away, not that the drain completed --
+                        // report it as cancelled, never as clean.
+                        if finish {
+                            return Poll::Ready(Ok(StreamResult::Cancelled));
+                        }
+                        return Poll::Pending;
+                    }
+                    // Hand over what we have rather than holding it back.
+                    break;
+                }
+            };
+            let message = match next {
+                Some(Ok(m)) => m,
+                Some(Err(e)) => {
+                    let timed_out = chain_timed_out(&e);
+                    failure = Some(kv_err("kv select iter failed", timed_out, e));
+                    break;
+                }
+                None => {
+                    ended = true;
+                    break;
+                }
+            };
+
+            self.consumed += 1;
+            let last = message.info().map(|info| info.pending == 0).unwrap_or(true)
+                || (self.expected != 0 && self.consumed >= self.expected);
+            let tombstone = is_tombstone(&message.message);
+            if !tombstone || self.include_tombstones {
+                if let Some(key) = message
+                    .subject
+                    .strip_prefix(self.prefix.as_str())
+                    .map(str::to_string)
+                {
+                    batch.push(kv::Entry {
+                        key,
+                        value: if self.include_values {
+                            message.payload.to_vec()
+                        } else {
+                            Vec::new()
+                        },
+                        revision: message.info().map(|i| i.stream_sequence).unwrap_or(0),
+                        created_at_unix_nanos: message
+                            .info()
+                            .map(|i| {
+                                i.published
+                                    .unix_timestamp_nanos()
+                                    .try_into()
+                                    .unwrap_or_default()
+                            })
+                            .unwrap_or(0),
+                        operation: kv_operation(&message.message),
+                    });
+                }
+            }
+            if last {
+                ended = true;
+                break;
+            }
+        }
+
+        self.emitted += batch.len() as u64;
+        let empty = batch.is_empty();
+        if !empty {
+            dst.set_buffer(VecBuffer::from(batch));
+        }
+
+        if let Some(e) = failure {
+            self.finish(Err(e));
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        }
+        if ended {
+            self.finish(Ok(()));
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        }
+        Poll::Ready(Ok(StreamResult::Completed))
+    }
+}
 
 impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
     async fn get(
@@ -348,6 +552,110 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
             keys: out,
             truncated,
         }))
+    }
+
+    async fn select(
+        accessor: &Accessor<T, Self>,
+        rep: Resource<BucketHandle>,
+        filter: String,
+        opts: kv::SelectOptions,
+    ) -> wasmtime::Result<
+        Result<
+            (
+                StreamReader<kv::Entry>,
+                FutureReader<Result<(), types::NatsError>>,
+            ),
+            types::NatsError,
+        >,
+    > {
+        let (store, _conn) = accessor.with(|mut a| {
+            let handle = a.get().table.get(&rep)?;
+            Ok::<_, wasmtime::Error>((handle.store.clone(), handle.conn.clone()))
+        })?;
+        if let Err(e) = validate_key_filter(&filter) {
+            return Ok(Err(e));
+        }
+
+        // A *pull* consumer, deliberately -- `keys()` uses an ordered push
+        // consumer, and that shape is wrong for a long drain.
+        //
+        // An ordered push consumer has no flow control: the server pushes as
+        // fast as it can, and when the client cannot keep up messages are
+        // dropped. async-nats notices the gap only via the 5s
+        // `ORDERED_IDLE_HEARTBEAT` (doubled to 10s at push.rs:129), then
+        // resets the consumer and resumes. That is exactly what a 40k drain
+        // showed: identical, always-correct results arriving in
+        // 400ms / 5.4s / 10.4s -- work plus N x 5s, with the drain itself
+        // reporting expected == consumed == emitted every time. The stall was
+        // never the end condition; it was mid-delivery heartbeat resets.
+        //
+        // A pull consumer asks for what it wants, so nothing is dropped and
+        // no heartbeat is involved.
+        let consumer = match store
+            .stream
+            .create_consumer(jetstream::consumer::pull::Config {
+                description: Some("wasmcloud:nats kv select consumer".to_string()),
+                filter_subject: format!("{}{filter}", store.prefix),
+                headers_only: !opts.include_values,
+                replay_policy: jetstream::consumer::ReplayPolicy::Instant,
+                deliver_policy: jetstream::consumer::DeliverPolicy::LastPerSubject,
+                // No acks. This is a read-only drain, and the default
+                // `explicit` policy means the server stops delivering once
+                // `max_ack_pending` (1000) messages are unacked -- which
+                // showed up as a body truncated at 128 KiB and then a hang.
+                ack_policy: jetstream::consumer::AckPolicy::None,
+                // Reaped server-side if the host dies mid-drain, so an
+                // abandoned consumer cannot count against `max_consumers`
+                // forever. Well above any healthy drain.
+                inactive_threshold: Duration::from_secs(60),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => return Ok(Err(jetstream_err("kv select failed", e))),
+        };
+
+        let (result_tx, result_rx) = oneshot::channel();
+        // A filter matching nothing yields a consumer with nothing pending.
+        // A pull consumer's message stream never ends on its own, so an empty
+        // result has to be recognised here rather than waited for.
+        let pending = consumer.cached_info().num_pending;
+        let messages: BoxStream<'static, Result<jetstream::Message, MessagesError>> =
+            if pending == 0 {
+                futures::stream::empty().boxed()
+            } else {
+                match consumer.messages().await {
+                    Ok(m) => m.boxed(),
+                    Err(e) => return Ok(Err(jetstream_err("kv select failed", e))),
+                }
+            };
+
+        let producer = KvSelectProducer {
+            messages,
+            expected: pending,
+            consumed: 0,
+            prefix: store.prefix.clone(),
+            include_tombstones: opts.include_tombstones,
+            include_values: opts.include_values,
+            max_entries: opts.max_entries,
+            emitted: 0,
+            result: Some(result_tx),
+            finished: false,
+        };
+
+        debug!(%filter, include_values = opts.include_values, "kv select started");
+        accessor.with(|mut store| {
+            let stream = StreamReader::new(&mut store, producer)?;
+            let future = FutureReader::new(&mut store, async move {
+                wasmtime::error::Ok(result_rx.await.unwrap_or_else(|_| {
+                    Err(types::NatsError::Unexpected(
+                        "kv select ended without reporting a terminal status".to_string(),
+                    ))
+                }))
+            })?;
+            Ok(Ok((stream, future)))
+        })
     }
 
     async fn history(
