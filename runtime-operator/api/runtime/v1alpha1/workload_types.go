@@ -192,9 +192,11 @@ type WorkloadComponent struct {
 	ReclaimWindowSeconds int32 `json:"reclaimWindowSeconds,omitempty"`
 	// ReclaimMinInstances is how many warm instances an idle sweep never
 	// retires below. Unset lets a fully idle pool empty out, so the next call
-	// after a quiet spell starts cold. Capped at PoolSize. This is a floor on
-	// reclaim, not a target to grow to: instances are still only built when a
-	// call needs one. Only meaningful alongside ReclaimWindowSeconds.
+	// after a quiet spell starts cold. A value at or above PoolSize disables
+	// reclaim entirely, since a sweep could never find a surplus to retire.
+	// This is a floor on reclaim, not a target to grow to: instances are
+	// still only built when a call needs one. Only meaningful alongside
+	// ReclaimWindowSeconds.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Minimum=0
 	ReclaimMinInstances int32 `json:"reclaimMinInstances,omitempty"`
