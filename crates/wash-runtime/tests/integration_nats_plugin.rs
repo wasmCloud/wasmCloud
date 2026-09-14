@@ -1828,3 +1828,144 @@ async fn an_ephemeral_component_starts_fresh_every_delivery() -> Result<()> {
     );
     Ok(())
 }
+
+const SELECT_BUCKET: &str = "test-select";
+/// More than `keys()`'s 1000-key page, and than two of the host's 1024-entry
+/// `select` batches.
+const SELECT_ITEMS: usize = 2500;
+
+/// Drives the async fixture's select probe; `args` is
+/// `<filter>:<values>:<tombstones>:<max>:<timeout-ms>:<delay-ms>`.
+async fn select_probe(client: &async_nats::Client, tag: &str, args: &str) -> Result<String> {
+    let mut results = client.subscribe("test.results".to_string()).await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    client
+        .publish(
+            "probe.select".to_string(),
+            format!("select:{tag}:{SELECT_BUCKET}:{args}").into(),
+        )
+        .await?;
+    client.flush().await?;
+    wait_for_result(
+        &mut results,
+        &format!("select:{tag}:"),
+        Duration::from_secs(30),
+    )
+    .await
+    .with_context(|| format!("the fixture never reported select `{tag}`"))
+}
+
+/// `select` streams every live entry with its value, past the cap `keys()`
+/// has, and its paired future says whether the drain completed.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn kv_select_streams_entries_with_values() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+
+    let kv =
+        h.js.create_key_value(async_nats::jetstream::kv::Config {
+            bucket: SELECT_BUCKET.to_string(),
+            ..Default::default()
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to create select bucket: {e}"))?;
+
+    // Values are `<key>=<generation>`; the fixture checks each against its key.
+    let puts: Vec<_> = futures::stream::iter(0..SELECT_ITEMS)
+        .map(|n| {
+            let kv = kv.clone();
+            async move {
+                let key = format!("item.{n:04}");
+                kv.put(&key, format!("{key}=1").into()).await
+            }
+        })
+        .buffer_unordered(64)
+        .collect()
+        .await;
+    for put in puts {
+        put.map_err(|e| anyhow::anyhow!("seed put failed: {e}"))?;
+    }
+    for key in ["other.a", "other.b", "other.c"] {
+        kv.put(key, format!("{key}=1").into())
+            .await
+            .map_err(|e| anyhow::anyhow!("seed put failed: {e}"))?;
+    }
+    // Last-per-subject must hand back the overwrite, and skip the delete
+    // unless tombstones are asked for.
+    kv.put("item.0000", "item.0000=2".into())
+        .await
+        .map_err(|e| anyhow::anyhow!("overwrite failed: {e}"))?;
+    kv.delete("item.0001")
+        .await
+        .map_err(|e| anyhow::anyhow!("delete failed: {e}"))?;
+    let live = SELECT_ITEMS - 1 + 3;
+
+    host.workload_start(workload_request(
+        "wl-kv-select",
+        nats_async_interface(&[
+            ("servers", &h.nats_url),
+            ("subject-allow", "test.>,probe.>"),
+            ("stream-allow", STREAM),
+            ("bucket-allow", SELECT_BUCKET),
+            ("core-subscriptions", "probe.select"),
+        ]),
+    ))
+    .await
+    .context("failed to start workload")?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let all = select_probe(&h.client, "all", ">:1:0:0:0:0").await?;
+    assert_eq!(
+        all,
+        format!("select:all:ok:count={live},deletes=0,empty=0,latest=1,bad=0"),
+        "every live entry should arrive once, paired with its latest value"
+    );
+
+    let tombstones = select_probe(&h.client, "tombstones", "item.>:1:1:0:0:0").await?;
+    assert_eq!(
+        tombstones,
+        format!("select:tombstones:ok:count={SELECT_ITEMS},deletes=1,empty=1,latest=1,bad=0"),
+        "include-tombstones should add the deleted key, with no value"
+    );
+
+    let keys_only = select_probe(&h.client, "keys-only", "item.>:0:0:0:0:0").await?;
+    let items = SELECT_ITEMS - 1;
+    assert_eq!(
+        keys_only,
+        format!("select:keys-only:ok:count={items},deletes=0,empty={items},latest=0,bad=0"),
+        "include-values=false should list every key with no value bytes"
+    );
+
+    let narrowed = select_probe(&h.client, "narrowed", "other.*:1:0:0:0:0").await?;
+    assert_eq!(
+        narrowed, "select:narrowed:ok:count=3,deletes=0,empty=0,latest=0,bad=0",
+        "the filter should narrow the drain to its subjects"
+    );
+
+    let capped = select_probe(&h.client, "capped", ">:1:0:10:0:0").await?;
+    assert!(
+        capped.starts_with("select:capped:ok:count=10,"),
+        "max-entries should end the drain cleanly at the caller's ceiling, got {capped:?}"
+    );
+
+    let none = select_probe(&h.client, "none", "missing.>:1:0:0:0:0").await?;
+    assert_eq!(
+        none, "select:none:ok:count=0,deletes=0,empty=0,latest=0,bad=0",
+        "a filter matching nothing should complete empty rather than hang"
+    );
+
+    let invalid = select_probe(&h.client, "invalid", "item..x:1:0:0:0:0").await?;
+    assert!(
+        invalid.starts_with("select:invalid:refused:unexpected:"),
+        "a malformed filter should be refused before any consumer exists, got {invalid:?}"
+    );
+
+    // The guest waits out the 50ms deadline before its first read.
+    let deadline = select_probe(&h.client, "deadline", ">:1:0:0:50:500").await?;
+    assert!(
+        deadline.starts_with("select:deadline:err:timeout:"),
+        "a lapsed timeout-ms must resolve the future with timeout, not ok, got {deadline:?}"
+    );
+    Ok(())
+}

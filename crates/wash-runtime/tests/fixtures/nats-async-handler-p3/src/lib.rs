@@ -22,6 +22,7 @@ use wasmcloud::nats::core;
 use wasmcloud::nats::jetstream::{self, MessageHandle};
 use wasmcloud::nats::kv;
 use wasmcloud::nats::types::{DenialReason, DeniedResource, NatsError, NatsMessage};
+use wit_bindgen::StreamResult;
 
 /// Bodies starting with this make the handler fail, to exercise auto-nak.
 const FAIL_MARKER: &str = "fail:";
@@ -36,6 +37,10 @@ const COUNTS_BUCKET: &str = "test-counts";
 const PULL_MARKER: &str = "pull:";
 /// How long a probe fetch waits for its first message.
 const PULL_TIMEOUT_MS: u32 = 1_000;
+/// Bodies starting with this drain a bucket through `select`:
+/// `select:<tag>:<bucket>:<filter>:<values>:<tombstones>:<max>:<timeout-ms>:<delay-ms>`,
+/// where the two flags are `1` or `0`.
+const SELECT_MARKER: &str = "select:";
 /// Bodies starting with this make the core handler report its in-memory
 /// delivery counter, which only survives between messages when the host is
 /// reusing the instance (`poolSize`).
@@ -238,6 +243,84 @@ async fn pull_probe(spec: &str) -> String {
     }
 }
 
+/// Drains a bucket through `select` and reports a summary plus the terminal
+/// status, so a test can check key/value pairing, tombstones and caps without
+/// shipping every entry back.
+async fn select_probe(spec: &str) -> String {
+    let parts: Vec<&str> = spec.split(':').collect();
+    let [
+        tag,
+        bucket,
+        filter,
+        values,
+        tombstones,
+        max,
+        timeout_ms,
+        delay_ms,
+    ] = parts[..]
+    else {
+        return "select:bad-spec".to_string();
+    };
+    let opts = kv::SelectOptions {
+        include_values: values == "1",
+        include_tombstones: tombstones == "1",
+        max_entries: max.parse().unwrap_or(0),
+        timeout_ms: timeout_ms.parse().unwrap_or(0),
+    };
+
+    let bucket = match kv::open(bucket.to_string()).await {
+        Ok(b) => b,
+        Err(e) => return format!("select:{tag}:open-failed:{}", label(&e)),
+    };
+    let (mut entries, status) = match bucket.select(filter.to_string(), opts).await {
+        Ok(pair) => pair,
+        Err(e) => return format!("select:{tag}:refused:{}", label(&e)),
+    };
+
+    // Lets a short `timeout-ms` lapse before the first read, so a deadline
+    // test does not race the drain.
+    let delay_ms: u64 = delay_ms.parse().unwrap_or(0);
+    if delay_ms > 0 {
+        monotonic_clock::wait_for(delay_ms * 1_000_000).await;
+    }
+
+    let (mut count, mut deletes, mut empty, mut latest, mut bad) = (0, 0, 0, 0, 0);
+    loop {
+        let (result, batch) = entries.read(Vec::with_capacity(256)).await;
+        for entry in &batch {
+            count += 1;
+            if !matches!(entry.operation, kv::KvOperation::Put) {
+                deletes += 1;
+            }
+            if entry.revision == 0 {
+                bad += 1;
+            }
+            if entry.value.is_empty() {
+                empty += 1;
+                continue;
+            }
+            // Seeded values are `<key>=<generation>`, so a value paired with
+            // the wrong key counts as bad.
+            let value = String::from_utf8_lossy(&entry.value);
+            match value.strip_prefix(&format!("{}=", entry.key)) {
+                Some("2") => latest += 1,
+                Some(_) => {}
+                None => bad += 1,
+            }
+        }
+        if matches!(result, StreamResult::Dropped) {
+            break;
+        }
+    }
+
+    let summary =
+        format!("count={count},deletes={deletes},empty={empty},latest={latest},bad={bad}");
+    match status.await {
+        Ok(()) => format!("select:{tag}:ok:{summary}"),
+        Err(e) => format!("select:{tag}:err:{}:{summary}", label(&e)),
+    }
+}
+
 impl CoreGuest for Component {
     /// Echoes onto `reply-to` when there is one — a request/reply round trip
     /// driven entirely from inside an async export.
@@ -246,6 +329,12 @@ impl CoreGuest for Component {
         let body = String::from_utf8_lossy(&msg.body).to_string();
         if let Some(spec) = body.strip_prefix(PULL_MARKER) {
             let outcome = pull_probe(spec).await;
+            return js_publish("test.results", outcome)
+                .await
+                .map_err(|e| label(&e));
+        }
+        if let Some(spec) = body.strip_prefix(SELECT_MARKER) {
+            let outcome = select_probe(spec).await;
             return js_publish("test.results", outcome)
                 .await
                 .map_err(|e| label(&e));
