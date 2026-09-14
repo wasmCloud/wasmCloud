@@ -1,4 +1,4 @@
-//! `wasmcloud:nats/jetstream@0.1.0#message-handle` — one delivered message and
+//! `wasmcloud:nats/jetstream@0.1.1#message-handle` — one delivered message and
 //! the settlement operations over it.
 
 use std::sync::Arc;

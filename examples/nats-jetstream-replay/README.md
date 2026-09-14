@@ -108,7 +108,7 @@ spec:
   hostInterfaces:
     - namespace: wasmcloud
       package: nats
-      version: "0.1.0"
+      version: "0.1.1"
       interfaces: [types, jetstream, kv, jetstream-handler]
       config:
         # STREAM:filter[:policy[:queue]] — an empty policy slot is the
