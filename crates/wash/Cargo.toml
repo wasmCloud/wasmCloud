@@ -53,10 +53,12 @@ clap-markdown = { workspace = true }
 ctrlc = { workspace = true }
 dialoguer = { workspace = true, features = ["editor", "password", "zeroize", "fuzzy-select", "fuzzy-matcher"] }
 etcetera = { workspace = true }
+fastrand = { workspace = true }
 figment = { workspace = true, features = ["json", "env", "yaml", "toml"] }
 flate2 = { workspace = true, features = ["rust_backend"] }
 humansize = { workspace = true }
 humantime = { workspace = true }
+oci-client = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
