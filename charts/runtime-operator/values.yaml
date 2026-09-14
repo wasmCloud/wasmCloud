@@ -658,8 +658,13 @@ runtime:
       #                   takes its own `config`/`configFrom`/`secretFrom`,
       #                   layered over the entry's.
       #
-      # Every entry here is file-backed (rendered into the `wash host` config
-      # file, never a CLI arg), since a binding can carry credentials.
+      # An entry renders as a plain `--host-plugin=...` CLI arg unless it sets
+      # `config`/`configFrom`/`secretFrom`/`allowedHosts`/`allowedIpNameLookups`
+      # (the component-only fields above) or any of `workloadConfig`/
+      # `hostOwnedKeys`/`bindings` (above), or is native (no image/file, so
+      # there is nothing to put on a CLI arg). Any of those makes the WHOLE
+      # entry file-backed instead (rendered into the `wash host` config file,
+      # never a CLI arg), since a binding can carry credentials.
       #
       # Examples:
       #
