@@ -803,16 +803,22 @@ struct GateEntry {
     /// Live bindings sharing this gate — replicas of one deployment on this
     /// host.
     bindings: usize,
+    /// Owed shrink debt: permits to forget before reaching the last requested
+    /// ceiling. Paid from free at once and from each returning permit in
+    /// `release_permit`; last request wins.
+    pending_shrink: usize,
 }
 
 impl ComponentGates {
     /// Take a reference to `identity`'s gate, creating it at `limit` if this is
     /// the first binding.
     ///
-    /// Returns the shared semaphore and the ceiling actually in force, which is
-    /// the first binding's where they disagree — a semaphore cannot be resized
-    /// under tasks already holding permits, and silently adopting the newer
-    /// number would change a running component's ceiling.
+    /// Returns the shared semaphore and the ceiling actually in force.
+    ///
+    /// `limit` (the live semaphore total) and the last request meet
+    /// eventually: grows apply at once via `add_permits`, shrinks apply from
+    /// free straight away and from newly freed slots as tasks drain (see
+    /// [`ComponentGates::release_permit`]). The last request wins.
     fn acquire(&self, identity: &AdmissionIdentity, limit: usize) -> (Arc<Semaphore>, usize) {
         let mut gates = self
             .inner
@@ -822,20 +828,53 @@ impl ComponentGates {
             semaphore: Arc::new(Semaphore::new(limit)),
             limit,
             bindings: 0,
+            pending_shrink: 0,
         });
         entry.bindings += 1;
-        if entry.limit != limit {
-            tracing::warn!(
-                namespace = %identity.namespace,
-                workload = %identity.workload,
-                component = %identity.component,
-                in_force = entry.limit,
-                requested = limit,
-                "two messaging components share one workload/component name but ask for \
-                 different max_in_flight ceilings; keeping the first. Replicas of one \
-                 deployment share a gate, so this means two distinct components collided \
-                 on one name"
-            );
+        let in_force_at_entry = entry.limit;
+        if entry.limit != limit || entry.pending_shrink != 0 {
+            if entry.pending_shrink != 0 {
+                tracing::debug!(
+                    namespace = %identity.namespace,
+                    workload = %identity.workload,
+                    component = %identity.component,
+                    in_force = entry.limit,
+                    requested = limit,
+                    pending_shrink = entry.pending_shrink,
+                    "previous shrink still converging; applying last request"
+                );
+            }
+            if limit > entry.limit {
+                let grow_by = limit - entry.limit;
+                entry.pending_shrink = 0;
+                if grow_by > 0 {
+                    entry.semaphore.add_permits(grow_by);
+                }
+                entry.limit = limit;
+            } else if limit < entry.limit {
+                entry.pending_shrink = entry.limit - limit;
+                // Shrink straight away from whatever is free.
+                let forgot = entry.semaphore.forget_permits(entry.pending_shrink);
+                entry.pending_shrink -= forgot;
+                entry.limit -= forgot;
+            } else {
+                // Requested equals the live total: previous shrink is cancelled.
+                entry.pending_shrink = 0;
+            }
+
+            if limit != in_force_at_entry {
+                tracing::warn!(
+                    namespace = %identity.namespace,
+                    workload = %identity.workload,
+                    component = %identity.component,
+                    in_force = entry.limit,
+                    requested = limit,
+                    "two messaging components share one workload/component name but ask for \
+                     different max_in_flight ceilings; converging to the last request as \
+                     permits drain. Replicas of one deployment share a gate, so this means \
+                     two distinct components collided on one name"
+                );
+            }
         }
         (Arc::clone(&entry.semaphore), entry.limit)
     }
@@ -856,10 +895,104 @@ impl ComponentGates {
             return;
         };
         entry.bindings = entry.bindings.saturating_sub(1);
+        drop(gates);
+        self.clean_up(identity);
+    }
+
+    /// Return one held component permit, paying shrink debt first.
+    ///
+    /// When `pending_shrink > 0` the permit is consumed with
+    /// [`OwnedSemaphorePermit::forget`] instead of released: `forget` shrinks
+    /// the semaphore total without waking a parked `acquire()`. Releasing
+    /// first and forgetting from `available` afterwards loses to parked
+    /// waiters — Tokio assigns freed permits to the wait queue synchronously
+    /// inside `release`, before `available` is credited, so a subsequent
+    /// `forget_permits` finds nothing to forget and the waiter runs on the old
+    /// ceiling while the debt is never paid.
+    ///
+    /// Holds the gate lock across the forget/release decision so a concurrent
+    /// `acquire` that installs new debt serializes either fully before (debt
+    /// seen, permit forgotten) or fully after (no debt owed, wake allowed).
+    fn release_permit(
+        &self,
+        identity: &AdmissionIdentity,
+        permit: Option<OwnedSemaphorePermit>,
+    ) {
+        let Some(permit) = permit else {
+            self.clean_up(identity);
+            return;
+        };
+        let mut gates = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(entry) = gates.get_mut(identity) else {
+            // Gate already removed (last binding tore down while handlers were
+            // still running and they have since all drained): just release.
+            drop(gates);
+            drop(permit);
+            return;
+        };
+        if entry.pending_shrink > 0 {
+            entry.pending_shrink -= 1;
+            entry.limit -= 1;
+            // Consumed without waking a waiter; the lock is still held so no
+            // concurrent bind can interleave new debt in between.
+            permit.forget();
+        } else {
+            // No debt owed: releasing may wake a parked waiter, which is
+            // correct. Held across the gate lock so a concurrent shrink
+            // request cannot slip in between the decision and the release.
+            drop(permit);
+        }
+        Self::clean_up_locked(identity, gates);
+    }
+
+    fn clean_up(&self, identity: &AdmissionIdentity) {
+        let gates = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::clean_up_locked(identity, gates);
+    }
+
+    /// Reconcile newly freed slots and remove idle gates. Caller must hold the
+    /// gate lock (see [`ComponentGates::release_permit`] for why the permit
+    /// handover keeps it across release/forget).
+    fn clean_up_locked(
+        identity: &AdmissionIdentity,
+        mut gates: std::sync::MutexGuard<
+            '_,
+            std::collections::HashMap<AdmissionIdentity, GateEntry>,
+        >,
+    ) {
+        let Some(entry) = gates.get_mut(identity) else {
+            return;
+        };
+
+        // Reconcile: newly freed slots pay down owed shrink first. This covers
+        // the bind-teardown path where no permit is being returned; permits
+        // returned via `release_permit` already paid their own debt with
+        // `forget`, and this catches any free slots left over.
+        if entry.pending_shrink > 0 {
+            let forgot = entry.semaphore.forget_permits(entry.pending_shrink);
+            entry.pending_shrink -= forgot;
+            entry.limit -= forgot;
+        }
+
         if entry.bindings == 0 && entry.semaphore.available_permits() == entry.limit {
             entry.semaphore.close();
             gates.remove(identity);
         }
+    }
+
+    /// Live semaphore total for `identity`, if the gate still exists.
+    fn live_limit(&self, identity: &AdmissionIdentity) -> Option<usize> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(identity)
+            .map(|e| e.limit)
     }
 
     #[cfg(test)]
@@ -869,6 +1002,24 @@ impl ComponentGates {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(identity)
             .map_or(0, |e| e.bindings)
+    }
+
+    #[cfg(test)]
+    fn contains(&self, identity: &AdmissionIdentity) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(identity)
+    }
+
+    /// Live gate state for tests: (semaphore total, owed shrink, bindings).
+    #[cfg(test)]
+    fn gate_state(&self, identity: &AdmissionIdentity) -> Option<(usize, usize, usize)> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(identity)
+            .map(|e| (e.limit, e.pending_shrink, e.bindings))
     }
 }
 
@@ -1174,6 +1325,10 @@ pub(crate) enum Admitted {
 pub(crate) struct Admission {
     component: Arc<Semaphore>,
     host: Arc<Semaphore>,
+    /// Ceiling resolved at bind time. The shared gate may converge to a later
+    /// request afterwards (see [`ComponentGates`]), so the shed log reports
+    /// the live total and this stays as the bind-time value for
+    /// [`Admission::limit`].
     limit: usize,
     wait: Duration,
     timeouts: AdmissionTimeouts,
@@ -1211,8 +1366,10 @@ impl Admission {
         let component = Arc::clone(&self.component).acquire_owned().await.ok()?;
         let host = Arc::clone(&self.host).acquire_owned().await.ok()?;
         Some(AdmissionPermit {
-            _component: component,
-            _host: host,
+            _component: Some(component),
+            _host: Some(host),
+            gates: self.gates.clone(),
+            identity: self.identity.clone(),
         })
     }
 
@@ -1242,6 +1399,9 @@ impl Admission {
                 // `wasmcloud.messaging.on_workload_resolved` span. The manifest
                 // names come along so the warning names the same thing the
                 // metric does.
+                // Report the live total, not the bind-time one: a shrink or
+                // grow may have converged since this `Admission` was built.
+                let limit = self.gates.live_limit(&self.identity).unwrap_or(self.limit);
                 tracing::warn!(
                     %component_id,
                     workload.namespace = %self.identity.namespace,
@@ -1249,7 +1409,7 @@ impl Admission {
                     component = %self.identity.component,
                     %subject,
                     waited = ?self.wait,
-                    limit = self.limit,
+                    %limit,
                     "no messaging admission slot came free before the deadline; \
                      dropping message. The host or this component is saturated — \
                      raise --wasmcloud-messaging-max-in-flight, raise the component's \
@@ -1260,7 +1420,10 @@ impl Admission {
         }
     }
 
-    /// The resolved per-component ceiling, after defaulting and clamping.
+    /// The ceiling resolved at bind time, after defaulting and clamping.
+    ///
+    /// Stays fixed while the shared gate converges to later requests; the shed
+    /// log reports the live total instead.
     pub(crate) fn limit(&self) -> usize {
         self.limit
     }
@@ -1350,10 +1513,28 @@ impl Admission {
 /// returns — whether it succeeded, failed, or trapped — and equally on the
 /// error paths between admission and spawn, where this is simply a local that
 /// falls out of scope.
+///
+/// On drop the host permit goes back and the component permit goes back via
+/// [`ComponentGates::release_permit`], which forgets it instead when shrink
+/// debt is owed so a parked waiter cannot steal the slot, then removes the
+/// gate once the last binding is gone with nothing outstanding.
 #[derive(Debug)]
 pub(crate) struct AdmissionPermit {
-    _component: OwnedSemaphorePermit,
-    _host: OwnedSemaphorePermit,
+    _component: Option<OwnedSemaphorePermit>,
+    _host: Option<OwnedSemaphorePermit>,
+    gates: ComponentGates,
+    identity: AdmissionIdentity,
+}
+
+impl Drop for AdmissionPermit {
+    fn drop(&mut self) {
+        // `take` first: `Drop::drop` runs before fields drop, so handing the
+        // permit to the gate while still holding it would always see
+        // `limit - 1`.
+        drop(self._host.take());
+        let component = self._component.take();
+        self.gates.release_permit(&self.identity, component);
+    }
 }
 
 /// Returns `true` if the world exports the `wasmcloud:messaging/handler`
@@ -2330,6 +2511,167 @@ mod tests {
             0,
             "the gate must not outlive the last binding once its permits are back"
         );
+    }
+
+    #[tokio::test]
+    async fn an_unbound_gate_is_removed_once_its_handlers_drain() {
+        // Shutdown with handlers running keeps the entry (permits out, so
+        // `available != limit` and nothing is removed). With no rebind ever
+        // coming, the entry must still go away once those handlers finish —
+        // otherwise it sits in the registry forever.
+        const LIMIT: usize = 10;
+        const HELD: usize = 8;
+        let limits = MessagingLimits::new(64, LIMIT);
+        let identity = super::AdmissionIdentity::new("team-a", "ingester", "worker");
+
+        let binding = limits.admission(&identity, Some(LIMIT));
+        let mut stragglers = Vec::new();
+        for _ in 0..HELD {
+            stragglers.push(binding.acquire().await.expect("admits up to held"));
+        }
+
+        // Shut down with 8 of 10 slots held: entry stays by design.
+        binding.close();
+        assert!(
+            limits.gates.contains(&identity),
+            "unbind with handlers running must keep the gate for the handover"
+        );
+
+        // Handlers drain with no rebind: each drop pays back its slots through
+        // `AdmissionPermit::drop` -> `clean_up`, so no wait is needed — drops
+        // reconcile synchronously.
+        drop(stragglers);
+        assert!(
+            !limits.gates.contains(&identity),
+            "gate must be removed once all handlers drained with no rebind"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_shrink_converges_as_handlers_drain() {
+        // Limit 10 fully held, unbound, rebound asking 5. The live total cannot
+        // drop while its permits are out, so the rebind keeps sharing the 10
+        // gate and the last request (5) is owed as shrink debt. Each drained
+        // handler pays one off until live == requested.
+        const OLD: usize = 10;
+        const NEW: usize = 5;
+        let limits = MessagingLimits::new(64, OLD);
+        let identity = super::AdmissionIdentity::new("team-a", "ingester", "worker");
+
+        let binding = limits.admission(&identity, Some(OLD));
+        let mut stragglers = Vec::new();
+        for _ in 0..OLD {
+            stragglers.push(binding.acquire().await.expect("admits up to its ceiling"));
+        }
+        binding.close();
+
+        let rebound = limits.admission(&identity, Some(NEW));
+        assert_eq!(
+            limits.gates.gate_state(&identity),
+            Some((OLD, OLD - NEW, 1)),
+            "rebind with everything out must keep the old total and owe the shrink"
+        );
+
+        // 3 drain: each freed slot pays debt, none becomes free.
+        for _ in 0..3 {
+            drop(stragglers.pop());
+        }
+        assert_eq!(
+            limits.gates.gate_state(&identity),
+            Some((OLD - 3, OLD - NEW - 3, 1)),
+            "drained handlers must shrink the live total, not free slots"
+        );
+        assert_eq!(
+            rebound.component.available_permits(),
+            0,
+            "no slot may come free while shrink debt remains"
+        );
+
+        // Drain the remaining 7 old handlers: debt paid off at 5, then 2 free.
+        for _ in 0..OLD - 3 {
+            drop(stragglers.pop());
+        }
+        assert_eq!(
+            limits.gates.gate_state(&identity),
+            Some((NEW, 0, 1)),
+            "live total must converge to the last request once handlers drained"
+        );
+
+        // The converged gate admits exactly the new ceiling.
+        let mut admitted = Vec::new();
+        while let Ok(permit) = Arc::clone(&rebound.component).try_acquire_owned() {
+            admitted.push(permit);
+        }
+        assert_eq!(
+            admitted.len(),
+            NEW,
+            "converged gate must admit the new ceiling, not the old one"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_parked_acquire_waits_out_the_shrink() {
+        // Same setup, but a new message is already queued when the drain
+        // starts. Freed slots must pay shrink debt first — the waiter must not
+        // run on the old ceiling before `clean_up` has applied.
+        const OLD: usize = 10;
+        const NEW: usize = 5;
+        let limits = MessagingLimits::new(64, OLD);
+        let identity = super::AdmissionIdentity::new("team-a", "ingester", "worker");
+
+        let binding = limits.admission(&identity, Some(OLD));
+        let mut stragglers = Vec::new();
+        for _ in 0..OLD {
+            stragglers.push(binding.acquire().await.expect("admits up to its ceiling"));
+        }
+        binding.close();
+        let rebound = limits.admission(&identity, Some(NEW));
+
+        // Queued behind a fully spent gate.
+        let waiter = tokio::spawn({
+            let rebound = rebound.clone();
+            async move { rebound.acquire().await }
+        });
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        assert!(
+            !waiter.is_finished(),
+            "waiter must park while the gate is fully held"
+        );
+
+        // One old handler drains: its slot pays debt (total 9, owed 4, free 0),
+        // so the waiter must stay parked rather than run on the old ceiling.
+        drop(stragglers.pop());
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        assert!(
+            !waiter.is_finished(),
+            "freed slot must pay shrink debt, not admit the waiter on old limits"
+        );
+        assert_eq!(
+            rebound.component.available_permits(),
+            0,
+            "no slot may come free while shrink debt remains"
+        );
+
+        // Drain 4 more: debt paid (total 5), still nothing free, waiter parked.
+        for _ in 0..4 {
+            drop(stragglers.pop());
+        }
+        tokio::task::yield_now().await;
+        assert!(
+            !waiter.is_finished(),
+            "waiter must stay parked until the live total reaches the new ceiling"
+        );
+
+        // One more drain frees the first slot of the converged gate.
+        drop(stragglers.pop());
+        let permit = tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("waiter must be admitted once the shrink has converged")
+            .expect("waiter panicked")
+            .expect("converged gate must admit the waiter");
+        drop(permit);
     }
 
     #[test]
