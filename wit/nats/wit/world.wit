@@ -410,15 +410,16 @@ interface kv {
     /// Include delete/purge tombstones rather than skipping them. `keys()`
     /// always skips them; false matches that.
     include-tombstones: bool,
-    /// Send the value bytes. False makes `select` a strict superset of
-    /// `keys()` — same consumer, same round trips, `headers_only` back on —
-    /// for a cheap name-only listing with no cap.
+    /// Send the value bytes. False asks the server for headers only, which
+    /// gives a cheap listing of keys and revisions with no 1000-key cap.
     include-values: bool,
     /// Caller's own bound on entries drained. 0 = unbounded, which is the
     /// point of streaming; this exists for a caller that wants a ceiling of
     /// its own, not as the host's.
     max-entries: u64,
-    /// Wall-clock bound on the whole drain. 0 = the connection default.
+    /// Wall-clock bound on the whole drain; hitting it resolves the paired
+    /// future with `timeout`. 0 = the binding's `request-timeout-ms`, or no
+    /// bound when the binding sets none.
     timeout-ms: u32,
   }
 
@@ -471,16 +472,11 @@ interface kv {
     /// Every live entry matching `filter`, streamed.
     ///
     /// This is the value-bearing counterpart to `keys()`, and the way to read
-    /// a bucket that holds more than one page. `keys()` drives an ordered
-    /// `last-per-subject` consumer with `headers_only` set, which is the only
-    /// reason the values are absent; `select` is the same consumer with the
-    /// values left on. They are not a second fetch — they are the payload
-    /// `keys()` asks the server not to send.
+    /// a bucket that holds more than one page. Values arrive with each entry
+    /// rather than costing a `get` per key.
     ///
-    /// The guest's read rate is the flow control, so no entry count is
-    /// buffered host-side and nothing is truncated. `max-list-entries` does
-    /// not apply here; `max-stream-buffer-bytes` bounds the read-ahead
-    /// instead, which is the thing that can actually grow.
+    /// The guest's read rate is the flow control: the host holds at most one
+    /// batch of entries at a time and nothing is truncated.
     ///
     /// The paired future carries the terminal status, following what
     /// `wasi:http@0.3.0` does for a body and its trailing status. A bare

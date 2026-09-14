@@ -1,14 +1,15 @@
 //! `wasmcloud:nats/kv@0.1.0` — the JetStream KV store, and the `bucket`
 //! resource an `open` hands back.
 
+use core::future::Future as _;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use std::time::Duration;
 
 use async_nats::jetstream;
 use async_nats::jetstream::consumer::pull::MessagesError;
-use futures::stream::BoxStream;
 use futures::StreamExt as _;
+use futures::stream::BoxStream;
 use tokio::sync::oneshot;
 use tracing::{debug, warn};
 use wasmtime::StoreContextMut;
@@ -50,8 +51,6 @@ fn validate_key_filter(filter: &str) -> Result<(), types::NatsError> {
     Ok(())
 }
 
-/// Whether a KV message is a delete or purge tombstone rather than a live
-/// value. The operation rides in a header; anything else is a put.
 /// The KV operation a raw stream message represents. The op rides in a
 /// header; anything else is a put. `kv_entry_to_wit` reads the same thing off
 /// a decoded `jetstream::kv::Entry`, which `select` does not have -- it reads
@@ -69,6 +68,8 @@ fn kv_operation(message: &async_nats::Message) -> kv::KvOperation {
     }
 }
 
+/// Whether a KV message is a delete or purge tombstone rather than a live
+/// value. The operation rides in a header; anything else is a put.
 fn is_tombstone(message: &async_nats::Message) -> bool {
     message
         .headers
@@ -161,12 +162,11 @@ impl<T: 'static + Send> labeled_kv::HostWithStore<T> for SharedCtx {
 
 impl kv::Host for ActiveCtx<'_> {}
 
-/// Streams live KV entries off one ordered `last-per-subject` consumer.
+/// Streams live KV entries off one no-ack `last-per-subject` pull consumer.
 ///
-/// This is `keys()`'s consumer with `headers_only` left off, so the values
-/// ride along instead of costing a `get()` each. Nothing is buffered beyond
-/// the item being handed over: the guest's read rate is the flow control,
-/// which is what lets a drain be unbounded without bounding host memory.
+/// Values ride along instead of costing a `get()` each. At most
+/// `DEFAULT_SELECT_BATCH` entries are held per poll, and the guest's read rate
+/// is the flow control, so an unbounded drain does not grow host memory.
 struct KvSelectProducer {
     messages: BoxStream<'static, Result<jetstream::Message, MessagesError>>,
     prefix: String,
@@ -192,6 +192,18 @@ struct KvSelectProducer {
     /// this is the only thing that says which happened.
     result: Option<oneshot::Sender<Result<(), types::NatsError>>>,
     finished: bool,
+    /// Wall-clock bound on the whole drain, and the limit it was built from.
+    /// `None` is unbounded.
+    deadline: Option<(Pin<Box<tokio::time::Sleep>>, Duration)>,
+}
+
+/// The drain deadline: the caller's `timeout-ms`, else the binding's
+/// `request-timeout-ms`, else none.
+fn select_timeout(timeout_ms: u32, request_timeout: Option<Duration>) -> Option<Duration> {
+    match timeout_ms {
+        0 => request_timeout,
+        ms => Some(Duration::from_millis(ms.into())),
+    }
 }
 
 impl KvSelectProducer {
@@ -232,6 +244,21 @@ where
         if self.finished {
             return Poll::Ready(Ok(StreamResult::Dropped));
         }
+        // Polled first so the waker is registered even when we go Pending below.
+        if let Some((sleep, limit)) = self.deadline.as_mut()
+            && sleep.as_mut().poll(cx).is_ready()
+        {
+            let limit_ms = limit.as_millis();
+            warn!(
+                limit_ms,
+                emitted = self.emitted,
+                "kv select drain hit its deadline"
+            );
+            self.finish(Err(types::NatsError::Timeout(format!(
+                "kv select did not complete within {limit_ms}ms"
+            ))));
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        }
         if dst.remaining(&mut store) == Some(0) {
             return Poll::Ready(Ok(StreamResult::Completed));
         }
@@ -242,7 +269,10 @@ where
 
         // Fill up to whatever the current read can take, bounded so a huge
         // read window cannot make one poll unbounded.
-        let cap = dst.remaining(&mut store).unwrap_or(DEFAULT_SELECT_BATCH).min(DEFAULT_SELECT_BATCH);
+        let cap = dst
+            .remaining(&mut store)
+            .unwrap_or(DEFAULT_SELECT_BATCH)
+            .min(DEFAULT_SELECT_BATCH);
         let mut batch: Vec<kv::Entry> = Vec::with_capacity(cap.min(1024));
         let mut ended = false;
         let mut failure: Option<types::NatsError> = None;
@@ -285,32 +315,31 @@ where
             let last = message.info().map(|info| info.pending == 0).unwrap_or(true)
                 || (self.expected != 0 && self.consumed >= self.expected);
             let tombstone = is_tombstone(&message.message);
-            if !tombstone || self.include_tombstones {
-                if let Some(key) = message
+            if (!tombstone || self.include_tombstones)
+                && let Some(key) = message
                     .subject
                     .strip_prefix(self.prefix.as_str())
                     .map(str::to_string)
-                {
-                    batch.push(kv::Entry {
-                        key,
-                        value: if self.include_values {
-                            message.payload.to_vec()
-                        } else {
-                            Vec::new()
-                        },
-                        revision: message.info().map(|i| i.stream_sequence).unwrap_or(0),
-                        created_at_unix_nanos: message
-                            .info()
-                            .map(|i| {
-                                i.published
-                                    .unix_timestamp_nanos()
-                                    .try_into()
-                                    .unwrap_or_default()
-                            })
-                            .unwrap_or(0),
-                        operation: kv_operation(&message.message),
-                    });
-                }
+            {
+                batch.push(kv::Entry {
+                    key,
+                    value: if self.include_values {
+                        message.payload.to_vec()
+                    } else {
+                        Vec::new()
+                    },
+                    revision: message.info().map(|i| i.stream_sequence).unwrap_or(0),
+                    created_at_unix_nanos: message
+                        .info()
+                        .map(|i| {
+                            i.published
+                                .unix_timestamp_nanos()
+                                .try_into()
+                                .unwrap_or_default()
+                        })
+                        .unwrap_or(0),
+                    operation: kv_operation(&message.message),
+                });
             }
             if last {
                 ended = true;
@@ -568,7 +597,7 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
             types::NatsError,
         >,
     > {
-        let (store, _conn) = accessor.with(|mut a| {
+        let (store, conn) = accessor.with(|mut a| {
             let handle = a.get().table.get(&rep)?;
             Ok::<_, wasmtime::Error>((handle.store.clone(), handle.conn.clone()))
         })?;
@@ -642,6 +671,8 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
             emitted: 0,
             result: Some(result_tx),
             finished: false,
+            deadline: select_timeout(opts.timeout_ms, conn.request_timeout)
+                .map(|limit| (Box::pin(tokio::time::sleep(limit)), limit)),
         };
 
         debug!(%filter, include_values = opts.include_values, "kv select started");
