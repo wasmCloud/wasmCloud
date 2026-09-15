@@ -781,10 +781,10 @@ pub struct MessagingLimits {
 ///
 /// An entry is reference-counted by *binding*, not by [`Admission`] clone:
 /// [`MessagingLimits::admission`] takes a reference and [`Admission::close`]
-/// gives it back, so the gate closes when the last replica on this host goes
-/// away and not before. `close` takes `self` by value, which is what the
-/// backends' `component_cleanup` has, so one binding cannot return its
-/// reference twice.
+/// gives it back, so the gate closes once the last replica on this host goes
+/// away and every permit has drained, and not before. `close` takes `self`
+/// by value, which is what the backends' `component_cleanup` has, so one
+/// binding cannot return its reference twice.
 #[derive(Clone, Debug, Default)]
 struct ComponentGates {
     // `std::sync::Mutex`: every critical section is a map lookup with no await
@@ -796,9 +796,9 @@ struct ComponentGates {
 #[derive(Debug)]
 struct GateEntry {
     semaphore: Arc<Semaphore>,
-    /// The ceiling the first binding resolved. Kept to notice a later binding
-    /// asking for a different one, which means two genuinely different
-    /// components collided on one identity.
+    /// The ceiling currently in force (live semaphore total). Converges to
+    /// the last requested ceiling, so a later binding asking for a different
+    /// one means two genuinely different components collided on one identity.
     limit: usize,
     /// Live bindings sharing this gate — replicas of one deployment on this
     /// host.
@@ -880,7 +880,7 @@ impl ComponentGates {
     }
 
     /// Give back one binding's reference, closing and dropping the gate once
-    /// the last replica is gone.
+    /// the last replica is gone and every permit has drained.
     ///
     /// Closing wakes any loop parked on a saturated gate with
     /// [`Admitted::Closed`]. Closing while another replica is still running
@@ -910,14 +910,12 @@ impl ComponentGates {
     /// `forget_permits` finds nothing to forget and the waiter runs on the old
     /// ceiling while the debt is never paid.
     ///
-    /// Holds the gate lock across the forget/release decision so a concurrent
-    /// `acquire` that installs new debt serializes either fully before (debt
-    /// seen, permit forgotten) or fully after (no debt owed, wake allowed).
-    fn release_permit(
-        &self,
-        identity: &AdmissionIdentity,
-        permit: Option<OwnedSemaphorePermit>,
-    ) {
+    /// Holds the gate lock across the forget/release decision and handover so a
+    /// concurrent `acquire` that installs new debt serializes either fully
+    /// before (debt seen, permit forgotten) or fully after (no debt owed, wake
+    /// allowed). Reconcile/remove runs afterwards in [`ComponentGates::clean_up`]
+    /// under its own lock.
+    fn release_permit(&self, identity: &AdmissionIdentity, permit: Option<OwnedSemaphorePermit>) {
         let Some(permit) = permit else {
             self.clean_up(identity);
             return;
@@ -945,27 +943,20 @@ impl ComponentGates {
             // request cannot slip in between the decision and the release.
             drop(permit);
         }
-        Self::clean_up_locked(identity, gates);
+
+        // Leave the lock first. `clean_up` needs the same lock, so if we do not
+        // leave now it will wait forever.
+        drop(gates);
+        self.clean_up(identity);
     }
 
+    /// Reconcile newly freed slots and remove the gate once the last binding
+    /// is gone and every permit has drained.
     fn clean_up(&self, identity: &AdmissionIdentity) {
-        let gates = self
+        let mut gates = self
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Self::clean_up_locked(identity, gates);
-    }
-
-    /// Reconcile newly freed slots and remove idle gates. Caller must hold the
-    /// gate lock (see [`ComponentGates::release_permit`] for why the permit
-    /// handover keeps it across release/forget).
-    fn clean_up_locked(
-        identity: &AdmissionIdentity,
-        mut gates: std::sync::MutexGuard<
-            '_,
-            std::collections::HashMap<AdmissionIdentity, GateEntry>,
-        >,
-    ) {
         let Some(entry) = gates.get_mut(identity) else {
             return;
         };
