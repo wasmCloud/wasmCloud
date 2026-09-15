@@ -2,12 +2,15 @@ package wasmcloud:nats@0.1.0;
 
 /// Shared types and errors used across the wasmcloud:nats interfaces.
 ///
-/// Every operation in this package is an `async func`, so a component built
-/// for WASI P3 can keep many publishes, requests, and JetStream fetches in
-/// flight at once, and a handler can await other imports while the host
-/// continues delivering to the same instance. There is no sync revision: a
-/// sync-signature function cannot be lifted with the async canonical ABI, so
-/// one package cannot serve both, and P3 is where this interface is going.
+/// Every operation that crosses the NATS wire (publishes, requests,
+/// JetStream fetches and acks) is an `async func`, so a component built
+/// for WASI P3 can keep many in flight at once, and a handler can await
+/// other imports while the host continues delivering to the same instance.
+/// There is no sync revision of a wire operation: a sync-signature function
+/// cannot be lifted with the async canonical ABI, so one package cannot
+/// serve both, and P3 is where this interface is going. The accessors on
+/// `message-handle` are the exception: they read state already held on the
+/// handle and stay plain `func`.
 interface types {
   /// A NATS message. Applies to both core and JetStream messages.
   record nats-message {
@@ -278,6 +281,10 @@ interface jetstream {
   /// `in-progress` may be called repeatedly to extend ack-wait. It works
   /// under `ack-mode: auto` too, where the host owns the settle and every
   /// other method here returns `ack-owned-by-host`.
+  ///
+  /// `message`, `sequence`, and `delivery-count` are sync: they read state
+  /// the handle already holds and make no wire round trip. The settle
+  /// operations are async.
   resource message-handle {
     /// Borrow the underlying message.
     message: func() -> nats-message;
