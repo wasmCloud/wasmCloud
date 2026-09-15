@@ -635,7 +635,7 @@ fn sanitize_name_component(name: &str) -> String {
 /// The durable/deliver-plane scope for a workload's JetStream subscriptions.
 ///
 /// **Namespace only.** Every replica of a deployment is a separate workload
-/// with its own `uuid::Uuid::new_v4()` id *and* its own generated name —
+/// with its own workload id *and* its own generated name —
 /// `js-sink-8b6857494-69bc97f647`, `js-sink-8b6857494-6dc679c6` — so both are
 /// per-replica keys and neither can scope a durable that replicas must share.
 /// Keying by either gave each replica a durable of its own: a queue group of N

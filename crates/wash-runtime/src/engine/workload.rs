@@ -353,7 +353,7 @@ impl WorkloadService {
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
-                id: uuid::Uuid::new_v4().to_string().into(),
+                id: uuid::Uuid::now_v7().to_string().into(),
                 workload_id: workload_id.into(),
                 workload_name: workload_name.into(),
                 workload_namespace: workload_namespace.into(),
@@ -449,7 +449,7 @@ impl WorkloadComponent {
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
-                id: uuid::Uuid::new_v4().to_string().into(),
+                id: uuid::Uuid::now_v7().to_string().into(),
                 workload_id: workload_id.into(),
                 workload_name: workload_name.into(),
                 workload_namespace: workload_namespace.into(),
@@ -595,7 +595,7 @@ impl DerefMut for WorkloadService {
 /// state of a workload before execution.
 #[derive(Clone)]
 pub struct ResolvedWorkload {
-    /// The unique identifier of the workload, created with [uuid::Uuid::new_v4]
+    /// The unique identifier of the workload, supplied by whoever starts it
     id: Arc<str>,
     /// The name of the workload
     name: Arc<str>,
@@ -2402,7 +2402,7 @@ impl ResolvedWorkload {
 /// - Validate that all dependencies can be satisfied
 /// - Create the final executable workload representation
 pub struct UnresolvedWorkload {
-    /// The unique identifier of the workload, created with [uuid::Uuid::new_v4]
+    /// The unique identifier of the workload, supplied by whoever starts it
     id: Arc<str>,
     /// The name of the workload
     name: Arc<str>,

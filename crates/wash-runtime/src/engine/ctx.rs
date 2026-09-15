@@ -303,7 +303,7 @@ impl<'a> DerefMut for ActiveCtx<'a> {
 /// - wasi@0.2 interfaces
 /// - wasi:http@0.2 interfaces
 pub struct Ctx {
-    /// Unique identifier for this component context. This is a [uuid::Uuid::new_v4] string.
+    /// Unique identifier for this component context. This is a [uuid::Uuid::now_v7] string.
     pub id: Arc<str>,
     /// Unique identifier shared by all component contexts in the same store.
     pub store_id: Arc<str>,
@@ -572,8 +572,8 @@ pub struct CtxBuilder {
 impl CtxBuilder {
     pub fn new(workload_id: impl Into<Arc<str>>, component_id: impl Into<Arc<str>>) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string().into(),
-            store_id: uuid::Uuid::new_v4().to_string().into(),
+            id: uuid::Uuid::now_v7().to_string().into(),
+            store_id: uuid::Uuid::now_v7().to_string().into(),
             component_id: component_id.into(),
             workload_id: workload_id.into(),
             ctx: None,
@@ -707,8 +707,11 @@ mod tests {
     fn ctx_builder_generates_uuid_id() {
         setup();
         let ctx = Ctx::builder("wk", "comp").build();
-        // id should be a valid UUID v4 string
-        assert!(uuid::Uuid::parse_str(&ctx.id).is_ok());
+        // id and store_id should be valid UUID v7 strings
+        let id = uuid::Uuid::parse_str(&ctx.id).expect("id is a UUID");
+        let store_id = uuid::Uuid::parse_str(&ctx.store_id).expect("store_id is a UUID");
+        assert_eq!(id.get_version_num(), 7);
+        assert_eq!(store_id.get_version_num(), 7);
     }
 
     #[test]
