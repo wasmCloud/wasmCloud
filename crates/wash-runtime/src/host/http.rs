@@ -38,20 +38,14 @@ use crate::{
 };
 use url::Url;
 
-/// The request-body type every ingress path carries, whichever WASI HTTP
-/// version serves it.
-///
-/// Spelled by wasmtime's `p2` module because that is where the `ErrorCode` a
-/// boxed body reports lives, but it is not a P2-only type and nothing here
-/// treats it as one: [`ServiceHttpJob`], [`handle_component_request`] and
-/// [`crate::host::http_p3::handle_component_request_p3`] all take it, which is
-/// what lets a P2 component and a P3 service be reached over one channel by
-/// both real network ingress (`hyper::body::Incoming`, boxed on the way in) and
-/// a locally routed call, whose body was never on a socket at all.
-///
-/// Re-exported so the rest of the crate names it here rather than reaching
-/// into `wasmtime_wasi_http::p2` for a type it uses on both paths.
-pub use wasmtime_wasi_http::p2::body::HyperIncomingBody;
+/// The request body a workload's incoming HTTP path is handed, from network
+/// ingress or a same-host call. Its error is the `error-code` of whichever
+/// `wasi:http` version produced it, converted once by the handler that consumes
+/// it, so a P3 caller's error reaches a P3 callee unchanged.
+pub type IncomingBody = http_body_util::combinators::UnsyncBoxBody<
+    bytes::Bytes,
+    wasmtime_wasi_http::handler::ErrorCode,
+>;
 
 use crate::{engine::workload::ResolvedWorkload, observability::GuestMeter};
 use anyhow::{Context, ensure};
@@ -1514,12 +1508,12 @@ pub type WorkloadHandles = Arc<
 /// a oneshot for its response and the abandonment flag of the [`DispatchedCall`]
 /// enforcing its deadline (see [`crate::engine::abandon`]).
 ///
-/// The request body is pre-boxed into [`HyperIncomingBody`] so both real
+/// The request body is pre-boxed into [`IncomingBody`] so both real
 /// network ingress (`hyper::body::Incoming`, boxed in [`handle_http_request`])
 /// and locally short-circuited outgoing requests (see
 /// [`IngressBuilder::local_routing`]) can be delivered on the same channel.
 pub struct ServiceHttpJob {
-    pub req: hyper::Request<HyperIncomingBody>,
+    pub req: hyper::Request<IncomingBody>,
     pub resp_tx: tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
     pub abandoned: Arc<AbandonFlag>,
 }
@@ -2098,7 +2092,12 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
                 };
                 let result = tokio::time::timeout(
                     config.first_byte_timeout,
-                    dispatch_local(&target, request, destination, guest_meter),
+                    dispatch_local(
+                        &target,
+                        request.map(|body| IncomingBody::new(body.map_err(Into::into))),
+                        destination,
+                        guest_meter,
+                    ),
                 )
                 .await
                 .map_err(|_| ErrorCode::ConnectionReadTimeout)
@@ -2140,7 +2139,6 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
         let guest_meter = self.local_guest_meter();
         let slot = self.take_local_slot(caller);
         Box::new(async move {
-            use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode as P2ErrorCode;
             use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
             let Ok(slot) = slot else {
                 return Err(wasmtime_wasi::TrappableError::from(
@@ -2154,13 +2152,10 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
                 .and_then(|o| o.between_bytes_timeout)
                 .unwrap_or(Duration::from_secs(600));
             // The probe reports the request body's outcome back to the caller, as
-            // the network path does. The local incoming path carries the p2
-            // `ErrorCode`.
+            // the network path does. Its P3 errors ride through unchanged.
             let (parts, body) = request.into_parts();
             let (body, upload) = crate::host::http_client::UploadProbe::new(body);
-            let body = HyperIncomingBody::new(
-                body.map_err(|e| P2ErrorCode::InternalError(Some(format!("{e:?}")))),
-            );
+            let body = IncomingBody::new(body.map_err(Into::into));
             let request = hyper::Request::from_parts(parts, body);
             let response = tokio::time::timeout(
                 first_byte_timeout,
@@ -2174,15 +2169,12 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
                     "local dispatch failed: {e}"
                 ))))
             })?;
-            // Back to the p3 `ErrorCode` for the response body. The slot is held
-            // until the body drains, and `between_bytes_timeout` is applied here
-            // because a P3 body goes straight back to the guest.
+            // The response channel is p2-typed; `From` maps its errors back variant
+            // for variant. The slot is held until the body drains, and
+            // `between_bytes_timeout` is applied here because a P3 body goes
+            // straight back to the guest.
             let response = attach_slot(response, slot).map(|body| {
-                TimedBody::new(
-                    body.map_err(|e| ErrorCode::InternalError(Some(format!("{e:?}")))),
-                    between_bytes_timeout,
-                )
-                .boxed_unsync()
+                TimedBody::new(body.map_err(ErrorCode::from), between_bytes_timeout).boxed_unsync()
             });
             Ok((response, upload))
         })
@@ -2259,7 +2251,7 @@ enum LocalTarget {
 /// [`Ingress::resolve_local_target`] already picked for it.
 async fn dispatch_local(
     workload_id: &str,
-    mut request: hyper::Request<HyperIncomingBody>,
+    mut request: hyper::Request<IncomingBody>,
     target: LocalTarget,
     guest_meter: GuestMeter,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
@@ -3167,7 +3159,7 @@ async fn handle_http_request<T: Router>(
     // Box the network body into the shared incoming-body type so the service
     // channel and per-request invoke path accept both network ingress and
     // locally routed requests (see `dispatch_local`).
-    let req = req.map(|body| HyperIncomingBody::new(body.map_err(hyper_request_error)));
+    let req = req.map(|body| IncomingBody::new(body.map_err(|e| hyper_request_error(e).into())));
 
     // If this workload's long-lived service serves HTTP, deliver the request to
     // it (preserving its in-memory state) instead of the per-request path.
@@ -3456,7 +3448,7 @@ async fn invoke_component_handler(
     workload_handle: ResolvedWorkload,
     instance_pre: InstancePre<SharedCtx>,
     component_id: &str,
-    req: hyper::Request<HyperIncomingBody>,
+    req: hyper::Request<IncomingBody>,
     guest_meter: GuestMeter,
     // Resolved once when the route was registered: this runs per request.
     identity: &crate::observability::WorkloadIdentity,
@@ -3540,13 +3532,11 @@ async fn invoke_component_handler(
             .await
             .ok_or_else(|| anyhow::anyhow!("cold instance produced no response"))?;
         let (parts, body) = resp?.into_parts();
+        // `From` maps the P3 error variant for variant, so a P3 caller routed
+        // here gets the callee's own error-code back.
         let body = HyperOutgoingBody::new(
-            body.map_err(|e| {
-                wasmtime_wasi_http::p2::bindings::http::types::ErrorCode::InternalError(Some(
-                    format!("failed to convert P3 http body: {e:?}"),
-                ))
-            })
-            .boxed_unsync(),
+            body.map_err(wasmtime_wasi_http::p2::bindings::http::types::ErrorCode::from)
+                .boxed_unsync(),
         );
         return Ok(watch_body(hyper::Response::from_parts(parts, body), watch));
     }
@@ -3562,7 +3552,7 @@ async fn invoke_component_handler(
 pub async fn handle_component_request(
     mut store: Store<SharedCtx>,
     pre: InstancePre<SharedCtx>,
-    req: hyper::Request<HyperIncomingBody>,
+    req: hyper::Request<IncomingBody>,
     guest_meter: GuestMeter,
     identity: &crate::observability::WorkloadIdentity,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
@@ -5429,6 +5419,41 @@ mod tests {
             None,
             "unbind must drop the workload's local routes too"
         );
+    }
+
+    /// A P3 caller routed to a P3 callee sees the callee's own `error-code`: the
+    /// request body carries it unchanged, and the p2-typed response channel maps
+    /// it variant for variant rather than into `InternalError`.
+    #[tokio::test]
+    async fn p3_body_errors_survive_the_local_path() {
+        use http_body_util::BodyExt;
+        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode as P2;
+        use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode as P3;
+
+        struct Failing(Option<P3>);
+        impl hyper::body::Body for Failing {
+            type Data = bytes::Bytes;
+            type Error = P3;
+            fn poll_frame(
+                mut self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Result<hyper::body::Frame<bytes::Bytes>, P3>>> {
+                std::task::Poll::Ready(self.0.take().map(Err))
+            }
+        }
+
+        // Request: P3 caller -> `IncomingBody` -> P3 callee.
+        let request =
+            IncomingBody::new(Failing(Some(P3::HttpRequestBodySize(Some(42)))).map_err(Into::into));
+        let err = request.map_err(P3::from).collect().await.err();
+        assert!(matches!(err, Some(P3::HttpRequestBodySize(Some(42)))));
+
+        // Response: P3 callee -> p2 response channel -> P3 caller.
+        let response = Failing(Some(P3::HttpResponseTimeout))
+            .map_err(P2::from)
+            .map_err(P3::from);
+        let err = response.collect().await.err();
+        assert!(matches!(err, Some(P3::HttpResponseTimeout)));
     }
 
     /// One unready replica must not send callers to the network while a ready
