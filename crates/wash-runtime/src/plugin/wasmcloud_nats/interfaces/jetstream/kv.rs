@@ -1,4 +1,4 @@
-//! `wasmcloud:nats/kv@0.1.1` — the JetStream KV store, and the `bucket`
+//! `wasmcloud:nats/kv@0.1.2` — the JetStream KV store, and the `bucket`
 //! resource an `open` hands back.
 
 use core::future::Future as _;

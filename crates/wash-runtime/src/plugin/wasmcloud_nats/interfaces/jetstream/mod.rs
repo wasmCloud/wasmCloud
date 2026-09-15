@@ -1,4 +1,4 @@
-//! `wasmcloud:nats/jetstream@0.1.1` — the stream-level operations.
+//! `wasmcloud:nats/jetstream@0.1.2` — the stream-level operations.
 //!
 //! The interface's two resources and the KV interface built on the same
 //! JetStream context live beside this one: [`message_handle`],

@@ -1,4 +1,4 @@
-package wasmcloud:nats@0.1.1;
+package wasmcloud:nats@0.1.2;
 
 /// Shared types and errors used across the wasmcloud:nats interfaces.
 ///

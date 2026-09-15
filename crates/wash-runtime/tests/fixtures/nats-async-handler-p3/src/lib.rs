@@ -1,4 +1,4 @@
-//! Real-guest fixture for the `wasmcloud:nats@0.1.1` surface.
+//! Real-guest fixture for the `wasmcloud:nats@0.1.2` surface.
 //!
 //! Both handlers are `async fn`s that await imported NATS calls from inside
 //! the delivery — the shape a sync-signature package cannot express, since a
