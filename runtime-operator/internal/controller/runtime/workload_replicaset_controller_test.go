@@ -328,3 +328,61 @@ func TestReplicaSetReadyCarriesScaleUpFailure(t *testing.T) {
 		t.Fatalf("ready = %v, want a failure carrying the ScaleUp message", err)
 	}
 }
+
+// A replica set that would hand each replica its own messaging consumer group
+// must fail before any Workload is minted, rather than silently duplicating
+// every message across the replicas.
+func TestReconcileScaleUp_MessagingWithoutConsumerGroup_MintsNoWorkloads(t *testing.T) {
+	scheme := newScaleTestScheme(t)
+	replicaSetGvk, err := gvkForType(&runtimev1alpha1.WorkloadReplicaSet{}, scheme)
+	if err != nil {
+		t.Fatalf("gvk: %v", err)
+	}
+	replicas := int32(2)
+	replicaSet := &runtimev1alpha1.WorkloadReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: testNamespace,
+			Name:      testReplicaSetName,
+			UID:       testReplicaSetUID,
+		},
+		Spec: runtimev1alpha1.WorkloadReplicaSetSpec{
+			Replicas: &replicas,
+			Template: runtimev1alpha1.WorkloadReplicaTemplate{
+				Spec: runtimev1alpha1.WorkloadSpec{
+					HostInterfaces: []runtimev1alpha1.HostInterface{{
+						Namespace:  "wasmcloud",
+						Package:    "messaging",
+						Interfaces: []string{"handler"},
+						ConfigLayer: runtimev1alpha1.ConfigLayer{
+							Config: map[string]string{"subscriptions": "tasks.>"},
+						},
+					}},
+					Components: []runtimev1alpha1.WorkloadComponent{{
+						Name:  "worker",
+						Image: "example.com/worker:latest",
+					}},
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(replicaSet).
+		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetOwnerIndex, replicaSetOwnerIndexValue(replicaSetGvk)).
+		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetRevisionIndex, replicaSetRevisionIndexValue(replicaSetGvk)).
+		Build()
+	r := &WorkloadReplicaSetReconciler{Client: fakeClient, Scheme: scheme}
+
+	if err := r.reconcileScaleUp(context.Background(), replicaSet); err == nil || !strings.Contains(err.Error(), "messaging consumer group") {
+		t.Fatalf("reconcileScaleUp = %v, want the missing consumer group error", err)
+	}
+
+	workloads := &runtimev1alpha1.WorkloadList{}
+	if err := fakeClient.List(context.Background(), workloads, client.InNamespace(testNamespace)); err != nil {
+		t.Fatalf("list workloads: %v", err)
+	}
+	if len(workloads.Items) != 0 {
+		t.Fatalf("expected no workloads, got %d", len(workloads.Items))
+	}
+}
