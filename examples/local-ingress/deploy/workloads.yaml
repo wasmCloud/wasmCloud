@@ -17,8 +17,8 @@
 # them. Pin `spec.replicas: 1` on the hostgroup (or use a dedicated hostgroup)
 # to make co-location deterministic.
 #
-# Replace the images with your own registry if you have not published these
-# components (see the README's "Building and pushing the components" section).
+# The images come from the in-cluster registry the README's step 3d sets up and
+# pushes to. Using your own registry? Update both `image:` fields.
 apiVersion: runtime.wasmcloud.dev/v1alpha1
 kind: WorkloadDeployment
 metadata:
@@ -57,10 +57,8 @@ spec:
             localRoute: functiona.internal/hello
       components:
         - name: callee
+          # The explicit :80 is the port the registry Service publishes.
           image: oci-registry.default.svc:80/local-ingress-callee:0.1.0
-          # Pushed to the in-cluster registry instead (README step 3d)? The
-          # explicit :80 is the port the registry Service publishes.
-          # image: oci-registry.default.svc:80/local-ingress-callee:0.1.0
 ---
 apiVersion: runtime.wasmcloud.dev/v1alpha1
 kind: WorkloadDeployment
@@ -87,10 +85,8 @@ spec:
             host: hello.localhost.cosmonic.sh
       components:
         - name: caller
+          # The explicit :80 is the port the registry Service publishes.
           image: oci-registry.default.svc:80/local-ingress-caller:0.1.0
-          # Pushed to the in-cluster registry instead (README step 3d)? The
-          # explicit :80 is the port the registry Service publishes.
-          # image: oci-registry.default.svc:80/local-ingress-caller:0.1.0
           localResources:
             # allowed_hosts is enforced before local routing: the caller must
             # still be permitted to reach the callee's authority. It is an

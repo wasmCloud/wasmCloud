@@ -150,21 +150,20 @@ scheduler may place the workloads on different hosts, in which case the call
 falls back to the network path (and fails for `functiona.internal`) — use a
 dedicated hostgroup if you need determinism at scale.
 
-### 2. Build and push the components
+### 2. Build the components
 
-These components are not published anywhere, so this step is not optional: you
-have to build them and push them to a registry the hosts can pull from.
-[`deploy/workloads.yaml`](./deploy/workloads.yaml) is written against the
-in-cluster registry that step 3d sets up
-(`oci-registry.default.svc:80/local-ingress-{caller,callee}:0.1.0`), which is
-the path of least resistance on kind.
+These components are not published anywhere, so you have to build them and
+push them to a registry the hosts can pull from. Build them now; step 3d pushes
+them to the in-cluster registry
+(`oci-registry.default.svc:80/local-ingress-{caller,callee}:0.1.0`) that
+[`deploy/workloads.yaml`](./deploy/workloads.yaml) is written against.
 
 ```shell
-wash -C callee build && wash oci push <your-registry>/local-ingress-callee:0.1.0 callee/target/wasm32-wasip2/release/local_ingress_callee.wasm
-wash -C caller build && wash oci push <your-registry>/local-ingress-caller:0.1.0 caller/target/wasm32-wasip2/release/local_ingress_caller.wasm
+wash -C callee build
+wash -C caller build
 ```
 
-If you push somewhere other than the in-cluster registry, update the `image:`
+To use a registry of your own instead, push both there and update the `image:`
 fields in [`deploy/workloads.yaml`](./deploy/workloads.yaml) to match.
 
 
@@ -223,7 +222,7 @@ kubectl -n wasmcloud get deploy -l app.kubernetes.io/component=host \
   -o jsonpath='{.items[*].spec.template.spec.containers[*].args}' | tr ' ' '\n' | grep local-routing
 ```
 
-#### 3d. Deploy an in-cluster OCI registry (optional)
+#### 3d. Deploy an in-cluster OCI registry and push the components
 
 [`deploy/oci-registry.yaml`](./deploy/oci-registry.yaml) runs the
 [examples/oci-registry](../oci-registry/) component as a WorkloadDeployment so
@@ -243,10 +242,6 @@ The registry speaks plain HTTP: laptop-side pushes need `wash oci push
 [`deploy/values.local-ingress.yaml`](./deploy/values.local-ingress.yaml)
 already sets via the hostgroup's `extraArgs`.
 
-> **Note:** the registry component imports the async
-> `wasmcloud:blobstore@0.1.0` interface, so the `wash:local-ingress` host
-> image must be built with the `wasm_component_model_implements` feature.
-
 ```shell
 kubectl apply -f deploy/oci-registry.yaml
 kubectl get workloaddeployment oci-registry
@@ -265,9 +260,8 @@ wash oci push --insecure registry.localhost.cosmonic.sh/local-ingress-caller:0.1
 curl -s http://registry.localhost.cosmonic.sh/v2/local-ingress-callee/tags/list
 ```
 
-Then point the `image:` fields in
-[`deploy/workloads.yaml`](./deploy/workloads.yaml) at the registry's
-**in-cluster** name — the hosts can't use `registry.localhost.cosmonic.sh`
+The `image:` fields in [`deploy/workloads.yaml`](./deploy/workloads.yaml)
+already use the registry's **in-cluster** name — the hosts can't use `registry.localhost.cosmonic.sh`
 (it resolves to `127.0.0.1`), but the operator registers the Service DNS name
 with the router, so pulls go through the Service:
 

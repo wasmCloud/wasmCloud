@@ -216,8 +216,8 @@ impl CliCommand for DevCommand {
         );
 
         // `localRoute` is accepted by the config schema but does nothing here.
-        // Validate it anyway to eliminate any misconfiguration deploying to a wash Host.
-        warn_unsupported_local_routes(&dev_config.host_interfaces);
+        // Checked anyway, so an entry a host would refuse fails in dev first.
+        check_local_routes(&dev_config.host_interfaces)?;
 
         let http_handler = wash_runtime::host::http::DevRouter::default();
 
@@ -525,40 +525,33 @@ struct LoadedService {
     interfaces: HashSet<WitInterface>,
 }
 
-/// Warn that any `localRoute` entries in `dev.host_interfaces` are not used, and
-/// report the ones that would not have parsed even where the feature is
-/// supported.
+/// Refuse `localRoute` entries a host would refuse, and warn that valid ones
+/// are not used.
 ///
-/// `wash dev` does not use `localRoute` since there is no route table and wash dev only runs one component at a time.
-/// The keys are still accepted so a project's `.wash/config.yaml` can carry the
-/// same interface config it deploys with, so validating now eliminated an error
-/// downstream when deployed or ran with a wash Host instance that does support local routing
-fn warn_unsupported_local_routes(host_interfaces: &[WitInterface]) {
+/// `wash dev` has no route table and runs one component at a time, so it does
+/// not use `localRoute`. The key is still accepted so a project's
+/// `.wash/config.yaml` can carry the config it deploys with.
+fn check_local_routes(host_interfaces: &[WitInterface]) -> anyhow::Result<()> {
     let (valid, invalid) = partition_local_routes(host_interfaces);
-    if valid.is_empty() && invalid.is_empty() {
-        return;
-    }
-
-    for entry in &invalid {
+    ensure!(
+        invalid.is_empty(),
+        "invalid `localRoute` entries {invalid:?}: expected `host` or `host/path` with a valid \
+         RFC 1123 hostname, and no scheme or port. A host refuses a workload declaring one"
+    );
+    if !valid.is_empty() {
         warn!(
-            entry,
-            "invalid `localRoute` entry: expected `host` or `host/path` with a valid \
-             RFC 1123 hostname — no scheme (`http://…`) and no port. This entry would \
-             be dropped by a host that does support local routing"
+            entries = valid.len(),
+            "`localRoute` is ignored by `wash dev`: local routing needs a hostname-routing host \
+             and a co-located second workload, and a dev session has neither. To exercise the \
+             same call locally, run the callee in its own `wash dev` on another port and point \
+             the caller at it over loopback"
         );
     }
-
-    warn!(
-        entries = valid.len() + invalid.len(),
-        "`localRoute` is ignored by `wash dev`: local routing needs a hostname-routing host \
-         and a co-located second workload, and a dev session has neither. To exercise the \
-         same call locally, run the callee in its own `wash dev` on another port and point \
-         the caller at it over loopback"
-    );
+    Ok(())
 }
 
 /// Split the HTTP handler interface's `localRoute` config into the entries a
-/// local-routing host would register and the ones it would drop.
+/// host would register and the ones it would refuse.
 ///
 /// Empty entries are skipped rather than reported: a trailing comma is
 /// punctuation, not a mistake worth warning about. Returns two empty vectors
@@ -946,10 +939,9 @@ mod tests {
         );
     }
 
-    /// The entries a local-routing host would drop are the ones worth naming
-    /// in dev, where nothing else will ever surface them.
+    /// The entries a host would refuse are the ones `wash dev` refuses too.
     #[test]
-    fn local_routes_partition_reports_entries_a_host_would_drop() {
+    fn local_routes_partition_reports_entries_a_host_would_refuse() {
         let ifaces = vec![http_handler_with_config(&[(
             "localRoute",
             "http://svc.internal/x, svc.internal:8080, /hello, bad_host/hello, ok.internal",
@@ -985,8 +977,8 @@ mod tests {
         assert_eq!(partition_local_routes(&wrong_iface), (vec![], vec![]));
     }
 
-    /// The example's own callee config, so the warning path is exercised
-    /// against a string the docs tell people to write.
+    /// The example's own callee config, so the check is exercised against a
+    /// string the docs tell people to write.
     #[test]
     fn the_shipped_example_local_route_parses() {
         let ifaces = vec![http_handler_with_config(&[

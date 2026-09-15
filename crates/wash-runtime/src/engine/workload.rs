@@ -915,11 +915,11 @@ impl ResolvedWorkload {
         // which workload's service a restart decision is about.
         let workload_name: Arc<str> = self.name.clone();
         let workload_namespace: Arc<str> = self.namespace.clone();
-        // The hostnames this service serves HTTP on, derived once from the
+        // The ingress routes this service serves HTTP on, derived once from the
         // workload's declared interfaces. Passed to every HTTP registration
         // (the first below and each restart re-registration in the supervisor)
         // so a hostname-keyed router can resolve requests to this service.
-        let ingress_routes = crate::host::http::http_ingress_routes(self.host_interfaces());
+        let ingress_routes = crate::host::http::http_ingress_routes(self.host_interfaces())?;
 
         // Build the first incarnation's host-invoked ingresses. Each paired sender
         // is registered with its host-side ingress (the HTTP server, the messaging

@@ -20,13 +20,9 @@
 gateway:
   enabled: false
 
-operator:
-  image:
-    tag: "2.5.2"
-#     repository: "runtime-operator"
-#     registry: ""
-#     pull_policy: Never
-    
+# The operator image follows this chart's appVersion. Pinning an older tag
+# pairs it with this tree's CRDs, which it may not understand.
+
 runtime:
   image:
     registry: ""

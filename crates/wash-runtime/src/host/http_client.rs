@@ -780,14 +780,9 @@ impl PooledClient {
             .and_then(|o| o.between_bytes_timeout)
             .unwrap_or(Duration::from_secs(600));
 
-        let (upload_tx, upload_rx) = tokio::sync::oneshot::channel::<Result<(), ErrorCode>>();
         let (parts, body) = request.into_parts();
-        let body = UploadProbe {
-            inner: body,
-            done: Some(upload_tx),
-        }
-        .map_err(|e| Box::new(e) as BoxError)
-        .boxed_unsync();
+        let (body, io) = UploadProbe::new(body);
+        let body = body.map_err(|e| Box::new(e) as BoxError).boxed_unsync();
         let request = hyper::Request::from_parts(parts, body);
 
         let resp = send_head(pool, request, connect_timeout, first_byte_timeout)
@@ -802,15 +797,6 @@ impl PooledClient {
             crate::host::http::TimedBody::new(body, between_bytes_timeout).boxed_unsync()
         });
 
-        let io: P3RequestErrorFuture = Box::new(async move {
-            match upload_rx.await {
-                Ok(result) => result,
-                // The body was dropped before completing — e.g. the server
-                // responded without draining the upload. Not a guest-visible
-                // failure.
-                Err(_) => Ok(()),
-            }
-        });
         Ok((resp, io))
     }
 }
@@ -1161,13 +1147,31 @@ impl Connection for PermittedStream {
 
 /// Request body wrapper that reports the upload outcome over a oneshot once
 /// the body has been fully pulled (or fails).
-struct UploadProbe {
+pub(crate) struct UploadProbe {
     inner: P3Body,
     done: Option<
         tokio::sync::oneshot::Sender<
             Result<(), wasmtime_wasi_http::p3::bindings::http::types::ErrorCode>,
         >,
     >,
+}
+
+impl UploadProbe {
+    /// Wrap `inner`, returning the request-error future that resolves with its
+    /// upload outcome. A body dropped before completing, e.g. by a server that
+    /// responded without draining it, is not a guest-visible failure.
+    pub(crate) fn new(inner: P3Body) -> (Self, P3RequestErrorFuture) {
+        let (done, outcome) = tokio::sync::oneshot::channel();
+        let outcome: P3RequestErrorFuture =
+            Box::new(async move { outcome.await.unwrap_or(Ok(())) });
+        (
+            Self {
+                inner,
+                done: Some(done),
+            },
+            outcome,
+        )
+    }
 }
 
 impl hyper::body::Body for UploadProbe {
@@ -2066,6 +2070,39 @@ mod tests {
         .expect("body read failed");
         assert_eq!(body.to_bytes().as_ref(), b"hello");
         drop(io);
+    }
+
+    /// The request-error future carries a failed upload to the guest, and a
+    /// body dropped unread resolves as success.
+    #[tokio::test]
+    async fn upload_probe_reports_the_body_outcome() {
+        use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
+
+        struct FailingBody;
+        impl hyper::body::Body for FailingBody {
+            type Data = Bytes;
+            type Error = ErrorCode;
+            fn poll_frame(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, ErrorCode>>> {
+                std::task::Poll::Ready(Some(Err(ErrorCode::HttpProtocolError)))
+            }
+        }
+
+        let (probe, outcome) = UploadProbe::new(FailingBody.boxed_unsync());
+        assert!(BodyExt::collect(probe).await.is_err());
+        assert!(matches!(
+            Box::into_pin(outcome).await,
+            Err(ErrorCode::HttpProtocolError)
+        ));
+
+        let empty = http_body_util::Empty::<Bytes>::new()
+            .map_err(|never| match never {})
+            .boxed_unsync();
+        let (probe, outcome) = UploadProbe::new(empty);
+        drop(probe);
+        assert!(Box::into_pin(outcome).await.is_ok());
     }
 
     /// A server that hangs up mid-body must surface as an error on the
