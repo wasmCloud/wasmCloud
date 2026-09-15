@@ -360,7 +360,10 @@ impl HostPlugin for NatsMessaging {
         let interface_subscriptions = interface.config.get("subscriptions").cloned();
         let interface_consumer_group = interface.config.get(CONSUMER_GROUP_CONFIG).cloned();
         let interface_max_in_flight = interface.config.get(super::MAX_IN_FLIGHT_CONFIG).cloned();
-        let interface_admission_wait = interface.config.get(super::ADMISSION_WAIT_CONFIG).cloned();
+        let interface_admission_wait = interface
+            .config
+            .get(super::SHED_INCOMING_AFTER_CONFIG)
+            .cloned();
 
         // Bind only the revision(s) the workload actually declared: the two
         // surfaces are separate linker instances, and binding one a component
@@ -397,7 +400,7 @@ impl HostPlugin for NatsMessaging {
         let local_admission_wait = component_handle
             .local_resources()
             .config
-            .get(super::ADMISSION_WAIT_CONFIG)
+            .get(super::SHED_INCOMING_AFTER_CONFIG)
             .cloned();
 
         // Track a handler component OR a long-lived handler service:
@@ -1144,5 +1147,83 @@ mod tests {
                 "expected `{value}` to be rejected"
             );
         }
+    }
+
+    /// Cleanup cancels the subscriber loop but leaves its handler tasks
+    /// running: they are detached and hold their permits until the guest call
+    /// returns. A rebind under the same identity must share what is left of the
+    /// ceiling with those stragglers rather than open a second gate, which
+    /// would let old and new run past `max_in_flight` together.
+    ///
+    /// Needs no Docker: `on_workload_unbind` never touches the client, and
+    /// `retry_on_initial_connect` returns one before it has connected.
+    #[tokio::test]
+    async fn unbinding_leaves_the_gate_for_handlers_still_holding_permits() {
+        const LIMIT: usize = 2;
+        let limits = super::super::MessagingLimits::new(64, LIMIT);
+        let identity = super::super::AdmissionIdentity::new("test-ns", "ingester", "worker");
+        let client = async_nats::ConnectOptions::new()
+            .retry_on_initial_connect()
+            .connect("nats://127.0.0.1:1")
+            .await
+            .expect("a retrying client is returned before it connects");
+        let plugin = NatsMessaging::with_limits(Arc::new(client), limits.clone());
+        let workload_id = "wl-1".to_string();
+        let component_id = "c-1".to_string();
+
+        // The state `on_workload_resolved` leaves behind, minus the engine it
+        // would need to build a real workload.
+        let admission = limits.admission(&identity, None);
+        {
+            let mut tracker = plugin.tracker.write().await;
+            tracker
+                .workloads
+                .entry(workload_id.clone())
+                .or_insert_with(|| WorkloadTrackerItem {
+                    workload_data: None,
+                    components: std::collections::HashMap::new(),
+                })
+                .components
+                .insert(
+                    component_id.clone(),
+                    ComponentData {
+                        cancel_token: tokio_util::sync::CancellationToken::new(),
+                        subscriptions: vec!["tasks.x".to_string()],
+                        consumer_group: ConsumerGroup::Grouped("workers".to_string()),
+                        task_handle: None,
+                        admission: admission.clone(),
+                    },
+                );
+            tracker
+                .components
+                .insert(component_id.clone(), workload_id.clone());
+        }
+
+        // Handlers that have not returned, holding every slot the ceiling
+        // allows.
+        let mut stragglers = Vec::new();
+        for _ in 0..LIMIT {
+            stragglers.push(admission.acquire().await.expect("admits up to its ceiling"));
+        }
+
+        plugin
+            .on_workload_unbind(&workload_id, WitInterfaces::new(&HashSet::new()))
+            .await
+            .expect("unbind should succeed");
+
+        // The same identity binds again before any straggler drains.
+        let rebound = limits.admission(&identity, None);
+        let mut admitted = Vec::new();
+        while let Ok(permit) = Arc::clone(&rebound.component).try_acquire_owned() {
+            admitted.push(permit);
+        }
+        assert_eq!(
+            stragglers.len() + admitted.len(),
+            LIMIT,
+            "handlers left running by the unbind and work admitted under the rebind \
+             must not exceed max_in_flight together; the rebind was handed {} slots \
+             of its own",
+            admitted.len()
+        );
     }
 }

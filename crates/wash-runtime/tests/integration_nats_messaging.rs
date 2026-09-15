@@ -29,13 +29,39 @@ use wash_runtime::{
     wit::WitInterface,
 };
 
+mod common;
+use common::{http_only_host_interfaces, json_u64_field};
+
 const MESSAGING_ECHO_WASM: &[u8] = include_bytes!("wasm/messaging_echo.wasm");
+const MSG_SLEEPER_WASM: &[u8] = include_bytes!("wasm/messaging_sleeper_p3.wasm");
 
 const SUBSCRIPTION_SUBJECT: &str = "test.echo";
+
+/// Kept off [`SUBSCRIPTION_SUBJECT`] so the echo workloads and the sleeper never
+/// land in one another's queue group.
+const SLEEPER_SUBJECT: &str = "test.sleep";
+
+/// `HOST` header the sleeper's counters are read back on.
+const SLEEPER_HOST: &str = "nats-admission";
+
+/// How long each delivery parks, in the body the fixture parses.
+const DELIVERY_MILLIS: u64 = 1_000;
+
+/// Far above every ceiling under test, so the deliveries the gate admits share
+/// one instance rather than spilling into stores of their own.
+const POOL_CONCURRENCY: i32 = 32;
+
+/// Waited before probing: several times a delivery, plus the fixture's one-off
+/// per-instance setup.
+const SETTLE: Duration = Duration::from_secs(12);
 
 struct TestHarness {
     nats_client: async_nats::Client,
     monitoring_url: String,
+    /// Where the host's ingress is listening. Only the admission tests use it,
+    /// to read the sleeper's counters back over HTTP.
+    addr: std::net::SocketAddr,
+    http_client: reqwest::Client,
     _host: Box<dyn std::any::Any + Send>,
     _container: Box<dyn std::any::Any + Send>,
 }
@@ -95,6 +121,7 @@ async fn setup_with_limits(
     // Ingress is required by HostBuilder even though this test doesn't
     // exercise HTTP — bind to ephemeral port 0.
     let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let addr = ingress.addr();
     let messaging_plugin = NatsMessaging::with_limits(plugin_client, limits);
 
     let host = HostBuilder::new()
@@ -115,6 +142,11 @@ async fn setup_with_limits(
     Ok(TestHarness {
         nats_client,
         monitoring_url,
+        addr,
+        http_client: reqwest::Client::builder()
+            .pool_max_idle_per_host(0)
+            .timeout(Duration::from_secs(20))
+            .build()?,
         _host: Box::new(host),
         _container: Box::new(container),
     })
@@ -128,6 +160,20 @@ struct MessagingHandlerWorkloadConfig {
     /// the way the messaging plugin's other per-component settings are. `None`
     /// leaves it unset, which resolves to the host default.
     max_in_flight: Option<usize>,
+    /// The fixture to run. `None` is the echo handler, which replies and
+    /// returns immediately.
+    wasm: Option<&'static [u8]>,
+    /// What the host wires up. `None` is a lone
+    /// `wasmcloud:messaging/handler@0.2.0` subscribed to
+    /// [`SUBSCRIPTION_SUBJECT`] — the sync surface, one message per store.
+    host_interfaces: Option<Vec<WitInterface>>,
+    /// `None` is 1: an instance takes one delivery at a time. Raising it is
+    /// what lets several deliveries share a warm instance, which is what makes
+    /// the guest's own in-flight counter readable.
+    max_concurrency: Option<i32>,
+    /// `None` is 100. `Some(0)` means unlimited, so an instance is not retired
+    /// out from under a test that still needs to read its counters.
+    max_invocations: Option<i32>,
 }
 
 /// Build a messaging workload with a variable amount of handlers
@@ -136,6 +182,10 @@ fn messaging_handler_workload(
         workload_name,
         pool_size,
         max_in_flight,
+        wasm,
+        host_interfaces,
+        max_concurrency,
+        max_invocations,
     }: MessagingHandlerWorkloadConfig,
 ) -> WorkloadStartRequest {
     WorkloadStartRequest {
@@ -148,7 +198,7 @@ fn messaging_handler_workload(
             components: vec![Component {
                 name: "messaging-handler".to_string(),
                 digest: None,
-                bytes: bytes::Bytes::from_static(MESSAGING_ECHO_WASM),
+                bytes: bytes::Bytes::from_static(wasm.unwrap_or(MESSAGING_ECHO_WASM)),
                 local_resources: LocalResources {
                     memory_limit_mb: 256,
                     cpu_limit: 1,
@@ -163,21 +213,23 @@ fn messaging_handler_workload(
                     allowed_host_loopback_ports: Default::default(),
                 },
                 pool_size: pool_size.unwrap_or(1),
-                max_invocations: 100,
-                max_concurrency: 1,
+                max_invocations: max_invocations.unwrap_or(100),
+                max_concurrency: max_concurrency.unwrap_or(1),
                 ..Default::default()
             }],
-            host_interfaces: vec![WitInterface {
-                namespace: "wasmcloud".to_string(),
-                package: "messaging".to_string(),
-                interfaces: ["handler".to_string()].into_iter().collect(),
-                version: Some(semver::Version::new(0, 2, 0)),
-                config: HashMap::from([(
-                    "subscriptions".to_string(),
-                    SUBSCRIPTION_SUBJECT.to_string(),
-                )]),
-                name: None,
-            }],
+            host_interfaces: host_interfaces.unwrap_or_else(|| {
+                vec![WitInterface {
+                    namespace: "wasmcloud".to_string(),
+                    package: "messaging".to_string(),
+                    interfaces: ["handler".to_string()].into_iter().collect(),
+                    version: Some(semver::Version::new(0, 2, 0)),
+                    config: HashMap::from([(
+                        "subscriptions".to_string(),
+                        SUBSCRIPTION_SUBJECT.to_string(),
+                    )]),
+                    name: None,
+                }]
+            }),
             volumes: vec![],
         },
     }
@@ -484,5 +536,148 @@ async fn test_host_wide_ceiling_still_lets_a_burst_complete() -> Result<()> {
     }
 
     assert_eq!(seen, expected);
+    Ok(())
+}
+
+/// The per-component ceiling caps how many handlers run at once: a burst of 15
+/// against a ceiling of 5 runs 5 at a time.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn test_max_in_flight_caps_handlers_running_at_once() -> Result<()> {
+    const CEILING: usize = 5;
+    const BURST: usize = 15;
+
+    // Messaging delivers the work, HTTP reads the counters back. `@0.3.0`
+    // because only the async surface shares an instance between deliveries.
+    let mut host_interfaces = http_only_host_interfaces(SLEEPER_HOST);
+    host_interfaces.push(WitInterface {
+        namespace: "wasmcloud".to_string(),
+        package: "messaging".to_string(),
+        interfaces: ["handler".to_string()].into_iter().collect(),
+        version: Some(semver::Version::new(0, 3, 0)),
+        config: HashMap::from([("subscriptions".to_string(), SLEEPER_SUBJECT.to_string())]),
+        name: None,
+    });
+
+    // Host total above the component ceiling so it is the component level under
+    // test, not the host one.
+    let harness = setup_with_limits(
+        vec![messaging_handler_workload(MessagingHandlerWorkloadConfig {
+            workload_name: Some("sleeper-per-component".into()),
+            max_in_flight: Some(CEILING),
+            wasm: Some(MSG_SLEEPER_WASM),
+            host_interfaces: Some(host_interfaces),
+            max_concurrency: Some(POOL_CONCURRENCY),
+            max_invocations: Some(0),
+            ..Default::default()
+        })],
+        MessagingLimits::new(64, 32),
+    )
+    .await?;
+
+    // Nothing replies, so the settle below is the only thing to wait on.
+    for i in 0..BURST {
+        harness
+            .nats_client
+            .publish(
+                SLEEPER_SUBJECT,
+                bytes::Bytes::from(DELIVERY_MILLIS.to_string()),
+            )
+            .await
+            .with_context(|| format!("failed to publish delivery {i}"))?;
+    }
+    harness
+        .nats_client
+        .flush()
+        .await
+        .context("failed to flush publishes")?;
+
+    tokio::time::sleep(SETTLE).await;
+
+    // `msg_peak` is a high-water mark, so it survives the burst draining.
+    let resp = harness
+        .http_client
+        .get(format!("http://{}/", harness.addr))
+        .header("HOST", SLEEPER_HOST)
+        .send()
+        .await
+        .context("counter probe failed")?;
+    anyhow::ensure!(resp.status().is_success(), "status {}", resp.status());
+    let peak = json_u64_field(&resp.text().await?, "msg_peak");
+
+    assert_eq!(
+        peak, CEILING as u64,
+        "a burst of {BURST} against a ceiling of {CEILING} must never have more \
+         than {CEILING} handlers live at once, and must reach {CEILING} for the \
+         assertion to mean anything; saw {peak}"
+    );
+    Ok(())
+}
+
+/// The host-wide ceiling caps live handlers too: a component asking for 32 on a
+/// host whose total is 2 runs 2 at a time.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn test_the_host_ceiling_caps_handlers_running_at_once() -> Result<()> {
+    const HOST_TOTAL: usize = 2;
+    const BURST: usize = 8;
+
+    let mut host_interfaces = http_only_host_interfaces(SLEEPER_HOST);
+    host_interfaces.push(WitInterface {
+        namespace: "wasmcloud".to_string(),
+        package: "messaging".to_string(),
+        interfaces: ["handler".to_string()].into_iter().collect(),
+        version: Some(semver::Version::new(0, 3, 0)),
+        config: HashMap::from([("subscriptions".to_string(), SLEEPER_SUBJECT.to_string())]),
+        name: None,
+    });
+
+    let harness = setup_with_limits(
+        vec![messaging_handler_workload(MessagingHandlerWorkloadConfig {
+            workload_name: Some("sleeper-host-wide".into()),
+            max_in_flight: Some(32),
+            wasm: Some(MSG_SLEEPER_WASM),
+            host_interfaces: Some(host_interfaces),
+            max_concurrency: Some(POOL_CONCURRENCY),
+            max_invocations: Some(0),
+            ..Default::default()
+        })],
+        MessagingLimits::new(HOST_TOTAL, 32),
+    )
+    .await?;
+
+    for i in 0..BURST {
+        harness
+            .nats_client
+            .publish(
+                SLEEPER_SUBJECT,
+                bytes::Bytes::from(DELIVERY_MILLIS.to_string()),
+            )
+            .await
+            .with_context(|| format!("failed to publish delivery {i}"))?;
+    }
+    harness
+        .nats_client
+        .flush()
+        .await
+        .context("failed to flush publishes")?;
+
+    tokio::time::sleep(SETTLE).await;
+
+    let resp = harness
+        .http_client
+        .get(format!("http://{}/", harness.addr))
+        .header("HOST", SLEEPER_HOST)
+        .send()
+        .await
+        .context("counter probe failed")?;
+    anyhow::ensure!(resp.status().is_success(), "status {}", resp.status());
+    let peak = json_u64_field(&resp.text().await?, "msg_peak");
+
+    assert_eq!(
+        peak, HOST_TOTAL as u64,
+        "a component asking for 32 on a host whose total is {HOST_TOTAL} must be \
+         held to {HOST_TOTAL} live handlers; saw {peak}"
+    );
     Ok(())
 }
