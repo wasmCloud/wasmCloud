@@ -5,7 +5,7 @@
 //! need no routing and ignore the label. They exist only because the resources
 //! live in routed interfaces, and delegate to the plain implementations.
 
-use wasmtime::component::{Accessor, Resource};
+use wasmtime::component::{Accessor, FutureReader, Resource, StreamReader};
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx};
 
@@ -181,6 +181,24 @@ impl<T: 'static + Send> labeled_kv::HostBucketWithStore<T> for SharedCtx {
         filter: String,
     ) -> wasmtime::Result<Result<kv::KeyPage, types::NatsError>> {
         <Self as kv::HostBucketWithStore<T>>::keys(accessor, rep, filter).await
+    }
+
+    async fn select(
+        accessor: &Accessor<T, Self>,
+        _id: NatsId,
+        rep: Resource<BucketHandle>,
+        filter: String,
+        opts: kv::SelectOptions,
+    ) -> wasmtime::Result<
+        Result<
+            (
+                StreamReader<kv::Entry>,
+                FutureReader<Result<(), types::NatsError>>,
+            ),
+            types::NatsError,
+        >,
+    > {
+        <Self as kv::HostBucketWithStore<T>>::select(accessor, rep, filter, opts).await
     }
     async fn history(
         accessor: &Accessor<T, Self>,

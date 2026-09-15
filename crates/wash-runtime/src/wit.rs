@@ -273,20 +273,12 @@ impl WitInterface {
     }
 
     /// Returns `true` if `other` belongs to the same `namespace:package` at a
-    /// compatible version. Equal when both specify a version;
-    /// if either omits a version, any version is considered compatible.
+    /// compatible version (see [`versions_compatible`]); if either omits a
+    /// version, any version is considered compatible.
     pub fn same_package(&self, other: &WitInterface) -> bool {
-        if self.namespace != other.namespace || self.package != other.package {
-            return false;
-        }
-        // If both interfaces specify a version, they must match.
-        if let Some(v) = &self.version
-            && let Some(ov) = &other.version
-            && v != ov
-        {
-            return false;
-        }
-        true
+        self.namespace == other.namespace
+            && self.package == other.package
+            && versions_compatible(self.version.as_ref(), other.version.as_ref())
     }
 
     /// Checks if this interface contains (is a superset of) another interface.
@@ -372,6 +364,21 @@ impl std::hash::Hash for WitInterface {
             config_hash ^= std::hash::Hasher::finish(&h);
         }
         config_hash.hash(state);
+    }
+}
+
+/// Whether two interface versions resolve to one another under the component
+/// model's semver rule, which is how wasmtime links an import against a newer
+/// definition; an unversioned side matches anything.
+pub(crate) fn versions_compatible(
+    a: Option<&semver::Version>,
+    b: Option<&semver::Version>,
+) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            a.major == b.major && (a.major != 0 || a.minor == b.minor) && a.pre == b.pre
+        }
+        _ => true,
     }
 }
 
@@ -481,6 +488,21 @@ mod tests {
             config: HashMap::new(),
             name: None,
         }
+    }
+
+    /// A manifest pinning a published version still matches a plugin that has
+    /// taken an additive bump, since wasmtime links the older import.
+    #[test]
+    fn same_package_accepts_a_semver_compatible_version() {
+        let plugin = create_interface_with_version("wasmcloud", "nats", &["kv"], "0.1.1");
+        let pinned = create_interface_with_version("wasmcloud", "nats", &["kv"], "0.1.0");
+        assert!(plugin.same_package(&pinned));
+        assert!(plugin.contains(&pinned));
+
+        let next_minor = create_interface_with_version("wasmcloud", "nats", &["kv"], "0.2.0");
+        assert!(!plugin.same_package(&next_minor));
+        let draft = create_interface_with_version("wasmcloud", "nats", &["kv"], "0.1.1-draft");
+        assert!(!plugin.same_package(&draft));
     }
 
     #[test]
