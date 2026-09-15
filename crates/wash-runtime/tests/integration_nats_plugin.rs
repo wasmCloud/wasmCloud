@@ -41,7 +41,7 @@ async fn expect_refused(host: &impl HostApi, request: WorkloadStartRequest) -> R
 
 /// A P3 guest exporting the JetStream and core handlers.
 const NATS_HANDLER_WASM: &[u8] = include_bytes!("wasm/nats_async_handler_p3.wasm");
-/// Imports `wasmcloud:nats/core@0.1.0` twice, under `hub` and `leaf`.
+/// Imports `wasmcloud:nats/core@0.1.1` twice, under `hub` and `leaf`.
 const NATS_BRIDGE_WASM: &[u8] = include_bytes!("wasm/nats_implements_p3.wasm");
 
 const STREAM: &str = "TESTS";

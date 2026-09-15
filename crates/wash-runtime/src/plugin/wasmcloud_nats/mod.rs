@@ -46,19 +46,19 @@ pub fn binding_schema() -> crate::plugin::BindingSchema {
 // `store.run_concurrent(..)` — see [`subscriber`].
 pub(super) mod jetstream_bindings {
     crate::wasmtime::component::bindgen!({
-        world: "wasmcloud:nats/js-processor@0.1.0",
+        world: "wasmcloud:nats/js-processor@0.1.1",
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
         with: {
-            "wasmcloud:nats/jetstream@0.1.0.message-handle": super::jetstream::MessageHandle,
-            "wasmcloud:nats/jetstream@0.1.0.pull-consumer": super::jetstream::PullConsumerHandle,
+            "wasmcloud:nats/jetstream@0.1.1.message-handle": super::jetstream::MessageHandle,
+            "wasmcloud:nats/jetstream@0.1.1.pull-consumer": super::jetstream::PullConsumerHandle,
         },
     });
 }
 
 pub(super) mod core_bindings {
     crate::wasmtime::component::bindgen!({
-        world: "wasmcloud:nats/subscriber@0.1.0",
+        world: "wasmcloud:nats/subscriber@0.1.1",
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
     });
@@ -66,11 +66,11 @@ pub(super) mod core_bindings {
 
 pub(super) mod kv_bindings {
     crate::wasmtime::component::bindgen!({
-        world: "wasmcloud:nats/kv-watcher@0.1.0",
+        world: "wasmcloud:nats/kv-watcher@0.1.1",
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
         with: {
-            "wasmcloud:nats/kv@0.1.0.bucket": super::jetstream::BucketHandle,
+            "wasmcloud:nats/kv@0.1.1.bucket": super::jetstream::BucketHandle,
         },
     });
 }
