@@ -871,8 +871,9 @@ impl ComponentGates {
                     requested = limit,
                     "two messaging components share one workload/component name but ask for \
                      different max_in_flight ceilings; converging to the last request as \
-                     permits drain. Replicas of one deployment share a gate, so this means \
-                     two distinct components collided on one name"
+                     permits drain. Replicas of one deployment share a gate, so this is \
+                     expected during a config rollout changing the ceiling, and otherwise \
+                     means two distinct components collided on one name"
                 );
             }
         }
