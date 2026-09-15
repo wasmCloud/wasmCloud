@@ -2959,7 +2959,14 @@ async fn run_http_server<T: Router>(
                                     let remote_context =
                                         opentelemetry::global::get_text_map_propagator(|propagator| propagator.extract(&extractor));
 
-                                    handle_http_request(handler, req, handles, service_handlers, guest_meter).with_context(remote_context).await
+                                    // Defer `#[instrument]` until the propagated parent is active.
+                                    async move {
+
+                                        handle_http_request(handler, req, handles, service_handlers, guest_meter).with_context(remote_context).await
+
+                                    }
+                                    .with_context(remote_context)
+                                    .await
                                 }
                             });
 
@@ -3106,6 +3113,11 @@ fn error_response(status: u16) -> hyper::Response<HyperOutgoingBody> {
 ///   collectors can break down requests by 2xx/4xx/5xx.
 /// - `otel.status_code` is set to `ERROR` for 5xx; 4xx stays UNSET per semconv.
 #[instrument(skip_all, fields(
+    // There are no path-based route templates, so the OTel HTTP server span
+    // name falls back to the request method. Keep the static tracing name for
+    // human-readable runtime logs while overriding the exported span name.
+    otel.name = %req.method(),
+    otel.kind = "server",
     // Legacy (pre-semconv) attribute names retained so dashboards built against
     // them keep resolving.
     http.method = %req.method(),
@@ -3210,13 +3222,8 @@ async fn handle_http_request<T: Router>(
 
     let response = match workload_handle {
         Some((handle, instance_pre, component_id, identity)) => {
-            let req_span = tracing::span!(
-                tracing::Level::INFO,
-                "invoke_component_handler",
-                workload.name = handle.name(),
-                workload.namespace = handle.namespace(),
-                workload.id = handle.id(),
-            );
+            let req_span =
+                component_handler_span(&method, handle.name(), handle.namespace(), handle.id());
             match invoke_component_handler(
                 handle,
                 instance_pre,
@@ -3252,6 +3259,21 @@ async fn handle_http_request<T: Router>(
     Ok(response)
 }
 
+fn component_handler_span(
+    method: &hyper::Method,
+    workload_name: &str,
+    workload_namespace: &str,
+    workload_id: &str,
+) -> tracing::Span {
+    tracing::info_span!(
+        "invoke_component_handler",
+        otel.name = %method,
+        workload.name = workload_name,
+        workload.namespace = workload_namespace,
+        workload.id = workload_id,
+    )
+}
+
 /// Record the response's status on the current span as the OTel HTTP semconv
 /// attribute `http.response.status_code`. 5xx flips `otel.status_code` to
 /// `ERROR` per the HTTP semconv (4xx is a client error and stays UNSET).
@@ -3275,6 +3297,7 @@ fn record_response_status<B>(response: &hyper::Response<B>) {
 fn outbound_client_span(method: &hyper::Method, uri: &hyper::Uri) -> tracing::Span {
     let span = tracing::info_span!(
         "outbound_http_request",
+        otel.name = %method,
         otel.kind = "client",
         { HTTP_REQUEST_METHOD } = %method,
         { URL_FULL } = %uri,
@@ -4049,14 +4072,69 @@ async fn send_grpc_request_p3_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use opentelemetry::trace::{SpanKind, TracerProvider as _};
+    use opentelemetry_sdk::{
+        error::OTelSdkResult,
+        trace::{SdkTracerProvider, SpanData, SpanExporter},
+    };
+    use std::sync::Mutex;
+    use tracing_subscriber::prelude::*;
     use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
     use wasmtime_wasi_http::p2::types::OutgoingRequestConfig;
+
+    #[derive(Clone, Debug, Default)]
+    struct RecordingSpanExporter {
+        spans: Arc<Mutex<Vec<SpanData>>>,
+    }
+
+    impl SpanExporter for RecordingSpanExporter {
+        fn export(
+            &self,
+            batch: Vec<SpanData>,
+        ) -> impl std::future::Future<Output = OTelSdkResult> + Send {
+            self.spans
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend(batch);
+            std::future::ready(Ok(()))
+        }
+    }
 
     fn build_request(uri: &str) -> hyper::Request<HyperOutgoingBody> {
         hyper::Request::builder()
             .uri(uri)
             .body(HyperOutgoingBody::default())
             .unwrap()
+    }
+
+    #[test]
+    fn component_handler_span_exports_method_name() {
+        let exporter = RecordingSpanExporter::default();
+        let spans = exporter.spans.clone();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter)
+            .build();
+        let tracer = provider.tracer("http-span-name-test");
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+
+        tracing::subscriber::with_default(subscriber, || {
+            let invocation =
+                component_handler_span(&hyper::Method::PATCH, "workload", "namespace", "id");
+            assert_eq!(
+                invocation.metadata().unwrap().name(),
+                "invoke_component_handler"
+            );
+            drop(invocation);
+        });
+
+        provider.force_flush().unwrap();
+        let spans = spans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(spans.len(), 1, "exported spans: {spans:#?}");
+        assert!(spans.iter().all(|span| span.name == "PATCH"));
+        assert_eq!(spans[0].span_kind, SpanKind::Internal);
     }
 
     /// `with_quotas` rebuilds an eagerly-configured client cache and must
