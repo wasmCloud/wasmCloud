@@ -13,5 +13,5 @@ package wasmcloud:nats-jetstream-replay;
 /// a replay from an arbitrary stream sequence without creating a consumer, the
 /// thing `wasmcloud:messaging` cannot express.
 world nats-jetstream-replay {
-  include wasmcloud:nats/js-processor@0.1.0;
+  include wasmcloud:nats/js-processor@0.1.1;
 }

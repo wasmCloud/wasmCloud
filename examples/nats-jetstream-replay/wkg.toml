@@ -3,4 +3,4 @@
 # then tracks the exact interface the host serves, and `wash wit fetch` works
 # from a fresh checkout with no network access to it.
 [overrides]
-"wasmcloud:nats" = { path = "../../crates/wash-runtime/wit/deps/wasmcloud-nats-0.1.0" }
+"wasmcloud:nats" = { path = "../../crates/wash-runtime/wit/deps/wasmcloud-nats-0.1.1" }
