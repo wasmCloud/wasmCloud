@@ -303,7 +303,7 @@ impl<'a> DerefMut for ActiveCtx<'a> {
 /// - wasi@0.2 interfaces
 /// - wasi:http@0.2 interfaces
 pub struct Ctx {
-    /// Unique identifier for this component context. This is a [uuid::Uuid::new_v4] string.
+    /// Unique identifier for this component context. This is a [uuid::Uuid::now_v7] string.
     pub id: Arc<str>,
     /// Unique identifier shared by all component contexts in the same store.
     pub store_id: Arc<str>,
@@ -572,8 +572,8 @@ pub struct CtxBuilder {
 impl CtxBuilder {
     pub fn new(workload_id: impl Into<Arc<str>>, component_id: impl Into<Arc<str>>) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string().into(),
-            store_id: uuid::Uuid::new_v4().to_string().into(),
+            id: uuid::Uuid::now_v7().to_string().into(),
+            store_id: uuid::Uuid::now_v7().to_string().into(),
             component_id: component_id.into(),
             workload_id: workload_id.into(),
             ctx: None,

@@ -88,7 +88,7 @@ pub struct Meters {
 /// scheme.
 ///
 /// Deliberately **not** the workload or component id: both are
-/// `uuid::Uuid::new_v4()` minted per workload construction, so attributing a
+/// `uuid::Uuid::now_v7()` minted per workload construction, so attributing a
 /// series with one mints a fresh series on every restart, rolling update and
 /// replica — growth driven by deployment churn, and a value no operator can map
 /// back to a workload. The ids keep their place on the span and the log line,
