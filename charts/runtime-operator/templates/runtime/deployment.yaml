@@ -337,7 +337,7 @@ spec:
                    this host's ingress serves are answered in-memory by the
                    co-located workload, bypassing the cluster network (and any
                    ingress middleware on it). Off unless explicitly enabled. */}}
-            {{- if .http.localRouting }}
+            {{- if .http.localBypassRouting }}
             - "--http-local-routing"
             {{- end }}
             {{- end }}

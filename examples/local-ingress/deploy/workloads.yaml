@@ -2,7 +2,7 @@
 #
 # Same-host routing takes two keys. The host operator turns the capability on
 # (`--http-local-routing`; chart value
-# `runtime.hostGroups[].http.localRouting`), and each workload declares what it
+# `runtime.hostGroups[].http.localBypassRouting`), and each workload declares what it
 # offers co-located callers via `localRoute` on its wasi:http/incoming-handler
 # interface. Neither alone routes anything, so neither the workload author nor
 # the operator can open that door by themselves.
@@ -49,7 +49,7 @@ spec:
             #
             # This is the workload half of a two-key opt-in: it does nothing
             # unless the host also runs with `--http-local-routing` (chart:
-            # `runtime.hostGroups[].http.localRouting`). The two scopes stay
+            # `runtime.hostGroups[].http.localBypassRouting`). The two scopes stay
             # separate — the public `host` above is never short-circuited for a
             # co-located caller, and this name is never reachable from the
             # network, so `functiona.internal` cannot be hit by anyone dialing

@@ -43,7 +43,7 @@ runtime:
         # co-located workload serves (`localRoute` config) are
         # served in-memory instead of leaving the pod. Renders
         # `--http-local-routing` on the host args.
-        localRouting: true
+        localBypassRouting: true
       # The in-cluster oci-registry workload (deploy/oci-registry.yaml) serves
       # plain HTTP, so hosts must be allowed to pull workload images from
       # non-TLS registries.

@@ -16,7 +16,7 @@ Same-host routing requires setting two pieces of configuration, and neither
 works alone:
 
 1. The **host operator** enables the capability — `--http-local-routing`, or
-   `runtime.hostGroups[].http.localRouting` in the chart.
+   `runtime.hostGroups[].http.localBypassRouting` in the chart.
 2. The **workload** declares what it offers co-located callers, with
    `localRoute` on its `wasi:http/incoming-handler` interface config.
 
@@ -138,7 +138,7 @@ runtime:
       http:
         enabled: true
         port: 9191
-        localRouting: true
+        localBypassRouting: true
 ```
 
 ```shell
@@ -187,7 +187,7 @@ helm upgrade --install traefik traefik/traefik \
 
 #### 3b. Build the host image from this working tree and load it
 
-`localRouting` renders `--http-local-routing`, and a host binary that predates
+`localBypassRouting` renders `--http-local-routing`, and a host binary that predates
 this feature exits on an argument it does not know. So the image has to be
 built from the tree that carries it, not pulled:
 
@@ -204,7 +204,7 @@ with `pull_policy: Never`, so the kind nodes use the image you just loaded.
 #### 3c. Install wasmCloud from this repository's chart
 
 From the repository root, and from the chart *in this tree* — a published chart
-release does not know the `http.localRouting` key yet, and Helm drops values a
+release does not know the `http.localBypassRouting` key yet, and Helm drops values a
 chart does not template, so installing one of those silently leaves local
 routing off:
 
@@ -335,7 +335,7 @@ $ curl -H 'Host: functiona.internal' http://localhost/hello
 `functiona.internal` — policy is checked before local routing, so a co-located
 callee can never widen a caller's egress.)
 
-To see the feature itself turned off, set `localRouting: false`, upgrade the
+To see the feature itself turned off, set `localBypassRouting: false`, upgrade the
 release, and the original curl reports `request failed` too.
 
 ## Required Capabilities
