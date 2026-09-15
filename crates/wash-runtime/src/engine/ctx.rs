@@ -707,8 +707,11 @@ mod tests {
     fn ctx_builder_generates_uuid_id() {
         setup();
         let ctx = Ctx::builder("wk", "comp").build();
-        // id should be a valid UUID v4 string
-        assert!(uuid::Uuid::parse_str(&ctx.id).is_ok());
+        // id and store_id should be valid UUID v7 strings
+        let id = uuid::Uuid::parse_str(&ctx.id).expect("id is a UUID");
+        let store_id = uuid::Uuid::parse_str(&ctx.store_id).expect("store_id is a UUID");
+        assert_eq!(id.get_version_num(), 7);
+        assert_eq!(store_id.get_version_num(), 7);
     }
 
     #[test]
