@@ -446,9 +446,8 @@ impl HostPlugin for NatsMessaging {
             // something a manifest author recognizes and selects the gate, so
             // replicas of this deployment on this host share one ceiling
             // rather than getting one apiece.
-            let workload_name = local_admission_group
-                .as_deref()
-                .or(interface_admission_group.as_deref())
+            let workload_name = super::parse_admission_group(local_admission_group.as_deref())
+                .or_else(|| super::parse_admission_group(interface_admission_group.as_deref()))
                 .unwrap_or_else(|| component_handle.stable_workload_name());
             let identity = super::AdmissionIdentity::new(
                 component_handle.workload_namespace(),

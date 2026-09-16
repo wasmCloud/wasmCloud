@@ -1534,10 +1534,19 @@ pub(crate) fn parse_subscriptions(raw: Option<&str>) -> Vec<String> {
     .unwrap_or_default()
 }
 
+/// Parses an [`ADMISSION_GROUP_CONFIG`] value into a trimmed, non-empty workload admission group name.
+///
+/// Returns `None` if the value is absent, empty, or whitespace-only, allowing callers to fall
+/// back to the component's stable workload name.
+pub(crate) fn parse_admission_group(raw: Option<&str>) -> Option<&str> {
+    raw.map(str::trim).filter(|s| !s.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        MsgError, declares_async_messaging, exports_messaging_handler, parse_subscriptions,
+        MsgError, declares_async_messaging, exports_messaging_handler, parse_admission_group,
+        parse_subscriptions,
     };
     use crate::plugin::WitInterfaces;
     use crate::wit::{WitInterface, WitWorld};
@@ -1667,6 +1676,18 @@ mod tests {
             vec!["tasks.leet".to_string(), "tasks.reverse".to_string()]
         );
         assert!(parse_subscriptions(None).is_empty());
+    }
+
+    #[test]
+    fn parses_admission_group() {
+        assert_eq!(parse_admission_group(Some("my-group")), Some("my-group"));
+        assert_eq!(
+            parse_admission_group(Some("  my-group  ")),
+            Some("my-group")
+        );
+        assert_eq!(parse_admission_group(Some("")), None);
+        assert_eq!(parse_admission_group(Some("   ")), None);
+        assert_eq!(parse_admission_group(None), None);
     }
 
     // --- Admission ceilings -------------------------------------------------
