@@ -215,6 +215,10 @@ impl CliCommand for DevCommand {
              `host-component-plugins` feature"
         );
 
+        // `localRoute` is accepted by the config schema but does nothing here.
+        // Checked anyway, so an entry a host would refuse fails in dev first.
+        check_local_routes(&dev_config.host_interfaces)?;
+
         let http_handler = wash_runtime::host::http::DevRouter::default();
 
         // Before the ceilings below, each of which is a share of the soft
@@ -519,6 +523,53 @@ struct LoadedService {
     bytes: Bytes,
     digest: Option<String>,
     interfaces: HashSet<WitInterface>,
+}
+
+/// Refuse `localRoute` entries a host would refuse, and warn that valid ones
+/// are not used.
+///
+/// `wash dev` has no route table and runs one component at a time, so it does
+/// not use `localRoute`. The key is still accepted so a project's
+/// `.wash/config.yaml` can carry the config it deploys with.
+fn check_local_routes(host_interfaces: &[WitInterface]) -> anyhow::Result<()> {
+    let (valid, invalid) = partition_local_routes(host_interfaces);
+    ensure!(
+        invalid.is_empty(),
+        "invalid `localRoute` entries {invalid:?}: expected `host` or `host/path` with a valid \
+         RFC 1123 hostname, and no scheme or port. A host refuses a workload declaring one"
+    );
+    if !valid.is_empty() {
+        warn!(
+            entries = valid.len(),
+            "`localRoute` is ignored by `wash dev`: local routing needs a hostname-routing host \
+             and a co-located second workload, and a dev session has neither. To exercise the \
+             same call locally, run the callee in its own `wash dev` on another port and point \
+             the caller at it over loopback"
+        );
+    }
+    Ok(())
+}
+
+/// Split the HTTP handler interface's `localRoute` config into the entries a
+/// host would register and the ones it would refuse.
+///
+/// Empty entries are skipped rather than reported: a trailing comma is
+/// punctuation, not a mistake worth warning about. Returns two empty vectors
+/// when no handler interface declares the key at all.
+fn partition_local_routes(host_interfaces: &[WitInterface]) -> (Vec<&str>, Vec<&str>) {
+    let Some(declared) = host_interfaces
+        .iter()
+        .find(|iface| iface.is_incoming_http_handler())
+        .and_then(|iface| iface.config.get("localRoute"))
+    else {
+        return (Vec::new(), Vec::new());
+    };
+
+    declared
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .partition(|entry| wash_runtime::host::http::parse_local_route(entry).is_some())
 }
 
 /// Thin wrapper around [`build_workload`]: extracts dev-component
@@ -862,6 +913,81 @@ mod tests {
             i.config.insert((*k).into(), (*v).into());
         }
         i
+    }
+
+    /// A `wasi:http` handler interface carrying the given config, the shape
+    /// `partition_local_routes` looks for.
+    fn http_handler_with_config(kvs: &[(&str, &str)]) -> WitInterface {
+        let mut i = iface_with_config("wasi", "http", kvs);
+        i.interfaces.insert("incoming-handler".to_string());
+        i
+    }
+
+    /// Both `localRoute` forms survive, and empty entries left by punctuation
+    /// are dropped rather than reported as mistakes.
+    #[test]
+    fn local_routes_partition_keeps_both_valid_forms() {
+        let ifaces = vec![http_handler_with_config(&[(
+            "localRoute",
+            "svc.internal, api.internal/v1 ,",
+        )])];
+        let (valid, invalid) = partition_local_routes(&ifaces);
+        assert_eq!(valid, vec!["svc.internal", "api.internal/v1"]);
+        assert!(
+            invalid.is_empty(),
+            "unexpected invalid entries: {invalid:?}"
+        );
+    }
+
+    /// The entries a host would refuse are the ones `wash dev` refuses too.
+    #[test]
+    fn local_routes_partition_reports_entries_a_host_would_refuse() {
+        let ifaces = vec![http_handler_with_config(&[(
+            "localRoute",
+            "http://svc.internal/x, svc.internal:8080, /hello, bad_host/hello, ok.internal",
+        )])];
+        let (valid, invalid) = partition_local_routes(&ifaces);
+        assert_eq!(valid, vec!["ok.internal"]);
+        assert_eq!(
+            invalid,
+            vec![
+                "http://svc.internal/x",
+                "svc.internal:8080",
+                "/hello",
+                "bad_host/hello"
+            ]
+        );
+    }
+
+    /// No handler interface, or one without the key, is the overwhelmingly
+    /// common case — it must stay silent.
+    #[test]
+    fn local_routes_partition_is_empty_without_the_key() {
+        assert_eq!(partition_local_routes(&[]), (vec![], vec![]));
+
+        let no_key = vec![http_handler_with_config(&[("host", "svc.example.com")])];
+        assert_eq!(partition_local_routes(&no_key), (vec![], vec![]));
+
+        // `localRoute` on a non-HTTP interface is not a handler declaration.
+        let wrong_iface = vec![iface_with_config(
+            "wasi",
+            "keyvalue",
+            &[("localRoute", "svc.internal")],
+        )];
+        assert_eq!(partition_local_routes(&wrong_iface), (vec![], vec![]));
+    }
+
+    /// The example's own callee config, so the check is exercised against a
+    /// string the docs tell people to write.
+    #[test]
+    fn the_shipped_example_local_route_parses() {
+        let ifaces = vec![http_handler_with_config(&[
+            ("host", "functiona.example.com"),
+            ("localRoute", "functiona.internal/hello"),
+        ])];
+        let (valid, invalid) = partition_local_routes(&ifaces);
+        assert_eq!(valid, vec!["functiona.internal/hello"]);
+        assert!(invalid.is_empty());
     }
 
     /// Like `iface`, but with one named interface set — introspection yields

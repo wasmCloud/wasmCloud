@@ -421,6 +421,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-local-caller-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "http-loopback-gateway"
 version = "0.0.0"
 dependencies = [

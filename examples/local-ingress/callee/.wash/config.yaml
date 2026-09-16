@@ -1,0 +1,10 @@
+version: 2.0.0
+
+build:
+  command: cargo build --target wasm32-wasip2 --release --locked
+  component_path: target/wasm32-wasip2/release/local_ingress_callee.wasm
+
+dev:
+  # The caller's dev session takes the default :8000; serve the callee on
+  # :8001 so both can run side by side.
+  address: 0.0.0.0:8001

@@ -41,7 +41,7 @@ async fn expect_refused(host: &impl HostApi, request: WorkloadStartRequest) -> R
 
 /// A P3 guest exporting the JetStream and core handlers.
 const NATS_HANDLER_WASM: &[u8] = include_bytes!("wasm/nats_async_handler_p3.wasm");
-/// Imports `wasmcloud:nats/core@0.1.0` twice, under `hub` and `leaf`.
+/// Imports `wasmcloud:nats/core@0.1.1` twice, under `hub` and `leaf`.
 const NATS_BRIDGE_WASM: &[u8] = include_bytes!("wasm/nats_implements_p3.wasm");
 
 const STREAM: &str = "TESTS";
@@ -139,7 +139,7 @@ fn nats_interface(config: &[(&str, &str)]) -> WitInterface {
         ]
         .into_iter()
         .collect(),
-        version: Some(semver::Version::new(0, 1, 0)),
+        version: Some(semver::Version::new(0, 1, 1)),
         config: config
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -164,7 +164,7 @@ fn nats_async_interface(config: &[(&str, &str)]) -> WitInterface {
         ]
         .into_iter()
         .collect(),
-        version: Some(semver::Version::new(0, 1, 0)),
+        version: Some(semver::Version::new(0, 1, 1)),
         config: config
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -1071,7 +1071,7 @@ fn named_nats_interface(name: &str, interfaces: &[&str], config: &[(&str, &str)]
         namespace: "wasmcloud".to_string(),
         package: "nats".to_string(),
         interfaces: interfaces.iter().map(|i| (*i).to_string()).collect(),
-        version: Some(semver::Version::new(0, 1, 0)),
+        version: Some(semver::Version::new(0, 1, 1)),
         config: config
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))

@@ -1,4 +1,4 @@
-//! # `wasmcloud:nats@0.1.0` host implementations
+//! # `wasmcloud:nats@0.1.1` host implementations
 //!
 //! Every function in the package is an `async func`, so this is the only
 //! implementation: a sync-signature function cannot be lifted with the async
@@ -51,17 +51,17 @@ mod labeled;
 
 pub(super) mod bindings {
     crate::wasmtime::component::bindgen!({
-        world: "wasmcloud:nats/imports@0.1.0",
+        world: "wasmcloud:nats/imports@0.1.1",
         imports: { default: async | trappable | tracing },
         named_imports: {
-            "wasmcloud:nats/core@0.1.0": super::NatsId,
-            "wasmcloud:nats/jetstream@0.1.0": super::NatsId,
-            "wasmcloud:nats/kv@0.1.0": super::NatsId,
+            "wasmcloud:nats/core@0.1.1": super::NatsId,
+            "wasmcloud:nats/jetstream@0.1.1": super::NatsId,
+            "wasmcloud:nats/kv@0.1.1": super::NatsId,
         },
         with: {
-            "wasmcloud:nats/jetstream@0.1.0.message-handle": super::super::jetstream::MessageHandle,
-            "wasmcloud:nats/jetstream@0.1.0.pull-consumer": super::super::jetstream::PullConsumerHandle,
-            "wasmcloud:nats/kv@0.1.0.bucket": super::super::jetstream::BucketHandle,
+            "wasmcloud:nats/jetstream@0.1.1.message-handle": super::super::jetstream::MessageHandle,
+            "wasmcloud:nats/jetstream@0.1.1.pull-consumer": super::super::jetstream::PullConsumerHandle,
+            "wasmcloud:nats/kv@0.1.1.bucket": super::super::jetstream::BucketHandle,
         },
     });
 }

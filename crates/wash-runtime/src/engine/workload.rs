@@ -353,7 +353,7 @@ impl WorkloadService {
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
-                id: uuid::Uuid::new_v4().to_string().into(),
+                id: uuid::Uuid::now_v7().to_string().into(),
                 workload_id: workload_id.into(),
                 workload_name: workload_name.into(),
                 workload_namespace: workload_namespace.into(),
@@ -449,7 +449,7 @@ impl WorkloadComponent {
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
-                id: uuid::Uuid::new_v4().to_string().into(),
+                id: uuid::Uuid::now_v7().to_string().into(),
                 workload_id: workload_id.into(),
                 workload_name: workload_name.into(),
                 workload_namespace: workload_namespace.into(),
@@ -595,7 +595,7 @@ impl DerefMut for WorkloadService {
 /// state of a workload before execution.
 #[derive(Clone)]
 pub struct ResolvedWorkload {
-    /// The unique identifier of the workload, created with [uuid::Uuid::new_v4]
+    /// The unique identifier of the workload, supplied by whoever starts it
     id: Arc<str>,
     /// The name of the workload
     name: Arc<str>,
@@ -915,11 +915,11 @@ impl ResolvedWorkload {
         // which workload's service a restart decision is about.
         let workload_name: Arc<str> = self.name.clone();
         let workload_namespace: Arc<str> = self.namespace.clone();
-        // The hostnames this service serves HTTP on, derived once from the
+        // The ingress routes this service serves HTTP on, derived once from the
         // workload's declared interfaces. Passed to every HTTP registration
         // (the first below and each restart re-registration in the supervisor)
         // so a hostname-keyed router can resolve requests to this service.
-        let ingress_hostnames = crate::host::http::http_ingress_hostnames(self.host_interfaces());
+        let ingress_routes = crate::host::http::http_ingress_routes(self.host_interfaces())?;
 
         // Build the first incarnation's host-invoked ingresses. Each paired sender
         // is registered with its host-side ingress (the HTTP server, the messaging
@@ -943,7 +943,7 @@ impl ResolvedWorkload {
             build_trigger_ingresses(serves_http, serves_messaging, &service_calls);
         if let Some(http_tx) = http_tx {
             self.http_handler()?
-                .on_service_http_resolved(self.id(), &ingress_hostnames, http_tx)
+                .on_service_http_resolved(self.id(), &ingress_routes, http_tx)
                 .await
                 .map_err(|e| anyhow::anyhow!("failed to register service HTTP handler: {e:#}"))?;
         }
@@ -989,7 +989,7 @@ impl ResolvedWorkload {
                                 && let Err(e) = http_handler
                                     .on_service_http_resolved(
                                         &workload_id,
-                                        &ingress_hostnames,
+                                        &ingress_routes,
                                         http_tx,
                                     )
                                     .await
@@ -2402,7 +2402,7 @@ impl ResolvedWorkload {
 /// - Validate that all dependencies can be satisfied
 /// - Create the final executable workload representation
 pub struct UnresolvedWorkload {
-    /// The unique identifier of the workload, created with [uuid::Uuid::new_v4]
+    /// The unique identifier of the workload, supplied by whoever starts it
     id: Arc<str>,
     /// The name of the workload
     name: Arc<str>,
