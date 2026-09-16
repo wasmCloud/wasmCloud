@@ -533,31 +533,29 @@ pub struct HostPluginConfig {
     /// against the same top-level `configs:`/`secrets:` catalogs.
     #[serde(flatten)]
     pub environment: EnvironmentLayer,
-    /// Hosts this plugin's own `wasi:http/outgoing-handler` calls may reach.
-    /// Unlike a workload's `allowedHosts`, an omitted list denies every
-    /// outbound host by default — a host component plugin is
-    /// operator-controlled, more privileged than a workload, and gets no
-    /// ergonomic allow-all default.
+    /// Hosts this plugin may reach. Component plugins are gated at their WASI
+    /// sockets and HTTP interfaces. Native plugins must enforce this against
+    /// their client endpoints or fail host startup. Empty denies all.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_hosts: Vec<AllowedHost>,
-    /// Names this plugin's own `wasi:sockets/ip-name-lookup` calls may
-    /// resolve. An omitted or empty list denies every lookup.
+    /// Names this plugin may resolve. Empty denies every lookup.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_ip_name_lookups: Vec<AllowedIpName>,
+    /// Ports on the machine's loopback this plugin may reach. Component
+    /// plugins use raw `wasi:sockets` with `host.wasmcloud.internal`;
+    /// `wasi:http` does not resolve that sentinel. Native clients check their
+    /// loopback endpoint directly. The host-wide gate must also be enabled.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_host_loopback_ports: Vec<AllowedLoopbackPort>,
     /// Ports this plugin listens on. An omitted or empty list means it binds
     /// nothing reachable, which is what every plugin got before ports existed.
     ///
     /// Each entry needs a `name` and the `port` the plugin's own code binds.
-    /// Optional: `protocol` (TCP or UDP, default TCP) and exactly one of
-    ///
-    ///   publish   real port the host binds, splicing accepted connections
-    ///             into the plugin's private virtual loopback. The plugin
-    ///             binds `127.0.0.1:<port>` and needs no change.
-    ///   bind      concrete address the plugin binds itself, skipping the
-    ///             splice. Rejected if unspecified (`0.0.0.0`) or loopback.
-    ///
-    /// Neither declares the port without exposing it. Requires the host to be
-    /// started with `--publish-ports`.
+    /// Optional: `protocol` (TCP or UDP, default TCP) and `bind`, a concrete
+    /// address the plugin binds itself. Unspecified (`0.0.0.0`) and loopback
+    /// addresses are rejected. Omitting `bind` declares the port without
+    /// exposing it. `publish` is rejected until host-component splicing is
+    /// implemented.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<wash_runtime::host::declared_port::DeclaredPort>,
 }
@@ -613,10 +611,11 @@ impl HostPluginConfig {
     /// Refuse fields that only mean something for a plugin this host loads.
     ///
     /// A native entry configures a plugin the host already has: there is no
-    /// driver to restart, no image to pull or pin, no sandbox to grant egress
-    /// to, and no listener to publish. Accepting them silently is the same
-    /// failure `hostPlugins` without a source has — a line an operator wrote
-    /// deliberately that does nothing, and reads as if it did.
+    /// driver to restart, no image to pull or pin, and no listener to publish.
+    /// Its egress lists are not among these — a native plugin enforces them
+    /// itself, against the endpoints it dials. Accepting a field that means
+    /// nothing is the same failure `hostPlugins` without a source has — a line
+    /// an operator wrote deliberately that does nothing, and reads as if it did.
     ///
     /// # Errors
     ///
@@ -634,12 +633,6 @@ impl HostPluginConfig {
         }
         if self.source.pull_policy.is_some() {
             set.push("pullPolicy");
-        }
-        if !self.allowed_hosts.is_empty() {
-            set.push("allowedHosts");
-        }
-        if !self.allowed_ip_name_lookups.is_empty() {
-            set.push("allowedIpNameLookups");
         }
         if !self.ports.is_empty() {
             set.push("ports");
@@ -695,6 +688,20 @@ impl HostPluginConfig {
             .with_base(resolve(&self.environment, &owner)?)
             .with_host_owned_keys(&self.host_owned_keys)
             .with_workload_config(self.workload_config.unwrap_or(default_policy).into());
+        // Declared only when the operator wrote one of the lists. An entry that
+        // sets none of them is configuring bindings, not a network ceiling, and
+        // declaring an empty policy for it would deny that plugin every
+        // endpoint it has been reaching.
+        if !self.allowed_hosts.is_empty()
+            || !self.allowed_ip_name_lookups.is_empty()
+            || !self.allowed_host_loopback_ports.is_empty()
+        {
+            set = set.with_egress_policy(
+                self.allowed_hosts.clone().into(),
+                self.allowed_ip_name_lookups.clone().into(),
+                self.allowed_host_loopback_ports.clone().into(),
+            );
+        }
         for (name, binding) in &self.bindings {
             if name.is_empty() {
                 bail!(
@@ -732,7 +739,7 @@ impl HostPluginConfig {
         let what = format!("host.plugins '{}'", self.id);
         // Catch a bad port declaration here, where the error can name the
         // config entry, rather than at plugin start.
-        wash_runtime::host::declared_port::validate_ports(&self.ports, &what)?;
+        wash_runtime::host::declared_port::validate_plugin_ports(&self.ports, &what)?;
         Ok(wash_runtime::plugin::ComponentPluginSpec {
             id: self.id.clone(),
             source: self.source.to_source(&what)?,
@@ -741,6 +748,7 @@ impl HostPluginConfig {
             config: self.environment.config.clone(),
             allowed_hosts: self.allowed_hosts.clone().into(),
             allowed_ip_name_lookups: self.allowed_ip_name_lookups.clone().into(),
+            allowed_host_loopback_ports: self.allowed_host_loopback_ports.clone().into(),
             ports: self.ports.clone().into(),
         })
     }
@@ -2435,6 +2443,7 @@ dev:
     - id: acme-kv
       file: ./build/kv_plugin.wasm
       maxRestarts: 3
+      allowedHostLoopbackPorts: [9000]
     - id: acme-widgets
       image: ghcr.io/acme/widgets:1.2.0
       pullPolicy: ifNotPresent
@@ -2450,6 +2459,10 @@ dev:
             ComponentSource::File("./build/kv_plugin.wasm".into())
         );
         assert_eq!(kv.max_restarts, Some(3));
+        assert_eq!(
+            &*kv.allowed_host_loopback_ports,
+            &[AllowedLoopbackPort::tcp(9000)]
+        );
 
         let widgets = dev.host_plugins[1].to_spec_unresolved().unwrap();
         assert_eq!(
@@ -2602,8 +2615,7 @@ dev:
         );
     }
 
-    /// A native entry configures a plugin the host already has, so the fields
-    /// that only mean something for one it loads are a mistake worth naming.
+    /// A native entry may declare egress, but not component lifecycle fields.
     #[test]
     fn a_native_entry_refuses_component_only_fields() {
         let yaml = r#"
@@ -2612,6 +2624,7 @@ host:
     - id: wasmcloud-nats
       maxRestarts: 3
       allowedHosts: ["nats.internal"]
+      allowedHostLoopbackPorts: [4222]
 "#;
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
         let err = config
@@ -2620,7 +2633,61 @@ host:
             .expect_err("component-only fields on a native entry must be refused")
             .to_string();
         assert!(err.contains("`maxRestarts`"), "got: {err}");
-        assert!(err.contains("`allowedHosts`"), "got: {err}");
+
+        let yaml = r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+      allowedHosts: ["nats://nats.internal:4222"]
+      allowedIpNameLookups: ["nats.internal"]
+      allowedHostLoopbackPorts: [4222]
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let bindings = config
+            .host()
+            .to_plugin_bindings(&config, Path::new("."), None)
+            .expect("native egress policy is valid");
+        let policy = bindings
+            .for_plugin("wasmcloud-nats")
+            .egress_policy(&wash_runtime::sockets::policy::SocketPolicy {
+                host_loopback_enabled: true,
+                ..Default::default()
+            })
+            .expect("egress policy is retained");
+        policy
+            .check_url(
+                "nats://nats.internal:4222",
+                wash_runtime::host::declared_port::Protocol::Tcp,
+                4222,
+            )
+            .unwrap();
+
+        // An entry that names no list declares no ceiling, so the plugin stays
+        // unmanaged. Declaring an empty one instead would be deny-all, and
+        // would cut off every plugin an operator configured for some other
+        // reason — a binding, a `workloadConfig` — the moment they upgraded.
+        let yaml = r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+      workloadConfig: allow
+      bindings:
+        primary:
+          config:
+            servers: nats://127.0.0.1:4222
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let bindings = config
+            .host()
+            .to_plugin_bindings(&config, Path::new("."), None)
+            .expect("an entry with no egress list is valid");
+        assert!(
+            bindings
+                .for_plugin("wasmcloud-nats")
+                .egress_policy(&wash_runtime::sockets::policy::SocketPolicy::default())
+                .is_none(),
+            "an entry with no egress list must not declare a ceiling"
+        );
 
         // The same fields are fine once the entry names a source.
         let yaml = r#"
@@ -2630,12 +2697,37 @@ host:
       image: ghcr.io/wasmcloud/plugins/secrets:0.1.0
       maxRestarts: 3
       allowedHosts: ["vault.internal"]
+      allowedHostLoopbackPorts: [8200]
 "#;
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
         config
             .host()
             .to_plugin_bindings(&config, Path::new("."), None)
             .expect("a component entry may set them");
+    }
+
+    #[test]
+    fn figment_loads_integer_loopback_ports() {
+        let dir = tempfile::tempdir().unwrap();
+        let wash_dir = dir.path().join(CONFIG_DIR_NAME);
+        std::fs::create_dir(&wash_dir).unwrap();
+        std::fs::write(
+            wash_dir.join("config.yaml"),
+            r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+      allowedHostLoopbackPorts: [5432, 53/udp]
+"#,
+        )
+        .unwrap();
+
+        let loaded = load_config::<Config>(&dir.path().join("global.yaml"), Some(dir.path()), None)
+            .expect("Figment accepts integer loopback ports");
+        assert_eq!(
+            loaded.host().plugins[0].allowed_host_loopback_ports,
+            [AllowedLoopbackPort::tcp(5432), AllowedLoopbackPort::udp(53)]
+        );
     }
 
     /// A binding under an empty name is refused: the unnamed binding is
@@ -2882,7 +2974,7 @@ host:
         // `host.hostPlugins` mirrors `dev.host_plugins`'s shape but adds
         // `config`/`configFrom`/`secretFrom` (this plugin's own bind-time
         // config, resolved the same way `workload.environment` is) and
-        // `allowedHosts`/`allowedIpNameLookups`.
+        // `allowedHosts`/`allowedIpNameLookups`/`allowedHostLoopbackPorts`.
         let yaml = r#"
 configs:
   etcd-connection-settings:
@@ -2900,6 +2992,13 @@ host:
         - https://etcd.internal:2379
       allowedIpNameLookups:
         - etcd.internal
+      allowedHostLoopbackPorts:
+        - 2379
+        - 53/udp
+      ports:
+        - name: metrics
+          port: 9100
+          bind: 192.0.2.10
       config:
         literal-key: literal-value
       configFrom:
@@ -2914,6 +3013,10 @@ host:
         assert_eq!(hp.id, "etcd-secrets");
         assert_eq!(hp.allowed_hosts.len(), 1);
         assert_eq!(hp.allowed_ip_name_lookups.len(), 1);
+        assert_eq!(
+            hp.allowed_host_loopback_ports,
+            vec![AllowedLoopbackPort::tcp(2379), AllowedLoopbackPort::udp(53)]
+        );
 
         let spec = hp
             .to_spec(&config, Path::new("."), None)
@@ -2925,6 +3028,12 @@ host:
         );
         assert_eq!(spec.allowed_hosts.len(), 1);
         assert_eq!(spec.allowed_ip_name_lookups.len(), 1);
+        assert_eq!(
+            &*spec.allowed_host_loopback_ports,
+            &[AllowedLoopbackPort::tcp(2379), AllowedLoopbackPort::udp(53)]
+        );
+        assert_eq!(spec.ports.len(), 1);
+        assert_eq!(spec.ports[0].name, "metrics");
         // inline < configFrom < secretFrom precedence, all three present.
         assert_eq!(spec.config.get("literal-key").unwrap(), "literal-value");
         assert_eq!(
@@ -2947,6 +3056,22 @@ host:
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
         let hp = &config.host().host_plugins[0];
         assert!(hp.to_spec(&config, Path::new("."), None).is_err());
+    }
+
+    #[test]
+    fn host_plugin_rejects_a_broad_loopback_grant() {
+        let yaml = r#"
+host:
+  plugins:
+    - id: postgres
+      image: ghcr.io/example/postgres:1.0.0
+      allowedHostLoopbackPorts:
+        - 5000-6000
+"#;
+        let err = serde_yaml_ng::from_str::<Config>(yaml)
+            .expect_err("loopback port ranges must be rejected")
+            .to_string();
+        assert!(err.contains("range"), "got: {err}");
     }
 
     #[test]
