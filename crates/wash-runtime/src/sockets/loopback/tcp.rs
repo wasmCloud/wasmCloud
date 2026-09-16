@@ -255,6 +255,21 @@ impl TcpSocket {
         }
     }
 
+    pub fn cancel_connect(&mut self, loopback: &mut Network) {
+        let TcpState::Connecting { local_address, .. } =
+            mem::replace(&mut self.state, TcpState::Closed)
+        else {
+            return;
+        };
+        let Some(port) = NonZeroU16::new(local_address.port()) else {
+            return;
+        };
+        let net = loopback.get_tcp_net_mut(local_address.ip());
+        if matches!(net.get(&port), Some(TcpEndpoint::Bound)) {
+            net.remove(&port);
+        }
+    }
+
     pub fn start_listen(&mut self, loopback: &mut Network) -> Result<(), ErrorCode> {
         let TcpState::Bound(addr) = self.state else {
             return Err(ErrorCode::InvalidState);

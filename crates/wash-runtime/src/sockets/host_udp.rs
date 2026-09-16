@@ -74,7 +74,6 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
         let check = self.table.get(&network)?.socket_addr_check.clone();
         let allowed = check
             .check(local_address, SocketAddrUse::UdpBind)
-            .await
             .map_err(super::network::socket_error_from_util)?;
         let local_address = allowed.addr;
 
@@ -139,7 +138,6 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
             };
             let allowed = check
                 .check(connect_addr, SocketAddrUse::UdpConnect)
-                .await
                 .map_err(super::network::socket_error_from_util)?;
             connect_plane = Some(allowed.plane);
             let connect_addr = allowed.addr;
@@ -179,6 +177,7 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
                     inner: socket.socket().clone(),
                     remote_address,
                     egress_peers: socket.egress_peers(),
+                    socket_addr_check: socket.socket_addr_check().cloned(),
                 }),
                 OutgoingDatagramStream::Network(super::p2_udp::NetworkOutgoingDatagramStream {
                     inner: socket.socket().clone(),
@@ -210,6 +209,7 @@ impl udp::HostUdpSocket for WasiSocketsCtxView<'_> {
                             inner: net.socket().clone(),
                             remote_address,
                             egress_peers: net.egress_peers(),
+                            socket_addr_check: net.socket_addr_check().cloned(),
                         },
                     },
                     OutgoingDatagramStream::Unspecified {
@@ -396,6 +396,14 @@ impl udp::HostIncomingDatagramStream for WasiSocketsCtxView<'_> {
                 return Ok(None);
             }
 
+            if stream.socket_addr_check.as_ref().is_some_and(|check| {
+                check
+                    .check(received_addr, SocketAddrUse::UdpReceive)
+                    .is_err()
+            }) {
+                return Ok(None);
+            }
+
             Ok(Some(udp::IncomingDatagram {
                 data: buf.get(..size).unwrap_or_default().into(),
                 remote_address: socket_addr_to_ip_socket_address(received_addr),
@@ -536,7 +544,7 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
         Ok(count)
     }
 
-    async fn send(
+    fn send(
         &mut self,
         this: Resource<udp::OutgoingDatagramStream>,
         datagrams: Vec<udp::OutgoingDatagram>,
@@ -550,7 +558,7 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
         /// internal-zone sentinel resolves here, so the caller must send to
         /// what this returns. `None` for the plane means the socket is
         /// connected and the decision was made at connect time.
-        async fn prepare_one(
+        fn prepare_one(
             remote_address: Option<SocketAddr>,
             family: SocketAddressFamily,
             socket_addr_check: Option<&super::SocketAddrCheck>,
@@ -570,7 +578,6 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
                     };
                     let allowed = check
                         .check(addr, SocketAddrUse::UdpOutgoingDatagram)
-                        .await
                         .map_err(super::network::socket_error_from_util)?;
                     (allowed.addr, Some(allowed.plane))
                 }
@@ -614,7 +621,7 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
             Ok(())
         }
 
-        async fn send_one_lo(
+        fn send_one_lo(
             stream: &mut super::p2_udp::LoopbackOutgoingDatagramStream,
             datagram: udp::OutgoingDatagram,
             loopback: &std::sync::Mutex<super::loopback::Network>,
@@ -624,8 +631,7 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
                 stream.family,
                 stream.socket_addr_check.as_ref(),
                 &datagram,
-            )
-            .await?;
+            )?;
             let Some(mut permit) = stream.permit.take() else {
                 return Err(SocketError::trap(wasmtime::format_err!(
                     "unpermitted: must call check-send first"
@@ -674,7 +680,7 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
                         )));
                     }
                 };
-                send_one_lo(stream, datagram, &self.ctx.loopback).await?;
+                send_one_lo(stream, datagram, &self.ctx.loopback)?;
                 return Ok(1);
             }
             OutgoingDatagramStream::Unspecified { lo, net } => {
@@ -707,8 +713,7 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
                 stream.family,
                 stream.socket_addr_check.as_ref(),
                 &datagram,
-            )
-            .await?;
+            )?;
 
             // The policy says which network carries this datagram. The address
             // cannot: a sentinel resolved to the machine's own loopback looks
@@ -720,7 +725,7 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
                 None => addr.ip().to_canonical().is_loopback(),
             };
             if virtual_plane && let Some(stream) = lo.as_mut() {
-                send_one_lo(stream, datagram, &self.ctx.loopback).await?;
+                send_one_lo(stream, datagram, &self.ctx.loopback)?;
                 count += 1;
                 continue;
             }
@@ -751,7 +756,7 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
         wasmtime_wasi_io::poll::subscribe(self.table, this)
     }
 
-    fn drop(&mut self, this: Resource<udp::OutgoingDatagramStream>) -> wasmtime::Result<()> {
+    async fn drop(&mut self, this: Resource<udp::OutgoingDatagramStream>) -> wasmtime::Result<()> {
         let this = rebind_outgoing_own(this);
         // As in the filesystem implementation, we assume closing a socket
         // doesn't block.

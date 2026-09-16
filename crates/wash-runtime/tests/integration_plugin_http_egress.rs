@@ -5,7 +5,7 @@
 //! `wasi:http/outgoing-handler` links into a plugin's store unconditionally
 //! once the plugin imports it; without an `allowed_hosts` policy and a real
 //! HTTP handler on the plugin's own store, every outgoing call would simply
-//! trap ("http client not available"). `http-egress-plugin` exports a bespoke
+//! fail ("http client not available"). `http-egress-plugin` exports a bespoke
 //! `acme:httpegress/fetch` capability that makes one outgoing GET and reports
 //! the *policy* outcome (not the upstream's own status) as a string, driven
 //! end to end over HTTP through the `http-egress-plugin-caller` workload.
@@ -21,14 +21,10 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Empty};
 use tokio::time::timeout;
-use wasmtime_wasi_http::p2::{
-    HttpResult,
-    body::{HyperIncomingBody, HyperOutgoingBody},
-    types::{HostFutureIncomingResponse, IncomingResponse, OutgoingRequestConfig},
-};
+use wasmtime_wasi_http::{RequestOptions, WasiBody};
 
 use wash_runtime::engine::Engine;
-use wash_runtime::host::http::{DevRouter, Ingress, OutgoingHandler};
+use wash_runtime::host::http::{DevRouter, Ingress, OutgoingHandler, RequestIoFuture, SendFuture};
 use wash_runtime::host::{HostApi, HostBuilder};
 use wash_runtime::plugin::component_host::ComponentHostPlugin;
 use wash_runtime::types::LocalResources;
@@ -52,36 +48,23 @@ impl OutgoingHandler for FakeOutgoingHandler {
     fn send_request(
         &self,
         _workload_id: &str,
-        request: hyper::Request<HyperOutgoingBody>,
-        _config: OutgoingRequestConfig,
-    ) -> HttpResult<HostFutureIncomingResponse> {
-        let handle = wasmtime_wasi::runtime::spawn(async move {
+        request: hyper::Request<WasiBody>,
+        _options: Option<RequestOptions>,
+        _fut: RequestIoFuture,
+    ) -> SendFuture {
+        Box::new(async move {
             let (_parts, body) = request.into_parts();
             let _ = body.collect().await;
-            let body: HyperIncomingBody = Empty::<Bytes>::new()
+            let body: WasiBody = Empty::<Bytes>::new()
                 .map_err(|never| match never {})
                 .boxed_unsync();
             let resp = hyper::Response::builder()
                 .status(hyper::StatusCode::OK)
                 .body(body)
                 .expect("static response is well-formed");
-            Ok(Ok(IncomingResponse {
-                resp,
-                worker: None,
-                between_bytes_timeout: Duration::from_secs(1),
-            }))
-        });
-        Ok(HostFutureIncomingResponse::pending(handle))
-    }
-
-    fn send_request_p3(
-        &self,
-        _workload_id: &str,
-        _request: hyper::Request<wash_runtime::host::http_p3::P3Body>,
-        _options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-        _fut: wash_runtime::host::http_p3::P3RequestErrorFuture,
-    ) -> wash_runtime::host::http_p3::P3SendFuture {
-        unimplemented!("this test only drives the plugin's p2 outgoing-handler import")
+            let io: RequestIoFuture = Box::new(async { Ok(()) });
+            Ok((resp, io))
+        })
     }
 }
 
@@ -126,7 +109,7 @@ async fn start_host_with_egress_plugin(
         .with_engine(engine.clone())
         .with_http_handler(Arc::new(ingress));
     let native_plugins = builder.native_plugins();
-    let http_handler = builder.http_handler();
+    let host_ref = builder.host_ref();
 
     let plugin = ComponentHostPlugin::builder()
         .id(PLUGIN_ID)
@@ -134,7 +117,7 @@ async fn start_host_with_egress_plugin(
         .engine(engine)
         .native_plugins(native_plugins)
         .allowed_hosts(allowed_hosts.into())
-        .maybe_http_handler(http_handler.as_ref().map(Arc::downgrade))
+        .maybe_http_handler(Some(host_ref))
         .build()
         .await
         .context("http-egress-plugin should link cleanly")?;

@@ -105,6 +105,33 @@ type BoundPluginWithInterfaces = (
     Vec<String>,
 );
 
+fn plugin_bound_instance_names(interface: &WitInterface) -> Vec<String> {
+    if let Some(name) = &interface.name {
+        return vec![name.clone()];
+    }
+    if interface.interfaces.is_empty() {
+        return vec![interface.instance()];
+    }
+    interface
+        .interfaces
+        .iter()
+        .map(|name| {
+            let base = format!("{}:{}/{name}", interface.namespace, interface.package);
+            match &interface.version {
+                Some(version) => format!("{base}@{version}"),
+                None => base,
+            }
+        })
+        .collect()
+}
+
+fn should_link_component_import(
+    import_name: &str,
+    plugin_bound_instances: &HashSet<String>,
+) -> bool {
+    !plugin_bound_instances.contains(import_name)
+}
+
 /// Metadata associated with components and services within a workload.
 #[derive(Clone)]
 pub struct WorkloadMetadata {
@@ -145,6 +172,8 @@ pub struct WorkloadMetadata {
     linked_components: HashSet<Arc<str>>,
     /// Workload annotations
     pub(crate) annotations: Arc<HashMap<String, String>>,
+    /// Top-level imports already supplied by host plugins.
+    plugin_bound_instances: HashSet<String>,
 }
 
 /// Kubernetes annotation set by the runtime-operator for the parent WorkloadDeployment.
@@ -409,6 +438,7 @@ impl WorkloadService {
                 guest_memory: Arc::default(),
                 linked_components: Default::default(),
                 annotations: Arc::default(),
+                plugin_bound_instances: Default::default(),
             },
             handle: None,
             max_restarts,
@@ -515,6 +545,7 @@ impl WorkloadComponent {
                 guest_memory: Arc::default(),
                 linked_components: Default::default(),
                 annotations: Arc::default(),
+                plugin_bound_instances: Default::default(),
             },
             name: component_name.into(),
             instances: Arc::new(InstancePool::new(instances)),
@@ -668,7 +699,7 @@ pub struct ResolvedWorkload {
     /// The HTTP handler for outgoing HTTP requests. See
     /// [`crate::host::http::live_handler`] for why this is weak and how the
     /// two kinds of caller differ.
-    http_handler: std::sync::Weak<dyn crate::host::http::HostHandler>,
+    http_handler: crate::host::HostRef,
     /// The meter of the host running this workload, stamped onto every store
     /// built for it. Reaches the engine the same way `http_handler` does,
     /// because a store has no other way back to the host that owns it.
@@ -722,7 +753,7 @@ struct ServiceStoreRecipe {
     engine: wasmtime::Engine,
     /// Weak, like the workload's own; the supervisor holds this recipe for as
     /// long as the service runs.
-    http_handler: std::sync::Weak<dyn crate::host::http::HostHandler>,
+    http_handler: crate::host::HostRef,
     active_template: ComponentCtxTemplate,
     linked_templates: Vec<ComponentCtxTemplate>,
     linked_instances: Vec<(Arc<str>, wasmtime::component::InstancePre<SharedCtx>)>,
@@ -1036,7 +1067,7 @@ impl ResolvedWorkload {
                         // handler to re-register them with. One the host merely
                         // dispatches to has none, and restarts either way.
                         if needs_handler {
-                            let Some(http_handler) = http_handler.upgrade() else {
+                            let Some(http_handler) = http_handler.handler() else {
                                 error!(
                                     workload.id = %workload_id,
                                     workload.namespace = %workload_namespace,
@@ -1316,10 +1347,16 @@ impl ResolvedWorkload {
             };
 
             let component = workload_component.metadata.component.clone();
+            let plugin_bound_instances = workload_component.metadata.plugin_bound_instances.clone();
             let linker = &mut workload_component.metadata.linker;
 
             let res = match self
-                .resolve_component_imports(&component, linker, interface_map)
+                .resolve_component_imports(
+                    &component,
+                    linker,
+                    interface_map,
+                    &plugin_bound_instances,
+                )
                 .await
             {
                 Ok(direct_links) => {
@@ -1344,10 +1381,16 @@ impl ResolvedWorkload {
 
         if let Some(mut service) = self.service.take() {
             let component = service.metadata.component.clone();
+            let plugin_bound_instances = service.metadata.plugin_bound_instances.clone();
             let linker = &mut service.metadata.linker;
 
             let res = match self
-                .resolve_component_imports(&component, linker, interface_map)
+                .resolve_component_imports(
+                    &component,
+                    linker,
+                    interface_map,
+                    &plugin_bound_instances,
+                )
                 .await
             {
                 Ok(direct_links) => {
@@ -1372,6 +1415,7 @@ impl ResolvedWorkload {
         component: &wasmtime::component::Component,
         linker: &mut Linker<SharedCtx>,
         interface_map: &HashMap<String, Arc<str>>,
+        plugin_bound_instances: &HashSet<String>,
     ) -> anyhow::Result<HashSet<Arc<str>>> {
         let mut linked_components = HashSet::new();
         let ty = component.component_type();
@@ -1390,6 +1434,13 @@ impl ResolvedWorkload {
             match import_item.ty {
                 ComponentItem::ComponentInstance(import_instance_ty) => {
                     trace!(name = import_name, "processing component instance import");
+                    if !should_link_component_import(import_name, plugin_bound_instances) {
+                        trace!(
+                            name = import_name,
+                            "host plugin already bound import, skipping"
+                        );
+                        continue;
+                    }
                     let mut all_components = self.components.write().await;
                     let (
                         plugin_component,
@@ -1680,7 +1731,7 @@ impl ResolvedWorkload {
     /// host is gone — a message still deliverable to a component of its own,
     /// say. No error is built for an answer the caller only branches on.
     pub fn try_http_handler(&self) -> Option<Arc<dyn crate::host::http::HostHandler>> {
-        self.http_handler.upgrade()
+        self.http_handler.handler()
     }
 
     /// Gets the name of the workload
@@ -2380,7 +2431,7 @@ impl ResolvedWorkload {
             // A handler that is already gone has nothing left to unbind from,
             // so teardown treats that as done rather than as a failure.
             if component.exports_wasi_http()
-                && let Some(http_handler) = self.http_handler.upgrade()
+                && let Some(http_handler) = self.http_handler.handler()
             {
                 anyhow::Context::context(
                     http_handler.on_workload_unbind(self.id()).await,
@@ -2424,7 +2475,7 @@ impl ResolvedWorkload {
         // (`execute_trigger_service`); drop those registrations on stop so it no
         // longer receives host-invoked deliveries on a torn-down instance.
         if self.service.is_some()
-            && let Some(http_handler) = self.http_handler.upgrade()
+            && let Some(http_handler) = self.http_handler.handler()
         {
             if let Err(e) = http_handler.on_service_http_unbind(self.id()).await {
                 tracing::error!(workload.id = %self.id(), err = %e, "failed to unbind service HTTP handler, continuing");
@@ -2961,6 +3012,11 @@ impl UnresolvedWorkload {
                             "successfully bound plugin to component"
                         );
                         workload_item.add_plugin(plugin_id, p.clone());
+                        workload_item.plugin_bound_instances.extend(
+                            matching_interfaces
+                                .iter()
+                                .flat_map(plugin_bound_instance_names),
+                        );
                         plugin_component_ids.push(workload_item.id().to_string());
 
                         // Remove matched interfaces from unmatched set
@@ -3033,7 +3089,7 @@ impl UnresolvedWorkload {
         mut self,
         plugins: Option<&HashMap<&'static str, Arc<dyn HostPlugin + 'static>>>,
         plugin_bindings: &crate::plugin::PluginBindings,
-        http_handler: &Arc<dyn crate::host::http::HostHandler>,
+        host: &crate::host::HostRef,
         meters: &crate::observability::Meters,
     ) -> anyhow::Result<ResolvedWorkload> {
         // Bind to plugins
@@ -3069,7 +3125,7 @@ impl UnresolvedWorkload {
             service_calls: Arc::default(),
             released: Arc::default(),
             host_interfaces: self.host_interfaces,
-            http_handler: Arc::downgrade(http_handler),
+            http_handler: host.clone(),
             invocation: meters.invocation.clone(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
@@ -3138,6 +3194,7 @@ impl UnresolvedWorkload {
         }
 
         if let Some(component_id) = incoming_http_component
+            && let Some(http_handler) = host.handler()
             && let Err(e) = http_handler
                 .on_workload_resolved(&resolved_workload, &component_id)
                 .await
@@ -3476,6 +3533,37 @@ impl std::fmt::Display for IdFlavor {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugin_bound_instances_match_linker_import_names() {
+        let plain = WitInterface::from("wasi:keyvalue/store,atomics@0.2.0");
+        assert_eq!(
+            plugin_bound_instance_names(&plain)
+                .into_iter()
+                .collect::<HashSet<_>>(),
+            HashSet::from([
+                "wasi:keyvalue/store@0.2.0".to_string(),
+                "wasi:keyvalue/atomics@0.2.0".to_string(),
+            ])
+        );
+
+        let mut named = plain;
+        named.name = Some("primary".to_string());
+        assert_eq!(plugin_bound_instance_names(&named), vec!["primary"]);
+    }
+
+    #[test]
+    fn plugin_bound_import_is_not_linked_again() {
+        let interface = WitInterface::from("test:marker/api@1.0.0");
+        let bound = plugin_bound_instance_names(&interface)
+            .into_iter()
+            .collect::<HashSet<_>>();
+        assert!(!should_link_component_import(
+            "test:marker/api@1.0.0",
+            &bound
+        ));
+        assert!(should_link_component_import("test:other/api@1.0.0", &bound));
+    }
     use crate::plugin::HostPlugin;
     use crate::wit::{WitInterface, WitWorld};
     use async_trait::async_trait;
@@ -4270,7 +4358,7 @@ mod tests {
             .resolve(
                 Some(&plugin.registered()),
                 &crate::plugin::PluginBindings::new(),
-                &http_handler,
+                &crate::host::HostRef::from_handler(&http_handler),
                 &crate::observability::Meters::new(crate::observability::MeterKind::Off),
             )
             .await

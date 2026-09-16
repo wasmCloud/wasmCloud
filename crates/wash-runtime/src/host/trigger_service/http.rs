@@ -9,10 +9,8 @@ use std::task::{Context, Poll};
 
 use http_body_util::BodyExt;
 use wasmtime::component::{Accessor, AccessorTask};
-use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode as P2ErrorCode;
-use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
+use wasmtime_wasi_http::{Error, WasiBody};
 use wasmtime_wasi_http::p3::bindings::Service;
-use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
 
 use crate::engine::ctx::SharedCtx;
 
@@ -21,12 +19,12 @@ use crate::engine::ctx::SharedCtx;
 /// instead of being buffered. End-of-stream is signalled when the task drops the
 /// sender (body complete, or the task aborted because the client disconnected).
 struct ChannelBody {
-    rx: tokio::sync::mpsc::Receiver<Result<hyper::body::Frame<bytes::Bytes>, P2ErrorCode>>,
+    rx: tokio::sync::mpsc::Receiver<Result<hyper::body::Frame<bytes::Bytes>, Error>>,
 }
 
 impl hyper::body::Body for ChannelBody {
     type Data = bytes::Bytes;
-    type Error = P2ErrorCode;
+    type Error = Error;
 
     fn poll_frame(
         mut self: Pin<&mut Self>,
@@ -59,9 +57,9 @@ impl hyper::body::Body for ChannelBody {
 /// re-registers) a fresh instance. See `test_trigger_service_http_restarts_on_fault`.
 pub(crate) struct HttpTask {
     pub(crate) service: Arc<Service>,
-    pub(crate) req: hyper::Request<crate::host::http::IncomingBody>,
+    pub(crate) req: hyper::Request<WasiBody>,
     pub(crate) resp_tx:
-        tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
+        tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<WasiBody>>>,
     /// Armed by the dispatcher once it has stopped waiting for this response.
     /// It is registered on the store for the life of the call so the epoch
     /// callback can see it — the only way to end a guest that never yields.
@@ -100,18 +98,15 @@ impl AccessorTask<SharedCtx> for HttpTask {
         let _sample =
             crate::engine::instance_driver::InvocationSample::start(&executed, attributes);
 
-        let (parts, body) = req.into_parts();
-        // The request body's error is either version's error-code; the guest wants P3.
-        let body = body.map_err(ErrorCode::from).boxed_unsync();
-        let req = hyper::Request::from_parts(parts, body);
-        let (wasi_req, req_io) = wasmtime_wasi_http::p3::Request::from_http(req);
+        let (wasi_req, req_io) =
+            accessor.with(|mut access| crate::host::http::p3_request(access.get(), req));
 
         // Bounded channel for response-body frames: the head is delivered to the
         // HTTP server as soon as the handler returns it, while the body keeps
         // streaming. The small capacity back-pressures the guest so frames don't
         // accumulate without bound.
         let (frame_tx, frame_rx) =
-            tokio::sync::mpsc::channel::<Result<hyper::body::Frame<bytes::Bytes>, P2ErrorCode>>(4);
+            tokio::sync::mpsc::channel::<Result<hyper::body::Frame<bytes::Bytes>, Error>>(4);
         let mut resp_tx = Some(resp_tx);
 
         let handler_fut = async move {
@@ -122,7 +117,7 @@ impl AccessorTask<SharedCtx> for HttpTask {
                     if let Some(tx) = resp_tx.take() {
                         let resp = hyper::Response::builder()
                             .status(500)
-                            .body(HyperOutgoingBody::default())
+                            .body(WasiBody::default())
                             .map_err(anyhow::Error::from);
                         let _ = tx.send(resp);
                     }
@@ -139,7 +134,7 @@ impl AccessorTask<SharedCtx> for HttpTask {
 
             // `into_http`'s future reports the body-delivery outcome back to the
             // guest; resolve it once the body has been fully forwarded.
-            let (finish_tx, finish_rx) = tokio::sync::oneshot::channel::<Result<(), ErrorCode>>();
+            let (finish_tx, finish_rx) = tokio::sync::oneshot::channel::<Result<(), Error>>();
             let http_response = match accessor
                 .with(|s| response.into_http(s, async move { finish_rx.await.unwrap_or(Ok(())) }))
             {
@@ -156,14 +151,13 @@ impl AccessorTask<SharedCtx> for HttpTask {
 
             // Deliver the head + streaming body to the HTTP server now.
             if let Some(tx) = resp_tx.take() {
-                let stream_body =
-                    HyperOutgoingBody::new(ChannelBody { rx: frame_rx }.boxed_unsync());
+                let stream_body = ChannelBody { rx: frame_rx }.boxed_unsync();
                 if tx
                     .send(Ok(hyper::Response::from_parts(head, stream_body)))
                     .is_err()
                 {
                     // Caller dropped the receiver; report the failed delivery.
-                    let _ = finish_tx.send(Err(ErrorCode::ConnectionTerminated));
+                    let _ = finish_tx.send(Err(Error::ConnectionTerminated));
                     return Ok(());
                 }
             }
@@ -171,11 +165,8 @@ impl AccessorTask<SharedCtx> for HttpTask {
             // Forward body frames incrementally; stop if the client disconnects.
             let mut delivery = Ok(());
             while let Some(frame) = body.frame().await {
-                // Frames carry the p3 `ErrorCode`; the server body wants the p2 one,
-                // and `From` maps it variant for variant.
-                let frame = frame.map_err(P2ErrorCode::from);
                 if frame_tx.send(frame).await.is_err() {
-                    delivery = Err(ErrorCode::ConnectionTerminated);
+                    delivery = Err(Error::ConnectionTerminated);
                     break;
                 }
             }
@@ -246,7 +237,7 @@ mod tests {
     /// delivered response from an abandoned one.
     #[tokio::test]
     async fn channel_body_reports_end_of_stream_at_rest() {
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, P2ErrorCode>>(4);
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, Error>>(4);
         let mut body = ChannelBody { rx };
         assert!(!hyper::body::Body::is_end_stream(&body));
 
@@ -275,7 +266,7 @@ mod tests {
     /// checks that end-of-stream is signalled when the producer drops its sender.
     #[tokio::test]
     async fn channel_body_streams_frames_incrementally() {
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, P2ErrorCode>>(4);
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, Error>>(4);
         // Gates the producer's second frame on the consumer acknowledging the
         // first, proving the first was delivered before the producer completed.
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel::<()>();

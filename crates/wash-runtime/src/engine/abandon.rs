@@ -665,6 +665,9 @@ pub(crate) enum AbandonedCallPolicy {
 /// armed flag alone only says nobody wants the result, which a client
 /// disconnect is enough to cause. The module docs ([`crate::engine::abandon`])
 /// cover it.
+///
+/// Being the only place the host can still end guest work, it also ends a
+/// store whose host is gone, which no flag arms and no call abandons.
 pub(crate) fn arm_epoch_deadline(
     store: &mut wasmtime::Store<SharedCtx>,
     policy: AbandonedCallPolicy,
@@ -672,6 +675,7 @@ pub(crate) fn arm_epoch_deadline(
     let abandoned = Arc::clone(&store.data().abandoned);
     let executed = Arc::clone(&store.data().executed);
     let store_id = Arc::clone(&store.data().active_ctx.store_id);
+    let host = store.data().active_ctx.host_link();
     let grace = crate::timeouts::abandoned_call_grace();
     let escalation = crate::timeouts::abandoned_call_escalation();
     let grace_millis = u64::try_from(grace.as_millis()).unwrap_or(u64::MAX);
@@ -709,6 +713,18 @@ pub(crate) fn arm_epoch_deadline(
             credit.reset();
             Ok(wasmtime::UpdateDeadline::Yield(EPOCH_DEADLINE_TICKS))
         };
+
+        // Nothing can reach a store whose host is gone: its ingress is
+        // unbound, and its egress has no handler behind it. The `wasi:http`
+        // hooks cannot trap, so a guest that keeps calling out would otherwise
+        // run on unnoticed, retrying against a host that no longer exists.
+        if host.host_is_gone() {
+            tracing::error!(
+                store_id = %store_id,
+                "the host that built this store is gone; trapping its guest"
+            );
+            return Ok(wasmtime::UpdateDeadline::Interrupt);
+        }
 
         // The conditions below must all hold at the same instant to justify
         // trapping, so read them once.

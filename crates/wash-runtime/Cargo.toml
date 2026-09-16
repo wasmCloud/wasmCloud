@@ -103,8 +103,6 @@ wasmtime-wasi = { workspace = true, features = ["p3"] }
 wasmtime-wasi-io = { workspace = true }
 wasmtime-wasi-http = { workspace = true, features = ["default-send-request", "p2", "p3", "component-model-async"] }
 wasmtime-wasi-tls = { workspace = true, optional = true, features = ["p3", "rustls"] }
-cap-net-ext = { workspace = true }
-cap-std = { workspace = true }
 io-lifetimes = { workspace = true }
 rustix = { workspace = true }
 rustls = { workspace = true, features = ["std", "tls12"] }
@@ -164,7 +162,7 @@ webpki-roots = { workspace = true }
 # fails to build on Windows and s390x, so the deps are gated to match the
 # `#[cfg]` on `plugin::wasi_webgpu`.
 [target.'cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))'.dependencies]
-wasi-webgpu-wasmtime = { version = "0.2", optional = true }
+wasi-webgpu-wasmtime = { version = "0.3", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
@@ -360,4 +358,3 @@ harness = false
 [[bench]]
 name = "gungraun_plugin"
 harness = false
-

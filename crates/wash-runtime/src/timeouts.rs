@@ -85,6 +85,13 @@ declare_timeouts! {
     http_response = ("WASH_HTTP_RESPONSE_TIMEOUT_SECS", 600);
     /// Max wall-clock for a trigger service to acknowledge a delivered message.
     messaging_deliver = ("WASH_MESSAGING_DELIVER_TIMEOUT_SECS", 600);
+    /// How long an inbound request body may stall between frames before the
+    /// guest reading it is given an error.
+    ///
+    /// wasmtime-wasi-http applied this itself until 48, where the inbound body
+    /// lost its timeout; without it a client that sends headers and then stops
+    /// pins the store serving it for as long as it holds the connection.
+    http_request_body = ("WASH_HTTP_REQUEST_BODY_TIMEOUT_SECS", 600);
     /// How long a stopped ingress waits for its connections to finish before
     /// letting go of the workloads it routed anyway.
     ///

@@ -425,6 +425,20 @@ pub struct QuotaRegistry {
     quotas: moka::sync::Cache<String, GuestConnectionQuota>,
 }
 
+/// The registry a policy built without one draws on.
+///
+/// One per process, not one per policy: a registry of its own would give each
+/// policy a private "host-wide" ceiling, which is the opposite of a ceiling —
+/// two of them would let a host hold the limit twice over. Built on first use,
+/// so a host that raises its descriptor limit during startup is measured after
+/// the raise rather than before it.
+pub fn default_registry() -> Arc<QuotaRegistry> {
+    static DEFAULT: std::sync::LazyLock<Arc<QuotaRegistry>> = std::sync::LazyLock::new(|| {
+        QuotaRegistry::new(QuotaLimits::default(), Some(default_max_connections()))
+    });
+    Arc::clone(&DEFAULT)
+}
+
 impl QuotaRegistry {
     /// A registry handing out `limits` to each guest, with an optional
     /// host-wide ceiling every guest rolls up into.

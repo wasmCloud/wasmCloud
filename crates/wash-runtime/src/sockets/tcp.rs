@@ -137,10 +137,8 @@ pub struct NetworkTcpSocket {
     /// The guest's connection-budget slot, held for as long as this socket
     /// exists.
     ///
-    /// Only a real outbound connection takes one — a virtual one costs no file
-    /// descriptor and no remote resource — and it is released when the guest
-    /// drops the socket, which is what makes the budget bound *concurrent*
-    /// connections rather than merely counting attempts.
+    /// Taken before the OS socket is opened and released when its real half is
+    /// dropped.
     quota_slot: Option<crate::host::quota::ConnectionSlot>,
 }
 
@@ -355,6 +353,13 @@ impl NetworkTcpSocket {
                 self.tcp_state = TcpState::Closed;
                 Err(ErrorCode::from(err))
             }
+        }
+    }
+
+    fn cancel_connect(&mut self) {
+        if matches!(self.tcp_state, TcpState::Connecting(_)) {
+            self.tcp_state = TcpState::Closed;
+            self.quota_slot = None;
         }
     }
 
@@ -983,7 +988,7 @@ impl TcpSocket {
                     options: socket.options.clone(),
                     send_taken: false,
                     receive_taken: false,
-                    quota_slot: None,
+                    quota_slot: socket.quota_slot.take(),
                 },
                 lo,
             }
@@ -1139,11 +1144,25 @@ impl TcpSocket {
         }
     }
 
+    /// Refuse a connection the policy turned away, resetting it rather than
+    /// closing it in order.
+    ///
+    /// An orderly close looks to the peer like a successful, empty exchange; a
+    /// reset says it was refused. A virtual connection has no socket to reset,
+    /// so dropping it is the whole story. Mirrors wasmtime-wasi's own accept
+    /// filter.
+    pub(crate) fn refuse(self) {
+        if let Self::Network(socket) = &self
+            && let Ok(stream) = socket.tcp_stream_arc()
+        {
+            _ = stream.set_zero_linger();
+        }
+        drop(self);
+    }
+
     /// Hold a connection-budget slot for this socket's lifetime.
     ///
-    /// Called after the policy granted one. Only a `Plane::Host` connect
-    /// carries a permit, and only [`TcpSocket::Network`] can hold it — a
-    /// virtual connection consumes no budget.
+    /// Called before exposing a newly opened OS socket to the guest.
     pub(crate) fn hold_quota_slot(&mut self, permit: Option<crate::host::quota::ConnectionSlot>) {
         if let (Self::Network(socket), Some(permit)) = (self, permit) {
             socket.quota_slot = Some(permit);
@@ -1180,6 +1199,14 @@ impl TcpSocket {
             Self::Network(socket) => socket.finish_connect(result),
             Self::Loopback(socket) => socket.finish_connect(result, loopback),
             Self::Unspecified { .. } => Err(ErrorCode::InvalidState),
+        }
+    }
+
+    pub(crate) fn cancel_connect(&mut self, loopback: &mut super::loopback::Network) {
+        match self {
+            Self::Network(socket) => socket.cancel_connect(),
+            Self::Loopback(socket) => socket.cancel_connect(loopback),
+            Self::Unspecified { .. } => {}
         }
     }
 
@@ -1547,6 +1574,57 @@ mod tests {
         let socket = make_ipv4_socket();
         assert!(!socket.is_listening());
         assert!(matches!(socket.address_family(), SocketAddressFamily::Ipv4));
+    }
+
+    #[tokio::test]
+    async fn cancelled_connect_closes_socket_and_releases_quota() {
+        let quota = crate::host::quota::GuestConnectionQuota::new(
+            crate::host::quota::QuotaLimits {
+                outbound_http: 1,
+                outbound_sockets: 1,
+                inbound_sockets: 1,
+            },
+            None,
+        );
+        let mut socket = make_ipv4_socket();
+        socket.quota_slot = quota.try_acquire_outbound_socket();
+        assert_eq!(quota.outbound_sockets_available(), 0);
+
+        let connecting = socket.start_connect().unwrap();
+        drop(connecting);
+        socket.cancel_connect();
+
+        assert!(matches!(socket.tcp_state, TcpState::Closed));
+        assert_eq!(quota.outbound_sockets_available(), 1);
+    }
+
+    #[tokio::test]
+    async fn accepted_network_socket_releases_inbound_quota_on_drop() {
+        let quota = crate::host::quota::GuestConnectionQuota::new(
+            crate::host::quota::QuotaLimits {
+                outbound_http: 1,
+                outbound_sockets: 1,
+                inbound_sockets: 1,
+            },
+            None,
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+
+        let mut accepted = TcpSocket::new_accept(
+            Ok(stream),
+            &NonInheritedOptions::default(),
+            SocketAddressFamily::Ipv4,
+        )
+        .unwrap();
+        accepted.hold_quota_slot(quota.try_acquire_inbound_socket());
+        assert_eq!(quota.inbound_sockets_available(), 0);
+        drop(accepted);
+        assert_eq!(quota.inbound_sockets_available(), 1);
+        drop(client);
     }
 
     #[tokio::test]

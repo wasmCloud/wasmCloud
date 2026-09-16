@@ -7,11 +7,11 @@
 #![cfg(feature = "wasi-tls")]
 
 use anyhow::{Context, Result};
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::time::timeout;
 
 use wash_runtime::{
-    host::{HostApi, HostBuilder},
+    host::{HostApi, HostBuilder, allowed_loopback::AllowedLoopbackPort},
     types::{LocalResources, Service, Workload, WorkloadStartRequest, WorkloadState},
 };
 
@@ -44,7 +44,9 @@ fn echo_client_workload_request(
                     volume_mounts: vec![],
                     allowed_hosts: Default::default(),
                     allowed_ip_name_lookups: Default::default(),
-                    allowed_host_loopback_ports: Default::default(),
+                    allowed_host_loopback_ports: Arc::from([AllowedLoopbackPort::tcp(
+                        echo_addr.port(),
+                    )]),
                 },
                 max_restarts: 0,
             }),
@@ -57,7 +59,7 @@ fn echo_client_workload_request(
 
 /// `test_p3_tls_tcp_round_trip` exercises:
 ///
-/// - TCP connect to a non-loopback echo server (loopback is intercepted by the runtime)
+/// - TCP connect to a host-loopback echo server through the host sentinel
 /// - TLS handshake against a self-signed cert via the custom `TestTlsProvider`
 /// - Plaintext `PING\r\n` write through the encrypted stream
 /// - Receipt verified via oneshot channel on the server side

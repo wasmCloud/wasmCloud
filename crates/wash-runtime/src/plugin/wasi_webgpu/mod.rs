@@ -17,6 +17,7 @@ use crate::{
 #[derive(Clone)]
 pub struct WebGpu {
     pub gpu: Arc<wasi_webgpu_wasmtime::reexports::wgpu_core::global::Global>,
+    options: wasi_webgpu_wasmtime::WasiWebGpuOptions,
 }
 
 /// Backend options for the WasiWebGpu plugin
@@ -58,6 +59,7 @@ impl WebGpu {
                 },
                 None,
             )),
+            options: Default::default(),
         }
     }
 }
@@ -74,6 +76,7 @@ impl wasi_webgpu_wasmtime::WasiWebGpuCtxView for SharedCtx {
         wasi_webgpu_wasmtime::WasiWebGpuCtx {
             instance: &plugin.gpu,
             table: &mut self.table,
+            options: &plugin.options,
         }
     }
 }

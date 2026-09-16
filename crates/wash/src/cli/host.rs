@@ -997,7 +997,7 @@ impl CliCommand for HostCommand {
                 timeout: Some(self.registry_pull_timeout),
             };
             let native_plugins = cluster_host_builder.native_plugins();
-            let http_handler = cluster_host_builder.http_handler();
+            let host_ref = cluster_host_builder.host_ref();
 
             // Config-file plugins (`host.hostPlugins`) first, so their
             // config/secretFrom/allowedHosts are honored; CLI/env
@@ -1021,7 +1021,7 @@ impl CliCommand for HostCommand {
                     &engine,
                     plugin_oci_config.clone(),
                     &native_plugins,
-                    http_handler.as_ref().map(Arc::downgrade),
+                    Some(host_ref.clone()),
                     Some(Arc::clone(&socket_policy)),
                 )
                 .await

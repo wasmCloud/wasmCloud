@@ -18,6 +18,10 @@ use wasmtime_wasi::p3::sockets::{SocketError, SocketResult};
 /// The upstream UDP socket resource type from the P3 bindings.
 type UpstreamUdpSocket = wasmtime_wasi::sockets::UdpSocket;
 
+/// How many datagrams the policy may refuse within one `receive` before the
+/// guest is told, rather than left waiting for one that never comes.
+const MAX_REFUSED_DATAGRAMS_PER_RECEIVE: usize = 64;
+
 fn get_socket<'a>(
     table: &'a ResourceTable,
     socket: &Resource<UpstreamUdpSocket>,
@@ -61,7 +65,6 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
         if let Some(addr) = remote_address {
             let check = store.with(|mut view| view.get().ctx.socket_addr_check.clone());
             let allowed = check(addr, SocketAddrUse::UdpOutgoingDatagram)
-                .await
                 .into_allowed()
                 .map_err(se)?;
             remote_address = Some(allowed.addr);
@@ -80,7 +83,6 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
             if let Some(family) = implicit_family {
                 let implicit_addr = crate::sockets::util::implicit_bind_addr(family);
                 let bind_slot = check(implicit_addr, SocketAddrUse::UdpImplicitBind)
-                    .await
                     .into_allowed()
                     .map_err(se)?
                     .permit;
@@ -251,6 +253,7 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
             },
         }
 
+        let permissions = store.with(|mut store| store.get().ctx.socket_addr_check.clone());
         let source = store.with(|mut store| {
             let socket = get_socket(store.get().table, &socket)?;
             match socket {
@@ -277,48 +280,63 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
             }
         })?;
 
-        let (data, addr) = match source {
-            RecvSource::Network {
-                socket: udp_socket,
-                connected_addr,
-                egress_peers,
-            } => {
-                let mut buf = vec![0u8; MAX_UDP_DATAGRAM_SIZE];
-                match connected_addr {
-                    Some(addr) => {
-                        let n = udp_socket.recv(&mut buf).await.map_err(|e| se(e.into()))?;
-                        buf.truncate(n);
-                        (buf, addr)
-                    }
-                    None => loop {
-                        let (n, addr) = udp_socket
-                            .recv_from(&mut buf)
-                            .await
-                            .map_err(|e| se(e.into()))?;
-                        // An unspecified-bound socket hears from anyone, so
-                        // deliver only what answers something the guest sent.
-                        // Anything else would make it an unsolicited server on
-                        // a real interface; keep waiting for a real reply
-                        // rather than surfacing a stranger's datagram.
-                        if let Some(peers) = egress_peers.as_ref()
-                            && !peers.lock().is_ok_and(|peers| peers.contains(&addr))
-                        {
-                            continue;
+        // Reused across refusals: a fresh 64 KiB zeroed allocation per refused
+        // datagram would make refusing more expensive than delivering.
+        let mut buf = vec![0u8; MAX_UDP_DATAGRAM_SIZE];
+        let mut refused = 0;
+        loop {
+            let (data, addr) = match &source {
+                RecvSource::Network {
+                    socket: udp_socket,
+                    connected_addr,
+                    egress_peers,
+                } => {
+                    let buf = &mut buf;
+                    match *connected_addr {
+                        Some(addr) => {
+                            let n = udp_socket.recv(buf).await.map_err(|e| se(e.into()))?;
+                            (buf.get(..n).unwrap_or_default().to_vec(), addr)
                         }
-                        buf.truncate(n);
-                        break (buf, addr);
-                    },
+                        None => loop {
+                            let (n, addr) =
+                                udp_socket.recv_from(buf).await.map_err(|e| se(e.into()))?;
+                            // An unspecified-bound socket hears from anyone, so
+                            // deliver only what answers something the guest sent.
+                            // Anything else would make it an unsolicited server on
+                            // a real interface; keep waiting for a real reply
+                            // rather than surfacing a stranger's datagram.
+                            if let Some(peers) = egress_peers.as_ref()
+                                && !peers.lock().is_ok_and(|peers| peers.contains(&addr))
+                            {
+                                continue;
+                            }
+                            break (buf.get(..n).unwrap_or_default().to_vec(), addr);
+                        },
+                    }
                 }
-            }
-            RecvSource::Loopback { rx } => {
-                let mut guard = rx.lock().await;
-                match guard.recv().await {
-                    Some((datagram, _permit)) => (datagram.data, datagram.source_address),
-                    None => return Err(se(super::util::ErrorCode::ConnectionReset)),
+                RecvSource::Loopback { rx } => {
+                    let mut guard = rx.lock().await;
+                    match guard.recv().await {
+                        Some((datagram, _permit)) => (datagram.data, datagram.source_address),
+                        None => return Err(se(super::util::ErrorCode::ConnectionReset)),
+                    }
                 }
+            };
+            if permissions.check(addr, SocketAddrUse::UdpReceive).is_ok() {
+                return Ok((data, addr.into()));
             }
-        };
-        Ok((data, addr.into()))
+            refused += 1;
+            // Waiting forever for a datagram the policy will accept leaves the
+            // guest's `receive` with no answer and no error. Tell it instead,
+            // and let it decide whether to ask again.
+            if refused >= MAX_REFUSED_DATAGRAMS_PER_RECEIVE {
+                tracing::warn!(
+                    refused,
+                    "refused every datagram this `receive` saw; reporting access-denied"
+                );
+                return Err(se(super::util::ErrorCode::AccessDenied));
+            }
+        }
     }
 }
 
@@ -330,7 +348,6 @@ impl HostUdpSocket for WasiSocketsCtxView<'_> {
     ) -> SocketResult<()> {
         let local_address = SocketAddr::from(local_address);
         let local_address = (self.ctx.socket_addr_check)(local_address, SocketAddrUse::UdpBind)
-            .await
             .into_allowed()
             .map_err(se)?
             .addr;
@@ -352,7 +369,6 @@ impl HostUdpSocket for WasiSocketsCtxView<'_> {
     ) -> SocketResult<()> {
         let remote_address = SocketAddr::from(remote_address);
         let allowed = (self.ctx.socket_addr_check)(remote_address, SocketAddrUse::UdpConnect)
-            .await
             .into_allowed()
             .map_err(se)?;
         let remote_address = allowed.addr;
@@ -369,15 +385,25 @@ impl HostUdpSocket for WasiSocketsCtxView<'_> {
         Ok(())
     }
 
-    fn create(
+    async fn create(
         &mut self,
         address_family: IpAddressFamily,
     ) -> SocketResult<Resource<UpstreamUdpSocket>> {
         let family = match address_family {
-            IpAddressFamily::Ipv4 => cap_net_ext::AddressFamily::Ipv4,
-            IpAddressFamily::Ipv6 => cap_net_ext::AddressFamily::Ipv6,
+            IpAddressFamily::Ipv4 => super::SocketAddressFamily::Ipv4,
+            IpAddressFamily::Ipv6 => super::SocketAddressFamily::Ipv6,
         };
-        let socket = UdpSocket::new(self.ctx, family).map_err(se)?;
+        let permit = self
+            .ctx
+            .socket_addr_check
+            .check(
+                crate::sockets::util::implicit_bind_addr(family),
+                SocketAddrUse::UdpCreate,
+            )
+            .map_err(se)?
+            .permit;
+        let mut socket = UdpSocket::new(self.ctx, family).await.map_err(se)?;
+        socket.hold_quota_slot(permit);
         let resource = self
             .table
             .push(socket)
