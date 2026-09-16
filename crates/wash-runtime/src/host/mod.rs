@@ -336,6 +336,8 @@ pub struct Host {
     system_monitor: Arc<RwLock<SystemMonitor>>,
     // endpoints: HashMap<String, EndpointConfiguration>
     pub(crate) http_handler: std::sync::Arc<dyn crate::host::http::HostHandler>,
+    /// Keeps the HTTP ingress marked as host-owned for this host's lifetime.
+    _port_reservations: Vec<crate::host::ports::PortReservation>,
     config: HostConfig,
     meters: Meters,
 }
@@ -1578,6 +1580,7 @@ impl HostBuilder {
             Some(handler) => handler,
             None => Arc::new(crate::host::http::NullServer::default()),
         };
+        let port_reservations = reserve_http_ingress(&engine.socket_policy, http_handler.port())?;
 
         // Every plugin is registered by now, so a binding declaration naming an
         // id this host does not have is a typo — and an inert one, which is the
@@ -1627,16 +1630,63 @@ impl HostBuilder {
             started_at: chrono::Utc::now(),
             system_monitor: Arc::new(RwLock::new(SystemMonitor::new())),
             http_handler,
+            _port_reservations: port_reservations,
             config,
             meters,
         })
     }
 }
 
+fn reserve_http_ingress(
+    policy: &crate::sockets::policy::SocketPolicy,
+    port: u16,
+) -> anyhow::Result<Vec<crate::host::ports::PortReservation>> {
+    let Some(table) = policy.host_owned_ports.as_ref().filter(|_| port != 0) else {
+        return Ok(Vec::new());
+    };
+    let owner = crate::host::ports::PortOwner::Host("HTTP ingress".into());
+    [
+        std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], port)),
+    ]
+    .into_iter()
+    .map(|addr| {
+        table.reserve(
+            crate::host::declared_port::Protocol::Tcp,
+            addr,
+            owner.clone(),
+        )
+    })
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::Component;
+
+    #[test]
+    fn http_ingress_is_host_owned() {
+        let policy = crate::sockets::policy::SocketPolicy {
+            host_loopback_enabled: true,
+            host_loopback: Arc::from([crate::host::allowed_loopback::AllowedLoopbackPort::tcp(
+                8000,
+            )]),
+            // The table comes from the host that owns it, as it does in `wash
+            // host` and `wash dev`: without one there is nothing to reserve
+            // into, and every port reads as unowned.
+            host_owned_ports: Some(crate::host::ports::PortTable::new()),
+            ..Default::default()
+        };
+        let _reservations = reserve_http_ingress(&policy, 8000).unwrap();
+        assert!(matches!(
+            policy.decide(
+                crate::sockets::SocketAddrUse::TcpConnect,
+                "127.255.255.254:8000".parse().unwrap()
+            ),
+            crate::sockets::AddrDecision::Deny(crate::sockets::DenyReason::HostOwnedPort)
+        ));
+    }
 
     /// An unreadable CA bundle has to stop the host being built. Trust is
     /// configured once and used much later, so accepting it here would surface

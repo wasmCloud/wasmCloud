@@ -264,47 +264,37 @@ impl ComponentHostPluginState {
 
 /// A [`HostPlugin`] backed by a WebAssembly component running in its own
 /// long-lived, supervised store.
+#[derive(Clone)]
+struct PluginStoreContext {
+    allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
+    allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
+    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
+    network: crate::host::ports::NetworkHandle,
+    socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
+}
+
+#[derive(Clone)]
+struct PluginRuntime {
+    engine: Engine,
+    pre: InstancePre<SharedCtx>,
+    store: PluginStoreContext,
+}
+
 pub struct ComponentHostPlugin {
     id: &'static str,
-    engine: Engine,
-    /// Pre-instantiated against a WASI linker; instantiates the plugin into a
-    /// fresh store on each (re)start.
-    pre: InstancePre<SharedCtx>,
+    runtime: PluginRuntime,
+    egress_policy: crate::plugin::PluginEgressPolicy,
     world: WitWorld,
     exports: Arc<Vec<ExportedInterface>>,
     /// Every exported function, flattened, for the TriggerService to resolve up front.
     capability_funcs: Vec<CapabilityFunc>,
     /// The plugin's `wasmcloud:host/workload-lifecycle` export, if it has one.
     lifecycle: Option<Arc<LifecycleFuncs>>,
-    /// Hosts this plugin's own `wasi:http/outgoing-handler` calls may reach.
-    /// Reinjected into every incarnation's own `Ctx` ([`build_plugin_store`]);
-    /// enforced by the existing, unmodified `check_allowed_hosts`.
-    allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
-    /// Names this plugin's own `wasi:sockets/ip-name-lookup` calls may
-    /// resolve.
-    allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
-    /// What this plugin's own outgoing HTTP calls are sent through — the same
-    /// handler a workload's outgoing calls use. `None` traps every call with
-    /// "http client not available", matching today's behavior for a plugin
-    /// that imports `wasi:http/outgoing-handler` with no handler configured.
-    ///
-    /// Weak — a bound plugin is reached from every workload that binds it, and
-    /// the ingress holds those. See [`crate::host::http::live_handler`].
-    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
     max_restarts: u32,
-    /// Ports this plugin declared, as the operator wrote them.
-    /// The subset of `ports` this plugin binds for real itself, precomputed for
-    /// the per-incarnation socket policy.
-    direct_binds: Arc<[crate::sockets::policy::DirectBind]>,
-    /// The host's one port table, so a collision with another plugin (or, later,
-    /// a workload) is caught at `start()` with both holders named.
-    /// Handle to the current incarnation's virtual network. Published listeners
-    /// hold this rather than a network, which is what lets them stay bound
-    /// across a supervised restart.
-    network: crate::host::ports::NetworkHandle,
-    /// The host-level half of this plugin's socket policy.
-    socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
     state: Arc<ComponentHostPluginState>,
+    /// This plugin's claim on the real addresses its `ports` declared, held so
+    /// nothing else takes one while the plugin is loaded.
+    _port_reservations: Vec<crate::host::ports::PortReservation>,
 }
 
 #[bon::bon]
@@ -327,14 +317,16 @@ impl ComponentHostPlugin {
     /// `config` is this plugin's own resolved bind-time config, delivered to
     /// every native it imports the same way a workload's is.
     ///
-    /// `allowed_hosts`/`allowed_ip_name_lookups` gate this plugin's own
-    /// `wasi:http`/DNS egress the same way a workload's `LocalResources` do;
-    /// `http_handler` is what its outgoing HTTP calls are actually sent
-    /// through (typically the host's own, via `HostBuilder::http_handler`).
+    /// `allowed_hosts`, `allowed_ip_name_lookups`, and
+    /// `allowed_host_loopback_ports` gate this plugin's own egress the same way
+    /// a workload's `LocalResources` do. `http_handler` handles its outgoing
+    /// HTTP calls (typically through `HostBuilder::http_handler`).
+    /// `socket_policy` supplies the host-wide gate and address policy. If it is
+    /// omitted, the default keeps host loopback closed; a non-empty loopback
+    /// grant then warns and remains denied.
     ///
-    /// `native_plugins`, `config`, `allowed_hosts`, `allowed_ip_name_lookups`,
-    /// and `http_handler` all default to empty/`None` — most callers (tests
-    /// especially) only care about a handful of these.
+    /// Egress lists default to empty. `native_plugins`, `config`, and
+    /// `http_handler` also default to empty/`None`.
     #[builder(finish_fn = build)]
     pub async fn new(
         id: &'static str,
@@ -346,23 +338,64 @@ impl ComponentHostPlugin {
         #[builder(default)] allowed_ip_name_lookups: Arc<
             [crate::host::allowed_ip_name::AllowedIpName],
         >,
+        #[builder(default)] allowed_host_loopback_ports: Arc<
+            [crate::host::allowed_loopback::AllowedLoopbackPort],
+        >,
         http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
         #[builder(default)] ports: Arc<[crate::host::declared_port::DeclaredPort]>,
         socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     ) -> anyhow::Result<Self> {
-        crate::host::declared_port::validate_ports(&ports, &format!("host plugin '{id}'"))?;
-        let direct_binds = ports
-            .iter()
-            .filter_map(|port| match port.mode() {
-                crate::host::declared_port::PortMode::Direct { bind } => {
-                    Some(crate::sockets::policy::DirectBind {
-                        addr: core::net::SocketAddr::new(bind, port.port),
-                        udp: port.protocol.is_udp(),
-                    })
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        crate::host::declared_port::validate_plugin_ports(&ports, &format!("host plugin '{id}'"))?;
+        let socket_policy = socket_policy.unwrap_or_default();
+        let egress_policy = crate::plugin::PluginEgressPolicy::new(
+            Arc::clone(&allowed_hosts),
+            Arc::clone(&allowed_ip_name_lookups),
+            Arc::clone(&allowed_host_loopback_ports),
+            &socket_policy,
+        );
+        if egress_policy.disabled_loopback_grants() {
+            warn!(
+                plugin_id = id,
+                "host component plugin declares allowedHostLoopbackPorts, but host-loopback \
+                 access is disabled; enable the host socket policy"
+            );
+        }
+        // Each direct bind is claimed from the host's one port table as it is
+        // collected, so two plugins declaring the same real address fail here,
+        // with both holders named, rather than at the second plugin's bind with
+        // a bare `AddressInUse` naming neither. The reservations live as long as
+        // the plugin does.
+        let mut binds = Vec::new();
+        let mut port_reservations = Vec::new();
+        for port in ports.iter() {
+            let crate::host::declared_port::PortMode::Direct { bind } = port.mode() else {
+                continue;
+            };
+            let addr = core::net::SocketAddr::new(bind, port.port);
+            binds.push(crate::sockets::policy::DirectBind {
+                addr,
+                udp: port.protocol.is_udp(),
+            });
+            if let Some(table) = &socket_policy.host_owned_ports {
+                port_reservations.push(
+                    table
+                        .reserve(
+                            port.protocol,
+                            addr,
+                            crate::host::ports::PortOwner::Plugin(id.into()),
+                        )
+                        .with_context(|| format!("host plugin '{id}': port '{}'", port.name))?,
+                );
+            }
+        }
+        let direct_binds: Arc<[crate::sockets::policy::DirectBind]> = binds.into();
+        let socket_policy = Arc::new(component_plugin_socket_policy(
+            id,
+            &direct_binds,
+            &allowed_hosts,
+            &allowed_host_loopback_ports,
+            &socket_policy,
+        ));
         // Defense-in-depth: re-filter to natives only. Both real call sites
         // already pass a pre-filtered map (`HostBuilder::native_plugins()`),
         // so this is a no-op today, but it makes the cycle-safety invariant
@@ -447,20 +480,25 @@ impl ComponentHostPlugin {
         }
         Ok(Self {
             id,
-            engine,
-            pre,
+            runtime: PluginRuntime {
+                engine,
+                pre,
+                store: PluginStoreContext {
+                    allowed_hosts,
+                    allowed_ip_name_lookups,
+                    http_handler,
+                    network: crate::host::ports::NetworkHandle::new(),
+                    socket_policy,
+                },
+            },
+            egress_policy,
             world,
             exports: Arc::new(exports),
             capability_funcs,
             lifecycle: lifecycle.map(Arc::new),
-            allowed_hosts,
-            allowed_ip_name_lookups,
-            http_handler,
             max_restarts: DEFAULT_MAX_RESTARTS,
-            direct_binds: Arc::from(direct_binds),
-            network: crate::host::ports::NetworkHandle::new(),
-            socket_policy: socket_policy.unwrap_or_default(),
             state,
+            _port_reservations: port_reservations,
         })
     }
 
@@ -679,12 +717,7 @@ pub(crate) fn native_only(
 /// registered on the host — typically `HostBuilder::native_plugins()` — so
 /// this plugin's own capability imports can resolve against them.
 ///
-/// `publish` governs this plugin's declared `ports`. Pass a context carrying the
-/// *same* table for every plugin on a host — it is the one place that knows
-/// which real ports are taken, so separate tables would let two plugins each
-/// believe they own the same address. `None` gives a private table and
-/// publishing disabled, which is what a test or an embedder that exposes no
-/// ports wants.
+/// `spec.ports` supplies the plugin's declared direct-bind grants.
 pub async fn load_component_plugin(
     spec: &ComponentPluginSpec,
     engine: &Engine,
@@ -700,6 +733,7 @@ pub async fn load_component_plugin(
         .with_context(|| format!("loading host component plugin '{}'", spec.id))?;
 
     let id = intern_plugin_id(&spec.id);
+    let socket_policy = socket_policy.unwrap_or_else(|| Arc::clone(&engine.socket_policy));
     let mut plugin = ComponentHostPlugin::builder()
         .id(id)
         .wasm(&loaded.bytes)
@@ -708,8 +742,10 @@ pub async fn load_component_plugin(
         .config(spec.config.clone())
         .allowed_hosts(Arc::clone(&spec.allowed_hosts))
         .allowed_ip_name_lookups(Arc::clone(&spec.allowed_ip_name_lookups))
+        .allowed_host_loopback_ports(Arc::clone(&spec.allowed_host_loopback_ports))
+        .ports(Arc::clone(&spec.ports))
         .maybe_http_handler(http_handler)
-        .maybe_socket_policy(socket_policy)
+        .socket_policy(socket_policy)
         .build()
         .await
         .with_context(|| format!("failed to build host component plugin '{}'", spec.id))?;
@@ -737,6 +773,18 @@ impl HostPlugin for ComponentHostPlugin {
 
     fn world(&self) -> WitWorld {
         self.world.clone()
+    }
+
+    fn configure_egress_policy(
+        &self,
+        policy: Arc<crate::plugin::PluginEgressPolicy>,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.egress_policy.same_declaration(&policy),
+            "component plugin '{}' was built with an egress policy different from its host.plugins declaration",
+            self.id
+        );
+        Ok(())
     }
 
     /// Never: one store answers a labeled and an unlabeled import alike, so
@@ -767,20 +815,13 @@ impl HostPlugin for ComponentHostPlugin {
         };
 
         let supervisor = tokio::spawn(run_supervisor(
-            self.engine.clone(),
-            self.pre.clone(),
+            self.runtime.clone(),
             self.capability_funcs.clone(),
             self.lifecycle.clone(),
             Arc::clone(&self.state),
             self.max_restarts,
             replay,
             rx,
-            Arc::clone(&self.allowed_hosts),
-            Arc::clone(&self.allowed_ip_name_lookups),
-            self.http_handler.clone(),
-            self.network.clone(),
-            Arc::clone(&self.direct_binds),
-            Arc::clone(&self.socket_policy),
         ));
         *self
             .state
@@ -1754,37 +1795,24 @@ async fn route_capability_call(
 /// TriggerService, and await the driver. A clean shutdown (the sender cleared by
 /// `stop()`) exits; a fault restarts up to `max_restarts` times, handing each
 /// new incarnation a fresh channel whose sender the installed shims pick up.
-#[allow(clippy::too_many_arguments)]
 async fn run_supervisor(
-    engine: Engine,
-    pre: InstancePre<SharedCtx>,
+    runtime: PluginRuntime,
     funcs: Vec<CapabilityFunc>,
     lifecycle: Option<Arc<LifecycleFuncs>>,
     state: Arc<ComponentHostPluginState>,
     max_restarts: u32,
     mut replay: Vec<LifecycleReplay>,
     mut rx: tokio::sync::mpsc::Receiver<CapabilityJob>,
-    allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
-    allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
-    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
-    network: crate::host::ports::NetworkHandle,
-    direct_binds: Arc<[crate::sockets::policy::DirectBind]>,
-    socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
 ) {
     let mut restarts = 0u32;
     loop {
         // Installs this incarnation's virtual network on the handle, which is
         // how a listener published before this incarnation existed finds it.
         let store = build_plugin_store(
-            &engine,
+            &runtime.engine,
             state.id,
             &state.native_plugins,
-            &allowed_hosts,
-            &allowed_ip_name_lookups,
-            http_handler.as_ref(),
-            &network,
-            &direct_binds,
-            &socket_policy,
+            &runtime.store,
         );
         // A fresh job registry per incarnation, published on `state` so the
         // baked-in identity/cancel imports reach this store's live jobs. Stale
@@ -1809,7 +1837,7 @@ async fn run_supervisor(
             registry,
             replay: std::mem::take(&mut replay),
         };
-        let trigger_service = TriggerService::spawn(store, pre.clone(), vec![ingress]);
+        let trigger_service = TriggerService::spawn(store, runtime.pre.clone(), vec![ingress]);
 
         // The driver runs until the capability channel closes (clean shutdown)
         // or the store faults (e.g. a guest trap).
@@ -1821,7 +1849,7 @@ async fn run_supervisor(
         if state.sender().is_none() {
             debug!(id = state.id, "host component plugin driver stopped");
             state.registry.store(None);
-            network.clear();
+            runtime.store.network.clear();
             return;
         }
 
@@ -1885,7 +1913,7 @@ async fn run_supervisor(
                 // No further incarnation will register a listener. Any still-open
                 // published listener now fails its readiness window rather than
                 // polling a network nothing will ever bind in.
-                network.clear();
+                runtime.store.network.clear();
                 return;
             }
             restarts += 1;
@@ -1949,46 +1977,26 @@ async fn run_supervisor(
 /// against ([`link_native_imports`]), so a native's host function — reading
 /// its own plugin state via `Ctx::try_get_plugin` — finds it here the same way
 /// it would in a workload's store.
-#[allow(clippy::too_many_arguments)]
 fn build_plugin_store(
     engine: &Engine,
     id: &'static str,
     native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
-    allowed_hosts: &Arc<[crate::host::allowed_hosts::AllowedHost]>,
-    allowed_ip_name_lookups: &Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
-    http_handler: Option<&std::sync::Weak<dyn crate::host::http::HostHandler>>,
-    network: &crate::host::ports::NetworkHandle,
-    direct_binds: &Arc<[crate::sockets::policy::DirectBind]>,
-    socket_policy: &Arc<crate::sockets::policy::SocketPolicy>,
+    store_context: &PluginStoreContext,
 ) -> Store<SharedCtx> {
-    // DNS lookup gated by `allowed_ip_name_lookups`, `wasi:http` gated by
-    // `allowed_hosts` (via `Ctx::with_allowed_hosts` + the existing
-    // `check_allowed_hosts`), raw socket connect otherwise unrestricted. Binds
-    // land in the plugin's own private virtual network unless the operator
-    // declared a concrete address for this plugin to hold directly — see
-    // `crate::sockets::policy::SocketPolicy`.
-    let policy = Arc::new(crate::sockets::policy::SocketPolicy {
-        allowed_hosts: Arc::clone(allowed_hosts),
-        ..socket_policy.for_guest(
-            crate::sockets::policy::GuestKind::Plugin {
-                direct_binds: Arc::clone(direct_binds),
-            },
-            id,
-        )
-    });
+    let policy = Arc::clone(&store_context.socket_policy);
     // A fresh network per incarnation, published on the handle so a
     // `PublishedPort` bound before this incarnation existed splices into it.
     // It must be fresh: tearing down a store does not release the virtual ports
     // its sockets registered, so reusing one would fail the next incarnation's
     // bind with `AddressInUse`.
-    let loopback = network.replace();
+    let loopback = store_context.network.replace();
     let sockets_ctx = crate::sockets::WasiSocketsCtx {
         socket_addr_check: crate::sockets::SocketAddrCheck::new(move |addr, reason| {
             let policy = Arc::clone(&policy);
             Box::pin(async move { policy.decide(reason, addr) })
         }),
         loopback,
-        allowed_ip_name_lookups: Arc::clone(allowed_ip_name_lookups),
+        allowed_ip_name_lookups: Arc::clone(&store_context.allowed_ip_name_lookups),
         ..Default::default()
     };
 
@@ -2000,8 +2008,8 @@ fn build_plugin_store(
                 .collect(),
         )
         .with_sockets(sockets_ctx)
-        .with_allowed_hosts(Arc::clone(allowed_hosts));
-    if let Some(http_handler) = http_handler {
+        .with_allowed_hosts(Arc::clone(&store_context.allowed_hosts));
+    if let Some(http_handler) = &store_context.http_handler {
         ctx_builder = ctx_builder.with_http_handler(http_handler);
     }
     let ctx = ctx_builder.build();
@@ -2030,6 +2038,23 @@ fn build_plugin_store(
     );
     crate::engine::guest_memory::install_memory_limiter(&mut store);
     store
+}
+
+fn component_plugin_socket_policy(
+    id: &str,
+    direct_binds: &Arc<[crate::sockets::policy::DirectBind]>,
+    allowed_hosts: &Arc<[crate::host::allowed_hosts::AllowedHost]>,
+    allowed_host_loopback_ports: &Arc<[crate::host::allowed_loopback::AllowedLoopbackPort]>,
+    socket_policy: &Arc<crate::sockets::policy::SocketPolicy>,
+) -> crate::sockets::policy::SocketPolicy {
+    socket_policy.for_guest(
+        crate::sockets::policy::GuestKind::Plugin {
+            direct_binds: Arc::clone(direct_binds),
+        },
+        id,
+        Arc::clone(allowed_hosts),
+        Arc::clone(allowed_host_loopback_ports),
+    )
 }
 
 /// Introspect a plugin component's exported interfaces and their functions from
@@ -2114,6 +2139,238 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
+    use crate::host::allowed_loopback::AllowedLoopbackPort;
+    use crate::sockets::{AddrDecision, DenyReason, Plane, SocketAddrUse};
+
+    #[test]
+    fn plugin_loopback_grant_is_applied_without_widening_the_host_gate() {
+        let direct_binds: Arc<[crate::sockets::policy::DirectBind]> = Arc::from([]);
+        let allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]> = Arc::from([]);
+        let allowed_loopback = Arc::from([AllowedLoopbackPort::tcp(5432)]);
+        let host_policy = Arc::new(crate::sockets::policy::SocketPolicy {
+            host_loopback_enabled: true,
+            ..Default::default()
+        });
+        let policy = component_plugin_socket_policy(
+            "postgres-plugin",
+            &direct_binds,
+            &allowed_hosts,
+            &allowed_loopback,
+            &host_policy,
+        );
+
+        let sentinel = "127.255.255.254:5432".parse().unwrap();
+        match policy.decide(SocketAddrUse::TcpConnect, sentinel) {
+            AddrDecision::Allow(allowed) => {
+                assert_eq!(allowed.addr, "127.0.0.1:5432".parse().unwrap());
+                assert_eq!(allowed.plane, Plane::Host);
+            }
+            AddrDecision::Deny(reason) => panic!("declared port was denied: {reason:?}"),
+        }
+
+        let undeclared = "127.255.255.254:6379".parse().unwrap();
+        assert!(matches!(
+            policy.decide(SocketAddrUse::TcpConnect, undeclared),
+            AddrDecision::Deny(DenyReason::HostLoopbackNotPermitted)
+        ));
+
+        let closed_host_policy = Arc::new(crate::sockets::policy::SocketPolicy::default());
+        let policy = component_plugin_socket_policy(
+            "postgres-plugin",
+            &direct_binds,
+            &allowed_hosts,
+            &allowed_loopback,
+            &closed_host_policy,
+        );
+        assert!(matches!(
+            policy.decide(SocketAddrUse::TcpConnect, sentinel),
+            AddrDecision::Deny(DenyReason::HostLoopbackNotPermitted)
+        ));
+    }
+
+    #[tokio::test]
+    async fn plugin_store_enforces_its_loopback_and_udp_policy() {
+        let engine = Engine::builder().build().unwrap();
+        let allowed_hosts = Arc::from([]);
+        let allowed_names = Arc::from([]);
+        let direct_binds = Arc::from([]);
+        let host_policy = Arc::new(crate::sockets::policy::SocketPolicy {
+            host_loopback_enabled: true,
+            ..Default::default()
+        });
+        let policy = Arc::new(component_plugin_socket_policy(
+            "socket-test-plugin",
+            &direct_binds,
+            &allowed_hosts,
+            &Arc::from([AllowedLoopbackPort::udp(53)]),
+            &host_policy,
+        ));
+        let store_context = PluginStoreContext {
+            allowed_hosts,
+            allowed_ip_name_lookups: allowed_names,
+            http_handler: None,
+            network: crate::host::ports::NetworkHandle::new(),
+            socket_policy: policy,
+        };
+        let mut store = build_plugin_store(
+            &engine,
+            "socket-test-plugin",
+            &HashMap::new(),
+            &store_context,
+        );
+        let check = store
+            .data_mut()
+            .active_ctx
+            .sockets
+            .socket_addr_check
+            .clone();
+
+        check
+            .check("0.0.0.0:0".parse().unwrap(), SocketAddrUse::UdpBind)
+            .await
+            .expect("plugin UDP may bind an unspecified local endpoint");
+        let allowed = check
+            .check(
+                "127.255.255.254:53".parse().unwrap(),
+                SocketAddrUse::UdpConnect,
+            )
+            .await
+            .expect("the store must retain the declared UDP loopback grant");
+        assert_eq!(allowed.addr, "127.0.0.1:53".parse().unwrap());
+        assert_eq!(allowed.plane, Plane::Host);
+    }
+
+    #[tokio::test]
+    async fn loader_rejects_unimplemented_published_ports() {
+        let engine = Engine::builder().build().unwrap();
+        let mut spec = crate::plugin::ComponentPluginSpec::from_plugin_source(
+            "published-port-plugin",
+            crate::component_source::ComponentSource::File(
+                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/wasm/kv_plugin.wasm").into(),
+            ),
+        );
+        spec.ports = Arc::from([crate::host::declared_port::DeclaredPort {
+            name: "grpc".into(),
+            port: 50051,
+            protocol: crate::host::declared_port::Protocol::Tcp,
+            publish: Some(31051),
+            bind: None,
+        }]);
+
+        let err = load_component_plugin(
+            &spec,
+            &engine,
+            crate::oci::OciConfig::default(),
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .await
+        .err()
+        .expect("unsupported port splicing must not be silently ignored");
+        assert!(format!("{err:#}").contains("port splicing is not supported"));
+    }
+
+    #[tokio::test]
+    async fn loader_threads_ports_and_loopback_into_the_plugin_store() {
+        let host_policy = Arc::new(crate::sockets::policy::SocketPolicy {
+            host_loopback_enabled: true,
+            host_owned_ports: Some(crate::host::ports::PortTable::new()),
+            ..Default::default()
+        });
+        // The same host policy, carrying a declaration this plugin was not
+        // built with: what `configure_egress_policy` must refuse.
+        let host_policy_for_mismatch = crate::sockets::policy::SocketPolicy {
+            host_loopback_enabled: true,
+            ..Default::default()
+        };
+        let engine = Engine::builder()
+            .with_socket_policy(Arc::clone(&host_policy))
+            .build()
+            .unwrap();
+        let mut spec = crate::plugin::ComponentPluginSpec::from_plugin_source(
+            "socket-test-plugin",
+            crate::component_source::ComponentSource::File(
+                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/wasm/kv_plugin.wasm").into(),
+            ),
+        );
+        spec.allowed_host_loopback_ports = Arc::from([AllowedLoopbackPort::udp(53)]);
+        spec.ports = Arc::from([crate::host::declared_port::DeclaredPort {
+            name: "metrics".into(),
+            port: 9100,
+            protocol: crate::host::declared_port::Protocol::Tcp,
+            publish: None,
+            bind: Some("192.0.2.10".parse().unwrap()),
+        }]);
+
+        let plugin = load_component_plugin(
+            &spec,
+            &engine,
+            crate::oci::OciConfig::default(),
+            &HashMap::new(),
+            None,
+            Some(host_policy),
+        )
+        .await
+        .unwrap();
+        let mismatched = Arc::new(crate::plugin::PluginEgressPolicy::new(
+            Arc::from([]),
+            Arc::from([]),
+            Arc::from([]),
+            &host_policy_for_mismatch,
+        ));
+        assert!(plugin.configure_egress_policy(mismatched).is_err());
+        let mut store = build_plugin_store(
+            &plugin.runtime.engine,
+            plugin.id,
+            &plugin.state.native_plugins,
+            &plugin.runtime.store,
+        );
+        let check = store
+            .data_mut()
+            .active_ctx
+            .sockets
+            .socket_addr_check
+            .clone();
+
+        check
+            .check("192.0.2.10:9100".parse().unwrap(), SocketAddrUse::TcpBind)
+            .await
+            .expect("the loader must retain the declared direct bind");
+
+        use wasmtime::component::Resource;
+        use wasmtime_wasi::p3::bindings::sockets::types::{HostUdpSocket, IpAddressFamily};
+        let mut sockets = crate::engine::ctx::extract_sockets(store.data_mut());
+        let socket = HostUdpSocket::create(&mut sockets, IpAddressFamily::Ipv4)
+            .expect("create plugin UDP socket");
+        HostUdpSocket::bind(
+            &mut sockets,
+            Resource::new_borrow(socket.rep()),
+            "0.0.0.0:0".parse::<std::net::SocketAddr>().unwrap().into(),
+        )
+        .await
+        .expect("plugin UDP may bind an unspecified local endpoint");
+        HostUdpSocket::connect(
+            &mut sockets,
+            Resource::new_borrow(socket.rep()),
+            "127.255.255.254:53"
+                .parse::<std::net::SocketAddr>()
+                .unwrap()
+                .into(),
+        )
+        .await
+        .expect("the plugin socket must retain the loopback grant");
+        let socket = Resource::<crate::sockets::UdpSocket>::new_borrow(socket.rep());
+        assert_eq!(
+            sockets
+                .table
+                .get(&socket)
+                .unwrap()
+                .remote_address()
+                .unwrap(),
+            "127.0.0.1:53".parse().unwrap()
+        );
+    }
 
     /// Records the `WorkloadItem::id()` it's bound under — the same accessor
     /// `DynamicConfig` (`wasi:config/store`) keys its per-component config

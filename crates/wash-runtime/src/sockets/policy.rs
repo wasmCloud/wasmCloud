@@ -124,6 +124,12 @@ impl Default for SocketPolicy {
     /// host loopback closed. An embedder that installs no policy of its own
     /// gets what an operator running the host would get, rather than a
     /// permissive one nobody chose.
+    ///
+    /// No port table: the table is the host's single record of which real ports
+    /// are spoken for, so it has to come from the host that owns it. Minting
+    /// one here would hand each defaulted policy a private table that nothing
+    /// reserves into, and an always-empty table answers "nobody owns that
+    /// port" — a denial silently absent rather than absent by `None`.
     fn default() -> Self {
         Self {
             kind: GuestKind::Component,
@@ -155,9 +161,17 @@ impl SocketPolicy {
     /// share whatever single quota the template happened to carry, making the
     /// number a host-wide cap wearing a per-guest name.
     #[must_use]
-    pub fn for_guest(&self, kind: GuestKind, guest_id: &str) -> Self {
+    pub fn for_guest(
+        &self,
+        kind: GuestKind,
+        guest_id: &str,
+        allowed_hosts: Arc<[AllowedHost]>,
+        host_loopback: Arc<[AllowedLoopbackPort]>,
+    ) -> Self {
         Self {
             kind,
+            allowed_hosts,
+            host_loopback,
             quota: self.quota_for(guest_id),
             ..self.clone()
         }
@@ -202,32 +216,32 @@ impl SocketPolicy {
 
     fn decide_bind(&self, reason: SocketAddrUse, addr: SocketAddr) -> AddrDecision {
         let ip = addr.ip();
-        let permitted = match &self.kind {
-            // A component never *listens* — but a UDP bind is not listening.
-            // Binding a local endpoint is the required first step of UDP
-            // egress: p2 refuses `stream()` on an unbound socket, and Rust's
-            // std does an explicit bind on p3 too, so denying this would deny
-            // outbound datagrams rather than deny a listener.
-            GuestKind::Component => match reason {
-                SocketAddrUse::UdpBind => ip.is_loopback() || ip.is_unspecified(),
-                _ => false,
-            },
-            // A service listens inside the workload's virtual network. An
-            // unspecified UDP bind is permitted because `UdpSocket::bind`
-            // rewrites it to loopback before it reaches the OS, exactly as the
-            // TCP path does.
-            GuestKind::Service => match reason {
-                SocketAddrUse::UdpBind => ip.is_loopback() || ip.is_unspecified(),
-                _ => ip.is_loopback(),
-            },
-            // A plugin's virtual network is private, so a listener in it
-            // reaches nothing until the host publishes a real port that splices
-            // into it. Beyond that it may bind only an address the operator
-            // declared, matched exactly.
-            GuestKind::Plugin { direct_binds } => {
-                ip.is_loopback() || direct_binds.iter().any(|b| b.permits(reason, addr))
-            }
-        };
+        // A UDP bind is not listening: binding a local endpoint is the required
+        // first step of UDP egress — p2 refuses `stream()` on an unbound
+        // socket, and Rust's std does an explicit bind on p3 too — so denying
+        // it outright would deny outbound datagrams rather than deny a
+        // listener. That first step takes an ephemeral port, which is the only
+        // unspecified bind permitted here: `UdpSocket::bind` leaves an
+        // unspecified address unspecified at the OS, so a *named* port on it
+        // claims a real port of the machine's on every interface, which is a
+        // listener whatever the guest calls it. Every kind shares this, so the
+        // match below carries only what actually differs between them.
+        let udp_egress_bind = matches!(reason, SocketAddrUse::UdpBind)
+            && (ip.is_loopback() || (ip.is_unspecified() && addr.port() == 0));
+        let permitted = udp_egress_bind
+            || match &self.kind {
+                // A component never listens.
+                GuestKind::Component => false,
+                // A service listens inside the workload's virtual network.
+                GuestKind::Service => ip.is_loopback(),
+                // A plugin's virtual network is private, so a listener in it
+                // reaches nothing until the host publishes a real port that
+                // splices into it. Beyond that it may bind only an address the
+                // operator declared, matched exactly.
+                GuestKind::Plugin { direct_binds } => {
+                    ip.is_loopback() || direct_binds.iter().any(|b| b.permits(reason, addr))
+                }
+            };
         if permitted {
             AddrDecision::allow_by_address(addr)
         } else {
@@ -417,9 +431,14 @@ mod tests {
         let policy = SocketPolicy::for_kind(GuestKind::Service);
         assert!(plane_of(&policy.decide(SocketAddrUse::TcpBind, addr("127.0.0.1:8080"))).is_some());
         assert!(denied(&policy.decide(SocketAddrUse::TcpBind, addr("10.0.0.5:8080"))).is_some());
-        // Unspecified UDP is permitted only because the bind path rewrites it
-        // to loopback before the OS sees it.
-        assert!(plane_of(&policy.decide(SocketAddrUse::UdpBind, addr("0.0.0.0:8080"))).is_some());
+        // Unspecified UDP is permitted for egress, which takes an ephemeral
+        // port. A named port on it would be a real listener on every
+        // interface: `UdpSocket::bind` leaves an unspecified address
+        // unspecified at the OS. The service's own fixed-port endpoint is the
+        // loopback bind above, inside its virtual network.
+        assert!(plane_of(&policy.decide(SocketAddrUse::UdpBind, addr("0.0.0.0:0"))).is_some());
+        assert!(plane_of(&policy.decide(SocketAddrUse::UdpBind, addr("127.0.0.1:8080"))).is_some());
+        assert!(denied(&policy.decide(SocketAddrUse::UdpBind, addr("0.0.0.0:8080"))).is_some());
         assert!(denied(&policy.decide(SocketAddrUse::UdpBind, addr("10.0.0.5:8080"))).is_some());
     }
 
@@ -455,6 +474,39 @@ mod tests {
         }
         // Same tuple, wrong protocol.
         assert!(denied(&policy.decide(SocketAddrUse::UdpBind, addr("10.0.0.5:9000"))).is_some());
+        // UDP needs a local endpoint before it can send anywhere, and that
+        // endpoint takes an ephemeral port.
+        assert!(plane_of(&policy.decide(SocketAddrUse::UdpBind, addr("0.0.0.0:0"))).is_some());
+    }
+
+    /// An unspecified bind reaches the OS unspecified, so a named port on it
+    /// claims that port of the machine's on every interface — a listener no
+    /// guest kind may open without declaring it.
+    #[test]
+    fn an_unspecified_udp_bind_may_not_name_a_port() {
+        let declared: Arc<[DirectBind]> = Arc::from([DirectBind {
+            addr: addr("10.0.0.5:9000"),
+            udp: true,
+        }]);
+        for kind in [
+            GuestKind::Component,
+            GuestKind::Service,
+            GuestKind::Plugin {
+                direct_binds: Arc::clone(&declared),
+            },
+        ] {
+            let policy = SocketPolicy::for_kind(kind);
+            assert_eq!(
+                denied(&policy.decide(SocketAddrUse::UdpBind, addr("0.0.0.0:53"))),
+                Some(DenyReason::BindNotPermitted)
+            );
+            assert!(plane_of(&policy.decide(SocketAddrUse::UdpBind, addr("0.0.0.0:0"))).is_some());
+        }
+        // A plugin still binds the concrete address an operator declared.
+        let policy = SocketPolicy::for_kind(GuestKind::Plugin {
+            direct_binds: declared,
+        });
+        assert!(plane_of(&policy.decide(SocketAddrUse::UdpBind, addr("10.0.0.5:9000"))).is_some());
     }
 
     #[test]
