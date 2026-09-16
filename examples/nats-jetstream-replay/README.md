@@ -70,6 +70,8 @@ it. `wasmcloud:nats` is configured like every other plugin, as an entry under
 host:
   plugins:
     - id: wasmcloud-nats
+      allowedHosts: [nats.default.svc:4222]
+      allowedIpNameLookups: [nats.default.svc]
       config:
         servers: nats://nats.default.svc:4222
         # Deny-by-default: without these the workload reaches nothing. A

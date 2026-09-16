@@ -2182,6 +2182,37 @@ mod tests {
             .expect("a binding that inherits the data-plane address is complete");
     }
 
+    #[cfg(feature = "wasmcloud-nats")]
+    #[test]
+    fn nats_checks_declared_egress_before_connecting() {
+        use crate::plugin::wasmcloud_nats::{PLUGIN_NATS_ID, WasmcloudNats};
+
+        let build = |server: &str| {
+            let declared = crate::plugin::PluginBindingSet::new(PLUGIN_NATS_ID)
+                .with_binding(
+                    "orders",
+                    [("servers".to_string(), server.to_string())]
+                        .into_iter()
+                        .collect(),
+                )
+                .with_egress_policy(
+                    Arc::from(["nats://data.example:4222".parse().unwrap()]),
+                    Arc::from(["data.example".parse().unwrap()]),
+                    Arc::from([]),
+                );
+            Host::builder()
+                .with_plugin(Arc::new(WasmcloudNats::new()))
+                .unwrap()
+                .with_plugin_bindings(crate::plugin::PluginBindings::new().with_plugin(declared))
+                .build()
+        };
+
+        build("nats://data.example:4222").expect("declared server is allowed");
+        let err =
+            build("nats://other.example:4222").expect_err("an undeclared server must fail startup");
+        assert!(format!("{err:#}").contains("allowedIpNameLookups"));
+    }
+
     /// A start that fails *after* its plugins bound must give the binding back.
     /// `resolve` rolls back its own failures; anything failing later has to be
     /// released by the start itself, or every plugin is left holding
