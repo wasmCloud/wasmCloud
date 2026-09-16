@@ -913,10 +913,8 @@ impl HostPlugin for InMemoryMessaging {
         let workload_cleanup = |_| async {};
         let component_cleanup = |component_data: ComponentData| async move {
             component_data.cancel_token.cancel();
-            // Wakes a loop parked on a saturated gate with `Admitted::Closed`.
-            // The token above covers the same case; this makes the closed
-            // semaphore a real signal rather than a documented one that only
-            // tests ever produce.
+            // Releases this binding's reference to the gate; once the last
+            // binding releases and in-flight handlers drain, the gate retires.
             component_data.admission.close();
             if let Some(handle) = component_data.task_handle {
                 handle.abort();

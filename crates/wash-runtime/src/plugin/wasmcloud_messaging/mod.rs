@@ -883,10 +883,10 @@ impl ComponentGates {
     /// Give back one binding's reference, closing and dropping the gate once
     /// the last replica is gone and every permit has drained.
     ///
-    /// Closing wakes any loop parked on a saturated gate with
-    /// [`Admitted::Closed`]. Closing while another replica is still running
-    /// would stop *its* subscriber loop, which is why this is refcounted rather
-    /// than closing on the first teardown.
+    /// The semaphore remains open while in-flight permits are held so that a
+    /// rebind cannot exceed `max_in_flight`. Closing occurs only when the last
+    /// binding is released and all permits have drained. Prompt subscriber
+    /// loop shutdown is handled per binding by its cancellation token.
     fn release(&self, identity: &AdmissionIdentity) {
         let mut gates = self
             .inner
@@ -1353,16 +1353,20 @@ impl Admission {
     /// the workload responsible for it.
     ///
     /// Cancel-safe: dropping the returned future before it resolves releases
-    /// whichever permit it had already taken.
+    /// whichever permit it had already taken. If dropped while waiting for the
+    /// host permit, the component permit is released through [`AdmissionPermit::drop`],
+    /// ensuring shrink debt accounting and gate retirement cleanup run.
     pub(crate) async fn acquire(&self) -> Option<AdmissionPermit> {
         let component = Arc::clone(&self.component).acquire_owned().await.ok()?;
-        let host = Arc::clone(&self.host).acquire_owned().await.ok()?;
-        Some(AdmissionPermit {
+        let mut permit = AdmissionPermit {
             _component: Some(component),
-            _host: Some(host),
+            _host: None,
             gates: self.gates.clone(),
             identity: self.identity.clone(),
-        })
+        };
+        let host = Arc::clone(&self.host).acquire_owned().await.ok()?;
+        permit._host = Some(host);
+        Some(permit)
     }
 
     /// [`Admission::acquire`], but giving up after [`MessagingLimits::admission_wait`]
@@ -1422,14 +1426,11 @@ impl Admission {
 
     /// Give this binding's reference to the component gate back on teardown.
     ///
-    /// The gate is closed — waking any loop parked in
-    /// [`Admission::acquire_before_deadline`] with [`Admitted::Closed`] — only
-    /// once the *last* binding releases it. Replicas of one deployment share a
-    /// gate (see [`ComponentGates`]), so closing on the first teardown would
-    /// stop a healthy replica's subscriber loop dead: it would see `Closed`,
-    /// break, and silently never receive another message. Refcounting is what
-    /// makes gate sharing safe to combine with the round-2 close-on-teardown
-    /// behavior instead of having to choose between them.
+    /// The gate is closed and retired only once the *last* binding releases it
+    /// and every permit has drained. This preserves the `max_in_flight`
+    /// ceiling across rebinds. Prompt loop shutdown is handled per binding by
+    /// its cancellation token (both backends select against it in their
+    /// subscriber loop).
     ///
     /// Only the component gate is ever closed. The host semaphore is shared by
     /// every messaging component on the host and must outlive all of them.
@@ -1439,10 +1440,6 @@ impl Admission {
     /// cannot return its reference twice and drive the count to zero under a
     /// live replica. Clones handed to subscriber loops are not bindings and
     /// never release.
-    ///
-    /// The per-component cancel token also wakes that loop, and both backends
-    /// select on it, so this remains belt-and-braces for the last replica; what
-    /// it adds is that the documented `Closed` signal actually fires.
     pub(crate) fn close(self) {
         self.gates.release(&self.identity);
     }
@@ -2321,29 +2318,82 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn closing_the_gate_wakes_a_loop_already_parked_on_it() {
-        // The point of closing on teardown: a loop parked on a saturated gate
+    async fn cancelling_a_binding_wakes_a_loop_already_parked_on_it() {
+        // The point of cancelling on teardown: a loop parked on a saturated gate
         // must not sit there until the deadline before noticing it is going
         // away. The 30s wait would make that obvious if it were still in force.
+        // In production, each binding selects its CancellationToken against
+        // acquire_before_deadline.
         let limits = MessagingLimits::new(1, 1).with_admission_wait(Duration::from_secs(30));
         let admission = limits.admission(&unique_identity(), Some(1));
         let _held = admission.acquire().await.expect("first admits");
+        let cancel_token = tokio_util::sync::CancellationToken::new();
 
         let parked = {
             let admission = admission.clone();
-            tokio::spawn(async move { admission.acquire_before_deadline("comp", "subj").await })
+            let cancel = cancel_token.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    admitted = admission.acquire_before_deadline("comp", "subj") => Some(admitted),
+                    _ = cancel.cancelled() => None,
+                }
+            })
         };
-        // Let it reach the semaphore before closing underneath it.
+        // Let it reach the semaphore before cancelling underneath it.
         tokio::task::yield_now().await;
+        cancel_token.cancel();
         admission.close();
 
         let outcome = tokio::time::timeout(Duration::from_secs(5), parked)
             .await
-            .expect("closing must wake the parked loop well inside the deadline")
+            .expect("cancelling must wake the parked loop well inside the deadline")
             .expect("task panicked");
         assert!(
-            matches!(outcome, Admitted::Closed),
-            "a parked loop must wake as Closed, not Shed"
+            outcome.is_none(),
+            "a parked loop must exit via cancellation token rather than waiting for admission"
+        );
+    }
+
+    #[tokio::test]
+    async fn dropping_acquire_while_waiting_for_host_permit_cleans_up_component_gate() {
+        // Edge case: component permit is acquired, but host permit is saturated.
+        // Dropping the future before host permit resolves must release the component
+        // permit through `release_permit`, so shrink debt and gate cleanup run.
+        let limits = MessagingLimits::new(1, 1);
+        let identity = unique_identity();
+        let admission = limits.admission(&identity, Some(1));
+
+        // Saturate the shared host semaphore with another component.
+        let other = limits.admission(&unique_identity(), Some(1));
+        let _held_host = other.acquire().await.expect("saturates host");
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let acquire_task = {
+            let admission = admission.clone();
+            let cancel = cancel.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    res = admission.acquire() => res,
+                    _ = cancel.cancelled() => None,
+                }
+            })
+        };
+        tokio::task::yield_now().await;
+
+        // Tear down the binding while the acquire future is parked on the host permit.
+        admission.close();
+        assert!(limits.gates.contains(&identity));
+
+        // Cancel the parked acquisition.
+        cancel.cancel();
+        let res = acquire_task.await.expect("task completes");
+        assert!(res.is_none());
+
+        // Once the cancelled future drops its partially-acquired permit,
+        // release_permit runs and removes the gate because bindings == 0.
+        assert!(
+            !limits.gates.contains(&identity),
+            "gate must be removed once component permit is returned from cancelled acquire"
         );
     }
 
@@ -2624,8 +2674,7 @@ mod tests {
             let rebound = rebound.clone();
             async move { rebound.acquire().await }
         });
-        tokio::task::yield_now().await;
-        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
         assert!(
             !waiter.is_finished(),
             "waiter must park while the gate is fully held"
@@ -2634,8 +2683,7 @@ mod tests {
         // One old handler drains: its slot pays debt (total 9, owed 4, free 0),
         // so the waiter must stay parked rather than run on the old ceiling.
         drop(stragglers.pop());
-        tokio::task::yield_now().await;
-        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
         assert!(
             !waiter.is_finished(),
             "freed slot must pay shrink debt, not admit the waiter on old limits"
@@ -2650,7 +2698,7 @@ mod tests {
         for _ in 0..4 {
             drop(stragglers.pop());
         }
-        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
         assert!(
             !waiter.is_finished(),
             "waiter must stay parked until the live total reaches the new ceiling"
