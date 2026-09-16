@@ -100,7 +100,7 @@ use crate::plugin::component_plugin_spec::ComponentPluginSpec;
 use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::sockets::loopback;
 use crate::types::LocalResources;
-use crate::wit::{WitInterface, WitWorld};
+use crate::wit::{WitInterface, WitWorld, versions_compatible};
 
 mod lifecycle;
 mod workload_call;
@@ -649,17 +649,6 @@ fn import_labels(world: &WitWorld, exported: &WitInterface) -> BTreeSet<Option<A
         })
         .map(|imported| imported.name.as_deref().map(Arc::from))
         .collect()
-}
-
-/// Whether two interface versions resolve to one another under the component
-/// model's semver rule; an unversioned side matches anything.
-fn versions_compatible(a: Option<&semver::Version>, b: Option<&semver::Version>) -> bool {
-    match (a, b) {
-        (Some(a), Some(b)) => {
-            a.major == b.major && (a.major != 0 || a.minor == b.minor) && a.pre == b.pre
-        }
-        _ => true,
-    }
 }
 
 /// Filters `plugins` down to the natives — every entry that is not itself a

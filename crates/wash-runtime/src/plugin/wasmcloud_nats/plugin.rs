@@ -1137,6 +1137,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn world_accepts_the_previous_patch_version() {
+        let world = WasmcloudNats::new().world();
+        assert!(world.includes_bidirectional(&WitInterface::from("wasmcloud:nats/core@0.1.0")));
+        assert!(
+            world.includes_bidirectional(&WitInterface::from("wasmcloud:nats/core-handler@0.1.0"))
+        );
+        assert!(!world.includes_bidirectional(&WitInterface::from("wasmcloud:nats/core@0.2.0")));
+    }
+
     fn entry(spec: &str, name: Option<&str>, config: &[(&str, &str)]) -> WitInterface {
         let mut interface = WitInterface::from(spec);
         interface.name = name.map(str::to_string);
