@@ -13,6 +13,7 @@
 //! | `consumer_group` | Queue-group name, or `broadcast` for no grouping (NATS only) | A name derived from namespace/workload/component |
 //! | `max_in_flight` | Messages this component may process at once, across every replica of it on this host | The host's per-component default |
 //! | `admission_wait` | How long to wait for a slot before shedding (`45s`, `2m`, or bare seconds) | [`DEFAULT_ADMISSION_WAIT`] |
+//! | `admission_group` | Name to group replicas under for admission concurrency gates | A name derived from stable workload / deployment |
 //!
 //! ```yaml
 //! localResources:
@@ -1393,6 +1394,13 @@ pub(crate) fn declares_async_messaging(interfaces: &crate::plugin::WitInterfaces
 /// It can only lower a component below the host's per-component default, never
 /// raise it above: [`MessagingLimits::admission`] clamps to both ceilings.
 pub(crate) const MAX_IN_FLIGHT_CONFIG: &str = "max_in_flight";
+
+/// Config key naming the admission group to collapse replicas onto for
+/// admission concurrency gates (`max_in_flight`).
+///
+/// Defaults to the stable workload name (or deployment name from orchestrator annotations),
+/// but can be set explicitly to group multiple components or override the gate key.
+pub(crate) const ADMISSION_GROUP_CONFIG: &str = "admission_group";
 
 /// Config key naming how long this component's subscriber loop waits for an
 /// admission slot before shedding.
