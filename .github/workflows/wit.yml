@@ -35,6 +35,7 @@ on:
     branches:
       - main
     types: [opened, synchronize, reopened]
+  merge_group:
   push:
     branches:
       - main
@@ -328,6 +329,7 @@ jobs:
   # skips the gate entirely so it doesn't post a phantom failure when a
   # newer run will report the real verdict on the same SHA.
   gate:
+    name: gate-wit
     needs:
       - changes
       - validate

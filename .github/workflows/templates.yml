@@ -21,6 +21,7 @@ on:
     branches:
       - main
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
   push:
     branches:
       - main
@@ -118,6 +119,7 @@ jobs:
           working-directory: ${{ runner.temp }}/${{ matrix.key }}
 
   gate:
+    name: gate-templates
     needs:
       - matrix
       - build

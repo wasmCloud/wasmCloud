@@ -532,6 +532,7 @@ jobs:
             "${SLACK_WEBHOOK_URL}"
 
   gate:
+    name: gate-release-tag
     # Mirror release-train's ISO-week parity gate. workflow_run fires on
     # every release-train completion — including off-cycle weeks where
     # release-train's own gate skipped the release job (skipped jobs roll

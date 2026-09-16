@@ -8,6 +8,7 @@ on:
       - "v*"
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -122,6 +123,7 @@ jobs:
           fixup-command: "cargo xtask generate-protos"
 
   gate:
+    name: gate-proto
     needs:
       - lint
       - check-generated

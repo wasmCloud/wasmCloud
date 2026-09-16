@@ -6,6 +6,7 @@ on:
     tags:
       - "v*"
   pull_request:
+  merge_group:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -145,6 +146,7 @@ jobs:
           soft_fail: false
 
   gate:
+    name: gate-charts
     needs:
       - test
       - lint

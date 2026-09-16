@@ -22,6 +22,7 @@ on:
     branches:
       - main
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
   push:
     branches:
       - main
@@ -110,6 +111,7 @@ jobs:
           image: ${{ matrix.image }}
 
   gate:
+    name: gate-examples
     needs:
       - matrix
       - build

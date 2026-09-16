@@ -46,6 +46,7 @@ concurrency:
 
 jobs:
   gate:
+    name: gate-release-train
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.gate.outputs.run }}
