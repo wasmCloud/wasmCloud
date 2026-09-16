@@ -1,8 +1,9 @@
 {{- /*
 Per-hostgroup ConfigMap holding a `wash host` config file (--config) for
 hostPlugins entries that declare config/configFrom/secretFrom/allowedHosts/
-allowedIpNameLookups — fields with no `--host-plugin` CLI equivalent (deliberately:
-a secret must never appear on the command line / in `kubectl describe pod`).
+allowedIpNameLookups/allowedHostLoopbackPorts/ports — fields with no `--host-plugin`
+CLI equivalent (deliberately: a secret must never appear on the command line /
+in `kubectl describe pod`).
 
 A native entry (no image/file) is always file-backed: it has no `--host-plugin`
 form at all, and its `bindings` carry credentials for the same reason.
