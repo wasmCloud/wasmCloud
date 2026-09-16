@@ -61,6 +61,19 @@ impl PluginEgressPolicy {
         }
     }
 
+    /// Whether two policies carry the same operator declaration.
+    ///
+    /// Only the declared lists and the host-wide loopback switch are compared:
+    /// the rest comes from the host's own socket policy, which is one value
+    /// both sides read.
+    #[cfg(feature = "host-component-plugins")]
+    pub(crate) fn same_declaration(&self, other: &Self) -> bool {
+        self.allowed_hosts == other.allowed_hosts
+            && self.allowed_ip_name_lookups == other.allowed_ip_name_lookups
+            && self.allowed_host_loopback_ports == other.allowed_host_loopback_ports
+            && self.host_loopback_enabled == other.host_loopback_enabled
+    }
+
     /// Whether loopback ports were declared while the host-wide gate is off.
     #[must_use]
     pub fn disabled_loopback_grants(&self) -> bool {

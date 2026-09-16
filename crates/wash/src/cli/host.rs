@@ -764,6 +764,10 @@ impl CliCommand for HostCommand {
             },
             quotas: Some(Arc::clone(&quotas)),
             meters: Some(Arc::new(wash_runtime::host::quota::PolicyMeters::default())),
+            // The host's one record of which real ports are spoken for. Every
+            // guest policy is derived from this one, so they all read the same
+            // table and a port reserved here is seen by all of them.
+            host_owned_ports: Some(wash_runtime::host::ports::PortTable::new()),
             ..Default::default()
         });
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));

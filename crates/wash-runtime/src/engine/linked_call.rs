@@ -286,13 +286,12 @@ async fn build_ctx_from_template(
     };
     // Keyed on the workload, not the component: a workload's components share
     // one allowance, the same way they share one virtual network.
-    let policy = Arc::new(sockets::policy::SocketPolicy {
-        allowed_hosts: Arc::clone(&template.local_resources.allowed_hosts),
-        host_loopback: Arc::clone(&template.local_resources.allowed_host_loopback_ports),
-        ..template
-            .socket_policy
-            .for_guest(kind, &template.workload_id)
-    });
+    let policy = Arc::new(template.socket_policy.for_guest(
+        kind,
+        &template.workload_id,
+        Arc::clone(&template.local_resources.allowed_hosts),
+        Arc::clone(&template.local_resources.allowed_host_loopback_ports),
+    ));
     let sockets_ctx = sockets::WasiSocketsCtx {
         socket_addr_check: sockets::SocketAddrCheck::new(move |addr, reason| {
             let policy = Arc::clone(&policy);
