@@ -540,7 +540,30 @@ jobs:
           docker tag localhost/wasmcloud-wash:e2e localhost/wasmcloud-wash:release
       - name: Build runtime-operator image
         working-directory: runtime-operator
-        run: make docker-build IMG=localhost/runtime-operator:e2e
+        run: |
+          for attempt in 1 2 3; do
+            if make docker-build IMG=localhost/runtime-operator:e2e; then
+              exit 0
+            fi
+            if [ "${attempt}" -eq 3 ]; then
+              exit 1
+            fi
+            echo "runtime-operator image build failed (attempt ${attempt}/3); retrying in 10 seconds"
+            sleep 10
+          done
+      - name: Build runtime-gateway image
+        working-directory: runtime-gateway
+        run: |
+          for attempt in 1 2 3; do
+            if docker build -t localhost/runtime-gateway:e2e .; then
+              exit 0
+            fi
+            if [ "${attempt}" -eq 3 ]; then
+              exit 1
+            fi
+            echo "runtime-gateway image build failed (attempt ${attempt}/3); retrying in 10 seconds"
+            sleep 10
+          done
       - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with:
           cluster_name: wasmcloud-e2e
@@ -554,6 +577,7 @@ jobs:
           SKIP_IMAGE_BUILD: "true"
           BUILD_RUNTIME_IMAGE: "true"
           SKIP_RUNTIME_BUILD: "true"
+          SKIP_GATEWAY_BUILD: "true"
           # Both legs run the in-cluster registry. The default (fixture) hostgroup
           # runs default_tag; the registry hostgroup runs registry_tag (always
           # all-features). implements self-skips when they differ (release leg).

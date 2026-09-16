@@ -75,7 +75,16 @@ jobs:
           # it only lints those, so it needs full history, not a shallow clone.
           fetch-depth: 0
           persist-credentials: false
-      - uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # v2.8.0
+      - name: Set up chart-testing
+        id: chart-testing
+        continue-on-error: true
+        uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # v2.8.0
+      # The action downloads ct and its verification assets from GitHub
+      # Releases. Retry once when that transient setup step fails; the actual
+      # chart lint below remains a single, blocking run.
+      - name: Retry chart-testing setup
+        if: steps.chart-testing.outcome == 'failure'
+        uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # v2.8.0
       - name: Lint charts
         run: ct lint --config .github/ct.yaml
 

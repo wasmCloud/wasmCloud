@@ -262,6 +262,11 @@ spec:
 			// optional so the spec still runs if someone disables TLS via helm
 			// override; the empty mount makes nats CLI fail with a clear error
 			// rather than a silent verify-skip.
+			//
+			// WorkloadDeployment Ready and the handler's NATS SUB are observed on
+			// different paths. Give that last registration a bounded grace period:
+			// an immediate request can otherwise lose the race with the SUB and
+			// report "no responders" even though the handler is coming up normally.
 			echoPayload := rev.payload
 			podName := rev.podName()
 			podManifest := fmt.Sprintf(`apiVersion: v1
@@ -275,15 +280,25 @@ spec:
     - name: nats
       image: natsio/nats-box:latest
       command:
-        - nats
-        - --server=nats://nats:4222
-        - --tlsca=/data-cert/ca.crt
-        - --tlscert=/data-cert/tls.crt
-        - --tlskey=/data-cert/tls.key
-        - request
-        - --timeout=10s
-        - %s
-        - %s
+        - /bin/sh
+        - -ec
+        - |
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if nats --server=nats://nats:4222 \
+              --tlsca=/data-cert/ca.crt \
+              --tlscert=/data-cert/tls.crt \
+              --tlskey=/data-cert/tls.key \
+              request --timeout=2s "${NATS_SUBJECT}" "${NATS_PAYLOAD}"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+      env:
+        - name: NATS_SUBJECT
+          value: %q
+        - name: NATS_PAYLOAD
+          value: %q
       volumeMounts:
         - name: data-cert
           mountPath: /data-cert
@@ -310,7 +325,7 @@ spec:
 				g.Expect(phase).To(Or(Equal("Succeeded"), Equal("Failed")),
 					"pod still %s", phase)
 			}
-			Eventually(verifyTerminated).WithTimeout(30 * time.Second).Should(Succeed())
+			Eventually(verifyTerminated).WithTimeout(45 * time.Second).Should(Succeed())
 
 			By("collecting the NATS client pod logs")
 			cmd = exec.Command("kubectl", "logs", podName, "-n", namespace)
