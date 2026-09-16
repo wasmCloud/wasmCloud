@@ -245,6 +245,56 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyHTTP).WithTimeout(1 * time.Minute).Should(Succeed())
 		})
 
+		It("should scale a workload through the scale subresource", func() {
+			const scaledReplicas = int32(2)
+			scalePath := fmt.Sprintf(
+				"/apis/runtime.wasmcloud.dev/v1alpha1/namespaces/%s/workloaddeployments/%s/scale",
+				namespace, deploymentName,
+			)
+
+			By("scaling the WorkloadDeployment through its scale subresource")
+			cmd := exec.Command("kubectl", "scale", "workloaddeployment", deploymentName,
+				fmt.Sprintf("--replicas=%d", scaledReplicas), "-n", namespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for the scale subresource to report the desired and current replicas")
+			var selector string
+			Eventually(func(g Gomega) {
+				output, err := utils.Run(exec.Command("kubectl", "get", "--raw", scalePath))
+				g.Expect(err).NotTo(HaveOccurred())
+
+				var scale struct {
+					Spec struct {
+						Replicas int32 `json:"replicas"`
+					} `json:"spec"`
+					Status struct {
+						Replicas int32  `json:"replicas"`
+						Selector string `json:"selector"`
+					} `json:"status"`
+				}
+				g.Expect(json.Unmarshal([]byte(output), &scale)).To(Succeed())
+				g.Expect(scale.Spec.Replicas).To(Equal(scaledReplicas))
+				g.Expect(scale.Status.Replicas).To(Equal(scaledReplicas))
+				g.Expect(scale.Status.Selector).NotTo(BeEmpty())
+				selector = scale.Status.Selector
+
+				output, err = utils.Run(exec.Command("kubectl", "get", "workloaddeployment",
+					deploymentName, "-n", namespace,
+					"-o", "jsonpath={.status.replicas.ready}"))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(strings.TrimSpace(output)).To(Equal(fmt.Sprint(scaledReplicas)))
+			}).WithTimeout(2 * time.Minute).Should(Succeed())
+
+			By("verifying the scale selector identifies the managed ReplicaSet")
+			cmd = exec.Command("kubectl", "get", "workloadreplicasets.runtime.wasmcloud.dev",
+				"-n", namespace, "-l", selector,
+				"-o", "jsonpath={.items[*].metadata.name}")
+			output, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(strings.Fields(output)).To(HaveLen(1))
+		})
+
 		It("should clean up workload resources on delete", func() {
 			By("deleting the WorkloadDeployment")
 			cmd := exec.Command("kubectl", "delete", "workloaddeployment", deploymentName,

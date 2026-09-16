@@ -87,11 +87,12 @@ pub struct Meters {
 /// groups calls across all of them. See [`Self::attributes`] for the full
 /// scheme.
 ///
-/// Deliberately **not** the workload or component id: both are
-/// `uuid::Uuid::new_v4()` minted per workload construction, so attributing a
-/// series with one mints a fresh series on every restart, rolling update and
-/// replica — growth driven by deployment churn, and a value no operator can map
-/// back to a workload. The ids keep their place on the span and the log line,
+/// Deliberately **not** the workload or component id: the workload id is
+/// unique per started workload and the component id is minted per workload
+/// construction, so attributing a series with one mints a fresh series on
+/// every restart, rolling update and replica — growth driven by deployment
+/// churn, and a value no operator can map back to a workload. The ids keep
+/// their place on the span and the log line,
 /// where identity is per-event and therefore free. This is the same rule
 /// `wasmcloud:messaging`'s admission counter follows.
 #[derive(Clone, Debug)]

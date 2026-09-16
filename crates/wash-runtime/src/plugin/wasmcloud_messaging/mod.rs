@@ -764,7 +764,7 @@ pub struct MessagingLimits {
 /// The per-component gates on this host, keyed by [`AdmissionIdentity`].
 ///
 /// **Keyed by manifest identity, not by component id.** Every replica of a
-/// deployment is a separate workload with its own `uuid::Uuid::new_v4()`
+/// deployment is a separate workload with its own `uuid::Uuid::now_v7()`
 /// component id, so keying by that gives each replica its own full ceiling:
 /// four replicas of a component at `max_in_flight: 32` could hold 128 messages
 /// on one host, against a stock host-wide total of 133. The per-component
@@ -1055,7 +1055,7 @@ const UNMATCHED_SUBSCRIPTION: &str = "<unmatched>";
 
 /// Who is shedding, in terms a manifest author and a dashboard both recognize.
 ///
-/// Deliberately **not** the component id: that is a `uuid::Uuid::new_v4()`
+/// Deliberately **not** the component id: that is a `uuid::Uuid::now_v7()`
 /// minted per workload construction (`engine::workload`), so attributing a
 /// counter with it mints a fresh time series on every restart, rolling update,
 /// and replica — unbounded growth driven by deployment churn, and a value no

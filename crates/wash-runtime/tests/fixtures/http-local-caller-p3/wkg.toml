@@ -1,0 +1,7 @@
+[overrides]
+"wasi:cli" = { path = "../p3-wit-deps/wasi-cli-0.3.0" }
+"wasi:clocks" = { path = "../p3-wit-deps/wasi-clocks-0.3.0" }
+"wasi:filesystem" = { path = "../p3-wit-deps/wasi-filesystem-0.3.0" }
+"wasi:http" = { path = "../p3-wit-deps/wasi-http-0.3.0" }
+"wasi:random" = { path = "../p3-wit-deps/wasi-random-0.3.0" }
+"wasi:sockets" = { path = "../p3-wit-deps/wasi-sockets-0.3.0" }

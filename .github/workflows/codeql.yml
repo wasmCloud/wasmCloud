@@ -21,6 +21,7 @@ on:
     paths:
       - ".github/workflows/codeql.yml"
       - ".github/actions/setup-rust/**"
+  merge_group:
 
 permissions: read-all
 

@@ -6,6 +6,7 @@ on:
     tags:
       - "v*"
   pull_request:
+  merge_group:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -74,7 +75,16 @@ jobs:
           # it only lints those, so it needs full history, not a shallow clone.
           fetch-depth: 0
           persist-credentials: false
-      - uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # v2.8.0
+      - name: Set up chart-testing
+        id: chart-testing
+        continue-on-error: true
+        uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # v2.8.0
+      # The action downloads ct and its verification assets from GitHub
+      # Releases. Retry once when that transient setup step fails; the actual
+      # chart lint below remains a single, blocking run.
+      - name: Retry chart-testing setup
+        if: steps.chart-testing.outcome == 'failure'
+        uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # v2.8.0
       - name: Lint charts
         run: ct lint --config .github/ct.yaml
 
@@ -136,7 +146,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: bridgecrewio/checkov-action@5659ddea96102e16d8f221b3d8402453c0b1c150 # v12.3121.0
+      - uses: bridgecrewio/checkov-action@f967808197a8d784d3e72919f38c3ff0cda7884e # v12.3122.0
         with:
           directory: charts/runtime-operator
           framework: helm
@@ -145,6 +155,7 @@ jobs:
           soft_fail: false
 
   gate:
+    name: gate-charts
     needs:
       - test
       - lint

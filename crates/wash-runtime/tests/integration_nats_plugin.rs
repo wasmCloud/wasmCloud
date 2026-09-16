@@ -127,9 +127,6 @@ async fn connect_with_retry(url: &str, budget: Duration) -> Result<async_nats::C
 }
 
 /// Builds the interface binding a workload is deployed with.
-///
-/// Pinned to the published `0.1.0` on purpose: the plugin serves `0.1.2`, so
-/// every test using this covers a manifest pinning an older compatible version.
 fn nats_interface(config: &[(&str, &str)]) -> WitInterface {
     WitInterface {
         namespace: "wasmcloud".to_string(),
@@ -142,7 +139,7 @@ fn nats_interface(config: &[(&str, &str)]) -> WitInterface {
         ]
         .into_iter()
         .collect(),
-        version: Some(semver::Version::new(0, 1, 0)),
+        version: Some(semver::Version::new(0, 1, 2)),
         config: config
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))

@@ -59,7 +59,7 @@ impl hyper::body::Body for ChannelBody {
 /// re-registers) a fresh instance. See `test_trigger_service_http_restarts_on_fault`.
 pub(crate) struct HttpTask {
     pub(crate) service: Arc<Service>,
-    pub(crate) req: hyper::Request<hyper::body::Incoming>,
+    pub(crate) req: hyper::Request<crate::host::http::IncomingBody>,
     pub(crate) resp_tx:
         tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
     /// Armed by the dispatcher once it has stopped waiting for this response.
@@ -101,9 +101,8 @@ impl AccessorTask<SharedCtx> for HttpTask {
             crate::engine::instance_driver::InvocationSample::start(&executed, attributes);
 
         let (parts, body) = req.into_parts();
-        let body = body
-            .map_err(|e| ErrorCode::InternalError(Some(e.to_string())))
-            .boxed_unsync();
+        // The request body's error is either version's error-code; the guest wants P3.
+        let body = body.map_err(ErrorCode::from).boxed_unsync();
         let req = hyper::Request::from_parts(parts, body);
         let (wasi_req, req_io) = wasmtime_wasi_http::p3::Request::from_http(req);
 
@@ -172,8 +171,9 @@ impl AccessorTask<SharedCtx> for HttpTask {
             // Forward body frames incrementally; stop if the client disconnects.
             let mut delivery = Ok(());
             while let Some(frame) = body.frame().await {
-                // Frames carry the p3 `ErrorCode`; the server body wants the p2 one.
-                let frame = frame.map_err(|e| P2ErrorCode::InternalError(Some(format!("{e:?}"))));
+                // Frames carry the p3 `ErrorCode`; the server body wants the p2 one,
+                // and `From` maps it variant for variant.
+                let frame = frame.map_err(P2ErrorCode::from);
                 if frame_tx.send(frame).await.is_err() {
                     delivery = Err(ErrorCode::ConnectionTerminated);
                     break;

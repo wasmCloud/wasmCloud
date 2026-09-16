@@ -198,8 +198,6 @@ pub struct WitInterface {
     pub package: String,
     /// The specific interfaces within the package (e.g., "incoming-handler", "types")
     pub interfaces: HashSet<String>,
-    // TODO: This is a nice way to represent a version, but it doesn't account for
-    // compatible versions. We should revisit this and implement https://docs.rs/semver/1.0.27/semver/struct.VersionReq.html
     /// Optional semantic version for the interface
     #[serde(default)]
     pub version: Option<semver::Version>,
@@ -273,12 +271,14 @@ impl WitInterface {
     }
 
     /// Returns `true` if `other` belongs to the same `namespace:package` at a
-    /// compatible version (see [`versions_compatible`]); if either omits a
-    /// version, any version is considered compatible.
+    /// compatible version. Compatibility follows the Component Model's semver
+    /// rule: versions share a major, and `0.x` versions also share a minor. If
+    /// either omits a version, any version is considered compatible.
     pub fn same_package(&self, other: &WitInterface) -> bool {
-        self.namespace == other.namespace
-            && self.package == other.package
-            && versions_compatible(self.version.as_ref(), other.version.as_ref())
+        if self.namespace != other.namespace || self.package != other.package {
+            return false;
+        }
+        versions_compatible(self.version.as_ref(), other.version.as_ref())
     }
 
     /// Checks if this interface contains (is a superset of) another interface.
@@ -323,6 +323,20 @@ impl WitInterface {
     }
 }
 
+/// Whether two interface versions resolve to one another under the Component
+/// Model's semver rule; an unversioned side matches anything.
+pub(crate) fn versions_compatible(
+    a: Option<&semver::Version>,
+    b: Option<&semver::Version>,
+) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            a.major == b.major && (a.major != 0 || a.minor == b.minor) && a.pre == b.pre
+        }
+        _ => true,
+    }
+}
+
 impl Display for WitInterface {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.namespace, self.package)?;
@@ -364,21 +378,6 @@ impl std::hash::Hash for WitInterface {
             config_hash ^= std::hash::Hasher::finish(&h);
         }
         config_hash.hash(state);
-    }
-}
-
-/// Whether two interface versions resolve to one another under the component
-/// model's semver rule, which is how wasmtime links an import against a newer
-/// definition; an unversioned side matches anything.
-pub(crate) fn versions_compatible(
-    a: Option<&semver::Version>,
-    b: Option<&semver::Version>,
-) -> bool {
-    match (a, b) {
-        (Some(a), Some(b)) => {
-            a.major == b.major && (a.major != 0 || a.minor == b.minor) && a.pre == b.pre
-        }
-        _ => true,
     }
 }
 
@@ -490,21 +489,6 @@ mod tests {
         }
     }
 
-    /// A manifest pinning a published version still matches a plugin that has
-    /// taken an additive bump, since wasmtime links the older import.
-    #[test]
-    fn same_package_accepts_a_semver_compatible_version() {
-        let plugin = create_interface_with_version("wasmcloud", "nats", &["kv"], "0.1.1");
-        let pinned = create_interface_with_version("wasmcloud", "nats", &["kv"], "0.1.0");
-        assert!(plugin.same_package(&pinned));
-        assert!(plugin.contains(&pinned));
-
-        let next_minor = create_interface_with_version("wasmcloud", "nats", &["kv"], "0.2.0");
-        assert!(!plugin.same_package(&next_minor));
-        let draft = create_interface_with_version("wasmcloud", "nats", &["kv"], "0.1.1-draft");
-        assert!(!plugin.same_package(&draft));
-    }
-
     #[test]
     fn test_contains_basic() {
         let interface_a = create_interface("wasi", "logging", &["log", "error", "debug"]);
@@ -603,6 +587,17 @@ mod tests {
         let wit9 = WitInterface::from("wasi:http/types,incoming-handler,outgoing-handler@0.2.0");
         let wit10 = WitInterface::from("wasi:http/types,incoming-handler@0.2.0");
         assert!(wit9.contains(&wit10));
+    }
+
+    #[test]
+    fn test_component_model_version_compatibility() {
+        let interface = |version| WitInterface::from(format!("wasmcloud:nats/core@{version}"));
+
+        assert!(interface("0.1.0").same_package(&interface("0.1.1")));
+        assert!(!interface("0.1.0").same_package(&interface("0.2.0")));
+        assert!(interface("1.2.0").same_package(&interface("1.9.0")));
+        assert!(!interface("1.2.0").same_package(&interface("2.0.0")));
+        assert!(!interface("0.1.0-draft").same_package(&interface("0.1.0")));
     }
 
     #[test]
