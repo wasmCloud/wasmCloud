@@ -36,14 +36,19 @@ use crate::{
 #[derive(Debug, Clone, Args)]
 pub struct DevCommand {}
 
-fn dev_socket_policy() -> Arc<wash_runtime::sockets::policy::SocketPolicy> {
+fn dev_socket_policy(
+    quotas: &Arc<wash_runtime::host::quota::QuotaRegistry>,
+) -> Arc<wash_runtime::sockets::policy::SocketPolicy> {
     // The guest's port list remains the per-guest gate in a dev session. The
     // port table is the session's single record of the real ports it holds —
     // the dev host's own ingress among them — so every guest policy derived
-    // from this one reads the same reservations.
+    // from this one reads the same reservations. `quotas` is the session's
+    // one registry, so socket connections draw on the same allowance the
+    // HTTP pool and the published ports do.
     Arc::new(wash_runtime::sockets::policy::SocketPolicy {
         host_loopback_enabled: true,
         host_owned_ports: Some(wash_runtime::host::ports::PortTable::new()),
+        quotas: Some(Arc::clone(quotas)),
         ..Default::default()
     })
 }
@@ -99,9 +104,19 @@ impl CliCommand for DevCommand {
                 .with_context(|| format!("invalid dev.wasm_proposals entry {name:?}"))?;
             engine_builder = engine_builder.with_wasm_proposal(proposal);
         }
+        // Raised before any ceiling is computed from it: every allowance below
+        // is a share of the soft descriptor limit. `wash dev` applies it for
+        // the same reason `wash host` does — both own their process.
+        wash_runtime::host::quota::raise_descriptor_limit();
+
+        // One registry for every surface: HTTP pool, raw sockets, inbound
+        // published ports. Built here so the socket policy carries the
+        // operator's configured allowance rather than a private default.
+        let quotas = dev_config.connection_quotas()?;
+
         // Dev enables the host-wide gate. Each workload or component plugin
         // must still name its loopback ports.
-        let socket_policy = dev_socket_policy();
+        let socket_policy = dev_socket_policy(&quotas);
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         let engine = engine_builder.build()?;
 
@@ -227,15 +242,6 @@ impl CliCommand for DevCommand {
         check_local_routes(&dev_config.host_interfaces)?;
 
         let http_handler = wash_runtime::host::http::DevRouter::default();
-
-        // Before the ceilings below, each of which is a share of the soft
-        // descriptor limit this leaves in place. `wash dev` applies it for the
-        // same reason `wash host` does: both own their process.
-        wash_runtime::host::quota::raise_descriptor_limit();
-
-        // One registry for every surface: HTTP pool, raw sockets, inbound
-        // published ports.
-        let quotas = dev_config.connection_quotas()?;
 
         // Outbound (egress) trust roots for the component's outgoing HTTPS
         // calls. Distinct from `tls_*_path` below, which configure the ingress
@@ -387,7 +393,7 @@ impl CliCommand for DevCommand {
         #[cfg(feature = "host-component-plugins")]
         {
             let native_plugins = host_builder.native_plugins();
-            let http_handler = host_builder.http_handler();
+            let host_ref = host_builder.host_ref();
             for hp in dev_config.component_plugins()? {
                 let spec = hp.to_spec(&config, project_dir, Some(project_dir))?;
                 let plugin = wash_runtime::plugin::component_host::load_component_plugin(
@@ -395,7 +401,7 @@ impl CliCommand for DevCommand {
                     &engine,
                     oci_config.clone(),
                     &native_plugins,
-                    http_handler.as_ref().map(Arc::downgrade),
+                    Some(host_ref.clone()),
                     Some(Arc::clone(&socket_policy)),
                 )
                 .await
@@ -905,9 +911,13 @@ mod tests {
 
     #[test]
     fn dev_enables_only_the_host_side_of_loopback_access() {
-        let policy = dev_socket_policy();
+        let policy = dev_socket_policy(&DevConfig::default().connection_quotas().unwrap());
         assert!(policy.host_loopback_enabled);
         assert!(policy.host_loopback.is_empty());
+        assert!(
+            policy.quotas.is_some(),
+            "a dev session's sockets draw on its one connection registry"
+        );
     }
 
     fn iface(namespace: &str, package: &str) -> WitInterface {

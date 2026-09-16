@@ -53,6 +53,7 @@ pub enum Relocated {
         owned: bool,
     },
     List(Vec<Relocated>),
+    FixedLengthList(Vec<Relocated>),
     Tuple(Vec<Relocated>),
     Record(Vec<(String, Relocated)>),
     Variant(String, Box<Relocated>),
@@ -165,7 +166,7 @@ bridgeable_elements!(
 fn contains_handle(val: &Val) -> bool {
     match val {
         Val::Stream(_) | Val::Future(_) | Val::Resource(_) | Val::ErrorContext(_) => true,
-        Val::List(vs) | Val::Tuple(vs) => vs.iter().any(contains_handle),
+        Val::List(vs) | Val::FixedLengthList(vs) | Val::Tuple(vs) => vs.iter().any(contains_handle),
         Val::Record(fs) => fs.iter().any(|(_, v)| contains_handle(v)),
         Val::Variant(_, Some(v)) | Val::Option(Some(v)) => contains_handle(v),
         Val::Result(Ok(Some(v))) | Val::Result(Err(Some(v))) => contains_handle(v),
@@ -293,6 +294,14 @@ pub fn extract(
             }
             Ok(Relocated::List(out))
         }
+        (Val::FixedLengthList(vs), Type::FixedLengthList(lt)) => {
+            let et = lt.ty();
+            let mut out = Vec::with_capacity(vs.len());
+            for v in vs {
+                out.push(extract(store.as_context_mut(), v, &et, dones)?);
+            }
+            Ok(Relocated::FixedLengthList(out))
+        }
         (Val::Tuple(vs), Type::Tuple(tt)) => {
             let tys: Vec<Type> = tt.types().collect();
             let mut out = Vec::with_capacity(vs.len());
@@ -380,6 +389,13 @@ pub fn inject(mut store: StoreContextMut<SharedCtx>, r: Relocated) -> wasmtime::
             }
             Ok(Val::List(out))
         }
+        Relocated::FixedLengthList(rs) => {
+            let mut out = Vec::with_capacity(rs.len());
+            for r in rs {
+                out.push(inject(store.as_context_mut(), r)?);
+            }
+            Ok(Val::FixedLengthList(out))
+        }
         Relocated::Tuple(rs) => {
             let mut out = Vec::with_capacity(rs.len());
             for r in rs {
@@ -424,8 +440,21 @@ pub fn inject(mut store: StoreContextMut<SharedCtx>, r: Relocated) -> wasmtime::
 
 #[cfg(test)]
 mod tests {
-    use super::contains_handle;
-    use wasmtime::component::Val;
+    use super::{Relocated, contains_handle, extract, inject, stream_pump};
+    use crate::engine::ctx::{Ctx, SharedCtx};
+    use wasmtime::AsContextMut as _;
+    use wasmtime::component::{Component, StreamReader, Val, types::ComponentItem};
+
+    fn make_store() -> wasmtime::Store<SharedCtx> {
+        #[cfg(feature = "wasi-tls")]
+        crate::init_crypto();
+
+        let mut config = wasmtime::Config::new();
+        config.wasm_component_model(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        let ctx = Ctx::builder("test-workload", "test-component").build();
+        wasmtime::Store::new(&engine, SharedCtx::new(ctx))
+    }
 
     // `contains_handle` decides the relocation fast path (copy wholesale) vs.
     // structural descent. Its `true` arms (`stream`/`future`/`resource`/
@@ -460,6 +489,10 @@ mod tests {
         ]);
         assert!(!contains_handle(&rec));
         assert!(!contains_handle(&Val::List(vec![Val::U8(1), Val::U8(2)])));
+        assert!(!contains_handle(&Val::FixedLengthList(vec![
+            Val::U8(1),
+            Val::U8(2)
+        ])));
         assert!(!contains_handle(&Val::Tuple(vec![
             Val::Bool(true),
             rec.clone()
@@ -491,5 +524,66 @@ mod tests {
             ])))),
         )])]);
         assert!(!contains_handle(&deep));
+    }
+
+    #[test]
+    fn inject_preserves_fixed_length_list() {
+        let mut store = make_store();
+        let relocated = Relocated::FixedLengthList(vec![
+            Relocated::Val(Val::U8(1)),
+            Relocated::Val(Val::U8(2)),
+        ]);
+
+        assert_eq!(
+            inject(store.as_context_mut(), relocated).unwrap(),
+            Val::FixedLengthList(vec![Val::U8(1), Val::U8(2)])
+        );
+    }
+
+    #[test]
+    fn extract_preserves_fixed_length_list() {
+        let mut config = wasmtime::Config::new();
+        config
+            .wasm_component_model(true)
+            .wasm_component_model_async(true)
+            .wasm_component_model_fixed_length_lists(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        let wasm = wat::parse_str(
+            r#"
+                (component
+                    (type $stream (stream u8))
+                    (type $fixed (list $stream 1))
+                    (type $func (func (param "value" $fixed)))
+                    (import "f" (func (type $func)))
+                )
+            "#,
+        )
+        .unwrap();
+        let component = Component::new(&engine, wasm).unwrap();
+        let ComponentItem::ComponentFunc(func_ty) = component
+            .component_type()
+            .imports(&engine)
+            .next()
+            .unwrap()
+            .1
+            .ty
+        else {
+            panic!("expected function import");
+        };
+        let ty = func_ty.params().next().unwrap().1;
+
+        let ctx = Ctx::builder("test-workload", "test-component").build();
+        let mut store = wasmtime::Store::new(&engine, SharedCtx::new(ctx));
+        let (_consumer, producer, _done) = stream_pump::channel::<u8>(1);
+        let reader = StreamReader::new(store.as_context_mut(), producer).unwrap();
+        let stream = reader.try_into_stream_any(store.as_context_mut()).unwrap();
+        let value = Val::FixedLengthList(vec![Val::Stream(stream)]);
+
+        let relocated = extract(store.as_context_mut(), &value, &ty, &mut Vec::new()).unwrap();
+        assert!(matches!(
+            relocated,
+            Relocated::FixedLengthList(values)
+                if matches!(values.as_slice(), [Relocated::Stream(_)])
+        ));
     }
 }

@@ -82,6 +82,7 @@ impl UdpSocket {
                 remote_address,
                 rx: Arc::clone(rx),
                 received: None,
+                socket_addr_check: self.socket_addr_check().cloned(),
             },
             crate::sockets::p2_udp::LoopbackOutgoingDatagramStream {
                 local_address: *local_address,

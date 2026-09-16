@@ -2,8 +2,10 @@
 
 use super::WasiSocketsCtxView;
 use super::tcp::{NonInheritedOptions, TcpSocket};
+use crate::host::quota::ConnectionSlot;
 use crate::sockets::{
-    SocketAddrUse, SocketAddressFamily, WasiSockets, p3_socket_error_from_util as se,
+    SocketAddrCheck, SocketAddrUse, SocketAddressFamily, WasiSockets,
+    p3_socket_error_from_util as se,
 };
 use bytes::BytesMut;
 use core::pin::Pin;
@@ -28,8 +30,58 @@ use wasmtime_wasi::p3::sockets::{SocketError, SocketResult};
 /// Type aliases for the upstream resource type (used in generated bindings)
 type UpstreamTcpSocket = types::TcpSocket;
 
+struct ConnectGuard<'a, T: Send + 'static> {
+    store: &'a Accessor<T, WasiSockets>,
+    socket_rep: u32,
+    armed: bool,
+}
+
+impl<T: Send + 'static> Drop for ConnectGuard<'_, T> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.store.with(|mut store| {
+            let view = store.get();
+            let socket = Resource::<TcpSocket>::new_borrow(self.socket_rep);
+            let Ok(socket) = view.table.get_mut(&socket) else {
+                return;
+            };
+            let Ok(mut loopback) = view.ctx.loopback.lock() else {
+                return;
+            };
+            socket.cancel_connect(&mut loopback);
+        });
+    }
+}
+
 /// Default buffer capacity for reads.
 const DEFAULT_BUFFER_CAPACITY: usize = 8192;
+
+/// How many connections the policy may refuse in one `poll_produce` before the
+/// task yields.
+///
+/// A peer flooding connections from a refused address would otherwise keep one
+/// poll accepting, checking and dropping for as long as they arrive, with the
+/// guest waiting behind it.
+const MAX_REFUSED_ACCEPTS_PER_POLL: usize = 32;
+
+fn refusal_limit_result(cx: &Context<'_>, finish: bool) -> Poll<wasmtime::Result<StreamResult>> {
+    if finish {
+        Poll::Ready(Ok(StreamResult::Cancelled))
+    } else {
+        cx.waker().wake_by_ref();
+        Poll::Pending
+    }
+}
+
+/// Refuse an accepted connection with a reset rather than an orderly close, so
+/// the peer learns it was refused instead of seeing a successful, empty
+/// exchange. Mirrors wasmtime-wasi's own accept filter.
+fn refuse_accepted(stream: TcpStream) {
+    _ = stream.set_zero_linger();
+    drop(stream);
+}
 
 fn get_socket<'a>(
     table: &'a ResourceTable,
@@ -57,6 +109,8 @@ struct ListenStreamProducer<T> {
     listener: Arc<TcpListener>,
     family: SocketAddressFamily,
     options: NonInheritedOptions,
+    permissions: SocketAddrCheck,
+    pending: Option<(std::io::Result<TcpStream>, Option<ConnectionSlot>)>,
     getter: for<'a> fn(&'a mut T) -> WasiSocketsCtxView<'a>,
 }
 
@@ -68,25 +122,48 @@ where
     type Buffer = Option<Self::Item>;
 
     fn poll_produce<'a>(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         mut store: StoreContextMut<'a, D>,
         mut dst: Destination<'a, Self::Item, Self::Buffer>,
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
+        let mut refused = 0;
+        while self.pending.is_none() {
+            let pending = match self.listener.poll_accept(cx) {
+                Poll::Ready(Ok((stream, addr))) => {
+                    let Ok(allowed) = self.permissions.check(addr, SocketAddrUse::TcpAccept) else {
+                        refuse_accepted(stream);
+                        refused += 1;
+                        if refused >= MAX_REFUSED_ACCEPTS_PER_POLL {
+                            return refusal_limit_result(cx, finish);
+                        }
+                        continue;
+                    };
+                    (Ok(stream), allowed.permit)
+                }
+                Poll::Ready(Err(err)) => (Err(err), None),
+                Poll::Pending if finish => return Poll::Ready(Ok(StreamResult::Cancelled)),
+                Poll::Pending => return Poll::Pending,
+            };
+            self.pending = Some(pending);
+        }
         if dst.remaining(&mut store) == Some(0) {
             return Poll::Ready(Ok(StreamResult::Completed));
         }
-        let res = match self.listener.poll_accept(cx) {
-            Poll::Ready(res) => res.map(|(stream, _)| stream),
-            Poll::Pending if finish => return Poll::Ready(Ok(StreamResult::Cancelled)),
-            Poll::Pending => return Poll::Pending,
+        // The loop above leaves `pending` set, so this only returns early if
+        // that ever stops holding.
+        let Some((res, permit)) = self.pending.take() else {
+            return Poll::Pending;
         };
-        let socket = TcpSocket::new_accept(res, &self.options, self.family).unwrap_or_else(|err| {
-            // Create a Network socket in error state - wrap in Connected with a dummy
-            // For simplicity, just create a closed socket on error
-            TcpSocket::Network(super::tcp::NetworkTcpSocket::new_error(err, self.family))
-        });
+        let socket = TcpSocket::new_accept(res, &self.options, self.family)
+            .map(|mut socket| {
+                socket.hold_quota_slot(permit);
+                socket
+            })
+            .unwrap_or_else(|err| {
+                TcpSocket::Network(super::tcp::NetworkTcpSocket::new_error(err, self.family))
+            });
         let WasiSocketsCtxView { table, .. } = (self.getter)(store.data_mut());
         let socket = table
             .push(socket)
@@ -258,7 +335,6 @@ impl<T: Send> HostTcpSocketWithStore<T> for WasiSockets {
         // Check if address is allowed
         let check = store.with(|mut view| view.get().ctx.socket_addr_check.clone());
         let allowed = check(remote_address, SocketAddrUse::TcpConnect)
-            .await
             .into_allowed()
             .map_err(se)?;
         let remote_address = allowed.addr;
@@ -283,11 +359,17 @@ impl<T: Send> HostTcpSocketWithStore<T> for WasiSockets {
             SocketResult::Ok(connecting)
         })?;
 
+        let mut guard = ConnectGuard {
+            store,
+            socket_rep: socket.rep(),
+            armed: true,
+        };
+
         // Perform the actual connect
         let res = connecting.connect(remote_address).await;
 
         // Finish connect
-        store.with(|mut store| {
+        let result = store.with(|mut store| {
             let view = store.get();
             let socket_ref = get_socket_mut(view.table, &socket)?;
             let mut loopback = view
@@ -297,7 +379,9 @@ impl<T: Send> HostTcpSocketWithStore<T> for WasiSockets {
                 .map_err(|e| SocketError::trap(wasmtime::format_err!("{e}")))?;
             socket_ref.finish_connect(res, &mut loopback).map_err(se)?;
             Ok(())
-        })
+        });
+        guard.armed = false;
+        result
     }
 
     async fn listen(
@@ -311,20 +395,27 @@ impl<T: Send> HostTcpSocketWithStore<T> for WasiSockets {
         // against that implicit bind address first — the same check `bind`
         // performs — so `listen` cannot be used to bind to an address the
         // network policy would otherwise deny. (bytecodealliance/wasmtime#13677)
-        let implicit_addr = {
+        let (implicit_addr, listen_addr) = {
             let view = store.get();
             let socket_ref = get_socket_mut(view.table, &socket)?;
-            socket_ref
+            let implicit = socket_ref
                 .needs_implicit_bind()
-                .then(|| crate::sockets::util::implicit_bind_addr(socket_ref.address_family()))
+                .then(|| crate::sockets::util::implicit_bind_addr(socket_ref.address_family()));
+            let listen = match implicit {
+                Some(addr) => addr,
+                None => socket_ref.local_address().map_err(se)?,
+            };
+            (implicit, listen)
         };
+        let check = store.get().ctx.socket_addr_check.clone();
         if let Some(addr) = implicit_addr {
-            let check = store.get().ctx.socket_addr_check.clone();
             check(addr, SocketAddrUse::TcpBind)
-                .await
                 .into_allowed()
                 .map_err(se)?;
         }
+        check(listen_addr, SocketAddrUse::TcpListen)
+            .into_allowed()
+            .map_err(se)?;
 
         // Scope: do the listen and extract info
         enum ListenKind {
@@ -390,6 +481,8 @@ impl<T: Send> HostTcpSocketWithStore<T> for WasiSockets {
                     listener,
                     family,
                     options,
+                    permissions: check.clone(),
+                    pending: None,
                     getter,
                 },
             )
@@ -399,6 +492,8 @@ impl<T: Send> HostTcpSocketWithStore<T> for WasiSockets {
                 LoopbackListenStreamProducer {
                     rx: info.rx,
                     socket_props: info.socket_props,
+                    permissions: check.clone(),
+                    pending: None,
                     getter,
                 },
             )
@@ -415,6 +510,9 @@ impl<T: Send> HostTcpSocketWithStore<T> for WasiSockets {
                     options,
                     loopback_rx: loopback.rx,
                     loopback_props: loopback.socket_props,
+                    permissions: check,
+                    pending: None,
+                    loopback_closed: false,
                     getter,
                 },
             )
@@ -518,7 +616,6 @@ impl HostTcpSocket for WasiSocketsCtxView<'_> {
     ) -> SocketResult<()> {
         let local_address = SocketAddr::from(local_address);
         let local_address = (self.ctx.socket_addr_check)(local_address, SocketAddrUse::TcpBind)
-            .await
             .into_allowed()
             .map_err(se)?
             .addr;
@@ -543,7 +640,17 @@ impl HostTcpSocket for WasiSocketsCtxView<'_> {
             IpAddressFamily::Ipv4 => SocketAddressFamily::Ipv4,
             IpAddressFamily::Ipv6 => SocketAddressFamily::Ipv6,
         };
-        let socket = TcpSocket::new(self.ctx, family).map_err(se)?;
+        let permit = self
+            .ctx
+            .socket_addr_check
+            .check(
+                crate::sockets::util::implicit_bind_addr(family),
+                SocketAddrUse::TcpCreate,
+            )
+            .map_err(se)?
+            .permit;
+        let mut socket = TcpSocket::new(self.ctx, family).map_err(se)?;
+        socket.hold_quota_slot(permit);
         let resource = self
             .table
             .push(socket)
@@ -727,6 +834,8 @@ impl HostTcpSocket for WasiSocketsCtxView<'_> {
 struct LoopbackListenStreamProducer<T> {
     rx: tokio::sync::mpsc::Receiver<super::loopback::TcpConn>,
     socket_props: super::tcp::LoopbackSocketProps,
+    permissions: SocketAddrCheck,
+    pending: Option<super::loopback::TcpConn>,
     getter: for<'a> fn(&'a mut T) -> WasiSocketsCtxView<'a>,
 }
 
@@ -744,28 +853,44 @@ where
         mut dst: Destination<'a, Self::Item, Self::Buffer>,
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
+        let this = self.get_mut();
+        let mut refused = 0;
+        while this.pending.is_none() {
+            match this.rx.poll_recv(cx) {
+                Poll::Ready(Some(conn)) => {
+                    if this
+                        .permissions
+                        .check(conn.remote_address, SocketAddrUse::TcpAcceptVirtual)
+                        .is_ok()
+                    {
+                        this.pending = Some(conn);
+                    } else {
+                        refused += 1;
+                        if refused >= MAX_REFUSED_ACCEPTS_PER_POLL {
+                            return refusal_limit_result(cx, finish);
+                        }
+                    }
+                }
+                Poll::Ready(None) => return Poll::Ready(Ok(StreamResult::Dropped)),
+                Poll::Pending if finish => return Poll::Ready(Ok(StreamResult::Cancelled)),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
         if dst.remaining(&mut store) == Some(0) {
             return Poll::Ready(Ok(StreamResult::Completed));
         }
-        let this = self.get_mut();
-        match this.rx.poll_recv(cx) {
-            Poll::Ready(Some(conn)) => {
-                let tcp_socket = TcpSocket::Loopback(this.socket_props.to_accepted_socket(conn));
-                let WasiSocketsCtxView { table, .. } = (this.getter)(store.data_mut());
-                let resource = table
-                    .push(tcp_socket)
-                    .context("failed to push loopback socket resource to table")?;
-                let resource = Resource::new_own(resource.rep());
-                dst.set_buffer(Some(resource));
-                Poll::Ready(Ok(StreamResult::Completed))
-            }
-            Poll::Ready(None) => {
-                // Channel closed — listener was dropped
-                Poll::Ready(Ok(StreamResult::Dropped))
-            }
-            Poll::Pending if finish => Poll::Ready(Ok(StreamResult::Cancelled)),
-            Poll::Pending => Poll::Pending,
-        }
+        // The loop above leaves `pending` set, so this only returns early if
+        // that ever stops holding.
+        let Some(conn) = this.pending.take() else {
+            return Poll::Pending;
+        };
+        let tcp_socket = TcpSocket::Loopback(this.socket_props.to_accepted_socket(conn));
+        let WasiSocketsCtxView { table, .. } = (this.getter)(store.data_mut());
+        let resource = table
+            .push(tcp_socket)
+            .context("failed to push loopback socket resource to table")?;
+        dst.set_buffer(Some(Resource::new_own(resource.rep())));
+        Poll::Ready(Ok(StreamResult::Completed))
     }
 }
 
@@ -954,7 +1079,17 @@ struct MergedListenStreamProducer<T> {
     options: NonInheritedOptions,
     loopback_rx: tokio::sync::mpsc::Receiver<super::loopback::TcpConn>,
     loopback_props: super::tcp::LoopbackSocketProps,
+    permissions: SocketAddrCheck,
+    pending: Option<MergedAccept>,
+    /// Set once the loopback channel has closed, so a channel that answers
+    /// `Ready(None)` forever is not polled forever.
+    loopback_closed: bool,
     getter: for<'a> fn(&'a mut T) -> WasiSocketsCtxView<'a>,
+}
+
+enum MergedAccept {
+    Network(std::io::Result<TcpStream>, Option<ConnectionSlot>),
+    Loopback(super::loopback::TcpConn),
 }
 
 impl<D> StreamProducer<D> for MergedListenStreamProducer<D>
@@ -971,54 +1106,117 @@ where
         mut dst: Destination<'a, Self::Item, Self::Buffer>,
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
+        let this = self.get_mut();
+
+        let mut refused = 0;
+        while this.pending.is_none() {
+            // `ready` tracks whether either source produced something this
+            // round. Only when neither did is it safe to park: a source that
+            // answered `Ready` has registered no waker, so returning `Pending`
+            // on the strength of the *other* source's waker would strand every
+            // connection this one goes on to queue.
+            let mut ready = false;
+
+            match this.listener.poll_accept(cx) {
+                Poll::Ready(Ok((stream, addr))) => {
+                    ready = true;
+                    if let Ok(allowed) = this.permissions.check(addr, SocketAddrUse::TcpAccept) {
+                        this.pending = Some(MergedAccept::Network(Ok(stream), allowed.permit));
+                    } else {
+                        refuse_accepted(stream);
+                        refused += 1;
+                    }
+                }
+                Poll::Ready(Err(err)) => {
+                    ready = true;
+                    this.pending = Some(MergedAccept::Network(Err(err), None));
+                }
+                Poll::Pending => {}
+            }
+
+            if this.pending.is_none() && !this.loopback_closed {
+                match this.loopback_rx.poll_recv(cx) {
+                    Poll::Ready(Some(conn)) => {
+                        ready = true;
+                        if this
+                            .permissions
+                            .check(conn.remote_address, SocketAddrUse::TcpAcceptVirtual)
+                            .is_ok()
+                        {
+                            this.pending = Some(MergedAccept::Loopback(conn));
+                        } else {
+                            refused += 1;
+                        }
+                    }
+                    // The loopback half is finished, but the network half is
+                    // not: stop polling a closed channel — it reports `Ready`
+                    // forever — and keep serving the listener.
+                    Poll::Ready(None) => this.loopback_closed = true,
+                    Poll::Pending => {}
+                }
+            }
+
+            if this.pending.is_some() {
+                break;
+            }
+            if refused >= MAX_REFUSED_ACCEPTS_PER_POLL {
+                return refusal_limit_result(cx, finish);
+            }
+            if !ready {
+                return if finish {
+                    Poll::Ready(Ok(StreamResult::Cancelled))
+                } else {
+                    Poll::Pending
+                };
+            }
+        }
+
         if dst.remaining(&mut store) == Some(0) {
             return Poll::Ready(Ok(StreamResult::Completed));
         }
 
-        let this = self.get_mut();
-
-        // Poll network listener
-        match this.listener.poll_accept(cx) {
-            Poll::Ready(res) => {
-                let res = res.map(|(stream, _)| stream);
-                let socket = TcpSocket::new_accept(res, &this.options, this.loopback_props.family)
+        // The loop above leaves `pending` set, so this only returns early if
+        // that ever stops holding.
+        let Some(pending) = this.pending.take() else {
+            return Poll::Pending;
+        };
+        let socket = match pending {
+            MergedAccept::Network(res, permit) => {
+                TcpSocket::new_accept(res, &this.options, this.loopback_props.family)
+                    .map(|mut socket| {
+                        socket.hold_quota_slot(permit);
+                        socket
+                    })
                     .unwrap_or_else(|err| {
                         TcpSocket::Network(super::tcp::NetworkTcpSocket::new_error(
                             err,
                             this.loopback_props.family,
                         ))
-                    });
-                let WasiSocketsCtxView { table, .. } = (this.getter)(store.data_mut());
-                let resource = table
-                    .push(socket)
-                    .context("failed to push socket resource to table")?;
-                dst.set_buffer(Some(Resource::new_own(resource.rep())));
-                return Poll::Ready(Ok(StreamResult::Completed));
+                    })
             }
-            Poll::Pending => {}
-        }
+            MergedAccept::Loopback(conn) => {
+                TcpSocket::Loopback(this.loopback_props.to_accepted_socket(conn))
+            }
+        };
+        let WasiSocketsCtxView { table, .. } = (this.getter)(store.data_mut());
+        let resource = table
+            .push(socket)
+            .context("failed to push socket resource to table")?;
+        dst.set_buffer(Some(Resource::new_own(resource.rep())));
+        Poll::Ready(Ok(StreamResult::Completed))
+    }
+}
 
-        // Poll loopback channel
-        match this.loopback_rx.poll_recv(cx) {
-            Poll::Ready(Some(conn)) => {
-                let tcp_socket = TcpSocket::Loopback(this.loopback_props.to_accepted_socket(conn));
-                let WasiSocketsCtxView { table, .. } = (this.getter)(store.data_mut());
-                let resource = table
-                    .push(tcp_socket)
-                    .context("failed to push loopback socket resource to table")?;
-                dst.set_buffer(Some(Resource::new_own(resource.rep())));
-                return Poll::Ready(Ok(StreamResult::Completed));
-            }
-            Poll::Ready(None) => {
-                // Loopback channel closed — not fatal, network listener may still be active
-            }
-            Poll::Pending => {}
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        if finish {
+    #[test]
+    fn refusal_limit_cancels_finished_read() {
+        let cx = Context::from_waker(std::task::Waker::noop());
+        assert!(matches!(
+            refusal_limit_result(&cx, true),
             Poll::Ready(Ok(StreamResult::Cancelled))
-        } else {
-            Poll::Pending
-        }
+        ));
     }
 }

@@ -268,7 +268,12 @@ impl ComponentHostPluginState {
 struct PluginStoreContext {
     allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
     allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
-    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
+    /// The host this plugin's stores reach back to: its handler serves their
+    /// outgoing HTTP, and its lifetime is what ends them if it is torn down
+    /// while one still runs. `None` reports "http client not available" per
+    /// call, as a plugin importing `wasi:http/outgoing-handler` with no
+    /// handler configured always has.
+    http_handler: Option<crate::host::HostRef>,
     network: crate::host::ports::NetworkHandle,
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
 }
@@ -341,7 +346,7 @@ impl ComponentHostPlugin {
         #[builder(default)] allowed_host_loopback_ports: Arc<
             [crate::host::allowed_loopback::AllowedLoopbackPort],
         >,
-        http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
+        http_handler: Option<crate::host::HostRef>,
         #[builder(default)] ports: Arc<[crate::host::declared_port::DeclaredPort]>,
         socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     ) -> anyhow::Result<Self> {
@@ -723,7 +728,7 @@ pub async fn load_component_plugin(
     engine: &Engine,
     oci_config: OciConfig,
     native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
-    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
+    http_handler: Option<crate::host::HostRef>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
 ) -> anyhow::Result<Arc<ComponentHostPlugin>> {
     let loaded = spec
@@ -1992,8 +1997,7 @@ fn build_plugin_store(
     let loopback = store_context.network.replace();
     let sockets_ctx = crate::sockets::WasiSocketsCtx {
         socket_addr_check: crate::sockets::SocketAddrCheck::new(move |addr, reason| {
-            let policy = Arc::clone(&policy);
-            Box::pin(async move { policy.decide(reason, addr) })
+            policy.decide(reason, addr)
         }),
         loopback,
         allowed_ip_name_lookups: Arc::clone(&store_context.allowed_ip_name_lookups),
@@ -2009,8 +2013,8 @@ fn build_plugin_store(
         )
         .with_sockets(sockets_ctx)
         .with_allowed_hosts(Arc::clone(&store_context.allowed_hosts));
-    if let Some(http_handler) = &store_context.http_handler {
-        ctx_builder = ctx_builder.with_http_handler(http_handler);
+    if let Some(host) = &store_context.http_handler {
+        ctx_builder = ctx_builder.with_host(host);
     }
     let ctx = ctx_builder.build();
     // The registry marks this as the plugin (real) side of the resource bridge
@@ -2227,14 +2231,12 @@ mod tests {
 
         check
             .check("0.0.0.0:0".parse().unwrap(), SocketAddrUse::UdpBind)
-            .await
             .expect("plugin UDP may bind an unspecified local endpoint");
         let allowed = check
             .check(
                 "127.255.255.254:53".parse().unwrap(),
                 SocketAddrUse::UdpConnect,
             )
-            .await
             .expect("the store must retain the declared UDP loopback grant");
         assert_eq!(allowed.addr, "127.0.0.1:53".parse().unwrap());
         assert_eq!(allowed.plane, Plane::Host);
@@ -2335,13 +2337,13 @@ mod tests {
 
         check
             .check("192.0.2.10:9100".parse().unwrap(), SocketAddrUse::TcpBind)
-            .await
             .expect("the loader must retain the declared direct bind");
 
         use wasmtime::component::Resource;
         use wasmtime_wasi::p3::bindings::sockets::types::{HostUdpSocket, IpAddressFamily};
         let mut sockets = crate::engine::ctx::extract_sockets(store.data_mut());
         let socket = HostUdpSocket::create(&mut sockets, IpAddressFamily::Ipv4)
+            .await
             .expect("create plugin UDP socket");
         HostUdpSocket::bind(
             &mut sockets,

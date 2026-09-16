@@ -5,10 +5,10 @@
 #![cfg(feature = "wasi-tls")]
 #![allow(dead_code)]
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use std::{
     future::Future,
-    net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     pin::Pin,
     sync::Arc,
 };
@@ -27,21 +27,6 @@ use tokio_rustls::{
 use wasmtime_wasi_tls::{Error as TlsError, TlsProvider, TlsStream, TlsTransport};
 
 use wash_runtime::engine::{Engine, ctx::SharedTlsProvider};
-
-/// Returns the outbound IPv4 via a UDP routing-table lookup (no packets sent).
-/// Returns `Ok(None)` if no non-loopback IPv4 interface is available.
-pub fn detect_non_loopback_ipv4() -> Result<Option<Ipv4Addr>> {
-    let sock = UdpSocket::bind("0.0.0.0:0").context("failed to bind discovery UDP socket")?;
-    if sock.connect("192.0.2.1:80").is_err() {
-        return Ok(None);
-    }
-    match sock.local_addr() {
-        Ok(SocketAddr::V4(v4)) if !v4.ip().is_loopback() && !v4.ip().is_unspecified() => {
-            Ok(Some(*v4.ip()))
-        }
-        _ => Ok(None),
-    }
-}
 
 /// Generate a self-signed certificate for `localhost` and return the rustls
 /// `ServerConfig` together with the DER-encoded certificate bytes (used to
@@ -71,23 +56,19 @@ pub struct EchoServer {
     pub ping_rx: oneshot::Receiver<Vec<u8>>,
 }
 
-/// Start a TLS echo server on a non-loopback IPv4 interface (required so
-/// wash-runtime's loopback interception doesn't swallow the connection).
+/// Start a TLS echo server on the host loopback interface.
 pub async fn start_tls_echo_server() -> Result<EchoServer> {
-    let Some(ip) = detect_non_loopback_ipv4()? else {
-        bail!(
-            "no non-loopback IPv4 interface available on this host; \
-             cannot run a TLS round-trip test against the real network stack"
-        );
-    };
-
     let (server_config, cert_der) = server_tls_config()?;
     let acceptor = TlsAcceptor::from(Arc::new(server_config));
 
-    let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(ip), 0))
+    let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
         .await
-        .with_context(|| format!("failed to bind echo server on {ip}:0"))?;
-    let addr = listener.local_addr()?;
+        .context("failed to bind echo server on host loopback")?;
+    let port = listener.local_addr()?.port();
+    let addr = SocketAddr::new(
+        IpAddr::V4(wash_runtime::sockets::internal_names::HOST_SENTINEL),
+        port,
+    );
 
     let (ping_tx, ping_rx) = oneshot::channel::<Vec<u8>>();
 
@@ -226,7 +207,12 @@ fn test_tls_provider(cert_der: &[u8]) -> Result<SharedTlsProvider> {
 
 /// Build an engine with P3 and a custom TLS provider that trusts `cert_der`.
 pub fn engine_with_p3_and_tls(cert_der: &[u8]) -> Result<Engine> {
+    let socket_policy = wash_runtime::sockets::policy::SocketPolicy {
+        host_loopback_enabled: true,
+        ..Default::default()
+    };
     Engine::builder()
+        .with_socket_policy(Arc::new(socket_policy))
         .with_tls_provider(test_tls_provider(cert_der)?)
         .build()
         .context("failed to build P3+TLS engine")

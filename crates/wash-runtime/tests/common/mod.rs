@@ -474,13 +474,13 @@ async fn start_host_with_component_plugin_router(
             .with_http_handler(Arc::new(ingress)),
     )?;
     let native_plugins = builder.native_plugins();
-    let http_handler = builder.http_handler();
+    let host_ref = builder.host_ref();
     let mut plugin = ComponentHostPlugin::builder()
         .id(plugin_id)
         .wasm(plugin_wasm)
         .engine(engine.clone())
         .native_plugins(native_plugins)
-        .maybe_http_handler(http_handler.as_ref().map(Arc::downgrade))
+        .maybe_http_handler(Some(host_ref))
         .build()
         .await
         .context("failed to build host component plugin")?;

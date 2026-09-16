@@ -1,7 +1,5 @@
-use core::future::Future;
 use core::ops::Deref;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::Arc;
 use wasmtime::component::{HasData, ResourceTable};
 
@@ -214,34 +212,29 @@ impl AddrDecision {
     }
 }
 
-type SocketAddrCheckFn = dyn Fn(SocketAddr, SocketAddrUse) -> Pin<Box<dyn Future<Output = AddrDecision> + Send + Sync>>
-    + Send
-    + Sync;
+type SocketAddrCheckFn = dyn Fn(SocketAddr, SocketAddrUse) -> AddrDecision + Send + Sync;
 
-/// The single outbound choke point: called for every address a guest binds,
-/// connects, or sends a datagram to, and answers with an [`AddrDecision`].
+/// The socket policy choke point for creation and address use.
+///
+/// Synchronous: `wasi:sockets` p2 `start-connect` and datagram `send` are
+/// synchronous host calls, and the decision picks the plane before any socket
+/// is touched.
 #[derive(Clone)]
 pub(crate) struct SocketAddrCheck(Arc<SocketAddrCheckFn>);
 
 impl SocketAddrCheck {
     pub(crate) fn new(
-        f: impl Fn(
-            SocketAddr,
-            SocketAddrUse,
-        ) -> Pin<Box<dyn Future<Output = AddrDecision> + Send + Sync>>
-        + Send
-        + Sync
-        + 'static,
+        f: impl Fn(SocketAddr, SocketAddrUse) -> AddrDecision + Send + Sync + 'static,
     ) -> Self {
         Self(Arc::new(f))
     }
 
-    pub(crate) async fn check(
+    pub(crate) fn check(
         &self,
         addr: SocketAddr,
         reason: SocketAddrUse,
     ) -> Result<Allowed, util::ErrorCode> {
-        (self.0)(addr, reason).await.into_allowed()
+        (self.0)(addr, reason).into_allowed()
     }
 }
 
@@ -256,7 +249,7 @@ impl Deref for SocketAddrCheck {
 impl Default for SocketAddrCheck {
     fn default() -> Self {
         Self(Arc::new(|_, _| {
-            Box::pin(async { AddrDecision::Deny(DenyReason::NotPermitted) })
+            AddrDecision::Deny(DenyReason::NotPermitted)
         }))
     }
 }
@@ -264,10 +257,20 @@ impl Default for SocketAddrCheck {
 /// The reason what a socket address is being used for.
 #[derive(Clone, Copy, Debug)]
 pub enum SocketAddrUse {
+    /// Creating a TCP socket. The address carries only its family.
+    TcpCreate,
     /// Binding TCP socket
     TcpBind,
+    /// Listening on a bound TCP socket
+    TcpListen,
+    /// Accepting an inbound network TCP connection
+    TcpAccept,
+    /// Accepting an inbound virtual TCP connection
+    TcpAcceptVirtual,
     /// Connecting TCP socket
     TcpConnect,
+    /// Creating a UDP socket. The address carries only its family.
+    UdpCreate,
     /// Binding UDP socket, as an explicit `bind` call from the guest
     UdpBind,
     /// Binding UDP socket implicitly, to give an outgoing datagram a local
@@ -281,6 +284,8 @@ pub enum SocketAddrUse {
     UdpConnect,
     /// Sending datagram on non-connected UDP socket
     UdpOutgoingDatagram,
+    /// Receiving a UDP datagram
+    UdpReceive,
 }
 
 /// Convert our custom `util::ErrorCode` to the P3 bindings `ErrorCode`.

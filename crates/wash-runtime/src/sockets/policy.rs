@@ -1,9 +1,8 @@
 //! Which addresses a guest may bind and connect, and on which plane.
 //!
 //! One [`SocketPolicy`] per guest, installed as the `socket_addr_check` closure
-//! on its [`WasiSocketsCtx`](super::WasiSocketsCtx). Every bind, connect, and
-//! outgoing datagram goes through [`SocketPolicy::decide`], so the answer to
-//! "what can this reach" is readable — and meterable — in one place.
+//! on its [`WasiSocketsCtx`](super::WasiSocketsCtx). Socket creation and every
+//! address use go through [`SocketPolicy::decide`].
 //!
 //! The order of evaluation for an outbound address, and why:
 //!
@@ -44,7 +43,7 @@ pub struct DirectBind {
 impl DirectBind {
     pub fn permits(&self, reason: SocketAddrUse, addr: SocketAddr) -> bool {
         let matches_protocol = match reason {
-            SocketAddrUse::TcpBind => !self.udp,
+            SocketAddrUse::TcpBind | SocketAddrUse::TcpListen => !self.udp,
             SocketAddrUse::UdpBind => self.udp,
             _ => return false,
         };
@@ -109,8 +108,7 @@ pub struct SocketPolicy {
     /// same quota bounds its pooled HTTP and its inbound published ports.
     ///
     /// Minted per guest from the host's registry — see
-    /// [`SocketPolicy::for_guest`]. A policy built without one, as the
-    /// host-level template is, has no quota until a guest claims it.
+    /// [`SocketPolicy::for_guest`].
     pub quota: Option<crate::host::quota::GuestConnectionQuota>,
     /// Where [`SocketPolicy::for_guest`] mints a quota from.
     pub quotas: Option<Arc<crate::host::quota::QuotaRegistry>>,
@@ -140,7 +138,9 @@ impl Default for SocketPolicy {
             host_owned_ports: None,
             egress_mode: EgressMode::Count,
             quota: None,
-            quotas: None,
+            // The process-wide default, so every policy that takes it shares
+            // one ceiling; a host that configures quotas passes its own.
+            quotas: Some(crate::host::quota::default_registry()),
             meters: None,
         }
     }
@@ -190,12 +190,19 @@ impl SocketPolicy {
     /// The single decision point. See the module docs for the evaluation order.
     pub fn decide(&self, reason: SocketAddrUse, addr: SocketAddr) -> AddrDecision {
         let decision = match reason {
-            SocketAddrUse::TcpBind | SocketAddrUse::UdpBind => self.decide_bind(reason, addr),
+            SocketAddrUse::TcpCreate | SocketAddrUse::UdpCreate => {
+                self.allow_with_slot(addr, Plane::Host)
+            }
+            SocketAddrUse::TcpBind | SocketAddrUse::TcpListen | SocketAddrUse::UdpBind => {
+                self.decide_bind(reason, addr)
+            }
+            SocketAddrUse::TcpAccept => self.decide_accept(addr, true),
+            SocketAddrUse::TcpAcceptVirtual => self.decide_accept(addr, false),
             // Giving an outgoing datagram a local endpoint is egress, not
             // listening, and its destination is checked separately as
             // `UdpOutgoingDatagram`. Denying it would deny UDP egress outright
-            // — but it does open a real socket, so it spends a quota slot.
-            SocketAddrUse::UdpImplicitBind => self.allow_with_slot(addr, Plane::Host),
+            // Socket creation already charged the descriptor.
+            SocketAddrUse::UdpImplicitBind => AddrDecision::allow_on(addr, Plane::Host),
             SocketAddrUse::TcpConnect => self.decide_connect(addr, Protocol::Tcp),
             SocketAddrUse::UdpConnect => self.decide_connect(addr, Protocol::Udp),
             // A datagram is not a connection: the socket sending it is one
@@ -207,6 +214,7 @@ impl SocketPolicy {
                 Ok((addr, plane)) => AddrDecision::allow_on(addr, plane),
                 Err(reason) => AddrDecision::Deny(reason),
             },
+            SocketAddrUse::UdpReceive => self.decide_receive(addr),
         };
         if let (Some(meters), AddrDecision::Deny(why)) = (&self.meters, &decision) {
             meters.record_deny(*why);
@@ -281,12 +289,45 @@ impl SocketPolicy {
         Ok((addr, Plane::Host))
     }
 
-    /// [`Self::resolve_connect`], spending a quota slot on what it permits.
+    /// Resolve a connect without charging the socket a second time.
     fn decide_connect(&self, addr: SocketAddr, protocol: Protocol) -> AddrDecision {
         match self.resolve_connect(addr, protocol) {
-            Ok((addr, plane)) => self.allow_with_slot(addr, plane),
+            Ok((addr, plane)) => AddrDecision::allow_on(addr, plane),
             Err(reason) => AddrDecision::Deny(reason),
         }
+    }
+
+    fn decide_accept(&self, addr: SocketAddr, network: bool) -> AddrDecision {
+        match self.kind {
+            GuestKind::Component => AddrDecision::Deny(DenyReason::NotPermitted),
+            GuestKind::Service | GuestKind::Plugin { .. } => {
+                let AddrDecision::Allow(mut allowed) = AddrDecision::allow_by_address(addr) else {
+                    unreachable!()
+                };
+                if network && let Some(quota) = &self.quota {
+                    let Some(permit) = quota.try_acquire_inbound_socket() else {
+                        return AddrDecision::Deny(DenyReason::NoCapacity);
+                    };
+                    allowed.permit = Some(permit);
+                }
+                AddrDecision::Allow(allowed)
+            }
+        }
+    }
+
+    /// A datagram that has arrived, judged by where it came from.
+    ///
+    /// Deliberately *not* the egress allowlist. `allowedHosts` describes where a
+    /// guest may send: its entries match a host and, when given, an exact port,
+    /// and a wildcard or a DNS name matches no address at all. A reply arrives
+    /// from an ephemeral port — and from an address, never a name — so checking
+    /// an inbound source against it refuses ordinary replies (a resolver, STUN,
+    /// TFTP) as soon as the gate is enforcing. The send side already decided
+    /// where this socket could talk to; what keeps an unsolicited datagram out
+    /// is the per-socket peer filter, which admits only peers the guest has
+    /// actually addressed (see [`crate::sockets::udp`]).
+    fn decide_receive(&self, addr: SocketAddr) -> AddrDecision {
+        AddrDecision::allow_by_address(addr)
     }
 
     fn resolve_host_loopback(
@@ -336,11 +377,6 @@ impl SocketPolicy {
     }
 
     fn allow_with_slot(&self, addr: SocketAddr, plane: Plane) -> AddrDecision {
-        // Only real connections spend the quota: a virtual one costs no file
-        // descriptor and no remote resource.
-        if plane == Plane::Virtual {
-            return AddrDecision::allow_on(addr, plane);
-        }
         let Some(quota) = &self.quota else {
             return AddrDecision::allow_on(addr, plane);
         };
@@ -399,12 +435,18 @@ mod tests {
     fn a_component_cannot_listen_at_all() {
         let policy = SocketPolicy::for_kind(GuestKind::Component);
         for a in ["127.0.0.1:8080", "0.0.0.0:8080", "10.0.0.5:8080"] {
-            assert_eq!(
-                denied(&policy.decide(SocketAddrUse::TcpBind, addr(a))),
-                Some(DenyReason::BindNotPermitted),
-                "component should not listen on {a}"
-            );
+            for reason in [SocketAddrUse::TcpBind, SocketAddrUse::TcpListen] {
+                assert_eq!(
+                    denied(&policy.decide(reason, addr(a))),
+                    Some(DenyReason::BindNotPermitted),
+                    "component should not listen on {a}"
+                );
+            }
         }
+        assert_eq!(
+            denied(&policy.decide(SocketAddrUse::TcpAccept, addr("127.0.0.1:50000"))),
+            Some(DenyReason::NotPermitted)
+        );
     }
 
     /// A UDP bind is the required first step of *egress*, not a listener: p2
@@ -430,6 +472,12 @@ mod tests {
     fn a_service_listens_only_on_its_virtual_loopback() {
         let policy = SocketPolicy::for_kind(GuestKind::Service);
         assert!(plane_of(&policy.decide(SocketAddrUse::TcpBind, addr("127.0.0.1:8080"))).is_some());
+        assert!(
+            plane_of(&policy.decide(SocketAddrUse::TcpListen, addr("127.0.0.1:8080"))).is_some()
+        );
+        assert!(
+            plane_of(&policy.decide(SocketAddrUse::TcpAccept, addr("10.0.0.5:50000"))).is_some()
+        );
         assert!(denied(&policy.decide(SocketAddrUse::TcpBind, addr("10.0.0.5:8080"))).is_some());
         // Unspecified UDP is permitted for egress, which takes an ephemeral
         // port. A named port on it would be a real listener on every
@@ -440,6 +488,40 @@ mod tests {
         assert!(plane_of(&policy.decide(SocketAddrUse::UdpBind, addr("127.0.0.1:8080"))).is_some());
         assert!(denied(&policy.decide(SocketAddrUse::UdpBind, addr("0.0.0.0:8080"))).is_some());
         assert!(denied(&policy.decide(SocketAddrUse::UdpBind, addr("10.0.0.5:8080"))).is_some());
+    }
+
+    #[test]
+    fn network_accepts_hold_inbound_capacity() {
+        let quota = crate::host::quota::GuestConnectionQuota::new(
+            crate::host::quota::QuotaLimits {
+                outbound_http: 1,
+                outbound_sockets: 1,
+                inbound_sockets: 1,
+            },
+            None,
+        );
+        let policy = SocketPolicy {
+            quota: Some(quota.clone()),
+            ..SocketPolicy::for_kind(GuestKind::Service)
+        };
+        let peer = addr("10.0.0.5:50000");
+
+        let AddrDecision::Allow(accepted) = policy.decide(SocketAddrUse::TcpAccept, peer) else {
+            panic!("first network accept should be allowed");
+        };
+        assert!(accepted.permit.is_some());
+        assert_eq!(quota.inbound_sockets_available(), 0);
+        assert_eq!(
+            denied(&policy.decide(SocketAddrUse::TcpAccept, peer)),
+            Some(DenyReason::NoCapacity)
+        );
+        assert!(matches!(
+            policy.decide(SocketAddrUse::TcpAcceptVirtual, peer),
+            AddrDecision::Allow(_)
+        ));
+
+        drop(accepted);
+        assert_eq!(quota.inbound_sockets_available(), 1);
     }
 
     #[test]
@@ -464,6 +546,10 @@ mod tests {
             assert!(
                 plane_of(&policy.decide(SocketAddrUse::TcpBind, addr(ok))).is_some(),
                 "{ok} should bind"
+            );
+            assert!(
+                plane_of(&policy.decide(SocketAddrUse::TcpListen, addr(ok))).is_some(),
+                "{ok} should listen"
             );
         }
         for denied_addr in ["10.0.0.6:9000", "10.0.0.5:9001", "0.0.0.0:9000"] {
@@ -683,9 +769,7 @@ mod tests {
         );
     }
 
-    /// The quota bounds concurrent connections, so a decision must *hold* its
-    /// permit — a policy that granted and immediately released one would count
-    /// attempts and bound nothing.
+    /// Creation takes and holds a slot before the OS descriptor is opened.
     #[test]
     fn an_exhausted_quota_denies_with_its_own_reason() {
         let policy = SocketPolicy {
@@ -700,22 +784,22 @@ mod tests {
             allowed_hosts: Arc::from([AllowedHost::Any]),
             ..enforcing(GuestKind::Component)
         };
-        let target = addr("10.0.0.5:5432");
+        let target = addr("0.0.0.0:0");
 
-        let first = policy.decide(SocketAddrUse::TcpConnect, target);
+        let first = policy.decide(SocketAddrUse::TcpCreate, target);
         assert_eq!(plane_of(&first), Some(Plane::Host));
 
         // The first decision is still holding its slot.
         assert_eq!(
-            denied(&policy.decide(SocketAddrUse::TcpConnect, target)),
+            denied(&policy.decide(SocketAddrUse::TcpCreate, target)),
             Some(DenyReason::NoCapacity)
         );
 
         drop(first);
         assert_eq!(
-            plane_of(&policy.decide(SocketAddrUse::TcpConnect, target)),
+            plane_of(&policy.decide(SocketAddrUse::TcpCreate, target)),
             Some(Plane::Host),
-            "releasing a connection must return its slot"
+            "dropping a socket must return its slot"
         );
     }
 
@@ -788,10 +872,9 @@ mod tests {
         }
     }
 
-    /// Reaching the guest's own virtual network costs no file descriptor and no
-    /// remote resource, so it must not draw on an allowance meant for real egress.
+    /// Connect checks do not charge again after creation charged the descriptor.
     #[test]
-    fn the_virtual_plane_does_not_spend_the_quota() {
+    fn connect_does_not_spend_a_second_quota_slot() {
         let policy = SocketPolicy {
             quota: Some(crate::host::quota::GuestConnectionQuota::new(
                 crate::host::quota::QuotaLimits {
@@ -803,13 +886,15 @@ mod tests {
             )),
             ..enforcing(GuestKind::Component)
         };
+        let create = policy.decide(SocketAddrUse::TcpCreate, addr("0.0.0.0:0"));
+        assert_eq!(plane_of(&create), Some(Plane::Host));
         let virtual_target = addr("127.0.0.1:6432");
         let held: Vec<_> = (0..8)
             .map(|_| policy.decide(SocketAddrUse::TcpConnect, virtual_target))
             .collect();
         assert!(
             held.iter().all(|d| plane_of(d) == Some(Plane::Virtual)),
-            "virtual connections must not be capped by the egress quota"
+            "connect policy must not charge an already-created socket"
         );
     }
 

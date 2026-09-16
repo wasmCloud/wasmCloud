@@ -257,16 +257,19 @@ async fn test_missing_host_returns_400() -> Result<()> {
     Ok(())
 }
 
-/// Invalid hostnames in `host-aliases` (e.g. names containing spaces) must be
-/// silently filtered by `DynamicRouter::on_workload_resolved`. The valid alias
-/// must still route; the invalid one must not appear in the routing table and
-/// must therefore return 404.
+/// Invalid hostnames in `host-aliases` must be silently filtered by
+/// `DynamicRouter::on_workload_resolved`. The valid alias must still route; the
+/// invalid one must not appear in the routing table and must therefore return
+/// 404.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_invalid_alias_is_silently_filtered() -> Result<()> {
     let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
 
-    // "not a hostname" contains spaces; is_valid_hostname func rejects it.
-    let req = http_counter_request("valid.local", Some("not a hostname"));
+    // `is_valid_hostname` rejects the underscore, while HTTP accepts it in an
+    // authority — so this reaches routing and proves the alias was filtered,
+    // rather than being refused as a malformed request (see
+    // `test_unparseable_host_is_a_bad_request`).
+    let req = http_counter_request("valid.local", Some("under_score.local"));
     host.workload_start(req).await?;
 
     let client = reqwest::Client::new();
@@ -277,13 +280,36 @@ async fn test_invalid_alias_is_silently_filtered() -> Result<()> {
         "primary host should route successfully"
     );
 
-    // "not a hostname" must not have been registered and must return 404.
-    let invalid_status = get_status(&client, addr, "not a hostname").await?;
+    // The alias must not have been registered, so it must 404.
+    let invalid_status = get_status(&client, addr, "under_score.local").await?;
     assert_eq!(
         invalid_status,
         reqwest::StatusCode::NOT_FOUND,
         "invalid alias must be filtered and return 404, got {invalid_status}"
     );
+
+    Ok(())
+}
+
+/// A `Host` that is not a valid authority is answered with 400. The ingress
+/// derives every guest's scheme and authority from it, and the hostname router
+/// splits it on the last colon, so a value neither can read is refused rather
+/// than guessed at.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_unparseable_host_is_a_bad_request() -> Result<()> {
+    let (addr, host) = start_host_with_dynamic_router("127.0.0.1:0").await?;
+    host.workload_start(http_counter_request("valid.local", None))
+        .await?;
+
+    let client = reqwest::Client::new();
+    for host_header in ["not a hostname", "valid.local:8080:9090"] {
+        let status = get_status(&client, addr, host_header).await?;
+        assert_eq!(
+            status,
+            reqwest::StatusCode::BAD_REQUEST,
+            "Host {host_header:?} is not a valid authority, got {status}"
+        );
+    }
 
     Ok(())
 }

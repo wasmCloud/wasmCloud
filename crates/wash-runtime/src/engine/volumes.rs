@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 use wasmtime::error::Context as _;
-use wasmtime_wasi::{DirPerms, FilePerms};
+use wasmtime_wasi::FsPerms;
 
 use crate::engine::workload::WorkloadComponent;
 use crate::types::VolumeMount;
@@ -29,8 +29,7 @@ use crate::types::VolumeMount;
 pub(crate) struct ResolvedVolumeMount {
     pub(crate) host_path: PathBuf,
     pub(crate) mount_path: String,
-    pub(crate) dir_perms: DirPerms,
-    pub(crate) file_perms: FilePerms,
+    pub(crate) perms: FsPerms,
 }
 
 impl ResolvedVolumeMount {
@@ -41,16 +40,15 @@ impl ResolvedVolumeMount {
         let host_path = tokio::fs::canonicalize(host_path)
             .await
             .with_context(|| format!("failed to canonicalize volume host path {host_path:?}"))?;
-        let (dir_perms, file_perms) = match mount.read_only {
-            true => (DirPerms::READ, FilePerms::READ),
-            false => (DirPerms::all(), FilePerms::all()),
+        let perms = match mount.read_only {
+            true => FsPerms::ReadOnly,
+            false => FsPerms::ReadWrite,
         };
 
         Ok(Self {
             host_path,
             mount_path: mount.mount_path.clone(),
-            dir_perms,
-            file_perms,
+            perms,
         })
     }
 }

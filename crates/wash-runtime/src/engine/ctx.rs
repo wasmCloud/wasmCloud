@@ -14,8 +14,7 @@ use std::{
 use wasmtime::StoreContextMut;
 use wasmtime::component::{Accessor, Instance, ResourceTable};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
-use wasmtime_wasi_http::WasiHttpCtx;
-use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpHooks, WasiHttpView};
+use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpHooks, WasiHttpView};
 #[cfg(feature = "wasi-tls")]
 use wasmtime_wasi_tls::{WasiTlsCtx, WasiTlsCtxBuilder, WasiTlsCtxView, WasiTlsView};
 
@@ -324,10 +323,8 @@ pub struct Ctx {
     /// These all implement the [`HostPlugin`] trait, but they are cast as `Arc<dyn Any + Send + Sync>`
     /// to support downcasting to the specific plugin type in [`Ctx::get_plugin`]
     plugins: HashMap<&'static str, Arc<dyn Any + Send + Sync>>,
-    /// The HTTP hooks for outgoing HTTP requests (implements WasiHttpHooks for P2).
+    /// The HTTP hooks for outgoing HTTP requests.
     http_hooks: CtxHttpHooks,
-    /// The HTTP hooks for outgoing HTTP requests (implements WasiHttpHooks for P3).
-    http_hooks_p3: CtxHttpHooksP3,
 }
 
 impl Ctx {
@@ -380,6 +377,12 @@ impl Ctx {
     ) -> CtxBuilder {
         CtxBuilder::new(workload_id, component_id)
     }
+
+    /// This store's link back to the host that built it, for readers that need
+    /// to know whether that host is still there; see [`HostLink`].
+    pub(crate) fn host_link(&self) -> HostLink {
+        self.http_hooks.host.clone()
+    }
 }
 
 impl std::fmt::Debug for Ctx {
@@ -407,7 +410,6 @@ impl wasmtime_wasi_io::IoView for SharedCtx {
     }
 }
 
-// Implement WasiHttpView for wasi:http@0.2
 impl WasiHttpView for SharedCtx {
     fn http(&mut self) -> WasiHttpCtxView<'_> {
         WasiHttpCtxView {
@@ -428,127 +430,78 @@ impl WasiTlsView for SharedCtx {
     }
 }
 
-// Implement WasiHttpView for wasi:http P3
-impl wasmtime_wasi_http::p3::WasiHttpView for SharedCtx {
-    fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
-        wasmtime_wasi_http::p3::WasiHttpCtxView {
-            ctx: &mut self.active_ctx.http,
-            table: &mut self.table,
-            hooks: &mut self.active_ctx.http_hooks_p3,
+/// A store's link back to the host that built it, held weak; see
+/// [`CtxBuilder::with_host`].
+#[derive(Clone, Default)]
+pub(crate) struct HostLink(Option<crate::host::HostRef>);
+
+impl HostLink {
+    /// The handler to serve this store's egress with, or why there is none. A
+    /// store with no host at all and a store whose host has gone away under it
+    /// are different failures, and the guest is told which.
+    fn handler(&self) -> Result<Arc<dyn crate::host::http::HostHandler>, String> {
+        match &self.0 {
+            None => Err("http client not available".to_string()),
+            Some(host) if !host.has_handler() => Err("http client not available".to_string()),
+            Some(host) => crate::host::http::live_handler(host).map_err(|e| format!("{e:#}")),
         }
+    }
+
+    /// Whether the host that built this store is gone, asked of the host's own
+    /// lifetime rather than of its handler: an embedder may hold a clone of the
+    /// handler long after the host is dropped, and a store that outlived its
+    /// host has to be ended either way. A store built without a host answers
+    /// `false` — never pointed at one, it can say nothing about one.
+    pub(crate) fn host_is_gone(&self) -> bool {
+        self.0.as_ref().is_some_and(crate::host::HostRef::host_is_gone)
     }
 }
 
-/// HTTP hooks implementation that delegates to a [`HostHandler`](crate::host::http::HostHandler).
+/// HTTP hooks that delegate outgoing requests to the configured
+/// [`HostHandler`](crate::host::http::HostHandler), so custom egress
+/// (allowed-hosts policy, alternate transports, etc.) applies to `wasi:http`
+/// 0.2 and 0.3 components alike.
 struct CtxHttpHooks {
-    /// See [`crate::host::http::live_handler`] for why this is weak.
-    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
+    host: HostLink,
     workload_id: Arc<str>,
     allowed_hosts: Arc<[AllowedHost]>,
+    /// Set once this store has reported that its egress cannot be served, so a
+    /// guest that keeps calling out does not repeat the warning per call.
+    warned_unserved: bool,
 }
 
 impl WasiHttpHooks for CtxHttpHooks {
     fn send_request(
         &mut self,
-        request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
-        config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
-    ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
-    {
-        // A store with no handler at all and a store whose host has gone away
-        // under it are different failures, and the guest is told which: the
-        // first is how this host was configured, the second is a store
-        // outliving the host that built it.
-        match &self.http_handler {
-            None => Err(wasmtime_wasi_http::p2::HttpError::trap(
-                wasmtime::format_err!("http client not available"),
-            )),
-            Some(handler) => match crate::host::http::live_handler(handler) {
-                Ok(handler) => handler.outgoing_request(
-                    &self.workload_id,
-                    request,
-                    config,
-                    &self.allowed_hosts,
-                ),
-                Err(e) => Err(wasmtime_wasi_http::p2::HttpError::trap(
-                    wasmtime::format_err!("{e:#}"),
-                )),
-            },
-        }
-    }
-}
-
-/// P3 HTTP hooks implementation that delegates outgoing requests to the
-/// configured [`HostHandler`](crate::host::http::HostHandler), so custom egress
-/// (allowed-hosts policy, alternate transports, etc.) applies uniformly to
-/// both P2 and P3 components.
-struct CtxHttpHooksP3 {
-    /// See [`crate::host::http::live_handler`] for why this is weak.
-    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
-    workload_id: Arc<str>,
-    allowed_hosts: Arc<[AllowedHost]>,
-}
-
-impl wasmtime_wasi_http::p3::WasiHttpHooks for CtxHttpHooksP3 {
-    fn send_request(
-        &mut self,
-        request: hyper::http::Request<
-            http_body_util::combinators::UnsyncBoxBody<
-                bytes::Bytes,
-                wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
-            >,
-        >,
-        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-        fut: Box<
-            dyn std::future::Future<
-                    Output = Result<(), wasmtime_wasi_http::p3::bindings::http::types::ErrorCode>,
-                > + Send,
-        >,
-    ) -> Box<
-        dyn std::future::Future<
-                Output = Result<
-                    (
-                        hyper::http::Response<
-                            http_body_util::combinators::UnsyncBoxBody<
-                                bytes::Bytes,
-                                wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
-                            >,
-                        >,
-                        Box<
-                            dyn std::future::Future<
-                                    Output = Result<
-                                        (),
-                                        wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
-                                    >,
-                                > + Send,
-                        >,
-                    ),
-                    wasmtime_wasi::TrappableError<
-                        wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
-                    >,
-                >,
-            > + Send,
-    > {
-        use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode as P3ErrorCode;
-
-        // As in [`CtxHttpHooks::send_request`], an unconfigured handler and a
-        // host that has gone away are reported apart.
-        let handler = match &self.http_handler {
-            None => Err("http client not available".to_string()),
-            Some(handler) => crate::host::http::live_handler(handler).map_err(|e| format!("{e:#}")),
-        };
-        match handler {
-            Ok(handler) => handler.outgoing_request_p3(
+        request: hyper::Request<wasmtime_wasi_http::WasiBody>,
+        options: Option<wasmtime_wasi_http::RequestOptions>,
+        fut: crate::host::http::RequestIoFuture,
+    ) -> crate::host::http::SendFuture {
+        match self.host.handler() {
+            Ok(handler) => handler.outgoing_request(
                 &self.workload_id,
                 request,
                 options,
                 fut,
                 &self.allowed_hosts,
             ),
-            Err(message) => Box::new(async move {
-                Err(wasmtime_wasi::TrappableError::from(
-                    P3ErrorCode::InternalError(Some(message)),
-                ))
-            }),
+            Err(message) => {
+                // The hook cannot trap, so the guest gets a handleable error
+                // and the host gets told once. A guest left calling out to a
+                // host that is gone is ended by the store's epoch deadline
+                // instead; see [`crate::engine::abandon::arm_epoch_deadline`].
+                if !self.warned_unserved {
+                    self.warned_unserved = true;
+                    tracing::warn!(
+                        workload_id = %self.workload_id,
+                        %message,
+                        "a component called out over HTTP with no handler to serve it"
+                    );
+                }
+                Box::new(
+                    async move { Err(wasmtime_wasi_http::Error::InternalError(Some(message))) },
+                )
+            }
         }
     }
 }
@@ -562,7 +515,7 @@ pub struct CtxBuilder {
     ctx: Option<WasiCtx>,
     sockets: Option<crate::sockets::WasiSocketsCtx>,
     plugins: HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>,
-    http_handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
+    http_handler: Option<crate::host::HostRef>,
     allowed_hosts: Arc<[AllowedHost]>,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
@@ -608,18 +561,18 @@ impl CtxBuilder {
         self
     }
 
-    /// Point this store's outgoing HTTP at `http_handler`.
+    /// Point this store back at the host that built it: its outgoing HTTP goes
+    /// through that host's handler, and it is ended if that host is torn down
+    /// while it still runs (see
+    /// [`crate::engine::abandon::arm_epoch_deadline`]).
     ///
     /// Weak, and taken weak: building a store must not depend on the host
     /// still being there, because a store is built on paths — a message
     /// delivery, a service restart — that have nothing to do with egress. Only
     /// an actual outbound call needs a live handler, and the hooks report it
     /// per call. See [`crate::host::http::live_handler`].
-    pub fn with_http_handler(
-        mut self,
-        http_handler: &std::sync::Weak<dyn crate::host::http::HostHandler>,
-    ) -> Self {
-        self.http_handler = Some(http_handler.clone());
+    pub fn with_host(mut self, host: &crate::host::HostRef) -> Self {
+        self.http_handler = Some(host.clone());
         self
     }
 
@@ -643,16 +596,11 @@ impl CtxBuilder {
             .map(|(k, v)| (k, v as Arc<dyn Any + Send + Sync>))
             .collect();
 
-        let http_hooks_p3 = CtxHttpHooksP3 {
-            http_handler: self.http_handler.clone(),
-            workload_id: self.workload_id.clone(),
-            allowed_hosts: self.allowed_hosts.clone(),
-        };
-
         let http_hooks = CtxHttpHooks {
-            http_handler: self.http_handler,
+            host: HostLink(self.http_handler),
             workload_id: self.workload_id.clone(),
             allowed_hosts: self.allowed_hosts,
+            warned_unserved: false,
         };
 
         Ctx {
@@ -681,7 +629,6 @@ impl CtxBuilder {
             },
             plugins,
             http_hooks,
-            http_hooks_p3,
         }
     }
 }
@@ -799,5 +746,19 @@ mod tests {
         }
 
         assert_eq!(store.data().active_ctx.component_id.as_ref(), "comp-a");
+    }
+
+    /// A store an embedder built for itself must never be ended by
+    /// [`crate::engine::abandon::arm_epoch_deadline`]'s host check: it was
+    /// never pointed at a host, so it can say nothing about one. The host side
+    /// of this contract is
+    /// `a_store_sees_its_host_go_away_though_a_handler_clone_remains`.
+    #[test]
+    fn a_store_built_without_a_host_reports_none_gone() {
+        setup();
+        assert!(
+            !Ctx::builder("wk", "comp").build().host_link().host_is_gone(),
+            "a store with no host must not report one gone"
+        );
     }
 }

@@ -13,8 +13,12 @@ use super::host_network::{ip_socket_address_to_socket_addr, socket_addr_to_ip_so
 use super::network::{SocketResult, socket_error_from_util as se};
 use super::{SocketAddrUse, WasiSocketsCtxView};
 
-type UpstreamTcpSocket = wasmtime_wasi::sockets::TcpSocket;
+type UpstreamTcpSocket = wasmtime_wasi::p2::TcpSocket;
 type UpstreamNetwork = wasmtime_wasi::p2::Network;
+
+/// How many connections the policy may refuse in one `accept` call before the
+/// guest is told to come back.
+const MAX_REFUSED_ACCEPTS_PER_CALL: usize = 32;
 
 impl tcp::Host for WasiSocketsCtxView<'_> {}
 
@@ -55,7 +59,6 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
 
         let allowed = network
             .check_socket_addr(local_address, SocketAddrUse::TcpBind)
-            .await
             .map_err(super::network::socket_error_from_util)?;
         let local_address = allowed.addr;
 
@@ -80,7 +83,7 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
         Ok(())
     }
 
-    async fn start_connect(
+    fn start_connect(
         &mut self,
         this: Resource<UpstreamTcpSocket>,
         network: Resource<UpstreamNetwork>,
@@ -92,7 +95,6 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
 
         let allowed = network
             .check_socket_addr(remote_address, SocketAddrUse::TcpConnect)
-            .await
             .map_err(super::network::socket_error_from_util)?;
         let remote_address = allowed.addr;
 
@@ -138,9 +140,14 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
         Ok((input, output))
     }
 
-    fn start_listen(&mut self, this: Resource<UpstreamTcpSocket>) -> SocketResult<()> {
+    async fn start_listen(&mut self, this: Resource<UpstreamTcpSocket>) -> SocketResult<()> {
         let this = Resource::<super::tcp::TcpSocket>::new_borrow(this.rep());
         let socket = self.table.get_mut(&this)?;
+        let local_address = socket.local_address().map_err(se)?;
+        self.ctx
+            .socket_addr_check
+            .check(local_address, SocketAddrUse::TcpListen)
+            .map_err(super::network::socket_error_from_util)?;
         let mut loopback = self
             .ctx
             .loopback
@@ -168,7 +175,35 @@ impl tcp::HostTcpSocket for WasiSocketsCtxView<'_> {
         let this = Resource::<super::tcp::TcpSocket>::new_borrow(this.rep());
         let socket = self.table.get_mut(&this)?;
 
-        let mut tcp_socket = socket.accept().map_err(se)?.ok_or(ErrorCode::WouldBlock)?;
+        let mut refused = 0;
+        let mut tcp_socket = loop {
+            let accepted = socket.accept().map_err(se)?.ok_or(ErrorCode::WouldBlock)?;
+            let reason = if matches!(accepted, super::tcp::TcpSocket::Network(_)) {
+                SocketAddrUse::TcpAccept
+            } else {
+                SocketAddrUse::TcpAcceptVirtual
+            };
+            // A peer that reset between `accept` and here has no address left to
+            // check. It is gone either way, so it is refused rather than made
+            // the error of this whole `accept` call.
+            let allowed = accepted
+                .remote_address()
+                .ok()
+                .and_then(|addr| self.ctx.socket_addr_check.check(addr, reason).ok());
+            if let Some(allowed) = allowed {
+                let mut accepted = accepted;
+                accepted.hold_quota_slot(allowed.permit);
+                break accepted;
+            }
+            accepted.refuse();
+            refused += 1;
+            // A flood from a refused address would otherwise keep this one host
+            // call accepting and dropping for as long as it lasts. The guest's
+            // pollable is still armed, so it comes straight back.
+            if refused >= MAX_REFUSED_ACCEPTS_PER_CALL {
+                return Err(ErrorCode::WouldBlock.into());
+            }
+        };
         let (input, output) = tcp_socket.p2_streams()?;
 
         let tcp_socket = self.table.push(tcp_socket)?;

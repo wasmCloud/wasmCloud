@@ -63,11 +63,11 @@ impl Network {
     ///
     /// The returned address may differ from `addr`: an internal-zone sentinel
     /// resolves to a real address here.
-    pub async fn check_socket_addr(
+    pub fn check_socket_addr(
         &self,
         addr: SocketAddr,
         reason: SocketAddrUse,
     ) -> Result<super::Allowed, super::util::ErrorCode> {
-        self.socket_addr_check.check(addr, reason).await
+        self.socket_addr_check.check(addr, reason)
     }
 }

@@ -14,6 +14,7 @@ pub struct NetworkIncomingDatagramStream {
     /// a real interface. `None` disables filtering — see
     /// [`NetworkUdpSocket::egress_peers`](super::udp::NetworkUdpSocket).
     pub(crate) egress_peers: Option<Arc<std::sync::Mutex<std::collections::BTreeSet<SocketAddr>>>>,
+    pub(crate) socket_addr_check: Option<SocketAddrCheck>,
 }
 
 pub struct NetworkOutgoingDatagramStream {
@@ -53,6 +54,7 @@ pub struct LoopbackIncomingDatagramStream {
         super::loopback::UdpDatagram,
         tokio::sync::OwnedSemaphorePermit,
     )>,
+    pub(crate) socket_addr_check: Option<SocketAddrCheck>,
 }
 
 impl LoopbackIncomingDatagramStream {
@@ -75,6 +77,14 @@ impl LoopbackIncomingDatagramStream {
             };
             match self.remote_address {
                 Some(connected_addr) if connected_addr != dgram.source_address => continue,
+                _ if self.socket_addr_check.as_ref().is_some_and(|check| {
+                    check
+                        .check(dgram.source_address, super::SocketAddrUse::UdpReceive)
+                        .is_err()
+                }) =>
+                {
+                    continue;
+                }
                 _ => datagrams.push(
                     wasmtime_wasi::p2::bindings::sockets::udp::IncomingDatagram {
                         data: dgram.data,
