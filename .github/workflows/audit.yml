@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+  merge_group:
   push:
     branches:
       - main
@@ -69,6 +70,7 @@ jobs:
         run: cargo audit
 
   gate:
+    name: gate-audit
     needs:
       - cargo-audit
     if: ${{ !cancelled() }}

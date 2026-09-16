@@ -6,6 +6,7 @@ on:
     tags:
       - "v*"
   pull_request:
+  merge_group:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -194,6 +195,7 @@ jobs:
           kubectl get workloads.runtime.wasmcloud.dev -A -o yaml || true
 
   gate:
+    name: gate-runtime-operator
     needs:
       - lint
       - test

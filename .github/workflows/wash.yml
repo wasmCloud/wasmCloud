@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+  merge_group:
   push:
     branches:
       - main
@@ -222,7 +223,7 @@ jobs:
   wash-image:
     needs:
       - changes
-    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && (github.event_name == 'pull_request' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'))
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'))
     permissions:
       contents: read
       packages: write
@@ -270,7 +271,7 @@ jobs:
         # above (whose cache this reuses), so the pushed canary is the exact
         # bytes the operator-e2e `release` leg tested. No `cache-to` — the
         # release build already wrote it.
-        if: github.event_name != 'pull_request'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         id: build_push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -280,7 +281,7 @@ jobs:
             type=gha,scope=wash-release-arm64-${{ github.head_ref || github.ref_name }}
             type=gha,scope=wash-release-arm64-main
       - name: Export digest
-        if: github.event_name != 'pull_request'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         env:
           DIGEST: ${{ steps.build_push.outputs.digest }}
         run: |
@@ -292,7 +293,7 @@ jobs:
           fi
           touch "/tmp/digests/${DIGEST#sha256:}"
       - name: Upload digest
-        if: github.event_name != 'pull_request'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wash-image-digest-arm64
@@ -316,7 +317,7 @@ jobs:
   wash-image-all-features:
     needs:
       - changes
-    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && (github.event_name == 'pull_request' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'))
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'))
     permissions:
       contents: read
     runs-on: ubuntu-24.04-arm
@@ -423,7 +424,7 @@ jobs:
   e2e-fixtures:
     needs:
       - changes
-    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && (github.event_name == 'pull_request' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'))
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     permissions:
@@ -586,7 +587,10 @@ jobs:
           kubectl get workloaddeployments.runtime.wasmcloud.dev -A -o yaml || true
           kubectl get workloads.runtime.wasmcloud.dev -A -o yaml || true
 
+  # The main branch ruleset requires this exact check name. Other workflows
+  # must give their gate jobs unique names so they cannot mask a wash failure.
   gate:
+    name: gate
     needs:
       - check
       - lint
@@ -729,7 +733,8 @@ jobs:
       needs.runtime-operator-e2e.result == 'success' &&
       (
         ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main') ||
-        (github.event_name == 'pull_request' && needs.changes.outputs.workflow == 'true')
+        (github.event_name == 'pull_request' && needs.changes.outputs.workflow == 'true') ||
+        github.event_name == 'merge_group'
       )
     needs:
       - changes
