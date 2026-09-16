@@ -59,15 +59,19 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 	expectedReplicas := int(*replicaSet.Spec.Replicas)
 
 	for i := len(workloads.Items); i < expectedReplicas; i++ {
-		annotations := map[string]string{
-			workloadReplicaSetGenerationAnnotation: replicaSet.Spec.Template.Hash(),
-			workloadReplicaSetNameAnnotation:       replicaSet.Name,
+		annotations := make(map[string]string, len(replicaSet.Spec.Template.Annotations)+3)
+		for k, v := range replicaSet.Spec.Template.Annotations {
+			if k == workloadReplicaSetGenerationAnnotation ||
+				k == workloadReplicaSetNameAnnotation ||
+				k == workloadDeploymentNameAnnotation {
+				continue
+			}
+			annotations[k] = v
 		}
+		annotations[workloadReplicaSetGenerationAnnotation] = replicaSet.Spec.Template.Hash()
+		annotations[workloadReplicaSetNameAnnotation] = replicaSet.Name
 		if replicaSet.Labels != nil && replicaSet.Labels[workloadDeploymentNameLabel] != "" {
 			annotations[workloadDeploymentNameAnnotation] = replicaSet.Labels[workloadDeploymentNameLabel]
-		}
-		for k, v := range replicaSet.Spec.Template.Annotations {
-			annotations[k] = v
 		}
 
 		workload := &runtimev1alpha1.Workload{
