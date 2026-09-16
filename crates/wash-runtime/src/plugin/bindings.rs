@@ -15,6 +15,7 @@
 //! `config` is already the merged, policy-checked map.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use tracing::{info, warn};
 
@@ -594,6 +595,10 @@ pub struct PluginBindingSet {
     declared_host_owned: BTreeSet<String>,
     workload_config: WorkloadConfigPolicy,
     default_bundles: Vec<DefaultBundle>,
+    allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
+    allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
+    allowed_host_loopback_ports: Arc<[crate::host::allowed_loopback::AllowedLoopbackPort]>,
+    egress_policy_declared: bool,
 }
 
 /// A set of defaults that applies only when nobody set its anchor key.
@@ -657,6 +662,43 @@ impl PluginBindingSet {
     pub fn with_workload_config(mut self, workload_config: WorkloadConfigPolicy) -> Self {
         self.workload_config = workload_config;
         self
+    }
+
+    /// Declares the network ceiling a native plugin must enforce.
+    #[must_use]
+    pub fn with_egress_policy(
+        mut self,
+        allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
+        allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
+        allowed_host_loopback_ports: Arc<[crate::host::allowed_loopback::AllowedLoopbackPort]>,
+    ) -> Self {
+        self.allowed_hosts = allowed_hosts;
+        self.allowed_ip_name_lookups = allowed_ip_name_lookups;
+        self.allowed_host_loopback_ports = allowed_host_loopback_ports;
+        self.egress_policy_declared = true;
+        self
+    }
+
+    /// Builds the declared policy under the host's own socket policy.
+    ///
+    /// A plugin nobody declared a ceiling for remains unmanaged: `None` here,
+    /// and no check on that plugin's endpoints. A declaration that names none
+    /// of the three lists is a deny-all ceiling, which is why the config path
+    /// declares one only when the operator wrote a list.
+    #[must_use]
+    pub fn egress_policy(
+        &self,
+        socket_policy: &crate::sockets::policy::SocketPolicy,
+    ) -> Option<Arc<crate::plugin::PluginEgressPolicy>> {
+        if !self.egress_policy_declared {
+            return None;
+        }
+        Some(Arc::new(crate::plugin::PluginEgressPolicy::new(
+            Arc::clone(&self.allowed_hosts),
+            Arc::clone(&self.allowed_ip_name_lookups),
+            Arc::clone(&self.allowed_host_loopback_ports),
+            socket_policy,
+        )))
     }
 
     /// Seed `key` on the base layer only if the operator did not set it — how a
@@ -2766,5 +2808,34 @@ mod tests {
             .resolve(UNNAMED_BINDING, &HashMap::new(), &schema, never_narrows())
             .unwrap();
         assert_eq!(resolved.len(), 1, "one broker key: {resolved:?}");
+    }
+
+    #[test]
+    fn an_explicit_empty_egress_policy_is_deny_all() {
+        assert!(
+            PluginBindingSet::new("native")
+                .egress_policy(&crate::sockets::policy::SocketPolicy::default())
+                .is_none()
+        );
+        let declared = PluginBindingSet::new("native").with_egress_policy(
+            Arc::from([]),
+            Arc::from([]),
+            Arc::from([]),
+        );
+        let policy = declared
+            .egress_policy(&crate::sockets::policy::SocketPolicy {
+                host_loopback_enabled: true,
+                ..Default::default()
+            })
+            .expect("an explicit empty policy remains declared");
+        assert!(
+            policy
+                .check_url(
+                    "tcp://example.com:9000",
+                    crate::host::declared_port::Protocol::Tcp,
+                    9000,
+                )
+                .is_err()
+        );
     }
 }

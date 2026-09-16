@@ -1597,6 +1597,11 @@ impl HostBuilder {
             };
             let declared = self.plugin_bindings.for_plugin(id);
             declared.validate_declaration()?;
+            if let Some(policy) = declared.egress_policy(&engine.socket_policy) {
+                plugin
+                    .configure_egress_policy(policy)
+                    .with_context(|| format!("invalid egress policy for host plugin '{id}'"))?;
+            }
             // The schema check next: an operator typo is named as a typo,
             // rather than as whatever the plugin's parser makes of a config
             // missing the key they meant to set.
@@ -2118,6 +2123,22 @@ mod tests {
             .expect("failed to register plugin")
             .build()
             .expect("failed to build host")
+    }
+
+    #[test]
+    fn a_native_plugin_cannot_silently_ignore_egress_policy() {
+        let declared = crate::plugin::PluginBindingSet::new("bind-recording").with_egress_policy(
+            Arc::from(["example.com".parse().unwrap()]),
+            Arc::from([]),
+            Arc::from([]),
+        );
+        let err = Host::builder()
+            .with_plugin(Arc::new(BindRecordingPlugin::default()))
+            .unwrap()
+            .with_plugin_bindings(crate::plugin::PluginBindings::new().with_plugin(declared))
+            .build()
+            .expect_err("an unenforced native policy must fail startup");
+        assert!(format!("{err:#}").contains("cannot enforce"));
     }
 
     /// `build()` runs each plugin's own parser over the operator's
