@@ -53,10 +53,13 @@ type herdWorkload struct {
 	hostID string
 }
 
-// herdHostGroup is the host group the herd is placed on. Every reading below
-// is scoped to it: the `registry` group beside it runs a different workload on
-// a different image and its health is not this spec's subject.
-const herdHostGroup = "default"
+const (
+	// herdHostGroup is the host group the herd is placed on. Every reading below
+	// is scoped to it: the `registry` group beside it runs a different workload on
+	// a different image and its health is not this spec's subject.
+	herdHostGroup = "default"
+	conditionTrue = "True"
+)
 
 // herdHostPods selects the pods of the host group the herd lands on.
 var herdHostPods = "wasmcloud.com/name=hostgroup,wasmcloud.com/hostgroup=" + herdHostGroup
@@ -118,7 +121,7 @@ func readyHerdHostPodIPs() map[string]string {
 	pods := map[string]string{}
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.SplitN(line, "\t", 4)
-		if len(fields) < 4 || fields[1] != "" || fields[2] == "" || fields[3] != "True" {
+		if len(fields) < 4 || fields[1] != "" || fields[2] == "" || fields[3] != conditionTrue {
 			continue
 		}
 		pods[fields[2]] = fields[0]
@@ -245,7 +248,7 @@ var _ = Describe("Thundering Herd", Ordered, func() {
 			g.Expect(err).NotTo(HaveOccurred())
 			for _, line := range strings.Split(out, "\n") {
 				fields := strings.SplitN(line, "\t", 3)
-				if len(fields) == 3 && fields[2] == "True" {
+				if len(fields) == 3 && fields[2] == conditionTrue {
 					if _, current := pods[fields[1]]; current {
 						hostName = fields[0]
 						return
@@ -336,7 +339,7 @@ spec:
 				if err != nil {
 					continue
 				}
-				if out != "True" {
+				if out != conditionTrue {
 					mu.Lock()
 					notReady = append(notReady, fmt.Sprintf("host CR Ready=%q at %s", out, time.Now().Format(time.RFC3339)))
 					mu.Unlock()
@@ -362,7 +365,7 @@ spec:
 					// started, and its two generations are both legitimately
 					// unready; the restart check is what catches a replacement
 					// this herd caused.
-					if _, ours := restartsBefore[name]; !ours || ready == "True" {
+					if _, ours := restartsBefore[name]; !ours || ready == conditionTrue {
 						continue
 					}
 					mu.Lock()
@@ -379,7 +382,7 @@ spec:
 				deploymentName, "-n", namespace,
 				"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`))
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(out).To(Equal("True"))
+			g.Expect(out).To(Equal(conditionTrue))
 		}).WithTimeout(converge).WithPolling(2 * time.Second).Should(Succeed())
 		converged := time.Since(started)
 		close(done)
@@ -451,7 +454,7 @@ spec:
 
 		hosts := map[string]int{}
 		for _, row := range rows {
-			Expect(row.ready).To(Equal("True"), "%s is not Ready", row.name)
+			Expect(row.ready).To(Equal(conditionTrue), "%s is not Ready", row.name)
 			// Asserted before counting. An unset field reads as empty rather
 			// than erroring, and an empty key would collapse every replica into
 			// one bucket — making the "all on one host" check below pass
@@ -493,7 +496,7 @@ spec:
 			"-n", namespace, "-l", "hostgroup=default",
 			"-o", `jsonpath={range .items[*]}{.status.conditions[?(@.type=="Ready")].status} {end}`))
 		Expect(err).NotTo(HaveOccurred())
-		Expect(strings.Fields(out)).To(ContainElement("True"),
+		Expect(strings.Fields(out)).To(ContainElement(conditionTrue),
 			"no host in the default hostgroup is Ready after the herd")
 	})
 })
