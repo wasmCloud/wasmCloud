@@ -98,6 +98,34 @@ func hostPodRestarts() map[string]string {
 	return restarts
 }
 
+// readyHerdHostPodIPs returns the current, non-terminating Ready pods in the
+// herd host group, keyed by pod IP. A rollout can leave the previous host's CR
+// reporting Ready for a short while after its pod is gone, so the test must
+// pair a Host CR with a live pod rather than accepting the first Ready CR.
+func readyHerdHostPodIPs() map[string]string {
+	const columns = `jsonpath={range .items[*]}` +
+		`{.metadata.name}{"\t"}` +
+		`{.metadata.deletionTimestamp}{"\t"}` +
+		`{.status.podIP}{"\t"}` +
+		`{.status.conditions[?(@.type=="Ready")].status}` +
+		`{"\n"}{end}`
+
+	out, err := utils.Run(exec.Command("kubectl", "get", "pods", "-n", namespace,
+		"-l", herdHostPods, "--field-selector=status.phase=Running", "-o", columns))
+	if err != nil {
+		return nil
+	}
+	pods := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.SplitN(line, "\t", 4)
+		if len(fields) < 4 || fields[1] != "" || fields[2] == "" || fields[3] != "True" {
+			continue
+		}
+		pods[fields[2]] = fields[0]
+	}
+	return pods
+}
+
 // herdWorkloads returns the Workload CRs belonging to `deployment`, matched on
 // the `<deployment>-<replicaset hash>-<workload hash>` name the controllers
 // generate. Nothing labels a Workload with the deployment it came from, and
@@ -195,30 +223,38 @@ var _ = Describe("Thundering Herd", Ordered, func() {
 			"-n", namespace, "--timeout=3m"))
 		Expect(err).NotTo(HaveOccurred(), "the host group never finished rolling out")
 
-		// The baseline the watch below is against. Without it a host that has
-		// not finished registering reads the same as one that has gone quiet:
-		// both have no Ready condition to report.
-		By("waiting for the host to be Ready before the herd arrives")
+		// The baseline the watch below is against. Match the Host CR to a live,
+		// Ready pod by IP. A completed rollout can leave the outgoing host's CR
+		// reporting Ready until the heartbeat timeout reaps it; selecting that
+		// stale CR makes its expected deletion look like the herd killed the new
+		// host.
+		By("waiting for the active host pod and Host CR to be Ready before the herd arrives")
 		var hostName string
 		Eventually(func(g Gomega) {
+			pods := readyHerdHostPodIPs()
+			g.Expect(pods).NotTo(BeEmpty(), "no current Ready host pod found")
+			hostName = ""
 			out, err := utils.Run(exec.Command("kubectl", "get",
 				"hosts.runtime.wasmcloud.dev", "-n", namespace,
-				"-l", "hostgroup=default",
-				"-o", `jsonpath={range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status} {end}`))
+				"-l", "hostgroup="+herdHostGroup,
+				"-o", `jsonpath={range .items[*]}`+
+					`{.metadata.name}{"\t"}`+
+					`{.hostname}{"\t"}`+
+					`{.status.conditions[?(@.type=="Ready")].status}`+
+					`{"\n"}{end}`))
 			g.Expect(err).NotTo(HaveOccurred())
-			for _, entry := range strings.Fields(out) {
-				if name, ok := strings.CutSuffix(entry, "=True"); ok {
-					hostName = name
-					return
+			for _, line := range strings.Split(out, "\n") {
+				fields := strings.SplitN(line, "\t", 3)
+				if len(fields) == 3 && fields[2] == "True" {
+					if _, current := pods[fields[1]]; current {
+						hostName = fields[0]
+						return
+					}
 				}
 			}
-			// Asserted on the name, not on the output: no Host CRs at all
-			// prints nothing and exits 0, so an emptiness check on `out` would
-			// pass on the way in and leave every reading below aimed at a host
-			// that does not exist — with the herd's central assertion satisfied
-			// by having looked at nothing.
 			g.Expect(hostName).NotTo(BeEmpty(),
-				"no host in the default hostgroup is Ready yet, got %q", out)
+				"no Ready Host CR belongs to a current Ready pod; pods by IP: %v, hosts: %q",
+				pods, out)
 		}).WithTimeout(3 * time.Minute).WithPolling(2 * time.Second).Should(Succeed())
 		Expect(hostName).NotTo(BeEmpty())
 
