@@ -522,8 +522,10 @@ impl Engine {
             service,
             volumes,
             host_interfaces,
+            annotations,
             ..
         } = workload;
+        let annotations_arc = Arc::new(annotations);
 
         // Process and validate volumes - create a lookup map from volume name to validated host path
         let mut validated_volumes = std::collections::HashMap::new();
@@ -566,7 +568,7 @@ impl Engine {
             ) {
                 Ok(handle) => {
                     tracing::debug!("successfully initialized service component");
-                    Some(handle)
+                    Some(handle.with_annotations(Arc::clone(&annotations_arc)))
                 }
                 Err(e) => {
                     tracing::error!(err = ?e, "failed to initialize service component");
@@ -590,7 +592,7 @@ impl Engine {
             ) {
                 Ok(handle) => {
                     tracing::debug!("successfully initialized workload component");
-                    workload_components.push(handle);
+                    workload_components.push(handle.with_annotations(Arc::clone(&annotations_arc)));
                 }
                 Err(e) => {
                     tracing::error!(err = ?e, "failed to initialize component");
