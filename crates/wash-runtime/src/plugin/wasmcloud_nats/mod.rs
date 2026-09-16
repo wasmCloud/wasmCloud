@@ -79,4 +79,4 @@ pub(super) mod kv_bindings {
 /// in `host.plugins`.
 pub const PLUGIN_NATS_ID: &str = "wasmcloud-nats";
 
-const NATS_VERSION: &str = "0.1.0";
+const NATS_VERSION: &str = "0.1.1";

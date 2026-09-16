@@ -1126,8 +1126,8 @@ mod tests {
             v.sort();
             v
         };
-        assert_eq!(versions(&world.imports), vec!["0.1.0"]);
-        assert_eq!(versions(&world.exports), vec!["0.1.0"]);
+        assert_eq!(versions(&world.imports), vec!["0.1.1"]);
+        assert_eq!(versions(&world.exports), vec!["0.1.1"]);
         for iface in world.exports.iter() {
             assert!(
                 iface.interfaces.contains("kv-handler"),
