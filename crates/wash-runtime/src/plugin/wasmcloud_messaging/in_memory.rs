@@ -551,6 +551,11 @@ impl HostPlugin for InMemoryMessaging {
                 .get(super::ADMISSION_WAIT_CONFIG)
                 .map(String::as_str),
         );
+        let admission_group = component_handle
+            .local_resources()
+            .config
+            .get(super::ADMISSION_GROUP_CONFIG)
+            .cloned();
 
         // Track a handler component OR a long-lived handler service:
         // `WorkloadItem` derefs to the underlying metadata for both, so the
@@ -565,9 +570,11 @@ impl HostPlugin for InMemoryMessaging {
                 WorkloadItem::Component(component) => component.name().to_string(),
                 WorkloadItem::Service(_) => "service".to_string(),
             };
+            let workload_name = super::parse_admission_group(admission_group.as_deref())
+                .unwrap_or_else(|| component_handle.stable_workload_name());
             let identity = super::AdmissionIdentity::new(
                 component_handle.workload_namespace(),
-                component_handle.workload_name(),
+                workload_name,
                 &component_name,
             );
             let admission = self

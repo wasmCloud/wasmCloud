@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::future::Future;
 #[cfg(any(feature = "wasi-blobstore", feature = "wasi-keyvalue"))]
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::engine::workload::WorkloadItem;
 use crate::{
@@ -55,6 +56,9 @@ pub mod wasi_otel;
 pub mod wasmcloud_messaging;
 
 pub mod wasmcloud_secrets;
+
+mod egress;
+pub use egress::PluginEgressPolicy;
 
 /// NATS-native capability: core pub/sub, JetStream, and KV.
 #[cfg(feature = "wasmcloud-nats")]
@@ -407,6 +411,23 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// workload's to write, as it was before bindings existed.
     fn binding_schema(&self) -> BindingSchema {
         BindingSchema::empty()
+    }
+
+    /// Installs the network ceiling declared for this native plugin.
+    ///
+    /// Native networking bypasses WASI socket hooks, so a plugin must retain
+    /// this policy and check every endpoint before connecting. The default
+    /// rejects the declaration instead of accepting an unenforced policy, so an
+    /// operator who writes a ceiling is never told it holds when nothing reads
+    /// it. Only a plugin that dials out has one to install; this is reached
+    /// only for an entry that names a list.
+    fn configure_egress_policy(&self, _policy: Arc<PluginEgressPolicy>) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "plugin '{}' does not connect out, so it cannot enforce allowedHosts, \
+             allowedIpNameLookups, or allowedHostLoopbackPorts. Drop those fields from its \
+             `host.plugins` entry — the rest of the entry still applies",
+            self.id()
+        )
     }
 
     /// Check the operator's declaration for this plugin at host startup.

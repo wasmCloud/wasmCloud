@@ -36,6 +36,18 @@ use crate::{
 #[derive(Debug, Clone, Args)]
 pub struct DevCommand {}
 
+fn dev_socket_policy() -> Arc<wash_runtime::sockets::policy::SocketPolicy> {
+    // The guest's port list remains the per-guest gate in a dev session. The
+    // port table is the session's single record of the real ports it holds —
+    // the dev host's own ingress among them — so every guest policy derived
+    // from this one reads the same reservations.
+    Arc::new(wash_runtime::sockets::policy::SocketPolicy {
+        host_loopback_enabled: true,
+        host_owned_ports: Some(wash_runtime::host::ports::PortTable::new()),
+        ..Default::default()
+    })
+}
+
 impl CliCommand for DevCommand {
     async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
         wash_runtime::init_crypto();
@@ -87,15 +99,10 @@ impl CliCommand for DevCommand {
                 .with_context(|| format!("invalid dev.wasm_proposals entry {name:?}"))?;
             engine_builder = engine_builder.with_wasm_proposal(proposal);
         }
-        // `wash host` needs both an operator flag and the workload's
-        // `allowedHostLoopbackPorts`. In a dev session the developer is
-        // both parties, so the flag is redundant: the port list alone gates
-        // it, and an empty list still denies.
-        let socket_policy = Arc::new(wash_runtime::sockets::policy::SocketPolicy {
-            host_loopback_enabled: true,
-            ..Default::default()
-        });
-        engine_builder = engine_builder.with_socket_policy(socket_policy);
+        // Dev enables the host-wide gate. Each workload or component plugin
+        // must still name its loopback ports.
+        let socket_policy = dev_socket_policy();
+        engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         let engine = engine_builder.build()?;
 
         let mut host_builder = Host::builder()
@@ -389,7 +396,7 @@ impl CliCommand for DevCommand {
                     oci_config.clone(),
                     &native_plugins,
                     http_handler.as_ref().map(Arc::downgrade),
-                    None,
+                    Some(Arc::clone(&socket_policy)),
                 )
                 .await
                 .with_context(|| format!("failed to load host component plugin '{}'", spec.id))?;
@@ -895,6 +902,13 @@ mod tests {
     use super::*;
     use crate::config::{DevComponent, DevConfig, DevVolume};
     use std::path::PathBuf;
+
+    #[test]
+    fn dev_enables_only_the_host_side_of_loopback_access() {
+        let policy = dev_socket_policy();
+        assert!(policy.host_loopback_enabled);
+        assert!(policy.host_loopback.is_empty());
+    }
 
     fn iface(namespace: &str, package: &str) -> WitInterface {
         WitInterface {

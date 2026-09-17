@@ -336,6 +336,8 @@ pub struct Host {
     system_monitor: Arc<RwLock<SystemMonitor>>,
     // endpoints: HashMap<String, EndpointConfiguration>
     pub(crate) http_handler: std::sync::Arc<dyn crate::host::http::HostHandler>,
+    /// Keeps the HTTP ingress marked as host-owned for this host's lifetime.
+    _port_reservations: Vec<crate::host::ports::PortReservation>,
     config: HostConfig,
     meters: Meters,
 }
@@ -1578,6 +1580,7 @@ impl HostBuilder {
             Some(handler) => handler,
             None => Arc::new(crate::host::http::NullServer::default()),
         };
+        let port_reservations = reserve_http_ingress(&engine.socket_policy, http_handler.port())?;
 
         // Every plugin is registered by now, so a binding declaration naming an
         // id this host does not have is a typo — and an inert one, which is the
@@ -1597,6 +1600,11 @@ impl HostBuilder {
             };
             let declared = self.plugin_bindings.for_plugin(id);
             declared.validate_declaration()?;
+            if let Some(policy) = declared.egress_policy(&engine.socket_policy) {
+                plugin
+                    .configure_egress_policy(policy)
+                    .with_context(|| format!("invalid egress policy for host plugin '{id}'"))?;
+            }
             // The schema check next: an operator typo is named as a typo,
             // rather than as whatever the plugin's parser makes of a config
             // missing the key they meant to set.
@@ -1622,16 +1630,63 @@ impl HostBuilder {
             started_at: chrono::Utc::now(),
             system_monitor: Arc::new(RwLock::new(SystemMonitor::new())),
             http_handler,
+            _port_reservations: port_reservations,
             config,
             meters,
         })
     }
 }
 
+fn reserve_http_ingress(
+    policy: &crate::sockets::policy::SocketPolicy,
+    port: u16,
+) -> anyhow::Result<Vec<crate::host::ports::PortReservation>> {
+    let Some(table) = policy.host_owned_ports.as_ref().filter(|_| port != 0) else {
+        return Ok(Vec::new());
+    };
+    let owner = crate::host::ports::PortOwner::Host("HTTP ingress".into());
+    [
+        std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], port)),
+    ]
+    .into_iter()
+    .map(|addr| {
+        table.reserve(
+            crate::host::declared_port::Protocol::Tcp,
+            addr,
+            owner.clone(),
+        )
+    })
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::Component;
+
+    #[test]
+    fn http_ingress_is_host_owned() {
+        let policy = crate::sockets::policy::SocketPolicy {
+            host_loopback_enabled: true,
+            host_loopback: Arc::from([crate::host::allowed_loopback::AllowedLoopbackPort::tcp(
+                8000,
+            )]),
+            // The table comes from the host that owns it, as it does in `wash
+            // host` and `wash dev`: without one there is nothing to reserve
+            // into, and every port reads as unowned.
+            host_owned_ports: Some(crate::host::ports::PortTable::new()),
+            ..Default::default()
+        };
+        let _reservations = reserve_http_ingress(&policy, 8000).unwrap();
+        assert!(matches!(
+            policy.decide(
+                crate::sockets::SocketAddrUse::TcpConnect,
+                "127.255.255.254:8000".parse().unwrap()
+            ),
+            crate::sockets::AddrDecision::Deny(crate::sockets::DenyReason::HostOwnedPort)
+        ));
+    }
 
     /// An unreadable CA bundle has to stop the host being built. Trust is
     /// configured once and used much later, so accepting it here would surface
@@ -2120,6 +2175,22 @@ mod tests {
             .expect("failed to build host")
     }
 
+    #[test]
+    fn a_native_plugin_cannot_silently_ignore_egress_policy() {
+        let declared = crate::plugin::PluginBindingSet::new("bind-recording").with_egress_policy(
+            Arc::from(["example.com".parse().unwrap()]),
+            Arc::from([]),
+            Arc::from([]),
+        );
+        let err = Host::builder()
+            .with_plugin(Arc::new(BindRecordingPlugin::default()))
+            .unwrap()
+            .with_plugin_bindings(crate::plugin::PluginBindings::new().with_plugin(declared))
+            .build()
+            .expect_err("an unenforced native policy must fail startup");
+        assert!(format!("{err:#}").contains("cannot enforce"));
+    }
+
     /// `build()` runs each plugin's own parser over the operator's
     /// declaration, so a binding written wrong fails startup rather than the
     /// first workload that asks for it. The message has to name the binding.
@@ -2159,6 +2230,37 @@ mod tests {
 
         build(&[("subject-allow", "orders.>")])
             .expect("a binding that inherits the data-plane address is complete");
+    }
+
+    #[cfg(feature = "wasmcloud-nats")]
+    #[test]
+    fn nats_checks_declared_egress_before_connecting() {
+        use crate::plugin::wasmcloud_nats::{PLUGIN_NATS_ID, WasmcloudNats};
+
+        let build = |server: &str| {
+            let declared = crate::plugin::PluginBindingSet::new(PLUGIN_NATS_ID)
+                .with_binding(
+                    "orders",
+                    [("servers".to_string(), server.to_string())]
+                        .into_iter()
+                        .collect(),
+                )
+                .with_egress_policy(
+                    Arc::from(["nats://data.example:4222".parse().unwrap()]),
+                    Arc::from(["data.example".parse().unwrap()]),
+                    Arc::from([]),
+                );
+            Host::builder()
+                .with_plugin(Arc::new(WasmcloudNats::new()))
+                .unwrap()
+                .with_plugin_bindings(crate::plugin::PluginBindings::new().with_plugin(declared))
+                .build()
+        };
+
+        build("nats://data.example:4222").expect("declared server is allowed");
+        let err =
+            build("nats://other.example:4222").expect_err("an undeclared server must fail startup");
+        assert!(format!("{err:#}").contains("allowedIpNameLookups"));
     }
 
     /// A start that fails *after* its plugins bound must give the binding back.

@@ -9,7 +9,8 @@
 {{- $imgRepo := $hi.repository | default $top.Values.runtime.image.repository }}
 {{- $imgTag := $hi.tag | default $top.Values.runtime.image.tag | default $top.Chart.AppVersion }}
 {{- /* hostPlugins entries needing a `wash host` config file (--config) —
-       config/configFrom/secretFrom/allowedHosts/allowedIpNameLookups have no
+       config/configFrom/secretFrom/allowedHosts/allowedIpNameLookups/
+       allowedHostLoopbackPorts/ports have no
        `--host-plugin` CLI-arg equivalent (deliberately: a secret must never
        land on the command line). See host-plugin-config.yaml, which renders
        the ConfigMap this deployment mounts. */}}
@@ -356,7 +357,7 @@ spec:
             {{- range .wasmProposals }}
             - "--wasm-proposal={{ . }}"
             {{- end }}
-            {{- /* Host component plugins with no config/secretFrom/allowedHosts:
+            {{- /* Host component plugins with no config/secretFrom/egress policy:
                    one --host-plugin flag per entry, rendered into the CLI's
                    `key=value` grammar (unchanged). Entries that DO set any of
                    those render into the mounted config file instead — see

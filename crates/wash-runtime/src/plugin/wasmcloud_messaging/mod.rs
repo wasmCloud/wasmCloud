@@ -13,6 +13,7 @@
 //! | `consumer_group` | Queue-group name, or `broadcast` for no grouping (NATS only) | A name derived from namespace/workload/component |
 //! | `max_in_flight` | Messages this component may process at once, across every replica of it on this host | The host's per-component default |
 //! | `admission_wait` | How long to wait for a slot before shedding (`45s`, `2m`, or bare seconds) | [`DEFAULT_ADMISSION_WAIT`] |
+//! | `admission_group` | Name to group replicas under for admission concurrency gates | A name derived from stable workload / deployment |
 //!
 //! ```yaml
 //! localResources:
@@ -1394,6 +1395,13 @@ pub(crate) fn declares_async_messaging(interfaces: &crate::plugin::WitInterfaces
 /// raise it above: [`MessagingLimits::admission`] clamps to both ceilings.
 pub(crate) const MAX_IN_FLIGHT_CONFIG: &str = "max_in_flight";
 
+/// Config key naming the admission group to collapse replicas onto for
+/// admission concurrency gates (`max_in_flight`).
+///
+/// Defaults to the stable workload name (or deployment name from orchestrator annotations),
+/// but can be set explicitly to group multiple components or override the gate key.
+pub(crate) const ADMISSION_GROUP_CONFIG: &str = "admission_group";
+
 /// Config key naming how long this component's subscriber loop waits for an
 /// admission slot before shedding.
 ///
@@ -1526,10 +1534,19 @@ pub(crate) fn parse_subscriptions(raw: Option<&str>) -> Vec<String> {
     .unwrap_or_default()
 }
 
+/// Parses an [`ADMISSION_GROUP_CONFIG`] value into a trimmed, non-empty workload admission group name.
+///
+/// Returns `None` if the value is absent, empty, or whitespace-only, allowing callers to fall
+/// back to the component's stable workload name.
+pub(crate) fn parse_admission_group(raw: Option<&str>) -> Option<&str> {
+    raw.map(str::trim).filter(|s| !s.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        MsgError, declares_async_messaging, exports_messaging_handler, parse_subscriptions,
+        MsgError, declares_async_messaging, exports_messaging_handler, parse_admission_group,
+        parse_subscriptions,
     };
     use crate::plugin::WitInterfaces;
     use crate::wit::{WitInterface, WitWorld};
@@ -1659,6 +1676,18 @@ mod tests {
             vec!["tasks.leet".to_string(), "tasks.reverse".to_string()]
         );
         assert!(parse_subscriptions(None).is_empty());
+    }
+
+    #[test]
+    fn parses_admission_group() {
+        assert_eq!(parse_admission_group(Some("my-group")), Some("my-group"));
+        assert_eq!(
+            parse_admission_group(Some("  my-group  ")),
+            Some("my-group")
+        );
+        assert_eq!(parse_admission_group(Some("")), None);
+        assert_eq!(parse_admission_group(Some("   ")), None);
+        assert_eq!(parse_admission_group(None), None);
     }
 
     // --- Admission ceilings -------------------------------------------------

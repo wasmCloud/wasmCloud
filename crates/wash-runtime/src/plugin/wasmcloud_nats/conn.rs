@@ -226,6 +226,7 @@ async fn build_options(
     config: &NatsConfig,
     reconnects: tokio::sync::watch::Sender<u64>,
     denials: tokio::sync::broadcast::Sender<String>,
+    ignore_discovered_servers: bool,
 ) -> anyhow::Result<async_nats::ConnectOptions> {
     let mut opts = apply_auth(async_nats::ConnectOptions::new(), &config.auth).await?;
 
@@ -250,6 +251,10 @@ async fn build_options(
     }
     if let (Some(cert), Some(key)) = (&config.tls.cert, &config.tls.key) {
         opts = opts.add_client_certificate(cert.clone(), key.clone());
+    }
+    if ignore_discovered_servers {
+        // Only operator-declared servers were checked against the policy.
+        opts = opts.ignore_discovered_servers();
     }
 
     // Without a callback these are raised and discarded. SlowConsumer is the
@@ -422,6 +427,7 @@ impl ConnectionRegistry {
         binding: &str,
         config: &NatsConfig,
         lattice_prefixes: Vec<String>,
+        ignore_discovered_servers: bool,
     ) -> anyhow::Result<Arc<ConnHandle>> {
         let key = config.connection_key();
 
@@ -442,7 +448,13 @@ impl ConnectionRegistry {
 
         let (reconnects, _) = tokio::sync::watch::channel(0);
         let (subscription_denials, _) = tokio::sync::broadcast::channel(64);
-        let opts = build_options(config, reconnects.clone(), subscription_denials.clone()).await?;
+        let opts = build_options(
+            config,
+            reconnects.clone(),
+            subscription_denials.clone(),
+            ignore_discovered_servers,
+        )
+        .await?;
         let client = opts
             .connect(config.servers.clone())
             .await

@@ -143,7 +143,18 @@ pub struct WorkloadMetadata {
     pub(crate) guest_memory: Arc<crate::engine::guest_memory::GuestMemoryBudget>,
     /// Linked component ids
     linked_components: HashSet<Arc<str>>,
+    /// Workload annotations
+    pub(crate) annotations: Arc<HashMap<String, String>>,
 }
+
+/// Kubernetes annotation set by the runtime-operator for the parent WorkloadDeployment.
+pub const WORKLOAD_DEPLOYMENT_ANNOTATION: &str = "runtime.wasmcloud.dev/workload-deployment";
+/// Kubernetes annotation set by the runtime-operator for the parent WorkloadReplicaSet.
+pub const WORKLOAD_REPLICASET_ANNOTATION: &str = "runtime.wasmcloud.dev/workload-replicaset-name";
+/// Alternate WorkloadReplicaSet annotation key.
+pub const WORKLOAD_REPLICASET_LEGACY_ANNOTATION: &str = "runtime.wasmcloud.dev/workload-replicaset";
+/// Standard Kubernetes application name annotation.
+pub const K8S_APP_NAME_ANNOTATION: &str = "app.kubernetes.io/name";
 
 impl WorkloadMetadata {
     async fn resolve_volume_mounts(&mut self) -> anyhow::Result<()> {
@@ -168,6 +179,36 @@ impl WorkloadMetadata {
     /// Returns the name of the workload this component belongs to.
     pub fn workload_name(&self) -> &str {
         &self.workload_name
+    }
+
+    /// Returns the stable workload name across replicas, if a deployment or
+    /// replicaset annotation was supplied by the orchestrator. Falls back to `workload_name`.
+    pub fn stable_workload_name(&self) -> &str {
+        let non_empty = |key: &str| {
+            self.annotations
+                .get(key)
+                .map(String::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        };
+
+        if let Some(deployment) = non_empty(WORKLOAD_DEPLOYMENT_ANNOTATION) {
+            return deployment;
+        }
+        if let Some(replicaset) = non_empty(WORKLOAD_REPLICASET_ANNOTATION)
+            .or_else(|| non_empty(WORKLOAD_REPLICASET_LEGACY_ANNOTATION))
+        {
+            return replicaset;
+        }
+        if let Some(name) = non_empty(K8S_APP_NAME_ANNOTATION) {
+            return name;
+        }
+        &self.workload_name
+    }
+
+    /// Returns the workload's annotations.
+    pub fn annotations(&self) -> &HashMap<String, String> {
+        &self.annotations
     }
 
     /// Returns the namespace of the workload this component belongs to.
@@ -367,10 +408,20 @@ impl WorkloadService {
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
                 linked_components: Default::default(),
+                annotations: Arc::default(),
             },
             handle: None,
             max_restarts,
         }
+    }
+
+    /// Attach workload annotations.
+    pub fn with_annotations(
+        mut self,
+        annotations: impl Into<Arc<HashMap<String, String>>>,
+    ) -> Self {
+        self.metadata.annotations = annotations.into();
+        self
     }
 
     /// Pre-instantiate the component to prepare for execution.
@@ -463,10 +514,20 @@ impl WorkloadComponent {
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
                 linked_components: Default::default(),
+                annotations: Arc::default(),
             },
             name: component_name.into(),
             instances: Arc::new(InstancePool::new(instances)),
         }
+    }
+
+    /// Attach workload annotations.
+    pub fn with_annotations(
+        mut self,
+        annotations: impl Into<Arc<HashMap<String, String>>>,
+    ) -> Self {
+        self.metadata.annotations = annotations.into();
+        self
     }
 
     /// Pre-instantiate the component to prepare for instantiation.
@@ -5870,5 +5931,70 @@ mod tests {
         if let Err(e) = result {
             panic!("Unnamed interfaces should work as before: {e}");
         }
+    }
+
+    #[test]
+    fn stable_workload_name_filtering_and_fallback() {
+        // 1. Valid deployment annotation with surrounding whitespace gets trimmed
+        let mut annotations = HashMap::new();
+        annotations.insert(
+            WORKLOAD_DEPLOYMENT_ANNOTATION.to_string(),
+            "  my-deployment  ".to_string(),
+        );
+        let comp = create_test_component("c").with_annotations(annotations);
+        assert_eq!(comp.stable_workload_name(), "my-deployment");
+
+        // 2. Blank deployment annotation falls back to replicaset
+        let mut annotations = HashMap::new();
+        annotations.insert(
+            WORKLOAD_DEPLOYMENT_ANNOTATION.to_string(),
+            "   ".to_string(),
+        );
+        annotations.insert(
+            WORKLOAD_REPLICASET_ANNOTATION.to_string(),
+            "my-replicaset".to_string(),
+        );
+        let comp = create_test_component("c").with_annotations(annotations);
+        assert_eq!(comp.stable_workload_name(), "my-replicaset");
+
+        // 3. Blank deployment and blank replicaset falls back to legacy replicaset
+        let mut annotations = HashMap::new();
+        annotations.insert(WORKLOAD_DEPLOYMENT_ANNOTATION.to_string(), "".to_string());
+        annotations.insert(
+            WORKLOAD_REPLICASET_ANNOTATION.to_string(),
+            "   ".to_string(),
+        );
+        annotations.insert(
+            WORKLOAD_REPLICASET_LEGACY_ANNOTATION.to_string(),
+            "my-legacy-rs".to_string(),
+        );
+        let comp = create_test_component("c").with_annotations(annotations);
+        assert_eq!(comp.stable_workload_name(), "my-legacy-rs");
+
+        // 4. Blank replicasets fall back to k8s app name
+        let mut annotations = HashMap::new();
+        annotations.insert(WORKLOAD_REPLICASET_ANNOTATION.to_string(), "".to_string());
+        annotations.insert(
+            WORKLOAD_REPLICASET_LEGACY_ANNOTATION.to_string(),
+            "".to_string(),
+        );
+        annotations.insert(K8S_APP_NAME_ANNOTATION.to_string(), "my-app".to_string());
+        let comp = create_test_component("c").with_annotations(annotations);
+        assert_eq!(comp.stable_workload_name(), "my-app");
+
+        // 5. All blank annotations fall back to raw workload_name
+        let mut annotations = HashMap::new();
+        annotations.insert(WORKLOAD_DEPLOYMENT_ANNOTATION.to_string(), "".to_string());
+        annotations.insert(
+            WORKLOAD_REPLICASET_ANNOTATION.to_string(),
+            "   ".to_string(),
+        );
+        annotations.insert(
+            WORKLOAD_REPLICASET_LEGACY_ANNOTATION.to_string(),
+            "".to_string(),
+        );
+        annotations.insert(K8S_APP_NAME_ANNOTATION.to_string(), "   ".to_string());
+        let comp = create_test_component("c").with_annotations(annotations);
+        assert_eq!(comp.stable_workload_name(), "test-workload-c");
     }
 }

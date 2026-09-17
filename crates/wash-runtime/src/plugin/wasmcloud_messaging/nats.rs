@@ -361,6 +361,8 @@ impl HostPlugin for NatsMessaging {
         let interface_consumer_group = interface.config.get(CONSUMER_GROUP_CONFIG).cloned();
         let interface_max_in_flight = interface.config.get(super::MAX_IN_FLIGHT_CONFIG).cloned();
         let interface_admission_wait = interface.config.get(super::ADMISSION_WAIT_CONFIG).cloned();
+        let interface_admission_group =
+            interface.config.get(super::ADMISSION_GROUP_CONFIG).cloned();
 
         // Bind only the revision(s) the workload actually declared: the two
         // surfaces are separate linker instances, and binding one a component
@@ -398,6 +400,11 @@ impl HostPlugin for NatsMessaging {
             .local_resources()
             .config
             .get(super::ADMISSION_WAIT_CONFIG)
+            .cloned();
+        let local_admission_group = component_handle
+            .local_resources()
+            .config
+            .get(super::ADMISSION_GROUP_CONFIG)
             .cloned();
 
         // Track a handler component OR a long-lived handler service:
@@ -439,9 +446,12 @@ impl HostPlugin for NatsMessaging {
             // something a manifest author recognizes and selects the gate, so
             // replicas of this deployment on this host share one ceiling
             // rather than getting one apiece.
+            let workload_name = super::parse_admission_group(local_admission_group.as_deref())
+                .or_else(|| super::parse_admission_group(interface_admission_group.as_deref()))
+                .unwrap_or_else(|| component_handle.stable_workload_name());
             let identity = super::AdmissionIdentity::new(
                 component_handle.workload_namespace(),
-                component_handle.workload_name(),
+                workload_name,
                 &component_name,
             );
             let admission = self

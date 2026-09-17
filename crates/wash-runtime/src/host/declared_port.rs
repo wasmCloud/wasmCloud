@@ -1,11 +1,11 @@
 //! A port a guest listens on, declared in configuration rather than by the
 //! guest itself.
 //!
-//! A guest never chooses its own exposure. It binds a port inside its virtual
-//! loopback and the host splices a real listener into it
-//! ([`PortMode::Splice`]), or — for a host component plugin only, and when the
-//! extra copy that splice costs is worth avoiding — the operator names a
-//! concrete address the plugin may bind for real ([`PortMode::Direct`]).
+//! A guest never chooses its own exposure. [`PortMode::Splice`] models a host
+//! listener forwarding into virtual loopback; host-component loading rejects
+//! that mode until its publisher is implemented. For a host component plugin,
+//! an operator may instead name a concrete address the plugin binds for real
+//! ([`PortMode::Direct`]).
 //! Either way the address and port come from configuration, not from guest
 //! code.
 //!
@@ -196,6 +196,30 @@ pub fn validate_workload_ports(ports: &[DeclaredPort], owner: &str) -> Result<()
         if port.bind.is_some() {
             bail!(
                 "{owner}: port '{}' sets `bind`, which is only available to host component                  plugins. A workload's ports are published by the host; set `publish` instead",
+                port.name
+            );
+        }
+    }
+    validate_ports(ports, owner)
+}
+
+/// Check a host component plugin's `ports` list.
+///
+/// Same as [`validate_ports`], plus: a plugin may not use `publish`. Splicing a
+/// host-held listener into a plugin's private network is not implemented, so an
+/// entry asking for it would load and then expose nothing.
+///
+/// # Errors
+///
+/// Returns the first problem found, named so an operator can find it in their
+/// config file rather than in a plugin that failed to start.
+pub fn validate_plugin_ports(ports: &[DeclaredPort], owner: &str) -> Result<()> {
+    for port in ports {
+        if let PortMode::Splice { .. } = port.mode() {
+            bail!(
+                "{owner}: port '{}' uses `publish`, but host-component port splicing is not \
+                 supported. Name a concrete non-loopback `bind` address instead, which has the \
+                 plugin hold the real socket itself",
                 port.name
             );
         }
