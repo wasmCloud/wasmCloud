@@ -9,8 +9,8 @@ use std::task::{Context, Poll};
 
 use http_body_util::BodyExt;
 use wasmtime::component::{Accessor, AccessorTask};
-use wasmtime_wasi_http::{Error, WasiBody};
 use wasmtime_wasi_http::p3::bindings::Service;
+use wasmtime_wasi_http::{Error, WasiBody};
 
 use crate::engine::ctx::SharedCtx;
 
@@ -58,8 +58,7 @@ impl hyper::body::Body for ChannelBody {
 pub(crate) struct HttpTask {
     pub(crate) service: Arc<Service>,
     pub(crate) req: hyper::Request<WasiBody>,
-    pub(crate) resp_tx:
-        tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<WasiBody>>>,
+    pub(crate) resp_tx: tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<WasiBody>>>,
     /// Armed by the dispatcher once it has stopped waiting for this response.
     /// It is registered on the store for the life of the call so the epoch
     /// callback can see it — the only way to end a guest that never yields.
