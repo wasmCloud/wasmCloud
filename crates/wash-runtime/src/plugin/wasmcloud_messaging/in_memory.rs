@@ -36,7 +36,7 @@ struct QueuedMessage {
     /// rather than recomputed in the drain loop: by then the subscriber set may
     /// have changed, and the answer that matters is the one that was true when
     /// the message fanned out.
-    sole_subscriber: bool,
+    was_sole_subscriber: bool,
 }
 
 mod bindings {
@@ -157,7 +157,7 @@ async fn route_to_subscribers(
             .collect()
     };
 
-    let sole_subscriber = targets.len() == 1;
+    let was_sole_subscriber = targets.len() == 1;
     for (inbox, notify) in targets {
         {
             let mut queue = inbox.write().await;
@@ -168,7 +168,7 @@ async fn route_to_subscribers(
             }
             queue.push_back(QueuedMessage {
                 msg: msg.clone(),
-                sole_subscriber,
+                was_sole_subscriber,
             });
         }
         notify.notify_one();
@@ -548,7 +548,7 @@ impl HostPlugin for InMemoryMessaging {
             component_handle
                 .local_resources()
                 .config
-                .get(super::ADMISSION_WAIT_CONFIG)
+                .get(super::SHED_INCOMING_AFTER_CONFIG)
                 .map(String::as_str),
         );
 
@@ -672,7 +672,7 @@ impl HostPlugin for InMemoryMessaging {
                         loop {
                         let queued = inbox.write().await.pop_front();
 
-                        let Some(QueuedMessage { msg, sole_subscriber }) = queued else {
+                        let Some(QueuedMessage { msg, was_sole_subscriber }) = queued else {
                             break;
                         };
 
@@ -693,7 +693,7 @@ impl HostPlugin for InMemoryMessaging {
                                 "host is gone and this component has no per-message \
                                  instance; ending the in-memory receive loop"
                             );
-                            if sole_subscriber
+                            if was_sole_subscriber
                                 && let (Some(reply_to), Some(pending)) =
                                     (&msg.reply_to, &pending_requests)
                                 && let Some(sender) = pending.write().await.remove(reply_to)
@@ -748,7 +748,7 @@ impl HostPlugin for InMemoryMessaging {
                         // built and held until the handler returns. Mirrors
                         // the NATS backend exactly; see `Admission::acquire`
                         // for why the component level is taken before the host
-                        // one, and `DEFAULT_ADMISSION_WAIT` for why the wait is
+                        // one, and `DEFAULT_SHED_AFTER` for why the wait is
                         // bounded. Here the bound also keeps the inbox draining:
                         // a loop parked forever lets the inbox reach
                         // `MAX_QUEUE_SIZE`, at which point a guest's `publish`
@@ -770,7 +770,7 @@ impl HostPlugin for InMemoryMessaging {
                                     // request here would fail a request that
                                     // was about to succeed.
                                     super::Admitted::Shed => {
-                                        if sole_subscriber
+                                        if was_sole_subscriber
                                             && let (Some(reply_to), Some(pending)) =
                                                 (&msg.reply_to, &pending_requests)
                                             && let Some(sender) =
@@ -913,10 +913,8 @@ impl HostPlugin for InMemoryMessaging {
         let workload_cleanup = |_| async {};
         let component_cleanup = |component_data: ComponentData| async move {
             component_data.cancel_token.cancel();
-            // Wakes a loop parked on a saturated gate with `Admitted::Closed`.
-            // The token above covers the same case; this makes the closed
-            // semaphore a real signal rather than a documented one that only
-            // tests ever produce.
+            // Releases this binding's reference to the gate; once the last
+            // binding releases and in-flight handlers drain, the gate retires.
             component_data.admission.close();
             if let Some(handle) = component_data.task_handle {
                 handle.abort();
@@ -995,7 +993,7 @@ mod tests {
             .await
             .expect("routes");
         assert!(
-            inboxes[0].read().await[0].sole_subscriber,
+            inboxes[0].read().await[0].was_sole_subscriber,
             "one matching component must be marked as the sole subscriber"
         );
 
@@ -1006,7 +1004,7 @@ mod tests {
             .expect("routes");
         for (i, inbox) in inboxes.iter().enumerate() {
             assert!(
-                !inbox.read().await[0].sole_subscriber,
+                !inbox.read().await[0].was_sole_subscriber,
                 "component {i} shares the message and must not fail the requester"
             );
         }
@@ -1016,7 +1014,7 @@ mod tests {
         route_to_subscribers(&plugin, &workload_id, &broker("tasks.new"))
             .await
             .expect("routes");
-        assert!(inboxes[0].read().await[0].sole_subscriber);
+        assert!(inboxes[0].read().await[0].was_sole_subscriber);
         assert!(
             inboxes[1].read().await.is_empty(),
             "a non-matching component must not receive the message at all"
@@ -1061,5 +1059,71 @@ mod tests {
         let subs = vec!["tasks.leet".to_string()];
         assert!(subscriptions_match(&subs, "tasks.leet"));
         assert!(!subscriptions_match(&subs, "tasks.reverse"));
+    }
+
+    /// Cleanup cancels the receive loop but leaves its handler tasks running:
+    /// they are detached and hold their permits until the guest call returns.
+    /// A rebind under the same identity must share what is left of the ceiling
+    /// with those stragglers rather than open a second gate, which would let
+    /// old and new run past `max_in_flight` together.
+    #[tokio::test]
+    async fn unbinding_leaves_the_gate_for_handlers_still_holding_permits() {
+        const LIMIT: usize = 2;
+        let limits = super::super::MessagingLimits::new(64, LIMIT);
+        let identity = super::super::AdmissionIdentity::new("test-ns", "ingester", "worker");
+        let plugin = InMemoryMessaging::with_limits(limits.clone());
+        let workload_id = "workload-1".to_string();
+
+        // The state `on_workload_resolved` leaves behind, minus the engine it
+        // would need to build a real workload.
+        let admission = limits.admission(&identity, None);
+        let mut item = WorkloadTrackerItem {
+            workload_data: Some(WorkloadData::default()),
+            components: HashMap::new(),
+        };
+        item.components.insert(
+            "component-0".to_string(),
+            ComponentData {
+                cancel_token: tokio_util::sync::CancellationToken::new(),
+                task_handle: None,
+                subscriptions: vec!["tasks.new".to_string()],
+                inbox: Arc::default(),
+                notify: Arc::new(Notify::new()),
+                admission: admission.clone(),
+            },
+        );
+        plugin
+            .tracker
+            .try_write()
+            .expect("fresh tracker")
+            .workloads
+            .insert(workload_id.clone(), item);
+
+        // Handlers that have not returned, holding every slot the ceiling
+        // allows.
+        let mut stragglers = Vec::new();
+        for _ in 0..LIMIT {
+            stragglers.push(admission.acquire().await.expect("admits up to its ceiling"));
+        }
+
+        plugin
+            .on_workload_unbind(&workload_id, WitInterfaces::new(&HashSet::new()))
+            .await
+            .expect("unbind should succeed");
+
+        // The same identity binds again before any straggler drains.
+        let rebound = limits.admission(&identity, None);
+        let mut admitted = Vec::new();
+        while let Ok(permit) = Arc::clone(&rebound.component).try_acquire_owned() {
+            admitted.push(permit);
+        }
+        assert_eq!(
+            stragglers.len() + admitted.len(),
+            LIMIT,
+            "handlers left running by the unbind and work admitted under the rebind \
+             must not exceed max_in_flight together; the rebind was handed {} slots \
+             of its own",
+            admitted.len()
+        );
     }
 }
