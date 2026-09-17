@@ -195,6 +195,8 @@ struct KvSelectProducer {
     /// Wall-clock bound on the whole drain, and the limit it was built from.
     /// `None` is unbounded.
     deadline: Option<(Pin<Box<tokio::time::Sleep>>, Duration)>,
+    /// Deletes the consumer when the producer is dropped, however the drain ended.
+    _consumer: super::ConsumerGuard,
 }
 
 /// The drain deadline: the caller's `timeout-ms`, else the binding's
@@ -300,9 +302,30 @@ where
             };
             let message = match next {
                 Some(Ok(m)) => m,
+                // async-nats checks its heartbeat timer before buffered
+                // messages, so a guest that pauses between reads trips it on a
+                // healthy consumer. The next poll starts a fresh timer; a
+                // consumer that is really gone surfaces as a delete error.
+                Some(Err(e))
+                    if matches!(
+                        e.kind(),
+                        jetstream::consumer::pull::MessagesErrorKind::MissingHeartbeat
+                    ) =>
+                {
+                    continue;
+                }
                 Some(Err(e)) => {
                     let timed_out = chain_timed_out(&e);
                     failure = Some(kv_err("kv select iter failed", timed_out, e));
+                    break;
+                }
+                // The pull stream never ends on its own; closing early means
+                // the connection went away, not that the drain completed.
+                None if self.consumed < self.expected => {
+                    failure = Some(types::NatsError::Connection(format!(
+                        "kv select stream closed after {} of {} entries",
+                        self.consumed, self.expected
+                    )));
                     break;
                 }
                 None => {
@@ -644,6 +667,7 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
             Ok(c) => c,
             Err(e) => return Ok(Err(jetstream_err("kv select failed", e))),
         };
+        let cleanup = super::ConsumerGuard::arm(&store.stream, &consumer.cached_info().name);
 
         let (result_tx, result_rx) = oneshot::channel();
         // A filter matching nothing yields a consumer with nothing pending.
@@ -660,6 +684,10 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
                 }
             };
 
+        // One instant bounds both the stream and the status future, so a guest
+        // that stops reading still sees `timeout` on the future.
+        let deadline = select_timeout(opts.timeout_ms, conn.request_timeout)
+            .map(|limit| (tokio::time::Instant::now() + limit, limit));
         let producer = KvSelectProducer {
             messages,
             expected: pending,
@@ -671,15 +699,27 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
             emitted: 0,
             result: Some(result_tx),
             finished: false,
-            deadline: select_timeout(opts.timeout_ms, conn.request_timeout)
-                .map(|limit| (Box::pin(tokio::time::sleep(limit)), limit)),
+            deadline: deadline.map(|(at, limit)| (Box::pin(tokio::time::sleep_until(at)), limit)),
+            _consumer: cleanup,
         };
 
         debug!(%filter, include_values = opts.include_values, "kv select started");
         accessor.with(|mut store| {
             let stream = StreamReader::new(&mut store, producer)?;
             let future = FutureReader::new(&mut store, async move {
-                wasmtime::error::Ok(result_rx.await.unwrap_or_else(|_| {
+                let status = match deadline {
+                    Some((at, limit)) => match tokio::time::timeout_at(at, result_rx).await {
+                        Ok(status) => status,
+                        Err(_) => {
+                            return wasmtime::error::Ok(Err(types::NatsError::Timeout(format!(
+                                "kv select did not complete within {}ms",
+                                limit.as_millis()
+                            ))));
+                        }
+                    },
+                    None => result_rx.await,
+                };
+                wasmtime::error::Ok(status.unwrap_or_else(|_| {
                     Err(types::NatsError::Unexpected(
                         "kv select ended without reporting a terminal status".to_string(),
                     ))
