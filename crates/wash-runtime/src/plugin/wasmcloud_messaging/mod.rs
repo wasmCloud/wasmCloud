@@ -797,8 +797,8 @@ struct ComponentGates {
 struct GateEntry {
     semaphore: Arc<Semaphore>,
     /// The ceiling currently in force (live semaphore total). Converges to
-    /// the last requested ceiling, so a later binding asking for a different
-    /// one means two genuinely different components collided on one identity.
+    /// the last requested ceiling, which occurs during a config rollout
+    /// changing the ceiling or if two components collided on one identity.
     limit: usize,
     /// Live bindings sharing this gate — replicas of one deployment on this
     /// host.
@@ -807,6 +807,20 @@ struct GateEntry {
     /// ceiling. Paid from free at once and from each returning permit in
     /// `release_permit`; last request wins.
     pending_shrink: usize,
+}
+
+impl GateEntry {
+    /// Reconcile owed shrink debt from currently available permits.
+    fn reconcile_shrink(&mut self) {
+        let forgot = self.semaphore.forget_permits(self.pending_shrink);
+        self.pending_shrink -= forgot;
+        self.limit -= forgot;
+    }
+
+    /// True when the last replica has unbound and all permits have drained.
+    fn can_retire(&self) -> bool {
+        self.bindings == 0 && self.semaphore.available_permits() == self.limit
+    }
 }
 
 impl ComponentGates {
@@ -854,9 +868,7 @@ impl ComponentGates {
             } else if limit < entry.limit {
                 entry.pending_shrink = entry.limit - limit;
                 // Shrink straight away from whatever is free.
-                let forgot = entry.semaphore.forget_permits(entry.pending_shrink);
-                entry.pending_shrink -= forgot;
-                entry.limit -= forgot;
+                entry.reconcile_shrink();
             } else {
                 // Requested equals the live total: previous shrink is cancelled.
                 entry.pending_shrink = 0;
@@ -880,6 +892,21 @@ impl ComponentGates {
         (Arc::clone(&entry.semaphore), entry.limit)
     }
 
+    /// Reconcile newly freed slots and remove the gate once the last binding
+    /// is gone and every permit has drained.
+    fn clean_up_entry(
+        gates: &mut std::collections::HashMap<AdmissionIdentity, GateEntry>,
+        identity: &AdmissionIdentity,
+    ) {
+        if let Some(entry) = gates.get_mut(identity) {
+            entry.reconcile_shrink();
+            if entry.can_retire() {
+                entry.semaphore.close();
+                gates.remove(identity);
+            }
+        }
+    }
+
     /// Give back one binding's reference, closing and dropping the gate once
     /// the last replica is gone and every permit has drained.
     ///
@@ -892,12 +919,10 @@ impl ComponentGates {
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(entry) = gates.get_mut(identity) else {
-            return;
-        };
-        entry.bindings = entry.bindings.saturating_sub(1);
-        drop(gates);
-        self.clean_up(identity);
+        if let Some(entry) = gates.get_mut(identity) {
+            entry.bindings = entry.bindings.saturating_sub(1);
+            Self::clean_up_entry(&mut gates, identity);
+        }
     }
 
     /// Return one held component permit, paying shrink debt first.
@@ -914,67 +939,28 @@ impl ComponentGates {
     /// Holds the gate lock across the forget/release decision and handover so a
     /// concurrent `acquire` that installs new debt serializes either fully
     /// before (debt seen, permit forgotten) or fully after (no debt owed, wake
-    /// allowed). Reconcile/remove runs afterwards in [`ComponentGates::clean_up`]
-    /// under its own lock.
+    /// allowed). Reconcile/remove runs under the same lock via
+    /// [`ComponentGates::clean_up_entry`].
     fn release_permit(&self, identity: &AdmissionIdentity, permit: Option<OwnedSemaphorePermit>) {
-        let Some(permit) = permit else {
-            self.clean_up(identity);
-            return;
-        };
         let mut gates = self
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(entry) = gates.get_mut(identity) else {
-            // Gate already removed (last binding tore down while handlers were
-            // still running and they have since all drained): just release.
-            drop(gates);
-            drop(permit);
-            return;
-        };
-        if entry.pending_shrink > 0 {
-            entry.pending_shrink -= 1;
-            entry.limit -= 1;
-            // Consumed without waking a waiter; the lock is still held so no
-            // concurrent bind can interleave new debt in between.
-            permit.forget();
+
+        if let Some(entry) = gates.get_mut(identity) {
+            if let Some(permit) = permit {
+                if entry.pending_shrink > 0 {
+                    entry.pending_shrink -= 1;
+                    entry.limit -= 1;
+                    permit.forget();
+                } else {
+                    drop(permit);
+                }
+            }
+
+            Self::clean_up_entry(&mut gates, identity);
         } else {
-            // No debt owed: releasing may wake a parked waiter, which is
-            // correct. Held across the gate lock so a concurrent shrink
-            // request cannot slip in between the decision and the release.
             drop(permit);
-        }
-
-        // Leave the lock first. `clean_up` needs the same lock, so if we do not
-        // leave now it will wait forever.
-        drop(gates);
-        self.clean_up(identity);
-    }
-
-    /// Reconcile newly freed slots and remove the gate once the last binding
-    /// is gone and every permit has drained.
-    fn clean_up(&self, identity: &AdmissionIdentity) {
-        let mut gates = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(entry) = gates.get_mut(identity) else {
-            return;
-        };
-
-        // Reconcile: newly freed slots pay down owed shrink first. This covers
-        // the bind-teardown path where no permit is being returned; permits
-        // returned via `release_permit` already paid their own debt with
-        // `forget`, and this catches any free slots left over.
-        if entry.pending_shrink > 0 {
-            let forgot = entry.semaphore.forget_permits(entry.pending_shrink);
-            entry.pending_shrink -= forgot;
-            entry.limit -= forgot;
-        }
-
-        if entry.bindings == 0 && entry.semaphore.available_permits() == entry.limit {
-            entry.semaphore.close();
-            gates.remove(identity);
         }
     }
 
@@ -2474,8 +2460,8 @@ mod tests {
             "the last release must drop the entry rather than leaking it"
         );
 
-        // And the gate really is closed now, so a loop still parked on it stops
-        // rather than shedding.
+        // With all bindings released and permits drained, the old gate is
+        // retired so a later binding gets a fresh, open gate.
         let rebound = limits.admission(&identity, Some(2));
         assert!(
             rebound.acquire().await.is_some(),
