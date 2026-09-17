@@ -51,9 +51,9 @@ use wasmtime::{
 };
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{
-    WasiHttpCtx,
+    WasiBody, WasiHttpCtx, WasiHttpCtxView, WasiHttpView,
     handler::{
-        HandlerState, Instance, ProxyHandler, ProxyPre, ShouldAccept, ViewFn, WorkerExpiration,
+        HandlerState, Instance, ProxyHandler, ProxyPre, ShouldAccept, WorkerExpiration,
         WorkerState, WorkerStatus,
     },
 };
@@ -65,7 +65,7 @@ const DEFAULT_WASIP3_MAX_INSTANCE_CONCURRENT_REUSE_COUNT: usize = 16;
 
 /// Unified response body produced by `handler::ProxyHandler::handle` for both
 /// the P2 and P3 dispatch paths.
-type ServeBody = http_body_util::combinators::UnsyncBoxBody<bytes::Bytes, wasmtime::Error>;
+type ServeBody = WasiBody;
 
 // ---------------------------------------------------------------------------
 // Store context
@@ -96,22 +96,12 @@ impl WasiView for Ctx {
     }
 }
 
-impl wasmtime_wasi_http::p2::WasiHttpView for Ctx {
-    fn http(&mut self) -> wasmtime_wasi_http::p2::WasiHttpCtxView<'_> {
-        wasmtime_wasi_http::p2::WasiHttpCtxView {
+impl WasiHttpView for Ctx {
+    fn http(&mut self) -> WasiHttpCtxView<'_> {
+        WasiHttpCtxView {
             ctx: &mut self.http,
             table: &mut self.table,
-            hooks: Default::default(),
-        }
-    }
-}
-
-impl wasmtime_wasi_http::p3::WasiHttpView for Ctx {
-    fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
-        wasmtime_wasi_http::p3::WasiHttpCtxView {
-            ctx: &mut self.http,
-            table: &mut self.table,
-            hooks: wasmtime_wasi_http::p3::default_hooks(),
+            hooks: wasmtime_wasi_http::default_hooks(),
         }
     }
 }
@@ -162,7 +152,7 @@ fn build_linker(engine: &Engine) -> anyhow::Result<Linker<Ctx>> {
 struct State {
     engine: Engine,
     pre: ProxyPre<Ctx>,
-    view: ViewFn<Ctx>,
+    view: fn(&mut Ctx) -> WasiHttpCtxView<'_>,
     max_instance_reuse_count: usize,
     max_instance_concurrent_reuse_count: usize,
     next_request_id: AtomicU64,
@@ -214,7 +204,7 @@ struct ReuseState {
 
 impl WorkerState for ReuseState {
     type StoreData = Ctx;
-    type RequestId = u64;
+    type RequestData = u64;
 
     fn should_accept_request(&self, concurrent_count: usize, total_count: usize) -> ShouldAccept {
         if total_count >= self.max_instance_reuse_count {
@@ -254,18 +244,12 @@ async fn handle_request(
     handler: ProxyHandler<State>,
     req: hyper::Request<Incoming>,
 ) -> anyhow::Result<hyper::Response<ServeBody>> {
-    use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
-
     let request_id = handler
         .state()
         .next_request_id
         .fetch_add(1, Ordering::Relaxed);
 
-    let req = req.map(|body| {
-        body.map_err(ErrorCode::from_hyper_request_error)
-            .map_err(wasmtime_wasi_http::handler::ErrorCode::from)
-            .boxed_unsync()
-    });
+    let req = req.map(|body| body.map_err(wasmtime_wasi_http::Error::from).boxed_unsync());
 
     Ok(handler.handle(request_id, req).await?)
 }
@@ -287,27 +271,20 @@ impl Server {
         let component = Component::from_binary(&engine, flavor.wasm())?;
         let instance_pre = linker.instantiate_pre(&component)?;
 
-        // Wrap the `InstancePre` in the right handler variant and pair it with
-        // the matching `WasiHttpView` getter.
-        let (pre, view) = match flavor {
-            Flavor::P2 => (
-                ProxyPre::P2(wasmtime_wasi_http::p2::bindings::ProxyPre::new(
-                    instance_pre,
-                )?),
-                ViewFn::P2(wasmtime_wasi_http::p2::WasiHttpView::http),
-            ),
-            Flavor::P3 => (
-                ProxyPre::P3(wasmtime_wasi_http::p3::bindings::ServicePre::new(
-                    instance_pre,
-                )?),
-                ViewFn::P3(wasmtime_wasi_http::p3::WasiHttpView::http),
-            ),
+        // Wrap the `InstancePre` in the right handler variant.
+        let pre = match flavor {
+            Flavor::P2 => ProxyPre::P2(wasmtime_wasi_http::p2::bindings::ProxyPre::new(
+                instance_pre,
+            )?),
+            Flavor::P3 => ProxyPre::P3(wasmtime_wasi_http::p3::bindings::ServicePre::new(
+                instance_pre,
+            )?),
         };
 
         let handler = ProxyHandler::new(State {
             engine,
             pre,
-            view,
+            view: Ctx::http,
             max_instance_reuse_count: max_instance_reuse(flavor),
             max_instance_concurrent_reuse_count: max_concurrent_reuse(flavor),
             next_request_id: AtomicU64::new(0),

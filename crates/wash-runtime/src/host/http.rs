@@ -38,15 +38,6 @@ use crate::{
 };
 use url::Url;
 
-/// The request body a workload's incoming HTTP path is handed, from network
-/// ingress or a same-host call. Its error is the `error-code` of whichever
-/// `wasi:http` version produced it, converted once by the handler that consumes
-/// it, so a P3 caller's error reaches a P3 callee unchanged.
-pub type IncomingBody = http_body_util::combinators::UnsyncBoxBody<
-    bytes::Bytes,
-    wasmtime_wasi_http::handler::ErrorCode,
->;
-
 use crate::{engine::workload::ResolvedWorkload, observability::GuestMeter};
 use anyhow::{Context, ensure};
 use http_body_util::BodyExt;
@@ -67,14 +58,9 @@ use tracing::{Instrument, debug, error, info, instrument, warn};
 use wasmtime::Store;
 use wasmtime::component::InstancePre;
 use wasmtime_wasi_http::{
+    RequestOptions, WasiBody, WasiHttpView,
     io::TokioIo,
-    p2::{
-        WasiHttpView,
-        bindings::{ProxyPre, http::types::Scheme},
-        body::HyperOutgoingBody,
-        hyper_request_error,
-        types::{HostFutureIncomingResponse, IncomingResponse, OutgoingRequestConfig},
-    },
+    p2::bindings::{ProxyPre, http::types::Scheme},
 };
 
 use rustls::ServerConfig;
@@ -470,21 +456,10 @@ pub trait Router: Send + Sync + 'static {
     fn allow_outgoing_request(
         &self,
         workload_id: &str,
-        request: &hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
-        config: &wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
-        _allowed_hosts: &[AllowedHost],
-    ) -> anyhow::Result<()>;
-
-    /// Determine if a P3 outgoing request is allowed.
-    fn allow_outgoing_request_p3(
-        &self,
-        _workload_id: &str,
-        request: &hyper::Request<crate::host::http_p3::P3Body>,
-        _options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+        request: &hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
         allowed_hosts: &[AllowedHost],
-    ) -> anyhow::Result<()> {
-        check_allowed_hosts(request, allowed_hosts)
-    }
+    ) -> anyhow::Result<()>;
 
     /// Pick a workload ID based on the incoming request.
     ///
@@ -817,8 +792,8 @@ impl Router for DynamicRouter {
     fn allow_outgoing_request(
         &self,
         _workload_id: &str,
-        request: &hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
-        _config: &wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
+        request: &hyper::Request<WasiBody>,
+        _options: Option<RequestOptions>,
         allowed_hosts: &[AllowedHost],
     ) -> anyhow::Result<()> {
         check_allowed_hosts(request, allowed_hosts)
@@ -879,29 +854,35 @@ impl Router for DynamicRouter {
     }
 }
 
-/// Trait for custom outgoing HTTP egress. gRPC requests (P2 and P3) are
-/// handled by the runtime before this trait is called.
+/// A request's I/O outcome once its response head has been returned: the
+/// request body upload, or the connection carrying the response body. wasmtime
+/// keeps it alive while the response body is read and reports its error to the
+/// guest.
+pub type RequestIoFuture =
+    Box<dyn std::future::Future<Output = Result<(), wasmtime_wasi_http::Error>> + Send>;
+
+/// The outcome of an outgoing send: the response and its [`RequestIoFuture`].
+pub type SendResult =
+    Result<(hyper::Response<WasiBody>, RequestIoFuture), wasmtime_wasi_http::Error>;
+
+/// Future returned by [`OutgoingHandler::send_request`].
+pub type SendFuture = Box<dyn std::future::Future<Output = SendResult> + Send>;
+
+/// Trait for custom outgoing HTTP egress. gRPC requests are handled by the
+/// runtime before this trait is called.
 ///
 /// # `workload_id` is a trust boundary
 ///
-/// The `workload_id` passed to `send_request`/`send_request_p3` must be the
-/// host-assigned identifier of the workload instance making the request —
-/// never empty, never derived from guest-controllable data, and never shared
-/// between workloads. Implementations (the default one included) key
-/// per-workload state on it: connection pools, TLS session-resumption stores,
-/// and connection quotas. Two callers presenting the same `workload_id`
-/// collapse into one identity and inherit each other's keep-alive connections
-/// and TLS session tickets.
+/// The `workload_id` passed to `send_request` must be the host-assigned
+/// identifier of the workload instance making the request — never empty, never
+/// derived from guest-controllable data, and never shared between workloads.
+/// Implementations (the default one included) key per-workload state on it:
+/// connection pools, TLS session-resumption stores, and connection quotas. Two
+/// callers presenting the same `workload_id` collapse into one identity and
+/// inherit each other's keep-alive connections and TLS session tickets.
 pub trait OutgoingHandler: Send + Sync + 'static {
-    /// Send a P2 outgoing HTTP request for the given `workload_id`.
-    fn send_request(
-        &self,
-        workload_id: &str,
-        request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
-        config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
-    ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>;
-
-    /// Send a P3 outgoing HTTP request for the given `workload_id`.
+    /// Send an outgoing HTTP request for the given `workload_id`, from a
+    /// `wasi:http` 0.2 or 0.3 guest.
     ///
     /// `fut` is a future provided by the WASI runtime to communicate
     /// request-side processing errors back to the guest (for example, a
@@ -910,16 +891,16 @@ pub trait OutgoingHandler: Send + Sync + 'static {
     /// it (`_fut`). It is provided so that custom transports with out-of-band
     /// error channels can still deliver upload errors to the component after
     /// the response has been returned.
-    fn send_request_p3(
+    fn send_request(
         &self,
         workload_id: &str,
-        request: hyper::Request<crate::host::http_p3::P3Body>,
-        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-        fut: crate::host::http_p3::P3RequestErrorFuture,
-    ) -> crate::host::http_p3::P3SendFuture;
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+        fut: RequestIoFuture,
+    ) -> SendFuture;
 
     /// TLS configuration used for host-mediated egress that bypasses
-    /// `send_request`/`send_request_p3` (currently the gRPC fast path).
+    /// `send_request` (currently the gRPC fast path).
     /// `None` (the default) means the process-wide default trust roots.
     fn client_tls_config(&self) -> Option<Arc<rustls::ClientConfig>> {
         None
@@ -927,7 +908,7 @@ pub trait OutgoingHandler: Send + Sync + 'static {
 
     /// Pooled HTTP/2 transport for `workload_id`'s gRPC egress.
     ///
-    /// gRPC requests never reach `send_request`/`send_request_p3` — the
+    /// gRPC requests never reach `send_request` — the
     /// runtime routes them itself, because the protocol requires HTTP/2 — but
     /// a handler that pools can serve them here instead, so they reuse
     /// connections and draw on the same quota as the workload's
@@ -1058,39 +1039,12 @@ impl OutgoingHandler for DefaultOutgoingHandler {
     fn send_request(
         &self,
         workload_id: &str,
-        request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
-        config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
-    ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
-    {
-        // Spawn the send ourselves so the request can be wrapped in a client
-        // span and the response status recorded once it arrives.
-        let span = outbound_client_span(request.method(), request.uri());
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+        _fut: RequestIoFuture,
+    ) -> SendFuture {
         let client = self.clients().client(workload_id);
-        let handle = wasmtime_wasi::runtime::spawn(
-            async move {
-                let result = client.send_request_p2(request, config).await;
-                match &result {
-                    Ok(incoming) => record_outbound_status(incoming.resp.status()),
-                    Err(_) => record_outbound_error(),
-                }
-                Ok(result)
-            }
-            .instrument(span),
-        );
-        Ok(HostFutureIncomingResponse::pending(handle))
-    }
-    fn send_request_p3(
-        &self,
-        workload_id: &str,
-        request: hyper::Request<crate::host::http_p3::P3Body>,
-        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-        _fut: crate::host::http_p3::P3RequestErrorFuture,
-    ) -> crate::host::http_p3::P3SendFuture {
-        let client = self.clients().client(workload_id);
-        Box::new(async move {
-            let (res, io) = client.send_request_p3(request, options).await?;
-            Ok((res, io))
-        })
+        Box::new(async move { client.send_request(request, options).await })
     }
 
     fn client_tls_config(&self) -> Option<Arc<rustls::ClientConfig>> {
@@ -1168,15 +1122,12 @@ impl Router for DevRouter {
     fn allow_outgoing_request(
         &self,
         _workload_id: &str,
-        request: &hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
-        _config: &wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
+        request: &hyper::Request<WasiBody>,
+        _options: Option<RequestOptions>,
         allowed_hosts: &[AllowedHost],
     ) -> anyhow::Result<()> {
         check_allowed_hosts(request, allowed_hosts)
     }
-
-    // `allow_outgoing_request_p3` deliberately not overridden — the trait
-    // default calls `check_allowed_hosts`, matching the P2 behavior above.
 
     /// Pick a workload ID based on the incoming request
     fn route_incoming_request(
@@ -1209,11 +1160,8 @@ impl Router for DevRouter {
 /// Callers split two ways, deliberately. A path that cannot proceed without a
 /// handler propagates this error; a teardown path asks the `Weak` directly and
 /// skips, because a handler that is already gone has nothing left to unbind.
-pub(crate) fn live_handler(
-    handler: &std::sync::Weak<dyn HostHandler>,
-) -> anyhow::Result<Arc<dyn HostHandler>> {
-    handler
-        .upgrade()
+pub(crate) fn live_handler(host: &crate::host::HostRef) -> anyhow::Result<Arc<dyn HostHandler>> {
+    host.handler()
         .ok_or_else(|| anyhow::anyhow!("host HTTP handler is no longer available"))
 }
 
@@ -1308,46 +1256,17 @@ pub trait HostHandler: Send + Sync + 'static {
         false
     }
 
-    /// Handle an outgoing HTTP request from a workload
+    /// Handle an outgoing HTTP request from a workload, enforcing its
+    /// `allowed_hosts`. `fut` is as described on
+    /// [`OutgoingHandler::send_request`].
     fn outgoing_request(
         &self,
         workload_id: &str,
-        request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
-        config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+        fut: RequestIoFuture,
         allowed_hosts: &[AllowedHost],
-    ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>;
-
-    /// Handle a P3 outgoing request, enforcing `allowed_hosts` policy and
-    /// delegating transport to [`wasmtime_wasi_http::p3::default_send_request`].
-    ///
-    /// Override to apply custom egress logic (e.g. alternate transports or
-    /// per-workload TLS configuration) while still honouring the allowlist via
-    /// [`check_allowed_hosts`].
-    fn outgoing_request_p3(
-        &self,
-        workload_id: &str,
-        request: hyper::Request<crate::host::http_p3::P3Body>,
-        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-        // Response-side body-error sink: unused here because hyper's response
-        // body already reports body errors through its `Stream` impl.
-        _fut: crate::host::http_p3::P3RequestErrorFuture,
-        allowed_hosts: &[AllowedHost],
-    ) -> crate::host::http_p3::P3SendFuture {
-        if let Err(e) = check_allowed_hosts(&request, allowed_hosts) {
-            use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
-            warn!(workload_id = %workload_id, err = %e, "outgoing request denied by allowed_hosts policy");
-            return Box::new(async move {
-                Err(wasmtime_wasi::TrappableError::from(
-                    ErrorCode::HttpRequestDenied,
-                ))
-            });
-        }
-        Box::new(async move {
-            let (res, io) = wasmtime_wasi_http::p3::default_send_request(request, options).await?;
-            let io: crate::host::http_p3::P3RequestErrorFuture = Box::new(io);
-            Ok((res.map(BodyExt::boxed_unsync), io))
-        })
-    }
+    ) -> SendFuture;
 }
 
 impl std::fmt::Debug for dyn HostHandler {
@@ -1388,29 +1307,15 @@ impl HostHandler for NullServer {
     fn outgoing_request(
         &self,
         _workload_id: &str,
-        _request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
-        _config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
+        _request: hyper::Request<WasiBody>,
+        _options: Option<RequestOptions>,
+        _fut: RequestIoFuture,
         _allowed_hosts: &[AllowedHost],
-    ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
-    {
-        Err(wasmtime_wasi_http::p2::HttpError::trap(
-            wasmtime::format_err!("http client not available"),
-        ))
-    }
-
-    fn outgoing_request_p3(
-        &self,
-        _workload_id: &str,
-        _request: hyper::Request<crate::host::http_p3::P3Body>,
-        _options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-        _fut: crate::host::http_p3::P3RequestErrorFuture,
-        _allowed_hosts: &[AllowedHost],
-    ) -> crate::host::http_p3::P3SendFuture {
-        use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
+    ) -> SendFuture {
         Box::new(async {
-            Err(wasmtime_wasi::TrappableError::from(
-                ErrorCode::InternalError(Some("http client not available".to_string())),
-            ))
+            Err(wasmtime_wasi_http::Error::InternalError(Some(
+                "http client not available".to_string(),
+            )))
         })
     }
 }
@@ -1469,22 +1374,17 @@ impl<B: hyper::body::Body + Unpin> hyper::body::Body for WatchedBody<B> {
 /// An already-complete body is left unwrapped and disarmed: hyper never polls
 /// one, so a wrapper would be dropped un-disarmed and arm the flag on a
 /// response that was delivered whole.
-fn watch_body(
-    resp: hyper::Response<HyperOutgoingBody>,
-    watch: AbandonOnDrop,
-) -> hyper::Response<HyperOutgoingBody> {
+fn watch_body(resp: hyper::Response<WasiBody>, watch: AbandonOnDrop) -> hyper::Response<WasiBody> {
     if hyper::body::Body::is_end_stream(resp.body()) {
         watch.disarm();
         return resp;
     }
     resp.map(|inner| {
-        HyperOutgoingBody::new(
-            WatchedBody {
-                inner,
-                watch: Some(watch),
-            }
-            .boxed_unsync(),
-        )
+        WatchedBody {
+            inner,
+            watch: Some(watch),
+        }
+        .boxed_unsync()
     })
 }
 
@@ -1508,13 +1408,13 @@ pub type WorkloadHandles = Arc<
 /// a oneshot for its response and the abandonment flag of the [`DispatchedCall`]
 /// enforcing its deadline (see [`crate::engine::abandon`]).
 ///
-/// The request body is pre-boxed into [`IncomingBody`] so both real
-/// network ingress (`hyper::body::Incoming`, boxed in [`handle_http_request`])
-/// and locally short-circuited outgoing requests (see
+/// The request body is pre-boxed into [`WasiBody`] so both real network
+/// ingress (`hyper::body::Incoming`, boxed in [`handle_http_request`]) and
+/// locally short-circuited outgoing requests (see
 /// [`IngressBuilder::local_routing`]) can be delivered on the same channel.
 pub struct ServiceHttpJob {
-    pub req: hyper::Request<IncomingBody>,
-    pub resp_tx: tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<HyperOutgoingBody>>>,
+    pub req: hyper::Request<WasiBody>,
+    pub resp_tx: tokio::sync::oneshot::Sender<anyhow::Result<hyper::Response<WasiBody>>>,
     pub abandoned: Arc<AbandonFlag>,
 }
 
@@ -2068,7 +1968,7 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
         }
     }
 
-    /// Serve a P2 outgoing request by dispatching it to co-located workload
+    /// Serve an outgoing request by dispatching it to co-located workload
     /// `target`'s incoming HTTP path in-memory (see
     /// [`IngressBuilder::local_routing`]).
     fn send_local_request(
@@ -2076,74 +1976,14 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
         caller: &str,
         target: String,
         destination: LocalTarget,
-        request: hyper::Request<HyperOutgoingBody>,
-        config: OutgoingRequestConfig,
-    ) -> HostFutureIncomingResponse {
-        let span = outbound_client_span(request.method(), request.uri());
-        span.record("wasmcloud.http.route", "local");
-        let slot = self.take_local_slot(caller);
-        let guest_meter = self.local_guest_meter();
-        let handle = wasmtime_wasi::runtime::spawn(
-            async move {
-                use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-                let Ok(slot) = slot else {
-                    record_outbound_error();
-                    return Ok(Err(ErrorCode::ConnectionLimitReached));
-                };
-                let result = tokio::time::timeout(
-                    config.first_byte_timeout,
-                    dispatch_local(
-                        &target,
-                        request.map(|body| IncomingBody::new(body.map_err(Into::into))),
-                        destination,
-                        guest_meter,
-                    ),
-                )
-                .await
-                .map_err(|_| ErrorCode::ConnectionReadTimeout)
-                .and_then(|resp| {
-                    resp.map_err(|e| {
-                        error!(err = ?e, workload_id = %target, "local dispatch failed");
-                        ErrorCode::InternalError(Some(format!("local dispatch failed: {e}")))
-                    })
-                })
-                .map(|resp| IncomingResponse {
-                    // Hold the slot until the body is drained, matching how a
-                    // network request occupies its connection.
-                    resp: attach_slot(resp, slot),
-                    worker: None,
-                    between_bytes_timeout: config.between_bytes_timeout,
-                });
-                match &result {
-                    Ok(incoming) => record_outbound_status(incoming.resp.status()),
-                    Err(_) => record_outbound_error(),
-                }
-                Ok(result)
-            }
-            .instrument(span),
-        );
-        HostFutureIncomingResponse::pending(handle)
-    }
-
-    /// P3 sibling of [`Self::send_local_request`]: dispatch a P3 outgoing
-    /// request to co-located workload `target` in-memory, converting the body
-    /// error types at the P3/P2 boundary in both directions.
-    fn send_local_request_p3(
-        &self,
-        caller: &str,
-        target: String,
-        destination: LocalTarget,
-        request: hyper::Request<crate::host::http_p3::P3Body>,
-        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-    ) -> crate::host::http_p3::P3SendFuture {
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+    ) -> SendFuture {
         let guest_meter = self.local_guest_meter();
         let slot = self.take_local_slot(caller);
         Box::new(async move {
-            use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
             let Ok(slot) = slot else {
-                return Err(wasmtime_wasi::TrappableError::from(
-                    ErrorCode::ConnectionLimitReached,
-                ));
+                return Err(wasmtime_wasi_http::Error::ConnectionLimitReached);
             };
             let first_byte_timeout = options
                 .and_then(|o| o.first_byte_timeout)
@@ -2151,32 +1991,29 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
             let between_bytes_timeout = options
                 .and_then(|o| o.between_bytes_timeout)
                 .unwrap_or(Duration::from_secs(600));
-            // The probe reports the request body's outcome back to the caller, as
-            // the network path does. Its P3 errors ride through unchanged.
+            // The probe reports the request body's outcome back to the caller,
+            // as the network path does.
             let (parts, body) = request.into_parts();
             let (body, upload) = crate::host::http_client::UploadProbe::new(body);
-            let body = IncomingBody::new(body.map_err(Into::into));
-            let request = hyper::Request::from_parts(parts, body);
+            let request = hyper::Request::from_parts(parts, body.boxed_unsync());
             let response = tokio::time::timeout(
                 first_byte_timeout,
                 dispatch_local(&target, request, destination, guest_meter),
             )
             .await
-            .map_err(|_| wasmtime_wasi::TrappableError::from(ErrorCode::ConnectionReadTimeout))?
+            .map_err(|_| wasmtime_wasi_http::Error::ConnectionReadTimeout)?
             .map_err(|e| {
                 error!(err = ?e, workload_id = %target, "local dispatch failed");
-                wasmtime_wasi::TrappableError::from(ErrorCode::InternalError(Some(format!(
+                wasmtime_wasi_http::Error::InternalError(Some(format!(
                     "local dispatch failed: {e}"
-                ))))
+                )))
             })?;
-            // The response channel is p2-typed; `From` maps its errors back variant
-            // for variant. The slot is held until the body drains, and
-            // `between_bytes_timeout` is applied here because a P3 body goes
+            // The slot is held until the body drains, and
+            // `between_bytes_timeout` is applied here because the body goes
             // straight back to the guest.
-            let response = attach_slot(response, slot).map(|body| {
-                TimedBody::new(body.map_err(ErrorCode::from), between_bytes_timeout).boxed_unsync()
-            });
-            Ok((response, upload))
+            let response = attach_slot(response, slot)
+                .map(|body| TimedBody::new(body, between_bytes_timeout).boxed_unsync());
+            Ok((response, crate::host::http_client::upload_io(upload)))
         })
     }
 }
@@ -2195,13 +2032,13 @@ fn h2_client_config(base: &rustls::ClientConfig) -> Arc<rustls::ClientConfig> {
 /// response head would let a workload keep unbounded bodies streaming while the
 /// quota read as idle.
 struct SlotBody {
-    inner: HyperOutgoingBody,
+    inner: WasiBody,
     _slot: crate::host::quota::ConnectionSlot,
 }
 
 impl hyper::body::Body for SlotBody {
     type Data = bytes::Bytes;
-    type Error = wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
+    type Error = wasmtime_wasi_http::Error;
 
     fn poll_frame(
         mut self: std::pin::Pin<&mut Self>,
@@ -2221,10 +2058,10 @@ impl hyper::body::Body for SlotBody {
 
 /// Wrap a response body so `slot` lives until the body is drained.
 fn attach_slot(
-    resp: hyper::Response<HyperOutgoingBody>,
+    resp: hyper::Response<WasiBody>,
     slot: crate::host::quota::ConnectionSlot,
-) -> hyper::Response<HyperOutgoingBody> {
-    resp.map(|inner| HyperOutgoingBody::new(SlotBody { inner, _slot: slot }))
+) -> hyper::Response<WasiBody> {
+    resp.map(|inner| WasiBody::new(SlotBody { inner, _slot: slot }))
 }
 
 /// Where a locally routed request is delivered, resolved out of the handler
@@ -2251,10 +2088,10 @@ enum LocalTarget {
 /// [`Ingress::resolve_local_target`] already picked for it.
 async fn dispatch_local(
     workload_id: &str,
-    mut request: hyper::Request<IncomingBody>,
+    mut request: hyper::Request<WasiBody>,
     target: LocalTarget,
     guest_meter: GuestMeter,
-) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
+) -> anyhow::Result<hyper::Response<WasiBody>> {
     // Mirror the wire: a network send would carry the request authority as its
     // `Host` header, and handlers routinely read it.
     if !request.headers().contains_key(hyper::header::HOST)
@@ -2555,87 +2392,46 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
     fn outgoing_request(
         &self,
         workload_id: &str,
-        request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
-        config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+        fut: RequestIoFuture,
         allowed_hosts: &[AllowedHost],
-    ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
-    {
-        if let Err(e) =
+    ) -> SendFuture {
+        let span = outbound_client_span(request.method(), request.uri());
+        let inner: SendFuture = if let Err(e) =
             self.router
-                .allow_outgoing_request(workload_id, &request, &config, allowed_hosts)
+                .allow_outgoing_request(workload_id, &request, options, allowed_hosts)
         {
             warn!(workload_id = %workload_id, err = %e, "outgoing request denied by allowed_hosts policy");
-            return Err(wasmtime_wasi_http::p2::HttpError::trap(
-                wasmtime_wasi_http::p2::bindings::http::types::ErrorCode::HttpRequestDenied,
-            ));
-        }
-        // The gRPC path is selected by the guest via a
-        // `content-type: application/grpc` header, and needs HTTP/2 rather
-        // than the HTTP/1.1 the ordinary egress pool speaks. A pooling
-        // handler serves it from its own per-workload HTTP/2 pool, under the
-        // same quota; otherwise the runtime opens a connection
-        // per request.
-        if is_grpc_request(&request) {
-            return Ok(match self.outgoing_handler.grpc_transport(workload_id) {
-                Some(client) => send_pooled_grpc_request(client, request, config),
-                None => send_grpc_request(request, config, self.grpc_tls()),
-            });
-        }
-        // Same-host short-circuit: dispatch to a co-located workload's incoming
-        // path in-memory. Checked after the gRPC branch so gRPC always egresses
-        // over the network, and after `allowed_hosts` so the short-circuit
-        // never widens a workload's egress policy.
-        if let Some((target, destination)) = self.local_destination(workload_id, request.uri()) {
-            debug!(workload_id, target, uri = %request.uri(), "routing outgoing request to co-located workload");
-            return Ok(self.send_local_request(workload_id, target, destination, request, config));
-        }
-        self.outgoing_handler
-            .send_request(workload_id, request, config)
-    }
-
-    fn outgoing_request_p3(
-        &self,
-        workload_id: &str,
-        request: hyper::Request<crate::host::http_p3::P3Body>,
-        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-        fut: crate::host::http_p3::P3RequestErrorFuture,
-        allowed_hosts: &[AllowedHost],
-    ) -> crate::host::http_p3::P3SendFuture {
-        let span = outbound_client_span(request.method(), request.uri());
-        let inner: crate::host::http_p3::P3SendFuture = if let Err(e) = self
-            .router
-            .allow_outgoing_request_p3(workload_id, &request, options, allowed_hosts)
-        {
-            warn!(workload_id = %workload_id, err = %e, "P3 outgoing request denied by allowed_hosts policy");
-            use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
-            Box::new(async move {
-                Err(wasmtime_wasi::TrappableError::from(
-                    ErrorCode::HttpRequestDenied,
-                ))
-            })
+            deny_request(request)
         } else if is_grpc_request(&request) {
-            // Guest-selected HTTP/2 path — see the matching comment in
-            // `outgoing_request`.
+            // The gRPC path is selected by the guest via a
+            // `content-type: application/grpc` header, and needs HTTP/2 rather
+            // than the HTTP/1.1 the ordinary egress pool speaks. A pooling
+            // handler serves it from its own per-workload HTTP/2 pool, under
+            // the same quota; otherwise the runtime opens a connection per
+            // request.
             match self.outgoing_handler.grpc_transport(workload_id) {
-                Some(client) => Box::new(async move {
-                    let (res, io) = client.send_grpc_request_p3(request, options).await?;
-                    Ok((res, io))
-                }),
-                None => send_grpc_request_p3(request, options, self.grpc_tls()),
+                Some(client) => {
+                    Box::new(async move { client.send_grpc_request(request, options).await })
+                }
+                None => Box::new(send_grpc_request(request, options, self.grpc_tls())),
             }
         } else if let Some((target, destination)) =
             self.local_destination(workload_id, request.uri())
         {
-            // Same-host short-circuit; see `outgoing_request` for ordering
-            // rationale (after allowed_hosts and the gRPC branch). `fut`, the
-            // guest's response-consumption outcome, is dropped here as wasmtime's
-            // default sender drops it.
-            debug!(workload_id, target, uri = %request.uri(), "routing P3 outgoing request to co-located workload");
+            // Same-host short-circuit: dispatch to a co-located workload's
+            // incoming path in-memory. Checked after the gRPC branch so gRPC
+            // always egresses over the network, and after `allowed_hosts` so
+            // the short-circuit never widens a workload's egress policy.
+            // `fut`, the guest's response-consumption outcome, is dropped here
+            // as wasmtime's default sender drops it.
+            debug!(workload_id, target, uri = %request.uri(), "routing outgoing request to co-located workload");
             span.record("wasmcloud.http.route", "local");
-            self.send_local_request_p3(workload_id, target, destination, request, options)
+            self.send_local_request(workload_id, target, destination, request, options)
         } else {
             self.outgoing_handler
-                .send_request_p3(workload_id, request, options, fut)
+                .send_request(workload_id, request, options, fut)
         };
         // Instrument the whole send so the span is current while the response
         // is awaited; `record_outbound_status` then lands on this span.
@@ -2942,6 +2738,13 @@ async fn run_http_server<T: Router>(
                         let tls_acceptor_clone = tls_acceptor.clone();
                         let handler_clone = handler.clone();
                         let guest_meter = guest_meter.clone();
+                        // What a guest is told it was reached over: this
+                        // listener's own scheme, not a header a client can set.
+                        let client_scheme = if tls_acceptor.is_some() {
+                            hyper::http::uri::Scheme::HTTPS
+                        } else {
+                            hyper::http::uri::Scheme::HTTP
+                        };
                         tokio::spawn(async move {
                             // Held for the connection's life: its descriptor is
                             // only given back once hyper is done with it.
@@ -2954,12 +2757,13 @@ async fn run_http_server<T: Router>(
                                 let service_handlers = service_handlers_clone.clone();
                                 let handler = handler_clone.clone();
                                 let guest_meter = guest_meter.clone();
+                                let scheme = client_scheme.clone();
                                 async move {
                                     let extractor = opentelemetry_http::HeaderExtractor(req.headers());
                                     let remote_context =
                                         opentelemetry::global::get_text_map_propagator(|propagator| propagator.extract(&extractor));
 
-                                    handle_http_request(handler, req, handles, service_handlers, guest_meter).with_context(remote_context).await
+                                    handle_http_request(handler, req, scheme, handles, service_handlers, guest_meter).with_context(remote_context).await
                                 }
                             });
 
@@ -3087,10 +2891,10 @@ fn ended_in_timeout(e: &(dyn std::error::Error + 'static)) -> bool {
 /// Build an error response with the given status code.
 /// Building HTTP responses with valid status codes is infallible.
 #[allow(clippy::expect_used)]
-fn error_response(status: u16) -> hyper::Response<HyperOutgoingBody> {
+fn error_response(status: u16) -> hyper::Response<WasiBody> {
     hyper::Response::builder()
         .status(status)
-        .body(HyperOutgoingBody::default())
+        .body(WasiBody::default())
         .expect("building HTTP response with valid status code should never fail")
 }
 
@@ -3125,11 +2929,20 @@ fn error_response(status: u16) -> hyper::Response<HyperOutgoingBody> {
 ))]
 async fn handle_http_request<T: Router>(
     handler: Arc<T>,
-    req: hyper::Request<hyper::body::Incoming>,
+    mut req: hyper::Request<hyper::body::Incoming>,
+    scheme: hyper::http::uri::Scheme,
     workload_handles: WorkloadHandles,
     service_handlers: ServiceHandlers,
     guest_meter: GuestMeter,
-) -> Result<hyper::Response<HyperOutgoingBody>, hyper::Error> {
+) -> Result<hyper::Response<WasiBody>, hyper::Error> {
+    // Every guest reads its scheme and authority off the URI, so they are put
+    // there once, here, from this listener rather than from any header.
+    if !normalize_ingress_uri(&mut req, &scheme) {
+        warn!(host = %host_header(&req), "rejecting a request whose Host is not a valid authority");
+        let resp = error_response(400);
+        record_response_status(&resp);
+        return Ok(resp);
+    }
     let method = req.method().clone();
     let uri = req.uri().clone();
 
@@ -3156,10 +2969,10 @@ async fn handle_http_request<T: Router>(
         "HTTP request received"
     );
 
-    // Box the network body into the shared incoming-body type so the service
-    // channel and per-request invoke path accept both network ingress and
-    // locally routed requests (see `dispatch_local`).
-    let req = req.map(|body| IncomingBody::new(body.map_err(|e| hyper_request_error(e).into())));
+    // Box the network body into the shared body type so the service channel
+    // and per-request invoke path accept both network ingress and locally
+    // routed requests (see `dispatch_local`).
+    let req = req.map(|body| body.map_err(wasmtime_wasi_http::Error::from).boxed_unsync());
 
     // If this workload's long-lived service serves HTTP, deliver the request to
     // it (preserving its in-memory state) instead of the per-request path.
@@ -3334,14 +3147,14 @@ fn record_grpc_status(headers: &hyper::HeaderMap) {
 /// until the body is done, ensuring the attribute is recorded before the span
 /// closes.
 struct MeteredBody {
-    inner: HyperOutgoingBody,
+    inner: WasiBody,
     span: tracing::Span,
     bytes: u64,
     recorded: bool,
 }
 
 impl MeteredBody {
-    fn new(inner: HyperOutgoingBody, span: tracing::Span) -> Self {
+    fn new(inner: WasiBody, span: tracing::Span) -> Self {
         Self {
             inner,
             span,
@@ -3360,7 +3173,7 @@ impl MeteredBody {
 
 impl hyper::body::Body for MeteredBody {
     type Data = bytes::Bytes;
-    type Error = wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
+    type Error = wasmtime_wasi_http::Error;
 
     fn poll_frame(
         mut self: std::pin::Pin<&mut Self>,
@@ -3448,11 +3261,11 @@ async fn invoke_component_handler(
     workload_handle: ResolvedWorkload,
     instance_pre: InstancePre<SharedCtx>,
     component_id: &str,
-    req: hyper::Request<IncomingBody>,
+    req: hyper::Request<WasiBody>,
     guest_meter: GuestMeter,
     // Resolved once when the route was registered: this runs per request.
     identity: &crate::observability::WorkloadIdentity,
-) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
+) -> anyhow::Result<hyper::Response<WasiBody>> {
     if crate::engine::targets_wasip3_http(instance_pre.component()) {
         let pool = workload_handle
             .instance_pool_for_component(component_id)
@@ -3531,14 +3344,7 @@ async fn invoke_component_handler(
             ))
             .await
             .ok_or_else(|| anyhow::anyhow!("cold instance produced no response"))?;
-        let (parts, body) = resp?.into_parts();
-        // `From` maps the P3 error variant for variant, so a P3 caller routed
-        // here gets the callee's own error-code back.
-        let body = HyperOutgoingBody::new(
-            body.map_err(wasmtime_wasi_http::p2::bindings::http::types::ErrorCode::from)
-                .boxed_unsync(),
-        );
-        return Ok(watch_body(hyper::Response::from_parts(parts, body), watch));
+        return Ok(watch_body(resp?, watch));
     }
 
     // The p2 path still builds and instantiates per request: its store is
@@ -3552,10 +3358,10 @@ async fn invoke_component_handler(
 pub async fn handle_component_request(
     mut store: Store<SharedCtx>,
     pre: InstancePre<SharedCtx>,
-    req: hyper::Request<IncomingBody>,
+    req: hyper::Request<WasiBody>,
     guest_meter: GuestMeter,
     identity: &crate::observability::WorkloadIdentity,
-) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
+) -> anyhow::Result<hyper::Response<WasiBody>> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let scheme = match req.uri().scheme() {
         Some(scheme) if scheme == &hyper::http::uri::Scheme::HTTP => Scheme::Http,
@@ -3567,6 +3373,7 @@ pub async fn handle_component_request(
 
     let attributes = http_attributes(identity, req.method(), HTTP_OPERATION_P2);
 
+    let req = with_body_timeout(req, crate::timeouts::http_request_body());
     let req = store.data_mut().http().new_incoming_request(scheme, req)?;
     let out = store.data_mut().http().new_response_outparam(sender)?;
     let pre = ProxyPre::new(pre)
@@ -3739,6 +3546,122 @@ pub fn check_allowed_hosts<B>(
     )
 }
 
+const MAX_DENIED_BODY_DRAINS: usize = 64;
+const DENIED_BODY_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+
+async fn drain_denied_body(mut body: WasiBody, timeout: Duration) {
+    _ = tokio::time::timeout(timeout, async {
+        while let Some(Ok(_frame)) = body.frame().await {}
+    })
+    .await;
+}
+
+/// Refuse an outgoing request while briefly draining its body.
+fn deny_request(request: hyper::Request<WasiBody>) -> SendFuture {
+    static DRAINS: std::sync::LazyLock<Arc<Semaphore>> =
+        std::sync::LazyLock::new(|| Arc::new(Semaphore::new(MAX_DENIED_BODY_DRAINS)));
+    if let Ok(permit) = Arc::clone(&DRAINS).try_acquire_owned() {
+        tokio::spawn(async move {
+            let _permit = permit;
+            drain_denied_body(request.into_body(), DENIED_BODY_DRAIN_TIMEOUT).await;
+        });
+    }
+    Box::new(async { Err(wasmtime_wasi_http::Error::HttpRequestDenied) })
+}
+
+/// The I/O future of an inbound `wasi:http` 0.3 request; see [`p3_request`].
+pub(crate) type P3RequestIo = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<(), wasmtime_wasi_http::Error>> + Send>,
+>;
+
+/// Convert an inbound request for a `wasi:http` 0.3 guest, with the store's
+/// hooks deciding which headers it may see.
+///
+/// Those hooks strip every hop-by-hop header — `host`, `connection`,
+/// `keep-alive`, `transfer-encoding`, `upgrade`, the `proxy-*` pair and
+/// `http2-settings` — before the guest is handed the request. That is what a
+/// 0.2 guest has always been given and what `wasi:http` intends: they describe
+/// this hop, which the guest does not own. What a guest legitimately needs from
+/// them, the scheme and authority, is on the URI — see
+/// [`normalize_ingress_uri`].
+///
+/// The I/O future is boxed because `from_http`'s opaque return type captures
+/// the hooks borrow, although the future itself is `'static`.
+pub(crate) fn p3_request(
+    ctx: &mut SharedCtx,
+    mut req: hyper::Request<WasiBody>,
+) -> (wasmtime_wasi_http::p3::Request, P3RequestIo) {
+    // A request that reaches a guest came through the ingress, which has
+    // normalized it already; this covers a caller that did not, and is a no-op
+    // otherwise.
+    normalize_ingress_uri(&mut req, &hyper::http::uri::Scheme::HTTP);
+    let req = with_body_timeout(req, crate::timeouts::http_request_body());
+    let (req, io) = wasmtime_wasi_http::p3::Request::from_http(ctx.http().hooks, req);
+    (req, Box::pin(io))
+}
+
+/// Give a request the scheme and authority a guest should see, reporting
+/// whether its `Host` was usable.
+///
+/// HTTP/1.1 sends an origin-form target, so the URI carries neither scheme nor
+/// authority, and wasmtime strips `Host` before any guest — 0.2 or 0.3 — is
+/// handed the request. Both therefore have to read them from here.
+///
+/// `scheme` is how the client reached *this* listener, never a forwarded
+/// header: `X-Forwarded-Proto` is set by whoever spoke to us, and a workload
+/// building redirect or callback URLs from a spoofed scheme is the same class of
+/// bug [wasmCloud#5557] fixes for `X-Real-IP`. A trusted-proxy setting could
+/// override it later; there is no such trust today.
+///
+/// Returns `false` for a `Host` that is not a valid authority. Such a request
+/// cannot be routed either — the hostname router splits on the last colon, so
+/// `example.com:8080:9090` would route as `example.com:8080` — so the ingress
+/// answers it with a 400 rather than guessing.
+///
+/// [wasmCloud#5557]: https://github.com/wasmCloud/wasmCloud/pull/5557
+fn normalize_ingress_uri<B>(
+    req: &mut hyper::Request<B>,
+    scheme: &hyper::http::uri::Scheme,
+) -> bool {
+    let header_authority = match req.headers().get(hyper::header::HOST) {
+        Some(host) => match host
+            .to_str()
+            .ok()
+            .and_then(|host| host.parse::<hyper::http::uri::Authority>().ok())
+        {
+            Some(authority) => Some(authority),
+            None => return false,
+        },
+        None => None,
+    };
+    let uri_authority = req.uri().authority();
+    if let (Some(header), Some(uri)) = (&header_authority, uri_authority)
+        && !header.as_str().eq_ignore_ascii_case(uri.as_str())
+    {
+        return false;
+    }
+    // `OPTIONS *` has no URI authority or scheme to normalize.
+    if req.uri().path() == "*" {
+        return true;
+    }
+    let Some(authority) = uri_authority.cloned().or(header_authority) else {
+        return true;
+    };
+    let mut parts = req.uri().clone().into_parts();
+    parts.scheme = Some(scheme.clone());
+    parts.authority = Some(authority);
+    parts
+        .path_and_query
+        .get_or_insert(hyper::http::uri::PathAndQuery::from_static("/"));
+    match hyper::Uri::from_parts(parts) {
+        Ok(uri) => {
+            *req.uri_mut() = uri;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// Check if a request is a gRPC request based on Content-Type header.
 fn is_grpc_request<B>(req: &hyper::Request<B>) -> bool {
     req.headers()
@@ -3747,155 +3670,34 @@ fn is_grpc_request<B>(req: &hyper::Request<B>) -> bool {
         .is_some_and(|ct| ct.starts_with("application/grpc"))
 }
 
-/// Send a gRPC request over HTTP/2.
-/// Send a P2 gRPC request through a handler's pooled HTTP/2 transport.
-/// Mirrors [`send_grpc_request`]'s span and status recording; the connection
-/// lifetime belongs to the pool rather than to this request.
-fn send_pooled_grpc_request(
-    client: crate::host::http_client::PooledClient,
-    request: hyper::Request<HyperOutgoingBody>,
-    config: OutgoingRequestConfig,
-) -> HostFutureIncomingResponse {
-    let span = outbound_client_span(request.method(), request.uri());
-    let handle = wasmtime_wasi::runtime::spawn(
-        async move {
-            let result = client.send_grpc_request_p2(request, config).await;
-            match &result {
-                Ok(incoming) => {
-                    record_outbound_status(incoming.resp.status());
-                    record_grpc_status(incoming.resp.headers());
-                }
-                Err(_) => record_outbound_error(),
-            }
-            Ok(result)
-        }
-        .instrument(span),
-    );
-    HostFutureIncomingResponse::pending(handle)
-}
-
-fn send_grpc_request(
-    request: hyper::Request<HyperOutgoingBody>,
-    config: OutgoingRequestConfig,
-    tls: Arc<rustls::ClientConfig>,
-) -> HostFutureIncomingResponse {
-    let span = outbound_client_span(request.method(), request.uri());
-    let handle = wasmtime_wasi::runtime::spawn(
-        async move {
-            let result = send_grpc_request_handler(request, config, tls).await;
-            match &result {
-                Ok(incoming) => {
-                    record_outbound_status(incoming.resp.status());
-                    record_grpc_status(incoming.resp.headers());
-                }
-                Err(_) => record_outbound_error(),
-            }
-            Ok(result)
-        }
-        .instrument(span),
-    );
-    HostFutureIncomingResponse::pending(handle)
-}
-
-/// Async handler that sends a gRPC request using HTTP/2. `tls` must already
-/// carry the h2 ALPN (see [`h2_client_config`]).
-async fn send_grpc_request_handler(
-    mut request: hyper::Request<HyperOutgoingBody>,
-    OutgoingRequestConfig {
-        use_tls,
-        connect_timeout,
-        first_byte_timeout,
-        between_bytes_timeout,
-    }: OutgoingRequestConfig,
-    tls: Arc<rustls::ClientConfig>,
-) -> Result<IncomingResponse, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> {
-    use crate::host::http_client::{
-        connect_tcp, connect_tls, request_authority, spawn_p2_conn_worker, to_origin_form,
-    };
-    use tokio::time::timeout;
-    use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-
-    let authority = request_authority(&request, use_tls).ok_or(ErrorCode::HttpRequestUriInvalid)?;
-    let tcp_stream = connect_tcp(&authority, connect_timeout).await?;
-
-    let (mut sender, worker) = if use_tls {
-        // The cached gRPC TLS configuration is shared across workloads; give
-        // this connection its own session store so TLS session tickets never
-        // resume across workloads.
-        let config = crate::host::http_client::isolated_resumption(&tls);
-        let stream = connect_tls(Arc::new(config), &authority, tcp_stream).await?;
-        let (sender, conn) = timeout(
-            connect_timeout,
-            http2::handshake(TokioExecutor::new(), TokioIo::new(stream)),
-        )
-        .await
-        .map_err(|_| ErrorCode::ConnectionTimeout)?
-        .map_err(hyper_request_error)?;
-        (sender, spawn_p2_conn_worker(conn))
-    } else {
-        // h2c (HTTP/2 over cleartext)
-        let (sender, conn) = timeout(
-            connect_timeout,
-            http2::handshake(TokioExecutor::new(), TokioIo::new(tcp_stream)),
-        )
-        .await
-        .map_err(|_| ErrorCode::ConnectionTimeout)?
-        .map_err(hyper_request_error)?;
-        (sender, spawn_p2_conn_worker(conn))
-    };
-
-    to_origin_form(&mut request);
-
-    let resp = timeout(first_byte_timeout, sender.send_request(request))
-        .await
-        .map_err(|_| ErrorCode::ConnectionReadTimeout)?
-        .map_err(hyper_request_error)?
-        .map(|body| body.map_err(hyper_request_error).boxed_unsync());
-
-    Ok(IncomingResponse {
-        resp,
-        worker: Some(worker),
-        between_bytes_timeout,
-    })
-}
-
-/// P3 sibling of send_grpc_request: HTTP/2 sender for P3 outgoing gRPC.
-fn send_grpc_request_p3(
-    request: hyper::Request<crate::host::http_p3::P3Body>,
-    options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-    tls: Arc<rustls::ClientConfig>,
-) -> crate::host::http_p3::P3SendFuture {
-    Box::new(send_grpc_request_p3_handler(request, options, tls))
-}
-
-/// Response-body wrapper enforcing a between-bytes read timeout on a streaming
-/// P3 outgoing response.
-///
-/// `inner` is held in an `Option` so it can be dropped the instant the timeout
-/// fires (or the stream ends / errors), releasing the underlying HTTP/2 stream
-/// and TCP connection eagerly instead of leaving it pinned until the guest
-/// drops its body handle.
+/// Enforces a between-frame timeout on an HTTP body.
+/// Drops the inner body on timeout or completion to release its connection.
 pub(crate) struct TimedBody<B> {
     inner: Option<B>,
-    interval: tokio::time::Interval,
+    timeout: Duration,
+    /// Armed only while a frame is actually being waited for, and cleared
+    /// whenever one arrives. A clock that ran whether or not anybody was
+    /// reading would count the time a guest spent doing something else against
+    /// the peer sending the body.
+    deadline: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
+}
+
+fn with_body_timeout<B>(req: hyper::Request<B>, timeout: Duration) -> hyper::Request<TimedBody<B>> {
+    req.map(|body| TimedBody::new(body, timeout))
 }
 
 impl<B> TimedBody<B> {
-    /// Wrap `inner`, erroring with `ConnectionReadTimeout` when more than
-    /// `between_bytes_timeout` passes between frames.
+    /// Wrap `inner`, erroring with `ConnectionReadTimeout` when a frame is
+    /// awaited for longer than `between_bytes_timeout`.
     ///
-    /// The period is clamped to a non-zero minimum: the guest sets this value
-    /// through `wasi:http` request-options, which accepts zero, and
-    /// `tokio::time::interval` panics on a zero period. A clamped period keeps
-    /// the meaning a zero timeout asks for — the next frame must already be
+    /// A zero timeout is honoured as the guest asks it — `wasi:http`
+    /// request-options accept one — and means the next frame must already be
     /// ready or the body errors.
     pub(crate) fn new(inner: B, between_bytes_timeout: Duration) -> Self {
-        let period = between_bytes_timeout.max(Duration::from_nanos(1));
-        let mut interval = tokio::time::interval(period);
-        interval.reset();
         Self {
             inner: Some(inner),
-            interval,
+            timeout: between_bytes_timeout,
+            deadline: None,
         }
     }
 }
@@ -3903,17 +3705,17 @@ impl<B> TimedBody<B> {
 impl<B> hyper::body::Body for TimedBody<B>
 where
     B: hyper::body::Body<Data = bytes::Bytes> + Unpin,
-    B::Error: IntoP3ErrorCode,
+    B::Error: IntoBodyError,
 {
     type Data = bytes::Bytes;
-    type Error = wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
+    type Error = wasmtime_wasi_http::Error;
 
     fn poll_frame(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
         use std::task::{Poll, ready};
-        use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
+        use wasmtime_wasi_http::Error;
 
         let Some(inner) = self.inner.as_mut() else {
             return Poll::Ready(None);
@@ -3925,18 +3727,24 @@ where
             }
             Poll::Ready(Some(Err(err))) => {
                 self.inner = None;
-                Poll::Ready(Some(Err(err.into_p3_error_code())))
+                Poll::Ready(Some(Err(err.into_body_error())))
             }
             Poll::Ready(Some(Ok(frame))) => {
-                self.interval.reset();
+                // The wait is over, so the clock stops until the next one.
+                self.deadline = None;
                 Poll::Ready(Some(Ok(frame)))
             }
             Poll::Pending => {
-                ready!(self.interval.poll_tick(cx));
+                let timeout = self.timeout;
+                let deadline = self
+                    .deadline
+                    .get_or_insert_with(|| Box::pin(tokio::time::sleep(timeout)));
+                ready!(deadline.as_mut().poll(cx));
                 // Release the connection before surfacing the timeout rather
                 // than waiting for the guest to drop the body.
                 self.inner = None;
-                Poll::Ready(Some(Err(ErrorCode::ConnectionReadTimeout)))
+                self.deadline = None;
+                Poll::Ready(Some(Err(Error::ConnectionReadTimeout)))
             }
         }
     }
@@ -3955,35 +3763,36 @@ where
 }
 
 /// A body error [`TimedBody`] can hand the guest: a network body's
-/// `hyper::Error`, or an `ErrorCode` a local dispatch already produced.
-pub(crate) trait IntoP3ErrorCode {
-    fn into_p3_error_code(self) -> wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
+/// `hyper::Error`, classified as wasmtime's default transport classifies it,
+/// or an error a local dispatch already produced.
+pub(crate) trait IntoBodyError {
+    fn into_body_error(self) -> wasmtime_wasi_http::Error;
 }
 
-impl IntoP3ErrorCode for hyper::Error {
-    fn into_p3_error_code(self) -> wasmtime_wasi_http::p3::bindings::http::types::ErrorCode {
-        wasmtime_wasi_http::p3::bindings::http::types::ErrorCode::from_hyper_request_error(self)
+impl IntoBodyError for hyper::Error {
+    fn into_body_error(self) -> wasmtime_wasi_http::Error {
+        crate::host::http_client::connection_error(self)
     }
 }
 
-impl IntoP3ErrorCode for wasmtime_wasi_http::p3::bindings::http::types::ErrorCode {
-    fn into_p3_error_code(self) -> Self {
+impl IntoBodyError for wasmtime_wasi_http::Error {
+    fn into_body_error(self) -> Self {
         self
     }
 }
 
-/// P3 sibling of [`send_grpc_request_handler`]. `tls` must already carry the
-/// h2 ALPN (see [`h2_client_config`]).
-async fn send_grpc_request_p3_handler(
-    mut request: hyper::Request<crate::host::http_p3::P3Body>,
-    options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+/// Send a gRPC request over its own HTTP/2 connection. `tls` must already carry
+/// the h2 ALPN (see [`h2_client_config`]).
+async fn send_grpc_request(
+    mut request: hyper::Request<WasiBody>,
+    options: Option<RequestOptions>,
     tls: Arc<rustls::ClientConfig>,
-) -> crate::host::http_p3::P3SendResult {
+) -> SendResult {
     use crate::host::http_client::{
-        connect_tcp, connect_tls, request_authority, spawn_p3_conn_worker, to_origin_form,
+        connect_http_tcp, connect_http_tls, request_authority, spawn_conn_worker, to_origin_form,
     };
     use tokio::time::timeout;
-    use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
+    use wasmtime_wasi_http::Error;
 
     let connect_timeout = options
         .and_then(|o| o.connect_timeout)
@@ -3997,44 +3806,37 @@ async fn send_grpc_request_p3_handler(
 
     let use_tls = request.uri().scheme() == Some(&hyper::http::uri::Scheme::HTTPS);
 
-    let authority = request_authority(&request, use_tls).ok_or(ErrorCode::HttpRequestUriInvalid)?;
-    let tcp_stream = connect_tcp(&authority, connect_timeout)
-        .await
-        .map_err(ErrorCode::from)?;
+    let authority = request_authority(&request, use_tls).ok_or(Error::HttpRequestUriInvalid)?;
+    let tcp_stream = connect_http_tcp(&authority, connect_timeout).await?;
 
     let (mut sender, conn_worker) = if use_tls {
         // The cached gRPC TLS configuration is shared across workloads; give
         // this connection its own session store so TLS session tickets never
         // resume across workloads.
         let config = crate::host::http_client::isolated_resumption(&tls);
-        let stream = connect_tls(Arc::new(config), &authority, tcp_stream)
-            .await
-            .map_err(ErrorCode::from)?;
+        let stream = connect_http_tls(Arc::new(config), &authority, tcp_stream).await?;
         let (sender, conn) = timeout(
             connect_timeout,
             http2::handshake(TokioExecutor::new(), TokioIo::new(stream)),
         )
         .await
-        .map_err(|_| ErrorCode::ConnectionTimeout)?
-        .map_err(ErrorCode::from_hyper_request_error)?;
-        (sender, spawn_p3_conn_worker(conn))
+        .map_err(|_| Error::ConnectionTimeout)??;
+        (sender, spawn_conn_worker(conn))
     } else {
         let (sender, conn) = timeout(
             connect_timeout,
             http2::handshake(TokioExecutor::new(), TokioIo::new(tcp_stream)),
         )
         .await
-        .map_err(|_| ErrorCode::ConnectionTimeout)?
-        .map_err(ErrorCode::from_hyper_request_error)?;
-        (sender, spawn_p3_conn_worker(conn))
+        .map_err(|_| Error::ConnectionTimeout)??;
+        (sender, spawn_conn_worker(conn))
     };
 
     to_origin_form(&mut request);
 
     let resp = timeout(first_byte_timeout, sender.send_request(request))
         .await
-        .map_err(|_| ErrorCode::ConnectionReadTimeout)?
-        .map_err(ErrorCode::from_hyper_request_error)?
+        .map_err(|_| Error::ConnectionReadTimeout)??
         .map(|body| TimedBody::new(body, between_bytes_timeout).boxed_unsync());
 
     // The connection driver *is* the request-error future: it must stay
@@ -4042,21 +3844,47 @@ async fn send_grpc_request_p3_handler(
     // body's lifetime only while it polls pending — see `p3::host::handler` —
     // and the `AbortOnDropJoinHandle` aborts the connection when dropped), and
     // a connection failure propagates to the guest instead of being dropped.
-    let io: crate::host::http_p3::P3RequestErrorFuture = Box::new(conn_worker);
+    let io: RequestIoFuture = Box::new(conn_worker);
     Ok((resp, io))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
-    use wasmtime_wasi_http::p2::types::OutgoingRequestConfig;
 
-    fn build_request(uri: &str) -> hyper::Request<HyperOutgoingBody> {
+    fn build_request(uri: &str) -> hyper::Request<WasiBody> {
         hyper::Request::builder()
             .uri(uri)
-            .body(HyperOutgoingBody::default())
+            .body(WasiBody::default())
             .unwrap()
+    }
+
+    #[test]
+    fn ingress_uses_listener_scheme_for_absolute_uri() {
+        let mut req = hyper::Request::builder()
+            .uri("https://tenant.test/path")
+            .header(hyper::header::HOST, "tenant.test")
+            .body(())
+            .unwrap();
+        assert!(normalize_ingress_uri(
+            &mut req,
+            &hyper::http::uri::Scheme::HTTP
+        ));
+        assert_eq!(req.uri().scheme(), Some(&hyper::http::uri::Scheme::HTTP));
+        assert_eq!(req.uri().authority().unwrap().as_str(), "tenant.test");
+    }
+
+    #[test]
+    fn ingress_rejects_mismatched_host_and_uri_authority() {
+        let mut req = hyper::Request::builder()
+            .uri("https://other.test/path")
+            .header(hyper::header::HOST, "tenant.test")
+            .body(())
+            .unwrap();
+        assert!(!normalize_ingress_uri(
+            &mut req,
+            &hyper::http::uri::Scheme::HTTP
+        ));
     }
 
     /// `with_quotas` rebuilds an eagerly-configured client cache and must
@@ -4083,15 +3911,6 @@ mod tests {
             Arc::ptr_eq(&tls, &got),
             "with_quotas must preserve the configured TLS roots"
         );
-    }
-
-    fn build_request_p3(uri: &str) -> hyper::Request<crate::host::http_p3::P3Body> {
-        hyper::Request::builder()
-            .uri(uri)
-            .body(crate::host::http_p3::P3Body::new(
-                http_body_util::Empty::new().map_err(|_: std::convert::Infallible| unreachable!()),
-            ))
-            .unwrap()
     }
 
     /// Spawn an HTTP/2-over-TLS server (h2 ALPN) whose certificate chains to a
@@ -4143,21 +3962,22 @@ mod tests {
         (port, ca_pem)
     }
 
-    fn grpc_config() -> OutgoingRequestConfig {
-        OutgoingRequestConfig {
-            use_tls: true,
-            connect_timeout: Duration::from_secs(5),
-            first_byte_timeout: Duration::from_secs(5),
-            between_bytes_timeout: Duration::from_secs(5),
-        }
+    fn grpc_options() -> Option<RequestOptions> {
+        Some(RequestOptions {
+            connect_timeout: Some(Duration::from_secs(5)),
+            first_byte_timeout: Some(Duration::from_secs(5)),
+            between_bytes_timeout: Some(Duration::from_secs(5)),
+        })
     }
 
     /// The gRPC egress fast path must verify TLS against the roots configured
     /// on the outgoing handler (with h2 ALPN layered on by
-    /// [`h2_client_config`]), not the compiled-in webpki bundle.
+    /// [`h2_client_config`]), not the compiled-in webpki bundle — and the
+    /// request I/O future it hands back must poll pending, so wasmtime keeps
+    /// the connection alive while the guest reads the body.
     #[tokio::test]
     async fn grpc_path_picks_up_configured_roots() {
-        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
+        use core::task::{Context as TaskContext, Waker};
 
         let (port, ca_pem) = private_ca_h2_server().await;
         let dir = tempfile::tempdir().unwrap();
@@ -4166,15 +3986,17 @@ mod tests {
         let uri = format!("https://127.0.0.1:{port}/svc.Test/Call");
 
         // Default roots: the handshake must fail with a TLS error.
-        let err = send_grpc_request_handler(
+        let Err(err) = send_grpc_request(
             build_request(&uri),
-            grpc_config(),
+            grpc_options(),
             h2_client_config(&crate::host::http_client::default_client_tls_config()),
         )
         .await
-        .expect_err("untrusted CA must fail");
+        else {
+            panic!("untrusted CA must fail");
+        };
         assert!(
-            matches!(err, ErrorCode::TlsProtocolError),
+            matches!(err, wasmtime_wasi_http::Error::TlsProtocolError),
             "expected TlsProtocolError, got {err:?}"
         );
 
@@ -4185,37 +4007,11 @@ mod tests {
         }
         .build()
         .unwrap();
-        let response =
-            send_grpc_request_handler(build_request(&uri), grpc_config(), h2_client_config(&tls))
-                .await
-                .expect("request with the private CA trusted should succeed");
-        assert_eq!(response.resp.status(), 200);
-    }
-
-    /// P3 sibling of [`grpc_path_picks_up_configured_roots`]: the configured
-    /// roots must apply, and the returned request-error future must poll
-    /// pending so wasmtime keeps the connection alive while the guest reads
-    /// the body.
-    #[tokio::test]
-    async fn grpc_p3_path_picks_up_configured_roots_and_keeps_connection_alive() {
-        use core::task::{Context as TaskContext, Waker};
-
-        let (port, ca_pem) = private_ca_h2_server().await;
-        let dir = tempfile::tempdir().unwrap();
-        let ca_path = dir.path().join("ca.pem");
-        std::fs::write(&ca_path, ca_pem).unwrap();
-        let uri = format!("https://127.0.0.1:{port}/svc.Test/Call");
-
-        let tls = crate::host::http_client::ClientTlsOptions {
-            roots: crate::host::http_client::TrustRoots::ExtraOnly,
-            extra_ca_paths: vec![ca_path],
-        }
-        .build()
-        .unwrap();
-        let (response, io) =
-            send_grpc_request_p3_handler(build_request_p3(&uri), None, h2_client_config(&tls))
-                .await
-                .expect("request with the private CA trusted should succeed");
+        let Ok((response, io)) =
+            send_grpc_request(build_request(&uri), grpc_options(), h2_client_config(&tls)).await
+        else {
+            panic!("request with the private CA trusted should succeed");
+        };
         assert_eq!(response.status(), 200);
 
         let mut io = Box::into_pin(io);
@@ -4631,13 +4427,8 @@ mod tests {
 
     // --- OutgoingHandler delegation tests ---
 
-    fn dummy_config() -> OutgoingRequestConfig {
-        OutgoingRequestConfig {
-            use_tls: false,
-            connect_timeout: Duration::from_secs(30),
-            first_byte_timeout: Duration::from_secs(30),
-            between_bytes_timeout: Duration::from_secs(30),
-        }
+    fn no_io() -> RequestIoFuture {
+        Box::new(async { Ok(()) })
     }
 
     struct SpyHandler {
@@ -4648,25 +4439,16 @@ mod tests {
         fn send_request(
             &self,
             _workload_id: &str,
-            _request: hyper::Request<HyperOutgoingBody>,
-            _config: OutgoingRequestConfig,
-        ) -> wasmtime_wasi_http::p2::HttpResult<
-            wasmtime_wasi_http::p2::types::HostFutureIncomingResponse,
-        > {
+            _request: hyper::Request<WasiBody>,
+            _options: Option<RequestOptions>,
+            _fut: RequestIoFuture,
+        ) -> SendFuture {
             self.called.store(true, std::sync::atomic::Ordering::SeqCst);
-            Err(wasmtime_wasi_http::p2::HttpError::trap(
-                wasmtime::format_err!("spy: no real request"),
-            ))
-        }
-
-        fn send_request_p3(
-            &self,
-            _workload_id: &str,
-            _request: hyper::Request<crate::host::http_p3::P3Body>,
-            _options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-            _fut: crate::host::http_p3::P3RequestErrorFuture,
-        ) -> crate::host::http_p3::P3SendFuture {
-            unimplemented!("spy does not implement P3")
+            Box::new(async {
+                Err(wasmtime_wasi_http::Error::InternalError(Some(
+                    "spy: no real request".to_string(),
+                )))
+            })
         }
     }
 
@@ -4684,8 +4466,129 @@ mod tests {
         // Explicit `[Any]` policy so the deny-all-on-empty default doesn't
         // short-circuit before reaching the spy.
         let allow_any = [AllowedHost::Any];
-        let _ = server.outgoing_request("test-workload", request, dummy_config(), &allow_any);
+        let _ = server.outgoing_request("test-workload", request, None, no_io(), &allow_any);
         assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// A request the policy refuses must reach the guest as
+    /// `http-request-denied`, and must not reach the transport at all.
+    ///
+    /// wasmtime 48 removed the host's ability to trap out of the outgoing-handler
+    /// hook, so a `wasi:http` 0.2 guest now receives this as a handleable error
+    /// where it used to be killed by a trap — the same semantics 0.3 always had.
+    /// Both versions take this path, so the code is pinned here.
+    #[tokio::test]
+    async fn a_denied_request_reports_denial_and_never_reaches_the_transport() {
+        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server = Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
+            .outgoing_handler(SpyHandler {
+                called: called.clone(),
+            })
+            .build()
+            .await
+            .unwrap();
+        let request = build_request("http://example.com/");
+        // An empty policy denies everything.
+        let result =
+            Box::into_pin(server.outgoing_request("test-workload", request, None, no_io(), &[]))
+                .await;
+        assert!(
+            matches!(result, Err(wasmtime_wasi_http::Error::HttpRequestDenied)),
+            "a denied request should report `http-request-denied`"
+        );
+        assert!(
+            !called.load(std::sync::atomic::Ordering::SeqCst),
+            "a denied request must not reach the outgoing handler"
+        );
+    }
+
+    /// The body of a denied request is drained rather than dropped: a guest that
+    /// uploads while awaiting the response would otherwise see its stream close
+    /// and report that instead of the denial.
+    #[tokio::test]
+    async fn a_denied_request_drains_its_body() {
+        let server = Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
+            .build()
+            .await
+            .unwrap();
+        // A body whose frames are pulled only if someone drains it.
+        struct ChannelBody(
+            tokio::sync::mpsc::Receiver<
+                Result<hyper::body::Frame<bytes::Bytes>, wasmtime_wasi_http::Error>,
+            >,
+        );
+        impl hyper::body::Body for ChannelBody {
+            type Data = bytes::Bytes;
+            type Error = wasmtime_wasi_http::Error;
+            fn poll_frame(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>>
+            {
+                self.0.poll_recv(cx)
+            }
+        }
+
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let body: WasiBody = ChannelBody(rx).boxed_unsync();
+        let request = hyper::Request::builder()
+            .uri("http://example.com/")
+            .body(body)
+            .unwrap();
+
+        let denied =
+            Box::into_pin(server.outgoing_request("test-workload", request, None, no_io(), &[]))
+                .await;
+        assert!(matches!(
+            denied,
+            Err(wasmtime_wasi_http::Error::HttpRequestDenied)
+        ));
+
+        // The drain is what keeps this send from failing: nothing else is
+        // reading, and the channel has capacity for one frame only.
+        for _ in 0..4 {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                tx.send(Ok(hyper::body::Frame::data(bytes::Bytes::from_static(
+                    b"upload",
+                )))),
+            )
+            .await
+            .expect("a denied request should keep draining its body")
+            .expect("the drain should still be listening");
+        }
+    }
+
+    #[tokio::test]
+    async fn denied_body_drain_stops_at_deadline() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct PendingBody(Arc<AtomicBool>);
+        impl Drop for PendingBody {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        impl hyper::body::Body for PendingBody {
+            type Data = bytes::Bytes;
+            type Error = wasmtime_wasi_http::Error;
+
+            fn poll_frame(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>>
+            {
+                std::task::Poll::Pending
+            }
+        }
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        drain_denied_body(
+            PendingBody(Arc::clone(&dropped)).boxed_unsync(),
+            Duration::from_millis(10),
+        )
+        .await;
+        assert!(dropped.load(Ordering::SeqCst));
     }
 
     /// gRPC requests must bypass the OutgoingHandler and go directly to
@@ -4703,13 +4606,13 @@ mod tests {
         let request = hyper::Request::builder()
             .uri("http://example.com/")
             .header(hyper::header::CONTENT_TYPE, "application/grpc")
-            .body(HyperOutgoingBody::default())
+            .body(WasiBody::default())
             .unwrap();
         // `[Any]` lets the policy check pass so the test actually verifies
         // the gRPC dispatch path. With `&[]` (deny-all), the spy would
         // appear "not called" because policy denied — for the wrong reason.
         let allow_any = [AllowedHost::Any];
-        let _ = server.outgoing_request("test-workload", request, dummy_config(), &allow_any);
+        let _ = server.outgoing_request("test-workload", request, None, no_io(), &allow_any);
         assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
     }
 
@@ -4721,7 +4624,6 @@ mod tests {
     async fn timed_body_releases_inner_on_between_bytes_timeout() {
         use http_body_util::BodyExt;
         use std::sync::atomic::{AtomicBool, Ordering};
-        use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
 
         // A body that never yields a frame — guarantees the between-bytes
         // timeout fires. Its `Drop` flips a flag so the test can prove the
@@ -4747,19 +4649,18 @@ mod tests {
         }
 
         let dropped = Arc::new(AtomicBool::new(false));
-        let mut interval = tokio::time::interval(Duration::from_millis(10));
-        interval.reset();
-        let mut body = TimedBody {
-            inner: Some(NeverBody {
+        let mut body = with_body_timeout(
+            hyper::Request::new(NeverBody {
                 dropped: dropped.clone(),
             }),
-            interval,
-        };
+            Duration::from_millis(10),
+        )
+        .into_body();
 
         // Awaiting the next frame parks on the interval until the timeout
         // elapses, then yields the timeout error.
         match body.frame().await {
-            Some(Err(ErrorCode::ConnectionReadTimeout)) => {}
+            Some(Err(wasmtime_wasi_http::Error::ConnectionReadTimeout)) => {}
             other => panic!("expected ConnectionReadTimeout, got {other:?}"),
         }
         assert!(
@@ -4783,7 +4684,7 @@ mod tests {
         }
         impl hyper::body::Body for FramesBody {
             type Data = bytes::Bytes;
-            type Error = wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
+            type Error = wasmtime_wasi_http::Error;
             fn poll_frame(
                 mut self: std::pin::Pin<&mut Self>,
                 _cx: &mut std::task::Context<'_>,
@@ -4801,7 +4702,7 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let inner: HyperOutgoingBody = FramesBody { frames }.boxed_unsync();
+        let inner: WasiBody = FramesBody { frames }.boxed_unsync();
 
         let mut body = MeteredBody::new(inner, tracing::Span::none());
         while body.frame().await.is_some() {}
@@ -4813,27 +4714,18 @@ mod tests {
         );
     }
 
-    /// NullServer must deny P3 outgoing requests with an internal error,
-    /// matching its P2 behaviour of returning "http client not available".
+    /// NullServer must deny outgoing requests with an internal error.
     #[tokio::test]
-    async fn null_server_denies_p3_outgoing_request() {
-        use crate::host::http_p3::{P3Body, P3RequestErrorFuture};
-        use http_body_util::BodyExt;
-
+    async fn null_server_denies_outgoing_request() {
         let server = NullServer::default();
-        let body: P3Body = http_body_util::Empty::new()
-            .map_err(|never| match never {})
-            .boxed_unsync();
-        let request = hyper::Request::builder()
-            .uri("http://example.com/")
-            .body(body)
-            .unwrap();
-        let fut: P3RequestErrorFuture = Box::new(async { Ok(()) });
+        let request = build_request("http://example.com/");
         let result =
-            Box::into_pin(server.outgoing_request_p3("test", request, None, fut, &[])).await;
+            Box::into_pin(server.outgoing_request("test", request, None, no_io(), &[])).await;
+        // A guest-visible `internal-error`, not a trap: `wasi:http` 0.2 used to
+        // trap here, and wasmtime 48's hook has no way to.
         assert!(
-            result.is_err(),
-            "NullServer P3 outgoing request should return an error"
+            matches!(result, Err(wasmtime_wasi_http::Error::InternalError(Some(msg))) if msg == "http client not available"),
+            "NullServer outgoing request should report that no client is available"
         );
     }
 
@@ -5421,39 +5313,36 @@ mod tests {
         );
     }
 
-    /// A P3 caller routed to a P3 callee sees the callee's own `error-code`: the
-    /// request body carries it unchanged, and the p2-typed response channel maps
-    /// it variant for variant rather than into `InternalError`.
+    /// A body error a local dispatch already produced reaches the guest as
+    /// itself: the between-frames clock hands it back unchanged rather than
+    /// reclassifying it as a transport failure, which is what keeps a
+    /// co-located callee's own error-code intact on the way to its caller.
     #[tokio::test]
-    async fn p3_body_errors_survive_the_local_path() {
-        use http_body_util::BodyExt;
-        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode as P2;
-        use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode as P3;
+    async fn an_already_classified_body_error_is_handed_back_unchanged() {
+        use wasmtime_wasi_http::Error;
 
-        struct Failing(Option<P3>);
+        struct Failing(Option<Error>);
         impl hyper::body::Body for Failing {
             type Data = bytes::Bytes;
-            type Error = P3;
+            type Error = Error;
             fn poll_frame(
                 mut self: std::pin::Pin<&mut Self>,
                 _cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Option<Result<hyper::body::Frame<bytes::Bytes>, P3>>> {
+            ) -> std::task::Poll<Option<Result<hyper::body::Frame<bytes::Bytes>, Error>>>
+            {
                 std::task::Poll::Ready(self.0.take().map(Err))
             }
         }
 
-        // Request: P3 caller -> `IncomingBody` -> P3 callee.
-        let request =
-            IncomingBody::new(Failing(Some(P3::HttpRequestBodySize(Some(42)))).map_err(Into::into));
-        let err = request.map_err(P3::from).collect().await.err();
-        assert!(matches!(err, Some(P3::HttpRequestBodySize(Some(42)))));
-
-        // Response: P3 callee -> p2 response channel -> P3 caller.
-        let response = Failing(Some(P3::HttpResponseTimeout))
-            .map_err(P2::from)
-            .map_err(P3::from);
-        let err = response.collect().await.err();
-        assert!(matches!(err, Some(P3::HttpResponseTimeout)));
+        let body = TimedBody::new(
+            Failing(Some(Error::HttpRequestBodySize(Some(42)))).boxed_unsync(),
+            Duration::from_secs(5),
+        );
+        let err = BodyExt::collect(body).await.err();
+        assert!(
+            matches!(err, Some(Error::HttpRequestBodySize(Some(42)))),
+            "expected the callee's own error, got {err:?}"
+        );
     }
 
     /// One unready replica must not send callers to the network while a ready

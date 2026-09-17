@@ -27,11 +27,7 @@ use anyhow::{Context, Result};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::time::timeout;
 
-use wasmtime_wasi_http::p2::{
-    HttpResult,
-    body::HyperOutgoingBody,
-    types::{HostFutureIncomingResponse, OutgoingRequestConfig},
-};
+use wasmtime_wasi_http::{RequestOptions, WasiBody};
 
 use wash_runtime::{
     engine::Engine,
@@ -60,28 +56,11 @@ impl OutgoingHandler for RefuseOutgoingHandler {
     fn send_request(
         &self,
         _workload_id: &str,
-        _request: hyper::Request<HyperOutgoingBody>,
-        _config: OutgoingRequestConfig,
-    ) -> HttpResult<HostFutureIncomingResponse> {
-        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-        let handle =
-            wasmtime_wasi::runtime::spawn(async move { Ok(Err(ErrorCode::ConnectionRefused)) });
-        Ok(HostFutureIncomingResponse::pending(handle))
-    }
-
-    fn send_request_p3(
-        &self,
-        _workload_id: &str,
-        _request: hyper::Request<wash_runtime::host::http_p3::P3Body>,
-        _options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-        _fut: wash_runtime::host::http_p3::P3RequestErrorFuture,
-    ) -> wash_runtime::host::http_p3::P3SendFuture {
-        use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
-        Box::new(async {
-            Err(wasmtime_wasi::TrappableError::from(
-                ErrorCode::ConnectionRefused,
-            ))
-        })
+        _request: hyper::Request<WasiBody>,
+        _options: Option<RequestOptions>,
+        _fut: wash_runtime::host::http::RequestIoFuture,
+    ) -> wash_runtime::host::http::SendFuture {
+        Box::new(async { Err(wasmtime_wasi_http::Error::ConnectionRefused) })
     }
 }
 

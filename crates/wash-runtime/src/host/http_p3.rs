@@ -3,40 +3,18 @@
 //! This module provides the HTTP request handling path for components that
 //! target WASIP3's `wasi:http/handler` interface. It uses wasmtime-wasi-http's
 //! P3 `ServicePre`/`Service` to invoke the component.
-//!
-//! It also exposes the type aliases used at the P3 outgoing-request boundary
-//! ([`P3Body`], [`P3RequestErrorFuture`], [`P3SendFuture`]). The
-//! outgoing-request egress policy itself lives on the unified
-//! [`crate::host::http::OutgoingHandler`] trait via its `send_request_p3` method.
 
 use crate::engine::instance_pool::ComponentInstance;
 use http_body_util::BodyExt;
 use tracing::Instrument;
 use wasmtime_wasi_http::p3::bindings::Service;
-use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
-
-/// Body type used on the P3 outgoing path (also used as the return-body type
-/// for `handle_component_request_p3`).
-pub type P3Body = http_body_util::combinators::UnsyncBoxBody<bytes::Bytes, ErrorCode>;
-
-/// Future returned to the guest to communicate request-side processing errors.
-pub type P3RequestErrorFuture = Box<dyn std::future::Future<Output = Result<(), ErrorCode>> + Send>;
-
-/// Result type returned by the inner future of a P3 outgoing send: a response
-/// paired with an I/O future for response-body errors.
-pub type P3SendResult = Result<
-    (hyper::Response<P3Body>, P3RequestErrorFuture),
-    wasmtime_wasi::TrappableError<ErrorCode>,
->;
-
-/// Future returned by [`crate::host::http::OutgoingHandler::send_request_p3`].
-pub type P3SendFuture = Box<dyn std::future::Future<Output = P3SendResult> + Send>;
+use wasmtime_wasi_http::{Error, WasiBody};
 
 /// Response body that yields frames forwarded from the component task over a
 /// bounded channel. End-of-stream is signalled when the sender (held by the
 /// component task) is dropped.
 struct ChannelBody {
-    rx: tokio::sync::mpsc::Receiver<Result<hyper::body::Frame<bytes::Bytes>, ErrorCode>>,
+    rx: tokio::sync::mpsc::Receiver<Result<hyper::body::Frame<bytes::Bytes>, Error>>,
     /// Aborts the component task when this body is dropped before the stream
     /// completes (e.g. the client disconnects). The abort lands at the guest's
     /// next await, reclaiming a yielding guest at once; a guest that never
@@ -47,7 +25,7 @@ struct ChannelBody {
 
 impl hyper::body::Body for ChannelBody {
     type Data = bytes::Bytes;
-    type Error = ErrorCode;
+    type Error = Error;
 
     fn poll_frame(
         mut self: std::pin::Pin<&mut Self>,
@@ -81,10 +59,10 @@ impl hyper::body::Body for ChannelBody {
 /// applies backpressure to the guest rather than buffering the whole body in
 /// memory.
 pub(crate) async fn handle_component_request_p3(
-    warm: ComponentInstance,
-    req: hyper::Request<crate::host::http::IncomingBody>,
+    mut warm: ComponentInstance,
+    req: hyper::Request<WasiBody>,
     abandoned: std::sync::Arc<crate::engine::abandon::AbandonFlag>,
-) -> anyhow::Result<hyper::Response<P3Body>> {
+) -> anyhow::Result<hyper::Response<WasiBody>> {
     // Named from the store this call was given, the same way `HttpTask` does:
     // the dispatcher does not have to know whose execution it is.
     let attributes =
@@ -92,16 +70,12 @@ pub(crate) async fn handle_component_request_p3(
     // The same store's meter as the attributes, carried in because the closure
     // below is handed an accessor rather than the store.
     let executed = std::sync::Arc::clone(&warm.store.data().executed);
-    // The request body's error is either version's error-code; the guest wants P3.
-    let (parts, body) = req.into_parts();
-    let body = body.map_err(ErrorCode::from).boxed_unsync();
-    let req = hyper::Request::from_parts(parts, body);
-    let (wasi_req, req_io) = wasmtime_wasi_http::p3::Request::from_http(req);
+    let (wasi_req, req_io) = crate::host::http::p3_request(warm.store.data_mut(), req);
 
     // Bounded so a slow client applies backpressure to the guest instead of
     // letting response frames accumulate without limit.
     let (frame_tx, frame_rx) =
-        tokio::sync::mpsc::channel::<Result<hyper::body::Frame<bytes::Bytes>, ErrorCode>>(4);
+        tokio::sync::mpsc::channel::<Result<hyper::body::Frame<bytes::Bytes>, Error>>(4);
     // Delivers the response head (status + headers) as soon as the handler
     // returns it, while the body is still streaming.
     let (parts_tx, parts_rx) =
@@ -175,7 +149,7 @@ pub(crate) async fn handle_component_request_p3(
                         // finished forwarding the body to the client, so a guest
                         // that awaits the result learns whether delivery succeeded.
                         let (finish_tx, finish_rx) =
-                            tokio::sync::oneshot::channel::<Result<(), ErrorCode>>();
+                            tokio::sync::oneshot::channel::<Result<(), Error>>();
                         let http_response = match store.with(|s| {
                             response.into_http(s, async move {
                                 match finish_rx.await {
@@ -213,7 +187,7 @@ pub(crate) async fn handle_component_request_p3(
                         {
                             // Caller dropped the receiver; report the failed
                             // delivery to the guest and stop.
-                            let _ = finish_tx.send(Err(ErrorCode::ConnectionTerminated));
+                            let _ = finish_tx.send(Err(Error::ConnectionTerminated));
                             return Ok(());
                         }
                         let mut delivery = Ok(());
@@ -222,7 +196,7 @@ pub(crate) async fn handle_component_request_p3(
                                 // The hyper response body was dropped (e.g. the
                                 // client disconnected); stop pulling from the guest
                                 // and report the failed delivery.
-                                delivery = Err(ErrorCode::ConnectionTerminated);
+                                delivery = Err(Error::ConnectionTerminated);
                                 break;
                             }
                         }
@@ -255,7 +229,7 @@ pub(crate) async fn handle_component_request_p3(
     let head = parts_rx
         .await
         .map_err(|_| anyhow::anyhow!("P3 component task ended before producing a response"))??;
-    let body: P3Body = ChannelBody {
+    let body: WasiBody = ChannelBody {
         rx: frame_rx,
         _task: task,
     }
@@ -275,7 +249,7 @@ mod tests {
     /// delivered response from an abandoned one.
     #[tokio::test]
     async fn channel_body_reports_end_of_stream_at_rest() {
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, ErrorCode>>(4);
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, Error>>(4);
         let mut body = ChannelBody {
             rx,
             _task: tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async {})),
@@ -307,7 +281,7 @@ mod tests {
     /// its sender.
     #[tokio::test]
     async fn channel_body_streams_frames_incrementally() {
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, ErrorCode>>(4);
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, Error>>(4);
         // Gates the producer's second frame on the consumer acknowledging the
         // first, proving the first was delivered before the producer completed.
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel::<()>();
@@ -360,7 +334,7 @@ mod tests {
     /// `AbortOnDropHandle`) so the guest is cancelled promptly on disconnect.
     #[tokio::test]
     async fn channel_body_drop_aborts_task() {
-        let (_tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, ErrorCode>>(1);
+        let (_tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, Error>>(1);
         let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
         let (gone_tx, gone_rx) = tokio::sync::oneshot::channel::<()>();
 

@@ -202,7 +202,7 @@ async fn plugin_host_release(
             .with_engine(engine.clone())
             .with_http_handler(Arc::clone(&ingress));
         let native_plugins = builder.native_plugins();
-        let http_handler = builder.http_handler();
+        let host_ref = builder.host_ref();
 
         let plugin = ComponentHostPlugin::builder()
             .id("http-egress-plugin")
@@ -210,7 +210,7 @@ async fn plugin_host_release(
             .engine(engine)
             .native_plugins(native_plugins)
             .allowed_hosts(vec!["example.com".parse()?].into())
-            .maybe_http_handler(http_handler.as_ref().map(Arc::downgrade))
+            .maybe_host_ref(Some(host_ref))
             .build()
             .await
             .context("the egress plugin should link cleanly")?;

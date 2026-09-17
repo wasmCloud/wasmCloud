@@ -104,14 +104,14 @@ async fn test_host_component_plugin_imports_native_secrets() -> Result<()> {
         ("db-password".to_string(), "hunter2".to_string()),
     ]);
     let native_plugins = builder.native_plugins();
-    let http_handler = builder.http_handler();
+    let host_ref = builder.host_ref();
     let plugin = ComponentHostPlugin::builder()
         .id(PLUGIN_ID)
         .wasm(CONSUMER_PLUGIN_WASM)
         .engine(engine)
         .native_plugins(native_plugins)
         .config(plugin_config)
-        .maybe_http_handler(http_handler.as_ref().map(Arc::downgrade))
+        .maybe_host_ref(Some(host_ref))
         .build()
         .await
         .context("secrets-consumer-plugin should link against the native secrets plugin")?;
@@ -176,14 +176,14 @@ async fn test_missing_labeled_secret_fails_plugin_construction() -> Result<()> {
     // `db-password` is missing.
     let plugin_config = HashMap::from([("api-key".to_string(), "s3cr3t-value".to_string())]);
     let native_plugins = builder.native_plugins();
-    let http_handler = builder.http_handler();
+    let host_ref = builder.host_ref();
     let result = ComponentHostPlugin::builder()
         .id(PLUGIN_ID)
         .wasm(CONSUMER_PLUGIN_WASM)
         .engine(engine)
         .native_plugins(native_plugins)
         .config(plugin_config)
-        .maybe_http_handler(http_handler.as_ref().map(Arc::downgrade))
+        .maybe_host_ref(Some(host_ref))
         .build()
         .await;
     let Err(err) = result else {

@@ -26,6 +26,7 @@ pub(crate) fn carries_cross_store_handle(ty: &Type) -> bool {
         | Type::Enum(_)
         | Type::Flags(_) => false,
         Type::List(list) => carries_cross_store_handle(&list.ty()),
+        Type::FixedLengthList(list) => carries_cross_store_handle(&list.ty()),
         Type::Map(map) => {
             carries_cross_store_handle(&map.key()) || carries_cross_store_handle(&map.value())
         }
@@ -71,6 +72,13 @@ pub(crate) fn lower(store: &mut StoreContextMut<SharedCtx>, v: &Val) -> wasmtime
                 .map(|v| lower(store, v))
                 .collect::<wasmtime::Result<_>>()?;
             Ok(Val::List(vs))
+        }
+        Val::FixedLengthList(vs) => {
+            let vs = vs
+                .iter()
+                .map(|v| lower(store, v))
+                .collect::<wasmtime::Result<_>>()?;
+            Ok(Val::FixedLengthList(vs))
         }
         Val::Map(vs) => {
             let vs = vs
@@ -257,6 +265,13 @@ pub(crate) fn lift(store: &mut StoreContextMut<SharedCtx>, v: Val) -> wasmtime::
                 .map(|v| lift(store, v))
                 .collect::<wasmtime::Result<_>>()?;
             Ok(Val::List(vs))
+        }
+        Val::FixedLengthList(vs) => {
+            let vs = vs
+                .into_iter()
+                .map(|v| lift(store, v))
+                .collect::<wasmtime::Result<_>>()?;
+            Ok(Val::FixedLengthList(vs))
         }
         Val::Map(vs) => {
             let vs = vs

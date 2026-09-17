@@ -30,7 +30,7 @@
 //! store, which honours `SSL_CERT_FILE`/`SSL_CERT_DIR`) with any explicitly
 //! configured PEM bundles layered on top.
 //!
-//! The per-connection helpers ([`connect_tcp`], [`connect_tls`], the
+//! The per-connection helpers ([`connect_http_tcp`], [`connect_http_tls`], the
 //! connection-worker spawners) follow wasmtime's `default_send_request` error
 //! mappings and serve the gRPC egress fast path in `host::http`, which manages
 //! its own HTTP/2 connections rather than going through the pool.
@@ -55,17 +55,14 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
 use tracing::{debug, warn};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
-use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
-use wasmtime_wasi_http::p2::hyper_request_error;
-use wasmtime_wasi_http::p2::types::{IncomingResponse, OutgoingRequestConfig};
+use wasmtime_wasi_http::{Error as HttpError, RequestOptions, WasiBody};
 
-use crate::host::http_p3::{P3Body, P3RequestErrorFuture};
+use crate::host::http::{RequestIoFuture, SendResult};
 
-/// Error type carried by the unified request body handed to the pooled client.
+/// Error type carried by the request body handed to the pooled client.
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-/// Unified request body: P2 and P3 bodies are mapped into this so a single
-/// connection pool serves both.
+/// Request body the pooled client sends.
 type ClientBody = UnsyncBoxBody<Bytes, BoxError>;
 
 type PoolClient = hyper_util::client::legacy::Client<BoundedConnector, ClientBody>;
@@ -277,61 +274,15 @@ pub fn default_client_tls_config() -> Arc<rustls::ClientConfig> {
         .clone()
 }
 
-/// Transport-level failure while establishing an outbound connection.
+/// A name-resolution failure as wasmtime's `default_send_request` reports it.
 ///
-/// The P2 and P3 egress paths use distinct wasi:http `ErrorCode` types, so the
-/// shared connection helpers report through this enum and each path converts
-/// with the matching `From` impl below (both follow wasmtime's
-/// `default_send_request` mappings).
-#[derive(Debug)]
-pub(crate) enum ConnectError {
-    /// The connect timeout elapsed.
-    Timeout,
-    /// TCP connect failed for a non-DNS reason.
-    Refused,
-    /// Name resolution failed ("address not available").
-    Dns,
-    /// The authority's host is not usable as a TLS server name.
-    InvalidDnsName,
-    /// The TLS handshake failed.
-    Tls,
-}
-
-impl From<ConnectError> for wasmtime_wasi_http::p2::bindings::http::types::ErrorCode {
-    fn from(err: ConnectError) -> Self {
-        use wasmtime_wasi_http::p2::bindings::http::types::{DnsErrorPayload, ErrorCode};
-        let dns_error = |rcode: &str| {
-            ErrorCode::DnsError(DnsErrorPayload {
-                rcode: Some(rcode.to_string()),
-                info_code: Some(0),
-            })
-        };
-        match err {
-            ConnectError::Timeout => ErrorCode::ConnectionTimeout,
-            ConnectError::Refused => ErrorCode::ConnectionRefused,
-            ConnectError::Dns => dns_error("address not available"),
-            ConnectError::InvalidDnsName => dns_error("invalid dns name"),
-            ConnectError::Tls => ErrorCode::TlsProtocolError,
-        }
-    }
-}
-
-impl From<ConnectError> for wasmtime_wasi_http::p3::bindings::http::types::ErrorCode {
-    fn from(err: ConnectError) -> Self {
-        use wasmtime_wasi_http::p3::bindings::http::types::{DnsErrorPayload, ErrorCode};
-        let dns_error = |rcode: &str| {
-            ErrorCode::DnsError(DnsErrorPayload {
-                rcode: Some(rcode.to_string()),
-                info_code: Some(0),
-            })
-        };
-        match err {
-            ConnectError::Timeout => ErrorCode::ConnectionTimeout,
-            ConnectError::Refused => ErrorCode::ConnectionRefused,
-            ConnectError::Dns => dns_error("address not available"),
-            ConnectError::InvalidDnsName => dns_error("invalid dns name"),
-            ConnectError::Tls => ErrorCode::TlsProtocolError,
-        }
+/// `rcode="address not available"` is what it emits for every resolver
+/// failure — misleading, but the error shape guests already match on, so both
+/// transports here emit it too.
+fn dns_error(rcode: &str) -> HttpError {
+    HttpError::DnsError {
+        rcode: Some(rcode.to_string()),
+        info_code: Some(0),
     }
 }
 
@@ -357,20 +308,19 @@ fn is_resolver_error(err: &std::io::Error) -> bool {
     cfg!(windows) && matches!(err.raw_os_error(), Some(11001..=11004))
 }
 
-/// Open a TCP connection to `authority` within `connect_timeout`, mapping
-/// failures the way wasmtime's default transport does.
-pub(crate) async fn connect_tcp(
+/// Open an HTTP TCP connection and return guest-visible connection errors.
+pub(crate) async fn connect_http_tcp(
     authority: &str,
     connect_timeout: Duration,
-) -> Result<TcpStream, ConnectError> {
+) -> Result<TcpStream, HttpError> {
     timeout(connect_timeout, TcpStream::connect(authority))
         .await
-        .map_err(|_| ConnectError::Timeout)?
+        .map_err(|_| HttpError::ConnectionTimeout)?
         .map_err(|e| {
             if is_resolver_error(&e) {
-                ConnectError::Dns
+                dns_error("address not available")
             } else {
-                ConnectError::Refused
+                HttpError::ConnectionRefused
             }
         })
 }
@@ -391,70 +341,42 @@ pub(crate) fn isolated_resumption(tls: &rustls::ClientConfig) -> rustls::ClientC
 
 /// Run a TLS client handshake over an established TCP stream, using
 /// `authority`'s host portion as the SNI server name.
-pub(crate) async fn connect_tls(
+pub(crate) async fn connect_http_tls(
     tls: Arc<rustls::ClientConfig>,
     authority: &str,
     tcp_stream: TcpStream,
-) -> Result<tokio_rustls::client::TlsStream<TcpStream>, ConnectError> {
+) -> Result<tokio_rustls::client::TlsStream<TcpStream>, HttpError> {
     let connector = tokio_rustls::TlsConnector::from(tls);
     let domain = tls_server_name(authority).ok_or_else(|| {
         warn!(authority = %authority, "invalid TLS server name");
-        ConnectError::InvalidDnsName
+        dns_error("invalid dns name")
     })?;
     connector.connect(domain, tcp_stream).await.map_err(|e| {
         warn!("tls protocol error: {e:?}");
-        ConnectError::Tls
+        HttpError::TlsProtocolError
     })
 }
 
-/// Spawn the hyper connection driver for a P2 egress connection.
+/// Spawn the hyper connection driver for an egress connection.
 ///
-/// P2's `IncomingResponse::worker` is an `AbortOnDropJoinHandle<()>`, so a
-/// connection error can only be logged here; body errors still reach the guest
-/// through the response body stream (mirrors wasmtime's
-/// `default_send_request_handler`).
-pub(crate) fn spawn_p2_conn_worker<F>(conn: F) -> AbortOnDropJoinHandle<()>
+/// The returned handle doubles as the request's [`RequestIoFuture`], so a
+/// connection failure is propagated to the guest via [`connection_error`]
+/// rather than dropped.
+pub(crate) fn spawn_conn_worker<F>(conn: F) -> AbortOnDropJoinHandle<Result<(), HttpError>>
 where
     F: Future<Output = Result<(), hyper::Error>> + Send + 'static,
 {
-    wasmtime_wasi::runtime::spawn(async move {
-        if let Err(e) = conn.await {
-            warn!(err = %e, "dropping outbound connection error");
-        }
-    })
+    wasmtime_wasi::runtime::spawn(async move { conn.await.map_err(connection_error) })
 }
 
-/// Spawn the hyper connection driver for a P3 egress connection.
-///
-/// The returned handle doubles as the request-error future handed back to
-/// wasmtime, so a connection failure is propagated to the guest via
-/// [`p3_connection_error`] rather than dropped.
-pub(crate) fn spawn_p3_conn_worker<F>(
-    conn: F,
-) -> AbortOnDropJoinHandle<Result<(), wasmtime_wasi_http::p3::bindings::http::types::ErrorCode>>
-where
-    F: Future<Output = Result<(), hyper::Error>> + Send + 'static,
-{
-    wasmtime_wasi::runtime::spawn(async move { conn.await.map_err(p3_connection_error) })
-}
-
-/// Translate an error from a hyper connection driver into a P3 [`ErrorCode`].
-///
-/// wasmtime's equivalent (`ErrorCode::from_hyper_response_error`) is crate
-/// private, so mirror it here: a timeout becomes `HttpResponseTimeout`, and
-/// everything else falls through to the public request mapping, which already
-/// recovers an `ErrorCode` carried in the error's source chain.
-///
-/// [`ErrorCode`]: wasmtime_wasi_http::p3::bindings::http::types::ErrorCode
-pub(crate) fn p3_connection_error(
-    err: hyper::Error,
-) -> wasmtime_wasi_http::p3::bindings::http::types::ErrorCode {
-    use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
-
+/// Translate an error from a hyper connection or response body, as wasmtime's
+/// `default_send_request` does: a timeout becomes `HttpResponseTimeout`, and
+/// anything else is left for wasmtime to classify.
+pub(crate) fn connection_error(err: hyper::Error) -> HttpError {
     if err.is_timeout() {
-        ErrorCode::HttpResponseTimeout
+        HttpError::HttpResponseTimeout
     } else {
-        ErrorCode::from_hyper_request_error(err)
+        HttpError::Hyper(err)
     }
 }
 
@@ -506,16 +428,15 @@ fn tls_server_name(authority: &str) -> Option<rustls::pki_types::ServerName<'sta
         .map(|name| name.to_owned())
 }
 
-/// Why awaiting a response head failed, before it is mapped to the P2 or P3
-/// `ErrorCode` (which are distinct types).
+/// Why awaiting a response head failed.
+///
+/// A timeout is already the guest's error: `connect_timeout` bounds the wait
+/// for a usable connection, `first_byte_timeout` the head itself. A transport
+/// failure is not yet — it may be hyper's wrapper around the guest's own body
+/// error, which only the caller of [`send_head`] can see.
 enum HeadError {
-    /// No connection became usable within the guest's `connect_timeout`.
-    ConnectTimeout,
-    /// A connection was in hand, but the head did not arrive within the
-    /// guest's `first_byte_timeout`.
-    ReadTimeout,
-    /// The transport failed; [`classify_client_error`] sorts out the cause.
-    Send(hyper_util::client::legacy::Error),
+    Timeout(HttpError),
+    Transport(hyper_util::client::legacy::Error),
 }
 
 /// Resolve once `captured` has a connection, discarding the metadata.
@@ -551,7 +472,9 @@ async fn send_head(
         biased;
         result = &mut send => Some(result),
         () = wait_connected(&mut captured) => None,
-        () = tokio::time::sleep(connect_timeout) => return Err(HeadError::ConnectTimeout),
+        () = tokio::time::sleep(connect_timeout) => {
+            return Err(HeadError::Timeout(HttpError::ConnectionTimeout));
+        }
     };
     let result = match settled {
         // The send resolved before a connection was ever observed — a connect
@@ -559,9 +482,9 @@ async fn send_head(
         Some(result) => result,
         None => timeout(first_byte_timeout, send)
             .await
-            .map_err(|_| HeadError::ReadTimeout)?,
+            .map_err(|_| HeadError::Timeout(HttpError::ConnectionReadTimeout))?,
     };
-    result.map_err(HeadError::Send)
+    result.map_err(HeadError::Transport)
 }
 
 /// Which protocol a connector negotiates, over ALPN for HTTPS and by prior
@@ -679,97 +602,34 @@ impl PooledClient {
         self.tls.clone()
     }
 
-    /// Send a P2 outgoing request through the HTTP/1.1 pool.
-    pub(crate) async fn send_request_p2(
-        &self,
-        request: hyper::Request<HyperOutgoingBody>,
-        config: OutgoingRequestConfig,
-    ) -> Result<IncomingResponse, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> {
-        self.p2(&self.client, request, config).await
-    }
-
-    /// Send a P2 gRPC request through the HTTP/2 pool.
-    pub(crate) async fn send_grpc_request_p2(
-        &self,
-        request: hyper::Request<HyperOutgoingBody>,
-        config: OutgoingRequestConfig,
-    ) -> Result<IncomingResponse, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> {
-        self.p2(&self.grpc, request, config).await
-    }
-
-    async fn p2(
-        &self,
-        pool: &PoolClient,
-        request: hyper::Request<HyperOutgoingBody>,
-        config: OutgoingRequestConfig,
-    ) -> Result<IncomingResponse, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> {
-        let OutgoingRequestConfig {
-            // The URI scheme (validated upstream against this flag) tells the
-            // connector whether to wrap the stream in TLS.
-            use_tls: _,
-            connect_timeout,
-            first_byte_timeout,
-            between_bytes_timeout,
-        } = config;
-        let request = request.map(|body| body.map_err(|e| Box::new(e) as BoxError).boxed_unsync());
-        let resp = send_head(pool, request, connect_timeout, first_byte_timeout)
-            .await
-            .map_err(|err| {
-                use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-                match err {
-                    HeadError::ConnectTimeout => ErrorCode::ConnectionTimeout,
-                    HeadError::ReadTimeout => ErrorCode::ConnectionReadTimeout,
-                    HeadError::Send(e) => classify_client_error(&e).into_p2(),
-                }
-            })?;
-        Ok(IncomingResponse {
-            resp: resp.map(|body| body.map_err(hyper_request_error).boxed_unsync()),
-            // Connection lifecycle is owned by the pool; there is no
-            // per-request connection task to keep alive.
-            worker: None,
-            between_bytes_timeout,
-        })
-    }
-
-    /// Send a P3 outgoing request through the HTTP/1.1 pool.
+    /// Send an outgoing request through the HTTP/1.1 pool.
     ///
     /// The returned future reports the request-body upload outcome to the
     /// guest: `Ok(())` once the body has been fully pulled, or the body's own
     /// error if producing it failed.
-    pub(crate) async fn send_request_p3(
+    pub(crate) async fn send_request(
         &self,
-        request: hyper::Request<P3Body>,
-        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-    ) -> Result<
-        (hyper::Response<P3Body>, P3RequestErrorFuture),
-        wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
-    > {
-        self.p3(&self.client, request, options).await
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+    ) -> SendResult {
+        self.send(&self.client, request, options).await
     }
 
-    /// Send a P3 gRPC request through the HTTP/2 pool.
-    pub(crate) async fn send_grpc_request_p3(
+    /// Send a gRPC request through the HTTP/2 pool.
+    pub(crate) async fn send_grpc_request(
         &self,
-        request: hyper::Request<P3Body>,
-        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-    ) -> Result<
-        (hyper::Response<P3Body>, P3RequestErrorFuture),
-        wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
-    > {
-        self.p3(&self.grpc, request, options).await
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+    ) -> SendResult {
+        self.send(&self.grpc, request, options).await
     }
 
-    async fn p3(
+    async fn send(
         &self,
         pool: &PoolClient,
-        request: hyper::Request<P3Body>,
-        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-    ) -> Result<
-        (hyper::Response<P3Body>, P3RequestErrorFuture),
-        wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
-    > {
-        use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
-
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+    ) -> SendResult {
         let connect_timeout = options
             .and_then(|o| o.connect_timeout)
             .unwrap_or(Duration::from_secs(600));
@@ -781,23 +641,27 @@ impl PooledClient {
             .unwrap_or(Duration::from_secs(600));
 
         let (parts, body) = request.into_parts();
-        let (body, io) = UploadProbe::new(body);
+        let (body, mut upload_rx) = UploadProbe::new(body);
         let body = body.map_err(|e| Box::new(e) as BoxError).boxed_unsync();
         let request = hyper::Request::from_parts(parts, body);
 
         let resp = send_head(pool, request, connect_timeout, first_byte_timeout)
             .await
             .map_err(|err| match err {
-                HeadError::ConnectTimeout => ErrorCode::ConnectionTimeout,
-                HeadError::ReadTimeout => ErrorCode::ConnectionReadTimeout,
-                HeadError::Send(e) => classify_client_error(&e).into_p3(),
+                HeadError::Timeout(err) => err,
+                // The guest's own body error, when that is what failed, rather
+                // than the transport error hyper wrapped the marker in.
+                HeadError::Transport(e) => match upload_rx.try_recv() {
+                    Ok(Err(body_err)) => body_err,
+                    _ => classify_client_error(&e),
+                },
             })?;
 
         let resp = resp.map(|body| {
             crate::host::http::TimedBody::new(body, between_bytes_timeout).boxed_unsync()
         });
 
-        Ok((resp, io))
+        Ok((resp, upload_io(upload_rx)))
     }
 }
 
@@ -1147,23 +1011,26 @@ impl Connection for PermittedStream {
 
 /// Request body wrapper that reports the upload outcome over a oneshot once
 /// the body has been fully pulled (or fails).
+///
+/// A failure is *moved* into the oneshot, and hyper is handed a marker in its
+/// place: [`HttpError`] is `#[non_exhaustive]` and not `Clone`, so copying one
+/// would mean maintaining a hand-written clone of an upstream enum. The
+/// oneshot is the only reader that matters — [`PooledClient::send`] takes the
+/// error from it, whether the request failed before the head or after it.
 pub(crate) struct UploadProbe {
-    inner: P3Body,
-    done: Option<
-        tokio::sync::oneshot::Sender<
-            Result<(), wasmtime_wasi_http::p3::bindings::http::types::ErrorCode>,
-        >,
-    >,
+    inner: WasiBody,
+    done: Option<tokio::sync::oneshot::Sender<Result<(), HttpError>>>,
 }
 
+/// The outcome channel of an [`UploadProbe`], which a sender both reads
+/// directly — to prefer the guest's own body error over hyper's wrapper — and
+/// hands to the guest as its request-error future.
+pub(crate) type UploadOutcome = tokio::sync::oneshot::Receiver<Result<(), HttpError>>;
+
 impl UploadProbe {
-    /// Wrap `inner`, returning the request-error future that resolves with its
-    /// upload outcome. A body dropped before completing, e.g. by a server that
-    /// responded without draining it, is not a guest-visible failure.
-    pub(crate) fn new(inner: P3Body) -> (Self, P3RequestErrorFuture) {
+    /// Wrap `inner`, returning the channel its upload outcome arrives on.
+    pub(crate) fn new(inner: WasiBody) -> (Self, UploadOutcome) {
         let (done, outcome) = tokio::sync::oneshot::channel();
-        let outcome: P3RequestErrorFuture =
-            Box::new(async move { outcome.await.unwrap_or(Ok(())) });
         (
             Self {
                 inner,
@@ -1174,9 +1041,16 @@ impl UploadProbe {
     }
 }
 
+/// The guest's request-error future for a body wrapped by [`UploadProbe`]. A
+/// body dropped before completing, e.g. by a server that responded without
+/// draining it, is not a guest-visible failure.
+pub(crate) fn upload_io(outcome: UploadOutcome) -> RequestIoFuture {
+    Box::new(async move { outcome.await.unwrap_or(Ok(())) })
+}
+
 impl hyper::body::Body for UploadProbe {
     type Data = Bytes;
-    type Error = wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
+    type Error = HttpError;
 
     fn poll_frame(
         mut self: std::pin::Pin<&mut Self>,
@@ -1191,10 +1065,17 @@ impl hyper::body::Body for UploadProbe {
                 Poll::Ready(None)
             }
             Poll::Ready(Some(Err(err))) => {
-                if let Some(done) = self.done.take() {
-                    let _ = done.send(Err(err.clone()));
+                match self.done.take() {
+                    // Sent before hyper can observe the failure, so `send` finds
+                    // it waiting.
+                    Some(done) => {
+                        let _ = done.send(Err(err));
+                        Poll::Ready(Some(Err(HttpError::InternalError(Some(
+                            "request body failed".to_string(),
+                        )))))
+                    }
+                    None => Poll::Ready(Some(Err(err))),
                 }
-                Poll::Ready(Some(Err(err)))
             }
             other => other,
         }
@@ -1206,63 +1087,6 @@ impl hyper::body::Body for UploadProbe {
 
     fn size_hint(&self) -> hyper::body::SizeHint {
         self.inner.size_hint()
-    }
-}
-
-/// Protocol-agnostic classification of a pooled-client send error, mapped to
-/// the P2/P3 `ErrorCode` variants below.
-enum SendError {
-    /// Name resolution failed. Deliberately mapped to the same misleading
-    /// `rcode="address not available"` DNS payload wasmtime's default
-    /// transport emits, so guests that already match on that error shape see
-    /// no change.
-    Dns,
-    ConnectionTimeout,
-    ConnectionRefused,
-    TlsProtocol,
-    /// The guest-provided request body failed while being uploaded.
-    P2Body(wasmtime_wasi_http::p2::bindings::http::types::ErrorCode),
-    P3Body(wasmtime_wasi_http::p3::bindings::http::types::ErrorCode),
-    Protocol(String),
-}
-
-impl SendError {
-    fn into_p2(self) -> wasmtime_wasi_http::p2::bindings::http::types::ErrorCode {
-        use wasmtime_wasi_http::p2::bindings::http::types::{DnsErrorPayload, ErrorCode};
-        match self {
-            SendError::Dns => ErrorCode::DnsError(DnsErrorPayload {
-                rcode: Some("address not available".to_string()),
-                info_code: Some(0),
-            }),
-            SendError::ConnectionTimeout => ErrorCode::ConnectionTimeout,
-            SendError::ConnectionRefused => ErrorCode::ConnectionRefused,
-            SendError::TlsProtocol => ErrorCode::TlsProtocolError,
-            SendError::P2Body(code) => code,
-            SendError::P3Body(_) => ErrorCode::HttpProtocolError,
-            SendError::Protocol(msg) => {
-                warn!(err = %msg, "outbound HTTP protocol error");
-                ErrorCode::HttpProtocolError
-            }
-        }
-    }
-
-    fn into_p3(self) -> wasmtime_wasi_http::p3::bindings::http::types::ErrorCode {
-        use wasmtime_wasi_http::p3::bindings::http::types::{DnsErrorPayload, ErrorCode};
-        match self {
-            SendError::Dns => ErrorCode::DnsError(DnsErrorPayload {
-                rcode: Some("address not available".to_string()),
-                info_code: Some(0),
-            }),
-            SendError::ConnectionTimeout => ErrorCode::ConnectionTimeout,
-            SendError::ConnectionRefused => ErrorCode::ConnectionRefused,
-            SendError::TlsProtocol => ErrorCode::TlsProtocolError,
-            SendError::P3Body(code) => code,
-            SendError::P2Body(_) => ErrorCode::HttpProtocolError,
-            SendError::Protocol(msg) => {
-                warn!(err = %msg, "outbound HTTP protocol error");
-                ErrorCode::HttpProtocolError
-            }
-        }
     }
 }
 
@@ -1341,47 +1165,35 @@ fn find_in_chain<'a, T: std::error::Error + 'static>(
 /// re-diff this against `wasmtime_wasi_http`'s mapping; the
 /// `connect_failures_classify_to_dns_and_refused` test pins the two
 /// classifications guests most commonly match on.
-fn classify_client_error(err: &hyper_util::client::legacy::Error) -> SendError {
-    // A guest body error travels through hyper wrapped in our BoxError; give
-    // it back to the guest unchanged.
-    if let Some(code) =
-        find_in_chain::<wasmtime_wasi_http::p2::bindings::http::types::ErrorCode>(err)
-    {
-        return SendError::P2Body(code.clone());
-    }
-    if let Some(code) =
-        find_in_chain::<wasmtime_wasi_http::p3::bindings::http::types::ErrorCode>(err)
-    {
-        return SendError::P3Body(code.clone());
-    }
-
+fn classify_client_error(err: &hyper_util::client::legacy::Error) -> HttpError {
     if err.is_connect() {
         if find_in_chain::<rustls::pki_types::InvalidDnsNameError>(err).is_some() {
             warn!(err = %format!("{err:?}"), "outbound TLS protocol error");
-            return SendError::TlsProtocol;
+            return HttpError::TlsProtocolError;
         }
         if let Some(io) = find_in_chain::<std::io::Error>(err) {
             let facts = unwrap_io_error(io);
             if facts.tls {
                 warn!(err = %format!("{err:?}"), "outbound TLS protocol error");
-                return SendError::TlsProtocol;
+                return HttpError::TlsProtocolError;
             }
             return match facts.kind {
-                std::io::ErrorKind::AddrNotAvailable => SendError::Dns,
-                std::io::ErrorKind::TimedOut => SendError::ConnectionTimeout,
-                _ if facts.resolver => SendError::Dns,
-                _ => SendError::ConnectionRefused,
+                std::io::ErrorKind::AddrNotAvailable => dns_error("address not available"),
+                std::io::ErrorKind::TimedOut => HttpError::ConnectionTimeout,
+                _ if facts.resolver => dns_error("address not available"),
+                _ => HttpError::ConnectionRefused,
             };
         }
-        return SendError::ConnectionRefused;
+        return HttpError::ConnectionRefused;
     }
 
     if let Some(hyper_err) = find_in_chain::<hyper::Error>(err)
         && hyper_err.is_timeout()
     {
-        return SendError::ConnectionTimeout;
+        return HttpError::ConnectionTimeout;
     }
-    SendError::Protocol(format!("{err:?}"))
+    warn!(err = %format!("{err:?}"), "outbound HTTP protocol error");
+    HttpError::HttpProtocolError
 }
 
 #[cfg(test)]
@@ -1609,28 +1421,27 @@ mod tests {
         (addr, conns)
     }
 
-    fn grpc_request(uri: &str) -> hyper::Request<HyperOutgoingBody> {
+    fn grpc_request(uri: &str) -> hyper::Request<WasiBody> {
         hyper::Request::builder()
             .uri(uri)
             .method(hyper::Method::POST)
             .header(hyper::header::CONTENT_TYPE, "application/grpc")
-            .body(HyperOutgoingBody::default())
+            .body(WasiBody::default())
             .unwrap()
     }
 
-    fn p2_config(use_tls: bool) -> OutgoingRequestConfig {
-        OutgoingRequestConfig {
-            use_tls,
-            connect_timeout: Duration::from_secs(5),
-            first_byte_timeout: Duration::from_secs(5),
-            between_bytes_timeout: Duration::from_secs(5),
-        }
+    fn test_options() -> Option<RequestOptions> {
+        Some(RequestOptions {
+            connect_timeout: Some(Duration::from_secs(5)),
+            first_byte_timeout: Some(Duration::from_secs(5)),
+            between_bytes_timeout: Some(Duration::from_secs(5)),
+        })
     }
 
-    fn p2_request(uri: &str) -> hyper::Request<HyperOutgoingBody> {
+    fn request(uri: &str) -> hyper::Request<WasiBody> {
         hyper::Request::builder()
             .uri(uri)
-            .body(HyperOutgoingBody::default())
+            .body(WasiBody::default())
             .unwrap()
     }
 
@@ -1644,13 +1455,13 @@ mod tests {
         let client = PooledClient::new(default_client_tls_config());
 
         for _ in 0..20 {
-            let response = client
-                .send_request_p2(p2_request(&format!("http://{addr}/")), p2_config(false))
+            let (response, _io) = client
+                .send_request(request(&format!("http://{addr}/")), test_options())
                 .await
                 .expect("request should succeed");
-            assert_eq!(response.resp.status(), 200);
+            assert_eq!(response.status(), 200);
             // Drain the body so the connection is returned to the pool.
-            let _ = response.resp.into_body().collect().await;
+            let _ = response.into_body().collect().await;
         }
 
         let opened = conns.load(std::sync::atomic::Ordering::SeqCst);
@@ -1672,13 +1483,13 @@ mod tests {
         for workload_id in ["workload-a", "workload-b"] {
             let client = clients.client(workload_id);
             for _ in 0..10 {
-                let response = client
-                    .send_request_p2(p2_request(&uri), p2_config(false))
+                let (response, _io) = client
+                    .send_request(request(&uri), test_options())
                     .await
                     .expect("request should succeed");
-                assert_eq!(response.resp.status(), 200);
+                assert_eq!(response.status(), 200);
                 // Drain the body so the connection is returned to the pool.
-                let _ = response.resp.into_body().collect().await;
+                let _ = response.into_body().collect().await;
             }
         }
 
@@ -1693,15 +1504,6 @@ mod tests {
         );
     }
 
-    fn p3_request(uri: &str) -> hyper::Request<P3Body> {
-        hyper::Request::builder()
-            .uri(uri)
-            .body(P3Body::new(
-                http_body_util::Empty::new().map_err(|_: std::convert::Infallible| unreachable!()),
-            ))
-            .unwrap()
-    }
-
     /// A guest may set any `between-bytes-timeout`, including zero, and
     /// `tokio::time::interval` panics on a zero period — so the response-body
     /// wrapper must clamp it rather than take the host down.
@@ -1709,14 +1511,14 @@ mod tests {
     async fn zero_between_bytes_timeout_is_not_a_panic() {
         let (addr, _conns) = spawn_counting_server().await;
         let client = PooledClient::new(default_client_tls_config());
-        let options = wasmtime_wasi_http::p3::RequestOptions {
+        let options = RequestOptions {
             connect_timeout: None,
             first_byte_timeout: None,
             between_bytes_timeout: Some(Duration::ZERO),
         };
 
         let (response, _io) = client
-            .send_request_p3(p3_request(&format!("http://{addr}/")), Some(options))
+            .send_request(request(&format!("http://{addr}/")), Some(options))
             .await
             .expect("a zero between-bytes timeout must not fail the request head");
         assert_eq!(response.status(), 200);
@@ -1738,19 +1540,18 @@ mod tests {
         let (addr, _conns) = spawn_counting_server_with_delay(Duration::from_millis(400)).await;
         let client = PooledClient::new(default_client_tls_config());
 
-        let response = client
-            .send_request_p2(
-                p2_request(&format!("http://{addr}/")),
-                OutgoingRequestConfig {
-                    use_tls: false,
-                    connect_timeout: Duration::from_millis(150),
-                    first_byte_timeout: Duration::from_secs(5),
-                    between_bytes_timeout: Duration::from_secs(5),
-                },
+        let (response, _io) = client
+            .send_request(
+                request(&format!("http://{addr}/")),
+                Some(RequestOptions {
+                    connect_timeout: Some(Duration::from_millis(150)),
+                    first_byte_timeout: Some(Duration::from_secs(5)),
+                    between_bytes_timeout: Some(Duration::from_secs(5)),
+                }),
             )
             .await
             .expect("a slow head must not be charged against the connect deadline");
-        assert_eq!(response.resp.status(), 200);
+        assert_eq!(response.status(), 200);
     }
 
     /// When no connection can be had, it is the guest's `connect_timeout`
@@ -1765,8 +1566,6 @@ mod tests {
     /// deadline was the one being honoured.
     #[tokio::test]
     async fn connect_timeout_fires_before_the_first_byte_deadline() {
-        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-
         let connect_timeout = TEST_PERMIT_WAIT / 5;
         let (addr, _conns) = spawn_counting_server_with_delay(TEST_PERMIT_WAIT * 2).await;
         let clients = WorkloadClients::with_quotas(default_client_tls_config(), test_quotas(1, 1));
@@ -1776,32 +1575,32 @@ mod tests {
         let busy = clients.client("workload-a");
         let busy_uri = uri.clone();
         let busy = tokio::spawn(async move {
-            let response = busy
-                .send_request_p2(p2_request(&busy_uri), p2_config(false))
+            let (response, _io) = busy
+                .send_request(request(&busy_uri), test_options())
                 .await
                 .expect("the first request should get the only connection");
-            let _ = response.resp.into_body().collect().await;
+            let _ = response.into_body().collect().await;
         });
         tokio::time::sleep(Duration::from_millis(150)).await;
 
         let started = tokio::time::Instant::now();
         let err = clients
             .client("workload-b")
-            .send_request_p2(
-                p2_request(&uri),
-                OutgoingRequestConfig {
-                    use_tls: false,
-                    connect_timeout,
-                    first_byte_timeout: Duration::from_secs(30),
-                    between_bytes_timeout: Duration::from_secs(30),
-                },
+            .send_request(
+                request(&uri),
+                Some(RequestOptions {
+                    connect_timeout: Some(connect_timeout),
+                    first_byte_timeout: Some(Duration::from_secs(30)),
+                    between_bytes_timeout: Some(Duration::from_secs(30)),
+                }),
             )
             .await
-            .expect_err("no slot is available, so the connect deadline must expire");
+            .err()
+            .expect("no slot is available, so the connect deadline must expire");
         let elapsed = started.elapsed();
 
         assert!(
-            matches!(err, ErrorCode::ConnectionTimeout),
+            matches!(err, HttpError::ConnectionTimeout),
             "expected ConnectionTimeout, got {err:?}"
         );
         assert!(
@@ -1823,22 +1622,22 @@ mod tests {
         let uri = format!("http://{addr}/");
 
         let client = clients.client("workload-a");
-        let response = client
-            .send_request_p2(p2_request(&uri), p2_config(false))
+        let (response, _io) = client
+            .send_request(request(&uri), test_options())
             .await
             .expect("request should succeed");
-        let _ = response.resp.into_body().collect().await;
+        let _ = response.into_body().collect().await;
         drop(client);
         assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 1);
 
         clients.invalidate("workload-a");
 
         let client = clients.client("workload-a");
-        let response = client
-            .send_request_p2(p2_request(&uri), p2_config(false))
+        let (response, _io) = client
+            .send_request(request(&uri), test_options())
             .await
             .expect("request should succeed");
-        let _ = response.resp.into_body().collect().await;
+        let _ = response.into_body().collect().await;
         assert_eq!(
             conns.load(std::sync::atomic::Ordering::SeqCst),
             2,
@@ -1856,12 +1655,12 @@ mod tests {
         let uri = format!("http://{addr}/svc.Test/Call");
 
         for _ in 0..20 {
-            let response = client
-                .send_grpc_request_p2(grpc_request(&uri), p2_config(false))
+            let (response, _io) = client
+                .send_grpc_request(grpc_request(&uri), test_options())
                 .await
                 .expect("gRPC request should succeed");
-            assert_eq!(response.resp.status(), 200);
-            let _ = response.resp.into_body().collect().await;
+            assert_eq!(response.status(), 200);
+            let _ = response.into_body().collect().await;
         }
 
         let opened = conns.load(std::sync::atomic::Ordering::SeqCst);
@@ -1876,8 +1675,6 @@ mod tests {
     /// cannot evade its cap by switching protocols.
     #[tokio::test]
     async fn grpc_and_http_egress_share_the_workload_quota() {
-        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-
         let (grpc_addr, _grpc_conns) = spawn_counting_h2c_server().await;
         let (http_addr, http_conns) = spawn_counting_server().await;
         let clients =
@@ -1886,29 +1683,29 @@ mod tests {
 
         // One gRPC connection, left idle in the h2 pool still holding the
         // workload's only permit.
-        let response = client
-            .send_grpc_request_p2(
+        let (response, _io) = client
+            .send_grpc_request(
                 grpc_request(&format!("http://{grpc_addr}/svc.Test/Call")),
-                p2_config(false),
+                test_options(),
             )
             .await
             .expect("gRPC request should succeed");
-        let _ = response.resp.into_body().collect().await;
+        let _ = response.into_body().collect().await;
 
         let err = client
-            .send_request_p2(
-                p2_request(&format!("http://{http_addr}/")),
-                OutgoingRequestConfig {
-                    use_tls: false,
-                    connect_timeout: TEST_PERMIT_WAIT / 5,
-                    first_byte_timeout: Duration::from_secs(30),
-                    between_bytes_timeout: Duration::from_secs(30),
-                },
+            .send_request(
+                request(&format!("http://{http_addr}/")),
+                Some(RequestOptions {
+                    connect_timeout: Some(TEST_PERMIT_WAIT / 5),
+                    first_byte_timeout: Some(Duration::from_secs(30)),
+                    between_bytes_timeout: Some(Duration::from_secs(30)),
+                }),
             )
             .await
-            .expect_err("the gRPC connection holds the workload's only permit");
+            .err()
+            .expect("the gRPC connection holds the workload's only permit");
         assert!(
-            matches!(err, ErrorCode::ConnectionTimeout),
+            matches!(err, HttpError::ConnectionTimeout),
             "expected ConnectionTimeout, got {err:?}"
         );
         assert_eq!(
@@ -1934,11 +1731,11 @@ mod tests {
         let busy_client = clients.client("workload-a");
         let busy_uri = uri.clone();
         let busy = tokio::spawn(async move {
-            if let Ok(response) = busy_client
-                .send_request_p2(p2_request(&busy_uri), p2_config(false))
+            if let Ok((response, _io)) = busy_client
+                .send_request(request(&busy_uri), test_options())
                 .await
             {
-                let _ = response.resp.into_body().collect().await;
+                let _ = response.into_body().collect().await;
             }
         });
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1972,8 +1769,6 @@ mod tests {
     /// them as connection-refused.
     #[tokio::test]
     async fn connect_failures_classify_to_dns_and_refused() {
-        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-
         let client = PooledClient::new(default_client_tls_config());
 
         // RFC 6761 reserves `.invalid`: resolution always fails.
@@ -1981,22 +1776,25 @@ mod tests {
         // The generous `connect_timeout` is load-bearing. [`send_head`] races
         // the send against that deadline, so a resolver slow to answer — a
         // GitHub macOS runner walking its search domains has needed more than
-        // the 5s [`p2_config`] hands out — lets the timeout arm win and the
+        // the 5s [`test_options`] hands out — lets the timeout arm win and the
         // assertion below reads `ConnectionTimeout`. What is pinned here is how
         // a resolver failure classifies, not how fast the ambient resolver
         // reports one.
         let err = client
-            .send_request_p2(
-                p2_request("http://definitely-not-a-real-host.invalid/"),
-                OutgoingRequestConfig {
-                    connect_timeout: Duration::from_secs(60),
-                    ..p2_config(false)
-                },
+            .send_request(
+                request("http://definitely-not-a-real-host.invalid/"),
+                Some(RequestOptions {
+                    connect_timeout: Some(Duration::from_secs(60)),
+                    // The rest stay short: a head that hangs should fail this
+                    // test by name rather than park until the suite times out.
+                    ..test_options().unwrap_or_default()
+                }),
             )
             .await
-            .expect_err("resolution must fail");
+            .err()
+            .expect("resolution must fail");
         assert!(
-            matches!(err, ErrorCode::DnsError(_)),
+            matches!(err, HttpError::DnsError { .. }),
             "expected DnsError, got {err:?}"
         );
 
@@ -2005,14 +1803,15 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         let err = client
-            .send_request_p2(
-                p2_request(&format!("http://127.0.0.1:{port}/")),
-                p2_config(false),
+            .send_request(
+                request(&format!("http://127.0.0.1:{port}/")),
+                test_options(),
             )
             .await
-            .expect_err("connect must be refused");
+            .err()
+            .expect("connect must be refused");
         assert!(
-            matches!(err, ErrorCode::ConnectionRefused),
+            matches!(err, HttpError::ConnectionRefused),
             "expected ConnectionRefused, got {err:?}"
         );
     }
@@ -2046,16 +1845,16 @@ mod tests {
         port
     }
 
-    /// The response body must keep streaming after the head on the pooled P3
+    /// The response body must keep streaming after the head on the pooled
     /// path, including when the request-error future has already been driven
     /// to completion — connection lifetime belongs to the pool, not to that
     /// future.
     #[tokio::test]
-    async fn p3_body_streams_after_head_on_pooled_connection() {
+    async fn body_streams_after_head_on_pooled_connection() {
         let port = delayed_body_server(Duration::from_millis(300)).await;
         let client = PooledClient::new(default_client_tls_config());
         let (response, io) = client
-            .send_request_p3(p3_request(&format!("http://127.0.0.1:{port}/")), None)
+            .send_request(request(&format!("http://127.0.0.1:{port}/")), None)
             .await
             .expect("request should succeed");
 
@@ -2076,25 +1875,30 @@ mod tests {
     /// body dropped unread resolves as success.
     #[tokio::test]
     async fn upload_probe_reports_the_body_outcome() {
-        use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
-
         struct FailingBody;
         impl hyper::body::Body for FailingBody {
             type Data = Bytes;
-            type Error = ErrorCode;
+            type Error = HttpError;
             fn poll_frame(
                 self: std::pin::Pin<&mut Self>,
                 _cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, ErrorCode>>> {
-                std::task::Poll::Ready(Some(Err(ErrorCode::HttpProtocolError)))
+            ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, HttpError>>> {
+                std::task::Poll::Ready(Some(Err(HttpError::HttpProtocolError)))
             }
         }
 
+        // The error is moved, so the guest's own future gets it and whoever is
+        // reading the body — hyper, or a co-located callee on the local path —
+        // gets told only that it failed, as a network peer would be.
         let (probe, outcome) = UploadProbe::new(FailingBody.boxed_unsync());
-        assert!(BodyExt::collect(probe).await.is_err());
+        let seen_by_reader = BodyExt::collect(probe).await.err();
+        assert!(
+            matches!(seen_by_reader, Some(HttpError::InternalError(Some(ref m))) if m == "request body failed"),
+            "the body's reader must see the failure marker, got {seen_by_reader:?}"
+        );
         assert!(matches!(
-            Box::into_pin(outcome).await,
-            Err(ErrorCode::HttpProtocolError)
+            Box::into_pin(upload_io(outcome)).await,
+            Err(HttpError::HttpProtocolError)
         ));
 
         let empty = http_body_util::Empty::<Bytes>::new()
@@ -2102,7 +1906,7 @@ mod tests {
             .boxed_unsync();
         let (probe, outcome) = UploadProbe::new(empty);
         drop(probe);
-        assert!(Box::into_pin(outcome).await.is_ok());
+        assert!(Box::into_pin(upload_io(outcome)).await.is_ok());
     }
 
     /// A server that hangs up mid-body must surface as an error on the
@@ -2111,7 +1915,7 @@ mod tests {
     /// through `TimedBody`'s error mapping — pin it here (ported from the
     /// per-request transport's test suite).
     #[tokio::test]
-    async fn p3_truncated_body_surfaces_as_body_error() {
+    async fn truncated_body_surfaces_as_body_error() {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2130,7 +1934,7 @@ mod tests {
 
         let client = PooledClient::new(default_client_tls_config());
         let (response, io) = client
-            .send_request_p3(p3_request(&format!("http://127.0.0.1:{port}/")), None)
+            .send_request(request(&format!("http://127.0.0.1:{port}/")), None)
             .await
             .expect("response head should arrive");
         let io = wasmtime_wasi::runtime::spawn(async move { Box::into_pin(io).await });
@@ -2142,12 +1946,19 @@ mod tests {
         .await
         .expect("body read should not hang")
         .expect_err("a truncated body must not read as success");
-        assert!(
-            matches!(
-                err,
-                wasmtime_wasi_http::p3::bindings::http::types::ErrorCode::HttpProtocolError
-            ),
-            "expected HttpProtocolError, got {err:?}"
+        // The truncation itself, not merely "some hyper error": a body that ends
+        // early carries an `UnexpectedEof`. wasmtime turns this into
+        // `HttpProtocolError` for the guest.
+        let HttpError::Hyper(hyper_err) = &err else {
+            panic!("expected a hyper error, got {err:?}");
+        };
+        let truncated = std::error::Error::source(hyper_err)
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .map(std::io::Error::kind);
+        assert_eq!(
+            truncated,
+            Some(std::io::ErrorKind::UnexpectedEof),
+            "expected a truncated body, got {err:?}"
         );
         drop(io);
     }
@@ -2167,13 +1978,13 @@ mod tests {
             let client = clients.client("workload-a");
             let uri = uri.clone();
             async move {
-                let response = client
-                    .send_request_p2(p2_request(&uri), p2_config(false))
+                let (response, _io) = client
+                    .send_request(request(&uri), test_options())
                     .await
                     .expect("request should succeed despite waiting for a connection");
-                assert_eq!(response.resp.status(), 200);
+                assert_eq!(response.status(), 200);
                 // Drain the body so the connection is returned to the pool.
-                let _ = response.resp.into_body().collect().await;
+                let _ = response.into_body().collect().await;
             }
         });
         futures::future::join_all(requests).await;
@@ -2200,12 +2011,12 @@ mod tests {
             let client = clients.client("workload-a");
             let uri = uri.clone();
             async move {
-                let response = client
-                    .send_request_p2(p2_request(&uri), p2_config(false))
+                let (response, _io) = client
+                    .send_request(request(&uri), test_options())
                     .await
                     .expect("request should succeed despite waiting for a connection");
-                assert_eq!(response.resp.status(), 200);
-                let _ = response.resp.into_body().collect().await;
+                assert_eq!(response.status(), 200);
+                let _ = response.into_body().collect().await;
             }
         });
         futures::future::join_all(requests).await;
@@ -2238,11 +2049,11 @@ mod tests {
         // Workload B can now connect instead of starving on permits pinned by
         // A's idle pool.
         let client_b = clients.client("workload-b");
-        let response = client_b
-            .send_request_p2(p2_request(&uri), p2_config(false))
+        let (response, _io) = client_b
+            .send_request(request(&uri), test_options())
             .await
             .expect("workload B should connect once A's permits are released");
-        assert_eq!(response.resp.status(), 200);
+        assert_eq!(response.status(), 200);
     }
 
     /// Spawn an HTTP/1.1-over-TLS server whose certificate chains to a private
@@ -2302,8 +2113,6 @@ mod tests {
     /// via `extra_ca_paths`, and must keep failing with a TLS error without it.
     #[tokio::test]
     async fn extra_ca_enables_https_to_private_ca_server() {
-        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-
         let (port, ca_pem) = private_ca_tls_server().await;
         let dir = tempfile::tempdir().unwrap();
         let ca_path = dir.path().join("ca.pem");
@@ -2312,14 +2121,15 @@ mod tests {
         // Without the CA: the handshake must fail with a TLS error.
         let default_client = PooledClient::new(default_client_tls_config());
         let err = default_client
-            .send_request_p2(
-                p2_request(&format!("https://127.0.0.1:{port}/")),
-                p2_config(true),
+            .send_request(
+                request(&format!("https://127.0.0.1:{port}/")),
+                test_options(),
             )
             .await
-            .expect_err("untrusted CA must fail");
+            .err()
+            .expect("untrusted CA must fail");
         assert!(
-            matches!(err, ErrorCode::TlsProtocolError),
+            matches!(err, HttpError::TlsProtocolError),
             "expected TlsProtocolError, got {err:?}"
         );
 
@@ -2331,13 +2141,13 @@ mod tests {
         .build()
         .unwrap();
         let client = PooledClient::new(tls);
-        let response = client
-            .send_request_p2(
-                p2_request(&format!("https://127.0.0.1:{port}/")),
-                p2_config(true),
+        let (response, _io) = client
+            .send_request(
+                request(&format!("https://127.0.0.1:{port}/")),
+                test_options(),
             )
             .await
             .expect("request with the private CA trusted should succeed");
-        assert_eq!(response.resp.status(), 200);
+        assert_eq!(response.status(), 200);
     }
 }

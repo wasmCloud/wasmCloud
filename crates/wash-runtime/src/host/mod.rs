@@ -338,14 +338,76 @@ pub struct Host {
     pub(crate) http_handler: std::sync::Arc<dyn crate::host::http::HostHandler>,
     /// Keeps the HTTP ingress marked as host-owned for this host's lifetime.
     _port_reservations: Vec<crate::host::ports::PortReservation>,
+    /// This host's own lifetime, handed out weakly; see [`HostLifetime`].
+    lifetime: Arc<HostLifetime>,
     config: HostConfig,
     meters: Meters,
+}
+
+/// A token whose lifetime is a [`Host`]'s.
+///
+/// Only the builder and host hold this token strongly. Callers get weak refs.
+struct HostLifetime(());
+
+/// A weak link to a host's lifetime and optional HTTP handler. Every guest
+/// store uses the lifetime check, even without HTTP egress.
+///
+/// Weak throughout, and for the handler deliberately so — see
+/// [`crate::host::http::live_handler`].
+#[derive(Clone)]
+pub struct HostRef {
+    handler: Option<std::sync::Weak<dyn crate::host::http::HostHandler>>,
+    /// `None` for a reference built from a handler alone, by an embedder
+    /// wiring stores up without a [`Host`]: there is no host whose teardown
+    /// could be detected, which [`Self::host_is_gone`] answers honestly rather
+    /// than guessing from the handler.
+    lifetime: Option<std::sync::Weak<HostLifetime>>,
+}
+
+impl HostRef {
+    /// A reference to a handler with no host behind it, for an embedder that
+    /// builds stores itself. Egress works; nothing ends those stores when the
+    /// handler goes, because no host owns them.
+    pub fn from_handler(handler: &Arc<dyn crate::host::http::HostHandler>) -> Self {
+        Self {
+            handler: Some(Arc::downgrade(handler)),
+            lifetime: None,
+        }
+    }
+
+    /// The configured HTTP handler, while it remains available.
+    pub fn handler(&self) -> Option<Arc<dyn crate::host::http::HostHandler>> {
+        if self.host_is_gone() {
+            return None;
+        }
+        self.handler.as_ref().and_then(std::sync::Weak::upgrade)
+    }
+
+    pub(crate) fn has_handler(&self) -> bool {
+        self.handler.is_some()
+    }
+
+    /// Whether the host this refers to has been torn down.
+    pub(crate) fn host_is_gone(&self) -> bool {
+        self.lifetime
+            .as_ref()
+            .is_some_and(|lifetime| lifetime.strong_count() == 0)
+    }
 }
 
 impl Host {
     /// Create a new builder for the host.
     pub fn builder() -> HostBuilder {
         HostBuilder::default()
+    }
+
+    /// What this host hands to everything it builds so it can reach back; see
+    /// [`HostRef`].
+    pub fn host_ref(&self) -> HostRef {
+        HostRef {
+            handler: Some(Arc::downgrade(&self.http_handler)),
+            lifetime: Some(Arc::downgrade(&self.lifetime)),
+        }
     }
 
     /// Extract known WIT interfaces from a component's imports and exports
@@ -828,7 +890,7 @@ impl Host {
             .resolve(
                 Some(&self.plugins),
                 &self.plugin_bindings,
-                &self.http_handler,
+                &self.host_ref(),
                 &self.meters,
             )
             .await?;
@@ -1321,6 +1383,7 @@ pub struct HostBuilder {
     environment: Option<String>,
     labels: HashMap<String, String>,
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
+    lifetime: Arc<HostLifetime>,
     config: Option<HostConfig>,
     /// Unset until [`HostBuilder::with_meters`], resolved in
     /// [`HostBuilder::build`]. An option because [`Meters::new`] binds its
@@ -1341,6 +1404,7 @@ impl Default for HostBuilder {
             environment: Default::default(),
             labels: Default::default(),
             http_handler: Default::default(),
+            lifetime: Arc::new(HostLifetime(())),
             config: Default::default(),
             meters: Default::default(),
         }
@@ -1418,6 +1482,15 @@ impl HostBuilder {
     #[cfg(feature = "host-component-plugins")]
     pub fn http_handler(&self) -> Option<Arc<dyn crate::host::http::HostHandler>> {
         self.http_handler.clone()
+    }
+
+    /// Reference for a plugin built before this builder becomes a host.
+    #[cfg(feature = "host-component-plugins")]
+    pub fn host_ref(&self) -> HostRef {
+        HostRef {
+            handler: self.http_handler.as_ref().map(Arc::downgrade),
+            lifetime: Some(Arc::downgrade(&self.lifetime)),
+        }
     }
 
     /// Registers the multiplexed plugin set from
@@ -1631,6 +1704,7 @@ impl HostBuilder {
             system_monitor: Arc::new(RwLock::new(SystemMonitor::new())),
             http_handler,
             _port_reservations: port_reservations,
+            lifetime: self.lifetime,
             config,
             meters,
         })
@@ -1717,6 +1791,76 @@ mod tests {
             .with_fuel_consumption(fuel)
             .build()
             .expect("a minimal engine must build")
+    }
+
+    /// What [`crate::engine::abandon::arm_epoch_deadline`] relies on to end a
+    /// guest whose host is gone. The handler cannot answer this: an embedder
+    /// that keeps its own clone — as `tests/common` does, to read the bound
+    /// address back — would keep every torn-down host looking alive.
+    #[test]
+    fn a_store_sees_its_host_go_away_though_a_handler_clone_remains() {
+        let handler: Arc<dyn crate::host::http::HostHandler> =
+            Arc::new(crate::host::http::NullServer::default());
+        let host = Host::builder()
+            .with_engine(frugal_engine(false))
+            .with_http_handler(Arc::clone(&handler))
+            .build()
+            .expect("a minimal host must build");
+        let link = crate::engine::ctx::Ctx::builder("wk", "comp")
+            .with_host(&host.host_ref())
+            .build()
+            .host_link();
+
+        assert!(!link.host_is_gone(), "the host is right here");
+        drop(host);
+        assert!(
+            link.host_is_gone(),
+            "the host is gone, and the handler clone this embedder kept must \
+             not make its store look like it is still hosted"
+        );
+        assert!(
+            Arc::strong_count(&handler) > 0,
+            "precondition: the embedder's handler clone outlives the host"
+        );
+    }
+
+    #[cfg(feature = "host-component-plugins")]
+    #[test]
+    fn a_plugin_store_sees_its_host_go_away() {
+        let handler: Arc<dyn crate::host::http::HostHandler> =
+            Arc::new(crate::host::http::NullServer::default());
+        let builder = Host::builder()
+            .with_engine(frugal_engine(false))
+            .with_http_handler(Arc::clone(&handler));
+        let host_ref = builder.host_ref();
+        let link = crate::engine::ctx::Ctx::builder("plugin", "plugin")
+            .with_host(&host_ref)
+            .build()
+            .host_link();
+
+        let host = builder.build().expect("a minimal host must build");
+        assert!(!link.host_is_gone());
+        assert!(host_ref.handler().is_some());
+        drop(host);
+        assert!(link.host_is_gone());
+        assert!(host_ref.handler().is_none());
+        assert!(Arc::strong_count(&handler) > 0);
+    }
+
+    #[cfg(feature = "host-component-plugins")]
+    #[test]
+    fn a_plugin_store_without_egress_sees_its_host_go_away() {
+        let builder = Host::builder().with_engine(frugal_engine(false));
+        let host_ref = builder.host_ref();
+        let link = crate::engine::ctx::Ctx::builder("plugin", "plugin")
+            .with_host(&host_ref)
+            .build()
+            .host_link();
+
+        let host = builder.build().expect("a minimal host must build");
+        assert!(!link.host_is_gone());
+        drop(host);
+        assert!(link.host_is_gone());
     }
 
     /// An embedder that never calls `with_meters` gets what

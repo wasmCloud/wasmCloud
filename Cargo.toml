@@ -14,7 +14,7 @@ members = [
 authors = ["The wasmCloud Team"]
 edition = "2024"
 version = "2.9.0"
-rust-version = "1.94.0"
+rust-version = "1.95.0"
 
 [workspace.lints.rust]
 warnings = 'deny' # Treat all warnings as errors
@@ -126,11 +126,11 @@ wasm-pkg-client = { version = "0.16.1", default-features = false }
 wasm-pkg-core = { version = "0.16.1", default-features = false }
 wasm-metadata = { version = "0.254.0", default-features = false, features = ["oci"] }
 wasmcloud = { path = "crates/wasmcloud", default-features = false }
-wasmtime = { version = "47.0.4", default-features = false }
-wasmtime-wasi = { version = "47.0.4", default-features = false }
-wasmtime-wasi-io = { version = "47.0.4", default-features = false }
-wasmtime-wasi-http = { version = "47.0.4", default-features = false }
-wasmtime-wasi-tls = { version = "47.0.4", default-features = false }
+wasmtime = { version = "48.0.2", default-features = false }
+wasmtime-wasi = { version = "48.0.2", default-features = false }
+wasmtime-wasi-io = { version = "48.0.2", default-features = false }
+wasmtime-wasi-http = { version = "48.0.2", default-features = false }
+wasmtime-wasi-tls = { version = "48.0.2", default-features = false }
 wit-component = { version = "0.254.0", default-features = false }
 wash-runtime = { path = "crates/wash-runtime", default-features = false }
 wat = { version = "1.254.0", default-features = false }
@@ -150,8 +150,6 @@ ulid = { version = "1", default-features = false }
 webpki-roots = { version = "0.26", default-features = false }
 
 # socket deps (used by wash-runtime sockets module)
-cap-net-ext = "3.4.4"
-cap-std = "3.4.4"
 io-lifetimes = { version = "2.0.3", default-features = false }
 rustix = "1.0.3"
 
@@ -165,3 +163,12 @@ ignored = [
     "tonic",
     "tonic-prost",
 ]
+
+# wasi-gfx 0.3.0 is the first release to build against wasmtime 48, and the
+# released 0.2.0 requires 47. This pins its release commit until 0.3.0 reaches
+# crates.io, at which point both lines are replaced by a version bump: a git
+# `[patch]` is not resolvable by `cargo publish`, so wash-runtime cannot be
+# released while it stands.
+[patch.crates-io]
+wasi-webgpu-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime", rev = "c27ddeb95a94c0c5d778de0a58aec96289ee5727" }
+wasi-gfx-runtime-shared = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime", rev = "c27ddeb95a94c0c5d778de0a58aec96289ee5727" }

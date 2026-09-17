@@ -168,6 +168,12 @@ impl ClusterHostBuilder {
         self.host_builder.http_handler()
     }
 
+    /// Reference for a component plugin built before the cluster host.
+    #[cfg(feature = "host-component-plugins")]
+    pub fn host_ref(&self) -> crate::host::HostRef {
+        self.host_builder.host_ref()
+    }
+
     /// Registers the multiplexed plugin set. See
     /// [`crate::host::HostBuilder::with_multiplexed_plugins`].
     #[cfg(feature = "wasm_component_model_implements")]
