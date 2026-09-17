@@ -210,7 +210,7 @@ async fn plugin_host_release(
             .engine(engine)
             .native_plugins(native_plugins)
             .allowed_hosts(vec!["example.com".parse()?].into())
-            .maybe_http_handler(Some(host_ref))
+            .maybe_host_ref(Some(host_ref))
             .build()
             .await
             .context("the egress plugin should link cleanly")?;

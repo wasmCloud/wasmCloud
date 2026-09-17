@@ -346,12 +346,11 @@ pub struct Host {
 
 /// A token whose lifetime is a [`Host`]'s.
 ///
-/// The builder transfers its sole strong reference to the host. Unlike the
-/// HTTP handler, an embedder cannot keep this token after the host is dropped.
-pub struct HostLifetime(());
+/// Only the builder and host hold this token strongly. Callers get weak refs.
+struct HostLifetime(());
 
-/// What a workload, a store or a bound plugin holds to reach back to the host
-/// that built it: its HTTP handler, and the host's own lifetime.
+/// A weak link to a host's lifetime and optional HTTP handler. Every guest
+/// store uses the lifetime check, even without HTTP egress.
 ///
 /// Weak throughout, and for the handler deliberately so — see
 /// [`crate::host::http::live_handler`].

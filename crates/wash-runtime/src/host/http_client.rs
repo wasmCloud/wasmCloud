@@ -30,7 +30,7 @@
 //! store, which honours `SSL_CERT_FILE`/`SSL_CERT_DIR`) with any explicitly
 //! configured PEM bundles layered on top.
 //!
-//! The per-connection helpers ([`connect_tcp`], [`connect_tls`], the
+//! The per-connection helpers ([`connect_http_tcp`], [`connect_http_tls`], the
 //! connection-worker spawners) follow wasmtime's `default_send_request` error
 //! mappings and serve the gRPC egress fast path in `host::http`, which manages
 //! its own HTTP/2 connections rather than going through the pool.
@@ -308,9 +308,8 @@ fn is_resolver_error(err: &std::io::Error) -> bool {
     cfg!(windows) && matches!(err.raw_os_error(), Some(11001..=11004))
 }
 
-/// Open a TCP connection to `authority` within `connect_timeout`, mapping
-/// failures the way wasmtime's default transport does.
-pub(crate) async fn connect_tcp(
+/// Open an HTTP TCP connection and return guest-visible connection errors.
+pub(crate) async fn connect_http_tcp(
     authority: &str,
     connect_timeout: Duration,
 ) -> Result<TcpStream, HttpError> {
@@ -342,7 +341,7 @@ pub(crate) fn isolated_resumption(tls: &rustls::ClientConfig) -> rustls::ClientC
 
 /// Run a TLS client handshake over an established TCP stream, using
 /// `authority`'s host portion as the SNI server name.
-pub(crate) async fn connect_tls(
+pub(crate) async fn connect_http_tls(
     tls: Arc<rustls::ClientConfig>,
     authority: &str,
     tcp_stream: TcpStream,
