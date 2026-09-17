@@ -368,6 +368,7 @@ pub fn tcp_bind(
 }
 
 pub fn udp_socket(family: SocketAddressFamily) -> std::io::Result<tokio::net::UdpSocket> {
+    // Rust's TCP connect initializes Winsock before rustix creates a UDP socket.
     #[cfg(windows)]
     static INIT: std::sync::Once = std::sync::Once::new();
     #[cfg(windows)]

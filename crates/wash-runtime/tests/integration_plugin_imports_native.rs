@@ -111,7 +111,7 @@ async fn test_host_component_plugin_imports_native_secrets() -> Result<()> {
         .engine(engine)
         .native_plugins(native_plugins)
         .config(plugin_config)
-        .maybe_http_handler(Some(host_ref))
+        .maybe_host_ref(Some(host_ref))
         .build()
         .await
         .context("secrets-consumer-plugin should link against the native secrets plugin")?;
@@ -183,7 +183,7 @@ async fn test_missing_labeled_secret_fails_plugin_construction() -> Result<()> {
         .engine(engine)
         .native_plugins(native_plugins)
         .config(plugin_config)
-        .maybe_http_handler(Some(host_ref))
+        .maybe_host_ref(Some(host_ref))
         .build()
         .await;
     let Err(err) = result else {

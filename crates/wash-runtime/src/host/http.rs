@@ -3789,7 +3789,7 @@ async fn send_grpc_request(
     tls: Arc<rustls::ClientConfig>,
 ) -> SendResult {
     use crate::host::http_client::{
-        connect_tcp, connect_tls, request_authority, spawn_conn_worker, to_origin_form,
+        connect_http_tcp, connect_http_tls, request_authority, spawn_conn_worker, to_origin_form,
     };
     use tokio::time::timeout;
     use wasmtime_wasi_http::Error;
@@ -3807,14 +3807,14 @@ async fn send_grpc_request(
     let use_tls = request.uri().scheme() == Some(&hyper::http::uri::Scheme::HTTPS);
 
     let authority = request_authority(&request, use_tls).ok_or(Error::HttpRequestUriInvalid)?;
-    let tcp_stream = connect_tcp(&authority, connect_timeout).await?;
+    let tcp_stream = connect_http_tcp(&authority, connect_timeout).await?;
 
     let (mut sender, conn_worker) = if use_tls {
         // The cached gRPC TLS configuration is shared across workloads; give
         // this connection its own session store so TLS session tickets never
         // resume across workloads.
         let config = crate::host::http_client::isolated_resumption(&tls);
-        let stream = connect_tls(Arc::new(config), &authority, tcp_stream).await?;
+        let stream = connect_http_tls(Arc::new(config), &authority, tcp_stream).await?;
         let (sender, conn) = timeout(
             connect_timeout,
             http2::handshake(TokioExecutor::new(), TokioIo::new(stream)),

@@ -83,6 +83,7 @@ impl LoopbackIncomingDatagramStream {
                         .is_err()
                 }) =>
                 {
+                    tracing::trace!(source = %dgram.source_address, "dropping denied UDP datagram");
                     continue;
                 }
                 _ => datagrams.push(

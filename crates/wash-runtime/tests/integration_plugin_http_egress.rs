@@ -117,7 +117,7 @@ async fn start_host_with_egress_plugin(
         .engine(engine)
         .native_plugins(native_plugins)
         .allowed_hosts(allowed_hosts.into())
-        .maybe_http_handler(Some(host_ref))
+        .maybe_host_ref(Some(host_ref))
         .build()
         .await
         .context("http-egress-plugin should link cleanly")?;

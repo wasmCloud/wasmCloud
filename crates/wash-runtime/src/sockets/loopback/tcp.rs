@@ -261,6 +261,7 @@ impl TcpSocket {
         else {
             return;
         };
+        // Endpoint keys are nonzero ports; zero has no reservation to release.
         let Some(port) = NonZeroU16::new(local_address.port()) else {
             return;
         };
