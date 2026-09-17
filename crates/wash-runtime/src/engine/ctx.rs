@@ -453,7 +453,9 @@ impl HostLink {
     /// host has to be ended either way. A store built without a host answers
     /// `false` — never pointed at one, it can say nothing about one.
     pub(crate) fn host_is_gone(&self) -> bool {
-        self.0.as_ref().is_some_and(crate::host::HostRef::host_is_gone)
+        self.0
+            .as_ref()
+            .is_some_and(crate::host::HostRef::host_is_gone)
     }
 }
 
@@ -757,7 +759,10 @@ mod tests {
     fn a_store_built_without_a_host_reports_none_gone() {
         setup();
         assert!(
-            !Ctx::builder("wk", "comp").build().host_link().host_is_gone(),
+            !Ctx::builder("wk", "comp")
+                .build()
+                .host_link()
+                .host_is_gone(),
             "a store with no host must not report one gone"
         );
     }

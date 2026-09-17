@@ -1374,10 +1374,7 @@ impl<B: hyper::body::Body + Unpin> hyper::body::Body for WatchedBody<B> {
 /// An already-complete body is left unwrapped and disarmed: hyper never polls
 /// one, so a wrapper would be dropped un-disarmed and arm the flag on a
 /// response that was delivered whole.
-fn watch_body(
-    resp: hyper::Response<WasiBody>,
-    watch: AbandonOnDrop,
-) -> hyper::Response<WasiBody> {
+fn watch_body(resp: hyper::Response<WasiBody>, watch: AbandonOnDrop) -> hyper::Response<WasiBody> {
     if hyper::body::Body::is_end_stream(resp.body()) {
         watch.disarm();
         return resp;
@@ -2007,7 +2004,9 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
             .map_err(|_| wasmtime_wasi_http::Error::ConnectionReadTimeout)?
             .map_err(|e| {
                 error!(err = ?e, workload_id = %target, "local dispatch failed");
-                wasmtime_wasi_http::Error::InternalError(Some(format!("local dispatch failed: {e}")))
+                wasmtime_wasi_http::Error::InternalError(Some(format!(
+                    "local dispatch failed: {e}"
+                )))
             })?;
             // The slot is held until the body drains, and
             // `between_bytes_timeout` is applied here because the body goes
@@ -5329,7 +5328,8 @@ mod tests {
             fn poll_frame(
                 mut self: std::pin::Pin<&mut Self>,
                 _cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Option<Result<hyper::body::Frame<bytes::Bytes>, Error>>> {
+            ) -> std::task::Poll<Option<Result<hyper::body::Frame<bytes::Bytes>, Error>>>
+            {
                 std::task::Poll::Ready(self.0.take().map(Err))
             }
         }
