@@ -1,4 +1,4 @@
-package wasmcloud:nats@0.1.1;
+package wasmcloud:nats@0.1.2;
 
 /// Shared types and errors used across the wasmcloud:nats interfaces.
 ///
@@ -412,6 +412,24 @@ interface kv {
     truncated: bool,
   }
 
+  /// Options for `select`.
+  record select-options {
+    /// Include delete/purge tombstones rather than skipping them. `keys()`
+    /// always skips them; false matches that.
+    include-tombstones: bool,
+    /// Send the value bytes. False asks the server for headers only, which
+    /// gives a cheap listing of keys and revisions with no 1000-key cap.
+    include-values: bool,
+    /// Caller's own bound on entries drained. 0 = unbounded, which is the
+    /// point of streaming; this exists for a caller that wants a ceiling of
+    /// its own, not as the host's.
+    max-entries: u64,
+    /// Wall-clock bound on the whole drain; hitting it resolves the paired
+    /// future with `timeout`. 0 = the binding's `request-timeout-ms`, or no
+    /// bound when the binding sets none.
+    timeout-ms: u32,
+  }
+
   /// Status snapshot for a bucket.
   record bucket-status {
     bucket: string,
@@ -457,6 +475,24 @@ interface kv {
 
     /// Bucket state snapshot, read fresh from the server.
     status: async func() -> result<bucket-status, nats-error>;
+
+    /// Every live entry matching `filter`, streamed.
+    ///
+    /// This is the value-bearing counterpart to `keys()`, and the way to read
+    /// a bucket that holds more than one page. Values arrive with each entry
+    /// rather than costing a `get` per key.
+    ///
+    /// The guest's read rate is the flow control: the host holds at most one
+    /// batch of entries at a time and nothing is truncated.
+    ///
+    /// The paired future carries the terminal status, following what
+    /// `wasi:http@0.3.0` does for a body and its trailing status. A bare
+    /// stream cannot report a mid-drain failure, and "drained clean" versus
+    /// "the consumer went away at entry 31,000" is exactly the distinction a
+    /// large read needs. A stream that ends because the consumer was deleted
+    /// or the connection dropped must not be readable as a completed drain.
+    select: async func(filter: string, opts: select-options)
+      -> result<tuple<stream<entry>, future<result<_, nats-error>>>, nats-error>;
   }
 
   /// Open an existing bucket. Errors with `not-found` if it doesn't exist, or

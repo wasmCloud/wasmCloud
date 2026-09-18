@@ -1,4 +1,4 @@
-//! `wasmcloud:nats/jetstream@0.1.1` — the stream-level operations.
+//! `wasmcloud:nats/jetstream@0.1.2` — the stream-level operations.
 //!
 //! The interface's two resources and the KV interface built on the same
 //! JetStream context live beside this one: [`message_handle`],
@@ -43,18 +43,15 @@ const MAX_STREAM_SUBJECTS: usize = 1_000;
 /// subject map, which would otherwise reach the guest as an empty result.
 const SUBJECT_FILTER_FLOOR: (u64, u64, u64) = (2, 7, 2);
 
-/// Deletes `scan`'s ephemeral consumer if the host future never reaches its
-/// in-line cleanup.
+/// Deletes an ephemeral consumer on drop unless defused.
 ///
-/// Under the concurrent ABI a guest can cancel a scan subtask, and a stopping
-/// workload drops every host future it has in flight; either way the future is
-/// abandoned at an await point and nothing after it runs. Without this the
-/// consumer sits on the stream skewing `consumer_count` and pressuring
-/// `max_consumers` until the server reaps it — exactly what a burst of
-/// cancelled scans produces.
-struct ScanConsumerGuard(Option<(jetstream::stream::Stream, String)>);
+/// `scan` arms it in case its host future is cancelled before the in-line
+/// delete; `kv.select` moves it into the stream producer so the consumer goes
+/// away however the drain ends. Without it the consumer pressures
+/// `max_consumers` until the server reaps it.
+struct ConsumerGuard(Option<(jetstream::stream::Stream, String)>);
 
-impl ScanConsumerGuard {
+impl ConsumerGuard {
     fn arm(stream: &jetstream::stream::Stream, name: &str) -> Self {
         Self(Some((stream.clone(), name.to_string())))
     }
@@ -66,16 +63,19 @@ impl ScanConsumerGuard {
     }
 }
 
-impl Drop for ScanConsumerGuard {
+impl Drop for ConsumerGuard {
     fn drop(&mut self) {
         let Some((stream, name)) = self.0.take() else {
             return;
         };
         // Drop is synchronous and the delete is a round trip, so it has to
-        // outlive this frame.
-        tokio::spawn(async move {
+        // outlive this frame. Outside a runtime the server reaps it instead.
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        handle.spawn(async move {
             if let Err(e) = stream.delete_consumer(&name).await {
-                warn!("failed to clean up scan consumer after cancellation: {e}");
+                warn!(consumer = %name, "failed to clean up ephemeral consumer: {e}");
             }
         });
     }
@@ -229,7 +229,7 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
         // guest that cancels the scan subtask, or a workload that stops, drops
         // it at an await point instead, and the guard is what deletes the
         // consumer on that path.
-        let mut cleanup = ScanConsumerGuard::arm(&stream, &pull_consumer.cached_info().name);
+        let mut cleanup = ConsumerGuard::arm(&stream, &pull_consumer.cached_info().name);
 
         // Read inside a block so every exit — including the error ones — falls
         // through to the cleanup below with the message stream already dropped.
