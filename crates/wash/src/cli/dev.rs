@@ -247,10 +247,10 @@ impl CliCommand for DevCommand {
         // calls. Distinct from `tls_*_path` below, which configure the ingress
         // HTTP server.
         let outgoing_handler = wash_runtime::host::http::DefaultOutgoingHandler::from_tls_options(
-            wash_runtime::host::http_client::ClientTlsOptions {
-                roots: dev_config.http_client_trust_roots.into(),
-                extra_ca_paths: dev_config.http_client_ca_paths.clone(),
-            },
+            wash_runtime::host::http_client::ClientTlsOptions::new(
+                dev_config.http_client_trust_roots.into(),
+            )
+            .with_ca_paths(dev_config.http_client_ca_paths.clone()),
         )
         .context("failed to load dev.http_client_ca_paths CA certificates")?
         // The same registry the socket policy uses, so a component's HTTP

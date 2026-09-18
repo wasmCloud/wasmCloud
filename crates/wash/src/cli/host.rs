@@ -128,6 +128,28 @@ pub struct HostCommand {
     )]
     pub http_client_trust_roots: HttpClientTrustRoots,
 
+    /// Client certificate chain (PEM) presented when a peer requests one
+    /// during outbound HTTPS from components.
+    ///
+    /// The other half of `--http-client-ca-path`: that decides which servers
+    /// this host will talk to, this decides who it says it is when one asks.
+    /// Host-wide, so every workload on this host authenticates as this
+    /// identity. Requires `--http-client-key-path`.
+    #[arg(
+        long = "http-client-cert-path",
+        env = "WASH_HTTP_CLIENT_CERT_PATH",
+        requires = "http_client_key_path"
+    )]
+    pub http_client_cert_path: Option<PathBuf>,
+
+    /// Private key (PEM) for `--http-client-cert-path`.
+    #[arg(
+        long = "http-client-key-path",
+        env = "WASH_HTTP_CLIENT_KEY_PATH",
+        requires = "http_client_cert_path"
+    )]
+    pub http_client_key_path: Option<PathBuf>,
+
     /// Host-wide cap on live connections across every workload and surface
     /// combined — pooled HTTP, raw sockets, and inbound published ports.
     ///
@@ -586,6 +608,25 @@ fn host_plugin_registry_credentials(
 }
 
 impl HostCommand {
+    /// Outbound TLS for components: which servers to trust, and which
+    /// identity to present when one asks for a client certificate.
+    fn client_tls_options(&self) -> wash_runtime::host::http_client::ClientTlsOptions {
+        let mut options = wash_runtime::host::http_client::ClientTlsOptions::default();
+        options.roots = self.http_client_trust_roots.into();
+        options.extra_ca_paths = self.http_client_ca_paths.clone();
+        // Clap keeps these together, so one present means both are.
+        if let (Some(cert_path), Some(key_path)) = (
+            self.http_client_cert_path.clone(),
+            self.http_client_key_path.clone(),
+        ) {
+            options.client_identity = Some(wash_runtime::host::http_client::ClientIdentity {
+                cert_path,
+                key_path,
+            });
+        }
+        options
+    }
+
     /// The operator's plugin binding declarations, plus the fallbacks this
     /// host's own flags supply.
     ///
@@ -926,10 +967,7 @@ impl CliCommand for HostCommand {
             // options below, which configure the HTTP *server*.
             let outgoing_handler =
                 wash_runtime::host::http::DefaultOutgoingHandler::from_tls_options(
-                    wash_runtime::host::http_client::ClientTlsOptions {
-                        roots: self.http_client_trust_roots.into(),
-                        extra_ca_paths: self.http_client_ca_paths.clone(),
-                    },
+                    self.client_tls_options(),
                 )
                 .context("failed to load --http-client-ca-path CA certificates")?
                 // The same registry the socket policy uses, so a workload's
