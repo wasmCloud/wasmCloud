@@ -219,8 +219,13 @@ impl ClientIdentity {
     }
 }
 
-/// Trust-root options for outbound HTTPS from components.
+/// Trust-root and client-identity options for outbound HTTPS from components.
+///
+/// `#[non_exhaustive]`: build one with [`Default`] and the `with_*` methods
+/// rather than a struct literal, so that adding an option later is not a
+/// breaking change for callers outside this crate.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ClientTlsOptions {
     /// Built-in roots to start from.
     pub roots: TrustRoots,
@@ -245,6 +250,29 @@ pub struct ClientTlsOptions {
 }
 
 impl ClientTlsOptions {
+    /// Options trusting `roots` and nothing else yet.
+    #[must_use]
+    pub fn new(roots: TrustRoots) -> Self {
+        Self {
+            roots,
+            ..Default::default()
+        }
+    }
+
+    /// Also trust the CA bundles at `paths`.
+    #[must_use]
+    pub fn with_ca_paths(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.extra_ca_paths.extend(paths);
+        self
+    }
+
+    /// Present `identity` when a peer requests a client certificate.
+    #[must_use]
+    pub fn with_client_identity(mut self, identity: ClientIdentity) -> Self {
+        self.client_identity = Some(identity);
+        self
+    }
+
     /// Build a rustls client configuration from these options.
     ///
     /// Fails when an entry in `extra_ca_paths` cannot be read or contains no
