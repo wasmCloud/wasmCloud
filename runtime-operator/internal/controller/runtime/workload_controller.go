@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"time"
 
@@ -241,9 +242,9 @@ func materializeLocalResources(ctx context.Context, c client.Client, namespace s
 	return lr, nil
 }
 
-// injectServiceDNSAliases adds host-aliases to wasi:http/incoming-handler
-// HostInterfaces so the wash-runtime DynamicRouter accepts requests arriving
-// via Kubernetes Service DNS.
+// injectServiceDNSAliases adds host-aliases to the wasi:http HostInterface
+// carrying the component's HTTP entrypoint so the wash-runtime DynamicRouter
+// accepts requests arriving via Kubernetes Service DNS.
 func injectServiceDNSAliases(hostInterfaces []*runtimev2.WitInterface, svcName, namespace string) {
 	aliases := strings.Join([]string{
 		fmt.Sprintf("%s.%s", svcName, namespace),
@@ -255,15 +256,22 @@ func injectServiceDNSAliases(hostInterfaces []*runtimev2.WitInterface, svcName, 
 			continue
 		}
 
-		for _, iface := range hi.Interfaces {
-			if iface == "incoming-handler" {
-				if hi.Config == nil {
-					hi.Config = make(map[string]string)
-				}
-				hi.Config["host-aliases"] = aliases
-				hostInterfaces[i] = hi
-			}
+		// The entrypoint is advertised as either the p2 `incoming-handler` or
+		// the p3 `handler` interface; the host serves both (wash-runtime's
+		// is_incoming_http_handler accepts either), so the aliases have to be
+		// injected for either. Without the p3 case, a workload exporting only
+		// wasi:http/handler@0.3.0 reaches Ready and routes on its configured
+		// `host` while every call by Service DNS 404s.
+		if !slices.Contains(hi.Interfaces, "incoming-handler") &&
+			!slices.Contains(hi.Interfaces, "handler") {
+			continue
 		}
+
+		if hi.Config == nil {
+			hi.Config = make(map[string]string)
+		}
+		hi.Config["host-aliases"] = aliases
+		hostInterfaces[i] = hi
 	}
 }
 
