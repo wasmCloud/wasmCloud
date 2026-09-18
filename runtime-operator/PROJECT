@@ -6,8 +6,8 @@ domain: wasmcloud.dev
 layout:
 - go.kubebuilder.io/v4
 multigroup: true
-plugins:
-  helm.kubebuilder.io/v1-alpha: {}
+# No helm plugin is declared - the published chart is maintained
+# by hand, not scaffolded by kubebuilder.
 projectName: runtime-operator
 repo: go.wasmcloud.dev/wash
 resources:
