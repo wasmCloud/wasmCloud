@@ -26,11 +26,12 @@
 
 use core::net::{IpAddr, SocketAddr};
 use core::time::Duration;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
+use std::io::IoSlice;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context as _, Result, bail};
-use bytes::{BufMut as _, BytesMut};
+use anyhow::{Context as _, Result, anyhow, bail};
+use bytes::{Buf as _, BufMut as _, Bytes, BytesMut};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
@@ -738,12 +739,66 @@ async fn splice(stream: TcpStream, conn: loopback::TcpConn) -> Result<()> {
     };
 
     let outbound = async move {
-        while let Some((chunk, permit)) = from_guest.recv().await {
-            let result = write_half.write_all(&chunk).await;
-            // Release the guest's permit only once the bytes are actually
-            // gone, so its next send waits on the external peer.
-            drop::<OwnedSemaphorePermit>(permit);
-            result?;
+        let mut queue: VecDeque<(Bytes, OwnedSemaphorePermit)> = VecDeque::new();
+
+        while let Some((first_chunk, first_permit)) = from_guest.recv().await {
+            if first_chunk.is_empty() {
+                drop::<OwnedSemaphorePermit>(first_permit);
+            } else {
+                queue.push_back((first_chunk, first_permit));
+            }
+
+            // Opportunistically drain any chunks already queued in the channel
+            // without awaiting, coalescing multiple small messages into a single write.
+            while let Ok((chunk, permit)) = from_guest.try_recv() {
+                if chunk.is_empty() {
+                    drop::<OwnedSemaphorePermit>(permit);
+                } else {
+                    queue.push_back((chunk, permit));
+                }
+            }
+
+            // Flush gathered chunks to the physical socket until the queue is drained.
+            while !queue.is_empty() {
+                let write_result = {
+                    let mut bufs = [IoSlice::new(&[]); MAX_INFLIGHT_CHUNKS];
+                    let count = queue.len().min(MAX_INFLIGHT_CHUNKS);
+                    for (i, (chunk, _)) in queue.iter().take(count).enumerate() {
+                        bufs[i] = IoSlice::new(chunk);
+                    }
+                    write_half.write_vectored(&bufs[..count]).await
+                };
+
+                match write_result {
+                    Ok(0) => {
+                        // Because empty chunks were filtered out above, Ok(0) unambiguously
+                        // means the connection was closed (EOF) by the peer.
+                        debug!("published port splice: write_vectored returned 0 bytes; peer closed connection");
+                        return Err(anyhow!("write_vectored returned Ok(0); connection closed"));
+                    }
+                    Ok(mut bytes_written) => {
+                        // Advance through the queued chunks and release permits as chunks are fully written.
+                        while bytes_written > 0 && !queue.is_empty() {
+                            let (chunk, _permit) = queue.front_mut().expect("queue is non-empty");
+
+                            if bytes_written >= chunk.len() {
+                                bytes_written -= chunk.len();
+                                // Chunk fully written: popping it drops both the Bytes buffer and
+                                // the OwnedSemaphorePermit, signaling backpressure relief to the guest.
+                                queue.pop_front();
+                            } else {
+                                // Chunk partially written: advance its start offset via bytes::Buf and stop.
+                                chunk.advance(bytes_written);
+                                bytes_written = 0;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Error while writing bytes: {e:?}");
+                        return Err(e.into());
+                    }
+                }
+            }
         }
         // Guest closed its side: half-close ours so the peer sees EOF.
         let _ = write_half.shutdown().await;

@@ -11,6 +11,7 @@ use wash_runtime::{
     host::{
         Host, HostApi, HostBuilder,
         http::{DevRouter, Ingress},
+        ports::PublishedPort,
     },
     types::{
         Component, LocalResources, Service, Workload, WorkloadStartRequest, WorkloadState,
@@ -239,4 +240,40 @@ pub async fn checked_request(
         String::from_utf8_lossy(&body)
     );
     Ok(())
+}
+
+/// Publish a random host port that splices into `127.0.0.1:50051` on the
+/// virtual loopback and forwards every accepted virtual connection to
+/// `backend_addr` (the backend host's HTTP `Ingress`).
+pub async fn start_splice_forwarder(
+    guest_addr: std::net::SocketAddr,
+) -> anyhow::Result<PublishedPort> {
+    use wash_runtime::host::declared_port::Protocol;
+    use wash_runtime::host::ports::{
+        NetworkHandle, PortOwner, PortTable, PublishConfig, PublishRequest, publish,
+    };
+
+    let network = NetworkHandle::new();
+    let target: std::net::SocketAddr = format!("127.0.0.1:{}", guest_addr).parse()?;
+
+    let table = PortTable::new();
+    let config = PublishConfig {
+        enabled: true,
+        readiness_timeout: Duration::from_secs(10),
+        ..Default::default()
+    };
+    let published = publish(
+        &config,
+        &table,
+        PublishRequest::new(
+            Protocol::Tcp,
+            PortOwner::Plugin("bench-forwarder".into()),
+            "bench",
+            0,
+            target,
+            network.clone(),
+        ),
+    )
+    .await?;
+    Ok(published)
 }
