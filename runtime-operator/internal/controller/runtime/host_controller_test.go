@@ -41,10 +41,9 @@ const (
 	testHeartbeatHostID = "host-id-1"
 )
 
-// requiredHostStatusKeys are the status fields the Host CRD marks as required.
-// The heartbeat handler's status write is rejected unless every one of these
-// keys is present in the patched object.
-var requiredHostStatusKeys = []string{
+// hostStatusMeasuredKeys are the status fields reconcileReporting writes
+// from measured data. hostStatusPatch must never set them.
+var hostStatusMeasuredKeys = []string{
 	"version", "osName", "osArch", "osKernel",
 	"systemCPUUsage", "systemMemoryTotal", "systemMemoryFree",
 }
@@ -64,18 +63,17 @@ func patchStatusKeys(t *testing.T, status *runtimev1alpha1.HostStatus) map[strin
 	return p.Status
 }
 
-// TestHostStatusPatch_EmptyStatusInjectsRequiredKeys ensures that lastSeen is always
-// populated in the patch, even for an empty status. Other keys required are also tested
-// to ensure the patch is valid for the CRD.
+// TestHostStatusPatch_EmptyStatusInjectsRequiredKeys ensures an empty status
+// produces a patch with only lastSeen, no placeholder values.
 func TestHostStatusPatch_EmptyStatusInjectsRequiredKeys(t *testing.T) {
 	keys := patchStatusKeys(t, &runtimev1alpha1.HostStatus{})
 
 	if _, ok := keys["lastSeen"]; !ok {
 		t.Errorf("lastSeen must always be present in the patch")
 	}
-	for _, k := range requiredHostStatusKeys {
-		if _, ok := keys[k]; !ok {
-			t.Errorf("required key %q missing from patch for empty status", k)
+	for _, k := range hostStatusMeasuredKeys {
+		if _, ok := keys[k]; ok {
+			t.Errorf("field %q must not be set on an empty status", k)
 		}
 	}
 	// Conditions and the optional counts must never be in this patch — they are
@@ -104,7 +102,7 @@ func TestHostStatusPatch_ReportedFieldsPreserved(t *testing.T) {
 	if _, ok := keys["lastSeen"]; !ok {
 		t.Errorf("lastSeen must always be present in the patch")
 	}
-	for _, k := range requiredHostStatusKeys {
+	for _, k := range hostStatusMeasuredKeys {
 		if _, ok := keys[k]; ok {
 			t.Errorf("reported field %q must be omitted to avoid clobbering its real value", k)
 		}
@@ -170,13 +168,15 @@ func TestHostStatusPatch_SatisfiesCRDRequired(t *testing.T) {
 	}
 
 	// host.Status is empty here, exactly as it is the first time the heartbeat
-	// handler patches a host that reconcileReporting has not polled yet.
+	// handler patches a host that reconcileReporting has not polled yet. The
+	// seven measured fields are optional now, so the API server must accept
+	// this patch leaving them unset.
 	patch, err := hostStatusPatch(&host.Status)
 	if err != nil {
 		t.Fatalf("hostStatusPatch: %v", err)
 	}
 	if err := c.Status().Patch(ctx, host, client.RawPatch(types.MergePatchType, patch)); err != nil {
-		t.Fatalf("status patch rejected by API server (required-field regression?): %v", err)
+		t.Fatalf("status patch rejected by API server (optional-field regression?): %v", err)
 	}
 
 	got := &runtimev1alpha1.Host{}
@@ -186,8 +186,8 @@ func TestHostStatusPatch_SatisfiesCRDRequired(t *testing.T) {
 	if got.Status.LastSeen.IsZero() {
 		t.Errorf("expected lastSeen to be set after patch")
 	}
-	if got.Status.OSArch == "" || got.Status.Version == "" {
-		t.Errorf("expected required string fields to be defaulted, got %+v", got.Status)
+	if got.Status.OSArch != "" || got.Status.Version != "" {
+		t.Errorf("expected unmeasured fields to stay empty rather than be defaulted, got %+v", got.Status)
 	}
 
 	// A second patch after the host has reported real values must preserve them
@@ -874,8 +874,8 @@ func TestHeartbeatHandler_SkipsRedundantApply(t *testing.T) {
 }
 
 // TestHeartbeatHandler_PreservesReportedStatus is the call-site counterpart to
-// TestHostStatusPatch_ReportedFieldsPreserved: the placeholders must come from
-// the stored status, so a heartbeat leaves what reconcileReporting measured.
+// TestHostStatusPatch_ReportedFieldsPreserved: a heartbeat must leave what
+// reconcileReporting measured untouched.
 func TestHeartbeatHandler_PreservesReportedStatus(t *testing.T) {
 	c, ctx := startHostEnvtest(t)
 	ns := createTestNamespace(t, ctx, c, "host-heartbeat-status")
