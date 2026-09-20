@@ -748,8 +748,7 @@ async fn splice(stream: TcpStream, conn: loopback::TcpConn) -> Result<()> {
                 queue.push_back((first_chunk, first_permit));
             }
 
-            // Opportunistically drain any chunks already queued in the channel
-            // without awaiting, coalescing multiple small messages into a single write.
+            // Grab what's already queued so small messages go out in one write.
             while let Ok((chunk, permit)) = from_guest.try_recv() {
                 if chunk.is_empty() {
                     drop::<OwnedSemaphorePermit>(permit);
@@ -771,20 +770,18 @@ async fn splice(stream: TcpStream, conn: loopback::TcpConn) -> Result<()> {
 
                 match write_result {
                     Ok(0) => {
-                        // Because empty chunks were filtered out above, Ok(0) unambiguously
-                        // means the connection was closed (EOF) by the peer.
+                        // Empty chunks are filtered above, so 0 means the peer closed.
                         debug!("published port splice: write_vectored returned 0 bytes; peer closed connection");
                         return Err(anyhow!("write_vectored returned Ok(0); connection closed"));
                     }
                     Ok(mut bytes_written) => {
-                        // Advance through the queued chunks and release permits as chunks are fully written.
+                        // Drop each fully written chunk, which frees its permit.
                         while bytes_written > 0 && !queue.is_empty() {
                             let (chunk, _permit) = queue.front_mut().expect("queue is non-empty");
 
                             if bytes_written >= chunk.len() {
                                 bytes_written -= chunk.len();
-                                // Chunk fully written: popping it drops both the Bytes buffer and
-                                // the OwnedSemaphorePermit, signaling backpressure relief to the guest.
+                                // Fully written, so popping it frees the buffer and permit.
                                 queue.pop_front();
                             } else {
                                 // Chunk partially written: advance its start offset via bytes::Buf and stop.

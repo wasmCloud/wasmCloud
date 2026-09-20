@@ -52,7 +52,7 @@ use tokio::runtime::Runtime;
 
 use common::{
     DIRECT_BODY, Flavor, REQUEST_TIMEOUT, bench_client, checked_request, service_request,
-    start_backend_host, start_service_host,
+    start_backend_host, start_service_host, start_spliced_backend_host,
 };
 
 /// Cold start: build the host, start the service workload, serve + validate
@@ -274,31 +274,10 @@ fn bench_service_to_component(c: &mut Criterion) {
     group.finish();
 }
 
-/// Splice-vs-direct comparison per #5450.
-///
-/// `svc-http-proxy` (Host 1) forwards via `wasi:http/client` to a backend
-/// HTTP component (Host 2). Two exposures of the same backend are compared:
-///
-/// * `mode: direct` — backend reached at its `Ingress` address (host holds the
-///   real socket).
-/// * `mode: splice` — backend reached at a `PublishedPort` that splices the
-///   real TCP stream into the forwarder's virtual loopback and then proxies it
-///   to the backend's `Ingress`. The extra userspace hop is exactly the path
-///   `crates/wash-runtime/src/host/ports.rs:splice` implements with
-///   `write_vectored`.
-///
-/// Both arms use the same persistent `reqwest` client (pooled HTTP/1.1) so the
-/// outer `client -> Host 1` connection is not in the measurement. Two groups
-/// cover the cases the issue asks for:
-///
-/// (a) many small messages — single-request latency, p99 visible in criterion's
-///     HTML report;
-/// (b) bulk transfer — concurrent throughput (32 in flight × 256 per batch).
-///
-/// Fixture notes from the issue are respected: the `svc-http-proxy` fixture is
-/// the one built from `tests/fixtures/svc-http-proxy/.wash/config.yaml`, and
-/// every `BenchHost` is torn down with `workload_stop` + `Host::stop` (see
-/// `common::BenchHost::shutdown`) so leaked service drivers do not SIGTRAP.
+/// Direct vs spliced backend. The proxy forwards to `http_handler_p3`
+/// behind `Ingress`, or to `http_server_p3` through a published port.
+/// Same body, different guests. Covers small-message latency and bulk
+/// throughput.
 fn bench_splice_vs_direct(c: &mut Criterion) {
     // ---------- (a) many small messages: single-request latency ----------
     {
@@ -309,9 +288,12 @@ fn bench_splice_vs_direct(c: &mut Criterion) {
         group.warm_up_time(Duration::from_millis(500));
         group.measurement_time(Duration::from_secs(5));
 
-        let (service, backend, client) = rt.block_on(async {
+        let (service, backend, spliced_backend, client) = rt.block_on(async {
             let service = start_service_host().await.expect("service host");
             let backend = start_backend_host(Flavor::P3).await.expect("backend host");
+            let spliced_backend = start_spliced_backend_host()
+                .await
+                .expect("spliced backend host");
             let client = bench_client();
             checked_request(
                 &client,
@@ -321,21 +303,15 @@ fn bench_splice_vs_direct(c: &mut Criterion) {
             )
             .await
             .expect("direct warmup");
-            (service, backend, client)
-        });
-
-        let forwarder = rt
-            .block_on(common::start_splice_forwarder(backend.addr))
-            .expect("forwarder");
-        rt.block_on(async {
             checked_request(
                 &client,
                 service.addr,
-                Some(forwarder.local_addr()),
+                Some(spliced_backend.addr),
                 Flavor::P3.expected_body(),
             )
             .await
             .expect("splice warmup");
+            (service, backend, spliced_backend, client)
         });
 
         // Direct Mode
@@ -350,7 +326,7 @@ fn bench_splice_vs_direct(c: &mut Criterion) {
         // Splice Mode
         group.bench_function("splice", |b| {
             b.to_async(&rt).iter(|| async {
-                service_request(&client, service.addr, Some(forwarder.local_addr()))
+                service_request(&client, service.addr, Some(spliced_backend.addr))
                     .await
                     .unwrap();
             });
@@ -360,6 +336,7 @@ fn bench_splice_vs_direct(c: &mut Criterion) {
         rt.block_on(async {
             service.shutdown().await;
             backend.shutdown().await;
+            spliced_backend.shutdown().await;
         });
     }
 
@@ -378,9 +355,12 @@ fn bench_splice_vs_direct(c: &mut Criterion) {
         group.sample_size(20);
         group.measurement_time(Duration::from_secs(15));
 
-        let (service, backend, client) = rt.block_on(async {
+        let (service, backend, spliced_backend, client) = rt.block_on(async {
             let service = start_service_host().await.expect("service host");
             let backend = start_backend_host(Flavor::P3).await.expect("backend host");
+            let spliced_backend = start_spliced_backend_host()
+                .await
+                .expect("spliced backend host");
             let client = bench_client();
             checked_request(
                 &client,
@@ -390,26 +370,20 @@ fn bench_splice_vs_direct(c: &mut Criterion) {
             )
             .await
             .expect("direct warmup");
-            (service, backend, client)
-        });
-
-        let forwarder = rt
-            .block_on(common::start_splice_forwarder(backend.addr))
-            .expect("forwarder");
-        rt.block_on(async {
             checked_request(
                 &client,
                 service.addr,
-                Some(forwarder.local_addr()),
+                Some(spliced_backend.addr),
                 Flavor::P3.expected_body(),
             )
             .await
             .expect("splice warmup");
+            (service, backend, spliced_backend, client)
         });
 
         let url = format!("http://{}/", service.addr);
 
-        for (name, target_addr) in [("direct", backend.addr), ("splice", forwarder.local_addr())] {
+        for (name, target_addr) in [("direct", backend.addr), ("splice", spliced_backend.addr)] {
             let failures = Arc::new(AtomicUsize::new(0));
             let failures_ref = failures.clone();
             let target_header = target_addr.to_string();
@@ -473,6 +447,7 @@ fn bench_splice_vs_direct(c: &mut Criterion) {
         rt.block_on(async {
             service.shutdown().await;
             backend.shutdown().await;
+            spliced_backend.shutdown().await;
         });
     }
 }

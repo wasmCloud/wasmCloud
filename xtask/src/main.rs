@@ -123,6 +123,7 @@ const P3_FIXTURES: &[&str] = &[
     "svc-counter",
     "svc-http-proxy",
     "svc-tcp-echo",
+    "http-server-p3",
     "http-loopback-gateway",
     "svc-no-run",
     "http-sleeper",

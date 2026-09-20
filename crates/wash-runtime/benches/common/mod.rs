@@ -11,7 +11,6 @@ use wash_runtime::{
     host::{
         Host, HostApi, HostBuilder,
         http::{DevRouter, Ingress},
-        ports::PublishedPort,
     },
     types::{
         Component, LocalResources, Service, Workload, WorkloadStartRequest, WorkloadState,
@@ -23,6 +22,7 @@ use wash_runtime::{
 const HTTP_HANDLER_P2_WASM: &[u8] = include_bytes!("../../tests/wasm/http_handler_p2.wasm");
 const HTTP_HANDLER_P3_WASM: &[u8] = include_bytes!("../../tests/wasm/http_handler_p3.wasm");
 const HTTP_SVC_PROXY_WASM: &[u8] = include_bytes!("../../tests/wasm/svc_http_proxy.wasm");
+const HTTP_SERVER_P3_WASM: &[u8] = include_bytes!("../../tests/wasm/http_server_p3.wasm");
 
 /// Body served by the `svc-http-proxy` fixture when a request carries no
 /// `x-backend` header.
@@ -242,19 +242,17 @@ pub async fn checked_request(
     Ok(())
 }
 
-/// Publish a random host port that splices into `127.0.0.1:50051` on the
-/// virtual loopback and forwards every accepted virtual connection to
-/// `backend_addr` (the backend host's HTTP `Ingress`).
-pub async fn start_splice_forwarder(
-    guest_addr: std::net::SocketAddr,
-) -> anyhow::Result<PublishedPort> {
-    use wash_runtime::host::declared_port::Protocol;
-    use wash_runtime::host::ports::{
-        NetworkHandle, PortOwner, PortTable, PublishConfig, PublishRequest, publish,
-    };
+/// Start a backend host running `http_server_p3.wasm` on a published port.
+///
+/// The service binds `127.0.0.1:8080` in virtual loopback, and the host splices
+/// external TCP connections arriving at the published host port into it.
+pub async fn start_spliced_backend_host() -> anyhow::Result<BenchHost> {
+    use wash_runtime::host::declared_port::{DeclaredPort, Protocol};
+    use wash_runtime::host::ports::{PortTable, PublishConfig, PublishContext};
 
-    let network = NetworkHandle::new();
-    let target: std::net::SocketAddr = format!("127.0.0.1:{}", guest_addr).parse()?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let host_port = listener.local_addr()?.port();
+    drop(listener);
 
     let table = PortTable::new();
     let config = PublishConfig {
@@ -262,18 +260,51 @@ pub async fn start_splice_forwarder(
         readiness_timeout: Duration::from_secs(10),
         ..Default::default()
     };
-    let published = publish(
-        &config,
-        &table,
-        PublishRequest::new(
-            Protocol::Tcp,
-            PortOwner::Plugin("bench-forwarder".into()),
-            "bench",
-            0,
-            target,
-            network.clone(),
-        ),
-    )
-    .await?;
-    Ok(published)
+
+    let host = HostBuilder::new()
+        .with_engine(engine())
+        .with_publish_context(PublishContext::new(table, config))
+        .build()?;
+    let host = host.start().await?;
+
+    let workload_id = uuid::Uuid::new_v4().to_string();
+    let resp = host
+        .workload_start(WorkloadStartRequest {
+            workload_id: workload_id.clone(),
+            workload: Workload {
+                namespace: "bench".to_string(),
+                name: "backend-spliced".to_string(),
+                annotations: HashMap::new(),
+                service: Some(Service {
+                    digest: None,
+                    bytes: bytes::Bytes::from_static(HTTP_SERVER_P3_WASM),
+                    local_resources: LocalResources::default(),
+                    max_restarts: 0,
+                    ports: vec![DeclaredPort {
+                        name: "http".into(),
+                        port: 8080,
+                        protocol: Protocol::Tcp,
+                        publish: Some(host_port),
+                        bind: None,
+                    }],
+                }),
+                components: vec![],
+                host_interfaces: vec![],
+                volumes: vec![],
+            },
+        })
+        .await?;
+    anyhow::ensure!(
+        resp.workload_status.workload_state == WorkloadState::Running,
+        "workload did not start: {:?}: {}",
+        resp.workload_status.workload_state,
+        resp.workload_status.message
+    );
+
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{host_port}").parse()?;
+    Ok(BenchHost {
+        host,
+        workload_id,
+        addr,
+    })
 }
