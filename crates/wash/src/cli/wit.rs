@@ -754,6 +754,13 @@ fn wit_fetch_retry_delay(failed_attempt: u32) -> Duration {
     base + Duration::from_millis(fastrand::u64(0..base.as_millis() as u64))
 }
 
+// A downcast only matches the `oci-client` types `wasm-pkg-client` was built against, so this
+// stops compiling if the two ever resolve to different `oci-client` versions.
+const _: () = {
+    use wasm_pkg_client::oci::client::{Client, ClientConfig};
+    let _: fn(<Client as TryFrom<ClientConfig>>::Error) -> OciDistributionError = |error| error;
+};
+
 /// Whether an error chain proves that a registry fetch failed for a transient reason.
 fn is_transient_registry_fetch_error(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
@@ -779,14 +786,6 @@ fn is_transient_registry_fetch_error(error: &anyhow::Error) -> bool {
                 }
                 _ => false,
             };
-        }
-
-        if let Some(error) = cause.downcast_ref::<reqwest::Error>() {
-            return error.is_timeout()
-                || error.is_connect()
-                || error
-                    .status()
-                    .is_some_and(|status| status.as_u16() == 429 || status.is_server_error());
         }
 
         cause
