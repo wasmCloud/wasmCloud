@@ -274,182 +274,233 @@ fn bench_service_to_component(c: &mut Criterion) {
     group.finish();
 }
 
-/// Direct vs spliced backend. The proxy forwards to `http_handler_p3`
-/// behind `Ingress`, or to `http_server_p3` through a published port.
-/// Same body, different guests. Covers small-message latency and bulk
-/// throughput.
-fn bench_splice_vs_direct(c: &mut Criterion) {
-    // ---------- (a) many small messages: single-request latency ----------
-    {
-        let rt = Runtime::new().expect("splice vs direct small runtime");
-        let mut group = c.benchmark_group("splice_vs_direct_small");
-        group.throughput(Throughput::Elements(1));
-        group.sample_size(20);
-        group.warm_up_time(Duration::from_millis(500));
-        group.measurement_time(Duration::from_secs(5));
+/// Direct vs spliced backend, small-message rate: the proxy forwards to
+/// `http_handler_p3` behind `Ingress`, or to `http_server_p3` through a
+/// published port. N workers each loop `service_request` sequentially, so
+/// many small responses are in flight at once on both arms.
+fn bench_splice_vs_direct_small(c: &mut Criterion) {
+    const CONCURRENCY: usize = 16;
+    const BATCH: usize = 64;
 
-        let (service, backend, spliced_backend, client) = rt.block_on(async {
-            let service = start_service_host().await.expect("service host");
-            let backend = start_backend_host(Flavor::P3).await.expect("backend host");
-            let spliced_backend = start_spliced_backend_host()
-                .await
-                .expect("spliced backend host");
-            let client = bench_client();
-            checked_request(
-                &client,
-                service.addr,
-                Some(backend.addr),
-                Flavor::P3.expected_body(),
-            )
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("splice vs direct small runtime");
+    let mut group = c.benchmark_group("splice_vs_direct_small");
+    group.throughput(Throughput::Elements(BATCH as u64));
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(5));
+
+    let (service, backend, spliced_backend, client) = rt.block_on(async {
+        let service = start_service_host().await.expect("service host");
+        let backend = start_backend_host(Flavor::P3).await.expect("backend host");
+        let spliced_backend = start_spliced_backend_host()
             .await
-            .expect("direct warmup");
-            checked_request(
-                &client,
-                service.addr,
-                Some(spliced_backend.addr),
-                Flavor::P3.expected_body(),
-            )
-            .await
-            .expect("splice warmup");
-            (service, backend, spliced_backend, client)
-        });
+            .expect("spliced backend host");
+        let client = bench_client();
+        checked_request(
+            &client,
+            service.addr,
+            Some(backend.addr),
+            Flavor::P3.expected_body(),
+        )
+        .await
+        .expect("direct warmup");
+        checked_request(
+            &client,
+            service.addr,
+            Some(spliced_backend.addr),
+            Flavor::P3.expected_body(),
+        )
+        .await
+        .expect("splice warmup");
+        (service, backend, spliced_backend, client)
+    });
 
-        // Direct Mode
-        group.bench_function("direct", |b| {
-            b.to_async(&rt).iter(|| async {
-                service_request(&client, service.addr, Some(backend.addr))
-                    .await
-                    .unwrap();
-            });
-        });
-
-        // Splice Mode
-        group.bench_function("splice", |b| {
-            b.to_async(&rt).iter(|| async {
-                service_request(&client, service.addr, Some(spliced_backend.addr))
-                    .await
-                    .unwrap();
-            });
-        });
-
-        group.finish();
-        rt.block_on(async {
-            service.shutdown().await;
-            backend.shutdown().await;
-            spliced_backend.shutdown().await;
-        });
-    }
-
-    // ---------- (b) bulk transfer: concurrent throughput ----------
-    {
-        const CONCURRENCY: usize = 32;
-        const BATCH: usize = 256;
-
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("splice vs direct bulk runtime");
-
-        let mut group = c.benchmark_group("splice_vs_direct_bulk");
-        group.throughput(Throughput::Elements(BATCH as u64));
-        group.sample_size(20);
-        group.measurement_time(Duration::from_secs(15));
-
-        let (service, backend, spliced_backend, client) = rt.block_on(async {
-            let service = start_service_host().await.expect("service host");
-            let backend = start_backend_host(Flavor::P3).await.expect("backend host");
-            let spliced_backend = start_spliced_backend_host()
-                .await
-                .expect("spliced backend host");
-            let client = bench_client();
-            checked_request(
-                &client,
-                service.addr,
-                Some(backend.addr),
-                Flavor::P3.expected_body(),
-            )
-            .await
-            .expect("direct warmup");
-            checked_request(
-                &client,
-                service.addr,
-                Some(spliced_backend.addr),
-                Flavor::P3.expected_body(),
-            )
-            .await
-            .expect("splice warmup");
-            (service, backend, spliced_backend, client)
-        });
-
-        let url = format!("http://{}/", service.addr);
-
-        for (name, target_addr) in [("direct", backend.addr), ("splice", spliced_backend.addr)] {
-            let failures = Arc::new(AtomicUsize::new(0));
-            let failures_ref = failures.clone();
-            let target_header = target_addr.to_string();
-
-            group.bench_function(name, |b| {
-                b.to_async(&rt).iter_custom(|iters| {
-                    let url = url.clone();
-                    let client = client.clone();
-                    let failures = failures_ref.clone();
-                    let target_header = target_header.clone();
-                    async move {
-                        let mut total = Duration::ZERO;
-                        for _ in 0..iters {
-                            let start = Instant::now();
-                            let mut handles = Vec::with_capacity(CONCURRENCY);
-                            let per_worker = BATCH / CONCURRENCY;
-                            for _ in 0..CONCURRENCY {
-                                let client = client.clone();
-                                let url = url.clone();
-                                let failures = failures.clone();
-                                let target_header = target_header.clone();
-                                handles.push(tokio::spawn(async move {
-                                    for _ in 0..per_worker {
-                                        let ok = tokio::time::timeout(REQUEST_TIMEOUT, async {
-                                            match client
-                                                .get(&url)
-                                                .header("x-backend", &target_header)
-                                                .send()
-                                                .await
-                                            {
-                                                Ok(resp) if resp.status().is_success() => {
-                                                    resp.bytes().await.is_ok()
-                                                }
-                                                _ => false,
-                                            }
-                                        })
+    for (name, target_addr) in [("direct", backend.addr), ("splice", spliced_backend.addr)] {
+        let failures = Arc::new(AtomicUsize::new(0));
+        let failures_ref = failures.clone();
+        group.bench_function(name, |b| {
+            b.to_async(&rt).iter_custom(|iters| {
+                let client = client.clone();
+                let failures = failures_ref.clone();
+                async move {
+                    let mut total = Duration::ZERO;
+                    for _ in 0..iters {
+                        let start = Instant::now();
+                        let mut handles = Vec::with_capacity(CONCURRENCY);
+                        let per_worker = BATCH / CONCURRENCY;
+                        for _ in 0..CONCURRENCY {
+                            let client = client.clone();
+                            let failures = failures.clone();
+                            handles.push(tokio::spawn(async move {
+                                for _ in 0..per_worker {
+                                    let ok = tokio::time::timeout(REQUEST_TIMEOUT, async {
+                                        match service_request(
+                                            &client,
+                                            service.addr,
+                                            Some(target_addr),
+                                        )
                                         .await
-                                        .unwrap_or(false);
-                                        if !ok {
-                                            failures.fetch_add(1, Ordering::Relaxed);
+                                        {
+                                            Ok(body)
+                                                if body.as_ref()
+                                                    == Flavor::P3.expected_body().as_bytes() =>
+                                            {
+                                                true
+                                            }
+                                            _ => false,
                                         }
+                                    })
+                                    .await
+                                    .unwrap_or(false);
+                                    if !ok {
+                                        failures.fetch_add(1, Ordering::Relaxed);
                                     }
-                                }));
-                            }
-                            for h in handles {
-                                h.await.expect("worker");
-                            }
-                            total += start.elapsed();
+                                }
+                            }));
                         }
-                        total
+                        for h in handles {
+                            h.await.expect("worker");
+                        }
+                        total += start.elapsed();
                     }
-                });
+                    total
+                }
             });
-            let failed = failures.load(Ordering::Relaxed);
-            if failed > 0 {
-                eprintln!("[splice_vs_direct_bulk/{name}] {failed} requests failed during bench run");
-            }
-        }
-
-        group.finish();
-        rt.block_on(async {
-            service.shutdown().await;
-            backend.shutdown().await;
-            spliced_backend.shutdown().await;
         });
+        let failed = failures.load(Ordering::Relaxed);
+        if failed > 0 {
+            eprintln!("[splice_vs_direct_small/{name}] {failed} requests failed during bench run");
+        }
     }
+
+    group.finish();
+    rt.block_on(async {
+        service.shutdown().await;
+        backend.shutdown().await;
+        spliced_backend.shutdown().await;
+    });
+}
+
+/// Direct vs spliced backend, bulk transfer: concurrent throughput over the
+/// same two backends as [`bench_splice_vs_direct_small`].
+fn bench_splice_vs_direct_bulk(c: &mut Criterion) {
+    const CONCURRENCY: usize = 32;
+    const BATCH: usize = 256;
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("splice vs direct bulk runtime");
+
+    let mut group = c.benchmark_group("splice_vs_direct_bulk");
+    group.throughput(Throughput::Elements(BATCH as u64));
+    group.sample_size(20);
+    group.measurement_time(Duration::from_secs(15));
+
+    let (service, backend, spliced_backend, client) = rt.block_on(async {
+        let service = start_service_host().await.expect("service host");
+        let backend = start_backend_host(Flavor::P3).await.expect("backend host");
+        let spliced_backend = start_spliced_backend_host()
+            .await
+            .expect("spliced backend host");
+        let client = bench_client();
+        checked_request(
+            &client,
+            service.addr,
+            Some(backend.addr),
+            Flavor::P3.expected_body(),
+        )
+        .await
+        .expect("direct warmup");
+        checked_request(
+            &client,
+            service.addr,
+            Some(spliced_backend.addr),
+            Flavor::P3.expected_body(),
+        )
+        .await
+        .expect("splice warmup");
+        (service, backend, spliced_backend, client)
+    });
+
+    let url = format!("http://{}/", service.addr);
+
+    for (name, target_addr) in [("direct", backend.addr), ("splice", spliced_backend.addr)] {
+        let failures = Arc::new(AtomicUsize::new(0));
+        let failures_ref = failures.clone();
+        let target_header = target_addr.to_string();
+
+        group.bench_function(name, |b| {
+            b.to_async(&rt).iter_custom(|iters| {
+                let url = url.clone();
+                let client = client.clone();
+                let failures = failures_ref.clone();
+                let target_header = target_header.clone();
+                async move {
+                    let mut total = Duration::ZERO;
+                    for _ in 0..iters {
+                        let start = Instant::now();
+                        let mut handles = Vec::with_capacity(CONCURRENCY);
+                        let per_worker = BATCH / CONCURRENCY;
+                        for _ in 0..CONCURRENCY {
+                            let client = client.clone();
+                            let url = url.clone();
+                            let failures = failures.clone();
+                            let target_header = target_header.clone();
+                            handles.push(tokio::spawn(async move {
+                                for _ in 0..per_worker {
+                                    let ok = tokio::time::timeout(REQUEST_TIMEOUT, async {
+                                        match client
+                                            .get(&url)
+                                            .header("x-backend", &target_header)
+                                            .send()
+                                            .await
+                                        {
+                                            Ok(resp) if resp.status().is_success() => {
+                                                resp.bytes().await.is_ok()
+                                            }
+                                            _ => false,
+                                        }
+                                    })
+                                    .await
+                                    .unwrap_or(false);
+                                    if !ok {
+                                        failures.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                }
+                            }));
+                        }
+                        for h in handles {
+                            h.await.expect("worker");
+                        }
+                        total += start.elapsed();
+                    }
+                    total
+                }
+            });
+        });
+        let failed = failures.load(Ordering::Relaxed);
+        if failed > 0 {
+            eprintln!("[splice_vs_direct_bulk/{name}] {failed} requests failed during bench run");
+        }
+    }
+
+    group.finish();
+    rt.block_on(async {
+        service.shutdown().await;
+        backend.shutdown().await;
+        spliced_backend.shutdown().await;
+    });
+}
+
+/// Wrapper preserving the `bench_splice_vs_direct` entry: runs the small
+/// rate bench then the bulk throughput bench.
+fn bench_splice_vs_direct(c: &mut Criterion) {
+    bench_splice_vs_direct_small(c);
+    bench_splice_vs_direct_bulk(c);
 }
 
 criterion_group!(
