@@ -351,6 +351,16 @@ spec:
             {{- range concat ($top.Values.runtime.ociCaPaths | default list) (.ociCaPaths | default list) }}
             - "--oci-ca-path={{ . }}"
             {{- end }}
+            {{- /* Component egress trust, which the OCI bundles above do not
+                   cover: a third trust store that reads neither the container's
+                   system roots nor the image-pull bundles. Chart-wide entries
+                   first, then per-host-group ones. */}}
+            {{- range concat ($top.Values.runtime.httpClientCaPaths | default list) (.httpClientCaPaths | default list) }}
+            - "--http-client-ca-path={{ . }}"
+            {{- end }}
+            {{- with (.httpClientTrustRoots | default $top.Values.runtime.httpClientTrustRoots) }}
+            - "--http-client-trust-roots={{ . }}"
+            {{- end }}
             {{- if and (.webgpu) (.webgpu.enabled) }}
             - "--wasi-webgpu"
             {{- end }}

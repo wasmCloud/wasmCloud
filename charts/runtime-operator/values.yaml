@@ -310,6 +310,37 @@ runtime:
   # relax verification but replaces it: every registry drops to plain HTTP, so
   # nothing is verified and credentials travel in the clear.
   ociCaPaths: []
+
+  # -- Extra CA certificate bundles (paths inside the host container) trusted
+  # for outbound HTTPS that components make (`wasi:http`), for a service behind
+  # a private or in-cluster CA. Applies to every host group; add
+  # `hostGroups[].httpClientCaPaths` for one group alone.
+  #
+  # A third trust store, separate from `ociCaPaths` above and from the ingress
+  # server's own TLS: naming a bundle for image pulls does nothing for a
+  # component's outgoing call, which fails its handshake with
+  # `InvalidCertificate(UnknownIssuer)` until it is named here too.
+  #
+  # A service served from a host group in this cluster presents a certificate
+  # from the chart's own CA, already mounted whenever `global.tls.enabled`:
+  #   httpClientCaPaths: ["/runtime-cert/ca.crt"]
+  #
+  # Verifies servers only. Components present no client certificate, so an
+  # endpoint requiring mutual TLS is not reachable by naming its CA here; see
+  # `wash host --http-client-cert-path`, which the chart does not template
+  # because the host reads a credential once at startup and would keep
+  # presenting a rotated one.
+  httpClientCaPaths: []
+
+  # -- Built-in roots layered under `httpClientCaPaths`: `webpki` (the default,
+  # compiled-in public roots), `webpki-and-native` (also the platform store,
+  # honouring `SSL_CERT_FILE`/`SSL_CERT_DIR`), `native`, or `extra-only` (trust
+  # exactly the bundles above and nothing else — the corporate-CA case of
+  # pinning a single private root).
+  #
+  # Empty leaves the host's own default. Override per group with
+  # `hostGroups[].httpClientTrustRoots`.
+  httpClientTrustRoots: ""
   # -- Labels to add to runtime host pod templates
   podLabels: {}
   # -- Annotations to add to runtime host pod templates
@@ -906,3 +937,10 @@ runtime:
       # chart-wide `runtime.ociCaPaths` rather than replacing it:
       # ociCaPaths:
       #   - "/runtime-cert/ca.crt"
+      # -- Extra CA bundles trusted for this group's component egress, added to
+      # the chart-wide `runtime.httpClientCaPaths` rather than replacing it:
+      # httpClientCaPaths:
+      #   - "/runtime-cert/ca.crt"
+      # -- Built-in roots for this group's component egress. Replaces the
+      # chart-wide `runtime.httpClientTrustRoots` when set:
+      # httpClientTrustRoots: "extra-only"
