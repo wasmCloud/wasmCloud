@@ -47,14 +47,44 @@ async fn handle_http(sock: TcpSocket) {
                 }
             }
 
-            // Write HTTP/1.1 response matching `Flavor::P3.expected_body()`
-            let header = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                BODY.len()
-            );
-            outgoing_tx.write_all(header.into_bytes()).await;
-            outgoing_tx.write_all(BODY.to_vec()).await;
-            drop(outgoing_tx);
+            let line_end = buf.iter().position(|&b| b == b'\n').unwrap_or(buf.len());
+            let mut parts = buf[..line_end].split(|&b| b == b' ');
+            let _method = parts.next();
+            let path = parts.next().unwrap_or_default();
+            let is_bulk = path.starts_with(b"/bulk");
+            let is_stream = path.starts_with(b"/stream");
+
+            if is_bulk {
+                let header = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+                outgoing_tx.write_all(header.as_bytes().to_vec()).await;
+                let chunk_data = vec![b'x'; 65536];
+                let chunk_hdr = format!("{:x}\r\n", chunk_data.len()).into_bytes();
+                for _ in 0..16 {
+                    outgoing_tx.write_all(chunk_hdr.clone()).await;
+                    outgoing_tx.write_all(chunk_data.clone()).await;
+                    outgoing_tx.write_all(b"\r\n".to_vec()).await;
+                }
+                outgoing_tx.write_all(b"0\r\n\r\n".to_vec()).await;
+                drop(outgoing_tx);
+            } else if is_stream {
+                let header = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+                outgoing_tx.write_all(header.as_bytes().to_vec()).await;
+                let chunk = format!("{:x}\r\nhello from p3\r\n", BODY.len()).into_bytes();
+                for _ in 0..500 {
+                    outgoing_tx.write_all(chunk.clone()).await;
+                }
+                outgoing_tx.write_all(b"0\r\n\r\n".to_vec()).await;
+                drop(outgoing_tx);
+            } else {
+                // Write HTTP/1.1 response matching `Flavor::P3.expected_body()`
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    BODY.len()
+                );
+                outgoing_tx.write_all(header.into_bytes()).await;
+                outgoing_tx.write_all(BODY.to_vec()).await;
+                drop(outgoing_tx);
+            }
         }
     );
     let _ = incoming_done.await;

@@ -73,7 +73,7 @@ fn bench_cold(c: &mut Criterion) {
                 let start = Instant::now();
                 let service = start_service_host().await.expect("service host");
                 let client = bench_client();
-                checked_request(&client, service.addr, None, DIRECT_BODY)
+                checked_request(&client, service.addr, None, DIRECT_BODY, None)
                     .await
                     .expect("first request");
                 total += start.elapsed();
@@ -96,7 +96,7 @@ fn bench_hot_direct(c: &mut Criterion) {
     let (service, client) = rt.block_on(async {
         let service = start_service_host().await.expect("service host");
         let client = bench_client();
-        checked_request(&client, service.addr, None, DIRECT_BODY)
+        checked_request(&client, service.addr, None, DIRECT_BODY, None)
             .await
             .expect("warmup");
         (service, client)
@@ -104,7 +104,7 @@ fn bench_hot_direct(c: &mut Criterion) {
 
     group.bench_function("direct", |b| {
         b.to_async(&rt).iter(|| async {
-            service_request(&client, service.addr, None).await.unwrap();
+            service_request(&client, service.addr, None, None).await.unwrap();
         });
     });
     group.finish();
@@ -130,7 +130,7 @@ fn bench_throughput_direct(c: &mut Criterion) {
     let (service, client) = rt.block_on(async {
         let service = start_service_host().await.expect("service host");
         let client = bench_client();
-        checked_request(&client, service.addr, None, DIRECT_BODY)
+        checked_request(&client, service.addr, None, DIRECT_BODY, None)
             .await
             .expect("warmup");
         (service, client)
@@ -233,6 +233,7 @@ fn bench_service_to_component(c: &mut Criterion) {
                 service.addr,
                 Some(backend.addr),
                 flavor.expected_body(),
+                None,
             )
             .await
             .expect("routed warmup");
@@ -251,12 +252,17 @@ fn bench_service_to_component(c: &mut Criterion) {
                             in_burst = 0;
                             tokio::time::sleep(PAUSE).await;
                             for _ in 0..WARMERS {
-                                let _ = service_request(&client, service_addr, Some(backend_addr))
-                                    .await;
+                                let _ = service_request(
+                                    &client,
+                                    service_addr,
+                                    Some(backend_addr),
+                                    None,
+                                )
+                                .await;
                             }
                         }
                         let start = Instant::now();
-                        service_request(&client, service_addr, Some(backend_addr))
+                        service_request(&client, service_addr, Some(backend_addr), None)
                             .await
                             .unwrap();
                         total += start.elapsed();
@@ -274,23 +280,23 @@ fn bench_service_to_component(c: &mut Criterion) {
     group.finish();
 }
 
-/// Direct vs spliced backend, small-message rate: the proxy forwards to
-/// `http_handler_p3` behind `Ingress`, or to `http_server_p3` through a
-/// published port. N workers each loop `service_request` sequentially, so
-/// many small responses are in flight at once on both arms.
+/// Direct vs spliced backend, small-message streaming rate: the proxy forwards
+/// `/stream` to `http_handler_p3` behind `Ingress`, or to `http_server_p3`
+/// through a published port. Each iteration streams 500 small response chunks
+/// to measure per-chunk throughput and batching efficiency.
 fn bench_splice_vs_direct_small(c: &mut Criterion) {
-    const CONCURRENCY: usize = 16;
-    const BATCH: usize = 64;
+    const CHUNKS: usize = 500;
+    let expected_len = CHUNKS * Flavor::P3.expected_body().len();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("splice vs direct small runtime");
     let mut group = c.benchmark_group("splice_vs_direct_small");
-    group.throughput(Throughput::Elements(BATCH as u64));
+    group.throughput(Throughput::Elements(CHUNKS as u64));
     group.sample_size(20);
     group.warm_up_time(Duration::from_millis(500));
-    group.measurement_time(Duration::from_secs(5));
+    group.measurement_time(Duration::from_secs(10));
 
     let (service, backend, spliced_backend, client) = rt.block_on(async {
         let service = start_service_host().await.expect("service host");
@@ -299,11 +305,13 @@ fn bench_splice_vs_direct_small(c: &mut Criterion) {
             .await
             .expect("spliced backend host");
         let client = bench_client();
+        let stream_body = Flavor::P3.expected_body().repeat(CHUNKS);
         checked_request(
             &client,
             service.addr,
             Some(backend.addr),
-            Flavor::P3.expected_body(),
+            &stream_body,
+            Some("/stream"),
         )
         .await
         .expect("direct warmup");
@@ -311,16 +319,19 @@ fn bench_splice_vs_direct_small(c: &mut Criterion) {
             &client,
             service.addr,
             Some(spliced_backend.addr),
-            Flavor::P3.expected_body(),
+            &stream_body,
+            Some("/stream"),
         )
         .await
         .expect("splice warmup");
+
         (service, backend, spliced_backend, client)
     });
 
     for (name, target_addr) in [("direct", backend.addr), ("splice", spliced_backend.addr)] {
         let failures = Arc::new(AtomicUsize::new(0));
         let failures_ref = failures.clone();
+
         group.bench_function(name, |b| {
             b.to_async(&rt).iter_custom(|iters| {
                 let client = client.clone();
@@ -329,40 +340,19 @@ fn bench_splice_vs_direct_small(c: &mut Criterion) {
                     let mut total = Duration::ZERO;
                     for _ in 0..iters {
                         let start = Instant::now();
-                        let mut handles = Vec::with_capacity(CONCURRENCY);
-                        let per_worker = BATCH / CONCURRENCY;
-                        for _ in 0..CONCURRENCY {
-                            let client = client.clone();
-                            let failures = failures.clone();
-                            handles.push(tokio::spawn(async move {
-                                for _ in 0..per_worker {
-                                    let ok = tokio::time::timeout(REQUEST_TIMEOUT, async {
-                                        match service_request(
-                                            &client,
-                                            service.addr,
-                                            Some(target_addr),
-                                        )
-                                        .await
-                                        {
-                                            Ok(body)
-                                                if body.as_ref()
-                                                    == Flavor::P3.expected_body().as_bytes() =>
-                                            {
-                                                true
-                                            }
-                                            _ => false,
-                                        }
-                                    })
-                                    .await
-                                    .unwrap_or(false);
-                                    if !ok {
-                                        failures.fetch_add(1, Ordering::Relaxed);
-                                    }
-                                }
-                            }));
-                        }
-                        for h in handles {
-                            h.await.expect("worker");
+                        let ok = match service_request(
+                            &client,
+                            service.addr,
+                            Some(target_addr),
+                            Some("/stream"),
+                        )
+                        .await
+                        {
+                            Ok(bytes) => bytes.len() == expected_len,
+                            Err(_) => false,
+                        };
+                        if !ok {
+                            failures.fetch_add(1, Ordering::Relaxed);
                         }
                         total += start.elapsed();
                     }
@@ -384,11 +374,10 @@ fn bench_splice_vs_direct_small(c: &mut Criterion) {
     });
 }
 
-/// Direct vs spliced backend, bulk transfer: concurrent throughput over the
-/// same two backends as [`bench_splice_vs_direct_small`].
+/// Direct vs spliced backend, bulk transfer: 1 MB streaming payload throughput
+/// over the same two backends as [`bench_splice_vs_direct_small`].
 fn bench_splice_vs_direct_bulk(c: &mut Criterion) {
-    const CONCURRENCY: usize = 32;
-    const BATCH: usize = 256;
+    const BULK_BYTES: usize = 1024 * 1024;
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -396,9 +385,10 @@ fn bench_splice_vs_direct_bulk(c: &mut Criterion) {
         .expect("splice vs direct bulk runtime");
 
     let mut group = c.benchmark_group("splice_vs_direct_bulk");
-    group.throughput(Throughput::Elements(BATCH as u64));
+    group.throughput(Throughput::Bytes(BULK_BYTES as u64));
     group.sample_size(20);
-    group.measurement_time(Duration::from_secs(15));
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(10));
 
     let (service, backend, spliced_backend, client) = rt.block_on(async {
         let service = start_service_host().await.expect("service host");
@@ -407,11 +397,13 @@ fn bench_splice_vs_direct_bulk(c: &mut Criterion) {
             .await
             .expect("spliced backend host");
         let client = bench_client();
+        let bulk_body = vec![b'x'; BULK_BYTES];
         checked_request(
             &client,
             service.addr,
             Some(backend.addr),
-            Flavor::P3.expected_body(),
+            &bulk_body,
+            Some("/bulk"),
         )
         .await
         .expect("direct warmup");
@@ -419,62 +411,40 @@ fn bench_splice_vs_direct_bulk(c: &mut Criterion) {
             &client,
             service.addr,
             Some(spliced_backend.addr),
-            Flavor::P3.expected_body(),
+            &bulk_body,
+            Some("/bulk"),
         )
         .await
         .expect("splice warmup");
+
         (service, backend, spliced_backend, client)
     });
-
-    let url = format!("http://{}/", service.addr);
 
     for (name, target_addr) in [("direct", backend.addr), ("splice", spliced_backend.addr)] {
         let failures = Arc::new(AtomicUsize::new(0));
         let failures_ref = failures.clone();
-        let target_header = target_addr.to_string();
 
         group.bench_function(name, |b| {
             b.to_async(&rt).iter_custom(|iters| {
-                let url = url.clone();
                 let client = client.clone();
                 let failures = failures_ref.clone();
-                let target_header = target_header.clone();
                 async move {
                     let mut total = Duration::ZERO;
                     for _ in 0..iters {
                         let start = Instant::now();
-                        let mut handles = Vec::with_capacity(CONCURRENCY);
-                        let per_worker = BATCH / CONCURRENCY;
-                        for _ in 0..CONCURRENCY {
-                            let client = client.clone();
-                            let url = url.clone();
-                            let failures = failures.clone();
-                            let target_header = target_header.clone();
-                            handles.push(tokio::spawn(async move {
-                                for _ in 0..per_worker {
-                                    let ok = tokio::time::timeout(REQUEST_TIMEOUT, async {
-                                        match client
-                                            .get(&url)
-                                            .header("x-backend", &target_header)
-                                            .send()
-                                            .await
-                                        {
-                                            Ok(resp) if resp.status().is_success() => {
-                                                resp.bytes().await.is_ok()
-                                            }
-                                            _ => false,
-                                        }
-                                    })
-                                    .await
-                                    .unwrap_or(false);
-                                    if !ok {
-                                        failures.fetch_add(1, Ordering::Relaxed);
-                                    }
-                                }
-                            }));
-                        }
-                        for h in handles {
-                            h.await.expect("worker");
+                        let ok = match service_request(
+                            &client,
+                            service.addr,
+                            Some(target_addr),
+                            Some("/bulk"),
+                        )
+                        .await
+                        {
+                            Ok(bytes) => bytes.len() == BULK_BYTES,
+                            Err(_) => false,
+                        };
+                        if !ok {
+                            failures.fetch_add(1, Ordering::Relaxed);
                         }
                         total += start.elapsed();
                     }
@@ -496,8 +466,6 @@ fn bench_splice_vs_direct_bulk(c: &mut Criterion) {
     });
 }
 
-/// Wrapper preserving the `bench_splice_vs_direct` entry: runs the small
-/// rate bench then the bulk throughput bench.
 fn bench_splice_vs_direct(c: &mut Criterion) {
     bench_splice_vs_direct_small(c);
     bench_splice_vs_direct_bulk(c);

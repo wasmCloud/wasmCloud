@@ -205,13 +205,28 @@ pub fn bench_client() -> reqwest::Client {
 
 /// GET the service; with `backend` set the service proxies to that authority.
 /// Bounded by [`REQUEST_TIMEOUT`] so a wedged host fails the run instead of
-/// hanging it.
 pub async fn service_request(
     client: &reqwest::Client,
     addr: std::net::SocketAddr,
     backend: Option<std::net::SocketAddr>,
+    endpoint: Option<&str>,
 ) -> anyhow::Result<bytes::Bytes> {
-    let mut req = client.get(format!("http://{addr}/"));
+    service_request_path(client, addr, backend, endpoint).await
+}
+
+pub async fn service_request_path(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    backend: Option<std::net::SocketAddr>,
+    endpoint: Option<&str>,
+) -> anyhow::Result<bytes::Bytes> {
+    let endpoint = endpoint.unwrap_or("/");
+    let path = if endpoint.starts_with('/') {
+        endpoint.to_string()
+    } else {
+        format!("/{endpoint}")
+    };
+    let mut req = client.get(format!("http://{addr}{path}"));
     if let Some(backend) = backend {
         req = req.header("x-backend", backend.to_string());
     }
@@ -231,13 +246,16 @@ pub async fn checked_request(
     client: &reqwest::Client,
     addr: std::net::SocketAddr,
     backend: Option<std::net::SocketAddr>,
-    expected_body: &str,
+    expected_body: impl AsRef<[u8]>,
+    endpoint: Option<&str>,
 ) -> anyhow::Result<()> {
-    let body = service_request(client, addr, backend).await?;
+    let body = service_request_path(client, addr, backend, endpoint).await?;
+    let expected = expected_body.as_ref();
     anyhow::ensure!(
-        body == expected_body.as_bytes(),
-        "unexpected body: {:?} (want {expected_body:?})",
-        String::from_utf8_lossy(&body)
+        body == expected,
+        "unexpected body: got {} bytes, want {} bytes",
+        body.len(),
+        expected.len()
     );
     Ok(())
 }
