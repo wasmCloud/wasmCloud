@@ -338,8 +338,9 @@ runtime:
   # exactly the bundles above and nothing else — the corporate-CA case of
   # pinning a single private root).
   #
-  # Empty leaves the host's own default. Override per group with
-  # `hostGroups[].httpClientTrustRoots`.
+  # Empty leaves the host's own default. A group overrides this with a
+  # non-empty `hostGroups[].httpClientTrustRoots`; a group cannot set empty to
+  # fall back to the host default once this is set, so name the roots it wants.
   httpClientTrustRoots: ""
   # -- Labels to add to runtime host pod templates
   podLabels: {}
@@ -941,6 +942,8 @@ runtime:
       # the chart-wide `runtime.httpClientCaPaths` rather than replacing it:
       # httpClientCaPaths:
       #   - "/runtime-cert/ca.crt"
-      # -- Built-in roots for this group's component egress. Replaces the
-      # chart-wide `runtime.httpClientTrustRoots` when set:
+      # -- Built-in roots for this group's component egress. A non-empty
+      # value replaces the chart-wide `runtime.httpClientTrustRoots`; empty
+      # inherits it. There is no way to spell "ignore the chart-wide value and
+      # take the host default" — name the roots this group wants instead:
       # httpClientTrustRoots: "extra-only"
