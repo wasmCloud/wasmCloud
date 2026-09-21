@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::Context as _;
+use anyhow::{Context as _, bail};
 use clap::Args;
 use tracing::info;
 use wash_runtime::{
@@ -133,8 +133,14 @@ pub struct HostCommand {
     ///
     /// The other half of `--http-client-ca-path`: that decides which servers
     /// this host will talk to, this decides who it says it is when one asks.
-    /// Host-wide, so every workload on this host authenticates as this
-    /// identity. Requires `--http-client-key-path`.
+    /// Host-wide *and* destination-wide: every workload on this host
+    /// authenticates as this identity, and it is presented to any peer that
+    /// asks for a client certificate, with no per-destination scoping. A
+    /// workload whose `allowed_hosts` reaches an arbitrary endpoint can
+    /// therefore make the host disclose this certificate to it, so pair this
+    /// with an `allowed_hosts` narrow enough to name the services it is for.
+    ///
+    /// Requires `--http-client-key-path`.
     #[arg(
         long = "http-client-cert-path",
         env = "WASH_HTTP_CLIENT_CERT_PATH",
@@ -610,23 +616,38 @@ fn host_plugin_registry_credentials(
 impl HostCommand {
     /// Outbound TLS for components: which servers to trust, and which
     /// identity to present when one asks for a client certificate.
-    fn client_tls_options(&self) -> wash_runtime::host::http_client::ClientTlsOptions {
+    fn client_tls_options(
+        &self,
+    ) -> anyhow::Result<wash_runtime::host::http_client::ClientTlsOptions> {
         let mut options = wash_runtime::host::http_client::ClientTlsOptions::default();
         options.roots = self.http_client_trust_roots.into();
         options.extra_ca_paths = self.http_client_ca_paths.clone();
-        // Clap keeps these together, so one present means both are.
-        if let (Some(cert_path), Some(key_path)) = (
+        // Clap's `requires` pairs these on the command line, but this struct
+        // is public and an embedder can set one alone. Half a credential is
+        // refused rather than dropped: silently serving without an identity
+        // surfaces as the upstream rejecting every request, which is the
+        // failure this whole flag exists to avoid.
+        match (
             self.http_client_cert_path.clone(),
             self.http_client_key_path.clone(),
         ) {
-            options.client_identity = Some(
-                wash_runtime::host::http_client::ClientIdentity::CertificatePem {
-                    cert_path,
-                    key_path,
-                },
-            );
+            (Some(cert_path), Some(key_path)) => {
+                options.client_identity = Some(
+                    wash_runtime::host::http_client::ClientIdentity::CertificatePem {
+                        cert_path,
+                        key_path,
+                    },
+                );
+            }
+            (None, None) => {}
+            (Some(_), None) => {
+                bail!("--http-client-cert-path needs --http-client-key-path")
+            }
+            (None, Some(_)) => {
+                bail!("--http-client-key-path needs --http-client-cert-path")
+            }
         }
-        options
+        Ok(options)
     }
 
     /// The operator's plugin binding declarations, plus the fallbacks this
@@ -969,7 +990,7 @@ impl CliCommand for HostCommand {
             // options below, which configure the HTTP *server*.
             let outgoing_handler =
                 wash_runtime::host::http::DefaultOutgoingHandler::from_tls_options(
-                    self.client_tls_options(),
+                    self.client_tls_options()?,
                 )
                 .context("failed to load --http-client-ca-path CA certificates")?
                 // The same registry the socket policy uses, so a workload's

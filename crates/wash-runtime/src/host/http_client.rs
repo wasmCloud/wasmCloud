@@ -309,11 +309,15 @@ impl ClientTlsOptions {
         let config = match &self.client_identity {
             Some(identity) => {
                 let (certs, key) = identity.load()?;
-                // Checks the key against the leaf certificate's
-                // SubjectPublicKeyInfo, so a crossed pair fails here.
-                let config = builder.with_client_auth_cert(certs, key).with_context(|| {
-                    format!("{identity} is not a usable client identity: the key does not match the certificate")
-                })?;
+                // Parses the key and compares it against the leaf's
+                // SubjectPublicKeyInfo, so this rejects both a key the
+                // provider cannot use and a crossed pair. Not a guarantee of
+                // consistency: `CertifiedKey::from_der` tolerates
+                // `InconsistentKeys(Unknown)`, so a key that cannot report its
+                // public half is accepted unchecked.
+                let config = builder
+                    .with_client_auth_cert(certs, key)
+                    .with_context(|| format!("{identity} is not a usable client identity"))?;
                 debug!(
                     identity = %identity,
                     "presenting a client certificate for outbound TLS"
@@ -799,7 +803,14 @@ impl PooledClient {
 ///
 /// Consulted when a workload's [`PooledClient`] is built, not per request, so
 /// a configuration handed out here is the one every connection in that pool
-/// negotiates with. Replace a credential *without* rebuilding the pool by
+/// negotiates with.
+///
+/// Must be cheap and must not block. It is called synchronously on the
+/// runtime worker serving the workload's first outbound request, while the
+/// client cache holds its per-key initialization lock, so reading a file or
+/// fetching a secret here stalls that worker and serializes every concurrent
+/// first request for the workload. Resolve credentials ahead of time and let
+/// this hand back what is already loaded. Replace a credential *without* rebuilding the pool by
 /// keeping one configuration per workload whose
 /// [`rustls::client::ResolvesClientCert`] reads swappable state: rustls
 /// consults that on every handshake, so a rotated credential applies to new
