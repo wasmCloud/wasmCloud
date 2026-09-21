@@ -1,0 +1,13 @@
+package example:feeds@0.1.0;
+
+/// A tiny guest-to-guest interface: two sibling components export it, and a
+/// third imports it twice under `(implements ..)` labels naming each of them.
+interface reader {
+    /// Returns the exporting component's own name, so the caller can tell
+    /// which sibling a labelled import actually reached.
+    source: func() -> string;
+}
+
+world imports {
+    import reader;
+}

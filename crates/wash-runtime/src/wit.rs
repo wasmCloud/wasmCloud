@@ -206,9 +206,11 @@ pub struct WitInterface {
     #[serde(default)]
     pub config: HashMap<String, String>,
     /// Optional name identifying this specific instance when multiple entries
-    /// of the same namespace:package exist. Used as the routing key in
-    /// multiplexing plugins (the `identifier` in store::open, etc.), and as the
-    /// binding name an operator declares under a `host.plugins` entry.
+    /// of the same namespace:package exist. Three meanings, all routing keys:
+    /// the `identifier` a multiplexing plugin opens with (store::open, etc.);
+    /// the binding name an operator declares under a `host.plugins` entry; and,
+    /// for an intra-workload import, the `name` of the component in the same
+    /// workload that serves it.
     #[serde(default)]
     pub name: Option<String>,
 }

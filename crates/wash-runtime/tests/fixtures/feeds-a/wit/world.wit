@@ -1,0 +1,5 @@
+package example:feeds-a@0.1.0;
+
+world component {
+    export example:feeds/reader@0.1.0;
+}

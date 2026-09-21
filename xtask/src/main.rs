@@ -102,6 +102,9 @@ const P2_FIXTURES: &[&str] = &[
     "keyvalue-counter",
     "keyvalue-implements",
     "postgres-implements",
+    "feeds-a",
+    "feeds-b",
+    "feeds-caller",
 ];
 
 const P3_FIXTURES: &[&str] = &[
