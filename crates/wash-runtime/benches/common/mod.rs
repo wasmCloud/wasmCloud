@@ -205,6 +205,7 @@ pub fn bench_client() -> reqwest::Client {
 
 /// GET the service; with `backend` set the service proxies to that authority.
 /// Bounded by [`REQUEST_TIMEOUT`] so a wedged host fails the run instead of
+/// hanging it.
 pub async fn service_request(
     client: &reqwest::Client,
     addr: std::net::SocketAddr,

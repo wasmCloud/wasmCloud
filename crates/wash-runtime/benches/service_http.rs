@@ -361,9 +361,10 @@ fn bench_splice_vs_direct_small(c: &mut Criterion) {
             });
         });
         let failed = failures.load(Ordering::Relaxed);
-        if failed > 0 {
-            eprintln!("[splice_vs_direct_small/{name}] {failed} requests failed during bench run");
-        }
+        assert_eq!(
+            failed, 0,
+            "[splice_vs_direct_small/{name}] {failed} requests failed during bench run"
+        );
     }
 
     group.finish();
@@ -453,9 +454,10 @@ fn bench_splice_vs_direct_bulk(c: &mut Criterion) {
             });
         });
         let failed = failures.load(Ordering::Relaxed);
-        if failed > 0 {
-            eprintln!("[splice_vs_direct_bulk/{name}] {failed} requests failed during bench run");
-        }
+        assert_eq!(
+            failed, 0,
+            "[splice_vs_direct_bulk/{name}] {failed} requests failed during bench run"
+        );
     }
 
     group.finish();
