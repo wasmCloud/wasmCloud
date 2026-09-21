@@ -1,0 +1,10 @@
+package example:feeds-caller@0.1.0;
+
+// Imports the SAME guest-exported interface twice under two component-model
+// `(implements ..)` labels. Each label names a sibling component's manifest
+// name in the workload (`feed-a` / `feed-b`), which is what routes it.
+world component {
+    import feed-a: example:feeds/reader@0.1.0;
+    import feed-b: example:feeds/reader@0.1.0;
+    export wasi:http/incoming-handler@0.2.2;
+}

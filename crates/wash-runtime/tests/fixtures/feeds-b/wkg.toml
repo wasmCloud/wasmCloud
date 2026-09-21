@@ -1,0 +1,2 @@
+[overrides]
+"example:feeds" = { path = "../p2-wit-deps/example-feeds-0.1.0" }
