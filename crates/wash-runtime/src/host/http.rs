@@ -981,7 +981,7 @@ impl DefaultOutgoingHandler {
     /// [`crate::host::http_client::ClientTlsOptions`] for building one with
     /// extra CA bundles or a client certificate).
     pub fn with_tls_config(tls: Arc<rustls::ClientConfig>) -> Self {
-        Self::with_tls_resolver(Arc::new(tls))
+        Self::with_tls_config_resolver(Arc::new(tls))
     }
 
     /// Create a handler that resolves outbound TLS per workload, so each can
@@ -989,11 +989,13 @@ impl DefaultOutgoingHandler {
     ///
     /// Otherwise identical to [`Self::with_tls_config`], which is this with a
     /// resolver that answers every workload the same way.
-    pub fn with_tls_resolver(tls: Arc<dyn crate::host::http_client::ClientConfigResolver>) -> Self {
+    pub fn with_tls_config_resolver(
+        tls: Arc<dyn crate::host::http_client::ClientTlsConfigResolver>,
+    ) -> Self {
         let quotas = crate::host::quota::QuotaRegistry::new(Default::default(), None);
         let cell = OnceLock::new();
         let _ = cell.set(
-            crate::host::http_client::WorkloadClients::with_config_resolver(
+            crate::host::http_client::WorkloadClients::with_tls_config_resolver(
                 tls,
                 Arc::clone(&quotas),
             ),
@@ -1035,8 +1037,8 @@ impl DefaultOutgoingHandler {
             // configuration here would collapse every workload's identity
             // onto it.
             let _ = cell.set(
-                crate::host::http_client::WorkloadClients::with_config_resolver(
-                    clients.config_resolver(),
+                crate::host::http_client::WorkloadClients::with_tls_config_resolver(
+                    clients.tls_config_resolver(),
                     Arc::clone(&quotas),
                 ),
             );

@@ -178,43 +178,63 @@ pub enum TrustRoots {
 /// asks. A peer that only *requests* a certificate completes the handshake
 /// either way, so a missing identity surfaces as the upstream rejecting
 /// requests rather than as a TLS error.
+///
+/// `#[non_exhaustive]`: PEM files on disk are the only form today, but a
+/// credential can arrive as a PKCS#12 bundle, as DER already in memory, or as
+/// a handle to something that never leaves an HSM. Naming the shape now keeps
+/// adding one from being a breaking change.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClientIdentity {
-    /// Certificate chain, leaf first.
-    pub cert_path: PathBuf,
-    /// Private key for the leaf certificate.
-    pub key_path: PathBuf,
+#[non_exhaustive]
+pub enum ClientIdentity {
+    /// A certificate chain and its private key, each PEM-encoded on disk.
+    CertificatePem {
+        /// Certificate chain, leaf first.
+        cert_path: PathBuf,
+        /// Private key for the leaf certificate.
+        key_path: PathBuf,
+    },
+}
+
+impl std::fmt::Display for ClientIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CertificatePem {
+                cert_path,
+                key_path,
+            } => write!(
+                f,
+                "certificate {} with key {}",
+                cert_path.display(),
+                key_path.display()
+            ),
+        }
+    }
 }
 
 impl ClientIdentity {
     /// Read the chain and key.
     fn load(&self) -> anyhow::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
-        let certs = CertificateDer::pem_file_iter(&self.cert_path)
-            .with_context(|| {
-                format!(
-                    "failed to read client certificate {}",
-                    self.cert_path.display()
-                )
-            })?
+        let Self::CertificatePem {
+            cert_path,
+            key_path,
+        } = self;
+        let certs = CertificateDer::pem_file_iter(cert_path)
+            .with_context(|| format!("failed to read client certificate {}", cert_path.display()))?
             .collect::<Result<Vec<_>, _>>()
             .with_context(|| {
                 format!(
                     "failed to parse PEM in client certificate {}",
-                    self.cert_path.display()
+                    cert_path.display()
                 )
             })?;
         anyhow::ensure!(
             !certs.is_empty(),
             "no certificate found in {}",
-            self.cert_path.display()
+            cert_path.display()
         );
 
-        let key = PrivateKeyDer::from_pem_file(&self.key_path).with_context(|| {
-            format!(
-                "failed to read client private key {}",
-                self.key_path.display()
-            )
-        })?;
+        let key = PrivateKeyDer::from_pem_file(key_path)
+            .with_context(|| format!("failed to read client private key {}", key_path.display()))?;
         Ok((certs, key))
     }
 }
@@ -292,14 +312,10 @@ impl ClientTlsOptions {
                 // Checks the key against the leaf certificate's
                 // SubjectPublicKeyInfo, so a crossed pair fails here.
                 let config = builder.with_client_auth_cert(certs, key).with_context(|| {
-                    format!(
-                        "client certificate {} does not match key {}",
-                        identity.cert_path.display(),
-                        identity.key_path.display()
-                    )
+                    format!("{identity} is not a usable client identity: the key does not match the certificate")
                 })?;
                 debug!(
-                    cert_path = %identity.cert_path.display(),
+                    identity = %identity,
                     "presenting a client certificate for outbound TLS"
                 );
                 config
@@ -792,7 +808,7 @@ impl PooledClient {
 /// `workload_id` is the host-assigned identifier described on
 /// [`WorkloadClients::client`], never guest-controlled, which is what makes
 /// it safe to key an identity on.
-pub trait ClientConfigResolver: Send + Sync + 'static {
+pub trait ClientTlsConfigResolver: Send + Sync + 'static {
     /// The configuration `workload_id`'s connections use.
     fn config_for(&self, workload_id: &str) -> Arc<rustls::ClientConfig>;
 
@@ -810,7 +826,7 @@ pub trait ClientConfigResolver: Send + Sync + 'static {
 
 /// One configuration for every workload, which is what a host without
 /// per-workload identity wants.
-impl ClientConfigResolver for Arc<rustls::ClientConfig> {
+impl ClientTlsConfigResolver for Arc<rustls::ClientConfig> {
     fn config_for(&self, _workload_id: &str) -> Arc<rustls::ClientConfig> {
         Arc::clone(self)
     }
@@ -832,7 +848,7 @@ impl ClientConfigResolver for Arc<rustls::ClientConfig> {
 /// Cloning is cheap and shares the underlying client cache.
 #[derive(Clone)]
 pub struct WorkloadClients {
-    tls: Arc<dyn ClientConfigResolver>,
+    tls: Arc<dyn ClientTlsConfigResolver>,
     /// Where each workload's allowance comes from. Held apart from
     /// [`Self::clients`] so that a client rebuilt for a workload draws on the
     /// same quota its predecessor did: a replaced client's connections keep
@@ -880,7 +896,7 @@ impl WorkloadClients {
         tls: Arc<rustls::ClientConfig>,
         quotas: Arc<crate::host::quota::QuotaRegistry>,
     ) -> Self {
-        Self::with_config_resolver(Arc::new(tls), quotas)
+        Self::with_tls_config_resolver(Arc::new(tls), quotas)
     }
 
     /// Create a per-workload client cache that resolves a TLS configuration
@@ -888,8 +904,8 @@ impl WorkloadClients {
     ///
     /// Otherwise identical to [`Self::with_quotas`], which is this with a
     /// resolver that answers every workload the same way.
-    pub fn with_config_resolver(
-        tls: Arc<dyn ClientConfigResolver>,
+    pub fn with_tls_config_resolver(
+        tls: Arc<dyn ClientTlsConfigResolver>,
         quotas: Arc<crate::host::quota::QuotaRegistry>,
     ) -> Self {
         Self {
@@ -991,7 +1007,7 @@ impl WorkloadClients {
     ///
     /// Not necessarily what any given workload's connections use: a host with
     /// per-workload identities resolves those in [`Self::client`]. See
-    /// [`ClientConfigResolver::host_config`].
+    /// [`ClientTlsConfigResolver::host_config`].
     pub fn tls_config(&self) -> Arc<rustls::ClientConfig> {
         self.tls.host_config()
     }
@@ -1003,7 +1019,7 @@ impl WorkloadClients {
     /// collapse every workload onto the host-wide configuration.
     ///
     /// [`DefaultOutgoingHandler::with_quotas`]: crate::host::http::DefaultOutgoingHandler::with_quotas
-    pub fn config_resolver(&self) -> Arc<dyn ClientConfigResolver> {
+    pub fn tls_config_resolver(&self) -> Arc<dyn ClientTlsConfigResolver> {
         Arc::clone(&self.tls)
     }
 }
@@ -1464,7 +1480,7 @@ mod tests {
         let key_path = dir.join(format!("{stem}.key"));
         std::fs::write(&cert_path, issued.cert.pem()).unwrap();
         std::fs::write(&key_path, issued.signing_key.serialize_pem()).unwrap();
-        ClientIdentity {
+        ClientIdentity::CertificatePem {
             cert_path,
             key_path,
         }
@@ -1494,12 +1510,18 @@ mod tests {
     #[test]
     fn a_mismatched_client_identity_fails_to_build() {
         let dir = tempfile::tempdir().unwrap();
-        let first = write_identity(dir.path(), "first");
-        let second = write_identity(dir.path(), "second");
+        // Cross the pair: the certificate from one, the key from another.
+        let (
+            ClientIdentity::CertificatePem { cert_path, .. },
+            ClientIdentity::CertificatePem { key_path, .. },
+        ) = (
+            write_identity(dir.path(), "first"),
+            write_identity(dir.path(), "second"),
+        );
         let opts = ClientTlsOptions {
-            client_identity: Some(ClientIdentity {
-                cert_path: first.cert_path,
-                key_path: second.key_path,
+            client_identity: Some(ClientIdentity::CertificatePem {
+                cert_path,
+                key_path,
             }),
             ..Default::default()
         };
@@ -1509,7 +1531,7 @@ mod tests {
     #[test]
     fn a_missing_client_identity_fails_to_build() {
         let opts = ClientTlsOptions {
-            client_identity: Some(ClientIdentity {
+            client_identity: Some(ClientIdentity::CertificatePem {
                 cert_path: PathBuf::from("/definitely/not/a/real/client.crt"),
                 key_path: PathBuf::from("/definitely/not/a/real/client.key"),
             }),
@@ -1527,7 +1549,7 @@ mod tests {
         host: Arc<rustls::ClientConfig>,
     }
 
-    impl ClientConfigResolver for PerWorkload {
+    impl ClientTlsConfigResolver for PerWorkload {
         fn config_for(&self, workload_id: &str) -> Arc<rustls::ClientConfig> {
             match workload_id {
                 "a" => Arc::clone(&self.a),
@@ -1561,7 +1583,7 @@ mod tests {
     #[test]
     fn an_arc_config_answers_every_workload_the_same_way() {
         let config = default_client_tls_config();
-        let resolver: Arc<dyn ClientConfigResolver> = Arc::new(Arc::clone(&config));
+        let resolver: Arc<dyn ClientTlsConfigResolver> = Arc::new(Arc::clone(&config));
         assert!(Arc::ptr_eq(&resolver.config_for("a"), &config));
         assert!(Arc::ptr_eq(&resolver.config_for("b"), &config));
         assert!(Arc::ptr_eq(&resolver.host_config(), &config));
@@ -1570,8 +1592,10 @@ mod tests {
     #[test]
     fn each_workloads_client_gets_its_own_configuration() {
         let resolver = per_workload_resolver();
-        let clients =
-            WorkloadClients::with_config_resolver(Arc::clone(&resolver) as _, test_quotas(4, 16));
+        let clients = WorkloadClients::with_tls_config_resolver(
+            Arc::clone(&resolver) as _,
+            test_quotas(4, 16),
+        );
 
         let a = clients.client("a").tls_config();
         let b = clients.client("b").tls_config();
@@ -1585,8 +1609,10 @@ mod tests {
     #[test]
     fn the_host_configuration_is_not_a_workloads() {
         let resolver = per_workload_resolver();
-        let clients =
-            WorkloadClients::with_config_resolver(Arc::clone(&resolver) as _, test_quotas(4, 16));
+        let clients = WorkloadClients::with_tls_config_resolver(
+            Arc::clone(&resolver) as _,
+            test_quotas(4, 16),
+        );
         let host = clients.tls_config();
         assert!(Arc::ptr_eq(&host, &resolver.host));
         assert!(!Arc::ptr_eq(&host, &resolver.a));
@@ -1597,10 +1623,14 @@ mod tests {
     #[test]
     fn a_rebuilt_cache_keeps_its_resolver() {
         let resolver = per_workload_resolver();
-        let clients =
-            WorkloadClients::with_config_resolver(Arc::clone(&resolver) as _, test_quotas(4, 16));
-        let rebuilt =
-            WorkloadClients::with_config_resolver(clients.config_resolver(), test_quotas(8, 32));
+        let clients = WorkloadClients::with_tls_config_resolver(
+            Arc::clone(&resolver) as _,
+            test_quotas(4, 16),
+        );
+        let rebuilt = WorkloadClients::with_tls_config_resolver(
+            clients.tls_config_resolver(),
+            test_quotas(8, 32),
+        );
         assert!(Arc::ptr_eq(&rebuilt.client("a").tls_config(), &resolver.a));
     }
 

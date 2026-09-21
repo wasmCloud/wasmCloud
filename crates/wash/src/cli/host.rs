@@ -619,10 +619,12 @@ impl HostCommand {
             self.http_client_cert_path.clone(),
             self.http_client_key_path.clone(),
         ) {
-            options.client_identity = Some(wash_runtime::host::http_client::ClientIdentity {
-                cert_path,
-                key_path,
-            });
+            options.client_identity = Some(
+                wash_runtime::host::http_client::ClientIdentity::CertificatePem {
+                    cert_path,
+                    key_path,
+                },
+            );
         }
         options
     }
