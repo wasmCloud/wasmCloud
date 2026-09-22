@@ -5,7 +5,7 @@
 //! fetching dependencies from registries and manages lock files for reproducible builds.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     io::ErrorKind,
     path::{Path, PathBuf},
     time::Duration,
@@ -232,8 +232,118 @@ pub struct WkgFetcher {
 struct CachedRelease {
     #[serde(rename = "version")]
     _version: semver::Version,
-    #[serde(rename = "content_digest")]
-    _content_digest: ContentDigest,
+    content_digest: ContentDigest,
+}
+
+async fn cached_blob_matches_digest(path: &Path, digest: &str) -> Result<bool> {
+    let Some(expected) = digest.strip_prefix("sha256:") else {
+        return Ok(false);
+    };
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Ok(false);
+    }
+    let contents = tokio::fs::read(path).await.with_context(|| {
+        format!(
+            "failed to read WIT package cache entry [{}]",
+            path.display()
+        )
+    })?;
+    Ok(format!("{:x}", Sha256::digest(contents)) == expected)
+}
+
+async fn discard_cache_entry(path: &Path) -> Result<()> {
+    warn!(path = %path.display(), "discarding incomplete WIT package cache entry");
+    tokio::fs::remove_file(path).await.with_context(|| {
+        format!(
+            "failed to remove invalid WIT package cache entry [{}]",
+            path.display()
+        )
+    })
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+// Colons in FileCache names become NTFS alternate data streams.
+fn windows_cache_streams(path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    use std::{
+        ffi::OsString,
+        os::windows::ffi::{OsStrExt as _, OsStringExt as _},
+    };
+    use windows_sys::Win32::{
+        Foundation::{ERROR_HANDLE_EOF, HANDLE, INVALID_HANDLE_VALUE},
+        Storage::FileSystem::{
+            FindClose, FindFirstStreamW, FindNextStreamW, FindStreamInfoStandard,
+            WIN32_FIND_STREAM_DATA,
+        },
+    };
+
+    struct FindHandle(HANDLE);
+
+    impl Drop for FindHandle {
+        fn drop(&mut self) {
+            // SAFETY: FindFirstStreamW returned this handle.
+            let _ = unsafe { FindClose(self.0) };
+        }
+    }
+
+    let mut wide_path: Vec<_> = path.as_os_str().encode_wide().collect();
+    wide_path.push(0);
+    let mut data = WIN32_FIND_STREAM_DATA::default();
+    // SAFETY: wide_path is NUL-terminated, and data is valid for writes.
+    let handle = unsafe {
+        FindFirstStreamW(
+            wide_path.as_ptr(),
+            FindStreamInfoStandard,
+            (&raw mut data).cast(),
+            0,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        let error = std::io::Error::last_os_error();
+        return if error.raw_os_error() == Some(ERROR_HANDLE_EOF as i32) {
+            Ok(Vec::new())
+        } else {
+            Err(error)
+        };
+    }
+    let handle = FindHandle(handle);
+    let mut paths = Vec::new();
+    const DATA_SUFFIX: &[u16] = &[
+        b':' as u16,
+        b'$' as u16,
+        b'D' as u16,
+        b'A' as u16,
+        b'T' as u16,
+        b'A' as u16,
+    ];
+
+    loop {
+        let length = data
+            .cStreamName
+            .iter()
+            .position(|character| *character == 0)
+            .unwrap_or(data.cStreamName.len());
+        let stream = &data.cStreamName[..length];
+        if let Some(name) = stream.strip_suffix(DATA_SUFFIX)
+            && name != [b':' as u16]
+        {
+            let mut full_name: Vec<_> = path.as_os_str().encode_wide().collect();
+            full_name.extend_from_slice(name);
+            paths.push(PathBuf::from(OsString::from_wide(&full_name)));
+        }
+
+        data = WIN32_FIND_STREAM_DATA::default();
+        // SAFETY: handle and data remain valid for the enumeration.
+        if unsafe { FindNextStreamW(handle.0, (&raw mut data).cast()) } == 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_HANDLE_EOF as i32) {
+                break;
+            }
+            return Err(error);
+        }
+    }
+
+    Ok(paths)
 }
 
 /// Common arguments for Wasm package tooling.
@@ -500,37 +610,68 @@ impl WkgFetcher {
         let mut entries = tokio::fs::read_dir(cache_dir).await.with_context(|| {
             format!("failed to read WIT package cache [{}]", cache_dir.display())
         })?;
+        let mut referenced = Vec::new();
+        let mut checked = HashSet::new();
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if !entry.file_type().await?.is_file() {
                 continue;
             }
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+
+            let paths = vec![path.clone()];
+            #[cfg(windows)]
+            let paths = {
+                let mut paths = paths;
+                paths.extend(windows_cache_streams(&path)?);
+                paths
+            };
+
+            for path in paths {
+                let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+
+                let valid = if name.starts_with("sha256:") {
+                    checked.insert(path.clone());
+                    cached_blob_matches_digest(&path, name).await?
+                } else if path
+                    .extension()
+                    .is_some_and(|extension| extension == "json")
+                {
+                    match serde_json::from_slice::<CachedRelease>(&tokio::fs::read(&path).await?) {
+                        Ok(release) => {
+                            referenced.push(release.content_digest);
+                            true
+                        }
+                        Err(_) => false,
+                    }
+                } else {
+                    true
+                };
+
+                if !valid {
+                    discard_cache_entry(&path).await?;
+                }
+            }
+        }
+
+        for digest in referenced {
+            let digest = digest.to_string();
+            let path = cache_dir.join(&digest);
+            if !checked.insert(path.clone()) {
                 continue;
-            };
-
-            let valid = if let Some(expected) = name.strip_prefix("sha256:") {
-                expected.len() == 64
-                    && expected.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    && format!("{:x}", Sha256::digest(tokio::fs::read(&path).await?)) == expected
-            } else if path
-                .extension()
-                .is_some_and(|extension| extension == "json")
-            {
-                serde_json::from_slice::<CachedRelease>(&tokio::fs::read(&path).await?).is_ok()
-            } else {
-                true
-            };
-
-            if !valid {
-                warn!(path = %path.display(), "discarding incomplete WIT package cache entry");
-                tokio::fs::remove_file(&path).await.with_context(|| {
-                    format!(
-                        "failed to remove invalid WIT package cache entry [{}]",
-                        path.display()
-                    )
-                })?;
+            }
+            if !tokio::fs::try_exists(&path).await.with_context(|| {
+                format!(
+                    "failed to inspect WIT package cache entry [{}]",
+                    path.display()
+                )
+            })? {
+                continue;
+            }
+            if !cached_blob_matches_digest(&path, &digest).await? {
+                discard_cache_entry(&path).await?;
             }
         }
         Ok(())
@@ -1454,27 +1595,59 @@ mod tests {
         let valid_digest = temp
             .path()
             .join("sha256:ec654fac9599f62e79e2706abef23dfb7c07c08185aa86db4d8695f0b718d1b3");
-        let invalid_digest = temp
+        let truncated_digest = temp
             .path()
-            .join("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        let valid_release = temp.path().join("example-valid.json");
-        let invalid_release = temp.path().join("example-invalid.json");
+            .join("sha256:eebbf6457e46a7f63acdf9b97390f790ba443d60cfa44b607da7e5c40aa1cc1d");
+        let valid_release = temp.path().join("example:valid-1.0.0.json");
+        let truncated_release = temp.path().join("example:truncated-1.0.0.json");
+        let invalid_release = temp.path().join("example:invalid-1.0.0.json");
+        let missing_release = temp.path().join("example:missing-1.0.0.json");
         tokio::fs::write(&valid_digest, b"valid").await.unwrap();
-        tokio::fs::write(&invalid_digest, b"partial").await.unwrap();
+        tokio::fs::write(&truncated_digest, b"partial")
+            .await
+            .unwrap();
         tokio::fs::write(
             &valid_release,
             br#"{"version":"1.0.0","content_digest":"sha256:ec654fac9599f62e79e2706abef23dfb7c07c08185aa86db4d8695f0b718d1b3"}"#,
         )
         .await
         .unwrap();
+        tokio::fs::write(
+            &truncated_release,
+            br#"{"version":"1.0.0","content_digest":"sha256:eebbf6457e46a7f63acdf9b97390f790ba443d60cfa44b607da7e5c40aa1cc1d"}"#,
+        )
+        .await
+        .unwrap();
         tokio::fs::write(&invalid_release, b"{").await.unwrap();
+        tokio::fs::write(
+            &missing_release,
+            br#"{"version":"1.0.0","content_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+        )
+        .await
+        .unwrap();
 
         fetcher.discard_invalid_cache_entries().await.unwrap();
 
         assert!(valid_digest.exists());
-        assert!(!invalid_digest.exists());
         assert!(valid_release.exists());
+        assert!(!truncated_digest.exists());
+        assert!(truncated_release.exists());
         assert!(!invalid_release.exists());
+        assert!(missing_release.exists());
+    }
+
+    #[tokio::test]
+    async fn wit_fetch_discards_unreferenced_incomplete_blobs() {
+        let temp = tempfile::tempdir().unwrap();
+        let fetcher = test_fetcher(temp.path()).await;
+        let orphan_digest = temp
+            .path()
+            .join("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        tokio::fs::write(&orphan_digest, b"partial").await.unwrap();
+
+        fetcher.discard_invalid_cache_entries().await.unwrap();
+
+        assert!(!orphan_digest.exists());
     }
 
     #[test]
