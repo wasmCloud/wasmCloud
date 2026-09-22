@@ -5,7 +5,7 @@
 //! fetching dependencies from registries and manages lock files for reproducible builds.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     io::ErrorKind,
     path::{Path, PathBuf},
     time::Duration,
@@ -232,8 +232,34 @@ pub struct WkgFetcher {
 struct CachedRelease {
     #[serde(rename = "version")]
     _version: semver::Version,
-    #[serde(rename = "content_digest")]
-    _content_digest: ContentDigest,
+    content_digest: ContentDigest,
+}
+
+/// Whether the cached blob at `path` hashes to `digest` (a `sha256:<hex>` string).
+async fn cached_blob_matches_digest(path: &Path, digest: &str) -> Result<bool> {
+    let Some(expected) = digest.strip_prefix("sha256:") else {
+        return Ok(false);
+    };
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Ok(false);
+    }
+    let contents = tokio::fs::read(path).await.with_context(|| {
+        format!(
+            "failed to read WIT package cache entry [{}]",
+            path.display()
+        )
+    })?;
+    Ok(format!("{:x}", Sha256::digest(contents)) == expected)
+}
+
+async fn discard_cache_entry(path: &Path) -> Result<()> {
+    warn!(path = %path.display(), "discarding incomplete WIT package cache entry");
+    tokio::fs::remove_file(path).await.with_context(|| {
+        format!(
+            "failed to remove invalid WIT package cache entry [{}]",
+            path.display()
+        )
+    })
 }
 
 /// Common arguments for Wasm package tooling.
@@ -501,6 +527,12 @@ impl WkgFetcher {
             format!("failed to read WIT package cache [{}]", cache_dir.display())
         })?;
 
+        // Digests named by the release metadata that survives this scan. A blob path
+        // contains a `:`, which on Windows makes it an NTFS alternate data stream that
+        // `read_dir` never yields, so those are validated by path below instead.
+        let mut referenced = Vec::new();
+        let mut checked = HashSet::new();
+
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if !entry.file_type().await?.is_file() {
@@ -510,27 +542,43 @@ impl WkgFetcher {
                 continue;
             };
 
-            let valid = if let Some(expected) = name.strip_prefix("sha256:") {
-                expected.len() == 64
-                    && expected.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    && format!("{:x}", Sha256::digest(tokio::fs::read(&path).await?)) == expected
+            let valid = if name.starts_with("sha256:") {
+                checked.insert(path.clone());
+                cached_blob_matches_digest(&path, name).await?
             } else if path
                 .extension()
                 .is_some_and(|extension| extension == "json")
             {
-                serde_json::from_slice::<CachedRelease>(&tokio::fs::read(&path).await?).is_ok()
+                match serde_json::from_slice::<CachedRelease>(&tokio::fs::read(&path).await?) {
+                    Ok(release) => {
+                        referenced.push(release.content_digest);
+                        true
+                    }
+                    Err(_) => false,
+                }
             } else {
                 true
             };
 
             if !valid {
-                warn!(path = %path.display(), "discarding incomplete WIT package cache entry");
-                tokio::fs::remove_file(&path).await.with_context(|| {
-                    format!(
-                        "failed to remove invalid WIT package cache entry [{}]",
-                        path.display()
-                    )
-                })?;
+                discard_cache_entry(&path).await?;
+            }
+        }
+
+        // The blobs releases point at, resolved the way `FileCache` writes them. On
+        // Windows this is the only pass that sees them; elsewhere the scan above
+        // already covered them.
+        for digest in referenced {
+            let path = cache_dir.join(digest.to_string());
+            if !checked.insert(path.clone()) {
+                continue;
+            }
+            // A release whose blob has not been fetched yet is normal, not corrupt.
+            if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                continue;
+            }
+            if !cached_blob_matches_digest(&path, &digest.to_string()).await? {
+                discard_cache_entry(&path).await?;
             }
         }
         Ok(())
@@ -1447,34 +1495,83 @@ mod tests {
         }
     }
 
+    // Mirrors a real cache directory: `<package>-<version>.json` release metadata
+    // beside the `sha256:<hex>` blobs it names. Those blob paths carry a `:`, so on
+    // Windows they are NTFS alternate data streams rather than ordinary files — the
+    // layout this test has to keep working on.
     #[tokio::test]
     async fn wit_fetch_discards_incomplete_cache_entries() {
         let temp = tempfile::tempdir().unwrap();
         let fetcher = test_fetcher(temp.path()).await;
+
+        // A release whose blob is complete: both stay.
         let valid_digest = temp
             .path()
             .join("sha256:ec654fac9599f62e79e2706abef23dfb7c07c08185aa86db4d8695f0b718d1b3");
-        let invalid_digest = temp
-            .path()
-            .join("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         let valid_release = temp.path().join("example-valid.json");
-        let invalid_release = temp.path().join("example-invalid.json");
         tokio::fs::write(&valid_digest, b"valid").await.unwrap();
-        tokio::fs::write(&invalid_digest, b"partial").await.unwrap();
         tokio::fs::write(
             &valid_release,
             br#"{"version":"1.0.0","content_digest":"sha256:ec654fac9599f62e79e2706abef23dfb7c07c08185aa86db4d8695f0b718d1b3"}"#,
         )
         .await
         .unwrap();
+
+        // A release whose download was cut short: the blob does not hash to the digest
+        // the release names, so the blob goes and the release stays.
+        let truncated_digest = temp
+            .path()
+            .join("sha256:eebbf6457e46a7f63acdf9b97390f790ba443d60cfa44b607da7e5c40aa1cc1d");
+        let truncated_release = temp.path().join("example-truncated.json");
+        tokio::fs::write(&truncated_digest, b"partial")
+            .await
+            .unwrap();
+        tokio::fs::write(
+            &truncated_release,
+            br#"{"version":"1.0.0","content_digest":"sha256:eebbf6457e46a7f63acdf9b97390f790ba443d60cfa44b607da7e5c40aa1cc1d"}"#,
+        )
+        .await
+        .unwrap();
+
+        // A release whose own metadata was cut short: it goes.
+        let invalid_release = temp.path().join("example-invalid.json");
         tokio::fs::write(&invalid_release, b"{").await.unwrap();
+
+        // A release whose blob was never fetched is not corrupt, just incomplete.
+        let missing_release = temp.path().join("example-missing.json");
+        tokio::fs::write(
+            &missing_release,
+            br#"{"version":"1.0.0","content_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+        )
+        .await
+        .unwrap();
 
         fetcher.discard_invalid_cache_entries().await.unwrap();
 
         assert!(valid_digest.exists());
-        assert!(!invalid_digest.exists());
         assert!(valid_release.exists());
+        assert!(!truncated_digest.exists());
+        assert!(truncated_release.exists());
         assert!(!invalid_release.exists());
+        assert!(missing_release.exists());
+    }
+
+    // A partial blob no release names can only be found by listing the directory, and
+    // `read_dir` does not list alternate data streams, so Windows cannot sweep it. It
+    // is unreachable there rather than dangerous: lookups go through a release.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn wit_fetch_discards_unreferenced_incomplete_blobs() {
+        let temp = tempfile::tempdir().unwrap();
+        let fetcher = test_fetcher(temp.path()).await;
+        let orphan_digest = temp
+            .path()
+            .join("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        tokio::fs::write(&orphan_digest, b"partial").await.unwrap();
+
+        fetcher.discard_invalid_cache_entries().await.unwrap();
+
+        assert!(!orphan_digest.exists());
     }
 
     #[test]
