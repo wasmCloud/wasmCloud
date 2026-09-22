@@ -309,23 +309,34 @@ jobs:
           retention-days: 1
 
   # ALL-FEATURES coverage image on arm64 — every optional host feature on (host
-  # component plugins). NOT shipped: the operator-e2e `all-features` leg loads
-  # this tarball to exercise those features on a host built with them (a
-  # released host can't run them). Runs in parallel with `wash-image` (a
+  # component plugins). Not the default image: the operator-e2e `all-features`
+  # leg loads this tarball to exercise those features on a host built with them
+  # (a default host can't run them). Runs in parallel with `wash-image` (a
   # separate job, not a second step) so the e2e gate waits on max(release,
-  # all-features), not their sum. Never pushed, so no digest.
+  # all-features), not their sum. On main it is also pushed by digest, and
+  # canary-publish tags it `sha-<full-sha>-all-features` so release-tag.yml can
+  # promote it to `X.Y.Z-all-features`. The amd64 leg of that manifest builds in
+  # `wash-image-all-features-amd64` (main only).
   wash-image-all-features:
     needs:
       - changes
     if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'))
     permissions:
       contents: read
+      packages: write
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Login to ghcr.io
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Build wash runtime image — all features (tarball for operator-e2e)
@@ -340,6 +351,42 @@ jobs:
             type=gha,scope=wash-all-features-arm64-${{ github.head_ref || github.ref_name }}
             type=gha,scope=wash-all-features-arm64-main
           cache-to: type=gha,scope=wash-all-features-arm64-${{ github.head_ref || github.ref_name }},mode=max
+      # Same split as `wash-image`: reuses the tarball build's cache, so the
+      # pushed image is the bytes the operator-e2e legs tested.
+      - name: Push all-features image to GHCR by digest (main only)
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        id: build_push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          outputs: type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            CARGO_FEATURES=host-component-plugins
+          cache-from: |
+            type=gha,scope=wash-all-features-arm64-${{ github.head_ref || github.ref_name }}
+            type=gha,scope=wash-all-features-arm64-main
+      - name: Export digest
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        env:
+          DIGEST: ${{ steps.build_push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          if [[ -z "$DIGEST" ]]; then
+            echo "no digest on build step output" >&2
+            exit 1
+          fi
+          touch "/tmp/digests/${DIGEST#sha256:}"
+      # Named outside the `wash-image-digest-*` pattern so canary-publish never
+      # folds it into the default multi-arch manifest.
+      - name: Upload digest
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wash-image-all-features-digest-arm64
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
       - name: Upload all-features image tarball
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -404,6 +451,62 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wash-image-digest-amd64
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ALL-FEATURES image on amd64, pushed by digest — the other leg of the
+  # `*-all-features` manifest. Main only, for the same reason as
+  # `wash-image-amd64`: the e2e gate runs on arm64, so amd64 stays off every
+  # PR's critical path.
+  wash-image-all-features-amd64:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') && ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main')
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Login to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Push all-features image to GHCR by digest
+        id: build_push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          outputs: type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            CARGO_FEATURES=host-component-plugins
+          cache-from: |
+            type=gha,scope=wash-all-features-amd64-${{ github.head_ref || github.ref_name }}
+            type=gha,scope=wash-all-features-amd64-main
+          cache-to: type=gha,scope=wash-all-features-amd64-${{ github.head_ref || github.ref_name }},mode=max
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build_push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          if [[ -z "$DIGEST" ]]; then
+            echo "no digest on build step output" >&2
+            exit 1
+          fi
+          touch "/tmp/digests/${DIGEST#sha256:}"
+      - name: Upload digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wash-image-all-features-digest-amd64
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -674,11 +777,15 @@ jobs:
       github.ref == 'refs/heads/main' &&
       needs.wash-image.result == 'success' &&
       needs.wash-image-amd64.result == 'success' &&
+      needs.wash-image-all-features.result == 'success' &&
+      needs.wash-image-all-features-amd64.result == 'success' &&
       needs.runtime-operator-e2e.result == 'success'
     needs:
       - runtime-operator-e2e
       - wash-image
       - wash-image-amd64
+      - wash-image-all-features
+      - wash-image-all-features-amd64
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -738,6 +845,35 @@ jobs:
           docker buildx imagetools inspect "ghcr.io/wasmcloud/wash:${STEPS_META_OUTPUTS_VERSION}"
         env:
           STEPS_META_OUTPUTS_VERSION: ${{ steps.meta.outputs.version }}
+      - name: Download all-features digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: /tmp/digests-all-features
+          pattern: wash-image-all-features-digest-*
+          merge-multiple: true
+      # release-tag.yml promotes `sha-<full-sha>-all-features` to
+      # `X.Y.Z-all-features`, mirroring the default image's promotion.
+      - name: Tag all-features image
+        working-directory: /tmp/digests-all-features
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          digests=( * )
+          shopt -u nullglob
+          # One per arch (arm64 + amd64).
+          if (( ${#digests[@]} != 2 )); then
+            echo "expected two all-features digests, got ${#digests[@]}. Refusing to push" >&2
+            exit 1
+          fi
+          args=(
+            -t ghcr.io/wasmcloud/wash:canary-all-features
+            -t "ghcr.io/wasmcloud/wash:sha-${GITHUB_SHA}-all-features"
+          )
+          for d in "${digests[@]}"; do
+            args+=("ghcr.io/wasmcloud/wash@sha256:$d")
+          done
+          docker buildx imagetools create "${args[@]}"
+          docker buildx imagetools inspect "ghcr.io/wasmcloud/wash:sha-${GITHUB_SHA}-all-features"
 
   # Canary matrix binary build. Runs on every push to main so each commit
   # exercises the full per-target matrix (including the s390x/musl cross
