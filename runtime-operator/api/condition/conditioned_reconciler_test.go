@@ -15,6 +15,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+const (
+	testNamespace               = "infra"
+	testName                    = "test-cluster"
+	testCondition ConditionType = "TestReconcile"
+)
+
 // conditionedResource is a sample resource that has a ConditionedStatus.
 type conditionedResource struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -77,8 +83,8 @@ func TestHandleFinalizer(t *testing.T) {
 			name: "acquisition",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace: "infra",
-					Name:      "test-cluster",
+					Namespace: testNamespace,
+					Name:      testName,
 				},
 			},
 			hasChanges:   true,
@@ -88,8 +94,8 @@ func TestHandleFinalizer(t *testing.T) {
 			name: "acquisition failure",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace: "infra",
-					Name:      "test-cluster",
+					Namespace: testNamespace,
+					Name:      testName,
 				},
 			},
 			emitClientError: true,
@@ -99,8 +105,8 @@ func TestHandleFinalizer(t *testing.T) {
 			name: "reconciliation",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 				},
 			},
@@ -111,8 +117,8 @@ func TestHandleFinalizer(t *testing.T) {
 			name: "reconciliation failure",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 				},
 			},
@@ -123,8 +129,8 @@ func TestHandleFinalizer(t *testing.T) {
 			name: "deletion",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 					DeletionTimestamp: &metav1.Time{
 						Time: time.Now(),
@@ -138,8 +144,8 @@ func TestHandleFinalizer(t *testing.T) {
 			name: "deletion failure",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 					DeletionTimestamp: &metav1.Time{
 						Time: time.Now(),
@@ -256,17 +262,34 @@ func TestConditionedReconciler(t *testing.T) {
 			name: "finalizer setup",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace: "infra",
-					Name:      "test-cluster",
+					Namespace: testNamespace,
+					Name:      testName,
 				},
+			},
+		},
+		{
+			name: "finalizer setup reconciles conditions in the same pass",
+			obj: conditionedResource{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: testNamespace,
+					Name:      testName,
+				},
+			},
+			condType: testCondition,
+			condFunc: okCallback,
+			checkFunc: func(t *testing.T, cs *ConditionedStatus) {
+				cond := cs.GetCondition(testCondition)
+				if cond.Status != ConditionTrue {
+					t.Fatalf("condition status: want %v, got %v", ConditionTrue, cond.Status)
+				}
 			},
 		},
 		{
 			name: "finalizer setup error",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace: "infra",
-					Name:      "test-cluster",
+					Namespace: testNamespace,
+					Name:      testName,
 				},
 			},
 			emitClientError: true,
@@ -276,8 +299,8 @@ func TestConditionedReconciler(t *testing.T) {
 			name: "finalizer removal",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 					DeletionTimestamp: &metav1.Time{
 						Time: time.Now(),
@@ -289,8 +312,8 @@ func TestConditionedReconciler(t *testing.T) {
 			name: "finalizer removal error",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 					DeletionTimestamp: &metav1.Time{
 						Time: time.Now(),
@@ -306,15 +329,15 @@ func TestConditionedReconciler(t *testing.T) {
 			name: "condition true",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 				},
 			},
-			condType: "TestReconcile",
+			condType: testCondition,
 			condFunc: okCallback,
 			checkFunc: func(t *testing.T, cs *ConditionedStatus) {
-				cond := cs.GetCondition("TestReconcile")
+				cond := cs.GetCondition(testCondition)
 				if cond.Status != ConditionTrue {
 					t.Fatalf("condition status: want %v, got %v", ConditionTrue, cond.Status)
 				}
@@ -324,15 +347,15 @@ func TestConditionedReconciler(t *testing.T) {
 			name: "condition false",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 				},
 			},
-			condType: "TestReconcile",
+			condType: testCondition,
 			condFunc: errCallback,
 			checkFunc: func(t *testing.T, cs *ConditionedStatus) {
-				cond := cs.GetCondition("TestReconcile")
+				cond := cs.GetCondition(testCondition)
 				if cond.Status != ConditionFalse {
 					t.Fatalf("condition status: want %v, got %v", ConditionFalse, cond.Status)
 				}
@@ -342,15 +365,15 @@ func TestConditionedReconciler(t *testing.T) {
 			name: "condition unknown",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 				},
 			},
-			condType: "TestReconcile",
+			condType: testCondition,
 			condFunc: unknownCallback,
 			checkFunc: func(t *testing.T, cs *ConditionedStatus) {
-				cond := cs.GetCondition("TestReconcile")
+				cond := cs.GetCondition(testCondition)
 				if cond.Status != ConditionUnknown {
 					t.Fatalf("condition status: want %v, got %v", ConditionUnknown, cond.Status)
 				}

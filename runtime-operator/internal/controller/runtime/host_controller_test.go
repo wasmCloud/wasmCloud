@@ -39,6 +39,8 @@ const (
 	// workload_route_controller_test.go's testHostID, which names the host a
 	// route is expected to resolve to.
 	testHeartbeatHostID = "host-id-1"
+	testHostGroupLabel  = "hostgroup"
+	testHostGroup       = "default"
 )
 
 // requiredHostStatusKeys are the status fields the Host CRD marks as required.
@@ -248,7 +250,7 @@ func TestHostApply_UpsertIsIdempotent(t *testing.T) {
 
 	// First apply: object does not exist yet -> SSA creates it.
 	if err := applyHost(ctx, c, ns, name, testHeartbeatHostID, "node-a", 8080, "tenant-a",
-		map[string]string{"hostgroup": "default"}); err != nil {
+		map[string]string{testHostGroupLabel: testHostGroup}); err != nil {
 		t.Fatalf("first apply (create) failed: %v", err)
 	}
 
@@ -263,7 +265,7 @@ func TestHostApply_UpsertIsIdempotent(t *testing.T) {
 	// Second apply with changed fields: object exists -> SSA updates in place,
 	// with no client-side Get and so no possibility of AlreadyExists.
 	if err := applyHost(ctx, c, ns, name, testHeartbeatHostID, "node-a-renamed", 9090, "tenant-a",
-		map[string]string{"hostgroup": "default"}); err != nil {
+		map[string]string{testHostGroupLabel: testHostGroup}); err != nil {
 		t.Fatalf("second apply (update) failed: %v", err)
 	}
 
@@ -297,7 +299,7 @@ func hostWith(hostID, hostname string, httpPort uint32, env string, labels map[s
 // case that must not register as a change.
 func TestHostSpecChanged(t *testing.T) {
 	base := func() *runtimev1alpha1.Host {
-		return hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", map[string]string{"hostgroup": "default"})
+		return hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", map[string]string{testHostGroupLabel: testHostGroup})
 	}
 
 	tests := []struct {
@@ -306,12 +308,12 @@ func TestHostSpecChanged(t *testing.T) {
 		want bool
 	}{
 		{"identical", base(), false},
-		{"hostID changed", hostWith("host-id-2", "node-a", 8080, "tenant-a", map[string]string{"hostgroup": "default"}), true},
-		{"hostname changed", hostWith(testHeartbeatHostID, "node-b", 8080, "tenant-a", map[string]string{"hostgroup": "default"}), true},
-		{"httpPort changed", hostWith(testHeartbeatHostID, "node-a", 9090, "tenant-a", map[string]string{"hostgroup": "default"}), true},
-		{"environment changed", hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-b", map[string]string{"hostgroup": "default"}), true},
-		{"label value changed", hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", map[string]string{"hostgroup": "other"}), true},
-		{"label added", hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", map[string]string{"hostgroup": "default", "extra": "x"}), true},
+		{"hostID changed", hostWith("host-id-2", "node-a", 8080, "tenant-a", map[string]string{testHostGroupLabel: testHostGroup}), true},
+		{"hostname changed", hostWith(testHeartbeatHostID, "node-b", 8080, "tenant-a", map[string]string{testHostGroupLabel: testHostGroup}), true},
+		{"httpPort changed", hostWith(testHeartbeatHostID, "node-a", 9090, "tenant-a", map[string]string{testHostGroupLabel: testHostGroup}), true},
+		{"environment changed", hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-b", map[string]string{testHostGroupLabel: testHostGroup}), true},
+		{"label value changed", hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", map[string]string{testHostGroupLabel: "other"}), true},
+		{"label added", hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", map[string]string{testHostGroupLabel: testHostGroup, "extra": "x"}), true},
 		{"label removed", hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", nil), true},
 	}
 
