@@ -644,6 +644,13 @@ impl HostCommand {
         use wash_runtime::host::http::DefaultOutgoingHandler;
 
         let options = self.client_tls_options()?;
+        // Clap's `requires` pairs these, but this struct is public: an
+        // embedder can ask for rotation without an identity to rotate, and
+        // silently getting neither is the same trap `client_tls_options`
+        // refuses for a half-set credential.
+        if self.http_client_identity_refresh.is_some() && options.client_identity.is_none() {
+            bail!("--http-client-identity-refresh needs --http-client-cert-path");
+        }
         let (Some(interval), Some(identity)) = (
             self.http_client_identity_refresh,
             options.client_identity.clone(),
@@ -657,7 +664,8 @@ impl HostCommand {
         let config = options
             .build_with_resolver(Arc::clone(&rotating) as _)
             .context("failed to load --http-client-ca-path CA certificates")?;
-        spawn_refresh(rotating, identity, interval);
+        spawn_refresh(rotating, identity, interval)
+            .context("invalid --http-client-identity-refresh")?;
         Ok(DefaultOutgoingHandler::with_tls_config(config))
     }
 

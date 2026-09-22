@@ -6,12 +6,16 @@
        a secret still gets the key names and mount path. `merge` leaves keys
        the group set alone and fills in the rest. */}}
 {{- $identity := merge (deepCopy (.clientIdentity | default dict)) $top.Values.runtime.clientIdentity }}
-{{- /* `merge` cannot tell an explicitly empty secretName from an unset one,
-       so a group opting out would otherwise be handed the chart-wide identity
-       back. Presenting a credential is a grant, not a default: honour the
-       opt-out. */}}
-{{- if and (hasKey (.clientIdentity | default dict) "secretName") (not (.clientIdentity | default dict).secretName) }}
+{{- /* `merge` cannot tell an explicitly empty value from an unset one, so a
+       group clearing either of these would otherwise be handed the chart-wide
+       one back. Both have a documented empty meaning — no identity at all, and
+       no refresh — and neither is a default worth restoring against the
+       operator's word. */}}
+{{- $groupIdentity := .clientIdentity | default dict }}
+{{- if and (hasKey $groupIdentity "secretName") (not $groupIdentity.secretName) }}
 {{- $identity = dict }}
+{{- else if and (hasKey $groupIdentity "refreshInterval") (not $groupIdentity.refreshInterval) }}
+{{- $identity = merge (dict "refreshInterval" "") (omit $identity "refreshInterval") }}
 {{- end }}
 {{- if $identity.secretName }}
 {{- if or (not $identity.mountPath) (not $identity.certKey) (not $identity.keyKey) }}
