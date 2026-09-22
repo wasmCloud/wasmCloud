@@ -325,9 +325,7 @@ runtime:
   # from the chart's own CA, already mounted whenever `global.tls.enabled`:
   #   httpClientCaPaths: ["/runtime-cert/ca.crt"]
   #
-  # Verifies servers only: it decides which servers a component will talk to,
-  # not who the host says it is when one asks. For that, see `clientIdentity`
-  # below.
+  # Verifies remote servers. See `clientIdentity` for client authentication.
   httpClientCaPaths: []
 
   # -- Built-in roots layered under `httpClientCaPaths`: `webpki` (the default,
@@ -341,60 +339,32 @@ runtime:
   # fall back to the host default once this is set, so name the roots it wants.
   httpClientTrustRoots: ""
 
-  # Client identity the host presents when a service asks components to
-  # authenticate with mutual TLS. The other half of `httpClientCaPaths`, which
-  # only decides which servers are trusted.
+  # Client identity for mutual TLS from components.
   #
-  # Host-wide *and* destination-wide: every workload on the host group
-  # authenticates as this identity, and it is presented to any peer that asks
-  # for a client certificate. A workload whose `allowedHosts` reaches an
-  # arbitrary endpoint can therefore make the host disclose this certificate
-  # to it, so give an identity its own host group and keep those
-  # `allowedHosts` narrow.
+  # Every workload and destination in the host group shares this identity.
+  # Restrict workload `allowedHosts` to the intended services.
   #
-  # The key is mounted into the host container and is not carried on any
-  # channel a component reads: it goes in neither `wasi:config` nor
-  # `wasi:cli/env`.
-  #
-  # That is not the same as being out of reach. A workload may declare a
-  # `hostPath` volume naming any path in the host container, including
-  # `mountPath` above, and the runtime preopens it without restricting where
-  # it points. Treat the mount as readable by any workload the host group
-  # admits, and give an identity its own host group rather than sharing one
-  # with workloads that should not hold it.
+  # The key is not exposed through `wasi:config` or `wasi:cli/env`. Workload
+  # `hostPath` mounts can still read it. Use a separate host group for workloads
+  # that must not access this identity.
   clientIdentity:
-    # -- Name of an existing `kubernetes.io/tls` Secret holding the
-    # certificate and key. Empty presents no identity, and a host group can
-    # set it empty to opt out of a chart-wide one.
+    # -- Existing `kubernetes.io/tls` Secret. Empty disables the identity.
     #
-    # Must exist in the namespace the host group is deployed into, which is
-    # `hostGroups[].namespace` when that is set rather than the release
-    # namespace.
-    # This is the shape cert-manager writes, so a Certificate resource can
-    # issue it with no glue.
-    #
-    # Not the chart's own CA: that one authenticates the host to NATS and to
-    # the ingress, and an upstream demanding mutual TLS wants a credential it
-    # trusts, which is rarely the same issuer.
+    # The Secret must be in the host group's namespace. cert-manager
+    # Certificate resources produce this Secret type.
     secretName: ""
     # -- Data keys inside the Secret.
     certKey: "tls.crt"
     keyKey: "tls.key"
     # -- Directory the Secret is mounted at inside the host container.
     mountPath: "/client-identity"
-    # -- Re-read the credential on this interval (e.g. `30s`, `5m`) so a
-    # rotated Secret applies without restarting the host. Empty reads it once
-    # at startup, which is wrong for anything an issuer renews. A host group
-    # may set it empty to turn refresh off for a hand-installed credential.
-    # Zero is rejected rather than read as "never".
+    # -- Re-read the credential on this interval, such as `30s` or `5m`.
+    # Empty reads it once. Zero is invalid.
     #
-    # Mounted as a directory rather than by `subPath`, because kubelet
-    # propagates a rotated Secret only into the former, and this interval is
-    # what notices. A read that fails leaves the running credential in place.
+    # A failed refresh keeps the current credential. The directory mount lets
+    # kubelet publish Secret updates.
     #
-    # Expiry is only checked on this path. Leave this empty and the host reads
-    # the credential once and presents it unconditionally, including after
-    # `notAfter`; set it and an expired credential is refused instead.
+    # A non-empty interval enables certificate-chain expiry checks.
     refreshInterval: "30s"
   # -- Labels to add to runtime host pod templates
   podLabels: {}
