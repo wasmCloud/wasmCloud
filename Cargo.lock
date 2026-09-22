@@ -6132,6 +6132,7 @@ dependencies = [
  "wasm-pkg-client",
  "wasm-pkg-core",
  "wat",
+ "windows-sys 0.61.2",
  "wit-component 0.254.0",
 ]
 
