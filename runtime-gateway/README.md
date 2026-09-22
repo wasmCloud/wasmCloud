@@ -10,5 +10,5 @@ When an HTTP request is received, the gateway determines which host to forward t
 
 It also enriches the request with additional headers with:
 
-- `X-Real-Ip`: The canonical IP address of the client.
+- `X-Real-Ip`: The IP address of the peer connected to the gateway. When a load balancer or ingress sits in front of the gateway, this is the proxy's address rather than the client's.
 - `X-Workload-Id`: The unique identifier of the workload handling the request.

@@ -86,9 +86,8 @@ func (h *HTTPGateway) rewrite(req *httputil.ProxyRequest) {
 		req.Out.Header.Del("X-Real-IP")
 	}
 
-	if xff := req.In.Header.Get("X-Forwarded-For"); xff != "" {
-		req.Out.Header.Set("X-Forwarded-For", xff)
-	}
+	// Copying the slice keeps every line; SetXForwarded joins them and appends the peer.
+	req.Out.Header["X-Forwarded-For"] = req.In.Header["X-Forwarded-For"]
 	req.SetXForwarded()
 
 	// Preserve Connection header from the original request

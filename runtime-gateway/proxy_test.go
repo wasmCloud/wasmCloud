@@ -136,11 +136,13 @@ type fakeResolver struct{ result LookupResult }
 
 func (f fakeResolver) Resolve(context.Context, *http.Request) LookupResult { return f.result }
 
-func newProxyRequest(remoteAddr string, xForwardedFor string) *httputil.ProxyRequest {
+func newProxyRequest(remoteAddr string, header http.Header) *httputil.ProxyRequest {
 	in := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
 	in.RemoteAddr = remoteAddr
-	if xForwardedFor != "" {
-		in.Header.Set("X-Forwarded-For", xForwardedFor)
+	for name, values := range header {
+		for _, value := range values {
+			in.Header.Add(name, value)
+		}
 	}
 	return &httputil.ProxyRequest{In: in, Out: in.Clone(context.Background())}
 }
@@ -148,7 +150,7 @@ func newProxyRequest(remoteAddr string, xForwardedFor string) *httputil.ProxyReq
 func TestRewriteRealIPIgnoresClientSuppliedForwardedFor(t *testing.T) {
 	gw := &HTTPGateway{Resolver: fakeResolver{result: LookupResult{Hostname: "backend:8080", Scheme: "http"}}}
 
-	pr := newProxyRequest("203.0.113.7:54321", "10.0.0.1, 192.168.1.1")
+	pr := newProxyRequest("203.0.113.7:54321", http.Header{"X-Forwarded-For": {"10.0.0.1, 192.168.1.1"}})
 	gw.rewrite(pr)
 
 	if got, want := pr.Out.Header.Get("X-Real-IP"), "203.0.113.7"; got != want {
@@ -162,11 +164,35 @@ func TestRewriteRealIPIgnoresClientSuppliedForwardedFor(t *testing.T) {
 func TestRewriteRealIPHasNoPort(t *testing.T) {
 	gw := &HTTPGateway{Resolver: fakeResolver{result: LookupResult{Hostname: "backend:8080", Scheme: "http"}}}
 
-	pr := newProxyRequest("203.0.113.7:54321", "")
+	pr := newProxyRequest("203.0.113.7:54321", nil)
 	gw.rewrite(pr)
 
 	if got, want := pr.Out.Header.Get("X-Real-IP"), "203.0.113.7"; got != want {
 		t.Errorf("X-Real-IP = %q, want %q", got, want)
+	}
+}
+
+// ReverseProxy strips client X-Forwarded-* headers but not X-Real-IP, so a
+// client's own X-Real-IP reaches rewrite and has to be replaced there.
+func TestRewriteRealIPReplacesClientSuppliedRealIP(t *testing.T) {
+	gw := &HTTPGateway{Resolver: fakeResolver{result: LookupResult{Hostname: "backend:8080", Scheme: "http"}}}
+
+	pr := newProxyRequest("203.0.113.7:54321", http.Header{"X-Real-IP": {"6.6.6.6"}})
+	gw.rewrite(pr)
+
+	if got := pr.Out.Header.Values("X-Real-IP"); len(got) != 1 || got[0] != "203.0.113.7" {
+		t.Errorf("X-Real-IP = %q, want only the actual peer %q", got, "203.0.113.7")
+	}
+}
+
+func TestRewriteKeepsEveryForwardedForLine(t *testing.T) {
+	gw := &HTTPGateway{Resolver: fakeResolver{result: LookupResult{Hostname: "backend:8080", Scheme: "http"}}}
+
+	pr := newProxyRequest("203.0.113.7:54321", http.Header{"X-Forwarded-For": {"10.0.0.1", "192.168.1.1"}})
+	gw.rewrite(pr)
+
+	if got, want := pr.Out.Header.Get("X-Forwarded-For"), "10.0.0.1, 192.168.1.1, 203.0.113.7"; got != want {
+		t.Errorf("X-Forwarded-For = %q, want %q", got, want)
 	}
 }
 
