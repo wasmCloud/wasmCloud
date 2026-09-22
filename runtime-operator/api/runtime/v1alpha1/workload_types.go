@@ -231,6 +231,9 @@ type HostInterface struct {
 	// so two imports of the same namespace:package can resolve to different
 	// backends.
 	// Required when multiple entries of the same namespace:package exist.
+	// A name declared here takes precedence over a component of the same
+	// name in the same Workload: the host serves the label, and the
+	// component's export is not linked for it.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]*$`
 	// +kubebuilder:validation:MaxLength=64

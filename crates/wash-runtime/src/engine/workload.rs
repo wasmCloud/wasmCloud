@@ -1315,7 +1315,18 @@ impl ResolvedWorkload {
                         // exporter, then we must record the exporter as a
                         // dependency.
                         Some(l) => {
-                            if let Some(labelled) =
+                            // A label a plugin already bound is the host's (see
+                            // `served_within_workload`), so it is not an
+                            // intra-workload dependency. `bind_plugins` has run
+                            // by now, so this is the same answer the link step
+                            // reaches through `should_link_component_import`;
+                            // recording an edge here anyway would order the
+                            // graph around a link that never happens, and can
+                            // manufacture a false circular-dependency bail.
+                            if should_link_component_import(
+                                import_name,
+                                &component.metadata.plugin_bound_instances,
+                            ) && let Some(labelled) =
                                 labelled_exporter(&exports.exporters, interface, l)?
                                 && labelled != component_id
                             {
@@ -2767,6 +2778,40 @@ impl UnresolvedWorkload {
             .map(|(id, component)| (id.clone(), Arc::from(component.name()), component.world()))
             .collect();
 
+        // A component named after a declared `hostInterfaces` label shadows it.
+        // The host wins (see `served_within_workload`), but the manifest reads
+        // as though the component should serve that label. Only worth saying
+        // when something actually imports under the label: a component that
+        // merely exports a host-served interface is the ordinary case, and is
+        // how the host reaches into a workload at all.
+        for entry in &host_interfaces {
+            let Some(label) = entry.name.as_deref() else {
+                continue;
+            };
+            // An entry naming no interface matches every interface of its
+            // package and never routes in-workload, so nothing can shadow it.
+            if entry.interfaces.is_empty() {
+                continue;
+            }
+            let shadowed = component_worlds
+                .iter()
+                .any(|(_, name, world)| name.as_ref() == label && exports_any_of(entry, world));
+            let imported = component_worlds
+                .iter()
+                .any(|(_, _, world)| imports_under_label(entry, world, label))
+                || self
+                    .service
+                    .as_ref()
+                    .is_some_and(|s| imports_under_label(entry, &s.world(), label));
+            if shadowed && imported {
+                warn!(
+                    label,
+                    "a component shares the name of an `(implements ..)` label declared \
+                     under `hostInterfaces`; the host serves that label"
+                );
+            }
+        }
+
         if let Some(service) = self.service.as_ref() {
             let world = service.world();
 
@@ -3501,12 +3546,33 @@ fn labelled_exporter<'a>(
 /// ambiguity [`build_export_map`] declines to resolve, and leaving those to a
 /// plugin keeps a workload that deploys today deploying.
 ///
-/// The label is the exception, and it is a real behaviour change: where two or
-/// more sibling components export X, a third imports X under a label equal to
-/// one of their names, AND a plugin serves X today, that import now reaches the
-/// sibling instead of the plugin. Narrow — it needs a guest exporting a
-/// host-shaped interface and a name that matches — and it is what the operator
-/// asked for by writing the label. Zero exporters is unchanged.
+/// A label the operator declared under `hostInterfaces` is the exception to
+/// that exception: it belongs to the host even when a component shares the
+/// name. Declaring the label is an explicit statement about routing; a
+/// component happening to be named the same thing is not. Without this a
+/// component would outrank a declared label and capture traffic the manifest
+/// asked the host to serve, which is both a regression against what deploys
+/// today and a way for a guest to answer for the host. Zero exporters is
+/// unchanged.
+/// Whether `world` exports an interface this entry names.
+fn exports_any_of(entry: &WitInterface, world: &WitWorld) -> bool {
+    entry.interfaces.iter().any(|interface| {
+        world
+            .exports
+            .iter()
+            .any(|ex| entry.same_package(ex) && ex.interfaces.contains(interface))
+    })
+}
+
+/// Whether `world` imports an interface this entry names, under `label`.
+fn imports_under_label(entry: &WitInterface, world: &WitWorld, label: &str) -> bool {
+    world.imports.iter().any(|im| {
+        im.name.as_deref() == Some(label)
+            && entry.same_package(im)
+            && entry.interfaces.iter().any(|i| im.interfaces.contains(i))
+    })
+}
+
 fn served_within_workload(
     entry: &WitInterface,
     item_id: &str,
@@ -3520,12 +3586,7 @@ fn served_within_workload(
     }
     // An item exporting any of the entry's interfaces keeps the entry, so the
     // host can reach that export.
-    if entry.interfaces.iter().any(|interface| {
-        item_world
-            .exports
-            .iter()
-            .any(|ex| entry.same_package(ex) && ex.interfaces.contains(interface))
-    }) {
+    if exports_any_of(entry, item_world) {
         return false;
     }
     // Of the names left, only the ones this item imports are its to answer: the
@@ -3577,6 +3638,18 @@ fn served_within_workload(
             .iter()
             .filter(|im| entry.same_package(im) && im.interfaces.contains(interface))
             .all(|im| match im.name.as_deref() {
+                // A label the operator declared under `hostInterfaces` belongs
+                // to the host, even when a component happens to share the name.
+                // Declaring the label is an explicit statement about routing;
+                // a component being named the same thing is not. Without this,
+                // the component silently captures traffic the manifest asked
+                // the host to serve, and the manifest still reads as correct.
+                //
+                // Returning false here keeps the entry in
+                // `unmatched_interfaces`, so a plugin binds it and the label
+                // lands in `plugin_bound_instances`, which is what makes
+                // `should_link_component_import` decline to link the sibling.
+                Some(label) if entry.name.as_deref() == Some(label) => false,
                 Some(label) => exporter_names.contains(&label),
                 None => exporter_names.len() == 1,
             });
@@ -6686,5 +6759,108 @@ mod tests {
             plugin_bound_ids(&mut workload).await.contains(&importer_id),
             "one sibling exporter must not swallow a label meant for the host"
         );
+    }
+
+    /// Direction 1: the label IS declared under `hostInterfaces`. A component
+    /// named the same as that label, exporting the very interface the host
+    /// serves, must NOT capture it. Before the precedence rule this silently
+    /// routed guest-to-guest while the manifest still asked for the host.
+    #[tokio::test]
+    async fn a_declared_host_label_beats_a_component_of_the_same_name() {
+        let importer = labelled_marker_importer("importer", &["plug"]);
+        let importer_id = importer.id().to_string();
+        let mut workload = served_within_workload_fixture(
+            // The squatter: named `plug`, exports what the host plugin serves.
+            vec![importer, implements_marker_exporter("plug")],
+            vec![marker_entry(Some("plug"))],
+        );
+        assert!(
+            plugin_bound_ids(&mut workload).await.contains(&importer_id),
+            "a declared `hostInterfaces` label must beat a component sharing its \
+             name, or the component silently captures host traffic"
+        );
+    }
+
+    /// Direction 2: the label is NOT declared under `hostInterfaces`, so there
+    /// is no host claim on it and the sibling it names still wins. The
+    /// precedence rule must not swallow ordinary guest-to-guest routing.
+    #[tokio::test]
+    async fn an_undeclared_label_still_routes_to_its_component() {
+        let importer = labelled_marker_importer("importer", &["exporter-a"]);
+        let importer_id = importer.id().to_string();
+        let mut workload = served_within_workload_fixture(
+            vec![
+                importer,
+                implements_marker_exporter("exporter-a"),
+                implements_marker_exporter("exporter-b"),
+            ],
+            // Declared under a DIFFERENT name, so `exporter-a` is unclaimed.
+            vec![marker_entry(Some("plug"))],
+        );
+        assert!(
+            !plugin_bound_ids(&mut workload).await.contains(&importer_id),
+            "a label the host never declared must still route to the sibling \
+             component it names"
+        );
+    }
+
+    /// The precedence rule keys on the declared label, not merely on a label
+    /// being present: an unnamed `hostInterfaces` entry claims nothing, so a
+    /// labelled import still resolves in-workload.
+    #[tokio::test]
+    async fn an_unnamed_host_entry_claims_no_label() {
+        let importer = labelled_marker_importer("importer", &["exporter-a"]);
+        let importer_id = importer.id().to_string();
+        let mut workload = served_within_workload_fixture(
+            vec![
+                importer,
+                implements_marker_exporter("exporter-a"),
+                implements_marker_exporter("exporter-b"),
+            ],
+            vec![marker_entry(None)],
+        );
+        assert!(
+            !plugin_bound_ids(&mut workload).await.contains(&importer_id),
+            "an unnamed host entry must not claim a label"
+        );
+    }
+
+    /// The two predicates that gate the shadow warning. The last assertion is
+    /// the one that matters: an exporter imports nothing, so a workload that
+    /// merely contains a namesake exporter and no importer must not warn.
+    /// Exporting a host-served interface is ordinary, and is how the host
+    /// reaches into a workload at all.
+    #[test]
+    fn the_shadow_warning_gates_on_an_actual_capture() {
+        let entry = marker_entry(Some("plug"));
+
+        // A namesake that exports what the entry names is a candidate shadow.
+        assert!(exports_any_of(
+            &entry,
+            &implements_marker_exporter("plug").world()
+        ));
+        // One that only imports it is not.
+        assert!(!exports_any_of(
+            &entry,
+            &labelled_marker_importer("importer", &["plug"]).world()
+        ));
+
+        // The label has to be the one actually imported.
+        assert!(imports_under_label(
+            &entry,
+            &labelled_marker_importer("importer", &["plug"]).world(),
+            "plug"
+        ));
+        assert!(!imports_under_label(
+            &entry,
+            &labelled_marker_importer("importer", &["other"]).world(),
+            "plug"
+        ));
+        // Nothing imports it here, so there is no capture to report.
+        assert!(!imports_under_label(
+            &entry,
+            &implements_marker_exporter("plug").world(),
+            "plug"
+        ));
     }
 }
