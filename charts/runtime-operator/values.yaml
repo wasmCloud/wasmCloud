@@ -325,11 +325,9 @@ runtime:
   # from the chart's own CA, already mounted whenever `global.tls.enabled`:
   #   httpClientCaPaths: ["/runtime-cert/ca.crt"]
   #
-  # Verifies servers only. Components present no client certificate, so an
-  # endpoint requiring mutual TLS is not reachable by naming its CA here; see
-  # `wash host --http-client-cert-path`, which the chart does not template
-  # because the host reads a credential once at startup and would keep
-  # presenting a rotated one.
+  # Verifies servers only: it decides which servers a component will talk to,
+  # not who the host says it is when one asks. For that, see `clientIdentity`
+  # below.
   httpClientCaPaths: []
 
   # -- Built-in roots layered under `httpClientCaPaths`: `webpki` (the default,
@@ -342,6 +340,45 @@ runtime:
   # non-empty `hostGroups[].httpClientTrustRoots`; a group cannot set empty to
   # fall back to the host default once this is set, so name the roots it wants.
   httpClientTrustRoots: ""
+
+  # Client identity the host presents when a service asks components to
+  # authenticate with mutual TLS. The other half of `httpClientCaPaths`, which
+  # only decides which servers are trusted.
+  #
+  # Host-wide *and* destination-wide: every workload on the host group
+  # authenticates as this identity, and it is presented to any peer that asks
+  # for a client certificate. A workload whose `allowedHosts` reaches an
+  # arbitrary endpoint can therefore make the host disclose this certificate
+  # to it, so give an identity its own host group and keep those
+  # `allowedHosts` narrow.
+  #
+  # The key is mounted into the host container and is never exposed to a
+  # component: `wasi:config`, `wasi:cli/env` and workload volume mounts are all
+  # guest-readable and none of them carries it.
+  clientIdentity:
+    # -- Name of an existing `kubernetes.io/tls` Secret in the release
+    # namespace holding the certificate and key. Empty presents no identity.
+    # This is the shape cert-manager writes, so a Certificate resource can
+    # issue it with no glue.
+    #
+    # Not the chart's own CA: that one authenticates the host to NATS and to
+    # the ingress, and an upstream demanding mutual TLS wants a credential it
+    # trusts, which is rarely the same issuer.
+    secretName: ""
+    # -- Data keys inside the Secret.
+    certKey: "tls.crt"
+    keyKey: "tls.key"
+    # -- Directory the Secret is mounted at inside the host container.
+    mountPath: "/client-identity"
+    # -- Re-read the credential on this interval (e.g. `30s`, `5m`) so a
+    # rotated Secret applies without restarting the host. Empty reads it once
+    # at startup, which is wrong for anything an issuer renews.
+    #
+    # Mounted as a directory rather than by `subPath`, because kubelet
+    # propagates a rotated Secret only into the former, and this interval is
+    # what notices. A read that fails leaves the running credential in place;
+    # an expired one is refused rather than presented either way.
+    refreshInterval: "30s"
   # -- Labels to add to runtime host pod templates
   podLabels: {}
   # -- Annotations to add to runtime host pod templates
@@ -942,6 +979,11 @@ runtime:
       # the chart-wide `runtime.httpClientCaPaths` rather than replacing it:
       # httpClientCaPaths:
       #   - "/runtime-cert/ca.crt"
+      # -- Client identity for this group. Merged field by field over
+      # `runtime.clientIdentity`, so naming a secret alone inherits the key
+      # names, mount path and refresh interval:
+      # clientIdentity:
+      #   secretName: "partner-api-client"
       # -- Built-in roots for this group's component egress. A non-empty
       # value replaces the chart-wide `runtime.httpClientTrustRoots`; empty
       # inherits it. There is no way to spell "ignore the chart-wide value and
