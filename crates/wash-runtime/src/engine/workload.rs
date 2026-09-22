@@ -1326,7 +1326,7 @@ impl ResolvedWorkload {
                             if should_link_component_import(
                                 import_name,
                                 &component.metadata.plugin_bound_instances,
-                            ) && let Some(labelled) =
+                            ) && let Some((labelled, _)) =
                                 labelled_exporter(&exports.exporters, interface, l)?
                                 && labelled != component_id
                             {
@@ -1507,13 +1507,15 @@ impl ResolvedWorkload {
                         // handing it a guest component instead is the kind of
                         // wrong that deploys.
                         let resolved = match label {
-                            Some(l) => {
-                                labelled_exporter(&exports.exporters, interface, l)?.cloned()
-                            }
-                            None => exports.unambiguous.get(interface).cloned(),
+                            Some(l) => labelled_exporter(&exports.exporters, interface, l)?
+                                .map(|(id, export_name)| (id.clone(), export_name.to_string())),
+                            None => exports
+                                .unambiguous
+                                .get(interface)
+                                .map(|id| (id.clone(), interface.to_string())),
                         }
-                        .filter(|exporter| Some(exporter.as_ref()) != importer_id);
-                        let Some(exporter_component) = resolved else {
+                        .filter(|(exporter, _)| Some(exporter.as_ref()) != importer_id);
+                        let Some((exporter_component, export_name)) = resolved else {
                             // Import not provided by another component in the workload.
                             // This is expected for host-provided interfaces (e.g. wasi:*).
                             // If it's not host-provided, linking will fail later with a
@@ -1563,26 +1565,12 @@ impl ResolvedWorkload {
                         };
                         let plugin_component_id = plugin_component.id.clone();
                         let plugin_engine = plugin_component.metadata.engine().clone();
-                        // The EXPORTER is asked for the interface, never the
-                        // label: it exports `example:feeds/reader@0.1.0`
-                        // and has never heard of `feed-a`. wasmtime's
-                        // `ExportLookup for str` bottoms out in `NameMap::get`,
-                        // which tries the exact name and then a
-                        // semver-compatible key — but never an `implements`
-                        // one, and a bare label has no `@version` for the
-                        // semver path to work with. So passing the label here
-                        // returns None and drops the link at trace level: the
-                        // workload is admitted and then fails to instantiate,
-                        // so it never runs.
-                        //
-                        // `linker.instance(..)` below is the mirror image and
-                        // must stay the label, because the linker is keyed by
-                        // the IMPORTER's raw import name. The asymmetry is the
-                        // whole trap.
+                        // The exporter uses its own interface name. The importer
+                        // linker uses the raw import label.
                         let Some((ComponentItem::ComponentInstance(_), idx)) = plugin_component
                             .metadata
                             .component
-                            .get_export(None, interface)
+                            .get_export(None, &export_name)
                         else {
                             trace!(
                                 name = import_name,
@@ -3474,8 +3462,8 @@ fn resolve_import<'a>(
     }
 }
 
-/// The component a labelled import routes to, if the label names one that
-/// actually exports the interface.
+/// The component and export name a labelled import routes to.
+/// Compatible versions can use different import and export names.
 ///
 /// This mirrors the rule already used for host interfaces, where a label
 /// matching a registered plugin id routes straight to that plugin because "the
@@ -3486,40 +3474,33 @@ fn labelled_exporter<'a>(
     exporters: &'a HashMap<String, Vec<ComponentExporter>>,
     interface: &str,
     label: &str,
-) -> anyhow::Result<Option<&'a Arc<str>>> {
-    let Some(candidates) = exporters.get(interface) else {
-        return Ok(None);
-    };
-    let mut matches = candidates.iter().filter(|e| e.name.as_ref() == label);
+) -> anyhow::Result<Option<(&'a Arc<str>, &'a str)>> {
+    let mut candidates: Vec<_> = exporters
+        .get_key_value(interface)
+        .into_iter()
+        .flat_map(|(name, entries)| entries.iter().map(move |entry| (entry, name.as_str())))
+        .filter(|(entry, _)| entry.name.as_ref() == label)
+        .collect();
+    if candidates.is_empty() {
+        let imported = WitInterface::from(interface);
+        candidates = exporters
+            .iter()
+            .filter(|(name, _)| WitInterface::from(name.as_str()).contains(&imported))
+            .flat_map(|(name, entries)| entries.iter().map(move |entry| (entry, name.as_str())))
+            .filter(|(entry, _)| entry.name.as_ref() == label)
+            .collect();
+    }
+    let mut matches = candidates.iter();
     let first = matches.next();
     if first.is_some() && matches.next().is_some() {
-        // Two components share a manifest name and both export the interface,
-        // so the label names both.
-        //
-        // `select_exporter` faces the same shape for host-dispatched exports and
-        // picks manifest order with a `warn!` rather than failing. Routing takes
-        // the harder line because the consequences differ: there, a duplicate
-        // entrypoint is dropped and one component still serves; here, half the
-        // calls would go somewhere the manifest never asked for, and the caller
-        // cannot tell. Note the tiebreak would not even be arbitrary — ids are
-        // UUIDv7 minted in manifest order — which is what makes silently
-        // picking one so easy to miss.
-        //
-        // This is narrower than "component names must be unique": it fires only
-        // when a label matches several same-named components that ALL export the
-        // imported interface. Broad uniqueness belongs in admission, where
-        // `hostInterfaces` already enforces the same routing key.
+        // A label must select one compatible export.
         anyhow::bail!(
-            "`(implements {label})` is ambiguous: {} components named '{label}' \
-             export '{interface}'. A named import routes by component name, so \
-             the components a label can reach must not share one.",
-            candidates
-                .iter()
-                .filter(|e| e.name.as_ref() == label)
-                .count()
+            "`(implements {label})` is ambiguous: {} compatible exports named '{label}' \
+             provide '{interface}'. A named import must select one export.",
+            candidates.len()
         );
     }
-    Ok(first.map(|e| &e.id))
+    Ok(first.map(|(entry, name)| (&entry.id, *name)))
 }
 
 /// Whether the workload answers `entry` for `item_id` out of its own
@@ -5870,14 +5851,14 @@ mod tests {
         assert_eq!(
             labelled_exporter(&exporters, &iface, "feed-a")
                 .unwrap()
-                .map(|c| c.as_ref()),
-            Some("id-1")
+                .map(|(id, export)| (id.as_ref(), export)),
+            Some(("id-1", iface.as_str()))
         );
         assert_eq!(
             labelled_exporter(&exporters, &iface, "feed-b")
                 .unwrap()
-                .map(|c| c.as_ref()),
-            Some("id-2")
+                .map(|(id, export)| (id.as_ref(), export)),
+            Some(("id-2", iface.as_str()))
         );
         // A label matching a runtime id must NOT resolve: ids are UUIDs a user
         // never sees and never writes in a manifest.
@@ -5900,6 +5881,59 @@ mod tests {
             labelled_exporter(&exporters, &other, "feed-a")
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn a_label_resolves_a_compatible_export_version() {
+        let imported = "example:feeds/reader@0.1.0";
+        let exported = "example:feeds/reader@0.1.1";
+        let exports = build_export_map(&[(
+            ComponentExporter {
+                name: Arc::from("feed-a"),
+                id: Arc::from("id-1"),
+            },
+            vec![exported.to_string()],
+        )]);
+
+        assert_eq!(
+            labelled_exporter(&exports.exporters, imported, "feed-a")
+                .unwrap()
+                .map(|(id, export)| (id.as_ref(), export)),
+            Some(("id-1", exported))
+        );
+        assert!(
+            labelled_exporter(&exports.exporters, "example:feeds/reader@0.2.0", "feed-a")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn an_exact_version_takes_precedence_over_compatible_exports() {
+        let imported = "example:feeds/reader@0.1.0";
+        let exports = build_export_map(&[
+            (
+                ComponentExporter {
+                    name: Arc::from("feed-a"),
+                    id: Arc::from("compatible"),
+                },
+                vec!["example:feeds/reader@0.1.1".to_string()],
+            ),
+            (
+                ComponentExporter {
+                    name: Arc::from("feed-a"),
+                    id: Arc::from("exact"),
+                },
+                vec![imported.to_string()],
+            ),
+        ]);
+
+        assert_eq!(
+            labelled_exporter(&exports.exporters, imported, "feed-a")
+                .unwrap()
+                .map(|(id, export)| (id.as_ref(), export)),
+            Some(("exact", imported))
         );
     }
 
