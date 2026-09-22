@@ -352,9 +352,16 @@ runtime:
   # to it, so give an identity its own host group and keep those
   # `allowedHosts` narrow.
   #
-  # The key is mounted into the host container and is never exposed to a
-  # component: `wasi:config`, `wasi:cli/env` and workload volume mounts are all
-  # guest-readable and none of them carries it.
+  # The key is mounted into the host container and is not carried on any
+  # channel a component reads: it goes in neither `wasi:config` nor
+  # `wasi:cli/env`.
+  #
+  # That is not the same as being out of reach. A workload may declare a
+  # `hostPath` volume naming any path in the host container, including
+  # `mountPath` above, and the runtime preopens it without restricting where
+  # it points. Treat the mount as readable by any workload the host group
+  # admits, and give an identity its own host group rather than sharing one
+  # with workloads that should not hold it.
   clientIdentity:
     # -- Name of an existing `kubernetes.io/tls` Secret holding the
     # certificate and key. Empty presents no identity, and a host group can
@@ -377,7 +384,9 @@ runtime:
     mountPath: "/client-identity"
     # -- Re-read the credential on this interval (e.g. `30s`, `5m`) so a
     # rotated Secret applies without restarting the host. Empty reads it once
-    # at startup, which is wrong for anything an issuer renews.
+    # at startup, which is wrong for anything an issuer renews. A host group
+    # may set it empty to turn refresh off for a hand-installed credential.
+    # Zero is rejected rather than read as "never".
     #
     # Mounted as a directory rather than by `subPath`, because kubelet
     # propagates a rotated Secret only into the former, and this interval is

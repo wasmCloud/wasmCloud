@@ -340,16 +340,26 @@ impl ClientTlsOptions {
     /// that rotates builds its resolver *from* that same identity and would
     /// otherwise have to clear the field to avoid loading it twice. See
     /// [`RotatingClientIdentity`](crate::host::client_identity::RotatingClientIdentity).
+    ///
+    /// TLS session resumption is disabled on the returned configuration. A
+    /// resumed session carries no CertificateRequest, so rustls never
+    /// consults the resolver and the session keeps whichever credential it
+    /// first negotiated with. That would make both of the guarantees a
+    /// rotating identity advertises conditional: a lapsed credential would go
+    /// on authenticating resumed connections, and a rotation would not reach
+    /// them until the server's ticket expired. A caller installing a resolver
+    /// wants it consulted, and the cost lands per connection rather than per
+    /// request, which a pooled client amortises.
     pub fn build_with_resolver(
         &self,
         resolver: Arc<dyn rustls::client::ResolvesClientCert>,
     ) -> anyhow::Result<Arc<rustls::ClientConfig>> {
         let roots = self.root_store()?;
-        Ok(Arc::new(
-            rustls::ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_client_cert_resolver(resolver),
-        ))
+        let mut config = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_client_cert_resolver(resolver);
+        config.resumption = rustls::client::Resumption::disabled();
+        Ok(Arc::new(config))
     }
 
     /// The trust store these options describe, without deciding how the client
