@@ -356,8 +356,13 @@ runtime:
   # component: `wasi:config`, `wasi:cli/env` and workload volume mounts are all
   # guest-readable and none of them carries it.
   clientIdentity:
-    # -- Name of an existing `kubernetes.io/tls` Secret in the release
-    # namespace holding the certificate and key. Empty presents no identity.
+    # -- Name of an existing `kubernetes.io/tls` Secret holding the
+    # certificate and key. Empty presents no identity, and a host group can
+    # set it empty to opt out of a chart-wide one.
+    #
+    # Must exist in the namespace the host group is deployed into, which is
+    # `hostGroups[].namespace` when that is set rather than the release
+    # namespace.
     # This is the shape cert-manager writes, so a Certificate resource can
     # issue it with no glue.
     #
@@ -376,8 +381,11 @@ runtime:
     #
     # Mounted as a directory rather than by `subPath`, because kubelet
     # propagates a rotated Secret only into the former, and this interval is
-    # what notices. A read that fails leaves the running credential in place;
-    # an expired one is refused rather than presented either way.
+    # what notices. A read that fails leaves the running credential in place.
+    #
+    # Expiry is only checked on this path. Leave this empty and the host reads
+    # the credential once and presents it unconditionally, including after
+    # `notAfter`; set it and an expired credential is refused instead.
     refreshInterval: "30s"
   # -- Labels to add to runtime host pod templates
   podLabels: {}

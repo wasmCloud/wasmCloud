@@ -6,6 +6,13 @@
        a secret still gets the key names and mount path. `merge` leaves keys
        the group set alone and fills in the rest. */}}
 {{- $identity := merge (deepCopy (.clientIdentity | default dict)) $top.Values.runtime.clientIdentity }}
+{{- /* `merge` cannot tell an explicitly empty secretName from an unset one,
+       so a group opting out would otherwise be handed the chart-wide identity
+       back. Presenting a credential is a grant, not a default: honour the
+       opt-out. */}}
+{{- if and (hasKey (.clientIdentity | default dict) "secretName") (not (.clientIdentity | default dict).secretName) }}
+{{- $identity = dict }}
+{{- end }}
 {{- if $identity.secretName }}
 {{- if or (not $identity.mountPath) (not $identity.certKey) (not $identity.keyKey) }}
 {{- fail (printf "hostGroup %s: clientIdentity.secretName needs mountPath, certKey and keyKey" .name) }}
@@ -167,6 +174,9 @@ spec:
         - name: client-identity
           secret:
             secretName: {{ $identity.secretName }}
+            # The chart's posture for private keys. `fsGroup` still lets the
+            # host read it.
+            defaultMode: 0400
         {{- end }}
         {{- /* Optional pod volumes (e.g. ConfigMap / Secret mounts). Rendered
                unconditionally — outside the global.tls.enabled guard above —
