@@ -97,12 +97,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "^1.26.0"
+          go-version: "^1.27.0"
           cache: false
-      - name: Setup TinyGo
-        uses: acifani/setup-tinygo@f51bf108c9895381060398804ce6cf6f62692106 # v3.0.1
-        with:
-          tinygo-version: "0.39.0"
       - name: Load pinned tool versions
         # Appends the KEY=VALUE lines from the pins file to $GITHUB_ENV,
         # skipping comment and blank lines. Subsequent steps then see
