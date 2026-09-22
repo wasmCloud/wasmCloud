@@ -35,7 +35,7 @@ func TestPlacementCarriesComponentInstanceLimits(t *testing.T) {
 	bus := &mockBus{reply: &wasmbus.Message{Data: reply}}
 	r := &WorkloadReconciler{Bus: bus}
 	workload := &runtimev1alpha1.Workload{
-		ObjectMeta: metav1.ObjectMeta{Name: "limits", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "limits", Namespace: metav1.NamespaceDefault},
 		Spec: runtimev1alpha1.WorkloadSpec{
 			Components: []runtimev1alpha1.WorkloadComponent{{
 				Name:                 "pooled",

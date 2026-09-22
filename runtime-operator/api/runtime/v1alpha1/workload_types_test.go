@@ -4,72 +4,68 @@ import (
 	"testing"
 )
 
+const (
+	wasiNamespace = "wasi"
+	kvCacheName   = "cache"
+	kvStore       = "store"
+	kvBackend     = "backend"
+	natsBackend   = "nats"
+)
+
+// kvCache is a named wasi:keyvalue host interface at the given version.
+func kvCache(version string, interfaces ...string) HostInterface {
+	return HostInterface{
+		Name:       kvCacheName,
+		Namespace:  wasiNamespace,
+		Package:    "keyvalue",
+		Version:    version,
+		Interfaces: interfaces,
+	}
+}
+
 func TestEnsureHostInterface_SameNamespacePackageDifferentName_KeepsSeparate(t *testing.T) {
 	spec := &WorkloadSpec{}
 
 	// Add a named "cache" keyvalue interface
-	spec.EnsureHostInterface(HostInterface{
-		Name:       "cache",
-		Namespace:  "wasi",
-		Package:    "keyvalue",
-		Interfaces: []string{"store"},
-		ConfigLayer: ConfigLayer{
-			Config: map[string]string{"backend": "nats"},
-		},
-	})
+	cache := kvCache("", kvStore)
+	cache.Config = map[string]string{kvBackend: natsBackend}
+	spec.EnsureHostInterface(cache)
 
 	// Add a named "sessions" keyvalue interface (same namespace:package, different name)
-	spec.EnsureHostInterface(HostInterface{
-		Name:       "sessions",
-		Namespace:  "wasi",
-		Package:    "keyvalue",
-		Interfaces: []string{"store"},
-		ConfigLayer: ConfigLayer{
-			Config: map[string]string{"backend": "redis"},
-		},
-	})
+	sessions := kvCache("", kvStore)
+	sessions.Name = "sessions"
+	sessions.Config = map[string]string{kvBackend: "redis"}
+	spec.EnsureHostInterface(sessions)
 
 	if len(spec.HostInterfaces) != 2 {
 		t.Fatalf("expected 2 host interfaces, got %d", len(spec.HostInterfaces))
 	}
 
-	if spec.HostInterfaces[0].Name != "cache" {
+	if spec.HostInterfaces[0].Name != kvCacheName {
 		t.Errorf("expected first interface name 'cache', got %q", spec.HostInterfaces[0].Name)
 	}
 	if spec.HostInterfaces[1].Name != "sessions" {
 		t.Errorf("expected second interface name 'sessions', got %q", spec.HostInterfaces[1].Name)
 	}
-	if spec.HostInterfaces[0].Config["backend"] != "nats" {
-		t.Errorf("expected first interface backend 'nats', got %q", spec.HostInterfaces[0].Config["backend"])
+	if spec.HostInterfaces[0].Config[kvBackend] != natsBackend {
+		t.Errorf("expected first interface backend 'nats', got %q", spec.HostInterfaces[0].Config[kvBackend])
 	}
-	if spec.HostInterfaces[1].Config["backend"] != "redis" {
-		t.Errorf("expected second interface backend 'redis', got %q", spec.HostInterfaces[1].Config["backend"])
+	if spec.HostInterfaces[1].Config[kvBackend] != "redis" {
+		t.Errorf("expected second interface backend 'redis', got %q", spec.HostInterfaces[1].Config[kvBackend])
 	}
 }
 
 func TestEnsureHostInterface_SameNamespacePackageSameName_Merges(t *testing.T) {
 	spec := &WorkloadSpec{}
 
-	spec.EnsureHostInterface(HostInterface{
-		Name:       "cache",
-		Namespace:  "wasi",
-		Package:    "keyvalue",
-		Interfaces: []string{"store"},
-		ConfigLayer: ConfigLayer{
-			Config: map[string]string{"backend": "nats"},
-		},
-	})
+	first := kvCache("", kvStore)
+	first.Config = map[string]string{kvBackend: natsBackend}
+	spec.EnsureHostInterface(first)
 
 	// Same name+namespace+package => should merge interfaces and config
-	spec.EnsureHostInterface(HostInterface{
-		Name:       "cache",
-		Namespace:  "wasi",
-		Package:    "keyvalue",
-		Interfaces: []string{"atomics"},
-		ConfigLayer: ConfigLayer{
-			Config: map[string]string{"bucket": "cache-kv"},
-		},
-	})
+	second := kvCache("", "atomics")
+	second.Config = map[string]string{"bucket": "cache-kv"}
+	spec.EnsureHostInterface(second)
 
 	if len(spec.HostInterfaces) != 1 {
 		t.Fatalf("expected 1 host interface after merge, got %d", len(spec.HostInterfaces))
@@ -79,14 +75,14 @@ func TestEnsureHostInterface_SameNamespacePackageSameName_Merges(t *testing.T) {
 	if len(iface.Interfaces) != 2 {
 		t.Errorf("expected 2 interfaces after merge, got %d", len(iface.Interfaces))
 	}
-	if !iface.HasInterface("store") {
+	if !iface.HasInterface(kvStore) {
 		t.Error("expected merged interface to have 'store'")
 	}
 	if !iface.HasInterface("atomics") {
 		t.Error("expected merged interface to have 'atomics'")
 	}
-	if iface.Config["backend"] != "nats" {
-		t.Errorf("expected config backend 'nats', got %q", iface.Config["backend"])
+	if iface.Config[kvBackend] != natsBackend {
+		t.Errorf("expected config backend 'nats', got %q", iface.Config[kvBackend])
 	}
 	if iface.Config["bucket"] != "cache-kv" {
 		t.Errorf("expected config bucket 'cache-kv', got %q", iface.Config["bucket"])
@@ -98,13 +94,13 @@ func TestEnsureHostInterface_UnnamedBackwardsCompatible(t *testing.T) {
 
 	// Two unnamed entries with same namespace:package should merge (backwards compatible)
 	spec.EnsureHostInterface(HostInterface{
-		Namespace:  "wasi",
+		Namespace:  wasiNamespace,
 		Package:    "http",
 		Interfaces: []string{"incoming-handler"},
 	})
 
 	spec.EnsureHostInterface(HostInterface{
-		Namespace:  "wasi",
+		Namespace:  wasiNamespace,
 		Package:    "http",
 		Interfaces: []string{"outgoing-handler"},
 	})
@@ -121,19 +117,12 @@ func TestEnsureHostInterface_NamedAndUnnamedAreDistinct(t *testing.T) {
 	spec := &WorkloadSpec{}
 
 	// Unnamed entry
-	spec.EnsureHostInterface(HostInterface{
-		Namespace:  "wasi",
-		Package:    "keyvalue",
-		Interfaces: []string{"store"},
-	})
+	unnamed := kvCache("", kvStore)
+	unnamed.Name = ""
+	spec.EnsureHostInterface(unnamed)
 
 	// Named entry with same namespace:package
-	spec.EnsureHostInterface(HostInterface{
-		Name:       "cache",
-		Namespace:  "wasi",
-		Package:    "keyvalue",
-		Interfaces: []string{"store"},
-	})
+	spec.EnsureHostInterface(kvCache("", kvStore))
 
 	if len(spec.HostInterfaces) != 2 {
 		t.Fatalf("expected 2 host interfaces (named vs unnamed), got %d", len(spec.HostInterfaces))
@@ -143,30 +132,19 @@ func TestEnsureHostInterface_NamedAndUnnamedAreDistinct(t *testing.T) {
 func TestEnsureHostInterface_CompatibleVersionsMergeKeepingMax(t *testing.T) {
 	spec := &WorkloadSpec{}
 
-	spec.EnsureHostInterface(HostInterface{
-		Name:       "cache",
-		Namespace:  "wasi",
-		Package:    "keyvalue",
-		Version:    "0.2.1",
-		Interfaces: []string{"store"},
-	})
+	older, newer := "0.2.1", "0.2.6"
+	spec.EnsureHostInterface(kvCache(older, kvStore))
 	// Same name + semver-compatible version (canonical "0.2") => merge, keep the
 	// higher version.
-	spec.EnsureHostInterface(HostInterface{
-		Name:       "cache",
-		Namespace:  "wasi",
-		Package:    "keyvalue",
-		Version:    "0.2.6",
-		Interfaces: []string{"atomics"},
-	})
+	spec.EnsureHostInterface(kvCache(newer, "atomics"))
 
 	if len(spec.HostInterfaces) != 1 {
 		t.Fatalf("expected 1 host interface (compatible merge), got %d", len(spec.HostInterfaces))
 	}
-	if got := spec.HostInterfaces[0].Version; got != "0.2.6" {
-		t.Errorf("expected merged version 0.2.6 (max), got %q", got)
+	if got := spec.HostInterfaces[0].Version; got != newer {
+		t.Errorf("expected merged version %q (max), got %q", newer, got)
 	}
-	if !spec.HostInterfaces[0].HasInterface("store") || !spec.HostInterfaces[0].HasInterface("atomics") {
+	if !spec.HostInterfaces[0].HasInterface(kvStore) || !spec.HostInterfaces[0].HasInterface("atomics") {
 		t.Errorf("expected merged interfaces to include store+atomics, got %v", spec.HostInterfaces[0].Interfaces)
 	}
 }
@@ -174,21 +152,9 @@ func TestEnsureHostInterface_CompatibleVersionsMergeKeepingMax(t *testing.T) {
 func TestEnsureHostInterface_IncompatibleVersionsStayDistinct(t *testing.T) {
 	spec := &WorkloadSpec{}
 
-	spec.EnsureHostInterface(HostInterface{
-		Name:       "cache",
-		Namespace:  "wasi",
-		Package:    "keyvalue",
-		Version:    "0.2.0",
-		Interfaces: []string{"store"},
-	})
+	spec.EnsureHostInterface(kvCache("0.2.0", kvStore))
 	// Same name but semver-incompatible (canonical "0.2" vs "0.3") => distinct.
-	spec.EnsureHostInterface(HostInterface{
-		Name:       "cache",
-		Namespace:  "wasi",
-		Package:    "keyvalue",
-		Version:    "0.3.0",
-		Interfaces: []string{"store"},
-	})
+	spec.EnsureHostInterface(kvCache("0.3.0", kvStore))
 
 	if len(spec.HostInterfaces) != 2 {
 		t.Fatalf("expected 2 host interfaces (incompatible versions stay distinct), got %d", len(spec.HostInterfaces))
@@ -212,16 +178,18 @@ func TestCanonVersion(t *testing.T) {
 }
 
 func TestMaxVersion(t *testing.T) {
-	cases := []struct{ a, b, want string }{
-		{"0.2.1", "0.2.6", "0.2.6"},
-		{"0.2.10", "0.2.9", "0.2.10"},
-		{"0.3.0", "0.2.9", "0.3.0"},
-		{"", "0.2.0", "0.2.0"},
-		{"0.2.0", "", "0.2.0"},
+	// Each case is checked in both argument orders.
+	cases := []struct{ lower, higher string }{
+		{"0.2.1", "0.2.6"},
+		{"0.2.9", "0.2.10"},
+		{"0.2.9", "0.3.0"},
+		{"", "0.2.0"},
 	}
 	for _, c := range cases {
-		if got := maxVersion(c.a, c.b); got != c.want {
-			t.Errorf("maxVersion(%q, %q) = %q, want %q", c.a, c.b, got, c.want)
+		for _, args := range [][2]string{{c.lower, c.higher}, {c.higher, c.lower}} {
+			if got := maxVersion(args[0], args[1]); got != c.higher {
+				t.Errorf("maxVersion(%q, %q) = %q, want %q", args[0], args[1], got, c.higher)
+			}
 		}
 	}
 }

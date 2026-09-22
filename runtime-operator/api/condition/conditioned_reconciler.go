@@ -218,8 +218,11 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 			return reconcile.Result{}, finalizerErr
 		}
 
-		if finalizerChanged {
-			return reconcile.Result{Requeue: true}, nil //nolint:staticcheck // SA1019: RequeueAfter drops the rate-limited backoff
+		// A removed finalizer leaves nothing to reconcile. An added one needs no
+		// requeue: the Patch refreshed obj, and a finalizer change doesn't bump
+		// the generation that GenerationChangedPredicate watches.
+		if finalizerChanged && !obj.GetDeletionTimestamp().IsZero() {
+			return reconcile.Result{}, nil
 		}
 	}
 
