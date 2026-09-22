@@ -322,6 +322,18 @@ type WorkloadSpec struct {
 	//      distinct `name`s to route multiple imports of the same package to
 	//      different backends. Semver-incompatible versions of the same package
 	//      may coexist (they are distinct interfaces).
+	//
+	// Declaring an interface here does not by itself guarantee the host serves
+	// it. A Workload serves itself first: where exactly one component in the
+	// Workload exports a declared interface, that component answers its
+	// siblings' unlabelled imports of it, and the host binds only the
+	// exporting component (an export is how the host reaches into a Workload).
+	// Two or more exporters are ambiguous and fall back to the host.
+	//
+	// Both routes can be stated explicitly, and an explicit route always wins.
+	// Give the entry a `name` and import under that `(implements <name>)`
+	// label to reach the host; import under a label naming a component to
+	// reach that component.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y.__namespace__ == x.__namespace__ && y.__package__ == x.__package__ && (has(y.name) ? y.name : '') == (has(x.name) ? x.name : '') && (has(y.version) ? y.version : '') == (has(x.version) ? x.version : '')))",message="hostInterfaces must not contain duplicate entries with the same namespace, package, name, and version"
