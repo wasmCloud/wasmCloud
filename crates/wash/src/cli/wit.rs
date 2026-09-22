@@ -110,11 +110,10 @@
 //! - [WIT Language Specification](https://component-model.bytecodealliance.org/design/wit.html)
 //! - [wasm-pkg-tools Documentation](https://github.com/bytecodealliance/wasm-pkg-tools)
 
-use std::{collections::BTreeMap, io::ErrorKind, path::PathBuf, time::Duration};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
-use oci_client::errors::{OciDistributionError, OciErrorCode};
 use tracing::{debug, info, instrument, warn};
 
 use crate::{
@@ -686,35 +685,10 @@ async fn fetch_with(
     // Load or create lock file
     let mut lock_file = load_lock_file(&project_dir).await?;
 
-    // Fetch dependencies. A transient registry failure can leave successfully downloaded
-    // packages in the cache, so the next attempt resumes without discarding useful work.
-    let mut attempt = 1;
-    let fetch_result = loop {
-        match fetcher
-            .fetch_wit_dependencies(&wit_dir, &mut lock_file)
-            .await
-        {
-            Ok(()) => break Ok(()),
-            Err(error)
-                if attempt < WIT_FETCH_MAX_ATTEMPTS
-                    && is_transient_registry_fetch_error(&error) =>
-            {
-                let delay = wit_fetch_retry_delay(attempt);
-                warn!(
-                    attempt,
-                    max_attempts = WIT_FETCH_MAX_ATTEMPTS,
-                    delay_ms = delay.as_millis(),
-                    error = %error,
-                    "transient registry fetch failed; retrying"
-                );
-                tokio::time::sleep(delay).await;
-                attempt += 1;
-            }
-            Err(error) => break Err(error),
-        }
-    };
-
-    if let Err(e) = fetch_result {
+    if let Err(e) = fetcher
+        .fetch_wit_dependencies(&wit_dir, &mut lock_file)
+        .await
+    {
         // Resolution reports only that it failed, so ask the sources what they have for each
         // package the WIT names and report anything they do not. The underlying error goes with
         // it, since the report is a reading of the WIT rather than of the failure itself.
@@ -742,67 +716,6 @@ async fn fetch_with(
             "lock_file": project_dir.join("wkg.lock").display().to_string(),
         })),
     ))
-}
-
-const WIT_FETCH_MAX_ATTEMPTS: u32 = 3;
-const WIT_FETCH_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
-
-/// Return a bounded exponential delay with up to one base delay of positive jitter.
-fn wit_fetch_retry_delay(failed_attempt: u32) -> Duration {
-    let exponent = failed_attempt.saturating_sub(1).min(3);
-    let base = WIT_FETCH_INITIAL_BACKOFF.saturating_mul(1 << exponent);
-    base + Duration::from_millis(fastrand::u64(0..base.as_millis() as u64))
-}
-
-// A downcast only matches the `oci-client` types `wasm-pkg-client` was built against, so this
-// stops compiling if the two ever resolve to different `oci-client` versions.
-const _: () = {
-    use wasm_pkg_client::oci::client::{Client, ClientConfig};
-    let _: fn(<Client as TryFrom<ClientConfig>>::Error) -> OciDistributionError = |error| error;
-};
-
-/// Whether an error chain proves that a registry fetch failed for a transient reason.
-fn is_transient_registry_fetch_error(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        if let Some(error) = cause.downcast_ref::<OciDistributionError>() {
-            return match error {
-                OciDistributionError::ServerError { code, .. } => {
-                    *code == 429 || (500..=599).contains(code)
-                }
-                OciDistributionError::RequestError(error) => {
-                    error.is_timeout()
-                        || error.is_connect()
-                        || error.status().is_some_and(|status| {
-                            status.as_u16() == 429 || status.is_server_error()
-                        })
-                }
-                OciDistributionError::IoError(error) => is_transient_io_error(error),
-                OciDistributionError::RegistryError { envelope, .. } => {
-                    !envelope.errors.is_empty()
-                        && envelope
-                            .errors
-                            .iter()
-                            .all(|error| error.code == OciErrorCode::Toomanyrequests)
-                }
-                _ => false,
-            };
-        }
-
-        cause
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(is_transient_io_error)
-    })
-}
-
-fn is_transient_io_error(error: &std::io::Error) -> bool {
-    matches!(
-        error.kind(),
-        ErrorKind::ConnectionAborted
-            | ErrorKind::ConnectionReset
-            | ErrorKind::Interrupted
-            | ErrorKind::TimedOut
-            | ErrorKind::UnexpectedEof
-    )
 }
 
 /// Put the lock file back when an update's fetch does not land. `wash wit update` clears the lock
@@ -1807,7 +1720,6 @@ async fn handle_build(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use oci_client::errors::{OciEnvelope, OciError};
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
@@ -1874,85 +1786,6 @@ world example {
         if let Err(e) = wasm_pkg_core::wit::get_packages(world_wit_path) {
             let content = fs::read_to_string(world_wit_path).unwrap_or_default();
             panic!("WIT should parse but did not: {e:#}\n{content}");
-        }
-    }
-
-    fn registry_fetch_error(error: OciDistributionError) -> anyhow::Error {
-        wasm_pkg_client::Error::RegistryError(anyhow::Error::new(error)).into()
-    }
-
-    fn registry_envelope_error(codes: Vec<OciErrorCode>) -> anyhow::Error {
-        registry_fetch_error(OciDistributionError::RegistryError {
-            envelope: OciEnvelope {
-                errors: codes
-                    .into_iter()
-                    .map(|code| OciError {
-                        code,
-                        message: String::new(),
-                        detail: serde_json::Value::Null,
-                    })
-                    .collect(),
-            },
-            url: "https://registry.example.test".to_string(),
-        })
-    }
-
-    #[test]
-    fn wit_fetch_retries_only_transient_registry_statuses() {
-        for code in [429, 500, 503] {
-            let error = registry_fetch_error(OciDistributionError::ServerError {
-                code,
-                url: "https://registry.example.test".to_string(),
-                message: String::new(),
-            });
-            assert!(is_transient_registry_fetch_error(&error), "status {code}");
-        }
-
-        for code in [400, 401, 403, 404] {
-            let error = registry_fetch_error(OciDistributionError::ServerError {
-                code,
-                url: "https://registry.example.test".to_string(),
-                message: String::new(),
-            });
-            assert!(!is_transient_registry_fetch_error(&error), "status {code}");
-        }
-    }
-
-    #[test]
-    fn wit_fetch_retries_rate_limit_envelopes_but_not_authentication_errors() {
-        assert!(is_transient_registry_fetch_error(&registry_envelope_error(
-            vec![OciErrorCode::Toomanyrequests]
-        )));
-        assert!(!is_transient_registry_fetch_error(
-            &registry_envelope_error(vec![OciErrorCode::Unauthorized])
-        ));
-        assert!(!is_transient_registry_fetch_error(
-            &registry_envelope_error(vec![
-                OciErrorCode::Toomanyrequests,
-                OciErrorCode::Unauthorized,
-            ])
-        ));
-    }
-
-    #[test]
-    fn wit_fetch_retries_transient_io_errors() {
-        let reset = registry_fetch_error(OciDistributionError::IoError(std::io::Error::from(
-            ErrorKind::ConnectionReset,
-        )));
-        assert!(is_transient_registry_fetch_error(&reset));
-
-        let denied = registry_fetch_error(OciDistributionError::IoError(std::io::Error::from(
-            ErrorKind::PermissionDenied,
-        )));
-        assert!(!is_transient_registry_fetch_error(&denied));
-    }
-
-    #[test]
-    fn wit_fetch_retry_delay_is_exponential_with_bounded_jitter() {
-        for (failed_attempt, lower_ms, upper_ms) in [(1, 100, 200), (2, 200, 400), (3, 400, 800)] {
-            let delay = wit_fetch_retry_delay(failed_attempt);
-            assert!(delay >= Duration::from_millis(lower_ms));
-            assert!(delay < Duration::from_millis(upper_ms));
         }
     }
 
