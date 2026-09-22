@@ -213,7 +213,9 @@ impl std::fmt::Display for ClientIdentity {
 
 impl ClientIdentity {
     /// Read the chain and key.
-    fn load(&self) -> anyhow::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+    pub(crate) fn load(
+        &self,
+    ) -> anyhow::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
         let Self::CertificatePem {
             cert_path,
             key_path,
@@ -328,6 +330,26 @@ impl ClientTlsOptions {
         };
 
         Ok(Arc::new(config))
+    }
+
+    /// Build a rustls client configuration whose client identity comes from
+    /// `resolver` rather than from [`Self::client_identity`].
+    ///
+    /// Trust roots are resolved exactly as [`Self::build`] does; only the
+    /// client half differs. `client_identity` is ignored, because a caller
+    /// that rotates builds its resolver *from* that same identity and would
+    /// otherwise have to clear the field to avoid loading it twice. See
+    /// [`RotatingClientIdentity`](crate::host::client_identity::RotatingClientIdentity).
+    pub fn build_with_resolver(
+        &self,
+        resolver: Arc<dyn rustls::client::ResolvesClientCert>,
+    ) -> anyhow::Result<Arc<rustls::ClientConfig>> {
+        let roots = self.root_store()?;
+        Ok(Arc::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_client_cert_resolver(resolver),
+        ))
     }
 
     /// The trust store these options describe, without deciding how the client

@@ -6218,6 +6218,7 @@ dependencies = [
  "wat",
  "webpki-roots 0.26.11",
  "wit-component 0.254.0",
+ "x509-parser",
  "zeroize",
 ]
 

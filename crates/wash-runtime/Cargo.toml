@@ -63,6 +63,7 @@ wasi-tls = ["dep:wasmtime-wasi-tls"]
 [dependencies]
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
+x509-parser = { workspace = true }
 async-nats = { workspace = true, features = ["server_2_10", "server_2_11", "server_2_12"] }
 async-trait = { workspace = true }
 bon = { workspace = true }
