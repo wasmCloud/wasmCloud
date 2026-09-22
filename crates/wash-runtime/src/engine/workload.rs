@@ -498,10 +498,10 @@ impl WorkloadService {
 /// full list of [`HostPlugin`]s that the component depends on.
 #[derive(Clone)]
 pub struct WorkloadComponent {
-    /// The component's manifest name. Load-bearing, not just for debugging:
-    /// an `(implements <name>)` import elsewhere in the workload routes to
-    /// this component's export by matching it. See [`Self::name`].
-    name: Arc<str>,
+    /// Component name
+    ///
+    /// This is the name used for `(implements <name>)` imports.
+    name: ComponentName,
     /// The [`WorkloadMetadata`] for this component
     pub(crate) metadata: WorkloadMetadata,
     /// Instances kept warm between ephemeral linked calls. Shared by every
@@ -583,10 +583,10 @@ impl WorkloadComponent {
         &self.metadata
     }
 
-    /// The component's manifest name. A routing key, not just a label: an
-    /// `(implements ..)` import naming this component links to its export.
-    /// Distinct from [`Self::id`], which is a per-instance UUID a user never
-    /// writes.
+    /// Component name, as written in the manifest.
+    ///
+    /// This is the name an `(implements <name>)` import routes by, not
+    /// [`Self::id`], which is a runtime UUID.
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -1246,7 +1246,7 @@ impl ResolvedWorkload {
     #[instrument(name="link_components", skip_all, fields(workload.id = self.id.as_ref(), workload.name = self.name.as_ref(), workload.namespace = self.namespace.as_ref()))]
     async fn link_components(&mut self) -> anyhow::Result<()> {
         // Collect each component's exported component-instance interfaces.
-        let mut component_exports: Vec<(Exporter, Vec<String>)> = Vec::new();
+        let mut component_exports: Vec<(ComponentExporter, Vec<String>)> = Vec::new();
         for c in self.components.read().await.values() {
             let mut names = Vec::new();
             for (name, item) in c.component_exports()? {
@@ -1262,7 +1262,7 @@ impl ResolvedWorkload {
                 }
             }
             component_exports.push((
-                Exporter {
+                ComponentExporter {
                     name: Arc::from(c.name()),
                     id: Arc::from(c.id()),
                 },
@@ -1277,10 +1277,9 @@ impl ResolvedWorkload {
         // `wasmcloud:messaging/handler` or `wasi:http/incoming-handler` are
         // consumed by host plugins, never imported intra-workload, so multiple
         // exporters are fine).
-        let (interface_map, ambiguous_exports, exporters) = build_export_map(&component_exports);
+        let exports = build_export_map(&component_exports);
 
-        self.resolve_workload_imports(&interface_map, &ambiguous_exports, &exporters)
-            .await?;
+        self.resolve_workload_imports(&exports).await?;
 
         Ok(())
     }
@@ -1292,12 +1291,7 @@ impl ResolvedWorkload {
     /// dependencies. This ensures that when a component imports from another component,
     /// the exporting component has already had its imports resolved and can be
     /// pre-instantiated.
-    async fn resolve_workload_imports(
-        &mut self,
-        interface_map: &HashMap<String, Arc<str>>,
-        ambiguous_exports: &HashSet<String>,
-        exporters: &HashMap<String, Vec<Exporter>>,
-    ) -> anyhow::Result<()> {
+    async fn resolve_workload_imports(&mut self, exports: &ExportMaps) -> anyhow::Result<()> {
         // Build a dependency graph: for each component, track which other components it imports from
         let mut dependencies: HashMap<Arc<str>, HashSet<Arc<str>>> = HashMap::new();
 
@@ -1312,36 +1306,43 @@ impl ResolvedWorkload {
                         continue;
                     }
                     let (interface, label) = resolve_import(import_name, import_item.implements);
-                    // A labelled import resolves only through its label, and a
-                    // label naming an exporting component settles the ambiguity
-                    // the bail below guards. A label that names nothing here is
-                    // for a host interface, so it records no dependency and is
-                    // left to plugin matching.
-                    if let Some(l) = label {
-                        if let Some(labelled) = labelled_exporter(exporters, interface, l)?
-                            && labelled != component_id
-                        {
-                            deps.insert(labelled.clone());
+                    match label {
+                        // For labeled imports without a labeled exporter, we
+                        // record no dependency, as resolution will happen
+                        // against the host.
+                        //
+                        // If the import is labeled and has a matching
+                        // exporter, then we must record the exporter as a
+                        // dependency.
+                        Some(l) => {
+                            if let Some(labelled) =
+                                labelled_exporter(&exports.exporters, interface, l)?
+                                && labelled != component_id
+                            {
+                                deps.insert(labelled.clone());
+                            }
                         }
-                        continue;
-                    }
-                    // An interface exported by multiple components can't be
-                    // resolved to a single provider for an intra-workload
-                    // import — that's the genuine ambiguity the link check
-                    // guards against.
-                    if ambiguous_exports.contains(interface) {
-                        anyhow::bail!(
-                            "component '{component_id}' imports interface '{interface}', \
-                             which is exported by multiple components in the workload; \
-                             cannot disambiguate the provider. Import it under an \
-                             `(implements ..)` label naming the component to use."
-                        );
-                    }
-                    if let Some(exporter_id) = interface_map.get(interface)
-                        && exporter_id != component_id
-                    {
-                        // This import is provided by another component in the workload
-                        deps.insert(exporter_id.clone());
+                        None => {
+                            // An interface exported by multiple components can't be
+                            // resolved to a single provider for an intra-workload
+                            // import: that's the genuine ambiguity the link check
+                            // guards against.
+                            if exports.ambiguous.contains(interface) {
+                                anyhow::bail!(
+                                    "component '{component_id}' imports interface \
+                                     '{interface}', which is exported by multiple \
+                                     components in the workload; cannot disambiguate the \
+                                     provider. Import it under an `(implements ..)` label \
+                                     naming the component to use."
+                                );
+                            }
+                            if let Some(exporter_id) = exports.unambiguous.get(interface)
+                                && exporter_id != component_id
+                            {
+                                // This import is provided by another component in the workload
+                                deps.insert(exporter_id.clone());
+                            }
+                        }
                     }
                 }
                 dependencies.insert(component_id.clone(), deps);
@@ -1382,8 +1383,7 @@ impl ResolvedWorkload {
                 .resolve_component_imports(
                     &component,
                     linker,
-                    interface_map,
-                    exporters,
+                    exports,
                     &plugin_bound_instances,
                     Some(component_id.as_ref()),
                 )
@@ -1418,8 +1418,7 @@ impl ResolvedWorkload {
                 .resolve_component_imports(
                     &component,
                     linker,
-                    interface_map,
-                    exporters,
+                    exports,
                     &plugin_bound_instances,
                     None,
                 )
@@ -1446,8 +1445,7 @@ impl ResolvedWorkload {
         &self,
         component: &wasmtime::component::Component,
         linker: &mut Linker<SharedCtx>,
-        interface_map: &HashMap<String, Arc<str>>,
-        exporters: &HashMap<String, Vec<Exporter>>,
+        exports: &ExportMaps,
         plugin_bound_instances: &HashSet<String>,
         // The importer's own id. A component resolving an import to ITSELF is a
         // no-op rather than a lookup failure: it has already been removed from
@@ -1498,8 +1496,10 @@ impl ResolvedWorkload {
                         // handing it a guest component instead is the kind of
                         // wrong that deploys.
                         let resolved = match label {
-                            Some(l) => labelled_exporter(exporters, interface, l)?.cloned(),
-                            None => interface_map.get(interface).cloned(),
+                            Some(l) => {
+                                labelled_exporter(&exports.exporters, interface, l)?.cloned()
+                            }
+                            None => exports.unambiguous.get(interface).cloned(),
                         }
                         .filter(|exporter| Some(exporter.as_ref()) != importer_id);
                         let Some(exporter_component) = resolved else {
@@ -3333,43 +3333,53 @@ impl UnresolvedWorkload {
     }
 }
 
-/// Builds the export→component map used to wire intra-workload component
+/// A component's manifest `name`: what an `(implements <name>)` import is
+/// written against.
+type ComponentName = Arc<str>;
+
+/// A component's runtime id: what the workload's component map is keyed by.
+type ComponentId = Arc<str>;
+
+/// One component that exports an interface. Both halves are needed: an
+/// `(implements ..)` label matches the `name`, and linking needs the `id`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ComponentExporter {
+    name: ComponentName,
+    id: ComponentId,
+}
+
+/// What [`build_export_map`] returns.
+struct ExportMaps {
+    /// Interface -> the one component exporting it. An interface exported by
+    /// more than one component is absent here and listed in
+    /// [`Self::ambiguous`] instead.
+    unambiguous: HashMap<String, ComponentId>,
+    /// Interfaces exported by more than one component.
+    ambiguous: HashSet<String>,
+    /// Every exporter of every interface, so an `(implements ..)` label can
+    /// still choose among them after [`Self::unambiguous`] has dropped it.
+    exporters: HashMap<String, Vec<ComponentExporter>>,
+}
+
+/// Builds the export->component map used to wire intra-workload component
 /// imports. An interface exported by exactly one component is registered for
-/// linking; an interface exported by more than one component is "ambiguous" —
-/// left out of the map and returned in the second set instead.
+/// linking; an interface exported by more than one component is "ambiguous",
+/// left out of [`ExportMaps::unambiguous`] and listed in
+/// [`ExportMaps::ambiguous`] instead.
 ///
 /// Ambiguity is not an error on its own: host-invoked exports (e.g.
 /// `wasmcloud:messaging/handler`, `wasi:http/incoming-handler`) are consumed
 /// by host plugins and never imported by another component, so multiple
 /// exporters are expected. The importer side ([`resolve_workload_imports`])
 /// errors only if a component actually imports an ambiguous interface.
-/// One component that exports an interface: its manifest `name` (what an
-/// `(implements ..)` label is written against) and its runtime `id` (what the
-/// component map is keyed by). Both are needed — the label matches the first
-/// and linking needs the second.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Exporter {
-    name: Arc<str>,
-    id: Arc<str>,
-}
-
-/// What [`build_export_map`] returns: the unambiguous interface -> component
-/// map, the interfaces too ambiguous to put in it, and every exporter of every
-/// interface so a label can still choose among them.
-type ExportMaps = (
-    HashMap<String, Arc<str>>,
-    HashSet<String>,
-    HashMap<String, Vec<Exporter>>,
-);
-
-fn build_export_map(component_exports: &[(Exporter, Vec<String>)]) -> ExportMaps {
-    let mut interface_map: HashMap<String, Arc<str>> = HashMap::new();
+fn build_export_map(component_exports: &[(ComponentExporter, Vec<String>)]) -> ExportMaps {
+    let mut unambiguous: HashMap<String, ComponentId> = HashMap::new();
     let mut ambiguous: HashSet<String> = HashSet::new();
-    // Every exporter of every interface, kept whole. `interface_map` collapses
+    // Every exporter of every interface, kept whole. `unambiguous` collapses
     // to nothing the moment two components export the same interface, which is
     // exactly the case an `(implements ..)` label exists to resolve — so the
     // label has to be able to look past that collapse to the candidates.
-    let mut exporters: HashMap<String, Vec<Exporter>> = HashMap::new();
+    let mut exporters: HashMap<String, Vec<ComponentExporter>> = HashMap::new();
 
     for (exporter, names) in component_exports {
         let component_id = &exporter.id;
@@ -3381,7 +3391,7 @@ fn build_export_map(component_exports: &[(Exporter, Vec<String>)]) -> ExportMaps
             if ambiguous.contains(name) {
                 continue;
             }
-            if interface_map.remove(name).is_some() {
+            if unambiguous.remove(name).is_some() {
                 // A second exporter for this interface: mark it ambiguous.
                 trace!(
                     name,
@@ -3390,12 +3400,16 @@ fn build_export_map(component_exports: &[(Exporter, Vec<String>)]) -> ExportMaps
                 ambiguous.insert(name.clone());
             } else {
                 trace!(name, "registering component export for linking");
-                interface_map.insert(name.clone(), component_id.clone());
+                unambiguous.insert(name.clone(), component_id.clone());
             }
         }
     }
 
-    (interface_map, ambiguous, exporters)
+    ExportMaps {
+        unambiguous,
+        ambiguous,
+        exporters,
+    }
 }
 
 /// What an intra-workload import resolves to: the interface being asked for,
@@ -3424,7 +3438,7 @@ fn resolve_import<'a>(
 /// no manifest change. An operator-declared binding tier can layer on top later
 /// exactly as `declaring_plugin` does for plugins, without disturbing this.
 fn labelled_exporter<'a>(
-    exporters: &'a HashMap<String, Vec<Exporter>>,
+    exporters: &'a HashMap<String, Vec<ComponentExporter>>,
     interface: &str,
     label: &str,
 ) -> anyhow::Result<Option<&'a Arc<str>>> {
@@ -5611,21 +5625,25 @@ mod tests {
     fn build_export_map_registers_unique_exports() {
         let exports = vec![
             (
-                Exporter {
+                ComponentExporter {
                     name: Arc::from("comp-a"),
                     id: Arc::from("comp-a"),
                 },
                 vec!["wasi:http/incoming-handler".to_string()],
             ),
             (
-                Exporter {
+                ComponentExporter {
                     name: Arc::from("comp-b"),
                     id: Arc::from("comp-b"),
                 },
                 vec!["custom:pkg/iface".to_string()],
             ),
         ];
-        let (map, ambiguous, _) = build_export_map(&exports);
+        let ExportMaps {
+            unambiguous: map,
+            ambiguous,
+            ..
+        } = build_export_map(&exports);
         assert_eq!(
             map.get("custom:pkg/iface").map(|c| c.as_ref()),
             Some("comp-b")
@@ -5639,21 +5657,25 @@ mod tests {
         // dropped from the resolvable map (only an importer would error).
         let exports = vec![
             (
-                Exporter {
+                ComponentExporter {
                     name: Arc::from("task-leet"),
                     id: Arc::from("task-leet"),
                 },
                 vec!["wasmcloud:messaging/handler@0.2.0".to_string()],
             ),
             (
-                Exporter {
+                ComponentExporter {
                     name: Arc::from("task-reverse"),
                     id: Arc::from("task-reverse"),
                 },
                 vec!["wasmcloud:messaging/handler@0.2.0".to_string()],
             ),
         ];
-        let (map, ambiguous, _) = build_export_map(&exports);
+        let ExportMaps {
+            unambiguous: map,
+            ambiguous,
+            ..
+        } = build_export_map(&exports);
         assert!(!map.contains_key("wasmcloud:messaging/handler@0.2.0"));
         assert!(ambiguous.contains("wasmcloud:messaging/handler@0.2.0"));
     }
@@ -5664,55 +5686,63 @@ mod tests {
         let iface = "wasmcloud:messaging/handler@0.2.0".to_string();
         let exports = vec![
             (
-                Exporter {
+                ComponentExporter {
                     name: Arc::from("a"),
                     id: Arc::from("a"),
                 },
                 vec![iface.clone()],
             ),
             (
-                Exporter {
+                ComponentExporter {
                     name: Arc::from("b"),
                     id: Arc::from("b"),
                 },
                 vec![iface.clone()],
             ),
             (
-                Exporter {
+                ComponentExporter {
                     name: Arc::from("c"),
                     id: Arc::from("c"),
                 },
                 vec![iface.clone()],
             ),
         ];
-        let (map, ambiguous, _) = build_export_map(&exports);
+        let ExportMaps {
+            unambiguous: map,
+            ambiguous,
+            ..
+        } = build_export_map(&exports);
         assert!(!map.contains_key(&iface));
         assert!(ambiguous.contains(&iface));
     }
 
     #[test]
     fn exporters_keeps_every_candidate_an_ambiguous_interface_dropped() {
-        // `interface_map` collapses to nothing once two components export the
+        // `unambiguous` collapses to nothing once two components export the
         // same interface — which is precisely when a label needs the
         // candidates. They have to survive that collapse.
         let iface = "example:feeds/reader@0.1.0".to_string();
         let exports = vec![
             (
-                Exporter {
+                ComponentExporter {
                     name: Arc::from("feed-a"),
                     id: Arc::from("id-1"),
                 },
                 vec![iface.clone()],
             ),
             (
-                Exporter {
+                ComponentExporter {
                     name: Arc::from("feed-b"),
                     id: Arc::from("id-2"),
                 },
                 vec![iface.clone()],
             ),
         ];
-        let (map, ambiguous, exporters) = build_export_map(&exports);
+        let ExportMaps {
+            unambiguous: map,
+            ambiguous,
+            exporters,
+        } = build_export_map(&exports);
         assert!(
             !map.contains_key(&iface),
             "ambiguous, so not directly resolvable"
@@ -5746,21 +5776,21 @@ mod tests {
         let iface = "example:feeds/reader@0.1.0".to_string();
         let exports = vec![
             (
-                Exporter {
+                ComponentExporter {
                     name: Arc::from("feed-a"),
                     id: Arc::from("id-1"),
                 },
                 vec![iface.clone()],
             ),
             (
-                Exporter {
+                ComponentExporter {
                     name: Arc::from("feed-b"),
                     id: Arc::from("id-2"),
                 },
                 vec![iface.clone()],
             ),
         ];
-        let (_, _, exporters) = build_export_map(&exports);
+        let ExportMaps { exporters, .. } = build_export_map(&exports);
 
         // Label in is the MANIFEST name; what comes back is the runtime id the
         // component map is keyed by.
@@ -5808,21 +5838,21 @@ mod tests {
         let iface = "example:feeds/reader@0.1.0".to_string();
         let exports = vec![
             (
-                Exporter {
+                ComponentExporter {
                     name: Arc::from("feed-a"),
                     id: Arc::from("id-1"),
                 },
                 vec![iface.clone()],
             ),
             (
-                Exporter {
+                ComponentExporter {
                     name: Arc::from("feed-a"),
                     id: Arc::from("id-2"),
                 },
                 vec![iface.clone()],
             ),
         ];
-        let (_, _, exporters) = build_export_map(&exports);
+        let ExportMaps { exporters, .. } = build_export_map(&exports);
         let err = labelled_exporter(&exporters, &iface, "feed-a")
             .expect_err("a duplicated name must not resolve");
         assert!(err.to_string().contains("ambiguous"), "{err}");

@@ -1,4 +1,4 @@
-package example:feeds-b@0.1.0;
+package example:feeds-callee-b@0.1.0;
 
 world component {
     export example:feeds/reader@0.1.0;

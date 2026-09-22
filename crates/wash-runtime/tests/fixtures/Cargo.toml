@@ -26,8 +26,8 @@ members = [
     "http-ip-name-lookup",
     "keyvalue-counter",
     "keyvalue-implements",
-    "feeds-a",
-    "feeds-b",
+    "feeds-callee-a",
+    "feeds-callee-b",
     "feeds-caller",
     "postgres-implements",
     # P3 fixtures (wasm32-wasip1 + reactor adapter)

@@ -188,14 +188,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "feeds-a"
+name = "feeds-callee-a"
 version = "0.0.0"
 dependencies = [
  "wit-bindgen 0.60.0",
 ]
 
 [[package]]
-name = "feeds-b"
+name = "feeds-callee-b"
 version = "0.0.0"
 dependencies = [
  "wit-bindgen 0.60.0",
