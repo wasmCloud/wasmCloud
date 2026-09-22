@@ -119,6 +119,8 @@ matrix binary build and is what `release-tag.yml` looks for to identify a releas
      for img in ghcr.io/wasmcloud/{wash,runtime-gateway,runtime-operator}; do
        docker buildx imagetools create --tag "${img}:X.Y.Z" "${img}:sha-<MERGE_SHA>"
      done
+     docker buildx imagetools create --tag ghcr.io/wasmcloud/wash:X.Y.Z-all-features \
+       ghcr.io/wasmcloud/wash:sha-<MERGE_SHA>-all-features
      ```
    - Push the immutable annotated tag and the Go module tag:
      ```bash
@@ -143,7 +145,7 @@ OCI image tags use bare semver (`X.Y.Z`); the git tag, GitHub Release, and Go mo
 
 | Component | What gets published on `vX.Y.Z` |
 |-----------|---------------------------------|
-| `wash` (CLI) | Cross-platform binaries with SLSA provenance, GitHub Release, `ghcr.io/wasmcloud/wash:X.Y.Z`, Homebrew tap update, winget |
+| `wash` (CLI) | Cross-platform binaries with SLSA provenance, GitHub Release, `ghcr.io/wasmcloud/wash:X.Y.Z` (plus `:X.Y.Z-all-features`), Homebrew tap update, winget |
 | `runtime-gateway` | `ghcr.io/wasmcloud/runtime-gateway:X.Y.Z` |
 | `runtime-operator` | `ghcr.io/wasmcloud/runtime-operator:X.Y.Z`, Go module tag `runtime-operator/vX.Y.Z` |
 | Helm chart | `ghcr.io/wasmcloud/charts/runtime-operator:X.Y.Z` |
@@ -158,6 +160,8 @@ images) but is not currently published as a standalone crate on crates.io — se
 On every merge to `main` (no tag required):
 
 - `ghcr.io/wasmcloud/wash:canary` and `ghcr.io/wasmcloud/wash:sha-<full-sha>`
+- `ghcr.io/wasmcloud/wash:canary-all-features` and `:sha-<full-sha>-all-features` (the
+  `host-component-plugins` build the operator e2e runs)
 - `ghcr.io/wasmcloud/runtime-gateway:canary` and `:sha-<full-sha>`
 - `ghcr.io/wasmcloud/runtime-operator:canary` and `:sha-<full-sha>`
 - Helm chart `runtime-operator:v2-canary`
