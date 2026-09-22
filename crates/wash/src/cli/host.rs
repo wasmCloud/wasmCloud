@@ -161,8 +161,11 @@ pub struct HostCommand {
     ///
     /// Unset reads it once at startup, which is fine for a credential
     /// installed by hand and wrong for one an issuer renews. A read that
-    /// fails leaves the running credential in place; an expired one is
-    /// refused rather than presented either way.
+    /// fails leaves the running credential in place.
+    ///
+    /// Expiry is only checked on this path. Without it the credential is read
+    /// once and presented unconditionally, including after `notAfter`; with
+    /// it, an expired credential is refused rather than offered.
     #[arg(
         long = "http-client-identity-refresh",
         env = "WASH_HTTP_CLIENT_IDENTITY_REFRESH",
