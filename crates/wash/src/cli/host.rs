@@ -156,6 +156,21 @@ pub struct HostCommand {
     )]
     pub http_client_key_path: Option<PathBuf>,
 
+    /// Re-read the client identity on this interval (e.g. `30s`, `5m`), so a
+    /// rotated credential applies without restarting the host.
+    ///
+    /// Unset reads it once at startup, which is fine for a credential
+    /// installed by hand and wrong for one an issuer renews. A read that
+    /// fails leaves the running credential in place; an expired one is
+    /// refused rather than presented either way.
+    #[arg(
+        long = "http-client-identity-refresh",
+        env = "WASH_HTTP_CLIENT_IDENTITY_REFRESH",
+        requires = "http_client_cert_path",
+        value_parser = humantime::parse_duration
+    )]
+    pub http_client_identity_refresh: Option<std::time::Duration>,
+
     /// Host-wide cap on live connections across every workload and surface
     /// combined — pooled HTTP, raw sockets, and inbound published ports.
     ///
@@ -614,6 +629,35 @@ fn host_plugin_registry_credentials(
 }
 
 impl HostCommand {
+    /// Outbound TLS for components, rotating the client identity when
+    /// `--http-client-identity-refresh` asks for it.
+    ///
+    /// The refresh task is spawned here and then left to run for the life of
+    /// the host: it holds only an `Arc` to the identity the returned
+    /// configuration points at, so there is nothing to join and nothing that
+    /// outlives the process.
+    fn egress_handler(&self) -> anyhow::Result<wash_runtime::host::http::DefaultOutgoingHandler> {
+        use wash_runtime::host::client_identity::{RotatingClientIdentity, spawn_refresh};
+        use wash_runtime::host::http::DefaultOutgoingHandler;
+
+        let options = self.client_tls_options()?;
+        let (Some(interval), Some(identity)) = (
+            self.http_client_identity_refresh,
+            options.client_identity.clone(),
+        ) else {
+            return DefaultOutgoingHandler::from_tls_options(options)
+                .context("failed to load --http-client-ca-path CA certificates");
+        };
+
+        let rotating = RotatingClientIdentity::load(&identity)
+            .context("failed to load the outbound client identity")?;
+        let config = options
+            .build_with_resolver(Arc::clone(&rotating) as _)
+            .context("failed to load --http-client-ca-path CA certificates")?;
+        spawn_refresh(rotating, identity, interval);
+        Ok(DefaultOutgoingHandler::with_tls_config(config))
+    }
+
     /// Outbound TLS for components: which servers to trust, and which
     /// identity to present when one asks for a client certificate.
     fn client_tls_options(
@@ -988,11 +1032,8 @@ impl CliCommand for HostCommand {
             // Outbound (egress) trust roots: extra CAs for components calling
             // HTTPS hosts behind a private CA. Distinct from the ingress TLS
             // options below, which configure the HTTP *server*.
-            let outgoing_handler =
-                wash_runtime::host::http::DefaultOutgoingHandler::from_tls_options(
-                    self.client_tls_options()?,
-                )
-                .context("failed to load --http-client-ca-path CA certificates")?
+            let outgoing_handler = self
+                .egress_handler()?
                 // The same registry the socket policy uses, so a workload's
                 // HTTP pool and its raw sockets share one configured
                 // allowance rather than two.

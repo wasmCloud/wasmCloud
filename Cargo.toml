@@ -48,6 +48,7 @@ unnecessary_box_returns = 'deny'
 [workspace.dependencies]
 anyhow = { version = "1.0.98", default-features = false }
 arc-swap = { version = "1.7", default-features = false }
+x509-parser = { version = "0.18", default-features = false }
 async-nats = { version = "0.49.1", default-features = false, features = ["aws-lc-rs", "jetstream", "kv", "nkeys", "object-store", "service"] }
 atty = { version= "0.2", default-features = false }
 base64 = { version = "0.22", default-features = false, features = ["std"] }
