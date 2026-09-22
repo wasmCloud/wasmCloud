@@ -6,8 +6,8 @@
 //! right **host** backend. This proves the other half: two sibling components
 //! in one workload export the same interface
 //! (`example:feeds/reader@0.1.0`), and a third imports it **twice** under
-//! the component-model labels `feed-a` and `feed-b`, which are the ids of
-//! those two siblings. Each label must link to the sibling it names.
+//! the component-model labels `feed-a` and `feed-b`, which are the manifest
+//! names of those two siblings. Each label must link to the sibling it names.
 //!
 //! Each sibling's `source` returns its own component name, so the caller's
 //! response body (`"<a>|<b>"`) says exactly which component each labelled
@@ -35,8 +35,8 @@ use wash_runtime::{
 mod common;
 use common::http_incoming_handler_interface;
 
-const TOOLS_A_WASM: &[u8] = include_bytes!("wasm/feeds_a.wasm");
-const TOOLS_B_WASM: &[u8] = include_bytes!("wasm/feeds_b.wasm");
+const CALLEE_A_WASM: &[u8] = include_bytes!("wasm/feeds_callee_a.wasm");
+const CALLEE_B_WASM: &[u8] = include_bytes!("wasm/feeds_callee_b.wasm");
 const CALLER_WASM: &[u8] = include_bytes!("wasm/feeds_caller.wasm");
 
 fn component(name: &str, bytes: &'static [u8]) -> Component {
@@ -77,8 +77,8 @@ async fn labelled_imports_route_to_the_sibling_they_name() -> Result<()> {
             components: vec![
                 // The component NAMES here are what the caller's `(implements ..)`
                 // labels name.
-                component("feed-a", TOOLS_A_WASM),
-                component("feed-b", TOOLS_B_WASM),
+                component("feed-a", CALLEE_A_WASM),
+                component("feed-b", CALLEE_B_WASM),
                 component("caller", CALLER_WASM),
             ],
             host_interfaces: vec![http_incoming_handler_interface("feeds", None)],
