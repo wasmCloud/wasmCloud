@@ -8,7 +8,9 @@ name: release-tag
 #      the bytes users pull at the release tag. Note: OCI image tags use
 #      the bare semver (no `v` prefix) per the convention users expect
 #      from `docker pull`; the git tag and GitHub Release still use
-#      `vX.Y.Z`.
+#      `vX.Y.Z`. The all-features wash image the e2e gate ran is
+#      promoted alongside it: `wash:sha-<merge-sha>-all-features` ->
+#      `wash:X.Y.Z-all-features`.
 #   2. Re-attests the promoted manifest digest so SLSA provenance covers
 #      the release tag (and not just the sha-prefixed canary).
 #   3. Downloads the canary-binaries artifacts produced by wash.yml on the
@@ -230,27 +232,36 @@ jobs:
           # source preserves the multi-arch manifest.
           declare -A IMAGES=(
             [wash]="ghcr.io/wasmcloud/wash"
+            [wash_all_features]="ghcr.io/wasmcloud/wash"
             [gateway]="ghcr.io/wasmcloud/runtime-gateway"
             [operator]="ghcr.io/wasmcloud/runtime-operator"
           )
-          for KEY in wash gateway operator; do
+          # Tag suffix shared by the canary source and the release tag.
+          declare -A SUFFIXES=(
+            [wash_all_features]="-all-features"
+          )
+          # wash_all_features last: a missing source (e.g. recovering a commit
+          # from before it was published) must not block the shipped images.
+          for KEY in wash gateway operator wash_all_features; do
             IMG="${IMAGES[${KEY}]}"
+            SUFFIX="${SUFFIXES[${KEY}]:-}"
+            DST_TAG="${IMAGE_TAG}${SUFFIX}"
             # Three outcomes: tag exists (skip), manifest unknown
             # (promote), any other error (abort with the captured stderr).
-            if INSPECT_OUT=$(docker buildx imagetools inspect "${IMG}:${IMAGE_TAG}" --format '{{json .Manifest}}' 2>&1); then
-              echo "${IMG}:${IMAGE_TAG} already exists — skipping (immutable)"
+            if INSPECT_OUT=$(docker buildx imagetools inspect "${IMG}:${DST_TAG}" --format '{{json .Manifest}}' 2>&1); then
+              echo "${IMG}:${DST_TAG} already exists — skipping (immutable)"
               DST=$(echo "${INSPECT_OUT}" | jq -r .digest)
             elif echo "${INSPECT_OUT}" | grep -qiE 'manifest unknown|no such manifest|not found|MANIFEST_UNKNOWN'; then
-              SRC="${IMG}:sha-${MERGE_SHA}"
-              echo "promoting ${SRC} -> ${IMG}:${IMAGE_TAG}"
+              SRC="${IMG}:sha-${MERGE_SHA}${SUFFIX}"
+              echo "promoting ${SRC} -> ${IMG}:${DST_TAG}"
               SRC_DIGEST=$(docker buildx imagetools inspect "${SRC}" --format '{{json .Manifest}}' | jq -r .digest)
-              docker buildx imagetools create --tag "${IMG}:${IMAGE_TAG}" "${IMG}@${SRC_DIGEST}"
-              DST=$(docker buildx imagetools inspect "${IMG}:${IMAGE_TAG}" --format '{{json .Manifest}}' | jq -r .digest)
+              docker buildx imagetools create --tag "${IMG}:${DST_TAG}" "${IMG}@${SRC_DIGEST}"
+              DST=$(docker buildx imagetools inspect "${IMG}:${DST_TAG}" --format '{{json .Manifest}}' | jq -r .digest)
               if [[ "${DST}" != "${SRC_DIGEST}" ]]; then
                 echo "WARN: retag digest (${DST}) differs from canary source (${SRC_DIGEST}) — same content, different manifest envelope. Attestation below covers ${DST}." >&2
               fi
             else
-              echo "destination check for ${IMG}:${IMAGE_TAG} failed — refusing to promote" >&2
+              echo "destination check for ${IMG}:${DST_TAG} failed — refusing to promote" >&2
               echo "${INSPECT_OUT}" >&2
               exit 1
             fi
@@ -266,6 +277,13 @@ jobs:
         with:
           subject-name: ghcr.io/wasmcloud/wash
           subject-digest: ${{ steps.promote.outputs.wash_digest }}
+          push-to-registry: true
+
+      - name: Attest wash all-features release manifest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/wasmcloud/wash
+          subject-digest: ${{ steps.promote.outputs.wash_all_features_digest }}
           push-to-registry: true
 
       - name: Attest runtime-gateway release manifest
