@@ -219,7 +219,7 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 		}
 
 		if finalizerChanged {
-			return reconcile.Result{Requeue: true}, nil
+			return reconcile.Result{Requeue: true}, nil //nolint:staticcheck // SA1019: RequeueAfter drops the rate-limited backoff
 		}
 	}
 
