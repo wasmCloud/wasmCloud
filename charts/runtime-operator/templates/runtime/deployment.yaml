@@ -1,16 +1,9 @@
 {{- $top := . }}
 {{- range .Values.runtime.hostGroups }}
 {{- $ns := default $top.Release.Namespace .namespace }}
-{{- /* Client identity for this group's component egress, merged field by
-       field over the chart-wide block (as probes are), so a group naming only
-       a secret still gets the key names and mount path. `merge` leaves keys
-       the group set alone and fills in the rest. */}}
+{{- /* Group values override chart-wide client identity fields. */}}
 {{- $identity := merge (deepCopy (.clientIdentity | default dict)) $top.Values.runtime.clientIdentity }}
-{{- /* `merge` cannot tell an explicitly empty value from an unset one, so a
-       group clearing either of these would otherwise be handed the chart-wide
-       one back. Both have a documented empty meaning — no identity at all, and
-       no refresh — and neither is a default worth restoring against the
-       operator's word. */}}
+{{- /* Empty group values disable identity or refresh inheritance. */}}
 {{- $groupIdentity := .clientIdentity | default dict }}
 {{- if and (hasKey $groupIdentity "secretName") (not $groupIdentity.secretName) }}
 {{- $identity = dict }}
@@ -171,15 +164,12 @@ spec:
             secretName: {{ if and (.http.tls.certificate) (.http.tls.certificate.secretName) }}{{ .http.tls.certificate.secretName }}{{ else }}hostgroup-{{ .name }}-http-tls{{ end }}
         {{- end }}
         {{- end }}
-        {{- /* Outside the global.tls guard: this credential authenticates the
-               host to upstreams, which is unrelated to whether the chart's own
-               CA is in play. */}}
+        {{- /* Client identity is independent of the chart CA. */}}
         {{- if $identity.secretName }}
         - name: client-identity
           secret:
             secretName: {{ $identity.secretName }}
-            # The chart's posture for private keys. `fsGroup` still lets the
-            # host read it.
+            # fsGroup grants the host read access.
             defaultMode: 0400
         {{- end }}
         {{- /* Optional pod volumes (e.g. ConfigMap / Secret mounts). Rendered
@@ -393,10 +383,7 @@ spec:
             {{- with (.httpClientTrustRoots | default $top.Values.runtime.httpClientTrustRoots) }}
             - "--http-client-trust-roots={{ . }}"
             {{- end }}
-            {{- /* The other half of the egress trust store: the bundles above
-                   decide which servers this host will talk to, these decide
-                   who it says it is when one asks. Resolved at the top of
-                   this template. */}}
+            {{- /* Identity presented for component egress. */}}
             {{- if $identity.secretName }}
             - "--http-client-cert-path={{ $identity.mountPath }}/{{ $identity.certKey }}"
             - "--http-client-key-path={{ $identity.mountPath }}/{{ $identity.keyKey }}"

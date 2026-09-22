@@ -156,16 +156,10 @@ pub struct HostCommand {
     )]
     pub http_client_key_path: Option<PathBuf>,
 
-    /// Re-read the client identity on this interval (e.g. `30s`, `5m`), so a
-    /// rotated credential applies without restarting the host.
+    /// Re-read the client identity on this interval, such as `30s` or `5m`.
     ///
-    /// Unset reads it once at startup, which is fine for a credential
-    /// installed by hand and wrong for one an issuer renews. A read that
-    /// fails leaves the running credential in place.
-    ///
-    /// Expiry is only checked on this path. Without it the credential is read
-    /// once and presented unconditionally, including after `notAfter`; with
-    /// it, an expired credential is refused rather than offered.
+    /// A failed refresh keeps the current credential. This option also checks
+    /// certificate-chain expiry. Without it, the identity is read once.
     #[arg(
         long = "http-client-identity-refresh",
         env = "WASH_HTTP_CLIENT_IDENTITY_REFRESH",
@@ -632,22 +626,13 @@ fn host_plugin_registry_credentials(
 }
 
 impl HostCommand {
-    /// Outbound TLS for components, rotating the client identity when
-    /// `--http-client-identity-refresh` asks for it.
-    ///
-    /// The refresh task is spawned here and then left to run for the life of
-    /// the host: it holds only an `Arc` to the identity the returned
-    /// configuration points at, so there is nothing to join and nothing that
-    /// outlives the process.
+    /// Build outbound TLS and start identity refresh when configured.
     fn egress_handler(&self) -> anyhow::Result<wash_runtime::host::http::DefaultOutgoingHandler> {
         use wash_runtime::host::client_identity::{RotatingClientIdentity, spawn_refresh};
         use wash_runtime::host::http::DefaultOutgoingHandler;
 
         let options = self.client_tls_options()?;
-        // Clap's `requires` pairs these, but this struct is public: an
-        // embedder can ask for rotation without an identity to rotate, and
-        // silently getting neither is the same trap `client_tls_options`
-        // refuses for a half-set credential.
+        // Public callers can bypass Clap's required argument checks.
         if self.http_client_identity_refresh.is_some() && options.client_identity.is_none() {
             bail!("--http-client-identity-refresh needs --http-client-cert-path");
         }

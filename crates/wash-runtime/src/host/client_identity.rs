@@ -1,21 +1,7 @@
-//! Rotating client identity for components' outbound HTTPS.
+//! Rotating client identity for outbound HTTPS.
 //!
-//! [`ClientTlsOptions::client_identity`] is read once when the configuration
-//! is built, which is fine for a credential an operator installs by hand and
-//! wrong for one an issuer renews. A certificate that outlives the host
-//! process is the exception, not the rule: cert-manager, SPIRE and the like
-//! all rotate on a schedule far shorter than a host's uptime.
-//!
-//! [`RotatingClientIdentity`] closes that gap. rustls consults a
-//! [`ResolvesClientCert`] once per handshake, so replacing the credential
-//! behind one takes effect on the next connection while established
-//! connections keep what they negotiated with. No pool is drained and nothing
-//! restarts.
-//!
-//! Authentication fails closed: an expired credential is refused rather than
-//! offered, and one that is already expired fails to load at all.
-//!
-//! [`ClientTlsOptions::client_identity`]: crate::host::http_client::ClientTlsOptions::client_identity
+//! New connections use the latest valid credential. Existing connections keep
+//! their negotiated identity. Expired credentials are not presented.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -33,37 +19,21 @@ use crate::host::http_client::ClientIdentity;
 /// Shortest gap between two repeated reports of the same condition.
 const REPORT_INTERVAL: Duration = Duration::from_secs(60);
 
-/// The longest lead time on an expiry warning.
-///
-/// Capped rather than fixed: a SPIRE SVID defaults to an hour, so a flat
-/// 24-hour window would warn from the moment a healthy credential loaded and
-/// keep warning for its whole life, which teaches operators to ignore the one
-/// message that matters. See [`warn_window`].
+/// Maximum lead time for an expiry warning.
 const MAX_EXPIRY_WARN_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// How much of a credential's life is spent warning that it is nearly over.
+/// Divisor used to scale the warning window to the credential lifetime.
 const EXPIRY_WARN_FRACTION: u32 = 4;
 
-/// How far a credential may be ahead of this host's clock and still load.
-///
-/// An issuer stamps `notBefore` at the moment it signs, so a node running a
-/// few seconds behind sees a brand new credential as not yet valid. Without
-/// slack the host would refuse to start, and would do so only when rotation
-/// is enabled, which is the wrong way round: turning rotation on must not
-/// make startup more fragile than leaving it off.
+/// Allowed clock skew for `notBefore` checks.
 const CLOCK_SKEW_TOLERANCE: Duration = Duration::from_secs(300);
 
-/// How long before expiry to start saying so, for a credential valid over
-/// `lifetime`.
-///
-/// A quarter of its own lifetime, capped at [`MAX_EXPIRY_WARN_WINDOW`], so a
-/// short-lived credential warns late rather than always and a long-lived one
-/// still gets a day's notice.
+/// Return one quarter of `lifetime`, capped at one day.
 fn warn_window(lifetime: Duration) -> Duration {
     (lifetime / EXPIRY_WARN_FRACTION).min(MAX_EXPIRY_WARN_WINDOW)
 }
 
-/// A loaded credential and the instant it stops being valid.
+/// A loaded credential and its effective chain validity.
 #[derive(Debug)]
 struct Loaded {
     key: Arc<CertifiedKey>,
@@ -85,37 +55,27 @@ impl Loaded {
     }
 }
 
-/// A client credential that can be replaced without rebuilding the
-/// configuration it is installed on.
+/// A client credential that can be replaced without rebuilding TLS state.
 ///
 /// Install with
 /// [`ClientTlsOptions::build_with_resolver`](crate::host::http_client::ClientTlsOptions::build_with_resolver)
 /// and keep it current with [`spawn_refresh`].
 ///
-/// An expired credential is refused rather than presented. rustls has no
-/// error path in this callback, so declining to authenticate is the strongest
-/// move available: a peer requiring mutual TLS drops the handshake, which is
-/// what we want, while a peer that merely *requests* a certificate still
-/// serves the call unauthenticated. Nothing downstream reports that second
-/// case, which is why it is logged at error level.
+/// An expired credential is not presented. A server may reject the connection
+/// or continue without client authentication.
 #[derive(Debug)]
 pub struct RotatingClientIdentity {
     current: ArcSwapOption<Loaded>,
     /// Throttles the refresh loop's expiry reports.
     last_report: Mutex<Option<Instant>>,
-    /// Throttles the handshake-path report, separately. Sharing one stamp let
-    /// the loop claim the slot on nearly every window at the default refresh
-    /// interval, so the message naming an actually-declined handshake almost
-    /// never surfaced.
+    /// Throttles handshake refusal reports.
     last_refusal: Mutex<Option<Instant>>,
 }
 
 impl RotatingClientIdentity {
     /// Read `identity` and hold it until it is replaced.
     ///
-    /// Fails for the same reasons building a static identity does, plus one:
-    /// a certificate that has already expired is refused here rather than
-    /// leaving a host that looks healthy while authenticating as nobody.
+    /// Rejects expired or not-yet-valid certificate chains.
     pub fn load(identity: &ClientIdentity) -> Result<Arc<Self>> {
         let loaded = Self::read(identity)?;
         Ok(Arc::new(Self {
@@ -126,24 +86,14 @@ impl RotatingClientIdentity {
     }
 
     fn read(identity: &ClientIdentity) -> Result<Loaded> {
-        // Installs the process default, which `CryptoProvider::get_default`
-        // returns `None` without. Every other entry point in this crate does
-        // the same; reaching here first is not unusual, since a caller builds
-        // the identity before the configuration it goes on.
+        // CertifiedKey requires the process crypto provider.
         crate::init_crypto();
 
         let (certs, key) = identity.load()?;
-        let leaf = certs
-            .first()
-            .with_context(|| format!("{identity} contains no certificate"))?;
-        let (not_before, not_after) = validity(leaf)
+        let (not_before, not_after) = validity(&certs)
             .with_context(|| format!("failed to read the validity period of {identity}"))?;
         let now = SystemTime::now();
         anyhow::ensure!(not_after > now, "{identity} has expired");
-        // Rejected rather than installed: a credential pre-staged by an issuer
-        // would otherwise replace a running one that still works, and then be
-        // refused by every peer. Ordinary clock skew is not that, so it gets
-        // slack rather than a failed start.
         anyhow::ensure!(
             not_before <= now + CLOCK_SKEW_TOLERANCE,
             "{identity} is not valid yet"
@@ -162,24 +112,18 @@ impl RotatingClientIdentity {
 
     /// Re-read `identity`, replacing the held credential if it changed.
     ///
-    /// Returns whether it changed. A read that fails leaves the running
-    /// credential in place: a half-written secret caught mid-rotation must
-    /// not take the host's identity away. That is not a way around expiry,
-    /// since the running credential is refused on its own merits once it
-    /// lapses.
+    /// Returns whether the certificate chain changed. A failed read keeps the
+    /// current credential.
     pub fn reload(&self, identity: &ClientIdentity) -> Result<bool> {
         let loaded = Self::read(identity)?;
-        // Stored unconditionally. Comparing only the chain would discard a
-        // re-keyed credential whose certificate is byte-identical, leaving the
-        // resolver signing with a key the peer no longer accepts while the log
-        // reported nothing had changed. The comparison below only decides
-        // whether this is worth mentioning.
         let changed = self
             .current
             .load()
             .as_ref()
             .is_none_or(|current| current.key.cert != loaded.key.cert);
-        self.current.store(Some(Arc::new(loaded)));
+        if changed {
+            self.current.store(Some(Arc::new(loaded)));
+        }
         Ok(changed)
     }
 
@@ -215,7 +159,7 @@ impl ResolvesClientCert for RotatingClientIdentity {
         }
         if Self::due(&self.last_refusal) {
             error!(
-                "client certificate has expired; refusing to authenticate rather than present \
+                "client certificate chain has expired; refusing to authenticate rather than present \
                  it. A peer requiring mutual TLS will reject this connection, and one that only \
                  requests a certificate will serve the call unauthenticated"
             );
@@ -228,40 +172,44 @@ impl ResolvesClientCert for RotatingClientIdentity {
     }
 }
 
-/// The leaf certificate's validity span, as `(notBefore, notAfter)`.
-fn validity(cert: &CertificateDer<'_>) -> Result<(SystemTime, SystemTime)> {
-    let (_, parsed) = x509_parser::parse_x509_certificate(cert)
-        .map_err(|err| anyhow::anyhow!("failed to parse the client certificate: {err}"))?;
+/// Return the chain's effective `(notBefore, notAfter)` span.
+fn validity(certs: &[CertificateDer<'_>]) -> Result<(SystemTime, SystemTime)> {
     let at = |label: &str, seconds: i64| -> Result<SystemTime> {
         let seconds = u64::try_from(seconds)
             .map_err(|_| anyhow::anyhow!("certificate {label} predates the unix epoch"))?;
         Ok(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds))
     };
-    Ok((
-        at("notBefore", parsed.validity().not_before.timestamp())?,
-        at("notAfter", parsed.validity().not_after.timestamp())?,
-    ))
+    let parse = |(index, cert): (usize, &CertificateDer<'_>)| {
+        let (_, parsed) = x509_parser::parse_x509_certificate(cert)
+            .map_err(|err| anyhow::anyhow!("failed to parse client certificate {index}: {err}"))?;
+        Ok::<_, anyhow::Error>((
+            at("notBefore", parsed.validity().not_before.timestamp())?,
+            at("notAfter", parsed.validity().not_after.timestamp())?,
+        ))
+    };
+
+    let mut certs = certs.iter().enumerate();
+    let first = certs
+        .next()
+        .context("the client certificate chain is empty")?;
+    let (mut not_before, mut not_after) = parse(first)?;
+    for cert in certs {
+        let (cert_not_before, cert_not_after) = parse(cert)?;
+        not_before = not_before.max(cert_not_before);
+        not_after = not_after.min(cert_not_after);
+    }
+    Ok((not_before, not_after))
 }
 
 /// Re-read `source` on an interval, replacing `identity` when it changes.
 ///
-/// Polling rather than watching the file: Kubernetes rotates a projected
-/// volume by writing a new directory and relinking it, so an inotify watch on
-/// the path itself never fires. For the same reason a Secret has to be mounted
-/// as a directory rather than by `subPath`, which receives no updates at all.
-///
-/// The returned handle does *not* stop the refresh when dropped — a dropped
-/// `JoinHandle` detaches its task. Call `abort()` to stop it, or drop it
-/// deliberately to let the refresh run for the life of the process.
+/// Polling supports atomically relinked Kubernetes Secret volumes. A dropped
+/// handle leaves the task running. Call `abort()` to stop it.
 pub fn spawn_refresh(
     identity: Arc<RotatingClientIdentity>,
     source: ClientIdentity,
     interval: Duration,
 ) -> Result<tokio::task::JoinHandle<()>> {
-    // `tokio::time::interval` panics on a zero period, and that panic would
-    // happen inside the spawned task whose handle callers are told to drop —
-    // leaving a host that presents its credential and never rotates or checks
-    // expiry again, silently. Refused here instead, before anything is spawned.
     anyhow::ensure!(
         !interval.is_zero(),
         "the client identity refresh interval must be greater than zero"
@@ -272,10 +220,7 @@ pub fn spawn_refresh(
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            // `spawn_blocking`, not `block_in_place`: the latter panics on a
-            // current-thread runtime, and since callers are expected to drop
-            // the handle that panic would never be observed — rotation would
-            // stop for good with nothing logged.
+            // File reads run outside the async executor.
             let reloaded = {
                 let identity = Arc::clone(&identity);
                 let source = source.clone();
@@ -303,8 +248,7 @@ pub fn spawn_refresh(
     }))
 }
 
-/// Say so while there is still time to act, and keep saying so once there is
-/// not.
+/// Report approaching or completed expiry.
 fn report_expiry(identity: &RotatingClientIdentity, source: &ClientIdentity) {
     let Some(current) = identity.current.load_full() else {
         return;
@@ -312,7 +256,7 @@ fn report_expiry(identity: &RotatingClientIdentity, source: &ClientIdentity) {
     match current.remaining() {
         None if RotatingClientIdentity::due(&identity.last_report) => error!(
             identity = %source,
-            "client certificate has expired and no valid replacement has been read; outbound \
+            "client certificate chain has expired and no valid replacement has been read; outbound \
              calls are no longer authenticated"
         ),
         Some(remaining)
@@ -322,7 +266,7 @@ fn report_expiry(identity: &RotatingClientIdentity, source: &ClientIdentity) {
             warn!(
                 identity = %source,
                 remaining_secs = remaining.as_secs(),
-                "client certificate expires soon; rotate it before outbound calls stop being \
+                "client certificate chain expires soon; rotate it before outbound calls stop being \
                  authenticated"
             )
         }
@@ -336,19 +280,15 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    /// Where a written pair sits relative to now.
     #[derive(Clone, Copy)]
     enum Validity {
         Current,
         Expired,
         NotYet,
-        /// Valid, but only briefly — a SPIRE-shaped short-lived credential.
         ShortLived,
-        /// `notBefore` a few seconds ahead, as ordinary clock skew produces.
         JustAhead,
     }
 
-    /// Writes a cert/key pair, as an operator mounts one.
     fn write_pair(dir: &Path, stem: &str, validity: Validity) -> ClientIdentity {
         use rcgen::{CertificateParams, KeyPair};
 
@@ -391,6 +331,39 @@ mod tests {
         }
     }
 
+    fn write_pair_with_expired_intermediate(dir: &Path, stem: &str) -> ClientIdentity {
+        use rcgen::{BasicConstraints, CertificateParams, CertifiedIssuer, IsCa, KeyPair};
+
+        let now = SystemTime::now();
+        let mut root_params = CertificateParams::new(Vec::new()).unwrap();
+        root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        root_params.not_before = (now - Duration::from_secs(172_800)).into();
+        root_params.not_after = (now + Duration::from_secs(2_592_000)).into();
+        let root = CertifiedIssuer::self_signed(root_params, KeyPair::generate().unwrap()).unwrap();
+
+        let mut issuer_params = CertificateParams::new(Vec::new()).unwrap();
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        issuer_params.not_before = (now - Duration::from_secs(172_800)).into();
+        issuer_params.not_after = (now - Duration::from_secs(3_600)).into();
+        let issuer =
+            CertifiedIssuer::signed_by(issuer_params, KeyPair::generate().unwrap(), &root).unwrap();
+
+        let mut leaf_params = CertificateParams::new(vec!["client".to_string()]).unwrap();
+        leaf_params.not_before = (now - Duration::from_secs(3_600)).into();
+        leaf_params.not_after = (now + Duration::from_secs(172_800)).into();
+        let key = KeyPair::generate().unwrap();
+        let leaf = leaf_params.signed_by(&key, &issuer).unwrap();
+
+        let cert_path = dir.join(format!("{stem}.crt"));
+        let key_path = dir.join(format!("{stem}.key"));
+        std::fs::write(&cert_path, format!("{}{}", leaf.pem(), issuer.pem())).unwrap();
+        std::fs::write(&key_path, key.serialize_pem()).unwrap();
+        ClientIdentity::CertificatePem {
+            cert_path,
+            key_path,
+        }
+    }
+
     #[test]
     fn a_loaded_identity_is_presented() {
         crate::init_crypto();
@@ -401,8 +374,6 @@ mod tests {
         assert!(identity.resolve(&[], &[SignatureScheme::ED25519]).is_some());
     }
 
-    /// A dead certificate must not start a host that then looks healthy while
-    /// authenticating as nobody.
     #[test]
     fn an_already_expired_identity_refuses_to_load() {
         crate::init_crypto();
@@ -415,7 +386,19 @@ mod tests {
         );
     }
 
-    /// The point of the type: a swap is visible to the next handshake.
+    #[test]
+    fn an_expired_intermediate_refuses_to_load() {
+        crate::init_crypto();
+        let dir = tempfile::tempdir().unwrap();
+        let source = write_pair_with_expired_intermediate(dir.path(), "expired-intermediate");
+        let err = RotatingClientIdentity::load(&source)
+            .expect_err("an expired intermediate must not load");
+        assert!(
+            format!("{err:#}").contains("has expired"),
+            "unexpected error: {err:#}"
+        );
+    }
+
     #[test]
     fn a_reload_replaces_what_is_presented() {
         crate::init_crypto();
@@ -424,7 +407,6 @@ mod tests {
         let identity = RotatingClientIdentity::load(&source).unwrap();
         let before = identity.resolve(&[], &[SignatureScheme::ED25519]).unwrap();
 
-        // Same paths, new material: what a rotated Secret looks like.
         let _ = write_pair(dir.path(), "id", Validity::Current);
         assert!(identity.reload(&source).unwrap(), "the pair changed");
 
@@ -441,7 +423,6 @@ mod tests {
         assert!(!identity.reload(&source).unwrap(), "nothing changed");
     }
 
-    /// A half-written secret caught mid-rotation must not disarm the host.
     #[test]
     fn a_failed_reload_keeps_the_running_credential() {
         crate::init_crypto();
@@ -458,9 +439,6 @@ mod tests {
         assert_eq!(before.cert, after.cert, "the running credential survives");
     }
 
-    /// Authentication fails closed: once the credential lapses while
-    /// resident, it stops being offered rather than being sent in the hope
-    /// that the peer is lenient.
     #[test]
     fn an_expired_credential_is_refused_not_presented() {
         crate::init_crypto();
@@ -469,8 +447,6 @@ mod tests {
             RotatingClientIdentity::load(&write_pair(dir.path(), "id", Validity::Current)).unwrap();
         let key = loaded.current.load_full().unwrap().key.clone();
 
-        // Built directly: `load` refuses expired material, so this is the
-        // credential lapsing after the host started.
         let identity = RotatingClientIdentity {
             current: ArcSwapOption::from(Some(Arc::new(Loaded {
                 key,
@@ -489,8 +465,6 @@ mod tests {
         );
     }
 
-    /// A credential pre-staged by an issuer, or written under clock skew, must
-    /// not replace one that still works only to be refused by every peer.
     #[test]
     fn a_not_yet_valid_identity_refuses_to_load() {
         crate::init_crypto();
@@ -518,9 +492,6 @@ mod tests {
         assert_eq!(before.cert, after.cert);
     }
 
-    /// A SPIRE SVID defaults to an hour. A flat 24-hour warning window would
-    /// fire from the moment such a credential loaded and never stop, which is
-    /// how an operator learns to ignore it.
     #[test]
     fn the_warning_window_scales_with_a_short_lived_credential() {
         let hour = Duration::from_secs(3_600);
@@ -538,7 +509,6 @@ mod tests {
         );
     }
 
-    /// The scaled window read off a real certificate, not just arithmetic.
     #[test]
     fn a_freshly_loaded_short_lived_credential_is_not_already_warning() {
         crate::init_crypto();
@@ -554,9 +524,6 @@ mod tests {
         );
     }
 
-    /// Default flavor: a current-thread runtime, which `block_in_place`
-    /// panics on. The panic would be unobservable because callers drop the
-    /// handle, so rotation would stop for good with nothing logged.
     #[tokio::test]
     async fn refresh_works_on_a_current_thread_runtime() {
         crate::init_crypto();
@@ -591,8 +558,6 @@ mod tests {
         rotated.expect("rotation works without a multi-thread runtime");
     }
 
-    /// A zero period panics `tokio::time::interval`, inside a task whose
-    /// handle callers are told to drop — a host that silently never rotates.
     #[tokio::test]
     async fn a_zero_interval_is_refused_before_anything_is_spawned() {
         crate::init_crypto();
@@ -607,9 +572,6 @@ mod tests {
         );
     }
 
-    /// An issuer stamps `notBefore` when it signs, so a node running slightly
-    /// behind sees a brand new credential as not yet valid. Refusing to start
-    /// on that would make rotation more fragile than leaving it off.
     #[test]
     fn a_credential_within_clock_skew_still_loads() {
         crate::init_crypto();
@@ -619,42 +581,23 @@ mod tests {
             .expect("a few seconds of clock skew must not fail startup");
     }
 
-    /// A re-keyed credential whose chain is byte-identical must still install,
-    /// or the resolver keeps signing with a key the peer no longer accepts.
     #[test]
-    fn a_reload_installs_a_new_key_under_an_identical_chain() {
+    fn a_mismatched_key_keeps_the_running_credential() {
         crate::init_crypto();
         let dir = tempfile::tempdir().unwrap();
         let source = write_pair(dir.path(), "id", Validity::Current);
         let identity = RotatingClientIdentity::load(&source).unwrap();
-        let ClientIdentity::CertificatePem {
-            cert_path,
-            key_path,
-        } = &source;
+        let before = identity.resolve(&[], &[SignatureScheme::ED25519]).unwrap();
+        let ClientIdentity::CertificatePem { key_path, .. } = &source;
 
-        // A different key, under the certificate already on disk. The pair no
-        // longer matches, so the read fails and the running one survives —
-        // which is the behaviour that matters here: nothing is silently
-        // half-applied.
         let other = rcgen::KeyPair::generate().unwrap();
         std::fs::write(key_path, other.serialize_pem()).unwrap();
         assert!(identity.reload(&source).is_err());
 
-        // A genuinely re-keyed pair installs, even though `changed` compares
-        // chains: the store is unconditional.
-        let fresh = write_pair(dir.path(), "fresh", Validity::Current);
-        let ClientIdentity::CertificatePem {
-            cert_path: fresh_cert,
-            key_path: fresh_key,
-        } = &fresh;
-        std::fs::copy(fresh_cert, cert_path).unwrap();
-        std::fs::copy(fresh_key, key_path).unwrap();
-        assert!(identity.reload(&source).unwrap());
+        let after = identity.resolve(&[], &[SignatureScheme::ED25519]).unwrap();
+        assert_eq!(before.cert, after.cert);
     }
 
-    /// The handshake-path refusal and the refresh loop's report throttle
-    /// independently; sharing one stamp starved the former at the default
-    /// refresh interval.
     #[test]
     fn the_two_expiry_reports_throttle_independently() {
         let identity = RotatingClientIdentity {
