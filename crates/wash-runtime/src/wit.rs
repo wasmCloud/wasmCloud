@@ -211,6 +211,10 @@ pub struct WitInterface {
     /// the binding name an operator declares under a `host.plugins` entry; and,
     /// for an intra-workload import, the `name` of the component in the same
     /// workload that serves it.
+    ///
+    /// When a name means more than one of those at once, the host wins: a name
+    /// declared on a `hostInterfaces` entry is served by the host even if a
+    /// component in the workload carries it too.
     #[serde(default)]
     pub name: Option<String>,
 }
