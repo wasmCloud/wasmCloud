@@ -22,6 +22,7 @@ use wash_runtime::{
 const HTTP_HANDLER_P2_WASM: &[u8] = include_bytes!("../../tests/wasm/http_handler_p2.wasm");
 const HTTP_HANDLER_P3_WASM: &[u8] = include_bytes!("../../tests/wasm/http_handler_p3.wasm");
 const HTTP_SVC_PROXY_WASM: &[u8] = include_bytes!("../../tests/wasm/svc_http_proxy.wasm");
+const HTTP_SERVER_P3_WASM: &[u8] = include_bytes!("../../tests/wasm/http_server_p3.wasm");
 
 /// Body served by the `svc-http-proxy` fixture when a request carries no
 /// `x-backend` header.
@@ -106,6 +107,84 @@ impl BenchHost {
             })
             .await;
         let _ = self.host.stop().await;
+    }
+}
+
+/// Per-request latency summary for `iter_custom` benches.
+///
+/// Accumulates individual request latencies so a run can report RPS and
+/// p50/p90/p99 in addition to Criterion's aggregate batch timing.
+#[derive(Debug, Default)]
+pub struct BenchStats {
+    /// Sum of timed per-request durations, excluding untimed pacing pauses
+    /// and warmer requests.
+    pub total_timed: Duration,
+
+    /// Total number of failed requests (dropped, timeout, wrong body, ...).
+    pub errors: u64,
+    /// Every successful individual request's round-trip duration in milliseconds.
+    pub latencies: Vec<f64>,
+}
+
+impl BenchStats {
+    /// Merge one `iter_custom` batch into this accumulator.
+    pub fn extend(&mut self, latencies: Vec<f64>, total_timed: Duration, errors: u64) {
+        self.latencies.extend(latencies);
+        self.total_timed += total_timed;
+        self.errors += errors;
+    }
+
+    pub fn sort_latencies(&mut self) {
+        self.latencies.sort_by(|a, b| a.total_cmp(b));
+    }
+
+    fn is_sorted(&self) -> bool {
+        self.latencies.windows(2).all(|w| match w {
+            [a, b] => a.total_cmp(b) != std::cmp::Ordering::Greater,
+            _ => true,
+        })
+    }
+
+    /// Nearest-rank percentile in `[0.0, 1.0]`. Requires sorted latencies;
+    /// call [`BenchStats::sort_latencies`] (or `print_summary`, which sorts
+    /// internally) first.
+    pub fn pct(&self, p: f64) -> f64 {
+        assert!(
+            self.is_sorted(),
+            "BenchStats::pct requires sorted latencies"
+        );
+        if self.latencies.is_empty() {
+            return f64::NAN;
+        }
+        let p = p.clamp(0.0, 1.0);
+        let index = ((self.latencies.len() as f64 - 1.0) * p).round() as usize;
+        match self.latencies.get(index) {
+            Some(&v) => v,
+            None => f64::NAN,
+        }
+    }
+
+    /// Mean timed-request rate: `(successes + errors) / total_timed`,
+    /// excluding pacing pauses from the denominator.
+    pub fn rps(&self) -> f64 {
+        let secs = self.total_timed.as_secs_f64();
+        if secs > 0.0 {
+            (self.latencies.len() as f64 + self.errors as f64) / secs
+        } else {
+            0.0
+        }
+    }
+
+    pub fn print_summary(&mut self, name: &str) {
+        self.sort_latencies();
+        println!(
+            "[{name}] RPS: {:>8.1} | p50: {:>6.2} ms | p90: {:>6.2} ms | p99: {:>6.2} ms | errors: {}",
+            self.rps(),
+            self.pct(0.50),
+            self.pct(0.90),
+            self.pct(0.99),
+            self.errors
+        );
     }
 }
 
@@ -209,8 +288,24 @@ pub async fn service_request(
     client: &reqwest::Client,
     addr: std::net::SocketAddr,
     backend: Option<std::net::SocketAddr>,
+    endpoint: Option<&str>,
 ) -> anyhow::Result<bytes::Bytes> {
-    let mut req = client.get(format!("http://{addr}/"));
+    service_request_path(client, addr, backend, endpoint).await
+}
+
+pub async fn service_request_path(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    backend: Option<std::net::SocketAddr>,
+    endpoint: Option<&str>,
+) -> anyhow::Result<bytes::Bytes> {
+    let endpoint = endpoint.unwrap_or("/");
+    let path = if endpoint.starts_with('/') {
+        endpoint.to_string()
+    } else {
+        format!("/{endpoint}")
+    };
+    let mut req = client.get(format!("http://{addr}{path}"));
     if let Some(backend) = backend {
         req = req.header("x-backend", backend.to_string());
     }
@@ -230,13 +325,83 @@ pub async fn checked_request(
     client: &reqwest::Client,
     addr: std::net::SocketAddr,
     backend: Option<std::net::SocketAddr>,
-    expected_body: &str,
+    expected_body: impl AsRef<[u8]>,
+    endpoint: Option<&str>,
 ) -> anyhow::Result<()> {
-    let body = service_request(client, addr, backend).await?;
+    let body = service_request_path(client, addr, backend, endpoint).await?;
+    let expected = expected_body.as_ref();
     anyhow::ensure!(
-        body == expected_body.as_bytes(),
-        "unexpected body: {:?} (want {expected_body:?})",
-        String::from_utf8_lossy(&body)
+        body == expected,
+        "unexpected body: got {} bytes, want {} bytes",
+        body.len(),
+        expected.len()
     );
     Ok(())
+}
+
+/// Start a backend host running `http_server_p3.wasm` on a published port.
+///
+/// The service binds `127.0.0.1:8080` in virtual loopback, and the host splices
+/// external TCP connections arriving at the published host port into it.
+pub async fn start_spliced_backend_host() -> anyhow::Result<BenchHost> {
+    use wash_runtime::host::declared_port::{DeclaredPort, Protocol};
+    use wash_runtime::host::ports::{PortTable, PublishConfig, PublishContext};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let host_port = listener.local_addr()?.port();
+    drop(listener);
+
+    let table = PortTable::new();
+    let config = PublishConfig {
+        enabled: true,
+        readiness_timeout: Duration::from_secs(10),
+        ..Default::default()
+    };
+
+    let host = HostBuilder::new()
+        .with_engine(engine())
+        .with_publish_context(PublishContext::new(table, config))
+        .build()?;
+    let host = host.start().await?;
+
+    let workload_id = uuid::Uuid::new_v4().to_string();
+    let resp = host
+        .workload_start(WorkloadStartRequest {
+            workload_id: workload_id.clone(),
+            workload: Workload {
+                namespace: "bench".to_string(),
+                name: "backend-spliced".to_string(),
+                annotations: HashMap::new(),
+                service: Some(Service {
+                    digest: None,
+                    bytes: bytes::Bytes::from_static(HTTP_SERVER_P3_WASM),
+                    local_resources: LocalResources::default(),
+                    max_restarts: 0,
+                    ports: vec![DeclaredPort {
+                        name: "http".into(),
+                        port: 8080,
+                        protocol: Protocol::Tcp,
+                        publish: Some(host_port),
+                        bind: None,
+                    }],
+                }),
+                components: vec![],
+                host_interfaces: vec![],
+                volumes: vec![],
+            },
+        })
+        .await?;
+    anyhow::ensure!(
+        resp.workload_status.workload_state == WorkloadState::Running,
+        "workload did not start: {:?}: {}",
+        resp.workload_status.workload_state,
+        resp.workload_status.message
+    );
+
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{host_port}").parse()?;
+    Ok(BenchHost {
+        host,
+        workload_id,
+        addr,
+    })
 }

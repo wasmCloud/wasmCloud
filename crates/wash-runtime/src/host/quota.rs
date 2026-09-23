@@ -100,8 +100,15 @@ pub fn default_max_connections() -> usize {
 /// The process's soft `RLIMIT_NOFILE`, or `None` if it cannot be read or is
 /// unlimited — in which case there is no budget to take a share of.
 fn descriptor_soft_limit() -> Option<usize> {
-    let limits = rustix::process::getrlimit(rustix::process::Resource::Nofile);
-    usize::try_from(limits.current?).ok()
+    #[cfg(unix)]
+    {
+        let limits = rustix::process::getrlimit(rustix::process::Resource::Nofile);
+        usize::try_from(limits.current?).ok()
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
 }
 
 /// Per-guest ceilings, one per surface.

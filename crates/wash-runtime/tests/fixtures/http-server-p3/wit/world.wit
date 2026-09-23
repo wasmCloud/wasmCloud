@@ -1,0 +1,10 @@
+package wasmcloud:test-p3@0.1.0;
+
+/// A p3 service that binds a TCP port on virtual loopback (127.0.0.1:8080)
+/// and answers incoming HTTP requests with "hello from p3".
+world http-server-p3 {
+    import wasi:sockets/types@0.3.0;
+
+    export wasi:cli/run@0.3.0;
+}
+
