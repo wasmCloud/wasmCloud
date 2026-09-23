@@ -33,6 +33,8 @@ use tracing::warn;
 
 /// Shortest gap between two reports about the same peer.
 const REPORT_INTERVAL: Duration = Duration::from_secs(60);
+/// Limits retained reports when peers vary their advertised issuers.
+const MAX_REPORTED_PEERS: usize = 256;
 
 /// Reports a peer's client-certificate request that this host cannot satisfy.
 ///
@@ -75,10 +77,17 @@ impl ReportClientAuth {
     /// Whether this peer is due a report again.
     fn due(&self, peer: u64) -> bool {
         let mut reported = self.reported.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
         match reported.get(&peer) {
-            Some(at) if at.elapsed() < REPORT_INTERVAL => false,
+            Some(at) if now.duration_since(*at) < REPORT_INTERVAL => false,
             _ => {
-                reported.insert(peer, Instant::now());
+                if !reported.contains_key(&peer) && reported.len() >= MAX_REPORTED_PEERS {
+                    reported.retain(|_, at| now.duration_since(*at) < REPORT_INTERVAL);
+                    if reported.len() >= MAX_REPORTED_PEERS {
+                        return false;
+                    }
+                }
+                reported.insert(peer, now);
                 true
             }
         }
@@ -150,6 +159,12 @@ impl ResolvesClientCert for ReportClientAuth {
     fn has_certs(&self) -> bool {
         self.inner.as_ref().is_some_and(|inner| inner.has_certs())
     }
+
+    fn only_raw_public_keys(&self) -> bool {
+        self.inner
+            .as_ref()
+            .is_some_and(|inner| inner.only_raw_public_keys())
+    }
 }
 
 #[cfg(test)]
@@ -168,6 +183,23 @@ mod tests {
         }
 
         fn has_certs(&self) -> bool {
+            true
+        }
+    }
+
+    #[derive(Debug)]
+    struct RawPublicKey;
+
+    impl ResolvesClientCert for RawPublicKey {
+        fn resolve(&self, _: &[&[u8]], _: &[SignatureScheme]) -> Option<Arc<CertifiedKey>> {
+            None
+        }
+
+        fn has_certs(&self) -> bool {
+            true
+        }
+
+        fn only_raw_public_keys(&self) -> bool {
             true
         }
     }
@@ -206,6 +238,13 @@ mod tests {
                 .resolve(&[b"issuer".as_slice()], &[SignatureScheme::ED25519])
                 .is_none()
         );
+    }
+
+    #[test]
+    fn raw_public_key_support_is_passed_through() {
+        let resolver = ReportClientAuth::wrapping(Arc::new(RawPublicKey));
+        assert!(resolver.only_raw_public_keys());
+        assert!(!ReportClientAuth::absent().only_raw_public_keys());
     }
 
     /// The gap this module exists for: rustls sends an empty certificate and
@@ -260,5 +299,25 @@ mod tests {
             resolver.due(peer_key(&b)),
             "a holding the throttle must not silence b"
         );
+    }
+
+    #[test]
+    fn report_cache_is_bounded_and_reuses_expired_slots() {
+        let resolver = ReportClientAuth::absent();
+        for peer in 0..MAX_REPORTED_PEERS as u64 {
+            assert!(resolver.due(peer));
+        }
+        assert!(!resolver.due(MAX_REPORTED_PEERS as u64));
+        assert_eq!(resolver.reported.lock().unwrap().len(), MAX_REPORTED_PEERS);
+
+        resolver
+            .reported
+            .lock()
+            .unwrap()
+            .insert(0, Instant::now() - REPORT_INTERVAL);
+        assert!(resolver.due(MAX_REPORTED_PEERS as u64));
+        let reported = resolver.reported.lock().unwrap();
+        assert_eq!(reported.len(), MAX_REPORTED_PEERS);
+        assert!(!reported.contains_key(&0));
     }
 }
