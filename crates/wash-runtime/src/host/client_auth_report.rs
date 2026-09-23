@@ -26,15 +26,57 @@ use std::hash::{Hash as _, Hasher as _};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rustls::SignatureScheme;
 use rustls::client::ResolvesClientCert;
-use rustls::sign::CertifiedKey;
+use rustls::pki_types::SubjectPublicKeyInfoDer;
+use rustls::sign::{CertifiedKey, Signer, SigningKey};
+use rustls::{SignatureAlgorithm, SignatureScheme};
 use tracing::warn;
 
 /// Shortest gap between two reports about the same peer.
 const REPORT_INTERVAL: Duration = Duration::from_secs(60);
 /// Limits retained reports when peers vary their advertised issuers.
 const MAX_REPORTED_PEERS: usize = 256;
+/// Leaves room for new peers after every tracked peer reports again.
+const MAX_REPORTS_PER_INTERVAL: usize = MAX_REPORTED_PEERS * 2;
+
+#[derive(Debug)]
+struct ReportState {
+    peers: HashMap<u64, Instant>,
+    window_started: Instant,
+    reports_in_window: usize,
+}
+
+impl ReportState {
+    fn new() -> Self {
+        Self {
+            peers: HashMap::new(),
+            window_started: Instant::now(),
+            reports_in_window: 0,
+        }
+    }
+}
+
+/// Hands rustls the signer selected during certificate resolution.
+#[derive(Debug)]
+struct PreselectedSigningKey {
+    inner: Arc<dyn SigningKey>,
+    signer: Mutex<Option<Box<dyn Signer>>>,
+}
+
+impl SigningKey for PreselectedSigningKey {
+    fn choose_scheme(&self, offered: &[SignatureScheme]) -> Option<Box<dyn Signer>> {
+        let signer = self.signer.lock().unwrap_or_else(|e| e.into_inner()).take();
+        signer.or_else(|| self.inner.choose_scheme(offered))
+    }
+
+    fn public_key(&self) -> Option<SubjectPublicKeyInfoDer<'_>> {
+        self.inner.public_key()
+    }
+
+    fn algorithm(&self) -> SignatureAlgorithm {
+        self.inner.algorithm()
+    }
+}
 
 /// Reports a peer's client-certificate request that this host cannot satisfy.
 ///
@@ -52,7 +94,7 @@ pub struct ReportClientAuth {
     /// Keyed by peer rather than shared. One stamp would let a peer that
     /// merely requests a certificate hold the throttle and mask the peer whose
     /// handshake is actually failing.
-    reported: Mutex<HashMap<u64, Instant>>,
+    reported: Mutex<ReportState>,
 }
 
 impl ReportClientAuth {
@@ -61,7 +103,7 @@ impl ReportClientAuth {
     pub fn absent() -> Self {
         Self {
             inner: None,
-            reported: Mutex::new(HashMap::new()),
+            reported: Mutex::new(ReportState::new()),
         }
     }
 
@@ -70,7 +112,7 @@ impl ReportClientAuth {
     pub fn wrapping(inner: Arc<dyn ResolvesClientCert>) -> Self {
         Self {
             inner: Some(inner),
-            reported: Mutex::new(HashMap::new()),
+            reported: Mutex::new(ReportState::new()),
         }
     }
 
@@ -78,19 +120,36 @@ impl ReportClientAuth {
     fn due(&self, peer: u64) -> bool {
         let mut reported = self.reported.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
-        match reported.get(&peer) {
-            Some(at) if now.duration_since(*at) < REPORT_INTERVAL => false,
-            _ => {
-                if !reported.contains_key(&peer) && reported.len() >= MAX_REPORTED_PEERS {
-                    reported.retain(|_, at| now.duration_since(*at) < REPORT_INTERVAL);
-                    if reported.len() >= MAX_REPORTED_PEERS {
-                        return false;
-                    }
+        if now.duration_since(reported.window_started) >= REPORT_INTERVAL {
+            reported.window_started = now;
+            reported.reports_in_window = 0;
+        }
+        if reported
+            .peers
+            .get(&peer)
+            .is_some_and(|at| now.duration_since(*at) < REPORT_INTERVAL)
+            || reported.reports_in_window >= MAX_REPORTS_PER_INTERVAL
+        {
+            return false;
+        }
+        if !reported.peers.contains_key(&peer) && reported.peers.len() >= MAX_REPORTED_PEERS {
+            reported
+                .peers
+                .retain(|_, at| now.duration_since(*at) < REPORT_INTERVAL);
+            if reported.peers.len() >= MAX_REPORTED_PEERS {
+                if let Some(oldest) = reported
+                    .peers
+                    .iter()
+                    .min_by_key(|(_, at)| *at)
+                    .map(|(peer, _)| *peer)
+                {
+                    reported.peers.remove(&oldest);
                 }
-                reported.insert(peer, now);
-                true
             }
         }
+        reported.peers.insert(peer, now);
+        reported.reports_in_window += 1;
+        true
     }
 }
 
@@ -141,8 +200,13 @@ impl ResolvesClientCert for ReportClientAuth {
         // rustls repeats this check after the resolver returns and, on
         // failure, sends an empty certificate having logged only at debug.
         // Doing it here too is what lets the reason be named.
-        if key.key.choose_scheme(sigschemes).is_some() {
-            return Some(key);
+        if let Some(signer) = key.key.choose_scheme(sigschemes) {
+            let mut selected = (*key).clone();
+            selected.key = Arc::new(PreselectedSigningKey {
+                inner: Arc::clone(&key.key),
+                signer: Mutex::new(Some(signer)),
+            });
+            return Some(Arc::new(selected));
         }
         if self.due(peer_key(root_hint_subjects)) {
             warn!(
@@ -171,6 +235,7 @@ impl ResolvesClientCert for ReportClientAuth {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A resolver that declines, as a rotating identity does once its
     /// credential has expired.
@@ -201,6 +266,26 @@ mod tests {
 
         fn only_raw_public_keys(&self) -> bool {
             true
+        }
+    }
+
+    #[derive(Debug)]
+    struct OneShotSigningKey {
+        inner: Arc<dyn SigningKey>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl SigningKey for OneShotSigningKey {
+        fn choose_scheme(&self, offered: &[SignatureScheme]) -> Option<Box<dyn Signer>> {
+            if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                self.inner.choose_scheme(offered)
+            } else {
+                None
+            }
+        }
+
+        fn algorithm(&self) -> SignatureAlgorithm {
+            self.inner.algorithm()
         }
     }
 
@@ -289,6 +374,25 @@ mod tests {
     }
 
     #[test]
+    fn signing_key_is_consulted_once_per_handshake() {
+        let schemes = [SignatureScheme::ED25519];
+        let original = resolver_for(&rcgen::PKCS_ED25519)
+            .resolve(&[], &schemes)
+            .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut one_shot = (*original).clone();
+        one_shot.key = Arc::new(OneShotSigningKey {
+            inner: Arc::clone(&original.key),
+            calls: Arc::clone(&calls),
+        });
+        let resolver =
+            ReportClientAuth::wrapping(Arc::new(rustls::sign::SingleCertAndKey::from(one_shot)));
+        let selected = resolver.resolve(&[], &schemes).unwrap();
+        assert!(selected.key.choose_scheme(&schemes).is_some());
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
     fn one_peer_is_reported_once_and_another_separately() {
         let resolver = ReportClientAuth::absent();
         let a = [b"issuer-a".as_slice()];
@@ -307,17 +411,48 @@ mod tests {
         for peer in 0..MAX_REPORTED_PEERS as u64 {
             assert!(resolver.due(peer));
         }
-        assert!(!resolver.due(MAX_REPORTED_PEERS as u64));
-        assert_eq!(resolver.reported.lock().unwrap().len(), MAX_REPORTED_PEERS);
+        assert_eq!(
+            resolver.reported.lock().unwrap().peers.len(),
+            MAX_REPORTED_PEERS
+        );
 
-        resolver
-            .reported
-            .lock()
-            .unwrap()
-            .insert(0, Instant::now() - REPORT_INTERVAL);
+        let mut reported = resolver.reported.lock().unwrap();
+        reported.peers.insert(0, Instant::now() - REPORT_INTERVAL);
+        drop(reported);
         assert!(resolver.due(MAX_REPORTED_PEERS as u64));
         let reported = resolver.reported.lock().unwrap();
-        assert_eq!(reported.len(), MAX_REPORTED_PEERS);
-        assert!(!reported.contains_key(&0));
+        assert_eq!(reported.peers.len(), MAX_REPORTED_PEERS);
+        assert!(!reported.peers.contains_key(&0));
+    }
+
+    #[test]
+    fn full_report_cache_evicts_an_active_peer() {
+        let resolver = ReportClientAuth::absent();
+        for peer in 0..MAX_REPORTED_PEERS as u64 {
+            assert!(resolver.due(peer));
+        }
+        let mut reported = resolver.reported.lock().unwrap();
+        reported
+            .peers
+            .insert(0, Instant::now() - Duration::from_secs(30));
+        drop(reported);
+
+        assert!(resolver.due(MAX_REPORTED_PEERS as u64));
+        let reported = resolver.reported.lock().unwrap();
+        assert_eq!(reported.peers.len(), MAX_REPORTED_PEERS);
+        assert!(!reported.peers.contains_key(&0));
+    }
+
+    #[test]
+    fn report_volume_is_bounded() {
+        let resolver = ReportClientAuth::absent();
+        for peer in 0..MAX_REPORTS_PER_INTERVAL as u64 {
+            assert!(resolver.due(peer));
+        }
+        assert!(!resolver.due(MAX_REPORTS_PER_INTERVAL as u64));
+        assert_eq!(
+            resolver.reported.lock().unwrap().peers.len(),
+            MAX_REPORTED_PEERS
+        );
     }
 }
