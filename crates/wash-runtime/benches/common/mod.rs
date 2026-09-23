@@ -110,6 +110,84 @@ impl BenchHost {
     }
 }
 
+/// Per-request latency summary for `iter_custom` benches.
+///
+/// Accumulates individual request latencies so a run can report RPS and
+/// p50/p90/p99 in addition to Criterion's aggregate batch timing.
+#[derive(Debug, Default)]
+pub struct BenchStats {
+    /// Sum of timed per-request durations, excluding untimed pacing pauses
+    /// and warmer requests.
+    pub total_timed: Duration,
+
+    /// Total number of failed requests (dropped, timeout, wrong body, ...).
+    pub errors: u64,
+    /// Every successful individual request's round-trip duration in milliseconds.
+    pub latencies: Vec<f64>,
+}
+
+impl BenchStats {
+    /// Merge one `iter_custom` batch into this accumulator.
+    pub fn extend(&mut self, latencies: Vec<f64>, total_timed: Duration, errors: u64) {
+        self.latencies.extend(latencies);
+        self.total_timed += total_timed;
+        self.errors += errors;
+    }
+
+    pub fn sort_latencies(&mut self) {
+        self.latencies.sort_by(|a, b| a.total_cmp(b));
+    }
+
+    fn is_sorted(&self) -> bool {
+        self.latencies.windows(2).all(|w| match w {
+            [a, b] => a.total_cmp(b) != std::cmp::Ordering::Greater,
+            _ => true,
+        })
+    }
+
+    /// Nearest-rank percentile in `[0.0, 1.0]`. Requires sorted latencies;
+    /// call [`BenchStats::sort_latencies`] (or `print_summary`, which sorts
+    /// internally) first.
+    pub fn pct(&self, p: f64) -> f64 {
+        assert!(
+            self.is_sorted(),
+            "BenchStats::pct requires sorted latencies"
+        );
+        if self.latencies.is_empty() {
+            return f64::NAN;
+        }
+        let p = p.clamp(0.0, 1.0);
+        let index = ((self.latencies.len() as f64 - 1.0) * p).round() as usize;
+        match self.latencies.get(index) {
+            Some(&v) => v,
+            None => f64::NAN,
+        }
+    }
+
+    /// Mean timed-request rate: `(successes + errors) / total_timed`,
+    /// excluding pacing pauses from the denominator.
+    pub fn rps(&self) -> f64 {
+        let secs = self.total_timed.as_secs_f64();
+        if secs > 0.0 {
+            (self.latencies.len() as f64 + self.errors as f64) / secs
+        } else {
+            0.0
+        }
+    }
+
+    pub fn print_summary(&mut self, name: &str) {
+        self.sort_latencies();
+        println!(
+            "[{name}] RPS: {:>8.1} | p50: {:>6.2} ms | p90: {:>6.2} ms | p99: {:>6.2} ms | errors: {}",
+            self.rps(),
+            self.pct(0.50),
+            self.pct(0.90),
+            self.pct(0.99),
+            self.errors
+        );
+    }
+}
+
 pub async fn start_host_and_workload(
     req_for: impl FnOnce(&str) -> Workload,
 ) -> anyhow::Result<BenchHost> {

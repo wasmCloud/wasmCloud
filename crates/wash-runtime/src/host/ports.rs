@@ -762,10 +762,11 @@ async fn splice(stream: TcpStream, conn: loopback::TcpConn) -> Result<()> {
                 let write_result = {
                     let mut bufs = [IoSlice::new(&[]); MAX_INFLIGHT_CHUNKS];
                     let count = queue.len().min(MAX_INFLIGHT_CHUNKS);
-                    for (i, (chunk, _)) in queue.iter().take(count).enumerate() {
-                        bufs[i] = IoSlice::new(chunk);
+                    for (slot, (chunk, _)) in bufs.iter_mut().zip(queue.iter().take(count)) {
+                        *slot = IoSlice::new(chunk);
                     }
-                    write_half.write_vectored(&bufs[..count]).await
+                    let slices = bufs.get(..count).unwrap_or(&[]);
+                    write_half.write_vectored(slices).await
                 };
 
                 match write_result {
@@ -776,8 +777,10 @@ async fn splice(stream: TcpStream, conn: loopback::TcpConn) -> Result<()> {
                     }
                     Ok(mut bytes_written) => {
                         // Drop each fully written chunk, which frees its permit.
-                        while bytes_written > 0 && !queue.is_empty() {
-                            let (chunk, _permit) = queue.front_mut().expect("queue is non-empty");
+                        while bytes_written > 0 {
+                            let Some((chunk, _permit)) = queue.front_mut() else {
+                                break;
+                            };
 
                             if bytes_written >= chunk.len() {
                                 bytes_written -= chunk.len();
