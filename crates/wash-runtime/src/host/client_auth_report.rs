@@ -1,24 +1,7 @@
-//! Reporting for a peer's client-certificate request the host cannot satisfy.
+//! Warns when an outbound TLS client-certificate request cannot be satisfied.
 //!
-//! rustls declines a CertificateRequest quietly in two situations, and from
-//! outside the host they look identical. When the peer merely *requests* a
-//! certificate rather than requiring one, the handshake completes, the peer
-//! answers, and whatever it does about the missing credential happens at the
-//! application layer — so an operator sees an upstream rejecting requests and
-//! nothing at all suggesting TLS.
-//!
-//! - **No identity configured.** `with_no_client_auth` installs a resolver
-//!   that returns nothing.
-//! - **An identity that cannot sign for the schemes offered.** rustls asks the
-//!   resolver, then checks `choose_scheme` on what came back; if no offered
-//!   scheme fits it sends an *empty* certificate. An Ed25519 credential
-//!   against a peer offering only RSA and ECDSA does exactly this.
-//!
-//! rustls logs one `debug!` covering both, which is of little help to an
-//! operator who has no reason to suspect TLS and therefore no reason to raise
-//! the log level of a TLS library. [`ReportClientAuth`] wraps whichever
-//! resolver would otherwise be installed, tells the two cases apart, and says
-//! so at warn level.
+//! Reports an absent identity, a declined identity, or a key that cannot sign
+//! with the peer's offered schemes.
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
