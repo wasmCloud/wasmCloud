@@ -9,7 +9,9 @@ mod bindings {
 
 use bindings::exports::acme::httpegress::fetch::Guest;
 use bindings::wasi::http::outgoing_handler::handle;
-use bindings::wasi::http::types::{ErrorCode, Fields, Method, OutgoingRequest, RequestOptions, Scheme};
+use bindings::wasi::http::types::{
+    ErrorCode, Fields, Method, OutgoingRequest, RequestOptions, Scheme,
+};
 
 struct Component;
 
@@ -18,7 +20,10 @@ impl Guest for Component {
         match send(&host) {
             Ok(status) => status.to_string(),
             Err(e) => {
-                if matches!(e.downcast_ref::<ErrorCode>(), Some(ErrorCode::HttpRequestDenied)) {
+                if matches!(
+                    e.downcast_ref::<ErrorCode>(),
+                    Some(ErrorCode::HttpRequestDenied)
+                ) {
                     "403".to_string()
                 } else {
                     format!("error: {e}")
@@ -29,9 +34,13 @@ impl Guest for Component {
 }
 
 fn send(host: &str) -> anyhow::Result<u16> {
+    let (scheme, host) = match host.strip_prefix("https://") {
+        Some(host) => (Scheme::Https, host),
+        None => (Scheme::Http, host),
+    };
     let request = OutgoingRequest::new(Fields::new());
     request
-        .set_scheme(Some(&Scheme::Http))
+        .set_scheme(Some(&scheme))
         .map_err(|()| anyhow::anyhow!("failed to set scheme"))?;
     request
         .set_authority(Some(host))
@@ -43,8 +52,8 @@ fn send(host: &str) -> anyhow::Result<u16> {
         .set_method(&Method::Get)
         .map_err(|()| anyhow::anyhow!("failed to set method"))?;
 
-    let future_response = handle(request, Some(RequestOptions::new()))
-        .map_err(|e| anyhow::anyhow!(e))?;
+    let future_response =
+        handle(request, Some(RequestOptions::new())).map_err(|e| anyhow::anyhow!(e))?;
     future_response.subscribe().block();
     let response = future_response
         .get()
@@ -56,6 +65,6 @@ fn send(host: &str) -> anyhow::Result<u16> {
 
 mod export {
     #![allow(unsafe_code)]
-    use super::{Component, bindings};
+    use super::{bindings, Component};
     bindings::export!(Component with_types_in bindings);
 }

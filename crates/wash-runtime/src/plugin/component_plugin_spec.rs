@@ -60,6 +60,11 @@ pub struct ComponentPluginSpec {
     /// grants concrete addresses the plugin may bind itself. `publish` is
     /// rejected until host-component port splicing is implemented.
     pub ports: Arc<[crate::host::declared_port::DeclaredPort]>,
+    /// The TLS trust the `tls` blocks on `allowed_hosts` declared, already
+    /// loaded. `None` (the default) declares none; a plugin declaring some must
+    /// import a supported HTTP or TLS client to load. Required TLS disables
+    /// raw sockets and requires HTTPS or the host-owned TLS dialer.
+    pub tls_policy: Option<Arc<crate::plugin::PluginTlsPolicy>>,
 }
 
 impl ComponentPluginSpec {
@@ -76,6 +81,7 @@ impl ComponentPluginSpec {
             allowed_ip_name_lookups: Arc::from([]),
             allowed_host_loopback_ports: Arc::from([]),
             ports: Arc::from([]),
+            tls_policy: None,
         }
     }
 }
@@ -152,6 +158,7 @@ impl FromStr for ComponentPluginSpec {
             allowed_ip_name_lookups: Arc::from([]),
             allowed_host_loopback_ports: Arc::from([]),
             ports: Arc::from([]),
+            tls_policy: None,
         })
     }
 }

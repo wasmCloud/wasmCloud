@@ -107,6 +107,71 @@ cargo xtask build-fixtures
 Re-run it after editing a fixture under [`tests/fixtures/`](./tests/fixtures/)
 (see that directory's README for details).
 
+## Plugin TLS grants
+
+A plugin's `allowedHosts` entries can supply CA roots and a client certificate
+for HTTPS, gRPC over HTTPS, and the host's TLS interfaces:
+
+```yaml
+host:
+  plugins:
+    - id: database
+      file: database.wasm
+      allowedHosts:
+        - host: "db.internal:443"
+          tls:
+            ca: tls/ca.crt
+            roots: replace
+            clientCert: tls/client.crt
+            clientKey: tls/client.key
+            required: true
+      allowedIpNameLookups: ["db.internal"]
+```
+
+Files are loaded at startup. HTTPS requests from both WASI HTTP versions use
+the matching grant automatically, including the gRPC transport. Connections
+and TLS session caches are isolated by plugin and loaded trust configuration.
+Custom HTTP handlers must support the grant or refuse the request.
+
+Without `required: true`, the TLS block configures host-performed TLS. A
+component with raw socket permission can still send plaintext or implement
+its own TLS. Importing a TLS interface does not prove the component uses it.
+
+If **any** grant sets `required: true`, the component plugin cannot create or
+use raw TCP or UDP sockets, even through wildcard or loopback grants. It also
+cannot declare listening ports. Its outgoing HTTP requests must use HTTPS and
+match a TLS grant; plaintext requests and HTTPS without declared trust fail.
+These restrictions hold even when the host's socket policy is in count mode.
+
+For other protocols, import `wasmcloud:tls/dialer@0.1.0` and call
+`connect("tls://db.internal:443")`. The host checks the endpoint grant, DNS
+permission, resolved addresses, loopback grants, and connection quota, then
+completes TLS before returning a connection. The connection's `send` and
+`receive` streams carry application bytes. The host never gives the component
+a raw socket. This API requires TLS from the start; it does not implement
+STARTTLS.
+
+`wasmcloud:tls/client` and `wasi:tls/client` remain stream transforms for
+components that have raw transport access. The restriction covers this
+plugin's host networking interfaces. Other capabilities explicitly granted to
+the plugin have their own policies; it does not impose TLS on another
+component's or native plugin's connections.
+
+### Upgrading a plugin that already imports `wasi:tls`
+
+Before plugin TLS grants, a component plugin's `wasi:tls` import (in a build
+with the `wasi-tls` feature) trusted the host's default roots. It now takes
+its trust from the grant, and a handshake to a host no grant declares `tls`
+for is refused. The plugin still loads, with a warning, so the failure shows
+up at the first connection. To keep trusting the public roots, add an empty
+`tls` block to each entry the plugin handshakes with:
+
+```yaml
+allowedHosts:
+  - host: "api.example.com:443"
+    tls: {}
+```
+
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](../../LICENSE) file for details.

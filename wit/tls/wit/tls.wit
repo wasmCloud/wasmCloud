@@ -1,0 +1,79 @@
+package wasmcloud:tls@0.1.0;
+
+/// Client-side TLS as a stream transform, for a host component plugin that
+/// speaks its own protocol over `wasi:sockets`.
+///
+/// The `types` and `client` interfaces mirror `wasi:tls@0.3.0-draft`.
+/// The additional `dialer` interface owns the network connection in the host,
+/// so a plugin can use TLS without raw socket access.
+///
+/// What this package adds is the trust model, which `wasi:tls` leaves to the
+/// host. The certificate authorities a connection trusts, and any client
+/// certificate it presents, come from the operator's `allowedHosts` grant for
+/// the plugin, never from the guest. A handshake to a server name that no grant
+/// declares `tls` for fails before any byte is written, so a handshake either
+/// uses the declared trust or does not happen. Whether a plugin runs TLS at all
+/// is the plugin's choice when it has raw socket access. A `tls.required`
+/// grant disables that access; the plugin must use the host-owned `dialer`
+/// or HTTPS instead.
+interface types {
+    /// A TLS error. Opaque: match on success or failure, and render this for
+    /// diagnostics only.
+    resource error {
+        /// A human-readable description of the failure, for logs.
+        to-debug-string: func() -> string;
+    }
+}
+
+interface client {
+    use types.{error};
+
+    /// One client connection's TLS state.
+    resource connector {
+        constructor();
+
+        /// Set up the encryption stream transform.
+        ///
+        /// Takes the plaintext `cleartext` application data stream and returns
+        /// the encrypted stream, ready to be written to the network. Closing
+        /// `cleartext` emits a `close_notify` on the returned stream.
+        send: func(cleartext: stream<u8>) -> tuple<stream<u8>, future<result<_, error>>>;
+
+        /// Set up the decryption stream transform.
+        ///
+        /// Takes the encrypted stream, as read from the network, and returns the
+        /// decrypted application data stream.
+        receive: func(ciphertext: stream<u8>) -> tuple<stream<u8>, future<result<_, error>>>;
+
+        /// Perform the handshake with `server-name`, which is both the SNI value
+        /// and the name the server's certificate must be valid for.
+        ///
+        /// `send` and `receive` must be set up first, and their streams pumped
+        /// to and from the network while this runs. Trust is the one the
+        /// plugin's `allowedHosts` grant declares for `server-name`; with none,
+        /// this fails without sending anything.
+        connect: static async func(this: connector, server-name: string) -> result<_, error>;
+    }
+}
+
+/// Host-owned TLS connections. The guest never receives a raw socket.
+interface dialer {
+    use types.{error};
+
+    /// Check the endpoint grant and complete TLS before returning.
+    /// The endpoint is tls://host:port; its host is also the certificate name.
+    connect: async func(endpoint: string) -> result<connection, error>;
+
+    resource connection {
+        /// Send application bytes once. Closing the stream sends close_notify.
+        send: func(data: stream<u8>) -> future<result<_, error>>;
+        /// Receive application bytes. May be called once.
+        receive: func() -> tuple<stream<u8>, future<result<_, error>>>;
+    }
+}
+
+world imports {
+    import types;
+    import client;
+    import dialer;
+}

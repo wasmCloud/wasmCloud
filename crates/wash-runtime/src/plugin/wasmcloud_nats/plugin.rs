@@ -66,6 +66,8 @@ pub struct WasmcloudNats {
     failure_sink: arc_swap::ArcSwapOption<WorkloadFailureSink>,
     /// Network ceiling checked before the native client connects.
     egress_policy: arc_swap::ArcSwapOption<PluginEgressPolicy>,
+    /// TLS trust the `allowedHosts` grant declared, by server.
+    tls_policy: arc_swap::ArcSwapOption<crate::plugin::PluginTlsPolicy>,
     /// The host's guest-memory budget, when it told this plugin. Subscription
     /// byte budgets are per subscription and were never compared against it:
     /// seven subscriptions at the 32MiB default is 224MiB of potential backlog
@@ -93,6 +95,7 @@ impl WasmcloudNats {
             lattice_prefixes: Vec::new(),
             failure_sink: arc_swap::ArcSwapOption::empty(),
             egress_policy: arc_swap::ArcSwapOption::empty(),
+            tls_policy: arc_swap::ArcSwapOption::empty(),
             memory_budget: None,
             host_backlog: Arc::new(subscriber::HostBacklogBudget::unbounded()),
         }
@@ -141,6 +144,65 @@ impl WasmcloudNats {
                 .with_context(|| format!("NATS server {server:?} is denied"))?;
         }
         Ok(())
+    }
+
+    /// The trust the grant declared for `config`'s servers, which one client
+    /// shares, so they must agree: all of them under the same `tls` block, or
+    /// none. A binding that brings its own `tls-*` keys as well is refused
+    /// rather than merged, since the two would each claim the connection.
+    fn grant_tls(
+        &self,
+        config: &NatsConfig,
+    ) -> anyhow::Result<Option<Arc<crate::plugin::TlsTrust>>> {
+        let Some(policy) = self.tls_policy.load_full() else {
+            return Ok(None);
+        };
+        let mut chosen: Option<(String, Option<Arc<crate::plugin::TlsTrust>>)> = None;
+        for server in &config.servers {
+            let addr = server
+                .parse::<async_nats::ServerAddr>()
+                .with_context(|| format!("NATS server {server:?} is invalid"))?;
+            let trust = policy
+                .for_url(addr.as_url_str())
+                .with_context(|| format!("NATS server {server:?}"))?;
+            anyhow::ensure!(
+                !policy.requires_tls() || trust.is_some(),
+                "NATS server {server:?} has no TLS grant, but the plugin requires TLS"
+            );
+            // async-nats never runs its TLS upgrade on a websocket address,
+            // and `require_tls` does not stop it connecting in plaintext.
+            anyhow::ensure!(
+                trust.is_none() || !addr.is_websocket(),
+                "NATS server {server:?} is a websocket address, which this client cannot \
+                 carry TLS on, but allowedHosts declares `tls` for its host; use a \
+                 `tls://` server"
+            );
+            match &chosen {
+                None => chosen = Some((server.clone(), trust)),
+                Some((first, first_trust)) => {
+                    let same = match (first_trust, &trust) {
+                        (None, None) => true,
+                        (Some(a), Some(b)) => a.grant() == b.grant(),
+                        _ => false,
+                    };
+                    anyhow::ensure!(
+                        same,
+                        "NATS servers {first:?} and {server:?} share one connection but \
+                         allowedHosts declares different `tls` for them; declare the same `tls` \
+                         block for every server of a binding"
+                    );
+                }
+            }
+        }
+        let trust = chosen.and_then(|(_, trust)| trust);
+        if trust.is_some() {
+            anyhow::ensure!(
+                config.tls.ca.is_none() && config.tls.cert.is_none() && config.tls.key.is_none(),
+                "wasmcloud:nats binding sets `tls-ca`, `tls-cert` or `tls-key` for servers whose \
+                 allowedHosts entry already declares `tls`; declare the trust in one place"
+            );
+        }
+        Ok(trust)
     }
 
     /// Opens one connection per binding name.
@@ -253,6 +315,7 @@ impl WasmcloudNats {
             // servers the operator wrote. `configure_egress_policy` says so at
             // startup, where an operator can act on it.
             let ignore_discovered_servers = self.egress_policy.load().is_some();
+            let grant_tls = self.grant_tls(&config)?;
             let handle = self
                 .connections
                 .acquire(
@@ -261,6 +324,7 @@ impl WasmcloudNats {
                     &config,
                     self.lattice_prefixes.clone(),
                     ignore_discovered_servers,
+                    grant_tls.as_deref(),
                 )
                 .await?;
             *opened = true;
@@ -657,6 +721,16 @@ impl HostPlugin for WasmcloudNats {
              servers are not followed. List every member a connection may fail over to"
         );
         self.egress_policy.store(Some(policy));
+        Ok(())
+    }
+
+    /// A server the grant declares `tls` for is dialled with that trust and
+    /// with TLS required, so the client refuses a server that offers none.
+    fn configure_tls_policy(
+        &self,
+        policy: Arc<crate::plugin::PluginTlsPolicy>,
+    ) -> anyhow::Result<()> {
+        self.tls_policy.store(Some(policy));
         Ok(())
     }
 
@@ -1194,6 +1268,93 @@ mod tests {
             host_owned_ports,
             ..Default::default()
         }
+    }
+
+    fn with_grant_tls(host: &str) -> WasmcloudNats {
+        crate::init_crypto();
+        let plugin = WasmcloudNats::new();
+        let policy =
+            crate::plugin::PluginTlsPolicy::from_grants(&[crate::plugin::PluginAllowedHost {
+                host: host.parse().unwrap(),
+                tls: Some(crate::plugin::TlsGrant::default()),
+            }])
+            .unwrap()
+            .unwrap();
+        plugin.configure_tls_policy(Arc::new(policy)).unwrap();
+        plugin
+    }
+
+    #[test]
+    fn required_tls_refuses_a_binding_without_declared_trust() {
+        let plugin = WasmcloudNats::new();
+        let policy =
+            crate::plugin::PluginTlsPolicy::from_grants(&[crate::plugin::PluginAllowedHost {
+                host: "a.internal".parse().unwrap(),
+                tls: Some(crate::plugin::TlsGrant {
+                    required: true,
+                    ..Default::default()
+                }),
+            }])
+            .unwrap()
+            .unwrap();
+        plugin.configure_tls_policy(Arc::new(policy)).unwrap();
+        assert!(
+            plugin
+                .grant_tls(&nats_config("nats://b.internal:4222"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_granted_server_gets_the_grant_trust() {
+        let plugin = with_grant_tls("nats.internal:4222");
+        assert!(
+            plugin
+                .grant_tls(&nats_config("tls://nats.internal:4222"))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            plugin
+                .grant_tls(&nats_config("nats://other:4222"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// async-nats skips its TLS upgrade on a websocket address, so declared
+    /// trust there would be a plaintext connection that believes otherwise.
+    #[test]
+    fn a_websocket_server_under_a_tls_grant_is_refused() {
+        let plugin = with_grant_tls("nats.internal");
+        for server in ["ws://nats.internal:8080", "wss://nats.internal:8443"] {
+            let err = plugin
+                .grant_tls(&nats_config(server))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("websocket"), "{server}: {err}");
+        }
+    }
+
+    #[test]
+    fn binding_tls_keys_beside_a_grant_are_refused() {
+        let plugin = with_grant_tls("nats.internal");
+        let config = NatsConfig::from_map(&HashMap::from([
+            (
+                "servers".to_string(),
+                "tls://nats.internal:4222".to_string(),
+            ),
+            ("tls-ca".to_string(), "/tmp/ca.pem".to_string()),
+        ]))
+        .unwrap();
+        assert!(plugin.grant_tls(&config).is_err());
+    }
+
+    #[test]
+    fn servers_of_one_binding_must_agree_on_tls() {
+        let plugin = with_grant_tls("a.internal");
+        let config = nats_config("tls://a.internal:4222,nats://b.internal:4222");
+        assert!(plugin.grant_tls(&config).is_err());
     }
 
     #[test]

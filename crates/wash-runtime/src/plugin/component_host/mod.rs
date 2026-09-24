@@ -268,6 +268,9 @@ impl ComponentHostPluginState {
 struct PluginStoreContext {
     allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
     allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
+    /// The TLS trust the plugin's grant declared, for its `wasmcloud:tls` and
+    /// `wasi:tls` imports.
+    tls_policy: Option<Arc<crate::plugin::PluginTlsPolicy>>,
     /// The host lifetime and optional outgoing HTTP handler for this store.
     host_ref: Option<crate::host::HostRef>,
     network: crate::host::ports::NetworkHandle,
@@ -285,6 +288,7 @@ pub struct ComponentHostPlugin {
     id: &'static str,
     runtime: PluginRuntime,
     egress_policy: crate::plugin::PluginEgressPolicy,
+    tls_policy: Option<Arc<crate::plugin::PluginTlsPolicy>>,
     world: WitWorld,
     exports: Arc<Vec<ExportedInterface>>,
     /// Every exported function, flattened, for the TriggerService to resolve up front.
@@ -322,6 +326,9 @@ impl ComponentHostPlugin {
     /// `allowed_host_loopback_ports` gate this plugin's own egress the same way
     /// a workload's `LocalResources` do. `host_ref` tracks host teardown and
     /// supplies its optional outgoing HTTP handler.
+    /// `tls_policy` is the trust the `tls` blocks on those hosts declared,
+    /// served through its HTTP or TLS imports. Required TLS disables raw
+    /// sockets and requires HTTPS or the host-owned TLS dialer.
     /// `socket_policy` supplies the host-wide gate and address policy. If it is
     /// omitted, the default keeps host loopback closed; a non-empty loopback
     /// grant then warns and remains denied.
@@ -345,8 +352,13 @@ impl ComponentHostPlugin {
         host_ref: Option<crate::host::HostRef>,
         #[builder(default)] ports: Arc<[crate::host::declared_port::DeclaredPort]>,
         socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
+        tls_policy: Option<Arc<crate::plugin::PluginTlsPolicy>>,
     ) -> anyhow::Result<Self> {
         crate::host::declared_port::validate_plugin_ports(&ports, &format!("host plugin '{id}'"))?;
+        anyhow::ensure!(
+            !tls_policy.as_ref().is_some_and(|p| p.requires_tls()) || ports.is_empty(),
+            "host component plugin '{id}' requires TLS and cannot declare raw listening ports"
+        );
         let socket_policy = socket_policy.unwrap_or_default();
         let egress_policy = crate::plugin::PluginEgressPolicy::new(
             Arc::clone(&allowed_hosts),
@@ -403,6 +415,30 @@ impl ComponentHostPlugin {
         // hold by construction here too, not just at the caller.
         let native_plugins = native_only(&native_plugins);
         let (component, base_linker) = engine.prepare_host_component(wasm)?;
+        let clients = crate::plugin::tls::component::ClientImports::of(
+            introspect_imports(&component)?.iter().map(|i| &i.wit),
+        );
+        anyhow::ensure!(
+            tls_policy.is_none() || clients.any(),
+            "host component plugin '{id}' declares `tls` on its allowedHosts entries, but imports \
+             no supported HTTP or TLS client interface, so nothing would apply that \
+             trust. Drop `tls` from its `host.plugins` entry, or build the plugin against one of \
+             those interfaces"
+        );
+        anyhow::ensure!(
+            !tls_policy.as_ref().is_some_and(|p| p.requires_tls())
+                || clients.dialer
+                || clients.http_client,
+            "host component plugin '{id}' requires TLS but imports neither a host-owned TLS dialer nor an HTTP client"
+        );
+        if tls_policy.is_none() && (clients.tls_client || clients.dialer) {
+            warn!(
+                plugin_id = id,
+                "host component plugin imports client TLS, but no allowedHosts entry declares \
+                 `tls`, so every handshake it starts is refused; add `tls: {{}}` to an entry \
+                 to trust the public roots for that host"
+            );
+        }
         let (exports, lifecycle) = introspect_capability_exports(id, &component)?;
         let workload_imports =
             classify_workload_imports(id, &component, &exports, &native_plugins)?;
@@ -487,12 +523,14 @@ impl ComponentHostPlugin {
                 store: PluginStoreContext {
                     allowed_hosts,
                     allowed_ip_name_lookups,
+                    tls_policy: tls_policy.clone(),
                     host_ref,
                     network: crate::host::ports::NetworkHandle::new(),
                     socket_policy,
                 },
             },
             egress_policy,
+            tls_policy,
             world,
             exports: Arc::new(exports),
             capability_funcs,
@@ -745,6 +783,7 @@ pub async fn load_component_plugin(
         .allowed_ip_name_lookups(Arc::clone(&spec.allowed_ip_name_lookups))
         .allowed_host_loopback_ports(Arc::clone(&spec.allowed_host_loopback_ports))
         .ports(Arc::clone(&spec.ports))
+        .maybe_tls_policy(spec.tls_policy.clone())
         .maybe_host_ref(host_ref)
         .socket_policy(socket_policy)
         .build()
@@ -783,6 +822,21 @@ impl HostPlugin for ComponentHostPlugin {
         anyhow::ensure!(
             self.egress_policy.same_declaration(&policy),
             "component plugin '{}' was built with an egress policy different from its host.plugins declaration",
+            self.id
+        );
+        Ok(())
+    }
+
+    fn configure_tls_policy(
+        &self,
+        policy: Arc<crate::plugin::PluginTlsPolicy>,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.tls_policy
+                .as_deref()
+                .is_some_and(|built| built.same_declaration(&policy)),
+            "component plugin '{}' was built with TLS trust different from its host.plugins \
+             declaration",
             self.id
         );
         Ok(())
@@ -1076,6 +1130,13 @@ fn is_base_wasi(wit: &WitInterface) -> bool {
         )
 }
 
+/// Whether an import is client TLS at a version the host serves every plugin
+/// itself ([`crate::plugin::tls::component`]) with trust from the plugin's
+/// grant. Any other version is left to fail as an unserved import.
+fn is_host_tls(wit: &WitInterface) -> bool {
+    crate::plugin::tls::component::serves(&wit.namespace, &wit.package, wit.version.as_ref())
+}
+
 /// Resolve a plugin's remaining unsatisfied imports against the host's native
 /// (non-component) plugins — `config`, `secrets`, `keyvalue`, and so on — and
 /// wire them into `linker`. Delivers this plugin's own resolved bind-time
@@ -1110,7 +1171,7 @@ async fn link_native_imports(
             continue;
         }
         let wit = imported.wit;
-        if is_reserved(&wit) || is_base_wasi(&wit) {
+        if is_reserved(&wit) || is_base_wasi(&wit) || is_host_tls(&wit) {
             continue;
         }
         merged
@@ -1211,6 +1272,7 @@ fn is_self_satisfied(imported: &ExportedInterface, exports: &[ExportedInterface]
     exports.iter().any(|e| e.name == imported.name)
         || is_reserved(&imported.wit)
         || is_base_wasi(&imported.wit)
+        || is_host_tls(&imported.wit)
 }
 
 /// Whether the plugin declares that it calls workloads, by importing
@@ -1352,6 +1414,8 @@ async fn build_plugin_linker(
         .with_context(|| format!("failed to install host cancel on plugin '{id}'"))?;
     install_host_workload(&mut linker, state)
         .with_context(|| format!("failed to install host workload targeting on plugin '{id}'"))?;
+    crate::plugin::tls::component::add_to_linker(&mut linker)
+        .with_context(|| format!("failed to install client TLS on plugin '{id}'"))?;
 
     let mut linked = std::collections::HashSet::new();
     for imported in introspect_imports(component)? {
@@ -1991,9 +2055,17 @@ fn build_plugin_store(
     // its sockets registered, so reusing one would fail the next incarnation's
     // bind with `AddressInUse`.
     let loopback = store_context.network.replace();
+    let tls_required = store_context
+        .tls_policy
+        .as_ref()
+        .is_some_and(|p| p.requires_tls());
     let sockets_ctx = crate::sockets::WasiSocketsCtx {
         socket_addr_check: crate::sockets::SocketAddrCheck::new(move |addr, reason| {
-            policy.decide(reason, addr)
+            if tls_required {
+                crate::sockets::AddrDecision::Deny(crate::sockets::DenyReason::NotPermitted)
+            } else {
+                policy.decide(reason, addr)
+            }
         }),
         loopback,
         allowed_ip_name_lookups: Arc::clone(&store_context.allowed_ip_name_lookups),
@@ -2008,7 +2080,12 @@ fn build_plugin_store(
                 .collect(),
         )
         .with_sockets(sockets_ctx)
-        .with_allowed_hosts(Arc::clone(&store_context.allowed_hosts));
+        .with_allowed_hosts(Arc::clone(&store_context.allowed_hosts))
+        .with_plugin_tls(store_context.tls_policy.clone())
+        .with_plugin_network(crate::plugin::tls::PluginNetwork {
+            sockets: Arc::clone(&store_context.socket_policy),
+            names: Arc::clone(&store_context.allowed_ip_name_lookups),
+        });
     if let Some(host) = &store_context.host_ref {
         ctx_builder = ctx_builder.with_host(host);
     }
@@ -2208,6 +2285,7 @@ mod tests {
         let store_context = PluginStoreContext {
             allowed_hosts,
             allowed_ip_name_lookups: allowed_names,
+            tls_policy: None,
             host_ref: None,
             network: crate::host::ports::NetworkHandle::new(),
             socket_policy: policy,

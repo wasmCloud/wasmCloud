@@ -599,6 +599,7 @@ pub struct PluginBindingSet {
     allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
     allowed_host_loopback_ports: Arc<[crate::host::allowed_loopback::AllowedLoopbackPort]>,
     egress_policy_declared: bool,
+    tls_policy: Option<Arc<crate::plugin::PluginTlsPolicy>>,
 }
 
 /// A set of defaults that applies only when nobody set its anchor key.
@@ -699,6 +700,20 @@ impl PluginBindingSet {
             Arc::clone(&self.allowed_host_loopback_ports),
             socket_policy,
         )))
+    }
+
+    /// Declares the TLS trust the `tls` blocks on the plugin's `allowedHosts`
+    /// resolved to.
+    #[must_use]
+    pub fn with_tls_policy(mut self, policy: Arc<crate::plugin::PluginTlsPolicy>) -> Self {
+        self.tls_policy = Some(policy);
+        self
+    }
+
+    /// The declared TLS trust, if any entry declared `tls`.
+    #[must_use]
+    pub fn tls_policy(&self) -> Option<Arc<crate::plugin::PluginTlsPolicy>> {
+        self.tls_policy.clone()
     }
 
     /// Seed `key` on the base layer only if the operator did not set it — how a

@@ -1,0 +1,9 @@
+package acme:tlsplugincaller@0.1.0;
+
+/// Workload component: HTTP ingress that drives the `tls-plugin-p3` host
+/// component plugin's `acme:tlsprobe/probe` capability.
+world caller {
+    import wasi:http/types@0.3.0;
+    import acme:tlsprobe/probe@0.1.0;
+    export wasi:http/handler@0.3.0;
+}
