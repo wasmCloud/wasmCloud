@@ -26,7 +26,8 @@ use wasmtime::component::{
 };
 
 use self::io::{
-    AsyncReadProducer, AsyncWriteConsumer, Closed, Deferred, Reader, SessionIo, Shared, Writer,
+    AsyncReadProducer, AsyncWriteConsumer, Closed, Deferred, Hangup, HangupWriter, Reader,
+    SessionIo, Shared, Writer,
 };
 use super::PluginTlsPolicy;
 use crate::engine::ctx::SharedCtx;
@@ -48,44 +49,44 @@ pub(crate) fn serves(namespace: &str, package: &str, version: Option<&semver::Ve
     }
 }
 
-/// Whether a component imports a supported TLS client or dialer.
-pub(crate) fn imports_tls_client(component: &wasmtime::component::Component) -> bool {
-    let ty = component.component_type();
-    ty.imports(component.engine()).any(|(name, _)| {
-        let Some((package, rest)) = name.split_once('/') else {
-            return false;
-        };
-        let Some((namespace, package)) = package.split_once(':') else {
-            return false;
-        };
-        let Some((interface, version)) = rest.split_once('@') else {
-            return false;
-        };
-        (interface == "client" || (namespace == "wasmcloud" && interface == "dialer"))
-            && serves(
-                namespace,
-                package,
-                semver::Version::parse(version).ok().as_ref(),
-            )
-    })
+/// Which of the clients that apply a plugin's declared trust it imports.
+///
+/// An import under an `(implements ..)` label counts for none: these are
+/// linked by interface name, so a labeled one would not reach them.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ClientImports {
+    /// `wasmcloud:tls/client` or `wasi:tls/client`, over a guest's socket.
+    pub(crate) tls_client: bool,
+    /// `wasmcloud:tls/dialer`, which owns the connection too.
+    pub(crate) dialer: bool,
+    /// `wasi:http`, whose outgoing requests take the grant's trust.
+    pub(crate) http_client: bool,
 }
 
-pub(crate) fn imports_dialer(component: &wasmtime::component::Component) -> bool {
-    component
-        .component_type()
-        .imports(component.engine())
-        .any(|(name, _)| name.starts_with("wasmcloud:tls/dialer@0.1."))
-}
+impl ClientImports {
+    pub(crate) fn of<'a>(imports: impl IntoIterator<Item = &'a crate::wit::WitInterface>) -> Self {
+        let mut clients = Self::default();
+        for wit in imports.into_iter().filter(|wit| wit.name.is_none()) {
+            let version = wit.version.as_ref();
+            if serves(&wit.namespace, &wit.package, version) {
+                clients.tls_client |= wit.interfaces.contains("client");
+                clients.dialer |= wit.namespace == "wasmcloud" && wit.interfaces.contains("dialer");
+            }
+            if (wit.namespace.as_str(), wit.package.as_str()) == ("wasi", "http") {
+                clients.http_client |= match version.map(|v| (v.major, v.minor)) {
+                    Some((0, 2)) => wit.interfaces.contains("outgoing-handler"),
+                    Some((0, 3)) => wit.interfaces.contains("client"),
+                    _ => false,
+                };
+            }
+        }
+        clients
+    }
 
-/// Whether HTTP egress can consume the plugin's declared trust.
-pub(crate) fn imports_http_client(component: &wasmtime::component::Component) -> bool {
-    component
-        .component_type()
-        .imports(component.engine())
-        .any(|(name, _)| {
-            name.starts_with("wasi:http/outgoing-handler@0.2.")
-                || name.starts_with("wasi:http/client@0.3.")
-        })
+    /// Whether anything here can apply declared trust at all.
+    pub(crate) fn any(self) -> bool {
+        self.tls_client || self.dialer || self.http_client
+    }
 }
 
 /// Link both packages into a plugin linker. Unused unless the plugin imports
@@ -224,7 +225,7 @@ fn send<T: 'static>(
             Ok(mut session) => session.shutdown().await,
             Err(e) => Err(e),
         };
-        let ciphertext_result = ciphertext_ended_rx.await?.map(drop);
+        let ciphertext_result = ciphertext_ended_rx.await?;
         let _ = result_tx.send(
             cleartext_result
                 .and(ciphertext_result)
@@ -259,18 +260,27 @@ fn receive<T: 'static>(
         connector.recv = Some(ciphertext_reader);
         connector.session.0.clone()
     };
+    // A guest that stops reading cleartext stops the ciphertext feeding it,
+    // rather than leaving that consumer parked on a full pipe.
+    let hangup = Arc::new(Hangup::default());
     ciphertext.pipe(
         &mut store,
-        AsyncWriteConsumer::new(ciphertext_writer, ciphertext_ended_tx),
+        AsyncWriteConsumer::new(
+            HangupWriter::new(ciphertext_writer, Arc::clone(&hangup)),
+            ciphertext_ended_tx,
+        ),
     )?;
-    let cleartext = AsyncReadProducer::new(session, cleartext_ended_tx);
+    let cleartext =
+        AsyncReadProducer::new(session, cleartext_ended_tx).with_hangup(Arc::clone(&hangup));
     store.spawn(FnTask(async move || {
         let ciphertext_result = match ciphertext_ended_rx.await? {
             // The network side closed: tell the session its transport is gone.
             Ok(mut inner) => inner.shutdown().await,
+            // The guest's own hangup, not a failure.
+            Err(_) if hangup.is_set() => Ok(()),
             Err(e) => Err(e),
         };
-        let cleartext_result = cleartext_ended_rx.await?.map(drop);
+        let cleartext_result = cleartext_ended_rx.await?;
         let _ = result_tx.send(
             cleartext_result
                 .and(ciphertext_result)

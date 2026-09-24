@@ -1016,6 +1016,7 @@ dependencies = [
 name = "tls-plugin-p3"
 version = "0.0.0"
 dependencies = [
+ "futures",
  "wit-bindgen 0.60.0",
 ]
 

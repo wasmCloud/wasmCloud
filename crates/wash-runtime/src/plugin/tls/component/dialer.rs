@@ -125,7 +125,7 @@ impl<T: 'static> dialer::HostConnectionWithStore<T> for PluginTls {
         let (result_tx, result_rx) = oneshot::channel();
         let stream = StreamReader::new(&mut store, AsyncReadProducer::new(io, ended_tx))?;
         store.spawn(FnTask(async move || {
-            let _ = result_tx.send(ended_rx.await?.map(drop).map_err(TlsError::from));
+            let _ = result_tx.send(ended_rx.await?.map_err(TlsError::from));
             Ok(())
         }))?;
         Ok((

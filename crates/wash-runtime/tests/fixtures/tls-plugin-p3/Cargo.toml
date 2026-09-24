@@ -8,3 +8,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen = { workspace = true, features = ["async-spawn", "inter-task-wakeup"] }
+futures = { workspace = true, features = ["alloc", "async-await"] }

@@ -27,7 +27,11 @@
 
 #![cfg(all(
     feature = "host-component-plugins",
-    feature = "wasm_component_model_implements"
+    feature = "wasm_component_model_implements",
+    feature = "wasi-blobstore",
+    feature = "wasi-config",
+    feature = "wasi-keyvalue",
+    feature = "wasi-logging"
 ))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

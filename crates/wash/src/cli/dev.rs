@@ -384,6 +384,20 @@ impl CliCommand for DevCommand {
             debug!("WASI WebGPU plugin registered");
         }
 
+        // `dev.data_nats_url` is the address a `wasmcloud:nats` binding falls
+        // back to. An anchored bundle rather than a plain default: a binding
+        // that names its own `servers` is pointing somewhere else, and should
+        // inherit nothing else from the dev NATS either. Resolved before the
+        // component plugins load, which take their TLS trust from it.
+        let mut plugin_bindings =
+            dev_config.to_plugin_bindings(&config, project_dir, Some(project_dir))?;
+        if let Some(url) = &dev_config.data_nats_url {
+            let nats = plugin_bindings
+                .for_plugin(plugin::wasmcloud_nats::PLUGIN_NATS_ID)
+                .with_default_bundle("servers", [("servers", url.clone())]);
+            plugin_bindings = plugin_bindings.with_plugin(nats);
+        }
+
         // Host component plugins: WebAssembly components that provide host
         // capabilities, each in its own supervised store. Fetched (local file or
         // OCI) and registered before the host starts — last, so every native
@@ -395,7 +409,7 @@ impl CliCommand for DevCommand {
             let native_plugins = host_builder.native_plugins();
             let host_ref = host_builder.host_ref();
             for hp in dev_config.component_plugins()? {
-                let spec = hp.to_spec(&config, project_dir, Some(project_dir))?;
+                let spec = hp.to_spec(&config, project_dir, Some(project_dir), &plugin_bindings)?;
                 let plugin = wash_runtime::plugin::component_host::load_component_plugin(
                     &spec,
                     &engine,
@@ -413,19 +427,6 @@ impl CliCommand for DevCommand {
 
         // After every plugin is registered, so `build()` can refuse a
         // declaration naming an id this host has no plugin for.
-        //
-        // `dev.data_nats_url` is the address a `wasmcloud:nats` binding falls
-        // back to. An anchored bundle rather than a plain default: a binding
-        // that names its own `servers` is pointing somewhere else, and should
-        // inherit nothing else from the dev NATS either.
-        let mut plugin_bindings =
-            dev_config.to_plugin_bindings(&config, project_dir, Some(project_dir))?;
-        if let Some(url) = &dev_config.data_nats_url {
-            let nats = plugin_bindings
-                .for_plugin(plugin::wasmcloud_nats::PLUGIN_NATS_ID)
-                .with_default_bundle("servers", [("servers", url.clone())]);
-            plugin_bindings = plugin_bindings.with_plugin(nats);
-        }
         host_builder = host_builder.with_plugin_bindings(plugin_bindings);
 
         // Build and start the host

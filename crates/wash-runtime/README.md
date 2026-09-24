@@ -157,6 +157,21 @@ plugin's host networking interfaces. Other capabilities explicitly granted to
 the plugin have their own policies; it does not impose TLS on another
 component's or native plugin's connections.
 
+### Upgrading a plugin that already imports `wasi:tls`
+
+Before plugin TLS grants, a component plugin's `wasi:tls` import (in a build
+with the `wasi-tls` feature) trusted the host's default roots. It now takes
+its trust from the grant, and a handshake to a host no grant declares `tls`
+for is refused. The plugin still loads, with a warning, so the failure shows
+up at the first connection. To keep trusting the public roots, add an empty
+`tls` block to each entry the plugin handshakes with:
+
+```yaml
+allowedHosts:
+  - host: "api.example.com:443"
+    tls: {}
+```
+
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](../../LICENSE) file for details.

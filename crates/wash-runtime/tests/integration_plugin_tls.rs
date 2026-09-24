@@ -125,10 +125,21 @@ impl Pki {
     }
 }
 
-/// A TLS echo server on host loopback: reads a line, answers `PONG\r\n`, and
-/// closes with `close_notify`. Returns the address a guest dials, through the
-/// host sentinel.
-async fn start_echo(config: Arc<rustls::ServerConfig>) -> Result<SocketAddr> {
+/// How a test server answers what it reads.
+#[derive(Clone, Copy)]
+enum Reply {
+    /// `PONG\r\n` once a line arrives.
+    Pong,
+    /// Every byte back as it arrives, so the client's writes meet
+    /// backpressure while it reads.
+    Echo,
+}
+
+/// A TLS server on host loopback that answers per `reply`, then waits for the
+/// client's `close_notify` before sending its own, so a client can check that
+/// both directions closed cleanly. Returns the address a guest dials, through
+/// the host sentinel.
+async fn start_server(config: Arc<rustls::ServerConfig>, reply: Reply) -> Result<SocketAddr> {
     let listener =
         tokio::net::TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).await?;
     let port = listener.local_addr()?.port();
@@ -140,15 +151,38 @@ async fn start_echo(config: Arc<rustls::ServerConfig>) -> Result<SocketAddr> {
                 let Ok(mut tls) = acceptor.accept(stream).await else {
                     return;
                 };
-                let mut received = Vec::new();
-                let mut buf = [0u8; 64];
-                while !received.windows(2).any(|w| w == b"\r\n") {
-                    match tls.read(&mut buf).await {
-                        Ok(0) | Err(_) => return,
-                        Ok(n) => received.extend_from_slice(buf.get(..n).unwrap_or_default()),
+                let mut tail = Vec::new();
+                let mut ponged = false;
+                let mut buf = vec![0u8; 16 * 1024];
+                loop {
+                    let n = match tls.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => return,
+                    };
+                    let chunk = buf.get(..n).unwrap_or_default();
+                    match reply {
+                        Reply::Echo => {
+                            if tls.write_all(chunk).await.is_err() {
+                                return;
+                            }
+                        }
+                        Reply::Pong if !ponged => {
+                            // Only the last two bytes can complete a CRLF split
+                            // across reads, so there is no need to keep more.
+                            tail.extend_from_slice(chunk);
+                            if tail.windows(2).any(|w| w == b"\r\n") {
+                                ponged = true;
+                                if tls.write_all(b"PONG\r\n").await.is_err() {
+                                    return;
+                                }
+                            }
+                            let keep = tail.len().saturating_sub(1);
+                            tail.drain(..keep);
+                        }
+                        Reply::Pong => {}
                     }
                 }
-                let _ = tls.write_all(b"PONG\r\n").await;
                 let _ = tls.shutdown().await;
             });
         }
@@ -157,6 +191,10 @@ async fn start_echo(config: Arc<rustls::ServerConfig>) -> Result<SocketAddr> {
         IpAddr::V4(wash_runtime::sockets::internal_names::HOST_SENTINEL),
         port,
     ))
+}
+
+async fn start_echo(config: Arc<rustls::ServerConfig>) -> Result<SocketAddr> {
+    start_server(config, Reply::Pong).await
 }
 
 fn probe_interface() -> WitInterface {
@@ -272,6 +310,28 @@ async fn both_interfaces_handshake_with_the_granted_private_ca() -> Result<()> {
             ping(ingress, echo, SERVER_NAME, via).await?,
             "PONG\r\n",
             "via {via}"
+        );
+    }
+    Ok(())
+}
+
+/// A megabyte each way at once, through a server that echoes as it reads: the
+/// send and receive halves of one session both sit under backpressure, and
+/// both of their result futures must report a clean close.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn both_interfaces_carry_full_duplex_traffic_under_backpressure() -> Result<()> {
+    let pki = Pki::new();
+    let echo = start_server(pki.server_config(false), Reply::Echo).await?;
+    let (ingress, _host) = start_host(echo.port(), pki.ca_grant()).await?;
+    let mut expected = "x".repeat(1024 * 1024);
+    expected.push_str("\r\n");
+    for via in ["wasmcloud", "wasi"] {
+        let reply = ping(ingress, echo, SERVER_NAME, via).await?;
+        assert!(
+            reply == expected,
+            "via {via}: {} bytes back, starting {:?}",
+            reply.len(),
+            reply.get(..reply.len().min(120)).unwrap_or_default()
         );
     }
     Ok(())

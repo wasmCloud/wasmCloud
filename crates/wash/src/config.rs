@@ -802,6 +802,11 @@ impl HostPluginConfig {
     /// `configs:`/`secrets:` catalogs the same way a workload's
     /// `environment.configFrom`/`secretFrom` resolve.
     ///
+    /// The TLS trust is the one `bindings` already resolved for this entry,
+    /// not a second read of its files: the plugin is built with the trust its
+    /// declaration is later checked against, and a file rotated in between
+    /// cannot split the two.
+    ///
     /// # Errors
     ///
     /// Same failure modes as [`crate::workload::resolve_workload`], for this
@@ -811,9 +816,10 @@ impl HostPluginConfig {
         config: &Config,
         project_dir: &Path,
         repo_root: Option<&Path>,
+        bindings: &wash_runtime::plugin::PluginBindings,
     ) -> Result<wash_runtime::plugin::ComponentPluginSpec> {
         let mut spec = self.to_spec_unresolved()?;
-        spec.tls_policy = self.tls_policy(project_dir)?;
+        spec.tls_policy = bindings.for_plugin(&self.id).tls_policy();
         let owner = format!("host.plugins '{}'", self.id);
         spec.config = wash_runtime::config_source::resolve_environment_layer(
             Some(&self.environment),
@@ -3113,7 +3119,7 @@ host:
         );
 
         let spec = hp
-            .to_spec(&config, Path::new("."), None)
+            .to_spec(&config, Path::new("."), None, &Default::default())
             .expect("host_plugins entry should resolve");
         assert_eq!(spec.id, "etcd-secrets");
         assert_eq!(
@@ -3149,7 +3155,10 @@ host:
 "#;
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
         let hp = &config.host().host_plugins[0];
-        assert!(hp.to_spec(&config, Path::new("."), None).is_err());
+        assert!(
+            hp.to_spec(&config, Path::new("."), None, &Default::default())
+                .is_err()
+        );
     }
 
     #[test]

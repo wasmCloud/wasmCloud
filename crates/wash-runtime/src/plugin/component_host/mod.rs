@@ -415,10 +415,11 @@ impl ComponentHostPlugin {
         // hold by construction here too, not just at the caller.
         let native_plugins = native_only(&native_plugins);
         let (component, base_linker) = engine.prepare_host_component(wasm)?;
+        let clients = crate::plugin::tls::component::ClientImports::of(
+            introspect_imports(&component)?.iter().map(|i| &i.wit),
+        );
         anyhow::ensure!(
-            tls_policy.is_none()
-                || crate::plugin::tls::component::imports_tls_client(&component)
-                || crate::plugin::tls::component::imports_http_client(&component),
+            tls_policy.is_none() || clients.any(),
             "host component plugin '{id}' declares `tls` on its allowedHosts entries, but imports \
              no supported HTTP or TLS client interface, so nothing would apply that \
              trust. Drop `tls` from its `host.plugins` entry, or build the plugin against one of \
@@ -426,11 +427,11 @@ impl ComponentHostPlugin {
         );
         anyhow::ensure!(
             !tls_policy.as_ref().is_some_and(|p| p.requires_tls())
-                || crate::plugin::tls::component::imports_dialer(&component)
-                || crate::plugin::tls::component::imports_http_client(&component),
+                || clients.dialer
+                || clients.http_client,
             "host component plugin '{id}' requires TLS but imports neither a host-owned TLS dialer nor an HTTP client"
         );
-        if tls_policy.is_none() && crate::plugin::tls::component::imports_tls_client(&component) {
+        if tls_policy.is_none() && (clients.tls_client || clients.dialer) {
             warn!(
                 plugin_id = id,
                 "host component plugin imports client TLS, but no allowedHosts entry declares \
