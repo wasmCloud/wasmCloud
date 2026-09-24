@@ -6122,6 +6122,7 @@ dependencies = [
  "tempfile",
  "testcontainers",
  "tokio",
+ "tokio-rustls",
  "toml 0.8.23",
  "tracing",
  "url",

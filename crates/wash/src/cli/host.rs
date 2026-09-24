@@ -416,10 +416,10 @@ pub struct HostCommand {
     pub allow_insecure_registries: bool,
 
     /// Extra CA certificate bundle files (PEM) trusted when pulling from OCI
-    /// registries: for a registry behind a private or in-cluster CA, which the
-    /// compiled-in public roots do not cover. Applies to every pull this host
-    /// makes: workload components, host component plugins, and washlet
-    /// artifacts alike.
+    /// registries: for a registry behind a private or in-cluster CA that
+    /// neither the OS trust store nor SSL_CERT_FILE / SSL_CERT_DIR covers.
+    /// Applies to every pull this host makes: workload components, host
+    /// component plugins, and washlet artifacts alike.
     ///
     /// Prefer this to `--allow-insecure-registries`, which does not relax
     /// verification but replaces it: that flag switches every registry to

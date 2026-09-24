@@ -1345,9 +1345,9 @@ pub struct HostConfig {
     pub allow_oci_insecure: bool,
     pub oci_pull_timeout: Option<Duration>,
     pub oci_cache_dir: Option<PathBuf>,
-    /// PEM CA bundles to trust for OCI pulls, on top of the compiled-in webpki
-    /// roots. Needed to reach a registry behind a private CA — an in-cluster
-    /// one, or a corporate mirror.
+    /// PEM CA bundles to trust for OCI pulls, on top of the OS trust store and
+    /// `SSL_CERT_FILE` / `SSL_CERT_DIR`. Needed to reach a registry behind a
+    /// private CA those do not cover — an in-cluster one, or a corporate mirror.
     ///
     /// Applied by [`HostBuilder::build`] to the process-wide trust store, so an
     /// embedder that fills in this struct configures registry trust the same

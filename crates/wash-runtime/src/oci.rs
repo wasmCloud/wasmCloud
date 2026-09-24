@@ -45,13 +45,17 @@ use std::{
 };
 use tracing::{debug, instrument, warn};
 
-/// Explicitly configured CA bundles every OCI client in this process trusts,
-/// alongside the compiled-in webpki and native platform roots.
+/// Extra CA certificates every OCI client in this process trusts, on top of
+/// the platform's own trust store.
 ///
 /// Trust roots are a property of the host, not of any one pull, so they live
-/// here rather than on [`OciConfig`]. This store contains only explicitly
-/// configured bundles; native platform roots are loaded separately when an OCI
-/// client is built.
+/// here rather than on [`OciConfig`]. That is built per workload (from an
+/// image pull secret) and per plugin, and would otherwise have to carry the
+/// same value to every construction site.
+///
+/// Empty until [`set_extra_ca_certificates`] is called. Certificates from
+/// `SSL_CERT_FILE` / `SSL_CERT_DIR` are not held here; they are read each
+/// time a client is built (see [`env_ca_certificates`]).
 static EXTRA_CA_CERTIFICATES: OnceLock<InstalledTrust> = OnceLock::new();
 
 /// The one set of extra trust roots a process runs with, and the configuration
@@ -72,9 +76,10 @@ struct InstalledTrust {
 
 /// Trust the PEM CA bundles at `paths` for every subsequent OCI pull or push.
 ///
-/// Call before serving to add explicit private CA bundles. OCI clients also
-/// load the platform's native roots, which honor standard certificate-store
-/// configuration such as `SSL_CERT_FILE` and `SSL_CERT_DIR`.
+/// Call once, before serving. A private CA the OS trusts (the macOS keychain,
+/// the Linux system bundle) or that `SSL_CERT_FILE` / `SSL_CERT_DIR` names is
+/// already trusted. This is for a CA wash should trust without the rest of the
+/// system, such as one mounted into a container.
 ///
 /// Fails when a bundle cannot be read or does not parse, rather than starting
 /// a host that will reject every pull from the registry it was pointed at.
@@ -101,7 +106,7 @@ fn install_ca_certificates(store: &OnceLock<InstalledTrust>, paths: &[PathBuf]) 
         // Claiming the store with nothing would lock out the caller that does
         // have trust roots — and tell it that it succeeded. Say so when trust
         // configured elsewhere in this process is in force regardless, because
-        // this caller asked for the compiled-in roots and is not getting them.
+        // this caller asked for the platform roots alone and is not getting them.
         if let Some(installed) = store.get() {
             warn!(
                 paths = %display_paths(&installed.paths),
@@ -163,11 +168,8 @@ fn display_paths(paths: &BTreeSet<PathBuf>) -> String {
 /// store it writes to can only be set once per process.
 ///
 /// The certificates are parsed here and the bytes then handed on as read.
-/// Parsing is what makes a bad bundle a startup failure: `oci-client` builds
-/// its client through `Client::new`, which logs and falls back to a wholly
-/// default configuration when a certificate fails to parse. That discards the
-/// registry protocol, the timeouts and the proxy along with the trust roots,
-/// and leaves only a warning to say so.
+/// Parsing makes a bad bundle a startup failure, rather than a failure of
+/// every pull once [`oci_client`] rejects it.
 fn load_ca_certificates(paths: &[PathBuf]) -> Result<Vec<Certificate>> {
     paths
         .iter()
@@ -209,37 +211,69 @@ fn validate_ca_bundle(data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Convert native platform certificates to the format expected by oci-client.
-fn native_certificates_to_oci(
-    certificates: impl IntoIterator<Item = rustls::pki_types::CertificateDer<'static>>,
-) -> Vec<Certificate> {
-    certificates
+/// The CA certificates `SSL_CERT_FILE` / `SSL_CERT_DIR` name, or none when
+/// neither is set.
+///
+/// The Linux platform verifier already reads these, but the macOS and Windows
+/// ones consult only the OS store, so a CA trusted through either variable
+/// would be ignored there. Loading them when neither is set would only repeat
+/// the OS store the verifier already trusts.
+///
+/// Read on every call, as the Linux verifier does, so a rotated bundle is
+/// trusted by the next pull without restarting a long-running host.
+fn env_ca_certificates() -> Vec<Certificate> {
+    if std::env::var_os("SSL_CERT_FILE").is_none() && std::env::var_os("SSL_CERT_DIR").is_none() {
+        return Vec::new();
+    }
+    usable_ca_certificates(rustls_native_certs::load_native_certs())
+}
+
+/// The loaded certificates webpki accepts as trust roots, as DER.
+///
+/// `oci-client` adds extra roots strictly, so one rejected entry fails the
+/// client build. An environment bundle is not validated at startup the way
+/// `--ca-path` is, so an entry that would be rejected is skipped here instead.
+fn usable_ca_certificates(loaded: rustls_native_certs::CertificateResult) -> Vec<Certificate> {
+    for err in &loaded.errors {
+        warn!(%err, "failed to load a CA certificate from SSL_CERT_FILE/SSL_CERT_DIR; skipping it");
+    }
+    let mut store = rustls::RootCertStore::empty();
+    loaded
+        .certs
         .into_iter()
-        .map(|certificate| Certificate {
-            encoding: CertificateEncoding::Der,
-            data: certificate.as_ref().to_vec(),
+        .filter_map(|cert| {
+            let data = cert.as_ref().to_vec();
+            match store.add(cert) {
+                Ok(()) => Some(Certificate {
+                    encoding: CertificateEncoding::Der,
+                    data,
+                }),
+                Err(err) => {
+                    warn!(%err, "CA certificate from SSL_CERT_FILE/SSL_CERT_DIR is not usable as a trust root; skipping it");
+                    None
+                }
+            }
         })
         .collect()
 }
 
-/// Load native platform certificates, skipping entries the platform could not load.
-fn native_ca_certificates() -> Vec<Certificate> {
-    let native = rustls_native_certs::load_native_certs();
-
-    for err in &native.errors {
-        warn!(
-            err = %err,
-            "failed to load a native root certificate; skipping it"
-        );
-    }
-
-    native_certificates_to_oci(native.certs)
+/// Build an OCI client, failing when `config` cannot be applied.
+///
+/// `Client::new` logs and falls back to a wholly default configuration
+/// instead, which turns an `insecure` registry back to HTTPS and drops every
+/// extra trust root.
+fn oci_client(config: ClientConfig) -> Result<Client> {
+    Client::try_from(config).context("failed to build the OCI client")
 }
 
-/// The extra CA certificates configured for this process and the native platform
-/// roots, for a `ClientConfig`.
+/// The extra CA certificates for a `ClientConfig`: the `SSL_CERT_FILE` /
+/// `SSL_CERT_DIR` certificates, then the configured `--ca-path` bundles.
+///
+/// The platform verifier loads the OS roots itself and skips any it cannot
+/// parse, but adds everything passed here strictly, so only certificates
+/// already checked against webpki belong.
 fn extra_ca_certificates() -> Vec<Certificate> {
-    let mut certs = native_ca_certificates();
+    let mut certs = env_ca_certificates();
     if let Some(trust) = EXTRA_CA_CERTIFICATES.get() {
         certs.extend(trust.certs.iter().cloned());
     }
@@ -642,7 +676,7 @@ pub async fn pull_component(
         ..Default::default()
     };
 
-    let client = Client::new(client_config);
+    let client = oci_client(client_config)?;
 
     // Setup credential resolver
     let credential_resolver = CredentialResolver::new(config.credentials);
@@ -804,7 +838,7 @@ pub async fn push_component(
         ..Default::default()
     };
 
-    let client = Client::new(client_config);
+    let client = oci_client(client_config)?;
 
     // Create the WebAssembly configuration and layer using oci-wasm
     let (wasm_config, image_layer) = WasmConfig::from_raw_component(component_data.to_vec(), None)
@@ -970,39 +1004,43 @@ mod tests {
         );
     }
 
-    /// Native certificates are handed to oci-client as DER.
+    /// A certificate webpki would reject is skipped, not handed to
+    /// `oci-client`, where it would fail the client build and discard its
+    /// whole configuration.
     #[test]
-    fn native_certificates_are_converted_to_der() {
-        let certificate = rcgen::generate_simple_self_signed(vec!["private-ca.test".to_string()])
+    fn env_ca_certificates_skip_unusable_entries() {
+        let dir = TempDir::new().expect("temp dir");
+        let ca = rcgen::generate_simple_self_signed(vec!["private-ca.test".to_string()])
             .expect("generating a test certificate")
-            .cert
-            .der()
-            .clone();
+            .cert;
+        let bundle = dir.path().join("bundle.pem");
+        std::fs::write(
+            &bundle,
+            format!(
+                "{}-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n",
+                ca.pem()
+            ),
+        )
+        .expect("writing the bundle");
 
-        let converted = native_certificates_to_oci([certificate.clone()]);
+        let loaded = rustls_native_certs::load_certs_from_paths(Some(&bundle), None);
+        assert_eq!(loaded.certs.len(), 2, "both PEM blocks load");
+        let certs = usable_ca_certificates(loaded);
 
-        assert_eq!(converted.len(), 1);
-        assert!(
-            converted
-                .iter()
-                .all(|converted| matches!(&converted.encoding, CertificateEncoding::Der))
-        );
-        assert!(
-            converted
-                .iter()
-                .any(|converted| converted.data.as_slice() == certificate.as_ref())
-        );
+        assert_eq!(certs.len(), 1, "only the real CA is usable");
+        assert!(matches!(certs[0].encoding, CertificateEncoding::Der));
+        assert_eq!(certs[0].data, ca.der().as_ref());
     }
 
-    /// An empty configuration must leave the store unclaimed. Native roots are
-    /// loaded separately and must not make an empty explicit configuration
-    /// claim the process-wide store.
+    /// An empty configuration must leave the store unclaimed. It can only be
+    /// written once, so an empty set taking it would lock out the caller that
+    /// does have trust roots — and that caller would be told it succeeded.
     #[test]
     fn no_ca_paths_leaves_the_trust_store_unclaimed() {
         set_extra_ca_certificates(&[]).expect("an empty set is not a failure");
         assert!(
             EXTRA_CA_CERTIFICATES.get().is_none(),
-            "nothing to install must leave the explicit trust store unclaimed"
+            "nothing to install must install nothing"
         );
     }
 
@@ -1132,11 +1170,8 @@ mod tests {
         assert_eq!(certs[0].data, bundle.as_bytes());
     }
 
-    /// Content is parsed at load, not at first pull. `oci-client`'s
-    /// `Client::new` reacts to an unparseable certificate by logging and
-    /// building a client from defaults, losing the registry protocol and
-    /// timeouts along with the trust roots. A bundle that would fail there has
-    /// to fail here instead.
+    /// Content is parsed at load, not at first pull. A bundle that would fail
+    /// the client build has to fail startup instead.
     #[test]
     fn unparseable_ca_bundles_are_rejected() {
         let dir = TempDir::new().unwrap();
