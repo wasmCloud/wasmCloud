@@ -1726,6 +1726,30 @@ mod tests {
         Component::new(&engine.inner, &bytes).expect("map component should compile");
     }
 
+    /// A component built against a newer WASI patch than the host links still
+    /// resolves, provided it only uses what the host's version defines.
+    #[test]
+    fn a_newer_compatible_wasi_import_links_against_the_host() {
+        let engine = Engine::builder().build().expect("engine should build");
+        let mut linker: Linker<SharedCtx> = Linker::new(&engine.inner);
+        add_wasi_to_linker(&mut linker).expect("WASI should link");
+        let importing = |version: &str| {
+            let wat = format!(
+                r#"(component (import "wasi:random/random@{version}"
+                    (instance (export "get-random-u64" (func (result u64))))))"#
+            );
+            let bytes = wat::parse_str(wat).expect("component should assemble");
+            Component::new(&engine.inner, &bytes).expect("component should compile")
+        };
+
+        for version in ["0.2.0", "0.2.99", "0.3.0", "0.3.3"] {
+            linker
+                .instantiate_pre(&importing(version))
+                .unwrap_or_else(|e| panic!("wasi:random@{version} should link: {e:#}"));
+        }
+        assert!(linker.instantiate_pre(&importing("0.4.0")).is_err());
+    }
+
     // A scheduler placing N replicas of one image sends N starts carrying one
     // digest, and the herd is affordable only because they share a compile.
     // Keying the cache on anything that differs between replicas — a workload
