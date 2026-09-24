@@ -221,6 +221,66 @@ fn extra_ca_certificates() -> Vec<Certificate> {
         .unwrap_or_default()
 }
 
+/// The platform's root certificates, as `oci-client` wants them.
+///
+/// `oci-client` honors no environment override for its trust roots, so a CA the
+/// user installed the standard way — into the OS store, or via
+/// `SSL_CERT_FILE`/`SSL_CERT_DIR` — leaves `wash oci` failing with
+/// `UnknownIssuer` while curl and docker succeed against the same registry.
+/// Those are the operator's own machine's roots, so `wash oci` trusts them by
+/// default, on top of the webpki roots `oci-client` compiles in and any
+/// [`set_extra_ca_certificates`] bundles.
+static NATIVE_CA_CERTIFICATES: OnceLock<Vec<Certificate>> = OnceLock::new();
+
+/// The trust roots every OCI `ClientConfig` in this process carries.
+fn oci_trust_certificates() -> Vec<Certificate> {
+    merge_trust_certificates(&extra_ca_certificates(), native_ca_certificates())
+}
+
+/// Combine explicitly configured bundles with the platform store.
+///
+/// Takes the sets as arguments rather than reading the process-wide stores:
+/// the extra-CA one can only be written once per process, so a test that
+/// claimed it would own it for the whole test binary.
+fn merge_trust_certificates(extra: &[Certificate], native: &[Certificate]) -> Vec<Certificate> {
+    extra.iter().chain(native).cloned().collect()
+}
+
+/// [`NATIVE_CA_CERTIFICATES`], loaded once on first use.
+fn native_ca_certificates() -> &'static [Certificate] {
+    NATIVE_CA_CERTIFICATES.get_or_init(load_native_ca_certificates)
+}
+
+/// Read the platform trust store.
+///
+/// Certificates that fail to load individually are warned about and skipped:
+/// unlike an explicit `--ca-path` bundle, where silence would mean pulling from
+/// the very registry the bundle was meant to cover, one unreadable file in the
+/// system store must not fail every registry operation.
+fn load_native_ca_certificates() -> Vec<Certificate> {
+    let native = rustls_native_certs::load_native_certs();
+    for err in &native.errors {
+        warn!(err = %err, "failed to load a native root certificate; skipping it");
+    }
+    convert_native_certificates(native.certs)
+}
+
+/// Re-package the store's DER certificates as `oci-client` entries.
+///
+/// DER rather than re-encoded PEM: the store hands out parsed DER, and
+/// `oci-client`'s `Der` path feeds it straight to the TLS stack.
+fn convert_native_certificates(
+    certs: Vec<rustls::pki_types::CertificateDer<'static>>,
+) -> Vec<Certificate> {
+    certs
+        .into_iter()
+        .map(|cert| Certificate {
+            encoding: CertificateEncoding::Der,
+            data: cert.to_vec(),
+        })
+        .collect()
+}
+
 #[allow(deprecated)]
 #[deprecated = "old media type used before Wasm WG standardization"]
 const WASMCLOUD_MEDIA_TYPE: &str = "application/vnd.module.wasm.content.layer.v1+wasm";
@@ -613,7 +673,7 @@ pub async fn pull_component(
         } else {
             ClientProtocol::Https
         },
-        extra_root_certificates: extra_ca_certificates(),
+        extra_root_certificates: oci_trust_certificates(),
         ..Default::default()
     };
 
@@ -775,7 +835,7 @@ pub async fn push_component(
         } else {
             ClientProtocol::Https
         },
-        extra_root_certificates: extra_ca_certificates(),
+        extra_root_certificates: oci_trust_certificates(),
         ..Default::default()
     };
 
@@ -905,6 +965,13 @@ pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result
 
 #[cfg(test)]
 mod tests {
+    // `SSL_CERT_FILE` has to be set for the trust-store test to exercise it,
+    // and `std::env::set_var` is unsafe on edition 2024. The one test that
+    // does it is the only reader of that variable in this binary, and it
+    // calls the loader directly rather than through the memoized accessor, so
+    // no concurrent test can observe the environment in either state.
+    #![allow(unsafe_code)]
+
     use super::*;
     use tempfile::TempDir;
 
@@ -1117,6 +1184,77 @@ mod tests {
         assert!(
             load_ca_certificates(&[]).unwrap().is_empty(),
             "an empty list must not invent a root; the default trust is oci-client's own"
+        );
+    }
+
+    /// The platform store hands out DER, and `oci-client`'s `Der` path passes
+    /// those bytes straight to the TLS stack. Re-encoding as PEM would add a
+    /// serialization step where a root could silently be lost, so the bytes
+    /// that arrive are the bytes that go out.
+    #[test]
+    fn native_certificates_are_carried_as_der() {
+        let cert = rcgen::generate_simple_self_signed(vec!["native.test".to_string()])
+            .expect("generating a test certificate")
+            .cert;
+        let der = cert.der().to_vec();
+
+        let certs = convert_native_certificates(vec![der.clone().into()]);
+
+        assert_eq!(certs.len(), 1);
+        assert!(matches!(certs[0].encoding, CertificateEncoding::Der));
+        assert_eq!(certs[0].data, der, "the DER bytes must arrive unchanged");
+    }
+
+    /// Explicit bundles and the platform store are additive: neither one
+    /// replaces the other, and the order is stable so two pulls in one
+    /// process see the same trust.
+    #[test]
+    fn extra_and_native_trust_are_merged_not_replaced() {
+        let pem = |name: &str| Certificate {
+            encoding: CertificateEncoding::Pem,
+            data: test_certificate_pem(name).into_bytes(),
+        };
+        let (extra, native) = (vec![pem("extra.test")], vec![pem("native.test")]);
+
+        let merged = merge_trust_certificates(&extra, &native);
+
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].data, extra[0].data, "explicit bundles come first");
+        assert_eq!(merged[1].data, native[0].data);
+    }
+
+    /// The standard ways to trust a private CA must work for `wash oci`:
+    /// `SSL_CERT_FILE` is honored by `rustls-native-certs`, and this is the
+    /// seam where its output reaches the OCI client. Pointed at a self-signed
+    /// bundle, that certificate has to show up in the roots a client builds
+    /// with — otherwise the operator is still told `UnknownIssuer`.
+    ///
+    /// Calls the loader directly rather than the memoized accessor: the env
+    /// var is process state, and this is the only test in the binary that
+    /// touches it.
+    #[test]
+    fn a_certificate_trusted_via_ssl_cert_file_reaches_oci_roots() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("ssl_cert_file.pem");
+        let cert = rcgen::generate_simple_self_signed(vec!["ssl-cert-file.test".to_string()])
+            .expect("generating a test certificate")
+            .cert;
+        std::fs::write(&path, cert.pem()).unwrap();
+
+        // SAFETY: no other test in this binary reads SSL_CERT_FILE while this
+        // one runs, and the store this feeds is loaded per call here, not
+        // memoized.
+        unsafe { std::env::set_var("SSL_CERT_FILE", &path) };
+        let roots = load_native_ca_certificates();
+        // SAFETY: undoing this test's own environment change.
+        unsafe { std::env::remove_var("SSL_CERT_FILE") };
+
+        let der = cert.der().to_vec();
+        assert!(
+            roots.iter().any(|root| {
+                matches!(root.encoding, CertificateEncoding::Der) && root.data == der
+            }),
+            "the certificate named by SSL_CERT_FILE must be trusted by OCI clients"
         );
     }
 
