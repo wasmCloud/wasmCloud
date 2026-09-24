@@ -5601,6 +5601,7 @@ mod tests {
             ("0.2.2", "wasi:random/random@0.2.0"),
             ("0.2.2", "wasi:random/random"),
             ("0.3.0", "wasi:random/random@0.3.0"),
+            ("0.3.3", "wasi:random/random@0.3.3"),
         ] {
             let bound = bind_without_plugins(random_importer(imported), vec![pinned.into()])
                 .await
