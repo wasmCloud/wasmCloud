@@ -222,6 +222,35 @@ fn tls_on_a_plaintext_scheme_is_refused() {
         .unwrap();
 }
 
+#[test]
+fn duplicate_hosts_still_validate_each_scheme() {
+    crate::init_crypto();
+    for (a, b) in [
+        ("https://cluster.internal", "http://cluster.internal"),
+        ("wss://*.internal", "ws://*.internal"),
+    ] {
+        for entries in [[a, b], [b, a]] {
+            let err = policy(&entries.map(|host| (host, Some(TlsGrant::default()))))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("never"), "{entries:?}: {err}");
+        }
+    }
+}
+
+#[test]
+fn wildcard_tls_names_ignore_the_trailing_dot() {
+    crate::init_crypto();
+    let policy = policy(&[("*.internal.", Some(TlsGrant::default()))])
+        .unwrap()
+        .unwrap();
+    for name in ["cluster.internal", "CLUSTER.internal."] {
+        assert!(policy.for_server_name(name).is_some(), "{name}");
+    }
+    assert!(policy.for_server_name("internal").is_none());
+    assert!(policy.for_server_name("notinternal").is_none());
+}
+
 #[tokio::test]
 async fn add_trusts_the_private_ca_beside_public_roots() {
     let pki = Pki::new();
@@ -355,6 +384,7 @@ fn one_host_with_different_tls_is_refused_whatever_the_ports() {
         ("tls://cluster.internal:4222", "cluster.internal"),
         ("10.0.0.5:4222", "[::ffff:10.0.0.5]:4223"),
         ("*.internal:1", "*.internal:2"),
+        ("*.internal.", "*.internal"),
     ] {
         let err = policy(&[
             (a, Some(TlsGrant::default())),

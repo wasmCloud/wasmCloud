@@ -95,15 +95,7 @@ impl TlsGrant {
     /// with no `ca`, an entry pinned to a scheme that never carries TLS, or a
     /// file that is missing, unparsable, or holds nothing usable.
     pub fn load(&self, host: &AllowedHost) -> anyhow::Result<TlsTrust> {
-        if let Some(scheme) = host.scheme() {
-            ensure!(
-                !PLAINTEXT_SCHEMES
-                    .iter()
-                    .any(|plain| plain.eq_ignore_ascii_case(scheme)),
-                "allowedHosts entry '{host}' declares `tls`, but its `{scheme}://` scheme never \
-                 carries TLS; use the TLS scheme, or drop the scheme from the entry"
-            );
-        }
+        self.validate_scheme(host)?;
         let client_identity = match (&self.client_cert, &self.client_key) {
             (Some(cert_path), Some(key_path)) => Some(ClientIdentity::CertificatePem {
                 cert_path: cert_path.clone(),
@@ -139,6 +131,19 @@ impl TlsGrant {
             grant: self.clone(),
             config,
         })
+    }
+
+    fn validate_scheme(&self, host: &AllowedHost) -> anyhow::Result<()> {
+        if let Some(scheme) = host.scheme() {
+            ensure!(
+                !PLAINTEXT_SCHEMES
+                    .iter()
+                    .any(|plain| plain.eq_ignore_ascii_case(scheme)),
+                "allowedHosts entry '{host}' declares `tls`, but its `{scheme}://` scheme never \
+                 carries TLS; use the TLS scheme, or drop the scheme from the entry"
+            );
+        }
+        Ok(())
     }
 }
 
@@ -296,6 +301,7 @@ impl PluginTlsPolicy {
             };
             let key = HostKey::of(&grant.host);
             if let Some(existing) = entries.iter().find(|e| e.key == key) {
+                tls.validate_scheme(&grant.host)?;
                 ensure!(
                     existing.trust.grant == *tls,
                     "allowedHosts entries '{}' and '{}' name the same host with different \
@@ -385,7 +391,7 @@ impl HostKey {
     fn of(host: &AllowedHost) -> Self {
         match host {
             AllowedHost::Any => Self::Any,
-            AllowedHost::SuffixWildcard { suffix, .. } => Self::Suffix(suffix.clone()),
+            AllowedHost::SuffixWildcard { suffix, .. } => Self::Suffix(canonical_name(suffix)),
             AllowedHost::Authority(authority) => Self::Name(canonical_name(authority.host())),
             AllowedHost::Url(url) => Self::Name(canonical_name(url.host_str().unwrap_or_default())),
         }

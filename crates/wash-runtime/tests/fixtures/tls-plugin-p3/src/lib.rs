@@ -45,12 +45,16 @@ macro_rules! ping_via {
 
         match client::Connector::connect(conn, $server_name).await {
             Ok(()) => {
-                let remaining = data_tx.write_all(b"PING\r\n".to_vec()).await;
+                // Exceed the transport buffer and keep the write side open.
+                let mut payload = vec![b'x'; 64 * 1024];
+                payload.extend_from_slice(b"\r\n");
+                let remaining = data_tx.write_all(payload).await;
                 if !remaining.is_empty() {
                     return "error: write".to_string();
                 }
+                let reply = String::from_utf8_lossy(&tls_rx.collect().await).into_owned();
                 drop(data_tx);
-                String::from_utf8_lossy(&tls_rx.collect().await).into_owned()
+                reply
             }
             Err(e) => format!("error: connect: {}", e.to_debug_string()),
         }

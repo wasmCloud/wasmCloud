@@ -9,6 +9,7 @@
 //! 16KiB [`pipe`] in each direction, between rustls and the guest's buffer.
 
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 
@@ -317,15 +318,44 @@ where
 }
 
 /// Drains a guest `stream<u8>` into an [`AsyncWrite`].
-pub(super) struct AsyncWriteConsumer<IO>(Option<(IO, Ended<IO>)>);
+pub(super) struct AsyncWriteConsumer<IO> {
+    io: Option<(IO, Ended<IO>)>,
+    phase: AtomicWritePhase,
+}
+
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum WritePhase {
+    Writing,
+    Flushing,
+}
+
+struct AtomicWritePhase(AtomicU8);
+
+impl AtomicWritePhase {
+    fn load(&self) -> WritePhase {
+        match self.0.load(Ordering::Relaxed) {
+            0 => WritePhase::Writing,
+            1 => WritePhase::Flushing,
+            _ => unreachable!("invalid TLS write phase"),
+        }
+    }
+
+    fn store(&self, phase: WritePhase) {
+        self.0.store(phase as u8, Ordering::Relaxed);
+    }
+}
 
 impl<IO> AsyncWriteConsumer<IO> {
     pub(super) fn new(io: IO, ended: Ended<IO>) -> Self {
-        Self(Some((io, ended)))
+        Self {
+            io: Some((io, ended)),
+            phase: AtomicWritePhase(AtomicU8::new(WritePhase::Writing as u8)),
+        }
     }
 
     fn end(&mut self, result: std::io::Result<()>) {
-        if let Some((io, ended)) = self.0.take() {
+        if let Some((io, ended)) = self.io.take() {
             let _ = ended.send(result.map(|()| io));
         }
     }
@@ -350,33 +380,48 @@ where
         src: Source<'_, Self::Item>,
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
-        let Some((io, _)) = self.0.as_mut() else {
+        let this = &mut *self;
+        let Some((io, _)) = this.io.as_mut() else {
             return Poll::Ready(Ok(StreamResult::Dropped));
         };
         let mut src = src.as_direct(store);
-        let remaining = src.remaining();
-        // The write-side readiness check; see `AsyncReadProducer`.
-        if remaining.is_empty() {
-            return Poll::Ready(Ok(if finish {
-                StreamResult::Cancelled
-            } else {
-                StreamResult::Completed
-            }));
-        }
-        match Pin::new(io).poll_write(cx, remaining) {
-            Poll::Ready(Ok(0)) => {
-                self.end(Err(std::io::ErrorKind::WriteZero.into()));
-                Poll::Ready(Ok(StreamResult::Dropped))
+        if let WritePhase::Writing = this.phase.load() {
+            let remaining = src.remaining();
+            // The write-side readiness check; see `AsyncReadProducer`.
+            if remaining.is_empty() {
+                return Poll::Ready(Ok(if finish {
+                    StreamResult::Cancelled
+                } else {
+                    StreamResult::Completed
+                }));
             }
-            Poll::Ready(Ok(n)) => {
-                src.mark_read(n);
+            match Pin::new(&mut *io).poll_write(cx, remaining) {
+                Poll::Ready(Ok(0)) => {
+                    this.end(Err(std::io::ErrorKind::WriteZero.into()));
+                    return Poll::Ready(Ok(StreamResult::Dropped));
+                }
+                Poll::Ready(Ok(n)) => {
+                    src.mark_read(n);
+                    this.phase.store(WritePhase::Flushing);
+                }
+                Poll::Ready(Err(e)) => {
+                    this.end(Err(e));
+                    return Poll::Ready(Ok(StreamResult::Dropped));
+                }
+                Poll::Pending if finish => return Poll::Ready(Ok(StreamResult::Cancelled)),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+        // Accepted bytes must reach the transport even if the guest cancels.
+        match Pin::new(io).poll_flush(cx) {
+            Poll::Ready(Ok(())) => {
+                this.phase.store(WritePhase::Writing);
                 Poll::Ready(Ok(StreamResult::Completed))
             }
             Poll::Ready(Err(e)) => {
-                self.end(Err(e));
+                this.end(Err(e));
                 Poll::Ready(Ok(StreamResult::Dropped))
             }
-            Poll::Pending if finish => Poll::Ready(Ok(StreamResult::Cancelled)),
             Poll::Pending => Poll::Pending,
         }
     }
