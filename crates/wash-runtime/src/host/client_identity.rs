@@ -135,6 +135,23 @@ impl RotatingClientIdentity {
             .is_some_and(|c| c.remaining().is_some())
     }
 
+    /// Move the held credential's expiry into the past, or back an hour ahead.
+    #[cfg(test)]
+    pub(crate) fn set_lapsed(&self, lapsed: bool) {
+        let current = self.current.load_full().expect("a credential is held");
+        let now = SystemTime::now();
+        let not_after = if lapsed {
+            now - Duration::from_secs(1)
+        } else {
+            now + Duration::from_secs(3_600)
+        };
+        self.current.store(Some(Arc::new(Loaded {
+            key: Arc::clone(&current.key),
+            not_before: current.not_before,
+            not_after,
+        })));
+    }
+
     /// Whether enough time has passed to report `slot`'s condition again.
     fn due(slot: &Mutex<Option<Instant>>) -> bool {
         let mut last = slot.lock().unwrap_or_else(|e| e.into_inner());
@@ -167,8 +184,11 @@ impl ResolvesClientCert for RotatingClientIdentity {
         None
     }
 
+    /// True while a credential is configured, even one that has lapsed:
+    /// whether a configuration resumes sessions is decided from this, and a
+    /// lapse must not let a later credential's sessions be resumed.
     fn has_certs(&self) -> bool {
-        self.is_usable()
+        self.current.load().is_some()
     }
 }
 
@@ -458,7 +478,10 @@ mod tests {
         };
 
         assert!(!identity.is_usable());
-        assert!(!identity.has_certs());
+        assert!(
+            identity.has_certs(),
+            "a lapsed credential is still configured"
+        );
         assert!(
             identity.resolve(&[], &[SignatureScheme::ED25519]).is_none(),
             "an expired credential must never be presented"
