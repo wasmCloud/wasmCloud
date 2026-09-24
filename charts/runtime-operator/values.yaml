@@ -780,10 +780,25 @@ runtime:
       #   allowedHosts    endpoints this plugin may reach. Component plugins
       #                   are gated at WASI; native plugins must check their
       #                   client endpoints. Omitted/empty denies all.
+      #                   An entry may be a `{host, tls}` record instead of a
+      #                   string, whose `tls` is the trust a TLS connection to
+      #                   that host uses. Name a Secret in this namespace and
+      #                   its keys, and the chart mounts it for the host:
+      #                     - host: cluster.internal:11207
+      #                       tls:
+      #                         secretName: couchbase-tls
+      #                         caKey: ca.crt
+      #                         clientCertKey: tls.crt   # optional, mTLS
+      #                         clientKeyKey: tls.key
+      #                         roots: add               # add | replace
+      #                   (or give `ca`/`clientCert`/`clientKey` as paths to
+      #                   files already in the image). A plugin that cannot
+      #                   apply the trust fails to load.
       #
       # Editing any of these rolls the host automatically (the Deployment
       # carries a checksum over the rendered config file). Rotating the
-      # CONTENTS of a ConfigMap/Secret named by `configFrom`/`secretFrom` is
+      # CONTENTS of a ConfigMap/Secret named by `configFrom`/`secretFrom`
+      # (or by an `allowedHosts` entry's `tls.secretName`) is
       # different: the host resolves that file once, at startup, and the
       # kubelet updates the projected volume in place, so a running host keeps
       # serving what it read at boot. The Deployment carries

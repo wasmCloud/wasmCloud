@@ -5,6 +5,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::{Context, Result, bail};
@@ -536,8 +537,15 @@ pub struct HostPluginConfig {
     /// Hosts this plugin may reach. Component plugins are gated at their WASI
     /// sockets and HTTP interfaces. Native plugins must enforce this against
     /// their client endpoints or fail host startup. Empty denies all.
+    ///
+    /// An entry is either a host string or a `{ host, tls }` record whose `tls`
+    /// block (`ca`, `roots: add|replace`, `clientCert`, `clientKey`) is the
+    /// trust a TLS connection to that host uses. Relative paths resolve against
+    /// the project directory, and the files are read when the host starts. A
+    /// plugin that cannot apply a `tls` block fails to load rather than
+    /// connecting without it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_hosts: Vec<AllowedHost>,
+    pub allowed_hosts: Vec<wash_runtime::plugin::PluginAllowedHost>,
     /// Names this plugin may resolve. Empty denies every lookup.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_ip_name_lookups: Vec<AllowedIpName>,
@@ -652,6 +660,34 @@ impl HostPluginConfig {
         )
     }
 
+    /// The egress half of `allowedHosts`, without any `tls` blocks.
+    fn egress_hosts(&self) -> Arc<[AllowedHost]> {
+        self.allowed_hosts.iter().map(|e| e.host.clone()).collect()
+    }
+
+    /// The trust the `tls` blocks on `allowedHosts` declare, with relative
+    /// paths resolved against `project_dir` and every file read. `None` when no
+    /// entry declares `tls`.
+    fn tls_policy(
+        &self,
+        project_dir: &Path,
+    ) -> Result<Option<Arc<wash_runtime::plugin::PluginTlsPolicy>>> {
+        let grants: Vec<_> = self
+            .allowed_hosts
+            .iter()
+            .cloned()
+            .map(|mut entry| {
+                if let Some(tls) = &mut entry.tls {
+                    tls.resolve_relative_to(project_dir);
+                }
+                entry
+            })
+            .collect();
+        Ok(wash_runtime::plugin::PluginTlsPolicy::from_grants(&grants)
+            .with_context(|| format!("host.plugins '{}'", self.id))?
+            .map(Arc::new))
+    }
+
     /// Resolve this entry's operator declaration: base config, every named
     /// binding, the policy, and the extra host-owned keys.
     ///
@@ -697,10 +733,13 @@ impl HostPluginConfig {
             || !self.allowed_host_loopback_ports.is_empty()
         {
             set = set.with_egress_policy(
-                self.allowed_hosts.clone().into(),
+                self.egress_hosts(),
                 self.allowed_ip_name_lookups.clone().into(),
                 self.allowed_host_loopback_ports.clone().into(),
             );
+        }
+        if let Some(tls) = self.tls_policy(project_dir)? {
+            set = set.with_tls_policy(tls);
         }
         for (name, binding) in &self.bindings {
             if name.is_empty() {
@@ -746,7 +785,7 @@ impl HostPluginConfig {
             max_restarts: self.max_restarts,
             expected_digest: self.expected_digest.clone(),
             config: self.environment.config.clone(),
-            allowed_hosts: self.allowed_hosts.clone().into(),
+            allowed_hosts: self.egress_hosts(),
             allowed_ip_name_lookups: self.allowed_ip_name_lookups.clone().into(),
             allowed_host_loopback_ports: self.allowed_host_loopback_ports.clone().into(),
             ports: self.ports.clone().into(),
@@ -2967,6 +3006,55 @@ host:
             .unwrap_err()
             .to_string();
         assert!(err.contains("no `file` or `image`"), "got: {err}");
+    }
+
+    #[test]
+    fn a_tls_block_on_allowed_hosts_resolves_against_the_project_dir() {
+        wash_runtime::init_crypto();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("tls")).unwrap();
+        let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = ca_params
+            .self_signed(&rcgen::KeyPair::generate().unwrap())
+            .unwrap();
+        std::fs::write(project.path().join("tls/ca.crt"), ca.pem()).unwrap();
+
+        let yaml = r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+      allowedHosts:
+        - host: "tls://nats.internal:4222"
+          tls:
+            ca: tls/ca.crt
+            roots: replace
+        - "nats.internal:8222"
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let hp = &config.host().plugins[0];
+        let set = hp
+            .to_binding_set(&config, project.path(), None, WorkloadConfigPolicy::Deny)
+            .unwrap();
+        let trust = set
+            .tls_policy()
+            .expect("a `tls` block declares a policy")
+            .for_url("tls://nats.internal:4222")
+            .unwrap()
+            .expect("the entry's host is covered");
+        assert_eq!(
+            trust.grant().ca.as_deref(),
+            Some(project.path().join("tls/ca.crt").as_path())
+        );
+
+        let missing = project.path().join("elsewhere");
+        let err = hp
+            .to_binding_set(&config, &missing, None, WorkloadConfigPolicy::Deny)
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("wasmcloud-nats"),
+            "got: {err:#}"
+        );
     }
 
     #[test]

@@ -107,6 +107,36 @@ cargo xtask build-fixtures
 Re-run it after editing a fixture under [`tests/fixtures/`](./tests/fixtures/)
 (see that directory's README for details).
 
+## Plugin TLS grants
+
+A plugin's `allowedHosts` entries can carry the TLS trust a connection to that
+host uses: CA roots, and a client certificate for mTLS:
+
+```yaml
+host:
+  plugins:
+    - id: wasmcloud-nats
+      allowedHosts:
+        - host: "tls://nats.internal:4222"
+          tls:
+            ca: tls/ca.crt
+            roots: replace   # add (the default) keeps the public roots too
+            clientCert: tls/client.crt
+            clientKey: tls/client.key
+      allowedIpNameLookups: ["nats.internal"]
+```
+
+Relative paths resolve against the project directory, and the files are
+loaded when the host starts, so a missing or malformed file fails startup
+rather than the first connection. Trust belongs to the host an entry names, on
+every port; two entries naming one host with different `tls` blocks are
+refused.
+
+A plugin that cannot apply a `tls` block fails to load rather than connecting
+without it. `wasmcloud-nats` dials the granted servers with that trust and
+requires TLS; another plugin applies it by implementing
+`HostPlugin::configure_tls_policy`.
+
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](../../LICENSE) file for details.
