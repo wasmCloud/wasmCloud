@@ -819,6 +819,7 @@ fn build_workload_host_interfaces(
     workload_config: &HashMap<String, String>,
 ) -> Vec<WitInterface> {
     let mut any_imports_wasi_config = false;
+    let user_declared = base.len();
     for set in component_interfaces {
         for interface in set {
             if interface.namespace == "wasi" && interface.package == "config" {
@@ -826,19 +827,29 @@ fn build_workload_host_interfaces(
             }
             // Introspection yields one `WitInterface` per imported instance
             // (e.g. `wasmcloud:secrets/store` and `.../reveal` arrive
-            // separately), so a namespace:package match against an existing
-            // entry must union interface names into it rather than drop the
-            // new one — dropping silently lost whichever of store/reveal
-            // didn't win the (HashSet-ordered, nondeterministic) race to
-            // populate `base` first.
+            // separately), so a match against an existing entry unions
+            // interface names into it rather than dropping the new one.
+            // Incompatible versions of a package are distinct interfaces and
+            // keep their own entries.
             match base
                 .iter_mut()
-                .find(|i| i.namespace == interface.namespace && i.package == interface.package)
+                .enumerate()
+                .find(|(_, i)| i.same_package(interface))
             {
-                Some(existing) => {
+                Some((index, existing)) => {
                     existing
                         .interfaces
                         .extend(interface.interfaces.iter().cloned());
+                    // A derived entry settles on the newest compatible version
+                    // rather than whichever component was introspected first.
+                    // A user's declared version is left as written.
+                    if index >= user_declared
+                        && let (Some(existing_version), Some(version)) =
+                            (&mut existing.version, &interface.version)
+                        && version > existing_version
+                    {
+                        *existing_version = version.clone();
+                    }
                 }
                 None => base.push(interface.clone()),
             }
@@ -1683,6 +1694,55 @@ mod tests {
             secrets[0].interfaces.contains("store") && secrets[0].interfaces.contains("reveal"),
             "merged entry must carry both interface names, got {:?}",
             secrets[0].interfaces
+        );
+    }
+
+    fn versions_of(result: &[WitInterface], package: &str) -> Vec<Option<String>> {
+        let mut versions: Vec<_> = result
+            .iter()
+            .filter(|i| i.package == package)
+            .map(|i| i.version.as_ref().map(ToString::to_string))
+            .collect();
+        versions.sort();
+        versions
+    }
+
+    #[test]
+    fn incompatible_versions_of_a_package_keep_their_own_entries() {
+        let comp_sync = HashSet::from([WitInterface::from("wasmcloud:messaging/consumer@0.2.0")]);
+        let comp_async = HashSet::from([WitInterface::from("wasmcloud:messaging/consumer@0.3.0")]);
+        let result =
+            build_workload_host_interfaces(Vec::new(), &[comp_sync, comp_async], &HashMap::new());
+
+        assert_eq!(
+            versions_of(&result, "messaging"),
+            vec![Some("0.2.0".to_string()), Some("0.3.0".to_string())]
+        );
+    }
+
+    #[test]
+    fn compatible_versions_settle_on_the_newest() {
+        let comp_a = HashSet::from([WitInterface::from("wasi:keyvalue/store@0.2.1")]);
+        let comp_b = HashSet::from([WitInterface::from("wasi:keyvalue/atomics@0.2.6")]);
+        let comp_c = HashSet::from([WitInterface::from("wasi:keyvalue/store@0.2.3")]);
+        let result =
+            build_workload_host_interfaces(Vec::new(), &[comp_a, comp_b, comp_c], &HashMap::new());
+
+        assert_eq!(
+            versions_of(&result, "keyvalue"),
+            vec![Some("0.2.6".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_declared_version_is_left_as_written() {
+        let declared = WitInterface::from("wasi:keyvalue/store@0.2.1");
+        let comp = HashSet::from([WitInterface::from("wasi:keyvalue/store@0.2.6")]);
+        let result = build_workload_host_interfaces(vec![declared], &[comp], &HashMap::new());
+
+        assert_eq!(
+            versions_of(&result, "keyvalue"),
+            vec![Some("0.2.1".to_string())]
         );
     }
 }
