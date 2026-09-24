@@ -45,16 +45,13 @@ use std::{
 };
 use tracing::{debug, instrument, warn};
 
-/// Extra CA certificates every OCI client in this process trusts, on top of
-/// the compiled-in webpki roots.
+/// Explicitly configured CA bundles every OCI client in this process trusts,
+/// alongside the compiled-in webpki and native platform roots.
 ///
 /// Trust roots are a property of the host, not of any one pull, so they live
-/// here rather than on [`OciConfig`]. That is built per workload (from an
-/// image pull secret) and per plugin, and would otherwise have to carry the
-/// same value to every construction site.
-///
-/// Empty unless [`set_extra_ca_certificates`] is called, which keeps the
-/// default behavior exactly as it was: the roots `oci-client` compiles in.
+/// here rather than on [`OciConfig`]. This store contains only explicitly
+/// configured bundles; native platform roots are loaded separately when an OCI
+/// client is built.
 static EXTRA_CA_CERTIFICATES: OnceLock<InstalledTrust> = OnceLock::new();
 
 /// The one set of extra trust roots a process runs with, and the configuration
@@ -75,10 +72,9 @@ struct InstalledTrust {
 
 /// Trust the PEM CA bundles at `paths` for every subsequent OCI pull or push.
 ///
-/// Call once, before serving. `oci-client` builds its TLS from the webpki roots
-/// and honors no environment override, so a registry behind a private CA (an
-/// in-cluster one, or a corporate mirror) is unreachable without this short of
-/// disabling verification altogether.
+/// Call before serving to add explicit private CA bundles. OCI clients also
+/// load the platform's native roots, which honor standard certificate-store
+/// configuration such as `SSL_CERT_FILE` and `SSL_CERT_DIR`.
 ///
 /// Fails when a bundle cannot be read or does not parse, rather than starting
 /// a host that will reject every pull from the registry it was pointed at.
@@ -213,12 +209,41 @@ fn validate_ca_bundle(data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// The extra CA certificates configured for this process, for a `ClientConfig`.
+/// Convert native platform certificates to the format expected by oci-client.
+fn native_certificates_to_oci(
+    certificates: impl IntoIterator<Item = rustls::pki_types::CertificateDer<'static>>,
+) -> Vec<Certificate> {
+    certificates
+        .into_iter()
+        .map(|certificate| Certificate {
+            encoding: CertificateEncoding::Der,
+            data: certificate.as_ref().to_vec(),
+        })
+        .collect()
+}
+
+/// Load native platform certificates, skipping entries the platform could not load.
+fn native_ca_certificates() -> Vec<Certificate> {
+    let native = rustls_native_certs::load_native_certs();
+
+    for err in &native.errors {
+        warn!(
+            err = %err,
+            "failed to load a native root certificate; skipping it"
+        );
+    }
+
+    native_certificates_to_oci(native.certs)
+}
+
+/// The extra CA certificates configured for this process and the native platform
+/// roots, for a `ClientConfig`.
 fn extra_ca_certificates() -> Vec<Certificate> {
-    EXTRA_CA_CERTIFICATES
-        .get()
-        .map(|trust| trust.certs.clone())
-        .unwrap_or_default()
+    let mut certs = native_ca_certificates();
+    if let Some(trust) = EXTRA_CA_CERTIFICATES.get() {
+        certs.extend(trust.certs.iter().cloned());
+    }
+    certs
 }
 
 #[allow(deprecated)]
@@ -945,15 +970,39 @@ mod tests {
         );
     }
 
-    /// An empty configuration must leave the store unclaimed. It can only be
-    /// written once, so an empty set taking it would lock out the caller that
-    /// does have trust roots — and that caller would be told it succeeded.
+    /// Native certificates are handed to oci-client as DER.
+    #[test]
+    fn native_certificates_are_converted_to_der() {
+        let certificate = rcgen::generate_simple_self_signed(vec!["private-ca.test".to_string()])
+            .expect("generating a test certificate")
+            .cert
+            .der()
+            .clone();
+
+        let converted = native_certificates_to_oci([certificate.clone()]);
+
+        assert_eq!(converted.len(), 1);
+        assert!(
+            converted
+                .iter()
+                .all(|converted| matches!(&converted.encoding, CertificateEncoding::Der))
+        );
+        assert!(
+            converted
+                .iter()
+                .any(|converted| converted.data.as_slice() == certificate.as_ref())
+        );
+    }
+
+    /// An empty configuration must leave the store unclaimed. Native roots are
+    /// loaded separately and must not make an empty explicit configuration
+    /// claim the process-wide store.
     #[test]
     fn no_ca_paths_leaves_the_trust_store_unclaimed() {
         set_extra_ca_certificates(&[]).expect("an empty set is not a failure");
         assert!(
-            extra_ca_certificates().is_empty(),
-            "nothing to install must install nothing"
+            EXTRA_CA_CERTIFICATES.get().is_none(),
+            "nothing to install must leave the explicit trust store unclaimed"
         );
     }
 
