@@ -13,6 +13,24 @@ pub(crate) const OCI_CACHE_DIR: &str = "oci";
 
 use crate::cli::{CliCommand, CliContext, CommandOutput};
 
+/// Add a registry CA hint only when an OCI operation failed during TLS
+/// certificate verification.
+fn with_registry_ca_hint(error: anyhow::Error) -> anyhow::Error {
+    let is_certificate_error = error.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("invalid peer certificate")
+            || message.contains("certificate verify failed")
+    });
+
+    if is_certificate_error {
+        error.context(
+            "the registry's certificate is not signed by a trusted CA; pass --ca-path <bundle.pem> (or set WASH_OCI_CA_PATHS)",
+        )
+    } else {
+        error
+    }
+}
+
 /// How to reach a registry, for every command that names an OCI reference.
 #[derive(Args, Debug, Clone, Default)]
 pub struct RegistryArgs {
@@ -118,7 +136,8 @@ impl PullCommand {
             pull_policy: OciPullPolicy::Always,
         }
         .load(oci_config)
-        .await?;
+        .await
+        .map_err(with_registry_ca_hint)?;
 
         // Resolve component path relative to project directory if not absolute
         let component_path = if self.component_path.is_absolute() {
@@ -227,7 +246,8 @@ impl PushCommand {
             oci_config,
             Some(all_annotations),
         )
-        .await?;
+        .await
+        .map_err(with_registry_ca_hint)?;
 
         Ok(CommandOutput::ok(
             "OCI command executed successfully.".to_string(),
@@ -237,5 +257,35 @@ impl PushCommand {
                 "digest": digest,
             })),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_registry_ca_hint;
+
+    #[test]
+    fn certificate_verification_errors_include_ca_guidance() {
+        let error =
+            with_registry_ca_hint(anyhow::anyhow!("invalid peer certificate: UnknownIssuer"));
+
+        assert!(
+            error.to_string().contains("--ca-path <bundle.pem>"),
+            "certificate verification failures should explain how to add a CA"
+        );
+        assert!(
+            error.to_string().contains("WASH_OCI_CA_PATHS"),
+            "the hint should name the environment variable"
+        );
+    }
+
+    #[test]
+    fn unrelated_errors_do_not_include_ca_guidance() {
+        let error = with_registry_ca_hint(anyhow::anyhow!("failed to read component file"));
+
+        assert!(
+            !error.to_string().contains("--ca-path"),
+            "unrelated failures should keep their original message"
+        );
     }
 }
