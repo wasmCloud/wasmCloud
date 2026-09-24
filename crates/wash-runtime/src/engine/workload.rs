@@ -2809,6 +2809,7 @@ impl UnresolvedWorkload {
             let required_interfaces: HashSet<WitInterface> = host_interfaces
                 .iter()
                 .filter(|wit_interface| world.uses(wit_interface))
+                .filter(|wit_interface| !served_by_host(wit_interface, &world))
                 .filter(|wit_interface| {
                     !served_within_workload(wit_interface, service.id(), &world, &component_worlds)
                 })
@@ -2828,6 +2829,7 @@ impl UnresolvedWorkload {
             let required_interfaces: HashSet<WitInterface> = host_interfaces
                 .iter()
                 .filter(|wit_interface| world.uses(wit_interface))
+                .filter(|wit_interface| !served_by_host(wit_interface, world))
                 .filter(|wit_interface| {
                     !served_within_workload(wit_interface, id, world, &component_worlds)
                 })
@@ -3639,6 +3641,25 @@ fn served_within_workload(
         }
     }
     imports_any
+}
+
+/// Whether the host links everything `world` uses of an unnamed WASI base
+/// `entry` itself. Judged by the versions and labels `world` actually uses,
+/// since an entry may pin a different compatible version or none, and the host
+/// only defines the plain instance.
+fn served_by_host(entry: &WitInterface, world: &WitWorld) -> bool {
+    entry.name.is_none()
+        && entry.is_host_builtin()
+        && world
+            .imports
+            .iter()
+            .chain(&world.exports)
+            .filter(|used| {
+                entry.same_package(used)
+                    && (entry.interfaces.is_empty()
+                        || entry.interfaces.iter().any(|i| used.interfaces.contains(i)))
+            })
+            .all(|used| used.name.is_none() && used.is_host_builtin())
 }
 
 /// Unbind every plugin already bound for `workload_id`, newest first.
@@ -5545,6 +5566,131 @@ mod tests {
         );
     }
 
+    fn random_importer(version: &str) -> WorkloadComponent {
+        component_from_wat(
+            "random-importer",
+            &format!(r#"(component (import "wasi:random/random@{version}" (instance)))"#),
+        )
+    }
+
+    async fn bind_without_plugins(
+        component: WorkloadComponent,
+        host_interfaces: Vec<WitInterface>,
+    ) -> anyhow::Result<Vec<(Arc<dyn HostPlugin + 'static>, Vec<String>)>> {
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![component],
+            host_interfaces,
+        );
+        workload
+            .bind_plugins(&HashMap::new(), &crate::plugin::PluginBindings::new())
+            .await
+    }
+
+    /// The host links the WASI base itself, so an entry pinning any version
+    /// compatible with the component's import needs no plugin.
+    #[tokio::test]
+    async fn a_wasi_builtin_pinned_at_a_compatible_version_needs_no_plugin() {
+        for (imported, pinned) in [
+            ("0.2.0", "wasi:random/random@0.2.2"),
+            ("0.2.2", "wasi:random/random@0.2.2"),
+            ("0.2.12", "wasi:random/random@0.2.2"),
+            ("0.2.2", "wasi:random/random@0.2.0"),
+            ("0.2.2", "wasi:random/random"),
+            ("0.3.0", "wasi:random/random@0.3.0"),
+        ] {
+            let bound = bind_without_plugins(random_importer(imported), vec![pinned.into()])
+                .await
+                .unwrap_or_else(|e| panic!("import @{imported}, entry {pinned}: {e:#}"));
+            assert!(bound.is_empty(), "import @{imported}, entry {pinned}");
+        }
+    }
+
+    /// A version or label the host does not link still needs a plugin.
+    #[tokio::test]
+    async fn a_wasi_builtin_the_host_cannot_serve_still_needs_a_plugin() {
+        let mut labelled = WitInterface::from("wasi:random/random@0.2.2");
+        labelled.name = Some("custom".to_string());
+        for (imported, entry) in [
+            ("0.4.0", WitInterface::from("wasi:random/random@0.4.0")),
+            ("0.4.0", WitInterface::from("wasi:random/random")),
+            ("0.2.2", labelled),
+        ] {
+            let err = bind_without_plugins(random_importer(imported), vec![entry])
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("import @{imported} should not bind"));
+            assert!(
+                err.to_string().contains("not available on this host"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    /// An unversioned entry is judged by the version the component imports, so
+    /// a WASI base version the host does not link still reaches a plugin.
+    #[tokio::test]
+    async fn an_unversioned_wasi_entry_reaches_a_plugin_for_a_version_the_host_lacks() {
+        let plugin = Arc::new(MockPlugin::new(
+            "random-plugin",
+            vec![WitInterface::from("wasi:random/random@0.4.0")],
+            vec![],
+        ));
+        let plugins: HashMap<&'static str, Arc<dyn HostPlugin>> =
+            HashMap::from([(plugin.id(), plugin.clone() as Arc<dyn HostPlugin>)]);
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![random_importer("0.4.0")],
+            vec![WitInterface::from("wasi:random/random")],
+        );
+
+        let bound = workload
+            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+            .await
+            .unwrap();
+
+        assert_eq!(bound.len(), 1);
+        assert_eq!(plugin.get_call_count("on_workload_item_bind"), 1);
+    }
+
+    /// A native plugin serves an entry pinned at any version compatible with
+    /// both its own and the component's.
+    #[tokio::test]
+    async fn a_native_plugin_serves_a_compatible_pinned_version() {
+        let plugin = Arc::new(MockPlugin::new(
+            "kv-plugin",
+            vec![WitInterface::from("acme:kv/store@0.2.0")],
+            vec![],
+        ));
+        let plugins: HashMap<&'static str, Arc<dyn HostPlugin>> =
+            HashMap::from([(plugin.id(), plugin.clone() as Arc<dyn HostPlugin>)]);
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![component_from_wat(
+                "kv-importer",
+                r#"(component (import "acme:kv/store@0.2.1" (instance)))"#,
+            )],
+            vec![WitInterface::from("acme:kv/store@0.2.2")],
+        );
+
+        let bound = workload
+            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+            .await
+            .unwrap();
+
+        assert_eq!(bound.len(), 1);
+        assert_eq!(plugin.get_call_count("on_workload_item_bind"), 1);
+    }
+
     /// A component exporting the unified WASI P3 `wasi:http/handler` interface
     /// must bind with no HTTP plugin present, exactly like a P2
     /// `incoming-handler` component: HTTP is served by the host, so the
@@ -6652,6 +6798,34 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         implements_component_from_wat(name, &format!("(component {imports})"))
+    }
+
+    /// The host defines only the plain WASI instance, so an import labelled
+    /// with a plugin's id still binds that plugin under an unnamed entry.
+    #[tokio::test]
+    async fn a_labelled_wasi_import_still_binds_its_plugin() {
+        let plugin = Arc::new(MockPlugin::new(
+            "random-plugin",
+            vec![WitInterface::from("wasi:random/random@0.2.2")],
+            vec![],
+        ));
+        let plugins: HashMap<&'static str, Arc<dyn HostPlugin>> =
+            HashMap::from([(plugin.id(), plugin.clone() as Arc<dyn HostPlugin>)]);
+        let mut workload = served_within_workload_fixture(
+            vec![implements_component_from_wat(
+                "random-importer",
+                r#"(component (import "random-plugin" (implements "wasi:random/random@0.2.2") (instance)))"#,
+            )],
+            vec![WitInterface::from("wasi:random/random")],
+        );
+
+        let bound = workload
+            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+            .await
+            .unwrap();
+
+        assert_eq!(bound.len(), 1);
+        assert_eq!(plugin.get_call_count("on_workload_item_bind"), 1);
     }
 
     fn served_within_workload_fixture(

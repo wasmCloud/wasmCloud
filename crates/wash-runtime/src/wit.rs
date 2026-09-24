@@ -317,6 +317,16 @@ impl WitInterface {
         self.interfaces.is_superset(&other.interfaces)
     }
 
+    /// Whether this is a WASI base package the host links itself, at a version
+    /// compatible with one it links.
+    pub fn is_host_builtin(&self) -> bool {
+        self.namespace == "wasi"
+            && WASI_BASE_PACKAGES.contains(&self.package.as_str())
+            && wasi_base_versions(&self.package)
+                .iter()
+                .any(|v| versions_compatible(self.version.as_ref(), Some(v)))
+    }
+
     /// Returns `true` if this interface is an incoming `wasi:http` handler.
     ///
     /// This recognises both the WASI P2 `incoming-handler` interface and the
@@ -331,15 +341,54 @@ impl WitInterface {
 
 /// Whether two interface versions resolve to one another under the Component
 /// Model's semver rule; an unversioned side matches anything.
+///
+/// Versions match when equal or when they share a canonical version. A
+/// prerelease or `0.0.x` version has no canonical version.
 pub(crate) fn versions_compatible(
     a: Option<&semver::Version>,
     b: Option<&semver::Version>,
 ) -> bool {
     match (a, b) {
         (Some(a), Some(b)) => {
-            a.major == b.major && (a.major != 0 || a.minor == b.minor) && a.pre == b.pre
+            (a.major, a.minor, a.patch, &a.pre) == (b.major, b.minor, b.patch, &b.pre)
+                || canonical_version(a).is_some_and(|c| Some(c) == canonical_version(b))
         }
         _ => true,
+    }
+}
+
+/// The `(major, minor)` prefix compatible versions share, matching wasmtime's
+/// `alternate_lookup_key`. The minor is only significant for `0.x`.
+fn canonical_version(v: &semver::Version) -> Option<(u64, u64)> {
+    match (v.major, v.minor) {
+        _ if !v.pre.is_empty() => None,
+        (0, 0) => None,
+        (0, minor) => Some((0, minor)),
+        (major, _) => Some((major, 0)),
+    }
+}
+
+/// WASI packages the host links into every component and plugin store.
+pub(crate) const WASI_BASE_PACKAGES: &[&str] = &[
+    "io",
+    "filesystem",
+    "clocks",
+    "random",
+    "cli",
+    "sockets",
+    "http",
+];
+
+/// Versions of a [`WASI_BASE_PACKAGES`] package the host links. Anything
+/// compatible with one of them resolves against it. WASI 0.3 folded `wasi:io`
+/// into the component model, so it has no 0.3 release.
+fn wasi_base_versions(package: &str) -> &'static [semver::Version] {
+    const P2: &[semver::Version] = &[semver::Version::new(0, 2, 0)];
+    const P2_AND_P3: &[semver::Version] =
+        &[semver::Version::new(0, 2, 0), semver::Version::new(0, 3, 0)];
+    match package {
+        "io" => P2,
+        _ => P2_AND_P3,
     }
 }
 
@@ -604,6 +653,34 @@ mod tests {
         assert!(interface("1.2.0").same_package(&interface("1.9.0")));
         assert!(!interface("1.2.0").same_package(&interface("2.0.0")));
         assert!(!interface("0.1.0-draft").same_package(&interface("0.1.0")));
+        assert!(interface("0.1.0-draft").same_package(&interface("0.1.0-draft")));
+        assert!(!interface("0.1.0-draft").same_package(&interface("0.1.1-draft")));
+        assert!(interface("0.0.1").same_package(&interface("0.0.1")));
+        assert!(!interface("0.0.1").same_package(&interface("0.0.2")));
+        assert!(interface("0.2.3").same_package(&interface("0.2.3+abc")));
+    }
+
+    #[test]
+    fn wasi_builtins_match_any_compatible_version() {
+        for builtin in [
+            "wasi:random/random@0.2.2",
+            "wasi:random/random@0.2.12",
+            "wasi:random/random",
+            "wasi:clocks/monotonic-clock@0.3.0",
+            "wasi:http/types@0.2.6",
+        ] {
+            assert!(WitInterface::from(builtin).is_host_builtin(), "{builtin}");
+        }
+        for other in [
+            "wasi:random/random@0.1.0",
+            "wasi:random/random@0.4.0",
+            "wasi:random/random@0.3.0-rc-2026-01-01",
+            "wasi:io/streams@0.3.0",
+            "wasi:keyvalue/store@0.2.0-draft",
+            "wasmcloud:random/random@0.2.2",
+        ] {
+            assert!(!WitInterface::from(other).is_host_builtin(), "{other}");
+        }
     }
 
     #[test]
