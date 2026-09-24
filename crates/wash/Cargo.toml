@@ -90,6 +90,7 @@ rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "a
 scopeguard = { version = "1.2", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 tokio = { version = "1.45.1", default-features = false, features = ["full"] }
+tokio-rustls = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 wash-runtime = { workspace = true, features = ["wasi-keyvalue", "wasi-blobstore"] }
 testcontainers = { workspace = true }
