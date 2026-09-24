@@ -66,6 +66,11 @@ impl OutgoingHandler for FakeOutgoingHandler {
             Ok((resp, io))
         })
     }
+
+    /// It dials nothing, so it has no identity for a plugin to borrow.
+    fn never_presents_client_identity(&self) -> bool {
+        true
+    }
 }
 
 fn fetch_interface() -> WitInterface {

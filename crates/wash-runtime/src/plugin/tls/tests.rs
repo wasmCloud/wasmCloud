@@ -119,6 +119,7 @@ fn select(trust: Option<&str>, identity: Option<&str>) -> TlsGrant {
     TlsGrant {
         trust: trust.map(str::to_string),
         identity: identity.map(str::to_string),
+        ..Default::default()
     }
 }
 
@@ -1027,4 +1028,303 @@ async fn dropping_catalog_aborts_refresh_tasks() {
     drop(catalog);
     tokio::task::yield_now().await;
     assert_eq!(runtime.metrics().num_alive_tasks(), baseline);
+}
+
+#[test]
+fn required_tls_is_explicit_and_survives_serialization() {
+    let entry: PluginAllowedHost =
+        serde_json::from_str(r#"{"host":"api.internal","tls":{"required":true}}"#).unwrap();
+    let decoded: PluginAllowedHost =
+        serde_json::from_str(&serde_json::to_string(&entry).unwrap()).unwrap();
+    let catalog = TlsCatalog::empty().unwrap();
+    let policy = PluginTlsPolicy::from_grants(&[decoded], &catalog)
+        .unwrap()
+        .unwrap();
+    assert!(policy.requires_tls());
+    assert!(
+        !PluginTlsPolicy::from_grants(
+            &[PluginAllowedHost {
+                host: "*".parse().unwrap(),
+                tls: Some(TlsGrant::default())
+            }],
+            &catalog
+        )
+        .unwrap()
+        .unwrap()
+        .requires_tls()
+    );
+}
+
+/// Every spelling of one endpoint reaches the grant, trust and address checks
+/// in one form, so no spelling can match a different entry than another.
+#[cfg(all(feature = "host-component-plugins", feature = "oci"))]
+#[test]
+fn a_dial_target_is_canonical_however_it_is_spelled() {
+    let target = |name| {
+        let (_, host, uri) = super::dial_target(name, 8443).unwrap();
+        (host, uri.to_string())
+    };
+    for spelling in ["127.0.0.1", "0x7f.1", "0177.0.0.1"] {
+        assert_eq!(
+            target(spelling),
+            ("127.0.0.1".to_string(), "tls://127.0.0.1:8443/".to_string()),
+            "{spelling}"
+        );
+    }
+    for mapped in ["::ffff:10.0.0.5", "[::ffff:10.0.0.5]"] {
+        assert_eq!(
+            target(mapped),
+            ("10.0.0.5".to_string(), "tls://10.0.0.5:8443/".to_string()),
+            "{mapped}"
+        );
+    }
+    assert_eq!(
+        target("::1"),
+        ("::1".to_string(), "tls://[::1]:8443/".to_string())
+    );
+    assert_eq!(
+        target("BÜCHER.example"),
+        (
+            "xn--bcher-kva.example".to_string(),
+            "tls://xn--bcher-kva.example:8443/".to_string()
+        )
+    );
+    for bad in ["", "a/b", "host:1", "[::1]x", "tls://host"] {
+        assert!(super::dial_target(bad, 8443).is_err(), "{bad:?}");
+    }
+    assert!(super::dial_target("host", 0).is_err());
+}
+
+#[cfg(all(feature = "host-component-plugins", feature = "oci"))]
+#[test]
+fn dialer_tls_checks_resolved_addresses_and_host_owned_ports() {
+    use crate::host::{
+        allowed_loopback::AllowedLoopbackPort,
+        declared_port::Protocol,
+        ports::{PortOwner, PortTable},
+    };
+    let table = PortTable::new();
+    let _reservation = table
+        .reserve(
+            Protocol::Tcp,
+            "127.0.0.1:443".parse().unwrap(),
+            PortOwner::Host("test".into()),
+        )
+        .unwrap();
+    let network = PluginNetwork {
+        sockets: Arc::new(crate::sockets::policy::SocketPolicy {
+            host_loopback_enabled: true,
+            host_loopback: Arc::from([
+                AllowedLoopbackPort::tcp(443),
+                AllowedLoopbackPort::tcp(8443),
+            ]),
+            host_owned_ports: Some(table),
+            ..Default::default()
+        }),
+        names: Arc::from([]),
+    };
+    for addr in [
+        "127.0.0.1:443",
+        "[::ffff:127.0.0.1]:443",
+        "127.0.0.1:444",
+        "169.254.169.254:80",
+    ] {
+        assert!(
+            network.check_address(addr.parse().unwrap()).is_err(),
+            "{addr}"
+        );
+    }
+    assert!(
+        network
+            .check_address("127.0.0.1:8443".parse().unwrap())
+            .is_ok()
+    );
+    assert!(
+        network
+            .check_address("93.184.216.34:443".parse().unwrap())
+            .is_ok()
+    );
+
+    // A refused address does not stop the dial: the permitted ones after it
+    // are still tried, in the resolver's order.
+    let addrs = |list: &[&str]| -> Vec<std::net::SocketAddr> {
+        list.iter().map(|a| a.parse().unwrap()).collect()
+    };
+    let (permitted, refused) = network.permitted_addresses(addrs(&[
+        "[::1]:444",
+        "127.0.0.1:8443",
+        "169.254.169.254:8443",
+        "93.184.216.34:8443",
+    ]));
+    assert_eq!(permitted, addrs(&["127.0.0.1:8443", "93.184.216.34:8443"]));
+    assert!(refused.is_some());
+    // With nothing permitted, the dial reports why the last one was refused.
+    let (permitted, refused) =
+        network.permitted_addresses(addrs(&["127.0.0.1:444", "169.254.169.254:443"]));
+    assert!(permitted.is_empty());
+    let refused = format!("{:#}", refused.unwrap());
+    assert!(
+        refused.contains("169.254.169.254:443") && refused.contains("denied address range"),
+        "{refused}"
+    );
+}
+
+/// Every request is decided at dispatch, so a request over a pooled connection
+/// opened before its identity expired is refused all the same, and one after
+/// renewal is not.
+#[test]
+fn a_request_is_refused_at_dispatch_while_its_identity_has_expired() {
+    use crate::host::http_client::{CallerTlsPolicy as _, DestinationTls, TlsRequest};
+    let pki = Pki::new();
+    let catalog = pki.catalog();
+    let policy = policy(
+        &catalog,
+        &[(
+            "https://cluster.internal",
+            Some(select(Some("add"), Some("client"))),
+        )],
+    )
+    .unwrap()
+    .unwrap();
+    let uri: http::Uri = "https://cluster.internal/v1".parse().unwrap();
+    let decide = || policy.select(&TlsRequest::new("plugin", &uri));
+    let identity = Arc::clone(&catalog.identities["client"]);
+
+    assert!(matches!(decide(), DestinationTls::Selected { .. }));
+    identity.set_lapsed(true);
+    match decide() {
+        DestinationTls::Refused(reason) => {
+            assert!(reason.contains("identity 'client' has expired"), "{reason}");
+        }
+        _ => panic!("a request whose identity has expired must be refused"),
+    }
+    identity.set_lapsed(false);
+    assert!(matches!(decide(), DestinationTls::Selected { .. }));
+}
+
+#[test]
+fn the_policy_selects_per_destination_and_enforces_required() {
+    use crate::host::http_client::{CallerTlsPolicy as _, DestinationTls, TlsRequest};
+    let pki = Pki::new();
+    let catalog = pki.catalog();
+    let pick = |policy: &PluginTlsPolicy, uri: &str| {
+        policy.select(&TlsRequest::new("plugin", &uri.parse().unwrap()))
+    };
+
+    let optional = policy(
+        &catalog,
+        &[("cluster.internal", Some(select(Some("add"), None)))],
+    )
+    .unwrap()
+    .unwrap();
+    assert!(matches!(
+        pick(&optional, "https://cluster.internal/"),
+        DestinationTls::Selected { .. }
+    ));
+    for other in ["https://other.example/", "http://other.example/"] {
+        assert!(
+            matches!(pick(&optional, other), DestinationTls::WithoutIdentity),
+            "{other}"
+        );
+    }
+    // A mistyped scheme to a host the grant says is TLS is refused, not sent
+    // in plaintext.
+    assert!(matches!(
+        pick(&optional, "http://cluster.internal/"),
+        DestinationTls::Refused(_)
+    ));
+
+    // An identity granted to one endpoint reaches no other, and nothing falls
+    // back to the host's own client identity.
+    let pinned = policy(
+        &catalog,
+        &[
+            (
+                "https://api.internal:8443",
+                Some(select(Some("add"), Some("client"))),
+            ),
+            ("https://api.internal:9443", None),
+            ("https://other.internal", None),
+        ],
+    )
+    .unwrap()
+    .unwrap();
+    assert!(matches!(
+        pick(&pinned, "https://api.internal:8443/v1"),
+        DestinationTls::Selected { .. }
+    ));
+    for ungranted in ["https://api.internal:9443/", "https://other.internal/"] {
+        assert!(
+            matches!(pick(&pinned, ungranted), DestinationTls::WithoutIdentity),
+            "{ungranted}"
+        );
+    }
+    // The plaintext check ignores the scheme the grant pins, not its port.
+    assert!(matches!(
+        pick(&pinned, "http://api.internal:8443/"),
+        DestinationTls::Refused(_)
+    ));
+    assert!(matches!(
+        pick(&pinned, "http://api.internal:9443/"),
+        DestinationTls::WithoutIdentity
+    ));
+
+    // `https://x:443` parses as `https://x`, and both mean port 443 only.
+    let default_port = policy(
+        &catalog,
+        &[(
+            "https://api.internal:443",
+            Some(select(Some("add"), Some("client"))),
+        )],
+    )
+    .unwrap()
+    .unwrap();
+    for granted in ["https://api.internal/", "https://api.internal:443/"] {
+        assert!(
+            matches!(
+                pick(&default_port, granted),
+                DestinationTls::Selected { .. }
+            ),
+            "{granted}"
+        );
+    }
+    assert!(matches!(
+        pick(&default_port, "https://api.internal:8443/"),
+        DestinationTls::WithoutIdentity
+    ));
+
+    let required = TlsGrant {
+        required: true,
+        ..select(Some("add"), None)
+    };
+    let required = policy(&catalog, &[("cluster.internal", Some(required))])
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        pick(&required, "https://cluster.internal/"),
+        DestinationTls::Selected { .. }
+    ));
+    for refused in ["http://cluster.internal/", "https://other.example/"] {
+        assert!(
+            matches!(pick(&required, refused), DestinationTls::Refused(_)),
+            "{refused}"
+        );
+    }
+}
+
+/// `required` on `*` names no material, so it is allowed: it requires TLS
+/// everywhere with the platform's roots.
+#[test]
+fn required_on_star_is_allowed() {
+    let pki = Pki::new();
+    let grant = TlsGrant {
+        required: true,
+        ..Default::default()
+    };
+    assert!(
+        policy(&pki.catalog(), &[("*", Some(grant))])
+            .unwrap()
+            .unwrap()
+            .requires_tls()
+    );
 }

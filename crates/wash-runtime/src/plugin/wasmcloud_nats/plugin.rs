@@ -172,6 +172,10 @@ impl WasmcloudNats {
             let trust = policy
                 .for_endpoint(addr.host(), addr.port(), schemes)
                 .with_context(|| format!("NATS server {server:?}"))?;
+            anyhow::ensure!(
+                !policy.requires_tls() || trust.is_some(),
+                "NATS server {server:?} has no TLS grant, but the plugin requires TLS"
+            );
             // async-nats never runs its TLS upgrade on a websocket address,
             // and `require_tls` does not stop it connecting in plaintext.
             anyhow::ensure!(
@@ -1287,6 +1291,29 @@ mod tests {
         .unwrap();
         plugin.configure_tls_policy(Arc::new(policy)).unwrap();
         plugin
+    }
+
+    #[test]
+    fn required_tls_refuses_a_binding_without_declared_trust() {
+        let plugin = WasmcloudNats::new();
+        let policy = crate::plugin::PluginTlsPolicy::from_grants(
+            &[crate::plugin::PluginAllowedHost {
+                host: "a.internal".parse().unwrap(),
+                tls: Some(crate::plugin::TlsGrant {
+                    required: true,
+                    ..Default::default()
+                }),
+            }],
+            &crate::plugin::TlsCatalog::empty().unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        plugin.configure_tls_policy(Arc::new(policy)).unwrap();
+        assert!(
+            plugin
+                .grant_tls(&nats_config("nats://b.internal:4222"))
+                .is_err()
+        );
     }
 
     #[test]

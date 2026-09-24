@@ -24,7 +24,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::{Context, Result};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 use tokio::time::timeout;
 
 use wasmtime_wasi_http::{RequestOptions, WasiBody};
@@ -229,6 +236,188 @@ async fn test_local_routing_declared_route() -> Result<()> {
         "egress to an undeclared authority must still hit the network path: {body}"
     );
 
+    Ok(())
+}
+
+/// A resolver that refuses `example.com`, leaves every other destination to
+/// the host's default TLS, and counts the decisions it makes for
+/// `example.com`.
+struct RefuseExampleCom {
+    config: Arc<rustls::ClientConfig>,
+    decisions: Arc<AtomicUsize>,
+}
+
+impl wash_runtime::host::http_client::ClientTlsConfigResolver for RefuseExampleCom {
+    fn config_for(&self, _workload_id: &str) -> Arc<rustls::ClientConfig> {
+        Arc::clone(&self.config)
+    }
+
+    fn host_config(&self) -> Arc<rustls::ClientConfig> {
+        Arc::clone(&self.config)
+    }
+
+    fn config_for_destination(
+        &self,
+        request: &wash_runtime::host::http_client::TlsRequest<'_>,
+    ) -> wash_runtime::host::http_client::DestinationTls {
+        use wash_runtime::host::http_client::DestinationTls;
+        match request.uri.host() {
+            Some("example.com") => {
+                self.decisions.fetch_add(1, Ordering::SeqCst);
+                DestinationTls::Refused("refused by the test resolver".into())
+            }
+            _ => DestinationTls::Default,
+        }
+    }
+}
+
+/// A handler whose decision selects TLS for `example.com`. It refuses every
+/// network send, so the caller's 502 shows the request went to the network
+/// rather than to the co-located callee, and it counts both the decisions it
+/// makes and any send that would have had to decide again.
+struct SelectExampleCom {
+    decisions: Arc<AtomicUsize>,
+    undecided_sends: Arc<AtomicUsize>,
+}
+
+impl OutgoingHandler for SelectExampleCom {
+    fn send_request(
+        &self,
+        _workload_id: &str,
+        _request: hyper::Request<WasiBody>,
+        _options: Option<RequestOptions>,
+        _fut: wash_runtime::host::http::RequestIoFuture,
+    ) -> wash_runtime::host::http::SendFuture {
+        self.undecided_sends.fetch_add(1, Ordering::SeqCst);
+        Box::new(async { Err(wasmtime_wasi_http::Error::ConnectionRefused) })
+    }
+
+    fn send_request_with(
+        &self,
+        _workload_id: &str,
+        _request: hyper::Request<WasiBody>,
+        _options: Option<RequestOptions>,
+        _fut: wash_runtime::host::http::RequestIoFuture,
+        _tls: wash_runtime::host::http_client::DestinationTls,
+    ) -> wash_runtime::host::http::SendFuture {
+        Box::new(async { Err(wasmtime_wasi_http::Error::ConnectionRefused) })
+    }
+
+    fn destination_tls(
+        &self,
+        _caller: &str,
+        uri: &http::Uri,
+    ) -> wash_runtime::host::http_client::DestinationTls {
+        use wash_runtime::host::http_client::DestinationTls;
+        match uri.host() {
+            Some("example.com") => {
+                self.decisions.fetch_add(1, Ordering::SeqCst);
+                DestinationTls::Selected {
+                    key: "test-selection".into(),
+                    config: wash_runtime::host::http_client::default_client_tls_config(),
+                }
+            }
+            _ => DestinationTls::Default,
+        }
+    }
+}
+
+/// A host with local routing on and `handler` for egress, running the caller
+/// and a callee that declares `example.com` as a local route.
+async fn start_caller_and_local_callee(
+    handler: impl OutgoingHandler,
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    let ingress = Ingress::builder(DynamicRouter::default(), "127.0.0.1:0".parse()?)
+        .outgoing_handler(handler)
+        .local_routing(true)
+        .build()
+        .await?;
+    let addr = ingress.addr();
+    let host = HostBuilder::new()
+        .with_engine(Engine::builder().build()?)
+        .with_http_handler(Arc::new(ingress))
+        .with_plugin(Arc::new(TracingLogger::default()))?
+        .with_plugin(Arc::new(DynamicConfig::default()))?
+        .build()?
+        .start()
+        .await?;
+    host.workload_start(http_workload(
+        "caller",
+        CALLER_WASM,
+        "caller.test",
+        &[],
+        &["*"],
+    ))
+    .await?;
+    host.workload_start(http_workload(
+        "callee",
+        CALLEE_WASM,
+        "callee.test",
+        &[("localRoute", "example.com")],
+        &[],
+    ))
+    .await?;
+    Ok((addr, host))
+}
+
+/// A destination the TLS resolver refuses is refused even when a co-located
+/// workload declares it as a local route: the host decides TLS before it
+/// chooses a route, so the short-circuit cannot bypass the refusal. The
+/// resolver is asked exactly once for the request, and the send takes that
+/// decision rather than asking again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_a_refused_destination_is_not_routed_locally() -> Result<()> {
+    let decisions = Arc::new(AtomicUsize::new(0));
+    let handler = wash_runtime::host::http::DefaultOutgoingHandler::with_tls_config_resolver(
+        Arc::new(RefuseExampleCom {
+            config: wash_runtime::host::http_client::default_client_tls_config(),
+            decisions: Arc::clone(&decisions),
+        }),
+    );
+    let (addr, _host) = start_caller_and_local_callee(handler).await?;
+
+    let (status, body) = call(addr, "/example").await?;
+    assert_eq!(
+        status, 403,
+        "a destination the resolver refuses must be refused, not served locally: {body}"
+    );
+    assert_eq!(
+        decisions.load(Ordering::SeqCst),
+        1,
+        "one request, one TLS decision"
+    );
+    Ok(())
+}
+
+/// A decision that selects TLS for a destination keeps it off the local route
+/// too: the request goes to the network, where that TLS applies. It is made
+/// once per request, and the send is handed it rather than deciding again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_a_selected_destination_is_not_routed_locally() -> Result<()> {
+    let decisions = Arc::new(AtomicUsize::new(0));
+    let undecided_sends = Arc::new(AtomicUsize::new(0));
+    let (addr, _host) = start_caller_and_local_callee(SelectExampleCom {
+        decisions: Arc::clone(&decisions),
+        undecided_sends: Arc::clone(&undecided_sends),
+    })
+    .await?;
+
+    let (status, body) = call(addr, "/example").await?;
+    assert_eq!(
+        status, 502,
+        "a destination with selected TLS must go to the network, not the co-located callee: \
+         {body}"
+    );
+    assert_eq!(
+        decisions.load(Ordering::SeqCst),
+        1,
+        "one request, one TLS decision"
+    );
+    assert_eq!(
+        undecided_sends.load(Ordering::SeqCst),
+        0,
+        "the send must take the decision already made"
+    );
     Ok(())
 }
 
