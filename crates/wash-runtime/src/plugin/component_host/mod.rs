@@ -670,8 +670,8 @@ impl ComponentHostPlugin {
 /// component's own world, because that is what has to be defined on its
 /// linker; the manifest's entries say which of them are bindings.
 ///
-/// Versions are matched the way wasmtime's linker matches them — same major,
-/// and same minor below 1.0 — since the plain instance is defined under the
+/// Versions are matched the way wasmtime's linker matches them (see
+/// [`versions_compatible`]), since the plain instance is defined under the
 /// plugin's own version and resolved by that rule.
 fn import_labels(world: &WitWorld, exported: &WitInterface) -> BTreeSet<Option<Arc<str>>> {
     world
@@ -1069,11 +1069,7 @@ impl HostPlugin for ComponentHostPlugin {
 /// An import in one of these packages is never a candidate for native-builtin
 /// resolution below — it's already satisfied.
 fn is_base_wasi(wit: &WitInterface) -> bool {
-    wit.namespace == "wasi"
-        && matches!(
-            wit.package.as_str(),
-            "io" | "filesystem" | "clocks" | "random" | "cli" | "sockets" | "http"
-        )
+    wit.namespace == "wasi" && crate::wit::WASI_BASE_PACKAGES.contains(&wit.package.as_str())
 }
 
 /// Resolve a plugin's remaining unsatisfied imports against the host's native
@@ -2503,6 +2499,7 @@ mod tests {
             vec![None]
         );
         assert!(labels(&importing(&[None]), "wasmcloud:secrets/store@3.0.0").is_empty());
+        assert!(labels(&importing(&[None]), "wasmcloud:secrets/store@2.1.0-rc.1").is_empty());
         let v = |s: &str| semver::Version::parse(s).unwrap();
         assert!(versions_compatible(Some(&v("0.2.0")), Some(&v("0.2.1"))));
         assert!(!versions_compatible(Some(&v("0.2.0")), Some(&v("0.3.0"))));
