@@ -9,6 +9,7 @@ use bytes::Bytes;
 use clap::Args;
 use tokio::select;
 use tracing::{debug, info, instrument, warn};
+use url::Url;
 use wash_runtime::{
     engine::{Engine, WasmProposal},
     host::{Host, HostApi},
@@ -35,6 +36,35 @@ use crate::{
 /// Start a development server for a Wasm component
 #[derive(Debug, Clone, Args)]
 pub struct DevCommand {}
+
+/// Stands in for an address this code cannot read as a URL, so a value it
+/// cannot inspect never reaches the logs with its credentials intact.
+const UNREADABLE_URL: &str = "<unreadable url>";
+
+/// Mask the userinfo in `value`, so a log line can name the backend a plugin
+/// connected to without carrying the password or token used to reach it.
+fn redact_url_credentials(value: &str) -> String {
+    let Ok(mut url) = Url::parse(value) else {
+        return UNREADABLE_URL.to_string();
+    };
+    // Without a host there is no authority to separate from the path, so a
+    // credential could sit anywhere in what is left. `user:secret@host:4222`
+    // parses this way: scheme `user`, the rest an opaque path.
+    if url.host().is_none() {
+        return UNREADABLE_URL.to_string();
+    }
+    let has_username = !url.username().is_empty();
+    let has_password = url.password().is_some();
+    if !has_username && !has_password {
+        return value.to_string();
+    }
+    if (has_username && url.set_username("redacted").is_err())
+        || (has_password && url.set_password(Some("redacted")).is_err())
+    {
+        return UNREADABLE_URL.to_string();
+    }
+    url.to_string()
+}
 
 fn dev_socket_policy(
     quotas: &Arc<wash_runtime::host::quota::QuotaRegistry>,
@@ -312,7 +342,10 @@ impl CliCommand for DevCommand {
                 plugin::wasi_keyvalue::RedisKeyValue::from_url(redis_url)
                     .context("failed to configure Redis keyvalue plugin")?,
             ))?;
-            debug!(url = %redis_url, "WASI KeyValue plugin registered with Redis backend");
+            debug!(
+                url = %redact_url_credentials(redis_url),
+                "WASI KeyValue plugin registered with Redis backend"
+            );
         } else if let Some(nats_url) = &dev_config.wasi_keyvalue_nats_url {
             let nats_client = async_nats::connect(nats_url.as_str())
                 .await
@@ -320,7 +353,10 @@ impl CliCommand for DevCommand {
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasi_keyvalue::NatsKeyValue::new(&nats_client),
             ))?;
-            debug!(url = %nats_url, "WASI KeyValue plugin registered with NATS backend");
+            debug!(
+                url = %redact_url_credentials(nats_url),
+                "WASI KeyValue plugin registered with NATS backend"
+            );
         } else if let Some(keyvalue_path) = &dev_config.wasi_keyvalue_path {
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasi_keyvalue::FilesystemKeyValue::new(keyvalue_path.clone()),
@@ -919,6 +955,47 @@ mod tests {
     use super::*;
     use crate::config::{DevComponent, DevConfig, DevVolume};
     use std::path::PathBuf;
+
+    /// A NATS or Redis URL carrying a password reaches the log without it.
+    #[test]
+    fn redact_url_credentials_removes_the_password() {
+        let redacted = redact_url_credentials("nats://user:s3cret@127.0.0.1:4222");
+        assert!(!redacted.contains("s3cret"), "{redacted}");
+        assert!(redacted.starts_with("nats://"), "{redacted}");
+        assert!(redacted.ends_with("@127.0.0.1:4222"), "{redacted}");
+    }
+
+    /// A NATS URL can carry a token as the username alone, which is just as
+    /// secret as a password.
+    #[test]
+    fn redact_url_credentials_removes_a_token_held_as_the_username() {
+        let redacted = redact_url_credentials("nats://s3cret@127.0.0.1:4222");
+        assert!(!redacted.contains("s3cret"), "{redacted}");
+    }
+
+    /// Without userinfo there is nothing to hide, and the address stays
+    /// exactly as the user wrote it so the log line is still worth reading.
+    #[test]
+    fn redact_url_credentials_leaves_a_url_without_userinfo_alone() {
+        for url in [
+            "nats://127.0.0.1:4222",
+            "redis://localhost:6379/0",
+            "nats://demo.nats.io",
+        ] {
+            assert_eq!(redact_url_credentials(url), url);
+        }
+    }
+
+    /// An address with no readable authority is dropped rather than echoed.
+    /// `user:s3cret@host:4222` is the case that matters: it parses, as scheme
+    /// `user` with the credential in the path, so testing only for a parse
+    /// error would print it.
+    #[test]
+    fn redact_url_credentials_drops_an_address_with_no_readable_host() {
+        for value in ["user:s3cret@127.0.0.1:4222", "nats:", "not a url at all"] {
+            assert_eq!(redact_url_credentials(value), UNREADABLE_URL, "{value}");
+        }
+    }
 
     #[test]
     fn dev_enables_only_the_host_side_of_loopback_access() {
