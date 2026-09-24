@@ -1,0 +1,10 @@
+package acme:tlsplugin@0.1.0;
+
+/// Host component plugin that speaks TLS over its own `wasi:sockets`
+/// connection, through either TLS interface the host serves.
+world tls-plugin {
+    import wasi:sockets/types@0.3.0;
+    import wasmcloud:tls/client@0.1.0;
+    import wasi:tls/client@0.3.0-draft;
+    export acme:tlsprobe/probe@0.1.0;
+}

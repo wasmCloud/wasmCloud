@@ -325,6 +325,14 @@ pub struct Ctx {
     plugins: HashMap<&'static str, Arc<dyn Any + Send + Sync>>,
     /// The HTTP hooks for outgoing HTTP requests.
     http_hooks: CtxHttpHooks,
+    /// The TLS trust a host component plugin's `allowedHosts` declared, read
+    /// by its `wasmcloud:tls`/`wasi:tls` imports. `None` outside a plugin
+    /// store, and for a plugin that declared none.
+    #[cfg_attr(
+        not(all(feature = "host-component-plugins", feature = "oci")),
+        allow(dead_code)
+    )]
+    pub(crate) plugin_tls: Option<Arc<crate::plugin::PluginTlsPolicy>>,
 }
 
 impl Ctx {
@@ -519,6 +527,7 @@ pub struct CtxBuilder {
     plugins: HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>,
     http_handler: Option<crate::host::HostRef>,
     allowed_hosts: Arc<[AllowedHost]>,
+    plugin_tls: Option<Arc<crate::plugin::PluginTlsPolicy>>,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -536,6 +545,7 @@ impl CtxBuilder {
             http_handler: None,
             plugins: HashMap::new(),
             allowed_hosts: Default::default(),
+            plugin_tls: None,
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
         }
@@ -591,6 +601,19 @@ impl CtxBuilder {
         self
     }
 
+    /// The TLS trust a host component plugin's grant declared.
+    #[cfg_attr(
+        not(all(feature = "host-component-plugins", feature = "oci")),
+        allow(dead_code)
+    )]
+    pub(crate) fn with_plugin_tls(
+        mut self,
+        plugin_tls: Option<Arc<crate::plugin::PluginTlsPolicy>>,
+    ) -> Self {
+        self.plugin_tls = plugin_tls;
+        self
+    }
+
     pub fn build(self) -> Ctx {
         let plugins = self
             .plugins
@@ -631,6 +654,7 @@ impl CtxBuilder {
             },
             plugins,
             http_hooks,
+            plugin_tls: self.plugin_tls,
         }
     }
 }

@@ -221,12 +221,14 @@ async fn apply_auth(
 /// Builds connect options from a workload's config.
 ///
 /// `reconnects` is bumped from the event callback, which is the only place the
-/// client reports having come back.
+/// client reports having come back. `grant_tls` is the trust the plugin's
+/// `allowedHosts` declared for these servers; it requires TLS on every one.
 async fn build_options(
     config: &NatsConfig,
     reconnects: tokio::sync::watch::Sender<u64>,
     denials: tokio::sync::broadcast::Sender<String>,
     ignore_discovered_servers: bool,
+    grant_tls: Option<&crate::plugin::TlsTrust>,
 ) -> anyhow::Result<async_nats::ConnectOptions> {
     let mut opts = apply_auth(async_nats::ConnectOptions::new(), &config.auth).await?;
 
@@ -251,6 +253,11 @@ async fn build_options(
     }
     if let (Some(cert), Some(key)) = (&config.tls.cert, &config.tls.key) {
         opts = opts.add_client_certificate(cert.clone(), key.clone());
+    }
+    if let Some(trust) = grant_tls {
+        opts = opts
+            .tls_client_config((*trust.client_config()).clone())
+            .require_tls(true);
     }
     if ignore_discovered_servers {
         // Only operator-declared servers were checked against the policy.
@@ -428,6 +435,7 @@ impl ConnectionRegistry {
         config: &NatsConfig,
         lattice_prefixes: Vec<String>,
         ignore_discovered_servers: bool,
+        grant_tls: Option<&crate::plugin::TlsTrust>,
     ) -> anyhow::Result<Arc<ConnHandle>> {
         let key = config.connection_key();
 
@@ -453,6 +461,7 @@ impl ConnectionRegistry {
             reconnects.clone(),
             subscription_denials.clone(),
             ignore_discovered_servers,
+            grant_tls,
         )
         .await?;
         let client = opts

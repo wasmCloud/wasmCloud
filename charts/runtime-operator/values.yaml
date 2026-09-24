@@ -780,6 +780,12 @@ runtime:
       #   allowedHosts    endpoints this plugin may reach. Component plugins
       #                   are gated at WASI; native plugins must check their
       #                   client endpoints. Omitted/empty denies all.
+      #                   An entry may be a `{host, tls}` record instead of a
+      #                   string: `tls.ca` (PEM path in the container),
+      #                   `tls.roots` (add | replace), `tls.clientCert` and
+      #                   `tls.clientKey`. A plugin that cannot apply the trust
+      #                   fails to load. The files must exist in the host
+      #                   container; this chart does not mount them.
       #
       # Editing any of these rolls the host automatically (the Deployment
       # carries a checksum over the rendered config file). Rotating the
