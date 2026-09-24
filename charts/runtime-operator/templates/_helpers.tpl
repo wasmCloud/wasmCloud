@@ -201,10 +201,13 @@ Shared by deployment.yaml (which needs both partitions, to render
 host-plugin-config.yaml (which needs only `fileBacked`, to render the
 `wash host` config file).
 
+Also collects the Secrets `allowedHosts[].tls.secretName` names, which
+deployment.yaml mounts for the host to read the TLS files from.
+
 Takes the host group dict directly (e.g. `.` inside
 `range .Values.runtime.hostGroups`). Returns a JSON object
-`{fileBacked, cli, configFromNames, secretFromNames, needsConfigFile}`
-and parses the result with `fromJson`.
+`{fileBacked, cli, configFromNames, secretFromNames, tlsSecretNames,
+needsConfigFile}` and parses the result with `fromJson`.
 */}}
 {{- define "runtime-operator.hostPluginPartition" -}}
 {{- /* Removed keys, refused rather than ignored. Helm drops values nothing
@@ -228,7 +231,13 @@ and parses the result with `fromJson`.
 {{- end }}
 {{- $configFromNames := list }}
 {{- $secretFromNames := list }}
+{{- $tlsSecretNames := list }}
 {{- range $fileBacked }}
+{{- range .allowedHosts }}
+{{- if and (kindIs "map" .) .tls .tls.secretName }}
+{{- $tlsSecretNames = append $tlsSecretNames .tls.secretName }}
+{{- end }}
+{{- end }}
 {{- range .configFrom }}
 {{- $configFromNames = append $configFromNames . }}
 {{- end }}
@@ -244,7 +253,7 @@ and parses the result with `fromJson`.
 {{- end }}
 {{- end }}
 {{- end }}
-{{- dict "fileBacked" $fileBacked "cli" $cli "configFromNames" ($configFromNames | uniq) "secretFromNames" ($secretFromNames | uniq) "needsConfigFile" (gt (len $fileBacked) 0) | toJson }}
+{{- dict "fileBacked" $fileBacked "cli" $cli "configFromNames" ($configFromNames | uniq) "secretFromNames" ($secretFromNames | uniq) "tlsSecretNames" ($tlsSecretNames | uniq) "needsConfigFile" (gt (len $fileBacked) 0) | toJson }}
 {{- end }}
 
 {{/*
@@ -323,7 +332,9 @@ host:
       {{- end }}
       {{- with .allowedHosts }}
       allowedHosts:
-        {{- toYaml . | nindent 8 }}
+        {{- range . }}
+        {{- include "runtime-operator.pluginAllowedHost" . | nindent 8 }}
+        {{- end }}
       {{- end }}
       {{- with .allowedIpNameLookups }}
       allowedIpNameLookups:
@@ -376,8 +387,46 @@ Takes the same `hostPluginPartition` result as `runtime-operator.hostPluginConfi
 {{- if $partition.configFromNames }}
 configmap.reloader.stakater.com/reload: {{ join "," $partition.configFromNames | quote }}
 {{- end }}
-{{- if $partition.secretFromNames }}
-secret.reloader.stakater.com/reload: {{ join "," $partition.secretFromNames | quote }}
+{{- $secretNames := concat (default list $partition.secretFromNames) (default list $partition.tlsSecretNames) | uniq }}
+{{- if $secretNames }}
+secret.reloader.stakater.com/reload: {{ join "," $secretNames | quote }}
+{{- end }}
+{{- end }}
+
+{{/*
+One plugin `allowedHosts` entry, as a one-item YAML list at column 0.
+
+A string, or a `{host, tls}` record whose `tls` names file paths already in
+the container, passes through unchanged. A `tls` block may instead name a
+Secret: `secretName` plus `caKey`, `clientCertKey` and `clientKeyKey`, the keys
+in that Secret holding each PEM file. deployment.yaml mounts the Secret at
+/etc/wasmcloud/host-plugin-tls/<secretName>, and this renders the paths the host
+reads there, so the host config never carries the chart-only keys. Mixing a
+Secret with paths is refused: the paths would point outside the mount.
+*/}}
+{{- define "runtime-operator.pluginAllowedHost" -}}
+{{- if and (kindIs "map" .) .tls .tls.secretName }}
+{{- $tls := .tls }}
+{{- if or $tls.ca $tls.clientCert $tls.clientKey }}
+{{- fail (printf "allowedHosts entry %v: `tls.secretName` cannot be combined with `tls.ca`, `tls.clientCert` or `tls.clientKey`; name the Secret's keys with `caKey`, `clientCertKey` and `clientKeyKey`" .host) }}
+{{- end }}
+{{- if not (or $tls.caKey $tls.clientCertKey $tls.clientKeyKey) }}
+{{- fail (printf "allowedHosts entry %v: `tls.secretName` needs `caKey`, or `clientCertKey` and `clientKeyKey`, naming the keys in that Secret to use" .host) }}
+{{- end }}
+{{- $dir := printf "/etc/wasmcloud/host-plugin-tls/%s" $tls.secretName }}
+{{- $out := omit $tls "secretName" "caKey" "clientCertKey" "clientKeyKey" }}
+{{- with $tls.caKey }}
+{{- $_ := set $out "ca" (printf "%s/%s" $dir .) }}
+{{- end }}
+{{- with $tls.clientCertKey }}
+{{- $_ := set $out "clientCert" (printf "%s/%s" $dir .) }}
+{{- end }}
+{{- with $tls.clientKeyKey }}
+{{- $_ := set $out "clientKey" (printf "%s/%s" $dir .) }}
+{{- end }}
+{{- list (dict "host" .host "tls" $out) | toYaml }}
+{{- else }}
+{{- list . | toYaml }}
 {{- end }}
 {{- end }}
 
