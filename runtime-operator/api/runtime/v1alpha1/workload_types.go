@@ -384,8 +384,9 @@ func (s *WorkloadSpec) EnsureHostInterface(iface HostInterface) {
 // canonVersion returns the canonical version prefix that determines whether two
 // interface versions are compatible for deduplication, per the component-model
 // `canonversion` rules:
+//   - with a prerelease    -> the whole version         (0.2.6-rc.1 -> "0.2.6-rc.1")
 //   - major > 0            -> "<major>"                 (1.2.3      -> "1")
-//   - major == 0, minor>0  -> "<major>.<minor>"         (0.2.6-rc.1 -> "0.2")
+//   - major == 0, minor>0  -> "<major>.<minor>"         (0.2.6      -> "0.2")
 //   - otherwise            -> "<major>.<minor>.<patch>" (0.0.1      -> "0.0.1")
 //
 // Compatible versions share a canonical prefix and so link by trivial string
@@ -401,6 +402,8 @@ func canonVersion(v string) string {
 		return v
 	}
 	switch {
+	case parsed.Prerelease() != "":
+		return fmt.Sprintf("%d.%d.%d-%s", parsed.Major(), parsed.Minor(), parsed.Patch(), parsed.Prerelease())
 	case parsed.Major() > 0:
 		return fmt.Sprintf("%d", parsed.Major())
 	case parsed.Minor() > 0:

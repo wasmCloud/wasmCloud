@@ -165,9 +165,12 @@ func TestCanonVersion(t *testing.T) {
 	cases := map[string]string{
 		"":            "",
 		"1.2.3":       "1",
-		"0.2.6-rc.1":  "0.2",
-		"0.2.0-draft": "0.2",
-		"0.0.1-alpha": "0.0.1",
+		"0.2.7":       "0.2",
+		"0.2.6+build": "0.2",
+		"0.0.1":       "0.0.1",
+		"0.2.6-rc.1":  "0.2.6-rc.1",
+		"0.2.0-draft": "0.2.0-draft",
+		"0.0.1-alpha": "0.0.1-alpha",
 		"not-semver":  "not-semver",
 	}
 	for in, want := range cases {
