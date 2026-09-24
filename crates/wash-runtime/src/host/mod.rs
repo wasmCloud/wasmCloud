@@ -1679,6 +1679,11 @@ impl HostBuilder {
                     .configure_egress_policy(policy)
                     .with_context(|| format!("invalid egress policy for host plugin '{id}'"))?;
             }
+            if let Some(policy) = declared.tls_policy() {
+                plugin
+                    .configure_tls_policy(policy)
+                    .with_context(|| format!("invalid TLS trust for host plugin '{id}'"))?;
+            }
             // The schema check next: an operator typo is named as a typo,
             // rather than as whatever the plugin's parser makes of a config
             // missing the key they meant to set.
