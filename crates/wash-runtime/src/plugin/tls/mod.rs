@@ -31,9 +31,10 @@
 //! picked up without a restart, and while one has expired, a connection that
 //! must present it is refused rather than made without it.
 //!
-//! A plugin reads [`PluginTlsPolicy`] through
-//! [`crate::plugin::HostPlugin::configure_tls_policy`] and hands the trust to
-//! its own TLS client. A plugin that cannot refuses the declaration at load.
+//! One declaration, two paths: a native plugin reads [`PluginTlsPolicy`] and
+//! hands the trust to its own TLS client; a component plugin gets it through
+//! the host's `wasmcloud:tls` and `wasi:tls` implementation ([`component`]). A
+//! plugin that can do neither refuses the declaration at load.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -48,6 +49,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::host::allowed_hosts::AllowedHost;
 use crate::host::client_identity::{RotatingClientIdentity, spawn_refresh};
 use crate::host::http_client::{ClientIdentity, ClientTlsOptions, TrustRoots};
+
+#[cfg(all(feature = "host-component-plugins", feature = "oci"))]
+pub(crate) mod component;
 
 /// How a trust bundle's `ca` combines with the built-in roots.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
