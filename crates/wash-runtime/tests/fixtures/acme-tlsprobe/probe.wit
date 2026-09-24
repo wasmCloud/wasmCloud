@@ -3,6 +3,14 @@ package acme:tlsprobe@0.1.0;
 /// A capability the `tls-plugin-p3` host component plugin exports, so a
 /// workload can drive the plugin's own client TLS.
 interface probe {
+    /// Connect to `endpoint` (`tls://host:port`) through
+    /// `wasmcloud:tls/dialer`, then exchange a megabyte the way `ping` does.
+    dial: async func(endpoint: string) -> string;
+    /// GET `endpoint` (`http://` or `https://`) through `wasi:http` and return
+    /// the status, or `error: ..`. `grpc` sends a gRPC content type.
+    http-get: async func(endpoint: string, grpc: bool) -> string;
+    /// Whether every raw TCP and UDP socket create is refused.
+    raw-denied: async func() -> bool;
     /// Open TCP to `addr` (`a.b.c.d:port`), run TLS with `server-name` over it
     /// through `wasmcloud:tls` (or `wasi:tls` when `via-wasi` is set), write a
     /// megabyte ending in `\r\n` while reading, close, and return what came

@@ -15,15 +15,14 @@
 //!   - "cluster.internal:8093"
 //! ```
 //!
-//! The trust sits on the entry that already gates egress, so a mistyped host
-//! denies the connection instead of opening it in plaintext. The PEM files are
-//! read once, when the policy is built, so a missing or malformed file fails
-//! the host rather than the first connection.
+//! The files are loaded when the policy is built. HTTPS requests, native
+//! adapters, and explicit TLS calls use this trust. A component with raw
+//! sockets can still send plaintext unless a grant sets `required: true`.
 //!
-//! One declaration, two paths: a native plugin reads [`PluginTlsPolicy`] and
-//! hands the trust to its own TLS client; a component plugin gets it through
-//! the host's `wasmcloud:tls` and `wasi:tls` implementation ([`component`]). A
-//! plugin that can do neither refuses the declaration at load.
+//! Required TLS disables every raw socket and plaintext HTTP request for the
+//! component plugin, including overlapping grants. Its HTTPS requests and
+//! `wasmcloud:tls/dialer` connections require matching TLS trust. The host
+//! owns these transports and never exposes their raw sockets to the guest.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -58,6 +57,10 @@ pub enum TlsRoots {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TlsGrant {
+    /// Require host-owned TLS transport. Disables raw sockets and plaintext
+    /// HTTP for the entire component plugin, including overlapping grants.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
     /// PEM bundle of CA certificates to trust; may hold several.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca: Option<PathBuf>,
@@ -284,6 +287,12 @@ pub struct PluginTlsPolicy {
 }
 
 impl PluginTlsPolicy {
+    /// Whether this component plugin must use host-owned TLS transports.
+    #[must_use]
+    pub fn requires_tls(&self) -> bool {
+        self.entries.iter().any(|entry| entry.trust.grant.required)
+    }
+
     /// Build the policy from a plugin's grants, reading every declared file.
     ///
     /// `None` when no entry declares `tls`: such a plugin declared no trust,
@@ -428,6 +437,132 @@ fn canonical_name(name: &str) -> String {
     match name.parse::<std::net::IpAddr>() {
         Ok(ip) => ip.to_canonical().to_string(),
         Err(_) => name.to_ascii_lowercase(),
+    }
+}
+
+/// Network permissions for a host-owned plugin connection.
+#[cfg_attr(
+    not(all(feature = "host-component-plugins", feature = "oci")),
+    allow(dead_code)
+)]
+pub(crate) struct PluginNetwork {
+    pub sockets: Arc<crate::sockets::policy::SocketPolicy>,
+    pub names: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
+}
+
+#[cfg(all(feature = "host-component-plugins", feature = "oci"))]
+impl PluginNetwork {
+    fn check_address(&self, addr: std::net::SocketAddr) -> anyhow::Result<()> {
+        use crate::host::declared_port::Protocol;
+        let ip = addr.ip().to_canonical();
+        ensure!(
+            !crate::sockets::internal_names::is_host_sentinel(ip),
+            "TLS dialer requires a real endpoint"
+        );
+        if ip.is_loopback() {
+            ensure!(
+                self.sockets.host_loopback_enabled,
+                "host-loopback access is disabled"
+            );
+            ensure!(
+                crate::host::allowed_loopback::check_allowed_loopback(
+                    &self.sockets.host_loopback,
+                    addr,
+                    Protocol::Tcp
+                ),
+                "TLS endpoint is not permitted by allowedHostLoopbackPorts"
+            );
+            ensure!(
+                !self
+                    .sockets
+                    .host_owned_ports
+                    .as_ref()
+                    .is_some_and(|ports| ports
+                        .is_published(Protocol::Tcp, std::net::SocketAddr::new(ip, addr.port()))),
+                "TLS endpoint reaches a host-owned port"
+            );
+        } else {
+            ensure!(
+                self.sockets.egress_addrs.permits(ip),
+                "TLS endpoint is in a denied address range"
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) async fn dial(
+        &self,
+        policy: &PluginTlsPolicy,
+        endpoint: &str,
+    ) -> anyhow::Result<(
+        tokio_rustls::client::TlsStream<tokio::net::TcpStream>,
+        Option<crate::host::quota::ConnectionSlot>,
+    )> {
+        let url = url::Url::parse(endpoint)?;
+        ensure!(
+            url.scheme() == "tls"
+                && url.username().is_empty()
+                && url.password().is_none()
+                && matches!(url.path(), "" | "/")
+                && url.query().is_none()
+                && url.fragment().is_none(),
+            "TLS endpoint must be tls://host:port"
+        );
+        let host = url.host_str().context("TLS endpoint has no host")?;
+        let port = url.port().context("TLS endpoint requires a port")?;
+        let uri: http::Uri = endpoint.parse()?;
+        ensure!(
+            self.sockets
+                .allowed_hosts
+                .iter()
+                .any(|grant| grant.matches(&uri)),
+            "TLS endpoint is not permitted by allowedHosts"
+        );
+        let host = canonical_name(host);
+        if host.parse::<std::net::IpAddr>().is_err() {
+            ensure!(
+                crate::host::allowed_ip_name::check_allowed_ip_name(
+                    &self.names,
+                    &url::Host::parse(&host)?
+                ),
+                "TLS endpoint is not permitted by allowedIpNameLookups"
+            );
+        }
+        let trust = policy
+            .for_server_name(&host)
+            .context("TLS endpoint has no declared trust")?;
+        let name = rustls::pki_types::ServerName::try_from(host.clone())?;
+        let permit = self
+            .sockets
+            .quota
+            .as_ref()
+            .map(|quota| {
+                quota
+                    .try_acquire_outbound_socket()
+                    .context("TLS connection quota exhausted")
+            })
+            .transpose()?;
+        let connect = async {
+            let addresses = tokio::net::lookup_host((host.as_str(), port)).await?;
+            let mut last_error = anyhow::anyhow!("TLS endpoint resolved to no addresses");
+            for addr in addresses {
+                self.check_address(addr)?;
+                match tokio::net::TcpStream::connect(addr).await {
+                    Ok(socket) => {
+                        let connector = tokio_rustls::TlsConnector::from(Arc::new(
+                            crate::host::http_client::isolated_resumption(&trust.client_config()),
+                        ));
+                        return Ok(connector.connect(name, socket).await?);
+                    }
+                    Err(err) => last_error = err.into(),
+                }
+            }
+            Err(last_error)
+        };
+        let stream = tokio::time::timeout(std::time::Duration::from_secs(30), connect)
+            .await
+            .context("TLS connection timed out")??;
+        Ok((stream, permit))
     }
 }
 

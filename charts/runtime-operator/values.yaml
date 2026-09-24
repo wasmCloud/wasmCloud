@@ -791,9 +791,15 @@ runtime:
       #                         clientCertKey: tls.crt   # optional, mTLS
       #                         clientKeyKey: tls.key
       #                         roots: add               # add | replace
+      #                         required: true           # optional
       #                   (or give `ca`/`clientCert`/`clientKey` as paths to
       #                   files already in the image). A plugin that cannot
       #                   apply the trust fails to load.
+      #                   HTTP and gRPC over HTTPS use the matching trust.
+      #                   With required: true on any grant, a component must
+      #                   use HTTPS or wasmcloud:tls/dialer. All raw sockets,
+      #                   listening ports, and plaintext HTTP are disabled.
+      #                   Without it, raw sockets can still send plaintext.
       #
       # Editing any of these rolls the host automatically (the Deployment
       # carries a checksum over the rendered config file). Rotating the

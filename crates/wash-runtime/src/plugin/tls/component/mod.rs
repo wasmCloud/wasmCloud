@@ -1,18 +1,17 @@
 //! `wasmcloud:tls` and `wasi:tls` for host component plugins, with trust from
 //! the plugin's own `allowedHosts` grant.
 //!
-//! The guest owns the socket and pumps bytes; the host owns the handshake and
-//! the keys. `connect` looks up the trust the grant declares for the server
-//! name the guest passes, and refuses before any byte is written when there is
-//! none, so a plugin cannot reach a TLS session with trust the operator did not
-//! declare, nor mistake a refused session for an open one.
+//! The host owns the handshake and keys. Stream transforms wrap a guest's
+//! transport; the dialer owns the network connection too. Both require trust
+//! declared for the server name before writing any bytes.
 //!
-//! The two packages have one signature set, and their resources map onto the
-//! same [`Connector`] and [`TlsError`], so [`impl_tls_host`] instantiates one
-//! body for each.
+//! The two `client` interfaces share signatures and resources, so
+//! [`impl_tls_host`] instantiates one body for each.
 
 mod bindings;
+mod dialer;
 mod io;
+pub use dialer::Connection;
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -58,17 +57,35 @@ pub(crate) fn serves(namespace: &str, package: &str, version: Option<&semver::Ve
 pub(crate) struct ClientImports {
     /// `wasmcloud:tls/client` or `wasi:tls/client`, over a guest's socket.
     pub(crate) tls_client: bool,
+    /// `wasmcloud:tls/dialer`, which owns the connection too.
+    pub(crate) dialer: bool,
+    /// `wasi:http`, whose outgoing requests take the grant's trust.
+    pub(crate) http_client: bool,
 }
 
 impl ClientImports {
     pub(crate) fn of<'a>(imports: impl IntoIterator<Item = &'a crate::wit::WitInterface>) -> Self {
         let mut clients = Self::default();
         for wit in imports.into_iter().filter(|wit| wit.name.is_none()) {
-            if serves(&wit.namespace, &wit.package, wit.version.as_ref()) {
+            let version = wit.version.as_ref();
+            if serves(&wit.namespace, &wit.package, version) {
                 clients.tls_client |= wit.interfaces.contains("client");
+                clients.dialer |= wit.namespace == "wasmcloud" && wit.interfaces.contains("dialer");
+            }
+            if (wit.namespace.as_str(), wit.package.as_str()) == ("wasi", "http") {
+                clients.http_client |= match version.map(|v| (v.major, v.minor)) {
+                    Some((0, 2)) => wit.interfaces.contains("outgoing-handler"),
+                    Some((0, 3)) => wit.interfaces.contains("client"),
+                    _ => false,
+                };
             }
         }
         clients
+    }
+
+    /// Whether anything here can apply declared trust at all.
+    pub(crate) fn any(self) -> bool {
+        self.tls_client || self.dialer || self.http_client
     }
 }
 
@@ -78,6 +95,7 @@ pub(crate) fn add_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()
     use bindings::{wasi, wasmcloud};
     wasmcloud::tls::types::add_to_linker::<_, PluginTls>(linker, view)?;
     wasmcloud::tls::client::add_to_linker::<_, PluginTls>(linker, view)?;
+    wasmcloud::tls::dialer::add_to_linker::<_, PluginTls>(linker, view)?;
     wasi::tls::types::add_to_linker::<_, PluginTls>(linker, view)?;
     wasi::tls::client::add_to_linker::<_, PluginTls>(linker, view)?;
     Ok(())
@@ -87,6 +105,7 @@ fn view(ctx: &mut SharedCtx) -> PluginTlsView<'_> {
     PluginTlsView {
         table: &mut ctx.table,
         policy: ctx.active_ctx.plugin_tls.as_ref(),
+        network: ctx.active_ctx.plugin_network.as_ref(),
     }
 }
 
@@ -94,6 +113,7 @@ fn view(ctx: &mut SharedCtx) -> PluginTlsView<'_> {
 pub(crate) struct PluginTlsView<'a> {
     table: &'a mut ResourceTable,
     policy: Option<&'a Arc<PluginTlsPolicy>>,
+    network: Option<&'a Arc<super::PluginNetwork>>,
 }
 
 /// [`HasData`] marker for this implementation.

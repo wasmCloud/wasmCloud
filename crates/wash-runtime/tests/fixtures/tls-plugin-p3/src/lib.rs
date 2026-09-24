@@ -1,6 +1,7 @@
 //! Host component plugin that runs client TLS over its own `wasi:sockets`
-//! connection, through `wasmcloud:tls` or the upstream `wasi:tls` it mirrors.
-//! The two packages have one signature set, so one body serves both.
+//! connection, through `wasmcloud:tls/client` or the upstream `wasi:tls/client`
+//! it mirrors — one signature set, so one body serves both — and over a
+//! host-owned connection through `wasmcloud:tls/dialer`.
 
 mod bindings {
     wit_bindgen::generate!({
@@ -75,6 +76,70 @@ macro_rules! ping_via {
 }
 
 impl Guest for Component {
+    async fn raw_denied() -> bool {
+        use bindings::wasi::sockets::types::UdpSocket;
+        TcpSocket::create(IpAddressFamily::Ipv4).is_err()
+            && TcpSocket::create(IpAddressFamily::Ipv6).is_err()
+            && UdpSocket::create(IpAddressFamily::Ipv4).is_err()
+            && UdpSocket::create(IpAddressFamily::Ipv6).is_err()
+    }
+
+    async fn dial(endpoint: String) -> String {
+        let conn = match bindings::wasmcloud::tls::dialer::connect(endpoint).await {
+            Ok(conn) => conn,
+            Err(err) => return format!("error: {}", err.to_debug_string()),
+        };
+        let (rx, received) = conn.receive();
+        let (mut tx, data) = wit_stream::new();
+        let sent = conn.send(data);
+        let mut payload = vec![b'x'; PAYLOAD];
+        payload.extend_from_slice(b"\r\n");
+        let write = async move {
+            let unwritten = tx.write_all(payload).await;
+            drop(tx);
+            unwritten.is_empty()
+        };
+        let (written, reply) = futures::join!(write, rx.collect());
+        if !written {
+            return "error: write".to_string();
+        }
+        if let Err(e) = sent.await {
+            return format!("error: send: {}", e.to_debug_string());
+        }
+        if let Err(e) = received.await {
+            return format!("error: receive: {}", e.to_debug_string());
+        }
+        String::from_utf8_lossy(&reply).into_owned()
+    }
+
+    async fn http_get(endpoint: String, grpc: bool) -> String {
+        use bindings::wasi::http::{
+            client,
+            types::{Fields, Request, Scheme},
+        };
+        let (scheme, authority) = match endpoint.split_once("://") {
+            Some(("https", authority)) => (Scheme::Https, authority),
+            Some(("http", authority)) => (Scheme::Http, authority),
+            _ => return "error: endpoint".to_string(),
+        };
+        let (tx, trailers) = bindings::wit_future::new(|| Ok(None));
+        wit_bindgen::spawn_local(async move {
+            let _ = tx.write(Ok(None)).await;
+        });
+        let headers = Fields::new();
+        if grpc {
+            let _ = headers.set("content-type", &[b"application/grpc".to_vec()]);
+        }
+        let (request, _sent) = Request::new(headers, None, trailers, None);
+        let _ = request.set_scheme(Some(&scheme));
+        let _ = request.set_authority(Some(authority));
+        let _ = request.set_path_with_query(Some("/"));
+        match client::send(request).await {
+            Ok(response) => response.get_status_code().to_string(),
+            Err(err) => format!("error: {err:?}"),
+        }
+    }
+
     async fn ping(addr: String, server_name: String, via_wasi: bool) -> String {
         let Some(addr) = parse_addr(&addr) else {
             return "error: addr".to_string();

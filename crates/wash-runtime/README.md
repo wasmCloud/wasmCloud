@@ -124,6 +124,7 @@ host:
             roots: replace   # add (the default) keeps the public roots too
             clientCert: tls/client.crt
             clientKey: tls/client.key
+            required: true   # optional; see below
       allowedIpNameLookups: ["db.internal"]
 ```
 
@@ -136,10 +137,39 @@ refused.
 A plugin that cannot apply a `tls` block fails to load rather than connecting
 without it. A native plugin applies it to its own client (`wasmcloud-nats`
 dials the granted servers with that trust and requires TLS). A component
-plugin applies it through `wasmcloud:tls/client` or `wasi:tls/client`: the
-host runs the handshake with the grant's trust over the plugin's own socket,
-and refuses a handshake to a server name no grant declares `tls` for. The
-plugin owns that socket, so whether it runs TLS at all is still its choice.
+plugin applies it through any of:
+
+- `wasi:http`: HTTPS requests from both WASI HTTP versions, gRPC included,
+  use the matching grant. Connections and TLS session caches are isolated by
+  plugin and loaded trust configuration. A custom HTTP handler must support
+  the grant or refuse the request.
+- `wasmcloud:tls/client` or `wasi:tls/client`: the host runs the handshake with
+  the grant's trust over the plugin's own socket, and refuses a handshake to a
+  server name no grant declares `tls` for.
+- `wasmcloud:tls/dialer`: see below.
+
+Without `required: true`, a component with raw socket permission can still
+send plaintext or run its own TLS; importing a TLS interface does not prove it
+uses it.
+
+If **any** grant sets `required: true`, the component plugin cannot create or
+use raw TCP or UDP sockets, even through wildcard or loopback grants, and
+cannot declare listening ports. Its outgoing HTTP requests must use HTTPS and
+match a TLS grant; plaintext requests and HTTPS without declared trust fail.
+These restrictions hold even when the host's socket policy is in count mode.
+
+For other protocols under `required: true`, import `wasmcloud:tls/dialer@0.1.0`
+and call `connect("tls://db.internal:5432")`. The host checks the endpoint
+grant, DNS permission, resolved addresses, loopback grants, and connection
+quota, then completes TLS before returning a connection whose `send` and
+`receive` streams carry application bytes. The component never gets a raw
+socket. The dialer requires TLS from the start; it does not implement
+STARTTLS. It is a wasmCloud addition: `wasmcloud:tls/client` and `types`
+follow `wasi:tls`, and `dialer` has no upstream counterpart.
+
+The restrictions cover this plugin's own host networking interfaces. Other
+capabilities granted to the plugin keep their own policies; `required` does
+not impose TLS on another component's or native plugin's connections.
 
 ### Upgrading a plugin that already imports `wasi:tls`
 

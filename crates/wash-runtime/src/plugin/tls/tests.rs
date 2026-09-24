@@ -416,3 +416,73 @@ fn an_address_is_matched_as_an_address() {
     assert!(policy.for_server_name("::ffff:10.0.0.5").is_some());
     assert!(policy.for_server_name("10.0.0.6").is_none());
 }
+
+#[test]
+fn required_tls_is_explicit_and_survives_serialization() {
+    let entry: PluginAllowedHost =
+        serde_json::from_str(r#"{"host":"api.internal","tls":{"required":true}}"#).unwrap();
+    let decoded: PluginAllowedHost =
+        serde_json::from_str(&serde_json::to_string(&entry).unwrap()).unwrap();
+    let policy = PluginTlsPolicy::from_grants(&[decoded]).unwrap().unwrap();
+    assert!(policy.requires_tls());
+    assert!(
+        !PluginTlsPolicy::from_grants(&[PluginAllowedHost {
+            host: "*".parse().unwrap(),
+            tls: Some(TlsGrant::default())
+        }])
+        .unwrap()
+        .unwrap()
+        .requires_tls()
+    );
+}
+
+#[cfg(all(feature = "host-component-plugins", feature = "oci"))]
+#[test]
+fn dialer_tls_checks_resolved_addresses_and_host_owned_ports() {
+    use crate::host::{
+        allowed_loopback::AllowedLoopbackPort,
+        declared_port::Protocol,
+        ports::{PortOwner, PortTable},
+    };
+    let table = PortTable::new();
+    let _reservation = table
+        .reserve(
+            Protocol::Tcp,
+            "127.0.0.1:443".parse().unwrap(),
+            PortOwner::Host("test".into()),
+        )
+        .unwrap();
+    let network = PluginNetwork {
+        sockets: Arc::new(crate::sockets::policy::SocketPolicy {
+            host_loopback_enabled: true,
+            host_loopback: Arc::from([
+                AllowedLoopbackPort::tcp(443),
+                AllowedLoopbackPort::tcp(8443),
+            ]),
+            host_owned_ports: Some(table),
+            ..Default::default()
+        }),
+        names: Arc::from([]),
+    };
+    for addr in [
+        "127.0.0.1:443",
+        "[::ffff:127.0.0.1]:443",
+        "127.0.0.1:444",
+        "169.254.169.254:80",
+    ] {
+        assert!(
+            network.check_address(addr.parse().unwrap()).is_err(),
+            "{addr}"
+        );
+    }
+    assert!(
+        network
+            .check_address("127.0.0.1:8443".parse().unwrap())
+            .is_ok()
+    );
+    assert!(
+        network
+            .check_address("93.184.216.34:443".parse().unwrap())
+            .is_ok()
+    );
+}

@@ -1,23 +1,25 @@
 package wasmcloud:tls@0.1.0;
 
-/// Client-side TLS as a stream transform, for a host component plugin that
-/// speaks its own protocol over `wasi:sockets`.
+/// Client TLS for host component plugins, with trust from the plugin's grant.
 ///
-/// This package is a stable, versioned mirror of `wasi:tls@0.3.0-draft`, and it
-/// follows the upstream interface: every type and function here has the same
-/// name and signature as its `wasi:tls` counterpart, so a plugin written against
-/// one is written against the other. The host serves both from one
-/// implementation, wherever it serves either. When `wasi:tls` publishes a
-/// stable release, this package takes that shape in a new version rather than
-/// diverging from it.
+/// `types` and `client` are a stable, versioned interface that follows
+/// `wasi:tls@0.3.0-draft`: they have the same names and signatures as their
+/// `wasi:tls` counterparts, so a plugin written against one is written against
+/// the other, and the host serves both from one implementation. When
+/// `wasi:tls` publishes a stable release, they take its shape in a new version
+/// of this package rather than diverging from it.
 ///
-/// What this package adds is the trust model, which `wasi:tls` leaves to the
-/// host. The certificate authorities a connection trusts, and any client
+/// `dialer` is a wasmCloud addition with no `wasi:tls` counterpart. `client`
+/// wraps a socket the guest owns, so a guest can always skip it and write
+/// plaintext; `dialer` owns the connection in the host instead. That is what
+/// lets a `tls.required` grant take raw sockets away while leaving the plugin
+/// a way to connect.
+///
+/// The trust model is this package's own, since `wasi:tls` leaves trust to
+/// the host. The certificate authorities a connection trusts, and any client
 /// certificate it presents, come from the operator's `allowedHosts` grant for
 /// the plugin, never from the guest. A handshake to a server name that no grant
-/// declares `tls` for fails before any byte is written, so a handshake either
-/// uses the declared trust or does not happen. Whether a plugin runs TLS at all
-/// is still the plugin's choice: the socket it wraps is its own.
+/// declares `tls` for fails before any byte is written.
 interface types {
     /// A TLS error. Opaque: match on success or failure, and render this for
     /// diagnostics only.
@@ -58,7 +60,24 @@ interface client {
     }
 }
 
+/// Host-owned TLS connections. The guest never receives a raw socket.
+interface dialer {
+    use types.{error};
+
+    /// Check the endpoint grant and complete TLS before returning.
+    /// The endpoint is tls://host:port; its host is also the certificate name.
+    connect: async func(endpoint: string) -> result<connection, error>;
+
+    resource connection {
+        /// Send application bytes once. Closing the stream sends close_notify.
+        send: func(data: stream<u8>) -> future<result<_, error>>;
+        /// Receive application bytes. May be called once.
+        receive: func() -> tuple<stream<u8>, future<result<_, error>>>;
+    }
+}
+
 world imports {
     import types;
     import client;
+    import dialer;
 }
