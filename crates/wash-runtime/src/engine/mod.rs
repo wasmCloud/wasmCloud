@@ -308,6 +308,8 @@ pub struct Engine {
     /// the host's port table, and the connection budget. The workload-level half
     /// (`allowedHosts`, `allowedHostLoopbackPorts`) is layered over it per component.
     pub(crate) socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
+    /// Host paths no workload's `hostPath` volume may expose.
+    reserved_host_paths: volumes::ReservedHostPaths,
     pub(crate) host_memory: host_memory::HostMemoryBudgets,
     /// The host-wide counter of guest linear-memory bytes that
     /// [`host_memory::HostMemoryBudgets::max_guest_memory`] is the cap on.
@@ -539,7 +541,9 @@ impl Engine {
                             "HostPath volume '{local_path}' does not exist or is not a directory",
                         );
                     }
-                    path
+                    // The canonical path checked, so a link swapped in after
+                    // the check cannot redirect the mount.
+                    self.reserved_host_paths.check(&path)?
                 }
                 VolumeType::EmptyDir(EmptyDirVolume {}) => {
                     // Create a temporary directory for the empty dir volume
@@ -987,6 +991,7 @@ pub struct EngineBuilder {
     parallel_compilation: Option<bool>,
     native_unwind_info: Option<bool>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
+    reserved_host_paths: Vec<PathBuf>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
     guest_memory_mode: guest_memory::GuestMemoryMode,
     /// Optional TLS provider override for wasi:tls client connections.
@@ -1002,6 +1007,14 @@ impl EngineBuilder {
     /// from each component's `LocalResources` and is layered over this, so a
     /// workload can only ever narrow what the host permits.
     #[must_use]
+    /// Reserve host paths — credential files, the directories holding them,
+    /// the host's configuration — so that no workload's `hostPath` volume may
+    /// lie inside one or contain one. Adds to any reserved before.
+    pub fn with_reserved_host_paths(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.reserved_host_paths.extend(paths);
+        self
+    }
+
     pub fn with_socket_policy(mut self, policy: Arc<crate::sockets::policy::SocketPolicy>) -> Self {
         self.socket_policy = Some(policy);
         self
@@ -1330,6 +1343,7 @@ impl EngineBuilder {
             #[cfg(test)]
             compiles: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             socket_policy: self.socket_policy.unwrap_or_default(),
+            reserved_host_paths: volumes::ReservedHostPaths::new(self.reserved_host_paths),
             host_memory,
             guest_memory: {
                 let budget = guest_memory::GuestMemoryBudget::from_budgets(
