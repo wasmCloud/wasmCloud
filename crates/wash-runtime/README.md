@@ -115,15 +115,16 @@ host uses: CA roots, and a client certificate for mTLS:
 ```yaml
 host:
   plugins:
-    - id: wasmcloud-nats
+    - id: database
+      file: database.wasm
       allowedHosts:
-        - host: "tls://nats.internal:4222"
+        - host: "db.internal:5432"
           tls:
             ca: tls/ca.crt
             roots: replace   # add (the default) keeps the public roots too
             clientCert: tls/client.crt
             clientKey: tls/client.key
-      allowedIpNameLookups: ["nats.internal"]
+      allowedIpNameLookups: ["db.internal"]
 ```
 
 Relative paths resolve against the project directory, and the files are
@@ -133,9 +134,27 @@ every port; two entries naming one host with different `tls` blocks are
 refused.
 
 A plugin that cannot apply a `tls` block fails to load rather than connecting
-without it. `wasmcloud-nats` dials the granted servers with that trust and
-requires TLS; another plugin applies it by implementing
-`HostPlugin::configure_tls_policy`.
+without it. A native plugin applies it to its own client (`wasmcloud-nats`
+dials the granted servers with that trust and requires TLS). A component
+plugin applies it through `wasmcloud:tls/client` or `wasi:tls/client`: the
+host runs the handshake with the grant's trust over the plugin's own socket,
+and refuses a handshake to a server name no grant declares `tls` for. The
+plugin owns that socket, so whether it runs TLS at all is still its choice.
+
+### Upgrading a plugin that already imports `wasi:tls`
+
+Before plugin TLS grants, a component plugin's `wasi:tls` import (in a build
+with the `wasi-tls` feature) trusted the host's default roots. It now takes
+its trust from the grant, and a handshake to a host no grant declares `tls`
+for is refused. The plugin still loads, with a warning, so the failure shows
+up at the first connection. To keep trusting the public roots, add an empty
+`tls` block to each entry the plugin handshakes with:
+
+```yaml
+allowedHosts:
+  - host: "api.example.com:443"
+    tls: {}
+```
 
 ## License
 

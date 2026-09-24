@@ -61,8 +61,22 @@ use wasmtime_wasi::WasiView;
 
 /// Add all WASI interfaces to the linker, using upstream for non-socket interfaces
 /// and our custom socket implementation (with loopback support) for socket interfaces.
-/// Both P2 and P3 bindings are registered.
+/// Both P2 and P3 bindings are registered, and `wasi:tls` under the `wasi-tls`
+/// feature.
 fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
+    add_wasi_base_to_linker(linker)?;
+
+    // wasi:tls@0.3.0-draft (p3).
+    #[cfg(feature = "wasi-tls")]
+    wasmtime_wasi_tls::p3::add_to_linker(linker)?;
+
+    Ok(())
+}
+
+/// Every WASI interface [`add_wasi_to_linker`] registers except `wasi:tls`,
+/// for a host component plugin, whose `wasi:tls` takes its trust from the
+/// plugin's grant ([`crate::plugin::tls`]) rather than the host's defaults.
+fn add_wasi_base_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
     use wasmtime_wasi::p2::bindings::{cli, clocks, filesystem, random, sockets};
 
     // IO interfaces (error, poll, streams)
@@ -182,10 +196,6 @@ fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
 
     // Sockets with our custom P3 implementation (with loopback)
     crate::sockets::add_p3_to_linker(linker)?;
-
-    // wasi:tls@0.3.0-draft (p3).
-    #[cfg(feature = "wasi-tls")]
-    wasmtime_wasi_tls::p3::add_to_linker(linker)?;
 
     Ok(())
 }
@@ -823,7 +833,7 @@ impl Engine {
             .context("failed to compile host component plugin")?;
 
         let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
-        add_wasi_to_linker(&mut linker).context("failed to add WASI to plugin linker")?;
+        add_wasi_base_to_linker(&mut linker).context("failed to add WASI to plugin linker")?;
         if uses_wasi_http(&component) {
             wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
                 .map_err(anyhow::Error::from)

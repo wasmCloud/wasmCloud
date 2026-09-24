@@ -1107,7 +1107,7 @@ impl CliCommand for HostCommand {
             let mut specs: Vec<wash_runtime::plugin::ComponentPluginSpec> = Vec::new();
             for hp in config.host().component_plugins()? {
                 specs.push(
-                    hp.to_spec(&config, project_dir, Some(project_dir))
+                    hp.to_spec(&config, project_dir, Some(project_dir), &plugin_bindings)
                         .with_context(|| format!("failed to resolve host.plugins '{}'", hp.id))?,
                 );
             }

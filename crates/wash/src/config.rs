@@ -543,7 +543,8 @@ pub struct HostPluginConfig {
     /// trust a TLS connection to that host uses. Relative paths resolve against
     /// the project directory, and the files are read when the host starts. A
     /// plugin that cannot apply a `tls` block fails to load rather than
-    /// connecting without it.
+    /// connecting without it: a native plugin must support it, and a component
+    /// plugin must import `wasmcloud:tls/client` or `wasi:tls/client`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_hosts: Vec<wash_runtime::plugin::PluginAllowedHost>,
     /// Names this plugin may resolve. Empty denies every lookup.
@@ -758,8 +759,9 @@ impl HostPluginConfig {
     }
 
     /// Convert to a runtime [`wash_runtime::plugin::ComponentPluginSpec`],
-    /// without resolving `configFrom`/`secretFrom` — used where no [`Config`]
-    /// is available. Prefer [`HostPluginConfig::to_spec`] when one is.
+    /// without resolving `configFrom`/`secretFrom` or reading `tls` files —
+    /// used where no [`Config`] is available, and leaving `tls_policy` unset.
+    /// Prefer [`HostPluginConfig::to_spec`] when one is.
     ///
     /// `expectedDigest` on a file source is caught by the loader, which only
     /// checks a pin against an `Oci` source, so this only has to validate
@@ -789,6 +791,7 @@ impl HostPluginConfig {
             allowed_ip_name_lookups: self.allowed_ip_name_lookups.clone().into(),
             allowed_host_loopback_ports: self.allowed_host_loopback_ports.clone().into(),
             ports: self.ports.clone().into(),
+            tls_policy: None,
         })
     }
 
@@ -796,6 +799,11 @@ impl HostPluginConfig {
     /// resolving `configFrom`/`secretFrom` against `config`'s top-level
     /// `configs:`/`secrets:` catalogs the same way a workload's
     /// `environment.configFrom`/`secretFrom` resolve.
+    ///
+    /// The TLS trust is the one `bindings` already resolved for this entry,
+    /// not a second read of its files: the plugin is built with the trust its
+    /// declaration is later checked against, and a file rotated in between
+    /// cannot split the two.
     ///
     /// # Errors
     ///
@@ -806,8 +814,10 @@ impl HostPluginConfig {
         config: &Config,
         project_dir: &Path,
         repo_root: Option<&Path>,
+        bindings: &wash_runtime::plugin::PluginBindings,
     ) -> Result<wash_runtime::plugin::ComponentPluginSpec> {
         let mut spec = self.to_spec_unresolved()?;
+        spec.tls_policy = bindings.for_plugin(&self.id).tls_policy();
         let owner = format!("host.plugins '{}'", self.id);
         spec.config = wash_runtime::config_source::resolve_environment_layer(
             Some(&self.environment),
@@ -3107,7 +3117,7 @@ host:
         );
 
         let spec = hp
-            .to_spec(&config, Path::new("."), None)
+            .to_spec(&config, Path::new("."), None, &Default::default())
             .expect("host_plugins entry should resolve");
         assert_eq!(spec.id, "etcd-secrets");
         assert_eq!(
@@ -3143,7 +3153,10 @@ host:
 "#;
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
         let hp = &config.host().host_plugins[0];
-        assert!(hp.to_spec(&config, Path::new("."), None).is_err());
+        assert!(
+            hp.to_spec(&config, Path::new("."), None, &Default::default())
+                .is_err()
+        );
     }
 
     #[test]

@@ -20,9 +20,10 @@
 //! read once, when the policy is built, so a missing or malformed file fails
 //! the host rather than the first connection.
 //!
-//! A plugin reads [`PluginTlsPolicy`] through
-//! [`crate::plugin::HostPlugin::configure_tls_policy`] and hands the trust to
-//! its own TLS client. A plugin that cannot refuses the declaration at load.
+//! One declaration, two paths: a native plugin reads [`PluginTlsPolicy`] and
+//! hands the trust to its own TLS client; a component plugin gets it through
+//! the host's `wasmcloud:tls` and `wasi:tls` implementation ([`component`]). A
+//! plugin that can do neither refuses the declaration at load.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -34,6 +35,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::host::allowed_hosts::AllowedHost;
 use crate::host::http_client::{ClientIdentity, ClientTlsOptions, TrustRoots};
+
+#[cfg(all(feature = "host-component-plugins", feature = "oci"))]
+pub(crate) mod component;
 
 /// How a grant's `ca` combines with the built-in roots.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -260,9 +264,9 @@ struct TlsEntry {
 ///
 /// Trust belongs to a host, not a port: an entry's port and scheme still gate
 /// egress, but its `tls` block covers every connection to the host it names.
-/// A TLS client often knows only the server name — one handed a socket that is
-/// already open never sees the port — so trust that varied by port could not
-/// be chosen correctly there. Two entries naming the same host with different
+/// A TLS client often knows only the name — `wasmcloud:tls` is handed one over
+/// a socket that is already open — so trust that varied by port could not be
+/// chosen correctly there. Two entries naming the same host with different
 /// `tls` blocks are therefore refused when the policy is built.
 ///
 /// A destination can still match several entries (`*` and `cluster.internal`,
