@@ -1,18 +1,17 @@
 //! `wasmcloud:tls` and `wasi:tls` for host component plugins, with trust from
 //! the plugin's own `allowedHosts` grant.
 //!
-//! The guest owns the socket and pumps bytes; the host owns the handshake and
-//! the keys. `connect` looks up the trust the grant declares for the server
-//! name the guest passes, and refuses before any byte is written when there is
-//! none, so a plugin cannot reach a TLS session with trust the operator did not
-//! declare, nor mistake a refused session for an open one.
+//! The host owns the handshake and keys. Stream transforms wrap a guest's
+//! transport; the dialer owns the network connection too. Both require trust
+//! declared for the server name before writing any bytes.
 //!
-//! The two packages have one signature set, and their resources map onto the
-//! same [`Connector`] and [`TlsError`], so [`impl_tls_host`] instantiates one
-//! body for each.
+//! The two `client` interfaces share signatures and resources, so
+//! [`impl_tls_host`] instantiates one body for each.
 
 mod bindings;
+mod dialer;
 mod io;
+pub use dialer::Connection;
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -49,8 +48,7 @@ pub(crate) fn serves(namespace: &str, package: &str, version: Option<&semver::Ve
     }
 }
 
-/// Whether a component imports a `client` interface of a TLS package the host
-/// serves.
+/// Whether a component imports a supported TLS client or dialer.
 pub(crate) fn imports_tls_client(component: &wasmtime::component::Component) -> bool {
     let ty = component.component_type();
     ty.imports(component.engine()).any(|(name, _)| {
@@ -60,15 +58,34 @@ pub(crate) fn imports_tls_client(component: &wasmtime::component::Component) -> 
         let Some((namespace, package)) = package.split_once(':') else {
             return false;
         };
-        let Some(("client", version)) = rest.split_once('@') else {
+        let Some((interface, version)) = rest.split_once('@') else {
             return false;
         };
-        serves(
-            namespace,
-            package,
-            semver::Version::parse(version).ok().as_ref(),
-        )
+        (interface == "client" || (namespace == "wasmcloud" && interface == "dialer"))
+            && serves(
+                namespace,
+                package,
+                semver::Version::parse(version).ok().as_ref(),
+            )
     })
+}
+
+pub(crate) fn imports_dialer(component: &wasmtime::component::Component) -> bool {
+    component
+        .component_type()
+        .imports(component.engine())
+        .any(|(name, _)| name.starts_with("wasmcloud:tls/dialer@0.1."))
+}
+
+/// Whether HTTP egress can consume the plugin's declared trust.
+pub(crate) fn imports_http_client(component: &wasmtime::component::Component) -> bool {
+    component
+        .component_type()
+        .imports(component.engine())
+        .any(|(name, _)| {
+            name.starts_with("wasi:http/outgoing-handler@0.2.")
+                || name.starts_with("wasi:http/client@0.3.")
+        })
 }
 
 /// Link both packages into a plugin linker. Unused unless the plugin imports
@@ -77,6 +94,7 @@ pub(crate) fn add_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()
     use bindings::{wasi, wasmcloud};
     wasmcloud::tls::types::add_to_linker::<_, PluginTls>(linker, view)?;
     wasmcloud::tls::client::add_to_linker::<_, PluginTls>(linker, view)?;
+    wasmcloud::tls::dialer::add_to_linker::<_, PluginTls>(linker, view)?;
     wasi::tls::types::add_to_linker::<_, PluginTls>(linker, view)?;
     wasi::tls::client::add_to_linker::<_, PluginTls>(linker, view)?;
     Ok(())
@@ -86,6 +104,7 @@ fn view(ctx: &mut SharedCtx) -> PluginTlsView<'_> {
     PluginTlsView {
         table: &mut ctx.table,
         policy: ctx.active_ctx.plugin_tls.as_ref(),
+        network: ctx.active_ctx.plugin_network.as_ref(),
     }
 }
 
@@ -93,6 +112,7 @@ fn view(ctx: &mut SharedCtx) -> PluginTlsView<'_> {
 pub(crate) struct PluginTlsView<'a> {
     table: &'a mut ResourceTable,
     policy: Option<&'a Arc<PluginTlsPolicy>>,
+    network: Option<&'a Arc<super::PluginNetwork>>,
 }
 
 /// [`HasData`] marker for this implementation.

@@ -62,6 +62,60 @@ macro_rules! ping_via {
 }
 
 impl Guest for Component {
+    async fn raw_denied() -> bool {
+        use bindings::wasi::sockets::types::UdpSocket;
+        TcpSocket::create(IpAddressFamily::Ipv4).is_err()
+            && TcpSocket::create(IpAddressFamily::Ipv6).is_err()
+            && UdpSocket::create(IpAddressFamily::Ipv4).is_err()
+            && UdpSocket::create(IpAddressFamily::Ipv6).is_err()
+    }
+
+    async fn dial(endpoint: String) -> String {
+        let conn = match bindings::wasmcloud::tls::dialer::connect(endpoint).await {
+            Ok(conn) => conn,
+            Err(err) => return format!("error: {}", err.to_debug_string()),
+        };
+        let (rx, _received) = conn.receive();
+        let (mut tx, data) = wit_stream::new();
+        let _sent = conn.send(data);
+        let mut payload = vec![b'x'; 64 * 1024];
+        payload.extend_from_slice(b"\r\n");
+        if !tx.write_all(payload).await.is_empty() {
+            return "error: write".to_string();
+        }
+        let reply = String::from_utf8_lossy(&rx.collect().await).into_owned();
+        drop(tx);
+        reply
+    }
+
+    async fn http_get(endpoint: String, grpc: bool) -> String {
+        use bindings::wasi::http::{
+            client,
+            types::{Fields, Request, Scheme},
+        };
+        let (scheme, authority) = match endpoint.split_once("://") {
+            Some(("https", authority)) => (Scheme::Https, authority),
+            Some(("http", authority)) => (Scheme::Http, authority),
+            _ => return "error: endpoint".to_string(),
+        };
+        let (tx, trailers) = bindings::wit_future::new(|| Ok(None));
+        wit_bindgen::spawn_local(async move {
+            let _ = tx.write(Ok(None)).await;
+        });
+        let headers = Fields::new();
+        if grpc {
+            let _ = headers.set("content-type", &[b"application/grpc".to_vec()]);
+        }
+        let (request, _sent) = Request::new(headers, None, trailers, None);
+        let _ = request.set_scheme(Some(&scheme));
+        let _ = request.set_authority(Some(authority));
+        let _ = request.set_path_with_query(Some("/"));
+        match client::send(request).await {
+            Ok(response) => response.get_status_code().to_string(),
+            Err(err) => format!("error: {err:?}"),
+        }
+    }
+
     async fn ping(addr: String, server_name: String, via_wasi: bool) -> String {
         let Some(addr) = parse_addr(&addr) else {
             return "error: addr".to_string();

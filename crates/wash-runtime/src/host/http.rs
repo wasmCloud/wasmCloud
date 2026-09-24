@@ -911,6 +911,16 @@ pub trait OutgoingHandler: Send + Sync + 'static {
         None
     }
 
+    /// Select a transport for operator-declared plugin trust. Custom handlers
+    /// must honor it or refuse; the default never falls back to other roots.
+    fn plugin_tls_transport(
+        &self,
+        _plugin_id: &str,
+        _trust: Arc<crate::plugin::TlsTrust>,
+    ) -> Result<crate::host::http_client::PooledClient, wasmtime_wasi_http::Error> {
+        Err(wasmtime_wasi_http::Error::HttpRequestDenied)
+    }
+
     /// Pooled HTTP/2 transport for `workload_id`'s gRPC egress.
     ///
     /// gRPC requests never reach `send_request` — the
@@ -943,6 +953,18 @@ pub trait OutgoingHandler: Send + Sync + 'static {
     fn on_workload_unbind(&self, _workload_id: &str) {}
 }
 
+#[derive(Default)]
+struct PluginTlsClients(std::sync::Mutex<HashMap<usize, PluginTlsClientEntry>>);
+
+struct PluginTlsClientEntry {
+    // A weak reference keeps the policy's allocation identity unique.
+    trust: std::sync::Weak<crate::plugin::TlsTrust>,
+    clients: crate::host::http_client::WorkloadClients,
+}
+
+#[derive(Clone)]
+struct PluginRequestTls(Arc<crate::plugin::PluginTlsPolicy>);
+
 /// Default [`OutgoingHandler`] — sends requests through per-workload
 /// keep-alive connection pools ([`crate::host::http_client::WorkloadClients`])
 /// so a workload's repeated and concurrent requests to the same authority
@@ -953,6 +975,7 @@ pub trait OutgoingHandler: Send + Sync + 'static {
 /// Construction does no I/O: unless a configuration is supplied up front, the
 /// TLS configuration (and any trust-store read) is built lazily on first use.
 pub struct DefaultOutgoingHandler {
+    plugin_clients: PluginTlsClients,
     /// Set eagerly by [`Self::with_tls_config`]; populated lazily with the
     /// process-wide default roots otherwise.
     clients: OnceLock<crate::host::http_client::WorkloadClients>,
@@ -969,6 +992,7 @@ impl Default for DefaultOutgoingHandler {
     /// [`DefaultOutgoingHandler::with_quotas`].
     fn default() -> Self {
         Self {
+            plugin_clients: PluginTlsClients::default(),
             clients: OnceLock::new(),
             quotas: crate::host::quota::QuotaRegistry::new(Default::default(), None),
         }
@@ -1001,6 +1025,7 @@ impl DefaultOutgoingHandler {
             ),
         );
         Self {
+            plugin_clients: PluginTlsClients::default(),
             clients: cell,
             quotas,
         }
@@ -1044,6 +1069,7 @@ impl DefaultOutgoingHandler {
             );
         }
         Self {
+            plugin_clients: PluginTlsClients::default(),
             clients: cell,
             quotas,
         }
@@ -1079,12 +1105,44 @@ impl OutgoingHandler for DefaultOutgoingHandler {
         Some(self.clients().client(workload_id))
     }
 
+    fn plugin_tls_transport(
+        &self,
+        plugin_id: &str,
+        trust: Arc<crate::plugin::TlsTrust>,
+    ) -> Result<crate::host::http_client::PooledClient, wasmtime_wasi_http::Error> {
+        let mut clients = self
+            .plugin_clients
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clients.retain(|_, entry| entry.trust.strong_count() > 0);
+        let entry = clients
+            .entry(Arc::as_ptr(&trust) as usize)
+            .or_insert_with(|| PluginTlsClientEntry {
+                trust: Arc::downgrade(&trust),
+                clients: crate::host::http_client::WorkloadClients::with_quotas(
+                    trust.client_config(),
+                    Arc::clone(&self.quotas),
+                ),
+            });
+        Ok(entry.clients.client(plugin_id))
+    }
+
     fn on_workload_bind(&self, workload_id: &str, call_concurrency: usize) {
         self.clients()
             .set_call_concurrency(workload_id, call_concurrency);
     }
 
     fn on_workload_unbind(&self, workload_id: &str) {
+        for entry in self
+            .plugin_clients
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+        {
+            entry.clients.invalidate(workload_id);
+        }
         // `get()`, not `clients()`: if no request ever ran there is no cache
         // to clean and nothing to lazily build for the purpose.
         if let Some(clients) = self.clients.get() {
@@ -1278,6 +1336,21 @@ pub trait HostHandler: Send + Sync + 'static {
     /// instantiating per message). Default: false.
     async fn has_trigger_service_messaging(&self, _workload_id: &str) -> bool {
         false
+    }
+
+    /// Handle a plugin request carrying its operator-declared TLS policy.
+    /// A handler that cannot honor it refuses the request.
+    #[allow(clippy::too_many_arguments)]
+    fn outgoing_plugin_request(
+        &self,
+        _plugin_id: &str,
+        _request: hyper::Request<WasiBody>,
+        _options: Option<RequestOptions>,
+        _fut: RequestIoFuture,
+        _allowed_hosts: &[AllowedHost],
+        _tls: Arc<crate::plugin::PluginTlsPolicy>,
+    ) -> SendFuture {
+        Box::new(async { Err(wasmtime_wasi_http::Error::HttpRequestDenied) })
     }
 
     /// Handle an outgoing HTTP request from a workload, enforcing its
@@ -2413,6 +2486,19 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
             .contains_key(workload_id)
     }
 
+    fn outgoing_plugin_request(
+        &self,
+        plugin_id: &str,
+        mut request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+        fut: RequestIoFuture,
+        allowed_hosts: &[AllowedHost],
+        tls: Arc<crate::plugin::PluginTlsPolicy>,
+    ) -> SendFuture {
+        request.extensions_mut().insert(PluginRequestTls(tls));
+        self.outgoing_request(plugin_id, request, options, fut, allowed_hosts)
+    }
+
     fn outgoing_request(
         &self,
         workload_id: &str,
@@ -2422,12 +2508,44 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         allowed_hosts: &[AllowedHost],
     ) -> SendFuture {
         let span = outbound_client_span(request.method(), request.uri());
+        let policy = request.extensions().get::<PluginRequestTls>().map(|p| &p.0);
+        if policy.is_some_and(|p| p.requires_tls()) && request.uri().scheme_str() != Some("https") {
+            return deny_request(request);
+        }
+        let trust = if request.uri().scheme_str() == Some("https") {
+            policy.and_then(|p| {
+                request
+                    .uri()
+                    .host()
+                    .and_then(|host| p.for_server_name(host))
+            })
+        } else {
+            None
+        };
+
+        if policy.is_some_and(|p| p.requires_tls()) && trust.is_none() {
+            return deny_request(request);
+        }
         let inner: SendFuture = if let Err(e) =
             self.router
                 .allow_outgoing_request(workload_id, &request, options, allowed_hosts)
         {
             warn!(workload_id = %workload_id, err = %e, "outgoing request denied by allowed_hosts policy");
             deny_request(request)
+        } else if let Some(trust) = trust {
+            match self
+                .outgoing_handler
+                .plugin_tls_transport(workload_id, trust)
+            {
+                Ok(client) => Box::new(async move {
+                    if is_grpc_request(&request) {
+                        client.send_grpc_request(request, options).await
+                    } else {
+                        client.send_request(request, options).await
+                    }
+                }),
+                Err(err) => Box::new(async move { Err(err) }),
+            }
         } else if is_grpc_request(&request) {
             // The gRPC path is selected by the guest via a
             // `content-type: application/grpc` header, and needs HTTP/2 rather
@@ -4475,6 +4593,48 @@ mod tests {
                 )))
             })
         }
+    }
+
+    #[tokio::test]
+    async fn plugin_tls_cannot_fall_back_to_an_unaware_custom_handler() {
+        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server = Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
+            .outgoing_handler(SpyHandler {
+                called: called.clone(),
+            })
+            .build()
+            .await
+            .unwrap();
+        let policy = Arc::new(
+            crate::plugin::PluginTlsPolicy::from_grants(&[crate::plugin::PluginAllowedHost {
+                host: "example.com".parse().unwrap(),
+                tls: Some(crate::plugin::TlsGrant::default()),
+            }])
+            .unwrap()
+            .unwrap(),
+        );
+        for grpc in [false, true] {
+            let mut request = build_request("https://example.com/");
+            if grpc {
+                request
+                    .headers_mut()
+                    .insert("content-type", "application/grpc".parse().unwrap());
+            }
+            let result = Box::into_pin(server.outgoing_plugin_request(
+                "plugin",
+                request,
+                None,
+                no_io(),
+                &[AllowedHost::Any],
+                policy.clone(),
+            ))
+            .await;
+            assert!(matches!(
+                result,
+                Err(wasmtime_wasi_http::Error::HttpRequestDenied)
+            ));
+        }
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[tokio::test]

@@ -82,6 +82,7 @@ world otel {
 world plugin-tls {
     import wasmcloud:tls/types@0.1.0;
     import wasmcloud:tls/client@0.1.0;
+    import wasmcloud:tls/dialer@0.1.0;
     import wasi:tls/types@0.3.0-draft;
     import wasi:tls/client@0.3.0-draft;
 }

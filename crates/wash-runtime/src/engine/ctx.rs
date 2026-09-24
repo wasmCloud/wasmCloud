@@ -333,6 +333,11 @@ pub struct Ctx {
         allow(dead_code)
     )]
     pub(crate) plugin_tls: Option<Arc<crate::plugin::PluginTlsPolicy>>,
+    #[cfg_attr(
+        not(all(feature = "host-component-plugins", feature = "oci")),
+        allow(dead_code)
+    )]
+    pub(crate) plugin_network: Option<Arc<crate::plugin::tls::PluginNetwork>>,
 }
 
 impl Ctx {
@@ -475,6 +480,7 @@ struct CtxHttpHooks {
     host: HostLink,
     workload_id: Arc<str>,
     allowed_hosts: Arc<[AllowedHost]>,
+    plugin_tls: Option<Arc<crate::plugin::PluginTlsPolicy>>,
     /// Set once this store has reported that its egress cannot be served, so a
     /// guest that keeps calling out does not repeat the warning per call.
     warned_unserved: bool,
@@ -488,13 +494,23 @@ impl WasiHttpHooks for CtxHttpHooks {
         fut: crate::host::http::RequestIoFuture,
     ) -> crate::host::http::SendFuture {
         match self.host.handler() {
-            Ok(handler) => handler.outgoing_request(
-                &self.workload_id,
-                request,
-                options,
-                fut,
-                &self.allowed_hosts,
-            ),
+            Ok(handler) => match &self.plugin_tls {
+                Some(policy) => handler.outgoing_plugin_request(
+                    &self.workload_id,
+                    request,
+                    options,
+                    fut,
+                    &self.allowed_hosts,
+                    Arc::clone(policy),
+                ),
+                None => handler.outgoing_request(
+                    &self.workload_id,
+                    request,
+                    options,
+                    fut,
+                    &self.allowed_hosts,
+                ),
+            },
             Err(message) => {
                 // The hook cannot trap, so the guest gets a handleable error
                 // and the host gets told once. A guest left calling out to a
@@ -528,6 +544,7 @@ pub struct CtxBuilder {
     http_handler: Option<crate::host::HostRef>,
     allowed_hosts: Arc<[AllowedHost]>,
     plugin_tls: Option<Arc<crate::plugin::PluginTlsPolicy>>,
+    plugin_network: Option<Arc<crate::plugin::tls::PluginNetwork>>,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -546,6 +563,7 @@ impl CtxBuilder {
             plugins: HashMap::new(),
             allowed_hosts: Default::default(),
             plugin_tls: None,
+            plugin_network: None,
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
         }
@@ -614,6 +632,18 @@ impl CtxBuilder {
         self
     }
 
+    #[cfg_attr(
+        not(all(feature = "host-component-plugins", feature = "oci")),
+        allow(dead_code)
+    )]
+    pub(crate) fn with_plugin_network(
+        mut self,
+        network: crate::plugin::tls::PluginNetwork,
+    ) -> Self {
+        self.plugin_network = Some(Arc::new(network));
+        self
+    }
+
     pub fn build(self) -> Ctx {
         let plugins = self
             .plugins
@@ -625,6 +655,7 @@ impl CtxBuilder {
             host: HostLink(self.http_handler),
             workload_id: self.workload_id.clone(),
             allowed_hosts: self.allowed_hosts,
+            plugin_tls: self.plugin_tls.clone(),
             warned_unserved: false,
         };
 
@@ -655,6 +686,7 @@ impl CtxBuilder {
             plugins,
             http_hooks,
             plugin_tls: self.plugin_tls,
+            plugin_network: self.plugin_network,
         }
     }
 }
