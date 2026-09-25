@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::component_source::{ComponentSource, LoadedComponent};
@@ -7,13 +7,166 @@ use crate::host::{Host, HostApi, HostConfig, WorkloadReservation};
 use crate::oci::{self, OciConfig};
 use crate::plugin::HostPlugin;
 use anyhow::{Context as _, anyhow};
+use async_trait::async_trait;
 use futures::{FutureExt as _, StreamExt as _};
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
 
 pub const HOST_API_PREFIX: &str = "runtime.host";
 pub const OPERATOR_API_PREFIX: &str = "runtime.operator";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+const ATTACHMENT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Built-in workload operations on the same host as the control loop.
+/// A handler can add policy or logging and then delegate to these methods.
+#[derive(Clone)]
+pub struct HostControlDefaults {
+    host: Arc<Host>,
+    starts: Arc<tokio::sync::Semaphore>,
+}
+
+impl HostControlDefaults {
+    /// Perform the runtime's normal reservation, OCI pull and workload start.
+    pub async fn start(
+        &self,
+        request: types::v2::WorkloadStartRequest,
+    ) -> anyhow::Result<types::v2::WorkloadStartResponse> {
+        workload_start(
+            self.host.as_ref(),
+            request,
+            self.host.config(),
+            &self.starts,
+        )
+        .await
+    }
+
+    /// Perform the runtime's normal stop.
+    pub async fn stop(
+        &self,
+        request: types::v2::WorkloadStopRequest,
+    ) -> anyhow::Result<types::v2::WorkloadStopResponse> {
+        workload_stop(self.host.as_ref(), request).await
+    }
+
+    /// Perform the runtime's normal status lookup.
+    pub async fn status(
+        &self,
+        request: types::v2::WorkloadStatusRequest,
+    ) -> anyhow::Result<types::v2::WorkloadStatusResponse> {
+        workload_status(self.host.as_ref(), request).await
+    }
+}
+
+/// Optional command customization. The default implementation of each method
+/// delegates to the runtime; overrides can do work before or after delegation.
+#[async_trait]
+pub trait HostCommandHandler: Send + Sync {
+    async fn start(
+        &self,
+        defaults: &HostControlDefaults,
+        request: types::v2::WorkloadStartRequest,
+    ) -> anyhow::Result<types::v2::WorkloadStartResponse> {
+        defaults.start(request).await
+    }
+    async fn stop(
+        &self,
+        defaults: &HostControlDefaults,
+        request: types::v2::WorkloadStopRequest,
+    ) -> anyhow::Result<types::v2::WorkloadStopResponse> {
+        defaults.stop(request).await
+    }
+    async fn status(
+        &self,
+        defaults: &HostControlDefaults,
+        request: types::v2::WorkloadStatusRequest,
+    ) -> anyhow::Result<types::v2::WorkloadStatusResponse> {
+        defaults.status(request).await
+    }
+}
+
+/// The runtime's NATS control loop attached to a caller-owned, already-started host.
+/// Call [`Self::shutdown`] before stopping that host.
+pub struct AttachedHostControl {
+    shutdown: Mutex<Option<oneshot::Sender<()>>>,
+    task: Mutex<Option<JoinHandle<anyhow::Result<()>>>>,
+}
+
+impl AttachedHostControl {
+    /// Subscribe and flush before returning, so the first request can be served.
+    pub async fn attach(
+        host: Arc<Host>,
+        nats_client: Arc<async_nats::Client>,
+        host_group: impl Into<String>,
+        handler: Option<Arc<dyn HostCommandHandler>>,
+    ) -> anyhow::Result<Self> {
+        let host_group = host_group.into();
+        let subscription = subscribe_host(&host, &nats_client).await?;
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let task = spawn_control_loop(
+            host,
+            nats_client,
+            subscription,
+            shutdown_rx,
+            handler,
+            Some(host_group),
+            HEARTBEAT_INTERVAL,
+            Duration::from_secs(300),
+            Duration::from_secs(3600),
+            default_max_concurrent_starts(),
+            None,
+            false,
+        );
+        Ok(Self {
+            shutdown: Mutex::new(Some(shutdown_tx)),
+            task: Mutex::new(Some(task)),
+        })
+    }
+
+    /// Stop subscriptions and drain or abort commands within the runtime's bounds.
+    /// The caller's host remains running.
+    pub async fn shutdown(&self) -> anyhow::Result<()> {
+        if let Some(tx) = self
+            .shutdown
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            let _ = tx.send(());
+        }
+        let task = self
+            .task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(mut task) = task {
+            match tokio::time::timeout(ATTACHMENT_SHUTDOWN_TIMEOUT, &mut task).await {
+                Ok(result) => result??,
+                Err(_) => {
+                    task.abort();
+                    let _ = tokio::time::timeout(COMMAND_ABORT_TIMEOUT, task).await;
+                    anyhow::bail!(
+                        "attached host control did not stop within {ATTACHMENT_SHUTDOWN_TIMEOUT:?}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for AttachedHostControl {
+    fn drop(&mut self) {
+        if let Some(task) = self
+            .task
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            task.abort();
+        }
+    }
+}
 
 /// How long the command loop may go quiet before it counts as stopped rather
 /// than slow.
@@ -290,6 +443,315 @@ pub struct ClusterHost {
     liveness: Option<Arc<crate::host::probes::Liveness>>,
 }
 
+async fn subscribe_host(
+    host: &Host,
+    nats_client: &async_nats::Client,
+) -> anyhow::Result<async_nats::Subscriber> {
+    let subscription = nats_client
+        .subscribe(host_subject(host.id()))
+        .await
+        .context("failed to subscribe for API requests")?;
+    nats_client
+        .flush()
+        .await
+        .context("failed to register host API subscription")?;
+    Ok(subscription)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_control_loop(
+    host: Arc<Host>,
+    nats_client: Arc<async_nats::Client>,
+    mut api_subscription: async_nats::Subscriber,
+    mut one_shot_rx: oneshot::Receiver<()>,
+    handler: Option<Arc<dyn HostCommandHandler>>,
+    host_group: Option<String>,
+    heartbeat_interval: Duration,
+    cleanup_interval: Duration,
+    cleanup_age: Duration,
+    max_concurrent_starts: usize,
+    liveness: Option<Arc<crate::host::probes::Liveness>>,
+    stop_host: bool,
+) -> JoinHandle<anyhow::Result<()>> {
+    let host_id = host.id().to_string();
+    tokio::task::spawn(async move {
+        let heartbeat_subject = heartbeat_subject(&host_id);
+        let mut heartbeat_timer = tokio::time::interval(heartbeat_interval);
+
+        // Only `workload.start` waits on this permit; stops and status
+        // never do, so neither queues behind a pull.
+        let starts = Arc::new(tokio::sync::Semaphore::new(max_concurrent_starts));
+        let defaults = HostControlDefaults {
+            host: host.clone(),
+            starts: starts.clone(),
+        };
+        // Commands run as their own tasks, so shutdown has to wait for
+        // them: `host.stop()` unbinds every plugin, and a start still
+        // running past it would bind against stopped plugins and leave
+        // a service nothing tears down.
+        let mut commands = tokio::task::JoinSet::new();
+
+        // Read once. Nothing changes the host's config after it is
+        // built, so a host with no cache directory has none for its
+        // whole life and gets no timer at all rather than one that
+        // wakes to reach the same answer. The path is behind an `Arc`
+        // so each tick hands it to a task without copying it.
+        let mut oci_cleanup = host
+            .config()
+            .oci_cache_dir
+            .clone()
+            .map(|dir| (Arc::new(dir), tokio::time::interval(cleanup_interval)));
+
+        // Heartbeats and cache cleanup run as their own tasks, for the
+        // reason commands already do: `select!` runs one branch to
+        // completion, so anything awaited in one stops the loop turning
+        // — and the loop turning is the whole of what `/livez` reports.
+        //
+        // A heartbeat publish ends in a send on async-nats' bounded
+        // command channel, which stops draining while NATS is
+        // unreachable. Awaited here, an outage would hold the loop past
+        // the liveness budget and the kubelet would restart the host:
+        // every workload on it lost, every host in the fleet at once
+        // because they all watch the same NATS, and none of it a thing
+        // a restart can fix. Cache cleanup is a filesystem walk, the
+        // same shape with a slower fuse.
+        //
+        // One at a time each, and a tick that finds the previous still
+        // running is dropped rather than queued: a heartbeat that has
+        // not gone out is not improved by a second behind it, and two
+        // in flight can arrive out of order. The permit lives in the
+        // task, so it comes back however the task ends.
+        let heartbeat_slot = Arc::new(tokio::sync::Semaphore::new(1));
+        let cleanup_slot = Arc::new(tokio::sync::Semaphore::new(1));
+
+        // Built once and pinned rather than rebuilt every turn, over an
+        // owned handle so the shutdown after the loop can still consume
+        // `host`.
+        let http_handler = Arc::clone(&host.http_handler);
+        let mut ingress_stopped = std::pin::pin!(async move { http_handler.stopped().await });
+
+        let ended = loop {
+            // Every turn, whichever branch woke it. The heartbeat timer
+            // alone guarantees one per interval, so silence here means
+            // the loop itself has stopped — which is what `/livez`
+            // reports and the only thing worth a restart.
+            if let Some(liveness) = &liveness {
+                liveness.beat();
+            }
+            tokio::select! {
+                // Shutdown signal
+                _ = &mut one_shot_rx => break Ended::Requested,
+                // The accept loop returned and nothing restarts it, so
+                // this host would hold every workload it was given,
+                // keep heartbeating, and serve no HTTP for as long as
+                // it runs. Stopping is what puts those workloads on a
+                // host that can serve them; they are lost either way.
+                () = &mut ingress_stopped => break Ended::IngressStopped,
+                // Reaps finished commands. A panicked one is fatal: it
+                // may have died holding a workload id it claimed and
+                // never committed or released, and no later stop can
+                // free that slot — the id would be refused as "already
+                // exists" for the life of the host. Taking the host
+                // down is what a panic here did before commands ran as
+                // their own tasks, and a restart is what clears it.
+                //
+                // Fatal by way of the shutdown below: skipping
+                // `host.stop()` would leave the ingress accepting and
+                // the plugins bound on a host that is already finished.
+                Some(finished) = commands.join_next() => {
+                    if let Err(e) = finished {
+                        break Ended::CommandPanicked(e);
+                    }
+                }
+                // OCI cache cleanup
+                cache_dir = next_cache_cleanup(&mut oci_cleanup) => {
+                    if let Ok(slot) = Arc::clone(&cleanup_slot).try_acquire_owned() {
+                        let age = cleanup_age;
+                        tokio::spawn(async move {
+                            let _slot = slot;
+                            if let Err(e) = oci::cleanup_cache(&*cache_dir, age).await {
+                                error!("error during OCI cache cleanup: {e}");
+                            }
+                        });
+                    }
+                }
+                // Send heartbeat
+                _ = heartbeat_timer.tick() => {
+                    // Dropped rather than queued when the last one is
+                    // still going. Nothing here returns on failure:
+                    // returning would drop `commands`, aborting
+                    // in-flight starts after they have reserved their
+                    // ids, and skip the `host.stop()` that unbinds
+                    // their plugins. A missed heartbeat is worth none
+                    // of that; the next tick tries again.
+                    match Arc::clone(&heartbeat_slot).try_acquire_owned() {
+                        Ok(slot) => {
+                            let host = host.clone();
+                            let nats_client = nats_client.clone();
+                            let subject = heartbeat_subject.clone();
+                            let host_group = host_group.clone();
+                            tokio::spawn(async move {
+                                let _slot = slot;
+                                match host_heartbeat(&host, host_group.as_deref()).await.and_then(|heartbeat| {
+                                    serde_json::to_vec(&heartbeat).context("failed to serialize heartbeat")
+                                }) {
+                                    Ok(heartbeat_bytes) => {
+                                        if let Err(e) = nats_client
+                                            .publish(subject, heartbeat_bytes.into())
+                                            .await
+                                        {
+                                            error!("failed to publish heartbeat: {e}");
+                                        }
+                                    }
+                                    Err(e) => error!("failed to build heartbeat: {e}"),
+                                }
+                            });
+                        }
+                        // Every tick this reports is one the operator
+                        // did not hear, which is what its unreachable
+                        // window is for. Said out loud because the
+                        // cause — a NATS that is not draining — is
+                        // otherwise visible only as a host going quiet.
+                        Err(_) => warn!(
+                            "previous heartbeat has not finished publishing; skipping this one"
+                        ),
+                    }
+                }
+                // Handle API requests
+                Some(msg) = api_subscription.next() => {
+                    // `select!` runs one branch to completion, so a
+                    // command awaited here would hold up the heartbeat
+                    // above for as long as it takes to pull and compile.
+                    // A host whose heartbeats stop looks unreachable to
+                    // the operator, which deletes it and its workloads.
+                    //
+                    // Commands naming one workload are ordered by the
+                    // host's reservation on that id, not by this loop:
+                    // a start claims the id before it fetches anything,
+                    // and a stop that finds the claim hands the teardown
+                    // back to the start holding it.
+                    let nats_client = nats_client.clone();
+                    let defaults = defaults.clone();
+                    let handler = handler.clone();
+                    let host_group = host_group.clone();
+                    commands.spawn(async move {
+                        match handle_command(&defaults, &msg, handler.as_deref(), host_group.as_deref()).await {
+                            Ok(resp_bytes) => {
+                                if let Some(reply_to) = msg.reply
+                                    && let Err(e) = nats_client.publish(reply_to, resp_bytes.into()).await
+                                {
+                                    error!("failed to publish API response: {e}");
+                                }
+                            }
+                            Err(e) => {
+                                error!("error handling command: {e}");
+                            }
+                        }
+                    });
+                }
+            }
+        };
+
+        // `wash host` watches the same accept loop and asks for a
+        // shutdown the moment it ends, so both branches above can be
+        // ready at once and `select!` picks between them at random.
+        // Which one fired is therefore not evidence of anything; the
+        // ingress itself is. Only checked on the `Requested` path, so
+        // the future is never polled after it has already completed.
+        let ended = match ended {
+            Ended::Requested if ingress_stopped.as_mut().now_or_never().is_some() => {
+                Ended::IngressStopped
+            }
+            ended => ended,
+        };
+
+        let unsubscribed = api_subscription
+            .unsubscribe()
+            .await
+            .context("failed to unsubscribe from API requests");
+        if let Err(e) = &unsubscribed {
+            error!("failed to unsubscribe from API requests: {e}");
+        }
+        // Anything still queued gives its workload id back and returns
+        // rather than starting something this host is about to tear
+        // down.
+        starts.close();
+        let drained = tokio::time::timeout(COMMAND_DRAIN_TIMEOUT, async {
+            while let Some(finished) = commands.join_next().await {
+                if let Err(e) = finished {
+                    error!("command task failed during shutdown: {e}");
+                }
+            }
+        })
+        .await;
+        let mut commands_still_running = false;
+        if drained.is_err() {
+            warn!(
+                "commands still running after {COMMAND_DRAIN_TIMEOUT:?}; \
+                         aborting them before control shutdown"
+            );
+            commands.abort_all();
+            // `abort_all` only asks. Wait for the tasks to reach their
+            // next await and unwind, or `host.stop()` unbinds plugins
+            // underneath one still binding them.
+            //
+            // Bounded: an aborted task cancels at its next await, and a
+            // command inside a synchronous compile has none. Waiting it
+            // out holds the shutdown past the pod's grace period, so
+            // `host.stop()` never runs at all.
+            let unwound = tokio::time::timeout(COMMAND_ABORT_TIMEOUT, async {
+                while let Some(finished) = commands.join_next().await {
+                    // A panic while unwinding still matters: the task
+                    // may hold a workload id it never released.
+                    if let Err(e) = finished
+                        && !e.is_cancelled()
+                    {
+                        error!("aborted command task failed: {e}");
+                    }
+                }
+            })
+            .await;
+            if unwound.is_err() {
+                commands_still_running = true;
+                warn!(
+                    "commands still unwinding {COMMAND_ABORT_TIMEOUT:?} after \
+                             abort; returning without waiting longer"
+                );
+            }
+        }
+        let stopped = if stop_host {
+            host.stop().await.context("failed to stop host")
+        } else {
+            Ok(())
+        };
+        match ended {
+            Ended::Requested => {
+                stopped?;
+                unsubscribed?;
+                if commands_still_running {
+                    Err(anyhow!("command tasks did not unwind after abort"))
+                } else {
+                    Ok(())
+                }
+            }
+            Ended::IngressStopped => {
+                // Stopped first either way, so the workloads unbind
+                // cleanly; the error is what tells whoever owns this
+                // host that it did not stop because it was asked to.
+                stopped?;
+                Err(anyhow!(
+                    "HTTP ingress stopped accepting connections; \
+                             the host can no longer serve traffic"
+                ))
+            }
+            Ended::CommandPanicked(e) => {
+                stopped?;
+                Err(anyhow!("command task failed: {e}"))
+            }
+        }
+    })
+}
+
 impl ClusterHost {
     pub fn host(&self) -> &Host {
         &self.prepared_host
@@ -299,7 +761,7 @@ impl ClusterHost {
     pub async fn start(
         self,
     ) -> anyhow::Result<(impl HostApi, impl Future<Output = anyhow::Result<()>>)> {
-        let (one_shot_tx, mut one_shot_rx) = oneshot::channel();
+        let (one_shot_tx, one_shot_rx) = oneshot::channel();
         let nats_client = self.nats_client.clone();
         let host = self
             .prepared_host
@@ -312,7 +774,6 @@ impl ClusterHost {
         let max_concurrent_starts = self.max_concurrent_starts;
         let liveness = self.liveness.clone();
         let host_id = host.id().to_string();
-        let host = host.clone();
 
         info!(
         host_id=?host_id,
@@ -325,269 +786,29 @@ impl ClusterHost {
 
         host.log_interfaces();
 
-        let task = tokio::task::spawn({
-            let host = host.clone();
-            async move {
-                let host_subject = host_subject(host_id.as_ref());
-
-                let heartbeat_subject = heartbeat_subject(host_id.as_ref());
-
-                let mut api_subscription = nats_client
-                    .subscribe(host_subject)
-                    .await
-                    .context("failed to subscribe for API requests")?;
-                let mut heartbeat_timer = tokio::time::interval(heartbeat_interval);
-
-                // Only `workload.start` waits on this permit; stops and status
-                // never do, so neither queues behind a pull.
-                let starts = Arc::new(tokio::sync::Semaphore::new(max_concurrent_starts));
-                // Commands run as their own tasks, so shutdown has to wait for
-                // them: `host.stop()` unbinds every plugin, and a start still
-                // running past it would bind against stopped plugins and leave
-                // a service nothing tears down.
-                let mut commands = tokio::task::JoinSet::new();
-
-                // Read once. Nothing changes the host's config after it is
-                // built, so a host with no cache directory has none for its
-                // whole life and gets no timer at all rather than one that
-                // wakes to reach the same answer. The path is behind an `Arc`
-                // so each tick hands it to a task without copying it.
-                let mut oci_cleanup = host
-                    .config()
-                    .oci_cache_dir
-                    .clone()
-                    .map(|dir| (Arc::new(dir), tokio::time::interval(cleanup_interval)));
-
-                // Heartbeats and cache cleanup run as their own tasks, for the
-                // reason commands already do: `select!` runs one branch to
-                // completion, so anything awaited in one stops the loop turning
-                // — and the loop turning is the whole of what `/livez` reports.
-                //
-                // A heartbeat publish ends in a send on async-nats' bounded
-                // command channel, which stops draining while NATS is
-                // unreachable. Awaited here, an outage would hold the loop past
-                // the liveness budget and the kubelet would restart the host:
-                // every workload on it lost, every host in the fleet at once
-                // because they all watch the same NATS, and none of it a thing
-                // a restart can fix. Cache cleanup is a filesystem walk, the
-                // same shape with a slower fuse.
-                //
-                // One at a time each, and a tick that finds the previous still
-                // running is dropped rather than queued: a heartbeat that has
-                // not gone out is not improved by a second behind it, and two
-                // in flight can arrive out of order. The permit lives in the
-                // task, so it comes back however the task ends.
-                let heartbeat_slot = Arc::new(tokio::sync::Semaphore::new(1));
-                let cleanup_slot = Arc::new(tokio::sync::Semaphore::new(1));
-
-                // Built once and pinned rather than rebuilt every turn, over an
-                // owned handle so the shutdown after the loop can still consume
-                // `host`.
-                let http_handler = Arc::clone(&host.http_handler);
-                let mut ingress_stopped =
-                    std::pin::pin!(async move { http_handler.stopped().await });
-
-                let ended = loop {
-                    // Every turn, whichever branch woke it. The heartbeat timer
-                    // alone guarantees one per interval, so silence here means
-                    // the loop itself has stopped — which is what `/livez`
-                    // reports and the only thing worth a restart.
-                    if let Some(liveness) = &liveness {
-                        liveness.beat();
-                    }
-                    tokio::select! {
-                        // Shutdown signal
-                        _ = &mut one_shot_rx => break Ended::Requested,
-                        // The accept loop returned and nothing restarts it, so
-                        // this host would hold every workload it was given,
-                        // keep heartbeating, and serve no HTTP for as long as
-                        // it runs. Stopping is what puts those workloads on a
-                        // host that can serve them; they are lost either way.
-                        () = &mut ingress_stopped => break Ended::IngressStopped,
-                        // Reaps finished commands. A panicked one is fatal: it
-                        // may have died holding a workload id it claimed and
-                        // never committed or released, and no later stop can
-                        // free that slot — the id would be refused as "already
-                        // exists" for the life of the host. Taking the host
-                        // down is what a panic here did before commands ran as
-                        // their own tasks, and a restart is what clears it.
-                        //
-                        // Fatal by way of the shutdown below: skipping
-                        // `host.stop()` would leave the ingress accepting and
-                        // the plugins bound on a host that is already finished.
-                        Some(finished) = commands.join_next() => {
-                            if let Err(e) = finished {
-                                break Ended::CommandPanicked(e);
-                            }
-                        }
-                        // OCI cache cleanup
-                        cache_dir = next_cache_cleanup(&mut oci_cleanup) => {
-                            if let Ok(slot) = Arc::clone(&cleanup_slot).try_acquire_owned() {
-                                let age = self.cleanup_age;
-                                tokio::spawn(async move {
-                                    let _slot = slot;
-                                    if let Err(e) = oci::cleanup_cache(&*cache_dir, age).await {
-                                        error!("error during OCI cache cleanup: {e}");
-                                    }
-                                });
-                            }
-                        }
-                        // Send heartbeat
-                        _ = heartbeat_timer.tick() => {
-                            // Dropped rather than queued when the last one is
-                            // still going. Nothing here returns on failure:
-                            // returning would drop `commands`, aborting
-                            // in-flight starts after they have reserved their
-                            // ids, and skip the `host.stop()` that unbinds
-                            // their plugins. A missed heartbeat is worth none
-                            // of that; the next tick tries again.
-                            match Arc::clone(&heartbeat_slot).try_acquire_owned() {
-                                Ok(slot) => {
-                                    let host = host.clone();
-                                    let nats_client = nats_client.clone();
-                                    let subject = heartbeat_subject.clone();
-                                    tokio::spawn(async move {
-                                        let _slot = slot;
-                                        match host_heartbeat(&host).await.and_then(|heartbeat| {
-                                            serde_json::to_vec(&heartbeat).context("failed to serialize heartbeat")
-                                        }) {
-                                            Ok(heartbeat_bytes) => {
-                                                if let Err(e) = nats_client
-                                                    .publish(subject, heartbeat_bytes.into())
-                                                    .await
-                                                {
-                                                    error!("failed to publish heartbeat: {e}");
-                                                }
-                                            }
-                                            Err(e) => error!("failed to build heartbeat: {e}"),
-                                        }
-                                    });
-                                }
-                                // Every tick this reports is one the operator
-                                // did not hear, which is what its unreachable
-                                // window is for. Said out loud because the
-                                // cause — a NATS that is not draining — is
-                                // otherwise visible only as a host going quiet.
-                                Err(_) => warn!(
-                                    "previous heartbeat has not finished publishing; skipping this one"
-                                ),
-                            }
-                        }
-                        // Handle API requests
-                        Some(msg) = api_subscription.next() => {
-                            // `select!` runs one branch to completion, so a
-                            // command awaited here would hold up the heartbeat
-                            // above for as long as it takes to pull and compile.
-                            // A host whose heartbeats stop looks unreachable to
-                            // the operator, which deletes it and its workloads.
-                            //
-                            // Commands naming one workload are ordered by the
-                            // host's reservation on that id, not by this loop:
-                            // a start claims the id before it fetches anything,
-                            // and a stop that finds the claim hands the teardown
-                            // back to the start holding it.
-                            let host = host.clone();
-                            let nats_client = nats_client.clone();
-                            let starts = Arc::clone(&starts);
-                            commands.spawn(async move {
-                                match handle_command(host.as_ref(), &msg, host.config(), &starts).await {
-                                    Ok(resp_bytes) => {
-                                        if let Some(reply_to) = msg.reply
-                                            && let Err(e) = nats_client.publish(reply_to, resp_bytes.into()).await
-                                        {
-                                            error!("failed to publish API response: {e}");
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("error handling command: {e}");
-                                    }
-                                }
-                            });
-                        }
-                    }
-                };
-
-                // `wash host` watches the same accept loop and asks for a
-                // shutdown the moment it ends, so both branches above can be
-                // ready at once and `select!` picks between them at random.
-                // Which one fired is therefore not evidence of anything; the
-                // ingress itself is. Only checked on the `Requested` path, so
-                // the future is never polled after it has already completed.
-                let ended = match ended {
-                    Ended::Requested if ingress_stopped.as_mut().now_or_never().is_some() => {
-                        Ended::IngressStopped
-                    }
-                    ended => ended,
-                };
-
-                if let Err(e) = api_subscription.unsubscribe().await {
-                    error!("failed to unsubscribe from API requests: {e}");
+        let subscription = match subscribe_host(&host, &nats_client).await {
+            Ok(subscription) => subscription,
+            Err(error) => {
+                if let Err(stop_error) = host.clone().stop().await {
+                    warn!(%stop_error, "failed to stop host after control subscription failed");
                 }
-                // Anything still queued gives its workload id back and returns
-                // rather than starting something this host is about to tear
-                // down.
-                starts.close();
-                let drained = tokio::time::timeout(COMMAND_DRAIN_TIMEOUT, async {
-                    while let Some(finished) = commands.join_next().await {
-                        if let Err(e) = finished {
-                            error!("command task failed during shutdown: {e}");
-                        }
-                    }
-                })
-                .await;
-                if drained.is_err() {
-                    warn!(
-                        "commands still running after {COMMAND_DRAIN_TIMEOUT:?}; \
-                         abandoning them to stop the host"
-                    );
-                    commands.abort_all();
-                    // `abort_all` only asks. Wait for the tasks to reach their
-                    // next await and unwind, or `host.stop()` unbinds plugins
-                    // underneath one still binding them.
-                    //
-                    // Bounded: an aborted task cancels at its next await, and a
-                    // command inside a synchronous compile has none. Waiting it
-                    // out holds the shutdown past the pod's grace period, so
-                    // `host.stop()` never runs at all.
-                    let unwound = tokio::time::timeout(COMMAND_ABORT_TIMEOUT, async {
-                        while let Some(finished) = commands.join_next().await {
-                            // A panic while unwinding still matters: the task
-                            // may hold a workload id it never released.
-                            if let Err(e) = finished
-                                && !e.is_cancelled()
-                            {
-                                error!("aborted command task failed: {e}");
-                            }
-                        }
-                    })
-                    .await;
-                    if unwound.is_err() {
-                        warn!(
-                            "commands still unwinding {COMMAND_ABORT_TIMEOUT:?} after \
-                             abort; stopping the host without them"
-                        );
-                    }
-                }
-                let stopped = host.stop().await.context("failed to stop host");
-                match ended {
-                    Ended::Requested => stopped,
-                    Ended::IngressStopped => {
-                        // Stopped first either way, so the workloads unbind
-                        // cleanly; the error is what tells whoever owns this
-                        // host that it did not stop because it was asked to.
-                        stopped?;
-                        Err(anyhow!(
-                            "HTTP ingress stopped accepting connections; \
-                             the host can no longer serve traffic"
-                        ))
-                    }
-                    Ended::CommandPanicked(e) => {
-                        stopped?;
-                        Err(anyhow!("command task failed: {e}"))
-                    }
-                }
+                return Err(error);
             }
-        });
+        };
+        let task = spawn_control_loop(
+            host.clone(),
+            nats_client,
+            subscription,
+            one_shot_rx,
+            None,
+            None,
+            heartbeat_interval,
+            cleanup_interval,
+            self.cleanup_age,
+            max_concurrent_starts,
+            liveness,
+            true,
+        );
 
         Ok((host, async move {
             let _ = one_shot_tx.send(());
@@ -768,36 +989,39 @@ fn from_api<'de, T: serde::Deserialize<'de>>(bytes: &'de [u8]) -> Result<T, anyh
 
 #[instrument(level = "debug", skip_all, fields(subject = %msg.subject))]
 async fn handle_command(
-    host: &(impl HostApi + WorkloadReservation),
+    defaults: &HostControlDefaults,
     msg: &async_nats::Message,
-    config: &HostConfig,
-    starts: &tokio::sync::Semaphore,
+    handler: Option<&dyn HostCommandHandler>,
+    host_group: Option<&str>,
 ) -> Result<Vec<u8>, anyhow::Error> {
     let command = msg.subject.split('.').skip(3).collect::<Vec<_>>().join(".");
-
     let payload = &msg.payload;
-
     match command.as_str() {
-        "heartbeat" => {
-            let res = host_heartbeat(host).await?;
-            to_api(&res)
-        }
+        "heartbeat" => to_api(&host_heartbeat(&defaults.host, host_group).await?),
         "workload.start" => {
-            let req: types::v2::WorkloadStartRequest = from_api(payload)?;
-            let res = workload_start(host, req, config, starts).await?;
-            to_api(&res)
+            let req = from_api(payload)?;
+            let response = match handler {
+                Some(handler) => handler.start(defaults, req).await?,
+                None => defaults.start(req).await?,
+            };
+            to_api(&response)
         }
         "workload.stop" => {
-            let req: types::v2::WorkloadStopRequest = from_api(payload)?;
-            let res = workload_stop(host, req).await?;
-            to_api(&res)
+            let req = from_api(payload)?;
+            let response = match handler {
+                Some(handler) => handler.stop(defaults, req).await?,
+                None => defaults.stop(req).await?,
+            };
+            to_api(&response)
         }
         "workload.status" => {
-            let req: types::v2::WorkloadStatusRequest = from_api(payload)?;
-            let res = workload_status(host, req).await?;
-            to_api(&res)
+            let req = from_api(payload)?;
+            let response = match handler {
+                Some(handler) => handler.status(defaults, req).await?,
+                None => defaults.status(req).await?,
+            };
+            to_api(&response)
         }
-        // catch-all
         _ => anyhow::bail!("unknown command: {command}"),
     }
 }
@@ -845,8 +1069,14 @@ fn component_from_wire(
 }
 
 #[instrument(level = "debug", skip_all)]
-async fn host_heartbeat(host: &impl HostApi) -> anyhow::Result<types::v2::HostHeartbeat> {
-    let hb = host.heartbeat().await?;
+async fn host_heartbeat(
+    host: &impl HostApi,
+    host_group: Option<&str>,
+) -> anyhow::Result<types::v2::HostHeartbeat> {
+    let mut hb = host.heartbeat().await?;
+    if let Some(host_group) = host_group {
+        hb.labels.insert("hostgroup".into(), host_group.into());
+    }
 
     Ok(hb.into())
 }
@@ -1287,6 +1517,61 @@ mod tests {
     use super::*;
     use crate::host::allowed_hosts::AllowedHost;
     use crate::host::allowed_ip_name::AllowedIpName;
+
+    struct AnnotatingStatus;
+
+    #[async_trait]
+    impl HostCommandHandler for AnnotatingStatus {
+        async fn status(
+            &self,
+            defaults: &HostControlDefaults,
+            request: types::v2::WorkloadStatusRequest,
+        ) -> anyhow::Result<types::v2::WorkloadStatusResponse> {
+            let mut response = defaults.status(request).await?;
+            if let Some(status) = &mut response.workload_status {
+                status.message = "checked by embedder".into();
+            }
+            Ok(response)
+        }
+    }
+
+    #[tokio::test]
+    async fn custom_handler_can_call_native_default_and_modify_its_reply() -> anyhow::Result<()> {
+        let host = crate::host::HostBuilder::default().build()?.start().await?;
+        let defaults = HostControlDefaults {
+            host: host.clone(),
+            starts: Arc::new(tokio::sync::Semaphore::new(1)),
+        };
+        let reply = AnnotatingStatus
+            .status(
+                &defaults,
+                types::v2::WorkloadStatusRequest {
+                    workload_id: "missing".into(),
+                },
+            )
+            .await?;
+        let status = reply
+            .workload_status
+            .ok_or_else(|| anyhow::anyhow!("missing native status"))?;
+        assert_eq!(status.workload_state(), types::v2::WorkloadState::NotFound);
+        assert_eq!(status.message, "checked by embedder");
+        let unchanged_stop = AnnotatingStatus
+            .stop(
+                &defaults,
+                types::v2::WorkloadStopRequest {
+                    workload_id: "missing".into(),
+                },
+            )
+            .await?;
+        assert_eq!(
+            unchanged_stop
+                .workload_status
+                .ok_or_else(|| anyhow::anyhow!("missing native stop status"))?
+                .workload_state(),
+            types::v2::WorkloadState::NotFound
+        );
+        host.stop().await
+    }
 
     /// Port 1 is privileged and nothing in a test environment listens on it, so
     /// a connection there is refused rather than left hanging.
