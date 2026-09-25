@@ -140,16 +140,17 @@ impl WasmcloudPostgres {
     /// The database name should NOT be included - workloads provide it via config.
     ///
     /// Example: `postgres://user:pass@bouncer:6432?sslmode=require&pool_size=10`
-    pub fn new(url: &str) -> anyhow::Result<Self> {
-        let parsed = Url::parse(url).context("failed to parse postgres URL")?;
-        let mut config: tokio_postgres::Config =
-            url.parse().context("failed to parse postgres config")?;
+    pub fn new(url: &url::Url) -> anyhow::Result<Self> {
+        let mut config: tokio_postgres::Config = url
+            .as_str()
+            .parse()
+            .context("failed to parse postgres config")?;
 
         // Extract pool_size from the URL (not a standard postgres param, we parse it ourselves)
-        let pool_size = extract_pool_size(&parsed);
+        let pool_size = extract_pool_size(url);
 
         // Determine TLS from sslmode
-        let tls = extract_tls_requirement(&parsed);
+        let tls = extract_tls_requirement(url);
 
         // Strip dbname from the base config - workloads set this via their config
         config.dbname("");
