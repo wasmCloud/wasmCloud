@@ -38,8 +38,10 @@ use testcontainers::{
     runners::AsyncRunner,
 };
 use wash_runtime::host::http::{DevRouter, HostHandler, Ingress};
+use wash_runtime::host::{HostApi, HostBuilder};
 use wash_runtime::washlet::{
-    COMMAND_DRAIN_TIMEOUT, ClusterHostBuilder, heartbeat_subject, rpc_subject, types::v2,
+    AttachedHostControl, COMMAND_DRAIN_TIMEOUT, ClusterHostBuilder, HostCommandHandler,
+    HostControlDefaults, heartbeat_subject, rpc_subject, types::v2,
 };
 
 const HOST_GROUP: &str = "e2e";
@@ -362,6 +364,223 @@ fn empty_start_request(workload_id: &str) -> v2::WorkloadStartRequest {
             volumes: vec![],
         }),
     }
+}
+
+/// This handler changes admission, then uses the same built-in operations as
+/// the uncustomized cluster host for workloads it owns.
+struct AttachedPolicy;
+
+#[async_trait::async_trait]
+impl HostCommandHandler for AttachedPolicy {
+    async fn start(
+        &self,
+        defaults: &HostControlDefaults,
+        request: v2::WorkloadStartRequest,
+    ) -> Result<v2::WorkloadStartResponse> {
+        if request.workload_id == "denied" {
+            return Ok(v2::WorkloadStartResponse {
+                workload_status: Some(v2::WorkloadStatus {
+                    workload_id: request.workload_id,
+                    workload_state: v2::WorkloadState::Error.into(),
+                    message: "admission denied".into(),
+                }),
+            });
+        }
+        defaults.start(request).await
+    }
+
+    async fn stop(
+        &self,
+        defaults: &HostControlDefaults,
+        request: v2::WorkloadStopRequest,
+    ) -> Result<v2::WorkloadStopResponse> {
+        if !request.workload_id.starts_with("owned-") {
+            return Ok(v2::WorkloadStopResponse {
+                workload_status: Some(v2::WorkloadStatus {
+                    workload_id: request.workload_id,
+                    workload_state: v2::WorkloadState::NotFound.into(),
+                    message: String::new(),
+                }),
+            });
+        }
+        defaults.stop(request).await
+    }
+
+    async fn status(
+        &self,
+        defaults: &HostControlDefaults,
+        request: v2::WorkloadStatusRequest,
+    ) -> Result<v2::WorkloadStatusResponse> {
+        if !request.workload_id.starts_with("owned-") {
+            return Ok(v2::WorkloadStatusResponse {
+                workload_status: Some(v2::WorkloadStatus {
+                    workload_id: request.workload_id,
+                    workload_state: v2::WorkloadState::NotFound.into(),
+                    message: String::new(),
+                }),
+            });
+        }
+        defaults.status(request).await
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn attached_control_delegates_and_leaves_caller_host_running() -> Result<()> {
+    let container = GenericImage::new("nats", "2.12.8-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+        .start()
+        .await?;
+    let port = container.get_host_port_ipv4(4222).await?;
+    let url = format!("nats://127.0.0.1:{port}");
+    let nats = Arc::new(async_nats::connect(&url).await?);
+    let operator = async_nats::connect(&url).await?;
+    check_attached_control(nats, operator).await
+}
+
+#[tokio::test]
+#[ignore = "requires NATS_URL pointing to a local nats-server"]
+async fn attached_control_with_local_nats() -> Result<()> {
+    let Ok(url) = std::env::var("NATS_URL") else {
+        eprintln!("NATS_URL is unset; local NATS attachment check skipped");
+        return Ok(());
+    };
+    let nats = Arc::new(async_nats::connect(&url).await?);
+    let operator = async_nats::connect(&url).await?;
+    check_attached_control(nats, operator).await
+}
+
+async fn check_attached_control(
+    nats: Arc<async_nats::Client>,
+    operator: async_nats::Client,
+) -> Result<()> {
+    let host = HostBuilder::default().build()?.start().await?;
+    host.workload_start(wash_runtime::types::WorkloadStartRequest {
+        workload_id: "local-1".into(),
+        workload: wash_runtime::types::Workload {
+            namespace: "default".into(),
+            name: "local".into(),
+            annotations: Default::default(),
+            service: None,
+            components: vec![],
+            host_interfaces: vec![],
+            volumes: vec![],
+        },
+    })
+    .await?;
+    let host_id = host.id().to_string();
+    let mut heartbeats = operator.subscribe(heartbeat_subject(&host_id)).await?;
+    operator.flush().await?;
+    let channel = AttachedHostControl::attach(
+        host.clone(),
+        nats,
+        "attached-group",
+        Some(Arc::new(AttachedPolicy)),
+    )
+    .await?;
+
+    let beat: v2::HostHeartbeat = rpc(&operator, rpc_subject(&host_id, "heartbeat"), &()).await?;
+    assert_eq!(beat.id, host_id);
+    assert_eq!(
+        beat.labels.get("hostgroup").map(String::as_str),
+        Some("attached-group")
+    );
+    let published = tokio::time::timeout(Duration::from_secs(5), heartbeats.next())
+        .await?
+        .context("heartbeat subscription closed")?;
+    let published: v2::HostHeartbeat = serde_json::from_slice(&published.payload)?;
+    assert_eq!(published.id, host_id);
+
+    let denied: v2::WorkloadStartResponse = rpc(
+        &operator,
+        rpc_subject(&host_id, "workload.start"),
+        &empty_start_request("denied"),
+    )
+    .await?;
+    assert_eq!(
+        status_of(denied.workload_status)?.message,
+        "admission denied"
+    );
+
+    let started: v2::WorkloadStartResponse = rpc(
+        &operator,
+        rpc_subject(&host_id, "workload.start"),
+        &empty_start_request("owned-1"),
+    )
+    .await?;
+    assert_eq!(
+        status_of(started.workload_status)?.workload_state(),
+        v2::WorkloadState::Running
+    );
+    let status: v2::WorkloadStatusResponse = rpc(
+        &operator,
+        rpc_subject(&host_id, "workload.status"),
+        &v2::WorkloadStatusRequest {
+            workload_id: "owned-1".into(),
+        },
+    )
+    .await?;
+    assert_eq!(
+        status_of(status.workload_status)?.workload_state(),
+        v2::WorkloadState::Running
+    );
+    let refused: v2::WorkloadStopResponse = rpc(
+        &operator,
+        rpc_subject(&host_id, "workload.stop"),
+        &v2::WorkloadStopRequest {
+            workload_id: "local-1".into(),
+        },
+    )
+    .await?;
+    assert_eq!(
+        status_of(refused.workload_status)?.workload_state(),
+        v2::WorkloadState::NotFound
+    );
+    let hidden: v2::WorkloadStatusResponse = rpc(
+        &operator,
+        rpc_subject(&host_id, "workload.status"),
+        &v2::WorkloadStatusRequest {
+            workload_id: "local-1".into(),
+        },
+    )
+    .await?;
+    assert_eq!(
+        status_of(hidden.workload_status)?.workload_state(),
+        v2::WorkloadState::NotFound
+    );
+    assert_eq!(
+        host.workload_status(wash_runtime::types::WorkloadStatusRequest {
+            workload_id: "local-1".into(),
+        })
+        .await?
+        .workload_status
+        .workload_state,
+        wash_runtime::types::WorkloadState::Running
+    );
+    let stopped: v2::WorkloadStopResponse = rpc(
+        &operator,
+        rpc_subject(&host_id, "workload.stop"),
+        &v2::WorkloadStopRequest {
+            workload_id: "owned-1".into(),
+        },
+    )
+    .await?;
+    assert_eq!(
+        status_of(stopped.workload_status)?.workload_state(),
+        v2::WorkloadState::Stopping
+    );
+
+    channel.shutdown().await?;
+    assert_eq!(host.heartbeat().await?.id, host_id);
+    let after_shutdown = tokio::time::timeout(
+        Duration::from_secs(2),
+        operator.request(rpc_subject(&host_id, "heartbeat"), Vec::new().into()),
+    )
+    .await;
+    assert!(!matches!(after_shutdown, Ok(Ok(_))));
+    host.stop().await?;
+    Ok(())
 }
 
 #[tokio::test]
