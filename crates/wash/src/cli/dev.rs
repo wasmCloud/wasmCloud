@@ -118,6 +118,10 @@ impl CliCommand for DevCommand {
         // must still name its loopback ports.
         let socket_policy = dev_socket_policy(&quotas);
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
+        // The session's volumes are the developer's own declaration, so they
+        // are exactly what the session permits; nothing else can name one.
+        engine_builder = engine_builder
+            .with_allowed_host_paths(dev_config.volumes.iter().map(|v| v.host_path.clone()));
         let engine = engine_builder.build()?;
 
         let mut host_builder = Host::builder()
