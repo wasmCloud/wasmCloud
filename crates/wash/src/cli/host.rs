@@ -95,7 +95,11 @@ pub struct HostCommand {
     #[arg(long = "tls-key-path", requires = "tls_cert_path")]
     pub tls_key_path: Option<PathBuf>,
 
-    /// Path to CA certificate file for mutual TLS on the HTTP server
+    /// CA (PEM) that verifies client certificates presented *to* the
+    /// component HTTP server.
+    ///
+    /// Inbound only: it grants this host no identity for the outbound calls
+    /// components make. That is `--http-client-cert-path`.
     #[arg(long = "tls-ca-path")]
     pub tls_ca_path: Option<PathBuf>,
 
