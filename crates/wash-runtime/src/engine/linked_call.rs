@@ -299,10 +299,6 @@ async fn build_ctx_from_template(
         Arc::clone(&template.local_resources.allowed_ip_name_lookups),
     );
 
-    for mount in all_volume_mounts {
-        wasi_ctx_builder.preopened_dir(&mount.host_path, &mount.mount_path, mount.perms)?;
-    }
-
     let mut ctx_builder = Ctx::builder(template.workload_id.clone(), template.component_id.clone())
         .with_host(http_handler)
         .with_wasi_ctx(wasi_ctx_builder.build())
@@ -319,6 +315,7 @@ async fn build_ctx_from_template(
     }
 
     let mut ctx = ctx_builder.build();
+    ctx.volume_mounts = all_volume_mounts.to_vec();
     ctx.store_id = store_id.to_string().into();
     Ok(ctx)
 }

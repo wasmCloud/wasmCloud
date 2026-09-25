@@ -149,7 +149,7 @@ pub struct WorkloadMetadata {
     linker: Linker<SharedCtx>,
     /// The volume mounts requested by this component
     pub(crate) volume_mounts: Vec<(PathBuf, VolumeMount)>,
-    /// Canonicalized volume mounts, resolved once during workload resolution.
+    /// Pinned directory handles with guest mount names and permissions.
     pub(crate) resolved_volume_mounts: Vec<ResolvedVolumeMount>,
     /// The local resources requested by this component
     pub(crate) local_resources: LocalResources,
