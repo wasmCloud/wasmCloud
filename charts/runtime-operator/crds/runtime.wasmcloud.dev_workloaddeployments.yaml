@@ -494,12 +494,103 @@ spec:
                             ? y.name : '''') == (has(x.name) ? x.name : '''') && (has(y.version)
                             ? y.version : '''') == (has(x.version) ? x.version : '''')))'
                         - message: at most one unnamed hostInterface is allowed per
-                            namespace:package; set a unique name to disambiguate multiple
-                            imports of the same package
-                          rule: self.all(x, (has(x.name) && x.name != '') || self.filter(y,
+                            namespace:package and semver-compatible version; set a
+                            unique name to disambiguate multiple imports of the same
+                            interface
+                          rule: 'self.all(x, (has(x.name) && x.name != '''') || !(has(x.version)
+                            ? x.version : '''').matches(''^v?[0-9]+([.][0-9]+){0,2}(-[0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?([+][0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?$'')
+                            || ((has(x.version) ? x.version : '''').startsWith(''v'')
+                            ? (has(x.version) ? x.version : '''').substring(1) : (has(x.version)
+                            ? x.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'')[0].find(''[1-9][0-9]*'')
+                            == '''' || self.filter(y, y.__namespace__ == x.__namespace__
+                            && y.__package__ == x.__package__ && !(has(y.name) &&
+                            y.name != '''') && (has(y.version) ? y.version : '''').matches(''^v?[0-9]+([.][0-9]+){0,2}(-[0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?([+][0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?$'')
+                            && ((has(y.version) ? y.version : '''').startsWith(''v'')
+                            ? (has(y.version) ? y.version : '''').substring(1) : (has(y.version)
+                            ? y.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'')[0].find(''[1-9][0-9]*'')
+                            == ((has(x.version) ? x.version : '''').startsWith(''v'')
+                            ? (has(x.version) ? x.version : '''').substring(1) : (has(x.version)
+                            ? x.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'')[0].find(''[1-9][0-9]*'')).size()
+                            == 1)'
+                        - message: at most one unnamed hostInterface is allowed per
+                            namespace:package and semver-compatible version; set a
+                            unique name to disambiguate multiple imports of the same
+                            interface
+                          rule: 'self.all(x, (has(x.name) && x.name != '''') || !(has(x.version)
+                            ? x.version : '''').matches(''^v?[0-9]+([.][0-9]+){0,2}(-[0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?([+][0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?$'')
+                            || ((has(x.version) ? x.version : '''').startsWith(''v'')
+                            ? (has(x.version) ? x.version : '''').substring(1) : (has(x.version)
+                            ? x.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'')[0].find(''[1-9][0-9]*'')
+                            != '''' || (((has(x.version) ? x.version : '''').startsWith(''v'')
+                            ? (has(x.version) ? x.version : '''').substring(1) : (has(x.version)
+                            ? x.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'').size()
+                            > 1 ? ((has(x.version) ? x.version : '''').startsWith(''v'')
+                            ? (has(x.version) ? x.version : '''').substring(1) : (has(x.version)
+                            ? x.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'')[1]
+                            : ''0'').find(''[1-9][0-9]*'') == '''' || self.filter(y,
                             y.__namespace__ == x.__namespace__ && y.__package__ ==
-                            x.__package__ && !(has(y.name) && y.name != '')).size()
-                            == 1)
+                            x.__package__ && !(has(y.name) && y.name != '''') && (has(y.version)
+                            ? y.version : '''').matches(''^v?[0-9]+([.][0-9]+){0,2}(-[0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?([+][0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?$'')
+                            && ((has(y.version) ? y.version : '''').startsWith(''v'')
+                            ? (has(y.version) ? y.version : '''').substring(1) : (has(y.version)
+                            ? y.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'')[0].find(''[1-9][0-9]*'')
+                            == '''' && (((has(y.version) ? y.version : '''').startsWith(''v'')
+                            ? (has(y.version) ? y.version : '''').substring(1) : (has(y.version)
+                            ? y.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'').size()
+                            > 1 ? ((has(y.version) ? y.version : '''').startsWith(''v'')
+                            ? (has(y.version) ? y.version : '''').substring(1) : (has(y.version)
+                            ? y.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'')[1]
+                            : ''0'').find(''[1-9][0-9]*'') == (((has(x.version) ?
+                            x.version : '''').startsWith(''v'') ? (has(x.version)
+                            ? x.version : '''').substring(1) : (has(x.version) ? x.version
+                            : '''')).split(''-'')[0].split(''+'')[0].split(''.'').size()
+                            > 1 ? ((has(x.version) ? x.version : '''').startsWith(''v'')
+                            ? (has(x.version) ? x.version : '''').substring(1) : (has(x.version)
+                            ? x.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'')[1]
+                            : ''0'').find(''[1-9][0-9]*'')).size() == 1)'
+                        - message: at most one unnamed hostInterface is allowed per
+                            namespace:package and semver-compatible version; set a
+                            unique name to disambiguate multiple imports of the same
+                            interface
+                          rule: 'self.all(x, (has(x.name) && x.name != '''') || !(has(x.version)
+                            ? x.version : '''').matches(''^v?[0-9]+([.][0-9]+){0,2}(-[0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?([+][0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?$'')
+                            || ((has(x.version) ? x.version : '''').startsWith(''v'')
+                            ? (has(x.version) ? x.version : '''').substring(1) : (has(x.version)
+                            ? x.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'')[0].find(''[1-9][0-9]*'')
+                            != '''' || (((has(x.version) ? x.version : '''').startsWith(''v'')
+                            ? (has(x.version) ? x.version : '''').substring(1) : (has(x.version)
+                            ? x.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'').size()
+                            > 1 ? ((has(x.version) ? x.version : '''').startsWith(''v'')
+                            ? (has(x.version) ? x.version : '''').substring(1) : (has(x.version)
+                            ? x.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'')[1]
+                            : ''0'').find(''[1-9][0-9]*'') != '''' || self.filter(y,
+                            y.__namespace__ == x.__namespace__ && y.__package__ ==
+                            x.__package__ && !(has(y.name) && y.name != '''') && (has(y.version)
+                            ? y.version : '''').matches(''^v?[0-9]+([.][0-9]+){0,2}(-[0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?([+][0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?$'')
+                            && ((has(y.version) ? y.version : '''').startsWith(''v'')
+                            ? (has(y.version) ? y.version : '''').substring(1) : (has(y.version)
+                            ? y.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'')[0].find(''[1-9][0-9]*'')
+                            == '''' && (((has(y.version) ? y.version : '''').startsWith(''v'')
+                            ? (has(y.version) ? y.version : '''').substring(1) : (has(y.version)
+                            ? y.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'').size()
+                            > 1 ? ((has(y.version) ? y.version : '''').startsWith(''v'')
+                            ? (has(y.version) ? y.version : '''').substring(1) : (has(y.version)
+                            ? y.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'')[1]
+                            : ''0'').find(''[1-9][0-9]*'') == '''' && (((has(y.version)
+                            ? y.version : '''').startsWith(''v'') ? (has(y.version)
+                            ? y.version : '''').substring(1) : (has(y.version) ? y.version
+                            : '''')).split(''-'')[0].split(''+'')[0].split(''.'').size()
+                            > 2 ? ((has(y.version) ? y.version : '''').startsWith(''v'')
+                            ? (has(y.version) ? y.version : '''').substring(1) : (has(y.version)
+                            ? y.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'')[2]
+                            : ''0'').find(''[1-9][0-9]*'') == (((has(x.version) ?
+                            x.version : '''').startsWith(''v'') ? (has(x.version)
+                            ? x.version : '''').substring(1) : (has(x.version) ? x.version
+                            : '''')).split(''-'')[0].split(''+'')[0].split(''.'').size()
+                            > 2 ? ((has(x.version) ? x.version : '''').startsWith(''v'')
+                            ? (has(x.version) ? x.version : '''').substring(1) : (has(x.version)
+                            ? x.version : '''')).split(''-'')[0].split(''+'')[0].split(''.'')[2]
+                            : ''0'').find(''[1-9][0-9]*'')).size() == 1)'
                       hostSelector:
                         additionalProperties:
                           type: string
