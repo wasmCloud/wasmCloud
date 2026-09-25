@@ -560,6 +560,13 @@ pub struct HostPluginConfig {
     /// Hosts this plugin may reach. Component plugins are gated at their WASI
     /// sockets and HTTP interfaces. Native plugins must enforce this against
     /// their client endpoints or fail host startup. Empty denies all.
+    ///
+    /// The guarantee differs. A component plugin's connection is checked at
+    /// the address a name resolved to, against the host's address-range
+    /// policy. A native plugin's client resolves names itself, so for a
+    /// hostname only the declared endpoint is checked, never where it
+    /// resolved. Write literal IP addresses where a native plugin needs the
+    /// stronger guarantee: an address is range-checked as written.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_hosts: Vec<AllowedHost>,
     /// Names this plugin may resolve. Empty denies every lookup.

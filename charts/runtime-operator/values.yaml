@@ -781,6 +781,15 @@ runtime:
       #                   are gated at WASI; native plugins must check their
       #                   client endpoints. Omitted/empty denies all.
       #
+      #                   The guarantee differs. A component plugin is
+      #                   checked at the address a name resolved to, against
+      #                   `networking.denySpecialRanges`/`denyPrivateRanges`.
+      #                   A native plugin's client resolves names itself, so
+      #                   for a hostname only the declared endpoint is
+      #                   checked, never where it resolved. Write literal IP
+      #                   addresses where a native plugin needs the stronger
+      #                   guarantee: an address is range-checked as written.
+      #
       # Editing any of these rolls the host automatically (the Deployment
       # carries a checksum over the rendered config file). Rotating the
       # CONTENTS of a ConfigMap/Secret named by `configFrom`/`secretFrom` is
