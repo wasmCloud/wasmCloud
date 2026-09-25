@@ -1656,6 +1656,13 @@ impl HostBuilder {
             None => Arc::new(crate::host::http::NullServer::default()),
         };
         let port_reservations = reserve_http_ingress(&engine.socket_policy, http_handler.port())?;
+        // The same policy that gates a workload's raw sockets, so `wasi:http`
+        // cannot reach an address a socket could not.
+        http_handler.install_egress_gate(
+            crate::host::egress_policy::EgressAddressGate::from_socket_policy(
+                &engine.socket_policy,
+            ),
+        );
 
         // Every plugin is registered by now, so a binding declaration naming an
         // id this host does not have is a typo — and an inert one, which is the
@@ -1721,9 +1728,14 @@ fn reserve_http_ingress(
         return Ok(Vec::new());
     };
     let owner = crate::host::ports::PortOwner::Host("HTTP ingress".into());
+    // The handler says only which port it holds, and ingress usually binds
+    // every interface, so the port is reserved on all of this machine's
+    // addresses: a pod IP reaches it as surely as loopback does.
     [
         std::net::SocketAddr::from(([127, 0, 0, 1], port)),
         std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], port)),
+        std::net::SocketAddr::from(([0, 0, 0, 0], port)),
+        std::net::SocketAddr::from(([0u16; 8], port)),
     ]
     .into_iter()
     .map(|addr| {
@@ -1793,6 +1805,98 @@ mod tests {
             .with_fuel_consumption(fuel)
             .build()
             .expect("a minimal engine must build")
+    }
+
+    /// Building a host is what gates `wasi:http` by address: an embedder that
+    /// only configured the engine's socket policy gets both surfaces checked
+    /// the same way, on the pooled path and on the unpooled gRPC fallback.
+    #[tokio::test]
+    async fn the_host_gates_http_egress_with_its_socket_policy() {
+        use crate::host::allowed_hosts::AllowedHost;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let engine = crate::engine::Engine::builder()
+            .with_socket_policy(Arc::new(crate::sockets::policy::SocketPolicy {
+                egress_mode: crate::sockets::policy::EgressMode::Enforce,
+                ..Default::default()
+            }))
+            .build()
+            .unwrap();
+        let pooled: Arc<dyn crate::host::http::HostHandler> = Arc::new(
+            crate::host::http::Ingress::builder(
+                crate::host::http::DevRouter::default(),
+                "127.0.0.1:0".parse().unwrap(),
+            )
+            .outgoing_handler(crate::host::http::DefaultOutgoingHandler::default())
+            .build()
+            .await
+            .unwrap(),
+        );
+        let _host = Host::builder()
+            .with_engine(engine.clone())
+            .with_http_handler(Arc::clone(&pooled))
+            .build()
+            .unwrap();
+        // No pooled gRPC transport, so gRPC takes the per-request connect.
+        let unpooled: Arc<dyn crate::host::http::HostHandler> = Arc::new(
+            crate::host::http::Ingress::builder(
+                crate::host::http::DevRouter::default(),
+                "127.0.0.1:0".parse().unwrap(),
+            )
+            .outgoing_handler(NoGrpcPool)
+            .build()
+            .await
+            .unwrap(),
+        );
+        let _other = Host::builder()
+            .with_engine(engine)
+            .with_http_handler(Arc::clone(&unpooled))
+            .build()
+            .unwrap();
+
+        let allow_any = [AllowedHost::Any];
+        for (handler, grpc) in [(&pooled, false), (&pooled, true), (&unpooled, true)] {
+            let mut request = hyper::Request::builder()
+                .method(hyper::Method::POST)
+                .uri(format!("http://localhost:{port}/svc.Test/Call"));
+            if grpc {
+                request = request.header(hyper::header::CONTENT_TYPE, "application/grpc");
+            }
+            let request = request
+                .body(wasmtime_wasi_http::WasiBody::default())
+                .unwrap();
+            let sent = Box::into_pin(handler.outgoing_request(
+                "workload",
+                request,
+                None,
+                Box::new(async { Ok(()) }),
+                &allow_any,
+            ))
+            .await;
+            assert!(
+                matches!(
+                    sent,
+                    Err(wasmtime_wasi_http::Error::DestinationIpProhibited)
+                ),
+                "grpc={grpc}: expected DestinationIpProhibited, got {:?}",
+                sent.err()
+            );
+        }
+    }
+
+    struct NoGrpcPool;
+
+    impl crate::host::http::OutgoingHandler for NoGrpcPool {
+        fn send_request(
+            &self,
+            _workload_id: &str,
+            _request: hyper::Request<wasmtime_wasi_http::WasiBody>,
+            _options: Option<wasmtime_wasi_http::RequestOptions>,
+            _fut: crate::host::http::RequestIoFuture,
+        ) -> crate::host::http::SendFuture {
+            unreachable!("only gRPC is sent through this handler")
+        }
     }
 
     /// What [`crate::engine::abandon::arm_epoch_deadline`] relies on to end a

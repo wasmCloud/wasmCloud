@@ -837,12 +837,15 @@ runtime:
         # `allowedHostLoopbackPorts` entry naming the port. `127.0.0.1` keeps
         # meaning the guest's own virtual network either way.
         allowHostLoopback: false
-        # -- How the raw-socket egress policy is applied: `count` or `enforce`.
+        # -- How the egress policy is applied: `count` or `enforce`. It covers
+        # raw sockets, and the addresses a guest's `wasi:http` requests
+        # resolve to — a name `allowedHosts` permits still may not land on
+        # loopback, the metadata address, or a port the host owns.
         #
-        # Raw socket connect was never gated, so enforcing on upgrade would
-        # sever live traffic. `count` evaluates the policy, records what it
-        # would refuse, and allows the connection anyway. Watch the
-        # would-deny counters, then switch to `enforce`.
+        # Neither was gated before, so enforcing on upgrade would sever live
+        # traffic. `count` evaluates the policy, records what it would
+        # refuse, and allows the connection anyway. Watch the would-deny
+        # counters, then switch to `enforce`.
         socketEgress: count
         # -- Deny outbound connections to loopback, link-local (including the
         # cloud metadata address), multicast, and documentation ranges —

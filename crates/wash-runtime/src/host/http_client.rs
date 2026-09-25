@@ -30,6 +30,12 @@
 //! store, which honours `SSL_CERT_FILE`/`SSL_CERT_DIR`) with any explicitly
 //! configured PEM bundles layered on top.
 //!
+//! Every address a connection is made to passes the host's
+//! [`EgressAddressGate`] first. The guest's `allowedHosts` judged the name it
+//! asked for; the gate judges where that name resolved, inside the resolver
+//! the connection uses, so the address checked is the address dialed. The
+//! hostname stays in the URI, so SNI and `Host` are unchanged.
+//!
 //! The per-connection helpers ([`connect_http_tcp`], [`connect_http_tls`], the
 //! connection-worker spawners) follow wasmtime's `default_send_request` error
 //! mappings and serve the gRPC egress fast path in `host::http`, which manages
@@ -37,6 +43,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -57,6 +64,7 @@ use tracing::{debug, warn};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 use wasmtime_wasi_http::{Error as HttpError, RequestOptions, WasiBody};
 
+use crate::host::egress_policy::{EgressAddressGate, EgressRefused};
 use crate::host::http::{RequestIoFuture, SendResult};
 
 /// Error type carried by the request body handed to the pooled client.
@@ -459,20 +467,45 @@ fn is_resolver_error(err: &std::io::Error) -> bool {
 }
 
 /// Open an HTTP TCP connection and return guest-visible connection errors.
+///
+/// Resolves `authority` once and dials only the addresses `gate` permits, so
+/// the address checked is the address connected to.
 pub(crate) async fn connect_http_tcp(
     authority: &str,
     connect_timeout: Duration,
+    gate: Option<&EgressAddressGate>,
 ) -> Result<TcpStream, HttpError> {
-    timeout(connect_timeout, TcpStream::connect(authority))
+    let io_error = |e: std::io::Error| {
+        if is_resolver_error(&e) {
+            dns_error("address not available")
+        } else {
+            HttpError::ConnectionRefused
+        }
+    };
+    let connect = async {
+        let resolved: Vec<SocketAddr> = tokio::net::lookup_host(authority)
+            .await
+            .map_err(io_error)?
+            .collect();
+        let permitted = match gate {
+            Some(gate) => gate.filter(resolved).map_err(refused_error)?,
+            None => resolved,
+        };
+        TcpStream::connect(&permitted[..]).await.map_err(io_error)
+    };
+    timeout(connect_timeout, connect)
         .await
         .map_err(|_| HttpError::ConnectionTimeout)?
-        .map_err(|e| {
-            if is_resolver_error(&e) {
-                dns_error("address not available")
-            } else {
-                HttpError::ConnectionRefused
-            }
-        })
+}
+
+/// The guest-visible error for an address the egress gate refused: distinct
+/// from nothing listening and from a spent quota.
+fn refused_error(refused: EgressRefused) -> HttpError {
+    debug!(
+        reason = refused.0.as_str(),
+        "outbound HTTP connection refused by egress address policy"
+    );
+    HttpError::DestinationIpProhibited
 }
 
 /// Clone a TLS client configuration with a fresh, private session-resumption
@@ -645,6 +678,17 @@ pub(crate) enum Alpn {
     H2,
 }
 
+/// `tls` offering `alpn`, as [`https_connector`] configures it.
+fn with_alpn(tls: &rustls::ClientConfig, alpn: Alpn) -> Arc<rustls::ClientConfig> {
+    let mut tls = tls.clone();
+    tls.alpn_protocols = match alpn {
+        // HTTP/1.1 alone offers nothing, as hyper-rustls leaves it.
+        Alpn::Http1 => Vec::new(),
+        Alpn::H2 => vec![b"h2".to_vec()],
+    };
+    Arc::new(tls)
+}
+
 /// The HTTPS connector every outbound connection this host makes is built on.
 /// A plain `HttpConnector` with `nodelay`, wrapped so it also speaks TLS.
 pub(crate) fn https_connector(
@@ -697,6 +741,7 @@ impl PooledClient {
             unbounded_permits(),
             crate::host::quota::QuotaRegistry::new(Default::default(), None).http_wait(),
             MIN_IDLE_PER_AUTHORITY,
+            Arc::default(),
         )
     }
 
@@ -711,6 +756,7 @@ impl PooledClient {
         global_permits: Arc<Semaphore>,
         permit_wait: Duration,
         idle_per_authority: usize,
+        gate: Arc<OnceLock<EgressAddressGate>>,
     ) -> Self {
         crate::init_crypto();
         // One session store, and one exhaustion-warning throttle, shared by
@@ -718,7 +764,8 @@ impl PooledClient {
         let tls_config = isolated_resumption(&tls);
         let last_permit_warning = Arc::new(std::sync::Mutex::new(None));
         let connector = |alpn: Alpn| BoundedConnector {
-            inner: https_connector(&tls_config, alpn),
+            tls: with_alpn(&tls_config, alpn),
+            gate: Arc::clone(&gate),
             workload: workload.clone(),
             workload_permits: workload_permits.clone(),
             global_permits: global_permits.clone(),
@@ -898,6 +945,9 @@ pub struct WorkloadClients {
     /// before any request builds a client, and is dropped when it unbinds.
     call_concurrency: Arc<std::sync::RwLock<BTreeMap<String, usize>>>,
     clients: moka::sync::Cache<String, PooledClient>,
+    /// The address check every client's new connections pass; see
+    /// [`Self::install_egress_gate`].
+    egress: Arc<OnceLock<EgressAddressGate>>,
 }
 
 impl WorkloadClients {
@@ -946,7 +996,24 @@ impl WorkloadClients {
             clients: moka::sync::Cache::builder()
                 .time_to_idle(WORKLOAD_CLIENT_IDLE)
                 .build(),
+            egress: Arc::default(),
         }
+    }
+
+    /// Check every address these clients connect to against `gate`.
+    ///
+    /// Applies to clients already built as well as later ones. The first gate
+    /// installed stays: it is the host's, and one host builds one. Returns
+    /// whether this call installed it.
+    pub fn install_egress_gate(&self, gate: EgressAddressGate) -> bool {
+        self.egress.set(gate).is_ok()
+    }
+
+    /// Share `cell` as this cache's gate, so a cache rebuilt from another
+    /// keeps whatever gate the old one had or is later given.
+    pub(crate) fn with_egress_gate_cell(mut self, cell: Arc<OnceLock<EgressAddressGate>>) -> Self {
+        self.egress = cell;
+        self
     }
 
     /// Record how many guest calls `workload_id` may run at once — call when
@@ -1006,6 +1073,7 @@ impl WorkloadClients {
                 quota.global_permits().unwrap_or_else(unbounded_permits),
                 self.quotas.http_wait(),
                 idle_per_authority(calls, self.quotas.limits().outbound_http),
+                Arc::clone(&self.egress),
             )
         })
     }
@@ -1055,15 +1123,21 @@ impl WorkloadClients {
     }
 }
 
-/// Connector that gates every *new* connection on a per-workload and a
-/// host-wide semaphore (see [`crate::host::quota`]). Reusing an idle pooled
-/// connection bypasses the connector entirely, so it needs no permit; hyper's
-/// pool checkout races this connector against idle-connection reuse and drops
-/// the pending connect (cancelling the permit acquisition) if reuse wins, so
-/// waiting here never starves a request that a freed connection could serve.
+/// Connector that gates every *new* connection on the host's
+/// [`EgressAddressGate`] and on a per-workload and a host-wide semaphore (see
+/// [`crate::host::quota`]). Reusing an idle pooled connection bypasses the
+/// connector entirely, so it needs no permit and no second address check: the
+/// address was checked when the connection was made. hyper's pool checkout
+/// races this connector against idle-connection reuse and drops the pending
+/// connect (cancelling the permit acquisition) if reuse wins, so waiting here
+/// never starves a request that a freed connection could serve.
 #[derive(Clone)]
 struct BoundedConnector {
-    inner: hyper_rustls::HttpsConnector<HttpConnector>,
+    /// Offers the pool's ALPN; see [`with_alpn`].
+    tls: Arc<rustls::ClientConfig>,
+    /// Installed by the host once it is built; read on every connect, so a
+    /// client built before that still applies it. Empty checks nothing.
+    gate: Arc<OnceLock<EgressAddressGate>>,
     /// The workload this connector belongs to, named in the exhaustion
     /// warning. `None` for a standalone [`PooledClient::new`] client.
     workload: Option<Arc<str>>,
@@ -1080,24 +1154,46 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
     type Error = BoxError;
     type Future = std::pin::Pin<Box<dyn Future<Output = Result<PermittedStream, BoxError>> + Send>>;
 
+    /// Always ready: each connect builds its own inner connector.
     fn poll_ready(
         &mut self,
-        cx: &mut std::task::Context<'_>,
+        _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
-        tower_service::Service::poll_ready(&mut self.inner, cx)
+        std::task::Poll::Ready(Ok(()))
     }
 
     fn call(&mut self, uri: hyper::Uri) -> Self::Future {
-        // Move out the connector we polled ready and leave a fresh clone
-        // behind (the usual tower clone-and-swap).
-        let mut inner = self.inner.clone();
-        std::mem::swap(&mut self.inner, &mut inner);
+        let gate = self.gate.get().cloned();
+        let port = uri.port_u16().unwrap_or(
+            match uri.scheme() == Some(&hyper::http::uri::Scheme::HTTPS) {
+                true => 443,
+                false => 80,
+            },
+        );
+        // The resolver is per connect because it has to know the port, which
+        // hyper-util does not pass it, to judge the host's own ports.
+        let mut http = HttpConnector::new_with_resolver(GatedResolver {
+            gate: gate.clone(),
+            port,
+            inner: hyper_util::client::legacy::connect::dns::GaiResolver::new(),
+        });
+        // The inner connector sees https URIs too; scheme handling belongs
+        // to the wrapping HttpsConnector.
+        http.enforce_http(false);
+        http.set_nodelay(true);
+        let mut inner = hyper_rustls::HttpsConnector::from((http, Arc::clone(&self.tls)));
         let workload = self.workload.clone();
         let workload_permits = self.workload_permits.clone();
         let global_permits = self.global_permits.clone();
         let permit_wait = self.permit_wait;
         let last_permit_warning = self.last_permit_warning.clone();
         Box::pin(async move {
+            // hyper-util connects to an address literal without resolving it,
+            // so the resolver never sees one. Judged before a permit is taken,
+            // so a refusal spends no quota.
+            if let (Some(gate), Some(ip)) = (&gate, uri_ip(&uri)) {
+                gate.filter([SocketAddr::new(ip, port)])?;
+            }
             // Acquire order (workload, then global) is fixed everywhere, and
             // waiters hold no resource another waiter needs, so waiting on
             // both cannot deadlock. `acquire_owned` only errors when the
@@ -1135,6 +1231,59 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
                 inner: stream,
                 _permits: permits,
             })
+        })
+    }
+}
+
+/// The host part of `uri` when it is an address literal.
+fn uri_ip(uri: &hyper::Uri) -> Option<std::net::IpAddr> {
+    uri.host()?
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse()
+        .ok()
+}
+
+/// Name resolution that hands the connector only the addresses the host's
+/// [`EgressAddressGate`] permits, so the connection lands on an address that
+/// was checked rather than on one resolved separately.
+#[derive(Clone)]
+struct GatedResolver {
+    gate: Option<EgressAddressGate>,
+    /// The destination port, which the address check needs and a resolver is
+    /// otherwise never told.
+    port: u16,
+    inner: hyper_util::client::legacy::connect::dns::GaiResolver,
+}
+
+impl tower_service::Service<hyper_util::client::legacy::connect::dns::Name> for GatedResolver {
+    type Response = std::vec::IntoIter<SocketAddr>;
+    type Error = BoxError;
+    type Future = std::pin::Pin<Box<dyn Future<Output = Result<Self::Response, BoxError>> + Send>>;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx).map_err(Into::into)
+    }
+
+    fn call(&mut self, name: hyper_util::client::legacy::connect::dns::Name) -> Self::Future {
+        let resolving = self.inner.call(name);
+        let gate = self.gate.clone();
+        let port = self.port;
+        Box::pin(async move {
+            let resolved = resolving
+                .await?
+                .map(|addr| SocketAddr::new(addr.ip(), port));
+            // The refusal itself is the error, not an `io::Error` around it:
+            // `io::Error::source` skips what it wraps, and the send path finds
+            // this by walking sources.
+            let permitted = match &gate {
+                Some(gate) => gate.filter(resolved)?,
+                None => resolved.collect(),
+            };
+            Ok(permitted.into_iter())
         })
     }
 }
@@ -1395,6 +1544,9 @@ fn find_in_chain<'a, T: std::error::Error + 'static>(
 /// classifications guests most commonly match on.
 fn classify_client_error(err: &hyper_util::client::legacy::Error) -> HttpError {
     if err.is_connect() {
+        if let Some(refused) = find_in_chain::<EgressRefused>(err) {
+            return refused_error(*refused);
+        }
         if find_in_chain::<rustls::pki_types::InvalidDnsNameError>(err).is_some() {
             warn!(err = %format!("{err:?}"), "outbound TLS protocol error");
             return HttpError::TlsProtocolError;
@@ -2545,5 +2697,237 @@ mod tests {
             .await
             .expect("request with the private CA trusted should succeed");
         assert_eq!(response.status(), 200);
+    }
+
+    fn egress_gate(
+        mode: crate::sockets::policy::EgressMode,
+        egress_addrs: crate::host::egress_policy::EgressAddressPolicy,
+    ) -> (EgressAddressGate, Arc<crate::host::quota::PolicyMeters>) {
+        let meters = Arc::new(crate::host::quota::PolicyMeters::default());
+        let gate = EgressAddressGate::from_socket_policy(&crate::sockets::policy::SocketPolicy {
+            egress_mode: mode,
+            egress_addrs,
+            meters: Some(Arc::clone(&meters)),
+            ..Default::default()
+        });
+        (gate, meters)
+    }
+
+    /// A workload's pooled client behind the host's default range policy.
+    fn gated_client(
+        mode: crate::sockets::policy::EgressMode,
+        tls: Arc<rustls::ClientConfig>,
+    ) -> (PooledClient, Arc<crate::host::quota::PolicyMeters>) {
+        let (gate, meters) = egress_gate(mode, Default::default());
+        let clients = WorkloadClients::new(tls);
+        assert!(clients.install_egress_gate(gate));
+        (clients.client("workload"), meters)
+    }
+
+    /// The DNS-rebinding shape: `allowedHosts` let the guest name `localhost`,
+    /// and the name resolves to the machine itself. Nothing is dialed.
+    #[tokio::test]
+    async fn a_name_resolving_to_loopback_is_refused_when_enforcing() {
+        let (addr, conns) = spawn_counting_server().await;
+        let (client, meters) = gated_client(
+            crate::sockets::policy::EgressMode::Enforce,
+            default_client_tls_config(),
+        );
+        for uri in [
+            format!("http://localhost:{}/", addr.port()),
+            format!("http://{addr}/"),
+        ] {
+            let err = client
+                .send_request(request(&uri), test_options())
+                .await
+                .err()
+                .expect("loopback must be refused");
+            assert!(
+                matches!(err, HttpError::DestinationIpProhibited),
+                "{uri}: expected DestinationIpProhibited, got {err:?}"
+            );
+        }
+        assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(meters.denied(crate::sockets::DenyReason::BlockedRange) >= 2);
+    }
+
+    /// The metadata address in its IPv4-mapped spelling, as a literal: judged
+    /// before any connect or permit, since hyper-util never resolves one.
+    #[tokio::test]
+    async fn the_metadata_address_is_refused_in_every_spelling() {
+        let (client, _) = gated_client(
+            crate::sockets::policy::EgressMode::Enforce,
+            default_client_tls_config(),
+        );
+        for uri in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::ffff:169.254.169.254]/latest/meta-data/",
+            "http://[fd00:ec2::254]/latest/meta-data/",
+        ] {
+            let err = client
+                .send_request(request(uri), test_options())
+                .await
+                .err()
+                .expect("the metadata address must be refused");
+            assert!(
+                matches!(err, HttpError::DestinationIpProhibited),
+                "{uri}: expected DestinationIpProhibited, got {err:?}"
+            );
+        }
+    }
+
+    /// The default: the connection goes through, and the refusal enforcement
+    /// would have made is on the counter.
+    #[tokio::test]
+    async fn count_mode_severs_nothing_and_counts() {
+        let (addr, conns) = spawn_counting_server().await;
+        let (client, meters) = gated_client(
+            crate::sockets::policy::EgressMode::Count,
+            default_client_tls_config(),
+        );
+        let (response, _io) = client
+            .send_request(
+                request(&format!("http://localhost:{}/", addr.port())),
+                test_options(),
+            )
+            .await
+            .expect("count mode must not refuse");
+        assert_eq!(response.status(), 200);
+        assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(meters.would_deny(crate::sockets::DenyReason::BlockedRange) >= 1);
+        assert_eq!(meters.denied(crate::sockets::DenyReason::BlockedRange), 0);
+    }
+
+    #[tokio::test]
+    async fn pooled_grpc_egress_is_gated_too() {
+        let (addr, conns) = spawn_counting_h2c_server().await;
+        let (client, _) = gated_client(
+            crate::sockets::policy::EgressMode::Enforce,
+            default_client_tls_config(),
+        );
+        let err = client
+            .send_grpc_request(
+                grpc_request(&format!("http://localhost:{}/svc.Test/Call", addr.port())),
+                test_options(),
+            )
+            .await
+            .err()
+            .expect("loopback must be refused");
+        assert!(
+            matches!(err, HttpError::DestinationIpProhibited),
+            "expected DestinationIpProhibited, got {err:?}"
+        );
+        assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// The per-request gRPC connection a non-pooling handler falls back to.
+    #[tokio::test]
+    async fn the_unpooled_connect_dials_only_what_the_gate_permits() {
+        let (addr, conns) = spawn_counting_server().await;
+        let authority = format!("localhost:{}", addr.port());
+        let (enforcing, _) = egress_gate(
+            crate::sockets::policy::EgressMode::Enforce,
+            Default::default(),
+        );
+        let err = connect_http_tcp(&authority, Duration::from_secs(5), Some(&enforcing))
+            .await
+            .expect_err("loopback must be refused");
+        assert!(
+            matches!(err, HttpError::DestinationIpProhibited),
+            "expected DestinationIpProhibited, got {err:?}"
+        );
+        let (counting, _) = egress_gate(
+            crate::sockets::policy::EgressMode::Count,
+            Default::default(),
+        );
+        connect_http_tcp(&authority, Duration::from_secs(5), Some(&counting))
+            .await
+            .expect("count mode must connect");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// A TLS server for `localhost` behind a private CA that records the
+    /// server name each client asked for.
+    async fn sni_recording_tls_server() -> (u16, String, Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        crate::init_crypto();
+        let certified_key =
+            rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let ca_pem = certified_key.cert.pem();
+        let key_der =
+            rustls::pki_types::PrivateKeyDer::try_from(certified_key.signing_key.serialize_der())
+                .unwrap();
+        let server_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![certified_key.cert.der().clone()], key_der)
+            .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let names = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_names = Arc::clone(&names);
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                let seen_names = Arc::clone(&seen_names);
+                tokio::spawn(async move {
+                    let Ok(mut tls) = acceptor.accept(stream).await else {
+                        return;
+                    };
+                    if let Some(name) = tls.get_ref().1.server_name() {
+                        seen_names.lock().unwrap().push(name.to_string());
+                    }
+                    let mut buf = [0u8; 4096];
+                    let mut seen = Vec::new();
+                    while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match tls.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => seen.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    let _ = tls
+                        .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
+                        .await;
+                });
+            }
+        });
+        (port, ca_pem, names)
+    }
+
+    /// The gate filters addresses, never the URI, so TLS to a permitted host
+    /// still names the host: SNI carries it and the certificate is verified
+    /// against it.
+    #[tokio::test]
+    async fn tls_through_the_gate_keeps_the_hostname() {
+        let (port, ca_pem, names) = sni_recording_tls_server().await;
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, ca_pem).unwrap();
+        let tls = ClientTlsOptions {
+            roots: TrustRoots::ExtraOnly,
+            extra_ca_paths: vec![ca_path],
+            ..Default::default()
+        }
+        .build()
+        .unwrap();
+        // Enforcing, with the ranges this test's loopback server needs.
+        let (gate, _) = egress_gate(
+            crate::sockets::policy::EgressMode::Enforce,
+            crate::host::egress_policy::EgressAddressPolicy::permissive(),
+        );
+        let clients = WorkloadClients::new(tls);
+        clients.install_egress_gate(gate);
+        let (response, _io) = clients
+            .client("workload")
+            .send_request(
+                request(&format!("https://localhost:{port}/")),
+                test_options(),
+            )
+            .await
+            .expect("a permitted host must be reachable over TLS");
+        assert_eq!(response.status(), 200);
+        assert_eq!(*names.lock().unwrap(), ["localhost"]);
     }
 }

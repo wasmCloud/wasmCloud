@@ -540,12 +540,14 @@ pub struct HostCommand {
     #[arg(long = "allow-host-loopback", default_value_t = false)]
     pub allow_host_loopback: bool,
 
-    /// How the raw-socket egress policy is applied.
+    /// How the egress policy is applied, to raw sockets and to the addresses
+    /// a guest's `wasi:http` requests resolve to.
     ///
     /// `count` (the default) evaluates the policy, records what it would refuse,
-    /// and allows the connection anyway. Raw socket connect was never gated, so
-    /// enforcing immediately would sever live traffic on upgrade; run in `count`
-    /// first, watch the `would_deny` counters, then switch to `enforce`.
+    /// and allows the connection anyway. Neither was gated before, so
+    /// enforcing immediately would sever live traffic on upgrade; run in
+    /// `count` first, watch the `would_deny` counters, then switch to
+    /// `enforce`.
     #[arg(long = "socket-egress", value_enum, default_value = "count")]
     pub socket_egress: SocketEgressMode,
 
