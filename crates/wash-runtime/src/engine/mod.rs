@@ -73,10 +73,7 @@ fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
         linker,
         <SharedCtx as wasmtime_wasi::filesystem::WasiFilesystemView>::filesystem,
     )?;
-    filesystem::preopens::add_to_linker::<SharedCtx, wasmtime_wasi::filesystem::WasiFilesystem>(
-        linker,
-        <SharedCtx as wasmtime_wasi::filesystem::WasiFilesystemView>::filesystem,
-    )?;
+    filesystem::preopens::add_to_linker::<SharedCtx, SharedCtx>(linker, ctx::extract_active_ctx)?;
 
     // Clocks
     clocks::wall_clock::add_to_linker::<SharedCtx, wasmtime_wasi::clocks::WasiClocks>(
@@ -177,7 +174,17 @@ fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
     // CLI, clocks, filesystem, random — upstream P3 add_to_linker
     wasmtime_wasi::p3::cli::add_to_linker(linker)?;
     wasmtime_wasi::p3::clocks::add_to_linker(linker)?;
-    wasmtime_wasi::p3::filesystem::add_to_linker(linker)?;
+    wasmtime_wasi::p3::bindings::filesystem::types::add_to_linker::<
+        SharedCtx,
+        wasmtime_wasi::filesystem::WasiFilesystem,
+    >(
+        linker,
+        <SharedCtx as wasmtime_wasi::filesystem::WasiFilesystemView>::filesystem,
+    )?;
+    wasmtime_wasi::p3::bindings::filesystem::preopens::add_to_linker::<SharedCtx, SharedCtx>(
+        linker,
+        ctx::extract_active_ctx,
+    )?;
     wasmtime_wasi::p3::random::add_to_linker(linker)?;
 
     // Sockets with our custom P3 implementation (with loopback)
@@ -308,6 +315,8 @@ pub struct Engine {
     /// the host's port table, and the connection budget. The workload-level half
     /// (`allowedHosts`, `allowedHostLoopbackPorts`) is layered over it per component.
     pub(crate) socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
+    /// Host paths no workload's `hostPath` volume may expose.
+    reserved_host_paths: volumes::ReservedHostPaths,
     pub(crate) host_memory: host_memory::HostMemoryBudgets,
     /// The host-wide counter of guest linear-memory bytes that
     /// [`host_memory::HostMemoryBudgets::max_guest_memory`] is the cap on.
@@ -539,14 +548,14 @@ impl Engine {
                             "HostPath volume '{local_path}' does not exist or is not a directory",
                         );
                     }
-                    path
+                    self.reserved_host_paths.open(&path)?
                 }
                 VolumeType::EmptyDir(EmptyDirVolume {}) => {
                     // Create a temporary directory for the empty dir volume
                     let temp_dir = tempfile::tempdir()
                         .context("failed to create temp dir for empty dir volume")?;
                     tracing::debug!(path = ?temp_dir.path(), "created temp dir for empty dir volume");
-                    temp_dir.keep()
+                    volumes::ReservedHostPaths::default().open(&temp_dir.keep())?
                 }
             };
 
@@ -623,7 +632,7 @@ impl Engine {
         workload_name: impl AsRef<str>,
         workload_namespace: impl AsRef<str>,
         service: crate::types::Service,
-        validated_volumes: &std::collections::HashMap<String, PathBuf>,
+        validated_volumes: &std::collections::HashMap<String, volumes::OpenedVolume>,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
     ) -> anyhow::Result<WorkloadService> {
         // Create a wasmtime component from the bytes
@@ -648,9 +657,12 @@ impl Engine {
 
         // Build volume mounts for this component by looking up validated volumes
         let mut component_volume_mounts = Vec::new();
+        let mut resolved_volume_mounts = Vec::new();
         for vm in &service.local_resources.volume_mounts {
             if let Some(host_path) = validated_volumes.get(&vm.name) {
-                component_volume_mounts.push((host_path.clone(), vm.clone()));
+                component_volume_mounts.push((host_path.path.clone(), vm.clone()));
+                resolved_volume_mounts
+                    .push(volumes::ResolvedVolumeMount::from_opened(host_path, vm)?);
             } else {
                 tracing::warn!(
                     volume = %vm.name,
@@ -670,6 +682,7 @@ impl Engine {
             service.max_restarts,
             loopback,
         );
+        service.metadata.resolved_volume_mounts = resolved_volume_mounts;
         service.metadata.socket_policy = Arc::clone(&self.socket_policy);
         service.metadata.guest_memory = Arc::clone(&self.guest_memory);
 
@@ -748,7 +761,7 @@ impl Engine {
         workload_name: impl AsRef<str>,
         workload_namespace: impl AsRef<str>,
         component: crate::types::Component,
-        validated_volumes: &std::collections::HashMap<String, PathBuf>,
+        validated_volumes: &std::collections::HashMap<String, volumes::OpenedVolume>,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
     ) -> anyhow::Result<WorkloadComponent> {
         // Read before the component's fields are moved out below.
@@ -776,9 +789,12 @@ impl Engine {
 
         // Build volume mounts for this component by looking up validated volumes
         let mut component_volume_mounts = Vec::new();
+        let mut resolved_volume_mounts = Vec::new();
         for vm in &component.local_resources.volume_mounts {
             if let Some(host_path) = validated_volumes.get(&vm.name) {
-                component_volume_mounts.push((host_path.clone(), vm.clone()));
+                component_volume_mounts.push((host_path.path.clone(), vm.clone()));
+                resolved_volume_mounts
+                    .push(volumes::ResolvedVolumeMount::from_opened(host_path, vm)?);
             } else {
                 tracing::warn!(
                     volume = %vm.name,
@@ -800,6 +816,7 @@ impl Engine {
             loopback,
             instances,
         );
+        workload_component.metadata.resolved_volume_mounts = resolved_volume_mounts;
         workload_component.metadata.socket_policy = Arc::clone(&self.socket_policy);
         workload_component.metadata.guest_memory = Arc::clone(&self.guest_memory);
         Ok(workload_component)
@@ -987,6 +1004,7 @@ pub struct EngineBuilder {
     parallel_compilation: Option<bool>,
     native_unwind_info: Option<bool>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
+    reserved_host_paths: Vec<PathBuf>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
     guest_memory_mode: guest_memory::GuestMemoryMode,
     /// Optional TLS provider override for wasi:tls client connections.
@@ -995,6 +1013,13 @@ pub struct EngineBuilder {
 }
 
 impl EngineBuilder {
+    /// Reserve paths that no workload volume may contain or lie inside.
+    #[must_use]
+    pub fn with_reserved_host_paths(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.reserved_host_paths.extend(paths);
+        self
+    }
+
     /// Install the host-level socket policy every workload on this engine
     /// inherits.
     ///
@@ -1330,6 +1355,7 @@ impl EngineBuilder {
             #[cfg(test)]
             compiles: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             socket_policy: self.socket_policy.unwrap_or_default(),
+            reserved_host_paths: volumes::ReservedHostPaths::new(self.reserved_host_paths),
             host_memory,
             guest_memory: {
                 let budget = guest_memory::GuestMemoryBudget::from_budgets(

@@ -741,6 +741,24 @@ runtime:
       #         prod:
       #           configFrom: [vault-prod]
       plugins: []
+      # -- Named CA bundles a plugin's `allowedHosts[].tls.trust` selects. Each
+      # names a Secret in the release namespace and the key holding the PEM
+      # bundle, which the chart mounts read-only for the host alone; or `ca`,
+      # a path already in the image. `roots` is `add` (the default: the
+      # public roots too) or `replace`.
+      #   trustBundles:
+      #     couchbase-ca: { secretName: couchbase-ca, caKey: ca.crt, roots: replace }
+      trustBundles: {}
+      # -- Named client identities a plugin's `allowedHosts[].tls.identity`
+      # selects. Each names a Secret and the keys holding the certificate chain
+      # and its key (a `kubernetes.io/tls` Secret: `tls.crt`/`tls.key`), or
+      # `cert`/`key` paths already in the image. The host re-reads a Secret
+      # identity every `refresh` (default 30s), so rotating the Secret reaches
+      # new connections without a restart; an expired certificate is never
+      # presented.
+      #   identities:
+      #     couchbase: { secretName: couchbase-client, certKey: tls.crt, keyKey: tls.key }
+      identities: {}
       # -- Deprecated alias for `plugins`, from when only component plugins
       # could be declared. Entries here must name an `image` or `file`; a
       # native plugin's configuration belongs under `plugins`. Merges with
@@ -780,10 +798,22 @@ runtime:
       #   allowedHosts    endpoints this plugin may reach. Component plugins
       #                   are gated at WASI; native plugins must check their
       #                   client endpoints. Omitted/empty denies all.
+      #                   An entry may be a `{host, tls}` record instead of a
+      #                   string, whose `tls` selects by name the trust bundle a
+      #                   TLS connection to that host verifies the server with,
+      #                   and the identity it presents, from this host group's
+      #                   `trustBundles` and `identities` below:
+      #                     - host: cluster.internal:11207
+      #                       tls: { trust: couchbase-ca, identity: couchbase }
+      #                   `tls: {}` uses the public roots and no identity; `*`
+      #                   and one-label suffixes like `*.com` may select
+      #                   neither. A plugin that cannot apply the
+      #                   trust fails to load.
       #
       # Editing any of these rolls the host automatically (the Deployment
       # carries a checksum over the rendered config file). Rotating the
-      # CONTENTS of a ConfigMap/Secret named by `configFrom`/`secretFrom` is
+      # CONTENTS of a ConfigMap/Secret named by `configFrom`/`secretFrom`
+      # (or by a `trustBundles` entry's `secretName`) is
       # different: the host resolves that file once, at startup, and the
       # kubelet updates the projected volume in place, so a running host keeps
       # serving what it read at boot. The Deployment carries

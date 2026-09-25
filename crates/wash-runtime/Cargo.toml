@@ -105,6 +105,7 @@ wasmtime-wasi-io = { workspace = true }
 wasmtime-wasi-http = { workspace = true, features = ["default-send-request", "p2", "p3", "component-model-async"] }
 wasmtime-wasi-tls = { workspace = true, optional = true, features = ["p3", "rustls"] }
 io-lifetimes = { workspace = true }
+cap-primitives = { workspace = true }
 rustix = { workspace = true }
 rustls = { workspace = true, features = ["std", "tls12"] }
 rustls-native-certs = { workspace = true }

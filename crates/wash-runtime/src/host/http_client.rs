@@ -476,16 +476,26 @@ pub(crate) async fn connect_http_tcp(
 }
 
 /// Clone a TLS client configuration with a fresh, private session-resumption
-/// store.
+/// store — or none, for one that presents a client certificate.
 ///
 /// `ClientConfig::clone` shares the resumption store behind an `Arc`, and
 /// rustls resumes sessions across clones — so every client (or connection)
 /// built from a shared base configuration would otherwise share one TLS
 /// session-ticket cache, letting an upstream server correlate two workloads
 /// via a resumed session, against this module's isolation promise.
+///
+/// A resumed session skips the client-certificate resolver and keeps the
+/// authentication it was established with, so a configuration presenting an
+/// identity does not resume at all: a rotated or expired credential must stop
+/// authenticating new connections, which a session cached under the old one
+/// would keep doing.
 pub(crate) fn isolated_resumption(tls: &rustls::ClientConfig) -> rustls::ClientConfig {
     let mut config = tls.clone();
-    config.resumption = rustls::client::Resumption::in_memory_sessions(256);
+    config.resumption = if tls.client_auth_cert_resolver.has_certs() {
+        rustls::client::Resumption::disabled()
+    } else {
+        rustls::client::Resumption::in_memory_sessions(256)
+    };
     config
 }
 

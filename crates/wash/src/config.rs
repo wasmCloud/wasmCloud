@@ -5,6 +5,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::{Context, Result, bail};
@@ -79,6 +80,20 @@ pub struct Config {
     )]
     pub secret_sources: BTreeMap<String, SecretSource>,
 
+    /// Named CA bundles an `allowedHosts` entry's `tls.trust` selects.
+    #[serde(
+        default,
+        rename = "trustBundles",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub trust_bundles: BTreeMap<String, wash_runtime::plugin::TrustBundle>,
+
+    /// Named client identities an `allowedHosts` entry's `tls.identity`
+    /// selects. The key material stays here, read by the host; a grant only
+    /// names it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub identities: BTreeMap<String, wash_runtime::plugin::IdentitySource>,
+
     /// WIT dependency management configuration (default: empty/optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wit: Option<WitConfig>,
@@ -97,12 +112,75 @@ impl Default for Config {
             workload: None,
             config_sources: BTreeMap::new(),
             secret_sources: BTreeMap::new(),
+            trust_bundles: BTreeMap::new(),
+            identities: BTreeMap::new(),
             wit: None,
         }
     }
 }
 
 impl Config {
+    /// The files and directories the `configs:`/`secrets:`/`trustBundles:`/
+    /// `identities:` catalogs read, with relative paths resolved against
+    /// `project_dir` — paths a host reserves so no workload volume can expose
+    /// them.
+    pub fn reserved_host_paths(&self, project_dir: &Path) -> Vec<PathBuf> {
+        let resolve = |path: &PathBuf| {
+            if path.is_relative() {
+                project_dir.join(path)
+            } else {
+                path.clone()
+            }
+        };
+        self.config_sources
+            .values()
+            .flat_map(|source| [&source.file, &source.dir])
+            .chain(
+                self.secret_sources
+                    .values()
+                    .flat_map(|source| [&source.file, &source.dir]),
+            )
+            .flatten()
+            .chain(self.trust_bundles.values().map(|bundle| &bundle.ca))
+            .chain(
+                self.identities
+                    .values()
+                    .flat_map(|identity| [&identity.cert, &identity.key]),
+            )
+            .map(resolve)
+            .collect()
+    }
+
+    /// Load `trustBundles:` and `identities:`, relative paths resolved against
+    /// `project_dir`. Identities with `refresh` start rotating, which needs the
+    /// host's async runtime.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`wash_runtime::plugin::TlsCatalog::load`] reports.
+    pub fn tls_catalog(&self, project_dir: &Path) -> Result<Arc<wash_runtime::plugin::TlsCatalog>> {
+        let bundles = self
+            .trust_bundles
+            .iter()
+            .map(|(name, bundle)| {
+                let mut bundle = bundle.clone();
+                bundle.resolve_relative_to(project_dir);
+                (name.clone(), bundle)
+            })
+            .collect();
+        let identities = self
+            .identities
+            .iter()
+            .map(|(name, identity)| {
+                let mut identity = identity.clone();
+                identity.resolve_relative_to(project_dir);
+                (name.clone(), identity)
+            })
+            .collect();
+        wash_runtime::plugin::TlsCatalog::load(&bundles, &identities)
+            .context("failed to load `trustBundles`/`identities`")
+    }
+
     /// Get the WIT directory from the configuration, defaulting to "./wit" if not set
     pub fn wit_dir(&self) -> PathBuf {
         if let Some(wit_config) = &self.wit
@@ -536,8 +614,15 @@ pub struct HostPluginConfig {
     /// Hosts this plugin may reach. Component plugins are gated at their WASI
     /// sockets and HTTP interfaces. Native plugins must enforce this against
     /// their client endpoints or fail host startup. Empty denies all.
+    ///
+    /// An entry is either a host string or a `{ host, tls }` record whose `tls`
+    /// block selects, by name, the `trustBundles` entry a TLS connection to that
+    /// host verifies the server with and the `identities` entry it presents.
+    /// `tls: {}` is the platform's default roots and no identity. A plugin that
+    /// cannot apply a `tls` block fails to load rather than connecting without
+    /// it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_hosts: Vec<AllowedHost>,
+    pub allowed_hosts: Vec<wash_runtime::plugin::PluginAllowedHost>,
     /// Names this plugin may resolve. Empty denies every lookup.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_ip_name_lookups: Vec<AllowedIpName>,
@@ -652,20 +737,40 @@ impl HostPluginConfig {
         )
     }
 
+    /// The egress half of `allowedHosts`, without any `tls` blocks.
+    fn egress_hosts(&self) -> Arc<[AllowedHost]> {
+        self.allowed_hosts.iter().map(|e| e.host.clone()).collect()
+    }
+
+    /// The trust the `tls` blocks on `allowedHosts` select from `catalog`.
+    /// `None` when no entry declares `tls`.
+    fn tls_policy(
+        &self,
+        catalog: &Arc<wash_runtime::plugin::TlsCatalog>,
+    ) -> Result<Option<Arc<wash_runtime::plugin::PluginTlsPolicy>>> {
+        Ok(
+            wash_runtime::plugin::PluginTlsPolicy::from_grants(&self.allowed_hosts, catalog)
+                .with_context(|| format!("host.plugins '{}'", self.id))?
+                .map(Arc::new),
+        )
+    }
+
     /// Resolve this entry's operator declaration: base config, every named
     /// binding, the policy, and the extra host-owned keys.
     ///
     /// # Errors
     ///
-    /// An empty `id`, an empty binding name, or a `configFrom`/`secretFrom`
+    /// An empty `id`, an empty binding name, a `configFrom`/`secretFrom`
     /// reference that does not resolve — same failure modes as
-    /// [`crate::workload::resolve_workload`].
+    /// [`crate::workload::resolve_workload`] — or a `tls` block `catalog`
+    /// cannot satisfy.
     pub fn to_binding_set(
         &self,
         config: &Config,
         project_dir: &Path,
         repo_root: Option<&Path>,
         default_policy: WorkloadConfigPolicy,
+        catalog: &Arc<wash_runtime::plugin::TlsCatalog>,
     ) -> Result<wash_runtime::plugin::PluginBindingSet> {
         if self.id.is_empty() {
             bail!("host.plugins entry is missing a non-empty `id`");
@@ -697,10 +802,13 @@ impl HostPluginConfig {
             || !self.allowed_host_loopback_ports.is_empty()
         {
             set = set.with_egress_policy(
-                self.allowed_hosts.clone().into(),
+                self.egress_hosts(),
                 self.allowed_ip_name_lookups.clone().into(),
                 self.allowed_host_loopback_ports.clone().into(),
             );
+        }
+        if let Some(tls) = self.tls_policy(catalog)? {
+            set = set.with_tls_policy(tls);
         }
         for (name, binding) in &self.bindings {
             if name.is_empty() {
@@ -746,7 +854,7 @@ impl HostPluginConfig {
             max_restarts: self.max_restarts,
             expected_digest: self.expected_digest.clone(),
             config: self.environment.config.clone(),
-            allowed_hosts: self.allowed_hosts.clone().into(),
+            allowed_hosts: self.egress_hosts(),
             allowed_ip_name_lookups: self.allowed_ip_name_lookups.clone().into(),
             allowed_host_loopback_ports: self.allowed_host_loopback_ports.clone().into(),
             ports: self.ports.clone().into(),
@@ -881,12 +989,16 @@ fn plugin_bindings_from(
     // self-contained manifest dev exists to run.
     let mut bindings = wash_runtime::plugin::PluginBindings::new()
         .with_default_workload_config(default_policy.into());
+    // Loaded once for every entry, so plugins selecting one identity share its
+    // one rotating credential.
+    let catalog = config.tls_catalog(project_dir)?;
     for entry in entries {
         bindings = bindings.with_plugin(entry.to_binding_set(
             config,
             project_dir,
             repo_root,
             default_policy,
+            &catalog,
         )?);
     }
     Ok(bindings)
@@ -1824,6 +1936,8 @@ pub fn example_config() -> Config {
         workload: None,
         config_sources: BTreeMap::new(),
         secret_sources: BTreeMap::new(),
+        trust_bundles: BTreeMap::new(),
+        identities: BTreeMap::new(),
     }
 }
 
@@ -2893,7 +3007,13 @@ host:
         assert!(!entry.is_component());
 
         let set = entry
-            .to_binding_set(&config, Path::new("."), None, WorkloadConfigPolicy::Deny)
+            .to_binding_set(
+                &config,
+                Path::new("."),
+                None,
+                WorkloadConfigPolicy::Deny,
+                &config.tls_catalog(Path::new(".")).unwrap(),
+            )
             .unwrap();
         assert_eq!(
             set.workload_config(),
@@ -2967,6 +3087,80 @@ host:
             .unwrap_err()
             .to_string();
         assert!(err.contains("no `file` or `image`"), "got: {err}");
+    }
+
+    #[test]
+    fn a_tls_block_selects_from_catalogs_resolved_against_the_project_dir() {
+        wash_runtime::init_crypto();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("tls")).unwrap();
+        let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = ca_params
+            .self_signed(&rcgen::KeyPair::generate().unwrap())
+            .unwrap();
+        std::fs::write(project.path().join("tls/ca.crt"), ca.pem()).unwrap();
+
+        let yaml = r#"
+trustBundles:
+  nats-ca:
+    ca: tls/ca.crt
+    roots: replace
+host:
+  plugins:
+    - id: wasmcloud-nats
+      allowedHosts:
+        - host: "tls://nats.internal:4222"
+          tls:
+            trust: nats-ca
+        - "nats.internal:8222"
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let hp = &config.host().plugins[0];
+        let catalog = config.tls_catalog(project.path()).unwrap();
+        let set = hp
+            .to_binding_set(
+                &config,
+                project.path(),
+                None,
+                WorkloadConfigPolicy::Deny,
+                &catalog,
+            )
+            .unwrap();
+        let trust = set
+            .tls_policy()
+            .expect("a `tls` block declares a policy")
+            .for_endpoint("nats.internal", 4222, &["tls"])
+            .unwrap()
+            .expect("the entry's endpoint is covered");
+        assert_eq!(trust.grant().trust.as_deref(), Some("nats-ca"));
+        assert!(
+            config
+                .reserved_host_paths(project.path())
+                .contains(&project.path().join("tls/ca.crt"))
+        );
+
+        // A bundle that does not load fails with its name.
+        let err = config
+            .tls_catalog(&project.path().join("elsewhere"))
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("nats-ca"), "got: {err:#}");
+
+        // A selection naming nothing declared fails with the plugin's id.
+        let empty = wash_runtime::plugin::TlsCatalog::empty().unwrap();
+        let err = hp
+            .to_binding_set(
+                &config,
+                project.path(),
+                None,
+                WorkloadConfigPolicy::Deny,
+                &empty,
+            )
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("wasmcloud-nats"),
+            "got: {err:#}"
+        );
     }
 
     #[test]

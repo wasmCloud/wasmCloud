@@ -89,6 +89,7 @@
 {{- $needsConfigFile := $partition.needsConfigFile }}
 {{- $configFromNames := $partition.configFromNames }}
 {{- $secretFromNames := $partition.secretFromNames }}
+{{- $tlsSecretNames := $partition.tlsSecretNames }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -193,6 +194,13 @@ spec:
             secretName: {{ . }}
             # Matches the Kubernetes Secret volume `defaultMode: 0400` posture
             # `crate::workload`'s own `file:` secret handling documents.
+            defaultMode: 0400
+        {{- end }}
+        {{- range $tlsSecretNames }}
+        - name: host-plugin-tls-{{ . | sha256sum | trunc 16 }}
+          secret:
+            secretName: {{ . }}
+            # A client key is among them; fsGroup grants the host read access.
             defaultMode: 0400
         {{- end }}
         {{- end }}
@@ -458,6 +466,11 @@ spec:
             {{- range $secretFromNames }}
             - name: host-plugin-secret-{{ . }}
               mountPath: /etc/wasmcloud/host-plugin-secrets/{{ . }}
+              readOnly: true
+            {{- end }}
+            {{- range $tlsSecretNames }}
+            - name: host-plugin-tls-{{ . | sha256sum | trunc 16 }}
+              mountPath: /etc/wasmcloud/host-plugin-tls/{{ . }}
               readOnly: true
             {{- end }}
             {{- end }}
