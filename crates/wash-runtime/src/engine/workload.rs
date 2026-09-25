@@ -2843,6 +2843,8 @@ impl UnresolvedWorkload {
 
         trace!(?unmatched_interfaces, "resolving unmatched interfaces");
 
+        let plugin_worlds: Vec<(&'static str, WitWorld)> =
+            plugins.iter().map(|(id, p)| (*id, p.world())).collect();
         // Iterate through each plugin first, then check every component for matching worlds.
         //
         // In plugin-id order, not `HashMap` order: where two plugins both match
@@ -2865,60 +2867,14 @@ impl UnresolvedWorkload {
                 // Find interfaces that this plugin can satisfy for this component
                 let mut matching_interfaces = HashSet::new();
                 for wit_interface in required_interfaces.iter() {
-                    // A named binding whose name matches a registered plugin
-                    // id directly routes to exactly that plugin — the id IS
-                    // the routing key, so this bypasses the
-                    // named/unnamed `supports_named_instances()` deferral
-                    // below entirely (that deferral is for the closed,
-                    // native-only multiplexer's own `(implements ..)`
-                    // labels, a separate routing axis). A plugin still has to
-                    // actually serve the interface to be matched; a name that
-                    // doesn't resolve to any registered plugin id falls
-                    // through to the existing world-matching path unchanged
-                    // (e.g. a `(implements ..)` multiplex label).
-                    if let Some(name) = &wit_interface.name
-                        && plugins.contains_key(name.as_str())
-                    {
-                        if name.as_str() == *plugin_id
-                            && plugin_interfaces.includes_bidirectional(wit_interface)
-                            && p.claims(wit_interface)
-                        {
-                            matching_interfaces.insert(wit_interface.clone());
-                        }
-                        continue;
-                    }
-                    // Check if plugin supports this interface. `claims` is the
-                    // plugin's own veto over a world match it cannot serve
-                    // (e.g. an entry that pins no version, which matches every
-                    // revision); a refusal leaves the interface unmatched so a
-                    // sibling plugin gets it.
-                    if plugin_interfaces.includes_bidirectional(wit_interface)
-                        && p.claims(wit_interface)
-                    {
-                        // An `(implements ..)` label routes to the plugin
-                        // whose `host.plugins` entry declares it; failing
-                        // that, to one that supports named instances. A plain
-                        // import stays with a plugin that serves it plainly.
-                        let defer_to_other = if let Some(label) = wit_interface.name.as_deref() {
-                            match declaring_plugin(plugins, plugin_bindings, label, wit_interface) {
-                                Some(owner) => owner != *plugin_id,
-                                None => {
-                                    !p.supports_named_instances()
-                                        && other_plugin_serves(
-                                            plugins,
-                                            plugin_id,
-                                            wit_interface,
-                                            true,
-                                        )
-                                }
-                            }
-                        } else {
-                            p.defers_unnamed_instances()
-                                && other_plugin_serves(plugins, plugin_id, wit_interface, false)
-                        };
-                        if defer_to_other {
-                            continue;
-                        }
+                    if plugin_qualifies(
+                        plugins,
+                        plugin_bindings,
+                        plugin_id,
+                        p,
+                        &plugin_interfaces,
+                        wit_interface,
+                    ) {
                         matching_interfaces.insert(wit_interface.clone());
                     }
                 }
@@ -3145,6 +3101,25 @@ impl UnresolvedWorkload {
                         if let Some(unmatched) = unmatched_interfaces.get_mut(&id) {
                             for interface in requested_interfaces.iter() {
                                 unmatched.remove(interface);
+                            }
+                        }
+
+                        for interface in requested_interfaces.iter() {
+                            let ignored: Vec<&str> =
+                                providers_for(plugins, plugin_bindings, &plugin_worlds, interface)
+                                    .into_iter()
+                                    .filter(|other| *other != *plugin_id)
+                                    .collect();
+                            if !ignored.is_empty() {
+                                warn!(
+                                    component_id = workload_item.id(),
+                                    interface = %interface,
+                                    selected = plugin_id,
+                                    ?ignored,
+                                    "multiple plugins serve an interface a workload imports; \
+                                     binding one and ignoring the rest - uninstall a plugin or \
+                                     bind it by name"
+                                );
                             }
                         }
                     }
@@ -3686,6 +3661,60 @@ async fn unbind_all(workload_id: &str, bound: &[BoundPluginWithInterfaces], reas
             );
         }
     }
+}
+
+fn providers_for(
+    plugins: &HashMap<&'static str, Arc<dyn HostPlugin + 'static>>,
+    plugin_bindings: &crate::plugin::PluginBindings,
+    plugin_worlds: &[(&'static str, WitWorld)],
+    wit_interface: &WitInterface,
+) -> Vec<&'static str> {
+    let mut ids: Vec<&'static str> = plugin_worlds
+        .iter()
+        .filter(|(id, world)| {
+            plugins.get(id).is_some_and(|p| {
+                plugin_qualifies(plugins, plugin_bindings, id, p, world, wit_interface)
+            })
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    ids.sort_unstable();
+    ids
+}
+
+fn plugin_qualifies(
+    plugins: &HashMap<&'static str, Arc<dyn HostPlugin + 'static>>,
+    plugin_bindings: &crate::plugin::PluginBindings,
+    plugin_id: &str,
+    p: &Arc<dyn HostPlugin>,
+    plugin_interfaces: &WitWorld,
+    wit_interface: &WitInterface,
+) -> bool {
+    if let Some(name) = &wit_interface.name
+        && plugins.contains_key(name.as_str())
+    {
+        return name.as_str() == plugin_id
+            && plugin_interfaces.includes_bidirectional(wit_interface)
+            && p.claims(wit_interface);
+    }
+
+    if !(plugin_interfaces.includes_bidirectional(wit_interface) && p.claims(wit_interface)) {
+        return false;
+    }
+
+    let defer_to_other = if let Some(label) = wit_interface.name.as_deref() {
+        match declaring_plugin(plugins, plugin_bindings, label, wit_interface) {
+            Some(owner) => owner != plugin_id,
+            None => {
+                !p.supports_named_instances()
+                    && other_plugin_serves(plugins, plugin_id, wit_interface, true)
+            }
+        }
+    } else {
+        p.defers_unnamed_instances()
+            && other_plugin_serves(plugins, plugin_id, wit_interface, false)
+    };
+    !defer_to_other
 }
 
 /// Returns whether some *other* registered plugin (not `self_id`) can take
@@ -5196,6 +5225,156 @@ mod tests {
 
         assert_eq!(bound_plugins.len(), 1);
         assert_eq!(bound_plugins[0].0.id(), "blobstore-a-newer");
+    }
+
+    /// Helper mirroring what `bind_plugins` builds before it asks who provides
+    /// what, so a test can call `providers_for` the way the deploy path does.
+    fn worlds_of(
+        plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
+    ) -> Vec<(&'static str, WitWorld)> {
+        plugins.iter().map(|(id, p)| (*id, p.world())).collect()
+    }
+
+    /// Two plugins that both take the same entry are a genuine tie: nothing in
+    /// the world match, `claims`, or the named/unnamed deferrals separates them,
+    /// so the binding loop hands it to whichever id sorts first and drops the
+    /// other without a word, and a rename moves it. Both have to come back as
+    /// providers so the caller can name the one it ignored.
+    #[test]
+    fn two_plain_plugins_serving_one_interface_are_both_providers() {
+        let iface = WitInterface::from("wasi:blobstore/container@0.2.0-draft");
+
+        let first = Arc::new(MockPlugin::new("blobstore-b", vec![], vec![iface.clone()]));
+        let second = Arc::new(MockPlugin::new("blobstore-a", vec![], vec![iface.clone()]));
+
+        let mut plugins = HashMap::new();
+        plugins.insert(first.id(), first.clone() as Arc<dyn HostPlugin>);
+        plugins.insert(second.id(), second.clone() as Arc<dyn HostPlugin>);
+
+        let providers = providers_for(
+            &plugins,
+            &crate::plugin::PluginBindings::new(),
+            &worlds_of(&plugins),
+            &iface,
+        );
+
+        assert_eq!(
+            providers,
+            vec!["blobstore-a", "blobstore-b"],
+            "both plugins take the entry, and the lower id must sort first so the \
+             caller names the plugin the binding loop actually binds"
+        );
+    }
+
+    /// The report is a warning, not a refusal: a workload two plugins can both
+    /// serve still deploys, bound to the lower plugin id exactly as before. The
+    /// operator is told which plugin was passed over and left to uninstall it or
+    /// bind it by name; nothing here stops the host working in the meantime.
+    #[tokio::test]
+    async fn a_duplicated_interface_still_binds_the_first_plugin() {
+        let iface = WitInterface::from("wasi:blobstore/container@0.2.0-draft");
+
+        let first = Arc::new(MockPlugin::new("blobstore-b", vec![], vec![iface.clone()]));
+        let second = Arc::new(MockPlugin::new("blobstore-a", vec![], vec![iface.clone()]));
+
+        let mut plugins = HashMap::new();
+        plugins.insert(first.id(), first.clone() as Arc<dyn HostPlugin>);
+        plugins.insert(second.id(), second.clone() as Arc<dyn HostPlugin>);
+
+        let mut workload = UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![create_test_component("component1")],
+            vec![iface],
+        );
+
+        let bound = workload
+            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+            .await
+            .expect("a duplicated interface is reported, not refused");
+
+        let bound_ids: Vec<&str> = bound.iter().map(|(p, _)| p.id()).collect();
+        assert_eq!(
+            bound_ids,
+            vec!["blobstore-a"],
+            "the lower plugin id binds, as it did before the report existed"
+        );
+    }
+
+    /// A multiplexer beside a plain plugin is not a tie: the multiplexer defers
+    /// an unlabeled import to the plugin that serves it plainly, and the plain
+    /// plugin has no way to tell one label from another. `wash host` registers
+    /// exactly this pair, so reporting it would fire on every default host.
+    #[test]
+    fn a_multiplexer_beside_a_plain_plugin_leaves_one_provider() {
+        let iface = keyvalue_interface(None);
+
+        let plain = Arc::new(MockPlugin::new(
+            "kv-standalone",
+            vec![],
+            vec![iface.clone()],
+        ));
+        let multiplexed = Arc::new(
+            MockPlugin::new("kv-multiplexed", vec![], vec![iface.clone()])
+                .with_named_instance_support(),
+        );
+
+        let mut plugins = HashMap::new();
+        plugins.insert(plain.id(), plain.clone() as Arc<dyn HostPlugin>);
+        plugins.insert(multiplexed.id(), multiplexed.clone() as Arc<dyn HostPlugin>);
+        let worlds = worlds_of(&plugins);
+        let bindings = crate::plugin::PluginBindings::new();
+
+        assert_eq!(
+            providers_for(&plugins, &bindings, &worlds, &iface),
+            vec!["kv-standalone"],
+            "an unlabeled entry is the plain plugin's; the multiplexer defers it"
+        );
+        assert_eq!(
+            providers_for(
+                &plugins,
+                &bindings,
+                &worlds,
+                &keyvalue_interface(Some("cache"))
+            ),
+            vec!["kv-multiplexed"],
+            "a labeled entry is the multiplexer's; the plain plugin cannot route labels"
+        );
+    }
+
+    /// Two multiplexers at different revisions are not a tie either: a
+    /// versionless entry matches both worlds, and `claims` is what separates
+    /// them. `multiplexed_plugins()` registers the sync and async pair together.
+    #[test]
+    fn multiplexers_at_different_revisions_leave_one_provider() {
+        let iface = WitInterface::from("wasi:blobstore/container");
+
+        let older = Arc::new(
+            MockPlugin::new("blobstore-a-older", vec![], vec![iface.clone()])
+                .with_named_instance_support(),
+        );
+        let newer = Arc::new(
+            MockPlugin::new("blobstore-b-newer", vec![], vec![iface.clone()])
+                .with_named_instance_support()
+                .claiming_from("0.3.0"),
+        );
+
+        let mut plugins = HashMap::new();
+        plugins.insert(older.id(), older.clone() as Arc<dyn HostPlugin>);
+        plugins.insert(newer.id(), newer.clone() as Arc<dyn HostPlugin>);
+
+        assert_eq!(
+            providers_for(
+                &plugins,
+                &crate::plugin::PluginBindings::new(),
+                &worlds_of(&plugins),
+                &iface,
+            ),
+            vec!["blobstore-a-older"],
+            "the entry pins no version, so the plugin claiming only >= 0.3.0 refuses it"
+        );
     }
 
     /// A plugin that serves labeled *and* plain imports off one backend keeps
