@@ -904,3 +904,39 @@ fn the_order_entries_are_written_in_does_not_change_the_declaration() {
     .unwrap();
     assert!(!forward.same_declaration(&changed));
 }
+
+#[tokio::test]
+async fn failed_catalog_load_aborts_started_refresh_tasks() {
+    let pki = Pki::new();
+    let runtime = tokio::runtime::Handle::current();
+    let baseline = runtime.metrics().num_alive_tasks();
+    for missing_cert in [true, false] {
+        let mut identities = pki.identities();
+        let first = identities.get_mut("client").unwrap();
+        first.refresh = Some(Duration::from_secs(30));
+        let mut bad = first.clone();
+        if missing_cert {
+            bad.cert = pki.path("missing.crt");
+        } else {
+            bad.refresh = Some(Duration::ZERO);
+        }
+        identities.insert("z-bad".into(), bad);
+        assert!(TlsCatalog::load(&BTreeMap::new(), &identities).is_err());
+        tokio::task::yield_now().await;
+        assert_eq!(runtime.metrics().num_alive_tasks(), baseline);
+    }
+}
+
+#[tokio::test]
+async fn dropping_catalog_aborts_refresh_tasks() {
+    let pki = Pki::new();
+    let runtime = tokio::runtime::Handle::current();
+    let baseline = runtime.metrics().num_alive_tasks();
+    let mut identities = pki.identities();
+    identities.get_mut("client").unwrap().refresh = Some(Duration::from_secs(30));
+    let catalog = TlsCatalog::load(&BTreeMap::new(), &identities).unwrap();
+    assert_eq!(runtime.metrics().num_alive_tasks(), baseline + 1);
+    drop(catalog);
+    tokio::task::yield_now().await;
+    assert_eq!(runtime.metrics().num_alive_tasks(), baseline);
+}

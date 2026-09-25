@@ -1,60 +1,88 @@
-//! Volume-mount resolution for workload components.
-//!
-//! Component volume mounts arrive as `(host_path, VolumeMount)` pairs and must
-//! be canonicalized (and turned into wasmtime preopen permissions) before a
-//! store can preopen them. This module holds the resolved-mount value type
-//! ([`ResolvedVolumeMount`]) plus the helpers that canonicalize a component's
-//! mounts once and cache them on its [`WorkloadMetadata`], so request-path
-//! store creation never re-canonicalizes.
+//! Directory handles retained from volume validation through WASI preopens.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
 use wasmtime::error::Context as _;
-use wasmtime_wasi::FsPerms;
+use wasmtime_wasi::filesystem::{Descriptor, Dir};
+use wasmtime_wasi::{FsPerms, OpenMode};
 
+use crate::engine::ctx::ActiveCtx;
 use crate::engine::workload::WorkloadComponent;
 use crate::types::VolumeMount;
 
-/// A volume mount with its host path canonicalized and its
-/// read-only/read-write flag turned into wasmtime preopen permissions.
-///
-/// Built once per component during workload resolution (see
-/// [`resolve_component_volume_mounts_in_map`]) and reused by the store factory
-/// when preopening directories, so the canonicalization cost stays off the
-/// request path.
+/// A directory opened without following links after its path was checked.
+#[derive(Debug, Clone)]
+pub(crate) struct OpenedVolume {
+    pub(crate) path: PathBuf,
+    dir: Arc<std::fs::File>,
+}
+
+/// A pinned directory with the permissions and name exposed to the guest.
 #[derive(Clone)]
 pub(crate) struct ResolvedVolumeMount {
-    pub(crate) host_path: PathBuf,
-    pub(crate) mount_path: String,
-    pub(crate) perms: FsPerms,
+    dir: Dir,
+    mount_path: String,
 }
 
 impl ResolvedVolumeMount {
-    pub(crate) async fn from_mount(
-        host_path: &PathBuf,
-        mount: &VolumeMount,
-    ) -> anyhow::Result<Self> {
-        let host_path = tokio::fs::canonicalize(host_path)
-            .await
-            .with_context(|| format!("failed to canonicalize volume host path {host_path:?}"))?;
-        let perms = match mount.read_only {
-            true => FsPerms::ReadOnly,
-            false => FsPerms::ReadWrite,
+    pub(crate) fn from_opened(volume: &OpenedVolume, mount: &VolumeMount) -> anyhow::Result<Self> {
+        let (perms, mode) = if mount.read_only {
+            (FsPerms::ReadOnly, OpenMode::READ)
+        } else {
+            (FsPerms::ReadWrite, OpenMode::READ | OpenMode::WRITE)
         };
-
         Ok(Self {
-            host_path,
+            dir: Dir::new(volume.dir.try_clone()?, perms, mode, false),
             mount_path: mount.mount_path.clone(),
-            perms,
         })
+    }
+
+    pub(crate) async fn from_mount(host_path: &Path, mount: &VolumeMount) -> anyhow::Result<Self> {
+        let path = host_path.to_path_buf();
+        let volume =
+            tokio::task::spawn_blocking(move || ReservedHostPaths::default().open(&path)).await??;
+        Self::from_opened(&volume, mount)
     }
 }
 
-/// Canonicalize a list of `(host_path, VolumeMount)` pairs into
-/// [`ResolvedVolumeMount`]s, preserving order.
+/// Expose retained handles alongside any preopens supplied by an embedder.
+impl ActiveCtx<'_> {
+    fn volume_directories(
+        &mut self,
+    ) -> wasmtime::Result<Vec<(wasmtime::component::Resource<Descriptor>, String)>> {
+        let mut view = wasmtime_wasi::filesystem::WasiFilesystemCtxView {
+            ctx: self.ctx.ctx.filesystem(),
+            table: self.table,
+        };
+        let mut directories =
+            wasmtime_wasi::p2::bindings::filesystem::preopens::Host::get_directories(&mut view)?;
+        for mount in &self.ctx.volume_mounts {
+            let descriptor = self.table.push(Descriptor::Dir(mount.dir.clone()))?;
+            directories.push((descriptor, mount.mount_path.clone()));
+        }
+        Ok(directories)
+    }
+}
+
+impl wasmtime_wasi::p2::bindings::filesystem::preopens::Host for ActiveCtx<'_> {
+    fn get_directories(
+        &mut self,
+    ) -> wasmtime::Result<Vec<(wasmtime::component::Resource<Descriptor>, String)>> {
+        self.volume_directories()
+    }
+}
+
+impl wasmtime_wasi::p3::bindings::filesystem::preopens::Host for ActiveCtx<'_> {
+    fn get_directories(
+        &mut self,
+    ) -> wasmtime::Result<Vec<(wasmtime::component::Resource<Descriptor>, String)>> {
+        self.volume_directories()
+    }
+}
+
 pub(crate) async fn resolve_volume_mounts(
     volume_mounts: &[(PathBuf, VolumeMount)],
 ) -> anyhow::Result<Vec<ResolvedVolumeMount>> {
@@ -68,10 +96,7 @@ pub(crate) async fn resolve_volume_mounts(
 /// Resolve and cache the volume mounts for the given components in the workload
 /// component map.
 ///
-/// For each component that has requested mounts but no resolved mounts yet, the
-/// canonicalization runs without holding the components lock; the resolved
-/// mounts are then written back under a single write lock. Components whose
-/// mounts are already resolved are skipped, so this is cheap to call repeatedly.
+/// Open unresolved mounts outside the components lock. Existing handles are kept.
 pub(crate) async fn resolve_component_volume_mounts_in_map(
     components: &Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
     component_ids: &[Arc<str>],
@@ -151,11 +176,19 @@ impl ReservedHostPaths {
         Self(reserved.into())
     }
 
-    /// Check a `hostPath` volume at `volume`, returning the canonical path it
-    /// was checked as — the one to mount, so the path mounted is the path
-    /// checked. The error does not name the reserved path, since it reaches
-    /// whoever deployed the workload; the host logs it.
-    pub fn check(&self, volume: &std::path::Path) -> anyhow::Result<PathBuf> {
+    /// Open the checked directory without following replacement symlinks.
+    pub(crate) fn open(&self, volume: &Path) -> anyhow::Result<OpenedVolume> {
+        let path = self.check(volume)?;
+        let dir = open_canonical_dir(&path)
+            .with_context(|| format!("failed to open hostPath volume '{}'", volume.display()))?;
+        Ok(OpenedVolume {
+            path,
+            dir: Arc::new(dir),
+        })
+    }
+
+    /// Check the path without exposing reserved names in the returned error.
+    fn check(&self, volume: &std::path::Path) -> anyhow::Result<PathBuf> {
         let canonical = volume.canonicalize().map_err(|err| {
             anyhow::anyhow!(
                 "failed to resolve hostPath volume '{}': {err}",
@@ -185,6 +218,28 @@ impl ReservedHostPaths {
             None => Ok(canonical),
         }
     }
+}
+
+/// Walk from the root by handle, rejecting links at every component.
+fn open_canonical_dir(path: &Path) -> std::io::Result<std::fs::File> {
+    use cap_primitives::fs::{open_ambient_dir, open_dir_nofollow};
+    use std::path::Component;
+
+    let root: PathBuf = path
+        .components()
+        .take_while(|part| matches!(part, Component::Prefix(_) | Component::RootDir))
+        .collect();
+    let mut dir = open_ambient_dir(&root, cap_primitives::ambient_authority())?;
+    for part in path.components().skip(root.components().count()) {
+        if !matches!(part, Component::Normal(_)) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "expected a canonical directory path",
+            ));
+        }
+        dir = open_dir_nofollow(&dir, Path::new(part.as_os_str()))?;
+    }
+    Ok(dir)
 }
 
 /// `path` canonicalized through its nearest existing ancestor, with the part
@@ -282,5 +337,126 @@ mod reserved_tests {
         assert!(reserved.check(&cache).is_err());
         assert!(reserved.check(&cache.join("blobs")).is_err());
         assert!(reserved.check(root.path()).is_err());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod pinned_tests {
+    use super::*;
+    use crate::engine::ctx::Ctx;
+    use std::os::unix::fs::symlink;
+    use wasmtime::component::{Resource, ResourceTable};
+    use wasmtime_wasi::p2::bindings::filesystem::types::{
+        DescriptorFlags, HostDescriptor, OpenFlags, PathFlags,
+    };
+
+    #[test]
+    fn a_link_swapped_after_the_check_is_refused_at_any_depth() {
+        for replace_parent in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let safe = root.path().join("data/volume");
+            let secret = root.path().join("secret/volume");
+            std::fs::create_dir_all(&safe).unwrap();
+            std::fs::create_dir_all(&secret).unwrap();
+            let reserved = ReservedHostPaths::new([secret.clone()]);
+            let checked = reserved.check(&safe).unwrap();
+            let replaced = if replace_parent {
+                safe.parent().unwrap()
+            } else {
+                &safe
+            };
+            std::fs::rename(replaced, root.path().join("original")).unwrap();
+            let target = if replace_parent {
+                "secret"
+            } else {
+                "../secret/volume"
+            };
+            symlink(target, replaced).unwrap();
+            assert!(open_canonical_dir(&checked).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn p2_and_p3_preopens_keep_the_checked_directory_and_permissions() {
+        let root = tempfile::tempdir().unwrap();
+        let safe = root.path().join("data");
+        let secret = root.path().join("secret");
+        std::fs::create_dir(&safe).unwrap();
+        std::fs::create_dir(&secret).unwrap();
+        std::fs::write(safe.join("value"), "safe").unwrap();
+        std::fs::write(secret.join("value"), "private key").unwrap();
+        let reserved = ReservedHostPaths::new([secret.join("value")]);
+        let volume = reserved.open(&safe).unwrap();
+        std::fs::rename(&safe, root.path().join("original")).unwrap();
+        symlink("secret", &safe).unwrap();
+
+        for p3 in [false, true] {
+            for read_only in [false, true] {
+                let mount = VolumeMount {
+                    name: "data".into(),
+                    mount_path: "/data".into(),
+                    read_only,
+                };
+                let resolved = ResolvedVolumeMount::from_opened(&volume, &mount).unwrap();
+                let mut ctx = Ctx::builder("workload", "component").build();
+                ctx.volume_mounts.push(resolved);
+                let mut table = ResourceTable::new();
+                let mut active = ActiveCtx {
+                    ctx: &mut ctx,
+                    table: &mut table,
+                };
+                let mut directories = if p3 {
+                    wasmtime_wasi::p3::bindings::filesystem::preopens::Host::get_directories(
+                        &mut active,
+                    )
+                    .unwrap()
+                } else {
+                    wasmtime_wasi::p2::bindings::filesystem::preopens::Host::get_directories(
+                        &mut active,
+                    )
+                    .unwrap()
+                };
+                assert_eq!(directories.len(), 1);
+                let (directory, name) = directories.pop().unwrap();
+                assert_eq!(name, "/data");
+                let mut view = wasmtime_wasi::filesystem::WasiFilesystemCtxView {
+                    ctx: ctx.ctx.filesystem(),
+                    table: &mut table,
+                };
+                let file = view
+                    .open_at(
+                        Resource::new_borrow(directory.rep()),
+                        PathFlags::empty(),
+                        "value".into(),
+                        OpenFlags::empty(),
+                        DescriptorFlags::READ,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(view.read(file, 32, 0).await.unwrap().0, b"safe");
+                let write = view
+                    .open_at(
+                        Resource::new_borrow(directory.rep()),
+                        PathFlags::empty(),
+                        "new".into(),
+                        OpenFlags::CREATE,
+                        DescriptorFlags::WRITE,
+                    )
+                    .await;
+                assert_eq!(write.is_err(), read_only);
+            }
+        }
+        assert!(!secret.join("new").exists());
+    }
+
+    #[test]
+    fn an_existing_allowed_symlink_can_be_pinned() {
+        let root = tempfile::tempdir().unwrap();
+        let safe = root.path().join("data");
+        std::fs::create_dir(&safe).unwrap();
+        symlink("data", root.path().join("alias")).unwrap();
+        ReservedHostPaths::default()
+            .open(&root.path().join("alias"))
+            .unwrap();
     }
 }

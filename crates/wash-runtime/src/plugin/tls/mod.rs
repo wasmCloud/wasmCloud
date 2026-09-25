@@ -157,7 +157,7 @@ pub struct TlsCatalog {
     trust: BTreeMap<String, Arc<rustls::RootCertStore>>,
     identities: BTreeMap<String, Arc<RotatingClientIdentity>>,
     configs: Mutex<BTreeMap<Selection, Arc<rustls::ClientConfig>>>,
-    refresh: Vec<tokio::task::JoinHandle<()>>,
+    refresh: Vec<tokio_util::task::AbortOnDropHandle<()>>,
 }
 
 impl fmt::Debug for TlsCatalog {
@@ -220,10 +220,10 @@ impl TlsCatalog {
                     tokio::runtime::Handle::try_current().is_ok(),
                     "identity '{name}' sets `refresh`, which needs the host's async runtime"
                 );
-                refresh.push(
+                refresh.push(tokio_util::task::AbortOnDropHandle::new(
                     spawn_refresh(Arc::clone(&identity), source.identity(), interval)
                         .with_context(|| format!("identity '{name}' has an invalid `refresh`"))?,
-                );
+                ));
             }
             loaded.insert(name.clone(), identity);
         }
