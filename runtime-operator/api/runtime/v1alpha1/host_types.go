@@ -13,13 +13,13 @@ const (
 type HostStatus struct {
 	condition.ConditionedStatus `json:",inline"`
 
-	Version           string `json:"version"`
-	OSName            string `json:"osName"`
-	OSArch            string `json:"osArch"`
-	OSKernel          string `json:"osKernel"`
-	SystemCPUUsage    string `json:"systemCPUUsage"`
-	SystemMemoryTotal int64  `json:"systemMemoryTotal"`
-	SystemMemoryFree  int64  `json:"systemMemoryFree"`
+	Version           string `json:"version,omitempty"`
+	OSName            string `json:"osName,omitempty"`
+	OSArch            string `json:"osArch,omitempty"`
+	OSKernel          string `json:"osKernel,omitempty"`
+	SystemCPUUsage    string `json:"systemCPUUsage,omitempty"`
+	SystemMemoryTotal int64  `json:"systemMemoryTotal,omitempty"`
+	SystemMemoryFree  int64  `json:"systemMemoryFree,omitempty"`
 	ComponentCount    int    `json:"componentCount,omitempty"`
 	WorkloadCount     int    `json:"workloadCount,omitempty"`
 
