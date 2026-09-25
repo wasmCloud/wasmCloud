@@ -492,7 +492,7 @@ impl QuotaRegistry {
     }
 }
 
-/// Counters for what the socket policy decided.
+/// Counters for what the socket policy and the `hostPath` volume gate decided.
 ///
 /// `would_deny` is the migration signal: while the host runs in count mode it
 /// records every refusal enforcement *would* have made, so an operator can see
@@ -502,6 +502,8 @@ impl QuotaRegistry {
 pub struct PolicyMeters {
     denied: [AtomicU64; DENY_REASONS],
     would_deny: [AtomicU64; DENY_REASONS],
+    host_path_denied: AtomicU64,
+    host_path_would_deny: AtomicU64,
 }
 
 const DENY_REASONS: usize = 6;
@@ -542,20 +544,171 @@ impl PolicyMeters {
             .map_or(0, |c| c.load(Ordering::Relaxed))
     }
 
+    /// Record a `hostPath` volume outside the host's allowed host paths.
+    pub fn record_host_path(&self, mode: crate::engine::HostPathMode) {
+        let counter = match mode {
+            crate::engine::HostPathMode::Enforce => &self.host_path_denied,
+            crate::engine::HostPathMode::Count => &self.host_path_would_deny,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `hostPath` volumes refused for lying outside the allowed host paths.
+    pub fn host_path_denied(&self) -> u64 {
+        self.host_path_denied.load(Ordering::Relaxed)
+    }
+
+    /// `hostPath` volumes mounted in count mode that enforcement would refuse.
+    pub fn host_path_would_deny(&self) -> u64 {
+        self.host_path_would_deny.load(Ordering::Relaxed)
+    }
+
     /// Every reason with a non-zero count, for a status line or a metric sweep.
     pub fn nonzero(&self) -> Vec<(DenyReason, u64, u64)> {
-        [
-            DenyReason::NotPermitted,
-            DenyReason::BindNotPermitted,
-            DenyReason::HostLoopbackNotPermitted,
-            DenyReason::HostOwnedPort,
-            DenyReason::BlockedRange,
-            DenyReason::NoCapacity,
-        ]
-        .into_iter()
-        .map(|r| (r, self.denied(r), self.would_deny(r)))
-        .filter(|(_, d, w)| *d > 0 || *w > 0)
-        .collect()
+        ALL_REASONS
+            .into_iter()
+            .map(|r| (r, self.denied(r), self.would_deny(r)))
+            .filter(|(_, d, w)| *d > 0 || *w > 0)
+            .collect()
+    }
+
+    /// These counters, published as metrics on the process-wide meter: the
+    /// would-deny figures are what an operator watches before switching the
+    /// socket policy or the `hostPath` gate to enforce. With no OTel exporter
+    /// configured the global meter is a no-op and nothing is ever read.
+    pub fn into_metered(self) -> Arc<Self> {
+        let meters = Arc::new(self);
+        meters.register_metrics(&opentelemetry::global::meter("wash-runtime"));
+        meters
+    }
+
+    fn register_metrics(self: &Arc<Self>, meter: &opentelemetry::metrics::Meter) {
+        // Weak, so the meter provider does not keep a dropped host's counters
+        // alive; a callback that cannot upgrade reports nothing.
+        let observe = |name: &'static str, doc: &'static str, read: fn(&Self) -> u64| {
+            let meters = Arc::downgrade(self);
+            let _ = meter
+                .u64_observable_counter(name)
+                .with_description(doc)
+                .with_unit("{volume}")
+                .with_callback(move |observer| {
+                    if let Some(meters) = meters.upgrade() {
+                        observer.observe(read(&meters), &[]);
+                    }
+                })
+                .build();
+        };
+        observe(
+            "host_path.denied",
+            "hostPath volumes refused for lying outside the allowed host paths",
+            Self::host_path_denied,
+        );
+        observe(
+            "host_path.would_deny",
+            "hostPath volumes mounted in count mode that enforcement would refuse",
+            Self::host_path_would_deny,
+        );
+        let by_reason =
+            |name: &'static str, doc: &'static str, read: fn(&Self, DenyReason) -> u64| {
+                let meters = Arc::downgrade(self);
+                let _ = meter
+                    .u64_observable_counter(name)
+                    .with_description(doc)
+                    .with_unit("{connection}")
+                    .with_callback(move |observer| {
+                        if let Some(meters) = meters.upgrade() {
+                            for reason in ALL_REASONS {
+                                observer.observe(
+                                    read(&meters, reason),
+                                    &[opentelemetry::KeyValue::new("reason", reason.as_str())],
+                                );
+                            }
+                        }
+                    })
+                    .build();
+            };
+        by_reason(
+            "socket_policy.denied",
+            "Socket operations the socket policy refused, by reason",
+            Self::denied,
+        );
+        by_reason(
+            "socket_policy.would_deny",
+            "Socket operations counted in count mode that enforcement would refuse, by reason",
+            Self::would_deny,
+        );
+    }
+}
+
+const ALL_REASONS: [DenyReason; DENY_REASONS] = [
+    DenyReason::NotPermitted,
+    DenyReason::BindNotPermitted,
+    DenyReason::HostLoopbackNotPermitted,
+    DenyReason::HostOwnedPort,
+    DenyReason::BlockedRange,
+    DenyReason::NoCapacity,
+];
+
+#[cfg(test)]
+mod policy_meter_tests {
+    use super::*;
+
+    /// The would-deny counters an operator is told to watch reach an exporter,
+    /// through a real SDK pipeline with a reader of its own.
+    #[test]
+    fn policy_counters_are_published_as_metrics() {
+        use opentelemetry::metrics::MeterProvider as _;
+        use opentelemetry_sdk::metrics::{
+            InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
+            data::{AggregatedMetrics, MetricData},
+        };
+
+        let meters = Arc::new(PolicyMeters::default());
+        meters.record_host_path(crate::engine::HostPathMode::Count);
+        meters.record_host_path(crate::engine::HostPathMode::Count);
+        meters.record_host_path(crate::engine::HostPathMode::Enforce);
+        meters.record_would_deny(DenyReason::BlockedRange);
+
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_reader(PeriodicReader::builder(exporter.clone()).build())
+            .build();
+        meters.register_metrics(&provider.meter("test"));
+        provider.force_flush().expect("flush");
+
+        let mut seen = std::collections::BTreeMap::new();
+        for resource in exporter.get_finished_metrics().expect("finished metrics") {
+            for scope in resource.scope_metrics() {
+                for metric in scope.metrics() {
+                    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+                        continue;
+                    };
+                    for point in sum.data_points() {
+                        let reason = point
+                            .attributes()
+                            .find(|kv| kv.key.as_str() == "reason")
+                            .map(|kv| kv.value.to_string());
+                        seen.insert((metric.name().to_string(), reason), point.value());
+                    }
+                }
+            }
+        }
+        assert_eq!(seen[&("host_path.would_deny".to_string(), None)], 2);
+        assert_eq!(seen[&("host_path.denied".to_string(), None)], 1);
+        assert_eq!(
+            seen[&(
+                "socket_policy.would_deny".to_string(),
+                Some("blocked_range".to_string())
+            )],
+            1
+        );
+        assert_eq!(
+            seen[&(
+                "socket_policy.denied".to_string(),
+                Some("not_permitted".to_string())
+            )],
+            0
+        );
     }
 }
 

@@ -885,6 +885,19 @@ runtime:
         # allows any port the OS will grant.
         # NOTE: not yet wired to the host, as with `publishPorts` above.
         publishPortRange: ""
+      # -- Which host directories a workload's `hostPath` volume may name. A
+      # volume is judged by its canonical path, so `..` and symlinks cannot
+      # step outside an allowed directory. Paths the host holds its own
+      # credentials and configuration in are refused whatever is set here.
+      hostPaths:
+        # -- Directories a `hostPath` volume may lie within. Empty permits none
+        # once `mode` is `enforce`.
+        allowed: []
+        # -- `count` or `enforce`. Empty keeps the host's default, `count`:
+        # a volume outside `allowed` is mounted, logged and counted in the
+        # `host_path.would_deny` metric. `hostPath` was never gated, so set
+        # `allowed`, watch that metric, then switch to `enforce`.
+        mode: ""
       http:
         enabled: true
         port: 9191

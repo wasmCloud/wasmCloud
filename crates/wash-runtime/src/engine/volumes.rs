@@ -179,6 +179,10 @@ impl ReservedHostPaths {
     /// Open the checked directory without following replacement symlinks.
     pub(crate) fn open(&self, volume: &Path) -> anyhow::Result<OpenedVolume> {
         let path = self.check(volume)?;
+        Self::open_checked(volume, path)
+    }
+
+    fn open_checked(volume: &Path, path: PathBuf) -> anyhow::Result<OpenedVolume> {
         let dir = open_canonical_dir(&path)
             .with_context(|| format!("failed to open hostPath volume '{}'", volume.display()))?;
         Ok(OpenedVolume {
@@ -216,6 +220,104 @@ impl ReservedHostPaths {
                 )
             }
             None => Ok(canonical),
+        }
+    }
+}
+
+/// How strictly the `hostPath` allowlist is applied.
+///
+/// Same shape as [`crate::sockets::policy::EgressMode`], for the same reason:
+/// `hostPath` volumes were never gated, so enforcing on upgrade would stop
+/// every workload that declares one. Reserved paths are refused in either mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HostPathMode {
+    /// Log and count a volume outside the allowlist, and mount it anyway.
+    #[default]
+    Count,
+    /// Refuse a volume outside the allowlist.
+    Enforce,
+}
+
+impl HostPathMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::Enforce => "enforce",
+        }
+    }
+}
+
+/// Which host directories a workload's `hostPath` volume may name.
+///
+/// A volume is resolved to its canonical path first, and every rule is applied
+/// to that path, so neither `..` nor a symlink inside a permitted directory
+/// reaches outside it. The canonical path is also the one opened and mounted.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct HostPathPolicy {
+    reserved: ReservedHostPaths,
+    /// Directories a volume must lie within. Empty permits none.
+    allowed: Arc<[PathBuf]>,
+    mode: HostPathMode,
+    meters: Option<Arc<crate::host::quota::PolicyMeters>>,
+}
+
+impl HostPathPolicy {
+    /// Relative paths in either list are taken against the working directory.
+    pub(crate) fn new(
+        reserved: impl IntoIterator<Item = PathBuf>,
+        allowed: impl IntoIterator<Item = PathBuf>,
+        mode: HostPathMode,
+        meters: Option<Arc<crate::host::quota::PolicyMeters>>,
+    ) -> Self {
+        Self {
+            reserved: ReservedHostPaths::new(reserved),
+            allowed: ReservedHostPaths::new(allowed).0,
+            mode,
+            meters,
+        }
+    }
+
+    /// Check a `hostPath` volume and open the directory that was checked.
+    pub(crate) fn open(&self, volume: &Path) -> anyhow::Result<OpenedVolume> {
+        let canonical = self.reserved.check(volume)?;
+        self.check_allowed(volume, &canonical)?;
+        ReservedHostPaths::open_checked(volume, canonical)
+    }
+
+    /// Each allowed directory is resolved at the time of the check, as the
+    /// reserved paths are, so one that is itself a link is judged by where it
+    /// leads now.
+    fn check_allowed(&self, volume: &Path, canonical: &Path) -> anyhow::Result<()> {
+        if self
+            .allowed
+            .iter()
+            .any(|allowed| canonical.starts_with(resolve_existing(allowed)))
+        {
+            return Ok(());
+        }
+        if let Some(meters) = &self.meters {
+            meters.record_host_path(self.mode);
+        }
+        match self.mode {
+            HostPathMode::Enforce => {
+                tracing::warn!(
+                    volume = %canonical.display(),
+                    "refused a hostPath volume outside the host's allowed host paths"
+                );
+                anyhow::bail!(
+                    "hostPath volume '{}' is outside the host paths this host permits \
+                     (--allowed-host-path)",
+                    volume.display()
+                )
+            }
+            HostPathMode::Count => {
+                tracing::warn!(
+                    volume = %canonical.display(),
+                    "a hostPath volume is outside the host's allowed host paths; mounting it \
+                     because the host is in count mode"
+                );
+                Ok(())
+            }
         }
     }
 }
@@ -458,5 +560,131 @@ mod pinned_tests {
         ReservedHostPaths::default()
             .open(&root.path().join("alias"))
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod allowlist_tests {
+    use super::*;
+    use crate::host::quota::PolicyMeters;
+
+    fn policy(allowed: &[&Path], mode: HostPathMode) -> (HostPathPolicy, Arc<PolicyMeters>) {
+        let meters = Arc::new(PolicyMeters::default());
+        let policy = HostPathPolicy::new(
+            [],
+            allowed.iter().map(|p| p.to_path_buf()),
+            mode,
+            Some(Arc::clone(&meters)),
+        );
+        (policy, meters)
+    }
+
+    #[test]
+    fn a_volume_must_lie_within_an_allowed_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let allowed = root.path().join("allowed");
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(allowed.join("nested")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let (policy, meters) = policy(&[&allowed], HostPathMode::Enforce);
+
+        assert_eq!(
+            policy.open(&allowed.join("nested")).unwrap().path,
+            allowed.join("nested").canonicalize().unwrap()
+        );
+        policy.open(&allowed).unwrap();
+        assert!(policy.open(&outside).is_err());
+        assert!(policy.open(root.path()).is_err());
+        // Judged after canonicalization, so `..` cannot climb out.
+        assert!(policy.open(&allowed.join("nested/../../outside")).is_err());
+        assert_eq!(meters.host_path_denied(), 3);
+        assert_eq!(meters.host_path_would_deny(), 0);
+    }
+
+    /// A match on the path's text would take `/data-secret` for part of
+    /// `/data`; matching whole components does not.
+    #[test]
+    fn a_sibling_sharing_a_name_prefix_is_outside() {
+        let root = tempfile::tempdir().unwrap();
+        let allowed = root.path().join("data");
+        let sibling = root.path().join("data-secret");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        let (policy, _) = policy(&[&allowed], HostPathMode::Enforce);
+        assert!(policy.open(&sibling).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_inside_an_allowed_directory_cannot_lead_out() {
+        let root = tempfile::tempdir().unwrap();
+        let allowed = root.path().join("allowed");
+        let secret = root.path().join("secret");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&secret).unwrap();
+        std::os::unix::fs::symlink(&secret, allowed.join("escape")).unwrap();
+        let (policy, _) = policy(&[&allowed], HostPathMode::Enforce);
+        assert!(policy.open(&allowed.join("escape")).is_err());
+    }
+
+    /// An allowed directory that is itself a link is judged by where it leads.
+    #[cfg(unix)]
+    #[test]
+    fn an_allowed_directory_behind_a_link_is_honored() {
+        let root = tempfile::tempdir().unwrap();
+        let real = root.path().join("real");
+        std::fs::create_dir_all(real.join("vol")).unwrap();
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let (policy, _) = policy(&[&link], HostPathMode::Enforce);
+        policy.open(&link.join("vol")).unwrap();
+        policy.open(&real.join("vol")).unwrap();
+    }
+
+    #[test]
+    fn count_mode_mounts_and_counts_what_enforce_refuses() {
+        let root = tempfile::tempdir().unwrap();
+        let (counting, meters) = policy(&[], HostPathMode::Count);
+        counting.open(root.path()).unwrap();
+        assert_eq!(meters.host_path_would_deny(), 1);
+        assert_eq!(meters.host_path_denied(), 0);
+
+        let (enforcing, meters) = policy(&[], HostPathMode::Enforce);
+        let err = enforcing.open(root.path()).unwrap_err();
+        assert!(err.to_string().contains("--allowed-host-path"), "{err}");
+        assert_eq!(meters.host_path_denied(), 1);
+    }
+
+    /// Count mode relaxes the allowlist only: a reserved path stays refused.
+    #[test]
+    fn a_reserved_path_is_refused_in_count_mode_even_when_allowed() {
+        let root = tempfile::tempdir().unwrap();
+        let creds = root.path().join("creds");
+        std::fs::create_dir_all(&creds).unwrap();
+        let policy = HostPathPolicy::new(
+            [creds.clone()],
+            [root.path().to_path_buf()],
+            HostPathMode::Count,
+            None,
+        );
+        assert!(policy.open(&creds).is_err());
+        assert!(policy.open(root.path()).is_err());
+    }
+
+    /// The gate decides which paths, never which permissions.
+    #[test]
+    fn an_allowed_volume_keeps_the_permissions_it_declared() {
+        let root = tempfile::tempdir().unwrap();
+        let (policy, _) = policy(&[root.path()], HostPathMode::Enforce);
+        let volume = policy.open(root.path()).unwrap();
+        for read_only in [false, true] {
+            let mount = VolumeMount {
+                name: "data".into(),
+                mount_path: "/data".into(),
+                read_only,
+            };
+            let resolved = ResolvedVolumeMount::from_opened(&volume, &mount).unwrap();
+            assert_eq!(resolved.dir.perms == FsPerms::ReadWrite, !read_only);
+        }
     }
 }

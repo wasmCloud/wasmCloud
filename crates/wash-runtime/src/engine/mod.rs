@@ -236,6 +236,7 @@ pub(crate) mod linked_call;
 pub(crate) mod store;
 mod value;
 mod volumes;
+pub use volumes::HostPathMode;
 pub mod workload;
 
 /// How often the engine's epoch advances.
@@ -315,8 +316,8 @@ pub struct Engine {
     /// the host's port table, and the connection budget. The workload-level half
     /// (`allowedHosts`, `allowedHostLoopbackPorts`) is layered over it per component.
     pub(crate) socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
-    /// Host paths no workload's `hostPath` volume may expose.
-    reserved_host_paths: volumes::ReservedHostPaths,
+    /// Which host paths a workload's `hostPath` volume may name.
+    host_paths: volumes::HostPathPolicy,
     pub(crate) host_memory: host_memory::HostMemoryBudgets,
     /// The host-wide counter of guest linear-memory bytes that
     /// [`host_memory::HostMemoryBudgets::max_guest_memory`] is the cap on.
@@ -548,7 +549,7 @@ impl Engine {
                             "HostPath volume '{local_path}' does not exist or is not a directory",
                         );
                     }
-                    self.reserved_host_paths.open(&path)?
+                    self.host_paths.open(&path)?
                 }
                 VolumeType::EmptyDir(EmptyDirVolume {}) => {
                     // Create a temporary directory for the empty dir volume
@@ -1005,6 +1006,8 @@ pub struct EngineBuilder {
     native_unwind_info: Option<bool>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     reserved_host_paths: Vec<PathBuf>,
+    allowed_host_paths: Vec<PathBuf>,
+    host_path_mode: HostPathMode,
     host_memory: Option<host_memory::HostMemoryBudgets>,
     guest_memory_mode: guest_memory::GuestMemoryMode,
     /// Optional TLS provider override for wasi:tls client connections.
@@ -1017,6 +1020,29 @@ impl EngineBuilder {
     #[must_use]
     pub fn with_reserved_host_paths(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
         self.reserved_host_paths.extend(paths);
+        self
+    }
+
+    /// Permit `hostPath` volumes within these directories. Adds to any
+    /// permitted before; with none, no `hostPath` volume is permitted.
+    ///
+    /// Whether a volume outside them is refused or only counted is
+    /// [`Self::with_host_path_mode`]. Reserved paths are refused either way.
+    #[must_use]
+    pub fn with_allowed_host_paths(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.allowed_host_paths.extend(paths);
+        self
+    }
+
+    /// Whether the `hostPath` allowlist is enforced or only counted.
+    ///
+    /// Unset, it is [`HostPathMode::Count`]: `hostPath` volumes were never
+    /// gated, so enforcing by default would stop every workload using one on
+    /// upgrade. Count mode records each volume enforcement would refuse in the
+    /// socket policy's [`PolicyMeters`](crate::host::quota::PolicyMeters).
+    #[must_use]
+    pub fn with_host_path_mode(mut self, mode: HostPathMode) -> Self {
+        self.host_path_mode = mode;
         self
     }
 
@@ -1349,13 +1375,21 @@ impl EngineBuilder {
                     .unwrap_or(Duration::from_secs(600)),
             )
             .build();
+        let socket_policy = self.socket_policy.unwrap_or_default();
         Ok(Engine {
             inner,
             cache,
             #[cfg(test)]
             compiles: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            socket_policy: self.socket_policy.unwrap_or_default(),
-            reserved_host_paths: volumes::ReservedHostPaths::new(self.reserved_host_paths),
+            host_paths: volumes::HostPathPolicy::new(
+                self.reserved_host_paths,
+                self.allowed_host_paths,
+                self.host_path_mode,
+                // The socket policy's counters, so an operator reads every
+                // would-deny figure in one place.
+                socket_policy.meters.clone(),
+            ),
+            socket_policy,
             host_memory,
             guest_memory: {
                 let budget = guest_memory::GuestMemoryBudget::from_budgets(
@@ -1643,6 +1677,89 @@ mod tests {
         let raw = wasmtime::Error::msg("expected a WebAssembly component");
         let explained = format!("{:#}", explain_compile_failure(raw, 1024 * 1024));
         assert_eq!(explained, "expected a WebAssembly component");
+    }
+
+    fn volume_only_workload(volumes: Vec<crate::types::Volume>) -> Workload {
+        Workload {
+            namespace: "ns".into(),
+            name: "volumes".into(),
+            annotations: Default::default(),
+            service: None,
+            components: vec![],
+            host_interfaces: vec![],
+            volumes,
+        }
+    }
+
+    fn host_path(path: &std::path::Path) -> crate::types::Volume {
+        crate::types::Volume {
+            name: "data".into(),
+            volume_type: VolumeType::HostPath(HostPathVolume {
+                local_path: path.to_string_lossy().into_owned(),
+            }),
+        }
+    }
+
+    #[test]
+    fn an_enforcing_engine_refuses_a_host_path_outside_its_allowlist() {
+        let root = tempfile::tempdir().unwrap();
+        let allowed = root.path().join("allowed");
+        let other = root.path().join("other");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let meters = Arc::new(crate::host::quota::PolicyMeters::default());
+        let engine = Engine::builder()
+            .with_socket_policy(Arc::new(crate::sockets::policy::SocketPolicy {
+                meters: Some(Arc::clone(&meters)),
+                ..Default::default()
+            }))
+            .with_allowed_host_paths([allowed.clone()])
+            .with_host_path_mode(HostPathMode::Enforce)
+            .build()
+            .unwrap();
+
+        let Err(err) =
+            engine.initialize_workload("w", volume_only_workload(vec![host_path(&other)]))
+        else {
+            panic!("a host path outside the allowlist should be refused");
+        };
+        assert!(
+            format!("{err:#}").contains("--allowed-host-path"),
+            "{err:#}"
+        );
+        assert_eq!(meters.host_path_denied(), 1);
+        engine
+            .initialize_workload("w", volume_only_workload(vec![host_path(&allowed)]))
+            .unwrap();
+        // An empty directory is the host's own, never a path a workload named.
+        engine
+            .initialize_workload(
+                "w",
+                volume_only_workload(vec![crate::types::Volume {
+                    name: "scratch".into(),
+                    volume_type: VolumeType::EmptyDir(EmptyDirVolume {}),
+                }]),
+            )
+            .unwrap();
+    }
+
+    /// Nothing configured is what every host upgrading to this has: the volume
+    /// still mounts, and the would-deny counter shows it.
+    #[test]
+    fn a_default_engine_mounts_a_host_path_and_counts_it() {
+        let root = tempfile::tempdir().unwrap();
+        let meters = Arc::new(crate::host::quota::PolicyMeters::default());
+        let engine = Engine::builder()
+            .with_socket_policy(Arc::new(crate::sockets::policy::SocketPolicy {
+                meters: Some(Arc::clone(&meters)),
+                ..Default::default()
+            }))
+            .build()
+            .unwrap();
+        engine
+            .initialize_workload("w", volume_only_workload(vec![host_path(root.path())]))
+            .unwrap();
+        assert_eq!(meters.host_path_would_deny(), 1);
     }
 
     // Compiling is parallel unless a host says otherwise, and saying so
