@@ -481,6 +481,15 @@ impl HostPlugin for MultiplexedAsyncKeyValue {
         )?;
         Ok(())
     }
+
+    async fn on_workload_unbind(
+        &self,
+        workload_id: &str,
+        _interfaces: WitInterfaces<'_>,
+    ) -> anyhow::Result<()> {
+        self.mux.forget_default(workload_id);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -550,5 +559,34 @@ mod tests {
             .err()
             .expect("expected error for unregistered backend");
         assert!(err.to_string().contains("redis"), "unexpected error: {err}");
+    }
+
+    /// A workload's default backend leaves with the workload: unbinding it
+    /// releases the backend, and every other workload keeps its own default.
+    #[tokio::test]
+    async fn unbind_forgets_only_that_workloads_default() {
+        let plugin = MultiplexedAsyncKeyValue::new().with_provider(Arc::new(InMemoryProvider));
+        let mut iface = kv_iface("default");
+        iface.name = None;
+        let interfaces = HashSet::from([iface]);
+        let a = plugin.build_registry(&interfaces).await.unwrap();
+        let b = plugin.build_registry(&interfaces).await.unwrap();
+        let a_backend = Arc::downgrade(a.get("").expect("plain import is the default route"));
+        plugin.mux.set_default("workload-a", &a);
+        plugin.mux.set_default("workload-b", &b);
+        drop((a, b));
+
+        let empty = HashSet::new();
+        plugin
+            .on_workload_unbind("workload-a", WitInterfaces::new(&empty))
+            .await
+            .expect("unbind should succeed");
+
+        assert!(plugin.mux.default_for("workload-a").is_none());
+        assert!(
+            a_backend.upgrade().is_none(),
+            "workload-a's backend outlived it"
+        );
+        assert!(plugin.mux.default_for("workload-b").is_some());
     }
 }
