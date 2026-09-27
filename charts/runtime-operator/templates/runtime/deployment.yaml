@@ -361,6 +361,9 @@ spec:
             - "--host-path-volumes={{ . }}"
             {{- end }}
             {{- end }}
+            {{- with .scratchRoot }}
+            - "--scratch-root={{ . }}"
+            {{- end }}
             {{- if and (.http) (.http.enabled) }}
             - "--http-addr=0.0.0.0:{{ .http.port }}"
             {{- if and ($top.Values.global.tls.enabled) (.http.tls) (.http.tls.enabled) }}

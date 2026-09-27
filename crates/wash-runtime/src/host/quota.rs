@@ -543,7 +543,8 @@ impl PolicyMeters {
             .map_or(0, |c| c.load(Ordering::Relaxed))
     }
 
-    /// Record a `hostPath` volume outside the host's allowed host paths.
+    /// Record a `hostPath` volume enforcement refuses: one outside the host's
+    /// allowed host paths, or one containing the `emptyDir` scratch root.
     pub fn record_host_path(&self, mode: crate::engine::HostPathMode) {
         let counter = match mode {
             crate::engine::HostPathMode::Enforce => &self.host_path_denied,
@@ -552,7 +553,7 @@ impl PolicyMeters {
         counter.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// `hostPath` volumes refused for lying outside the allowed host paths.
+    /// `hostPath` volumes refused by the allowlist or the scratch root.
     pub fn host_path_denied(&self) -> u64 {
         self.host_path_denied.load(Ordering::Relaxed)
     }
@@ -599,7 +600,7 @@ impl PolicyMeters {
         };
         observe(
             "host_path.denied",
-            "hostPath volumes refused for lying outside the allowed host paths",
+            "hostPath volumes refused by the allowlist or the emptyDir scratch root",
             Self::host_path_denied,
         );
         observe(
