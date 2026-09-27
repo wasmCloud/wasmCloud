@@ -894,10 +894,19 @@ runtime:
         # once `mode` is `enforce`.
         allowed: []
         # -- `count` or `enforce`. Empty keeps the host's default, `count`:
-        # a volume outside `allowed` is mounted, logged and counted in the
-        # `host_path.would_deny` metric. `hostPath` was never gated, so set
-        # `allowed`, watch that metric, then switch to `enforce`.
+        # a volume outside `allowed`, or one containing `scratchRoot` (such as
+        # `/tmp` with the default root), is mounted, logged and counted in
+        # the `host_path.would_deny` metric. `hostPath` was never gated, so
+        # set `allowed`, watch that metric, then switch to `enforce`. Anything
+        # inside `scratchRoot` is refused in either mode.
         mode: ""
+      # -- Where `emptyDir` volumes live. Empty uses `wasmcloud-scratch` under
+      # the container's temporary directory. Point it at a mounted volume to
+      # keep scratch off the container filesystem, or at a memory-backed one
+      # knowing scratch then counts against the pod's memory. Each workload's
+      # scratch is removed when it stops, and a restarted host removes what
+      # its predecessor left.
+      scratchRoot: ""
       http:
         enabled: true
         port: 9191

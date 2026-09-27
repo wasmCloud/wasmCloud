@@ -462,12 +462,13 @@ pub struct HostCommand {
 
     /// How the `hostPath` allowlist is applied.
     ///
-    /// `count` (the default) mounts a volume outside `--allowed-host-path`,
-    /// logs it, and counts it in the `host_path.would_deny` metric. `hostPath`
-    /// volumes were never gated, so enforcing immediately would stop every
-    /// workload using one on upgrade; run in `count` first, set the allowlist,
-    /// watch the metric, then switch to `enforce`. Reserved host paths are
-    /// refused in either mode.
+    /// `count` (the default) mounts a volume outside `--allowed-host-path`, or
+    /// one containing the `emptyDir` scratch root such as `/tmp`, logs it, and
+    /// counts it in the `host_path.would_deny` metric. `hostPath` volumes were
+    /// never gated, so enforcing immediately would stop every workload using
+    /// one on upgrade; run in `count` first, set the allowlist, watch the
+    /// metric, then switch to `enforce`. Reserved host paths and anything
+    /// inside the scratch root are refused in either mode.
     #[arg(
         long = "host-path-volumes",
         env = "WASH_HOST_PATH_VOLUMES",
@@ -475,6 +476,16 @@ pub struct HostCommand {
         default_value = "count"
     )]
     pub host_path_volumes: HostPathVolumes,
+
+    /// Where `emptyDir` volumes live. Defaults to `wasmcloud-scratch` under
+    /// the system temporary directory.
+    ///
+    /// The host claims a directory of its own here, removes each workload's
+    /// scratch when the workload stops, and at startup removes what hosts that
+    /// are no longer running left behind. No `hostPath` volume may lie inside
+    /// it; one that contains it is refused under `--host-path-volumes=enforce`.
+    #[arg(long = "scratch-root", env = "WASH_SCRATCH_ROOT")]
+    pub scratch_root: Option<PathBuf>,
 
     /// How long to keep serving after a shutdown signal, before stopping.
     ///
@@ -951,6 +962,9 @@ impl CliCommand for HostCommand {
             .with_reserved_host_paths(self.reserved_paths(&config, ctx))
             .with_allowed_host_paths(self.allowed_host_paths.iter().cloned())
             .with_host_path_mode(self.host_path_volumes.into());
+        if let Some(root) = &self.scratch_root {
+            engine_builder = engine_builder.with_scratch_root(root);
+        }
         for proposal in &self.wasm_proposals {
             engine_builder = engine_builder.with_wasm_proposal(*proposal);
         }

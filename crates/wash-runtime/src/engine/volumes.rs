@@ -257,6 +257,8 @@ pub(crate) struct HostPathPolicy {
     reserved: ReservedHostPaths,
     /// Directories a volume must lie within. Empty permits none.
     allowed: Arc<[PathBuf]>,
+    /// Where `emptyDir` scratch lives, holding every workload's.
+    scratch: Option<PathBuf>,
     mode: HostPathMode,
     meters: Option<Arc<crate::host::quota::PolicyMeters>>,
 }
@@ -266,12 +268,14 @@ impl HostPathPolicy {
     pub(crate) fn new(
         reserved: impl IntoIterator<Item = PathBuf>,
         allowed: impl IntoIterator<Item = PathBuf>,
+        scratch: Option<PathBuf>,
         mode: HostPathMode,
         meters: Option<Arc<crate::host::quota::PolicyMeters>>,
     ) -> Self {
         Self {
             reserved: ReservedHostPaths::new(reserved),
             allowed: ReservedHostPaths::new(allowed).0,
+            scratch,
             mode,
             meters,
         }
@@ -280,41 +284,65 @@ impl HostPathPolicy {
     /// Check a `hostPath` volume and open the directory that was checked.
     pub(crate) fn open(&self, volume: &Path) -> anyhow::Result<OpenedVolume> {
         let canonical = self.reserved.check(volume)?;
-        self.check_allowed(volume, &canonical)?;
+        self.check_policy(volume, &canonical)?;
         ReservedHostPaths::open_checked(volume, canonical)
     }
 
-    /// Each allowed directory is resolved at the time of the check, as the
-    /// reserved paths are, so one that is itself a link is judged by where it
-    /// leads now.
-    fn check_allowed(&self, volume: &Path, canonical: &Path) -> anyhow::Result<()> {
-        if self
+    /// The allowlist, and the scratch root. A volume outside the allowlist, or
+    /// one containing the scratch root as `/tmp` contains the default one, is
+    /// mounted and counted in count mode and refused in enforce mode, so a
+    /// mount that worked before the gate keeps working until enforcement is on.
+    /// A volume inside the scratch root is refused in either mode: no mount
+    /// from before scratch had a root of its own can name it.
+    ///
+    /// Each path is resolved at the time of the check, as the reserved paths
+    /// are, so one that is itself a link is judged by where it leads now.
+    fn check_policy(&self, volume: &Path, canonical: &Path) -> anyhow::Result<()> {
+        let scratch = self.scratch.as_deref().map(resolve_existing);
+        if scratch
+            .as_deref()
+            .is_some_and(|root| canonical.starts_with(root))
+        {
+            tracing::warn!(
+                volume = %canonical.display(),
+                "refused a hostPath volume inside the host's emptyDir scratch"
+            );
+            anyhow::bail!(
+                "hostPath volume '{}' lies inside the host's emptyDir scratch, which holds \
+                 other workloads' volumes",
+                volume.display()
+            );
+        }
+        let contains_scratch = scratch
+            .as_deref()
+            .is_some_and(|root| root.starts_with(canonical));
+        let outside = !self
             .allowed
             .iter()
-            .any(|allowed| canonical.starts_with(resolve_existing(allowed)))
-        {
-            return Ok(());
-        }
+            .any(|allowed| canonical.starts_with(resolve_existing(allowed)));
+        let why = match (outside, contains_scratch) {
+            (false, false) => return Ok(()),
+            (true, false) => "is outside the host paths this host permits (--allowed-host-path)",
+            (false, true) => {
+                "contains the host's emptyDir scratch, which holds other workloads' volumes"
+            }
+            (true, true) => {
+                "is outside the host paths this host permits (--allowed-host-path) and contains \
+                 the host's emptyDir scratch, which holds other workloads' volumes"
+            }
+        };
         if let Some(meters) = &self.meters {
             meters.record_host_path(self.mode);
         }
         match self.mode {
             HostPathMode::Enforce => {
-                tracing::warn!(
-                    volume = %canonical.display(),
-                    "refused a hostPath volume outside the host's allowed host paths"
-                );
-                anyhow::bail!(
-                    "hostPath volume '{}' is outside the host paths this host permits \
-                     (--allowed-host-path)",
-                    volume.display()
-                )
+                tracing::warn!(volume = %canonical.display(), "refused a hostPath volume that {why}");
+                anyhow::bail!("hostPath volume '{}' {why}", volume.display())
             }
             HostPathMode::Count => {
                 tracing::warn!(
                     volume = %canonical.display(),
-                    "a hostPath volume is outside the host's allowed host paths; mounting it \
-                     because the host is in count mode"
+                    "a hostPath volume {why}; mounting it because the host is in count mode"
                 );
                 Ok(())
             }
@@ -573,6 +601,7 @@ mod allowlist_tests {
         let policy = HostPathPolicy::new(
             [],
             allowed.iter().map(|p| p.to_path_buf()),
+            None,
             mode,
             Some(Arc::clone(&meters)),
         );
@@ -664,6 +693,7 @@ mod allowlist_tests {
         let policy = HostPathPolicy::new(
             [creds.clone()],
             [root.path().to_path_buf()],
+            None,
             HostPathMode::Count,
             None,
         );

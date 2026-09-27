@@ -121,7 +121,10 @@ impl CliCommand for DevCommand {
         // The session's volumes are the developer's own declaration, so they
         // are exactly what the session permits; nothing else can name one.
         engine_builder = engine_builder
-            .with_allowed_host_paths(dev_config.volumes.iter().map(|v| v.host_path.clone()));
+            .with_allowed_host_paths(dev_config.volumes.iter().map(|v| v.host_path.clone()))
+            // Out of `$TMPDIR`: the scratch root is reserved, and a session
+            // mounting `/tmp` as a volume would otherwise be refused.
+            .with_scratch_root(ctx.cache_dir().join("scratch"));
         let engine = engine_builder.build()?;
 
         let mut host_builder = Host::builder()

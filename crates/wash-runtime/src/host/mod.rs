@@ -262,6 +262,7 @@ async fn release(workload_id: &str, resolved: &ResolvedWorkload) {
             "error unbinding plugins during teardown, continuing"
         );
     }
+    resolved.remove_scratch();
 }
 
 /// What a stop does to the slot it found, decided before anything is written.
