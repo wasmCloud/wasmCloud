@@ -82,3 +82,51 @@ func TestPlacementCarriesComponentInstanceLimits(t *testing.T) {
 		}
 	}
 }
+
+// A Workload deleted mid-start has a host but no recorded workload id; it must still be stopped.
+func TestFinalizeStopsWorkloadWithoutRecordedPlacement(t *testing.T) {
+	reply, err := protojson.Marshal(&runtimev2.WorkloadStopResponse{
+		WorkloadStatus: &runtimev2.WorkloadStatus{WorkloadId: "workload-uid"},
+	})
+	if err != nil {
+		t.Fatalf("marshal stop response: %v", err)
+	}
+
+	bus := &mockBus{reply: &wasmbus.Message{Data: reply}}
+	r := &WorkloadReconciler{Bus: bus}
+	workload := &runtimev1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{Name: "deleted-mid-start", Namespace: "default", UID: "workload-uid"},
+		Status:     runtimev1alpha1.WorkloadStatus{HostID: "host-1"},
+	}
+
+	if err := r.finalize(context.Background(), workload); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+
+	if want := "runtime.host.host-1.workload.stop"; bus.gotSubject != want {
+		t.Fatalf("stop sent to %q, want %q", bus.gotSubject, want)
+	}
+	var req runtimev2.WorkloadStopRequest
+	if err := protojson.Unmarshal(bus.gotData, &req); err != nil {
+		t.Fatalf("unmarshal stop request: %v", err)
+	}
+	if req.GetWorkloadId() != "workload-uid" {
+		t.Errorf("stop named workload %q, want the Workload's UID %q", req.GetWorkloadId(), "workload-uid")
+	}
+}
+
+// No host was ever selected, so no start was sent and there is nothing to stop.
+func TestFinalizeSkipsWorkloadWithoutHost(t *testing.T) {
+	bus := &mockBus{err: errors.New("no request expected")}
+	r := &WorkloadReconciler{Bus: bus}
+	workload := &runtimev1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{Name: "unscheduled", Namespace: "default", UID: "workload-uid"},
+	}
+
+	if err := r.finalize(context.Background(), workload); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	if bus.gotSubject != "" {
+		t.Errorf("finalize sent %q for a Workload with no host", bus.gotSubject)
+	}
+}

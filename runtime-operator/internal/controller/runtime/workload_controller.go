@@ -444,14 +444,19 @@ func (r *WorkloadReconciler) reconcileReady(_ context.Context, workload *runtime
 }
 
 func (r *WorkloadReconciler) finalize(ctx context.Context, workload *runtimev1alpha1.Workload) error {
-	if !workload.Status.AllTrue(runtimev1alpha1.WorkloadConditionPlacement) {
-		// nothing to do, the workload was never placed
+	// Don't gate on Placement: it is recorded only after the start returns, so a
+	// Workload deleted mid-start would skip the stop and stay running on the host.
+	// HostID is set before any start is sent.
+	if workload.Status.HostID == "" {
+		// nothing to do, no start was ever sent
 		return nil
 	}
 
+	workloadID := string(workload.GetUID())
+
 	client := NewWashHostClient(r.Bus, workload.Status.HostID)
 	req := &runtimev2.WorkloadStopRequest{
-		WorkloadId: workload.Status.WorkloadID,
+		WorkloadId: workloadID,
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, workloadStopTimeout)
@@ -460,7 +465,7 @@ func (r *WorkloadReconciler) finalize(ctx context.Context, workload *runtimev1al
 	_, err := client.Stop(ctx, req)
 	if err != nil {
 		logger := ctrl.LoggerFrom(ctx)
-		logger.Error(err, "failed to stop workload on host", "hostID", workload.Status.HostID, "workloadID", workload.Status.WorkloadID)
+		logger.Error(err, "failed to stop workload on host", "hostID", workload.Status.HostID, "workloadID", workloadID)
 		// don't return error, we want to remove the finalizer anyway
 		// this might leave a dangling workload on the host, but there's not much we can do about it if the host is down
 	}
