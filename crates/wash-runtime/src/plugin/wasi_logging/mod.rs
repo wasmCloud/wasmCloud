@@ -49,6 +49,7 @@ impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
         message: String,
     ) -> wasmtime::Result<()> {
         let plugin = self.try_get_plugin::<TracingLogger>(PLUGIN_LOGGING_ID)?;
+        let store_id = self.store_id.to_string();
 
         let workloads = plugin.components.read().await;
         let Some(ComponentInfo {
@@ -65,6 +66,7 @@ impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
                     workload.component_id = component_id,
                     workload.name = workload_name,
                     workload.namespace = workload_namespace,
+                    workload.store_id = store_id,
                     context,
                     "{message}"
                 )
@@ -74,6 +76,7 @@ impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
                     workload.component_id = component_id,
                     workload.name = workload_name,
                     workload.namespace = workload_namespace,
+                    workload.store_id = store_id,
                     context,
                     "{message}"
                 )
@@ -83,6 +86,7 @@ impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
                     workload.component_id = component_id,
                     workload.name = workload_name,
                     workload.namespace = workload_namespace,
+                    workload.store_id = store_id,
                     context,
                     "{message}"
                 )
@@ -92,6 +96,7 @@ impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
                     workload.component_id = component_id,
                     workload.name = workload_name,
                     workload.namespace = workload_namespace,
+                    workload.store_id = store_id,
                     context,
                     "{message}"
                 )
@@ -101,6 +106,7 @@ impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
                     workload.component_id = component_id,
                     workload.name = workload_name,
                     workload.namespace = workload_namespace,
+                    workload.store_id = store_id,
                     context,
                     "{message}"
                 )
@@ -110,6 +116,7 @@ impl<'a> bindings::wasi::logging::logging::Host for ActiveCtx<'a> {
                     workload.component_id = component_id,
                     workload.name = workload_name,
                     workload.namespace = workload_namespace,
+                    workload.store_id = store_id,
                     context,
                     "{message}"
                 )
