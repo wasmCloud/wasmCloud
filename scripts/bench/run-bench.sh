@@ -78,6 +78,25 @@ if [ -d xtask ]; then
   cargo xtask build-fixtures 2>&1 | tee -a "$log"
 fi
 
+# gungraun refuses to run unless gungraun-runner's version equals the gungraun
+# version resolved in Cargo.lock. Prefer the shared /usr/local copy that
+# provision.yml installs; when the lockfile has moved past it, install the
+# matching runner into a per-version cache and point the bench at it.
+if [[ "$bench" == gungraun* ]]; then
+  want="$(awk '/^name = "gungraun"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)"
+  have="$(gungraun-runner --version 2>/dev/null | awk '{ print $NF }' || true)"
+  if [ -n "$want" ] && [ "$have" != "$want" ]; then
+    root="${WASMCLOUD_BENCH_TOOLS_DIR:-$HOME/.cache/wasmcloud-bench}/gungraun-runner-${want}"
+    if [ ! -x "${root}/bin/gungraun-runner" ]; then
+      echo "::warning::gungraun-runner ${have:-missing} != Cargo.lock gungraun ${want}; installing ${want} to ${root}" | tee -a "$log"
+      cargo install --locked --quiet gungraun-runner --version "$want" --root "$root" 2>&1 | tee -a "$log"
+    fi
+    # Read at compile time (option_env!); rustc tracks it, so a change rebuilds the bench.
+    export GUNGRAUN_RUNNER="${root}/bin/gungraun-runner"
+    echo "using GUNGRAUN_RUNNER=${GUNGRAUN_RUNNER}" | tee -a "$log"
+  fi
+fi
+
 # gungraun: pin to the isolated CPU. The criterion-style benches are
 # multi-threaded (tokio + hyper) and would lose throughput under taskset,
 # so they run unpinned across the non-isolated cores.

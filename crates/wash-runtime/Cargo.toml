@@ -190,11 +190,10 @@ redis = { workspace = true }
 # postgres client for admin setup (create roles/tables) in tests
 tokio-postgres = { workspace = true, features = ["runtime"] }
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
-# Pinned to match the gungraun-runner version the bench host's Ansible
-# playbook installs (scripts/bench/ansible/provision.yml). gungraun
-# enforces equality between this crate version and the runner binary at
-# run time.
-gungraun = "0.19.1"
+# gungraun requires a gungraun-runner of exactly the version resolved in
+# Cargo.lock. The bench host's provision.yml installs it, and
+# scripts/bench/run-bench.sh installs a matching one when the lock moves.
+gungraun = "0.20.0"
 
 # Integration tests that build a host through `tests/common`'s standard
 # plugin set (in-memory blobstore + keyvalue, tracing logger, dynamic
