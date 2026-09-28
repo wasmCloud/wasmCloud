@@ -309,10 +309,13 @@ The playbook installs (as `root` on the bench host):
   `wasm32-wasip1`, and `wasm32-wasip2` targets). The default is set so
   out-of-tree `cargo install` invocations (notably
   `gungraun-runner` below) have something to pick.
-- **`gungraun-runner`** via `cargo install --version 0.19.1`
-  (pinned). gungraun (formerly `iai-callgrind`; renamed at 0.17.0)
-  enforces equality between the runner binary and the `gungraun` crate
-  version pinned in `crates/wash-runtime/Cargo.toml`; bump them together.
+- **`gungraun-runner`** via `cargo install --version <X>`, where `<X>`
+  is the `gungraun` version resolved in `Cargo.lock`. gungraun (formerly
+  `iai-callgrind`; renamed at 0.17.0) enforces equality between the
+  runner binary and the crate. When the lockfile moves ahead of this
+  copy (e.g. a Dependabot bump), `run-bench.sh` installs the matching
+  runner under `~/.cache/wasmcloud-bench/` and sets `GUNGRAUN_RUNNER`,
+  so the bench keeps working until the next Ansible run.
 - **Node.js (current LTS)** from NodeSource's apt repo. The CI
   workflow runs `.github/scripts/*.mjs` via `run: node …`, which
   needs an OS-level `node` on `PATH` (self-hosted runners do not
@@ -338,7 +341,7 @@ nproc                              # 6
 uname -r                           # 6.8.0-* (Ubuntu Noble)
 cargo --version                    # rustup-pinned stable
 valgrind --version                 # valgrind-3.22.x or newer
-gungraun-runner --version          # 0.19.1
+gungraun-runner --version          # the gungraun version in Cargo.lock
 node --version                     # the node_lts_major pinned in provision.yml
 cat /etc/wasmcloud-bench-stage     # post-install marker
 ```
@@ -380,7 +383,7 @@ with a fresh token). It:
 - Installs **rustup as the `bench` user** so `cargo` is available in
   the workflow's PATH. The actual toolchain is auto-installed on
   first build via `rust-toolchain.toml`.
-- Downloads `actions-runner-linux-x64-2.335.1.tar.gz`, **verifies the
+- Downloads `actions-runner-linux-x64-2.337.0.tar.gz`, **verifies the
   SHA256** (constant in the script — bump version + sha together
   when upgrading), extracts to `/opt/actions-runner`.
 - Registers the runner with labels `self-hosted, bench, hetzner` and
@@ -935,7 +938,7 @@ into layers, each with its own cadence.
 | glibc / libstdc++                      | with the kernel                                   | apt                                                                                                | Same reason.                                                                                                                                                                                                           |
 | valgrind                               | yearly, or when gungraun asks for it              | apt                                                                                                | Major valgrind bumps have historically renamed cachegrind event columns; our `Ir` parser is robust to that, but verify.                                                                                                |
 | Rust toolchain                         | rolls with `rust-toolchain.toml` (monthly stable) | repo file                                                                                          | No bench-host-specific pin.                                                                                                                                                                                            |
-| `gungraun` crate + runner              | when the bench fails to start, or yearly          | `crates/wash-runtime/Cargo.toml`, resolved in `Cargo.lock`                                          | Bump the dep in `Cargo.toml` and `cargo update -p gungraun`; `provision.yml` installs the matching `gungraun-runner` (derived from the **resolved** `Cargo.lock` version — a caret req resolves up to the latest patch) to the shared `/usr/local`. gungraun enforces crate-vs-runner equality at run time.                       |
+| `gungraun` crate + runner              | when the bench fails to start, or yearly          | `crates/wash-runtime/Cargo.toml`, resolved in `Cargo.lock`                                          | Bump the dep in `Cargo.toml` and `cargo update -p gungraun`; `provision.yml` installs the matching `gungraun-runner` (derived from the **resolved** `Cargo.lock` version — a caret req resolves up to the latest patch) to the shared `/usr/local`; until it is re-run, `run-bench.sh` installs a per-version copy itself. gungraun enforces crate-vs-runner equality at run time.                       |
 | Node.js                                | quarterly (with the kernel bump)                  | `provision.yml` (`node_lts_major`)                                                                 | Bump to the current active LTS line. Built-ins-only scripts; Node version changes are usually low-risk.                                                                                                                |
 | GitHub Actions runner agent            | monthly check, bump on changelog review           | `install-runner.sh` (`RUNNER_VERSION` + `RUNNER_SHA256`)                                           | Auto-tracked via [`bench-host-checks.yml`](../../.github/workflows/bench-host-checks.yml); see below.                                                                                                                  |
 | Action SHA pins (`actions/checkout@…`) | weekly via Dependabot                             | `.github/workflows/*.yml`                                                                          | Low risk — these execute on hosted runners, not the bench host.                                                                                                                                                        |
