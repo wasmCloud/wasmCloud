@@ -2019,6 +2019,7 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
             // as the network path does.
             let (parts, body) = request.into_parts();
             let (body, upload) = crate::host::http_client::UploadProbe::new(body);
+            let body = DrainOnDrop::new(body.boxed_unsync(), between_bytes_timeout);
             let request = hyper::Request::from_parts(parts, body.boxed_unsync());
             let response = tokio::time::timeout(
                 first_byte_timeout,
@@ -2086,6 +2087,73 @@ fn attach_slot(
     slot: crate::host::quota::ConnectionSlot,
 ) -> hyper::Response<WasiBody> {
     resp.map(|inner| WasiBody::new(SlotBody { inner, _slot: slot }))
+}
+
+/// Request body handed to a locally routed callee, drained on drop.
+///
+/// The caller writes its outgoing body into a channel whose receiver is this
+/// body. Over the network, hyper's connection holds the receiver until the body
+/// ends, even when the server answers without reading it. Here the callee owns
+/// it, and dropping it unread closes the caller's stream, so the caller's next
+/// write or `finish` fails with `StreamError::Closed` (a guest sees "connection
+/// reset"). Draining the rest on its own task keeps the network's behavior.
+struct DrainOnDrop {
+    inner: Option<WasiBody>,
+    /// Stops a drain whose caller has stopped writing without ending the body.
+    idle_timeout: Duration,
+}
+
+impl DrainOnDrop {
+    fn new(inner: WasiBody, idle_timeout: Duration) -> Self {
+        Self {
+            inner: Some(inner),
+            idle_timeout,
+        }
+    }
+}
+
+impl hyper::body::Body for DrainOnDrop {
+    type Data = bytes::Bytes;
+    type Error = wasmtime_wasi_http::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+        match self.inner.as_mut() {
+            Some(inner) => std::pin::Pin::new(inner).poll_frame(cx),
+            None => std::task::Poll::Ready(None),
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.as_ref().is_none_or(|b| b.is_end_stream())
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        self.inner
+            .as_ref()
+            .map_or_else(|| hyper::body::SizeHint::with_exact(0), |b| b.size_hint())
+    }
+}
+
+impl Drop for DrainOnDrop {
+    fn drop(&mut self) {
+        let Some(mut body) = self.inner.take() else {
+            return;
+        };
+        if hyper::body::Body::is_end_stream(&body) {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let idle = self.idle_timeout;
+        runtime.spawn(async move {
+            // Ends at end of stream, a body error, or an idle caller.
+            while let Ok(Some(Ok(_))) = tokio::time::timeout(idle, body.frame()).await {}
+        });
+    }
 }
 
 /// Where a locally routed request is delivered, resolved out of the handler
@@ -4580,6 +4648,48 @@ mod tests {
             )
             .await
             .expect("a denied request should keep draining its body")
+            .expect("the drain should still be listening");
+        }
+    }
+
+    /// A locally routed callee that drops its request body unread must not
+    /// close the caller's upload: the caller's `finish` (or any write after the
+    /// callee answered) would fail with `StreamError::Closed`, which a guest
+    /// reports as "connection reset" and nested local hops hit intermittently.
+    #[tokio::test]
+    async fn a_local_callee_dropping_its_body_keeps_the_upload_open() {
+        struct ChannelBody(
+            tokio::sync::mpsc::Receiver<
+                Result<hyper::body::Frame<bytes::Bytes>, wasmtime_wasi_http::Error>,
+            >,
+        );
+        impl hyper::body::Body for ChannelBody {
+            type Data = bytes::Bytes;
+            type Error = wasmtime_wasi_http::Error;
+            fn poll_frame(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>>
+            {
+                self.0.poll_recv(cx)
+            }
+        }
+
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let body = DrainOnDrop::new(ChannelBody(rx).boxed_unsync(), Duration::from_secs(5));
+        // The callee answers without reading, and its store drops the body.
+        drop(body);
+
+        assert!(!tx.is_closed(), "the caller's upload must stay open");
+        for _ in 0..4 {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                tx.send(Ok(hyper::body::Frame::data(bytes::Bytes::from_static(
+                    b"upload",
+                )))),
+            )
+            .await
+            .expect("the drain should keep reading")
             .expect("the drain should still be listening");
         }
     }
