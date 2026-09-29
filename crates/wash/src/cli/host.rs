@@ -533,7 +533,11 @@ pub struct HostCommand {
     /// only — the data plane's certificates say nothing about another NATS —
     /// and it carries no grant either way: a binding that inherits it still
     /// reaches nothing until the host grants it something.
-    #[arg(long = "wasmcloud-nats-url", env = "WASH_WASMCLOUD_NATS_URL")]
+    #[arg(
+        long = "wasmcloud-nats-url",
+        env = "WASH_WASMCLOUD_NATS_URL",
+        hide_env_values = true
+    )]
     pub wasmcloud_nats_url: Option<String>,
 
     /// Removed: the policy is `workloadConfig` on the `host.plugins` entry.
