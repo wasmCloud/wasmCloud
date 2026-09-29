@@ -72,7 +72,7 @@ pub struct UpdateCommand {
     git: String,
 
     /// GitHub token for private repository access. Can also be set via GITHUB_TOKEN, GH_TOKEN, or GITHUB_ACCESS_TOKEN environment variables
-    #[arg(long, env = "WASH_GITHUB_TOKEN")]
+    #[arg(long, env = "WASH_GITHUB_TOKEN", hide_env_values = true)]
     token: Option<String>,
 }
 
