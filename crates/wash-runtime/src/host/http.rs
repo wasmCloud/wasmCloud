@@ -2022,20 +2022,25 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
             // as the network path does.
             let (parts, body) = request.into_parts();
             let (body, upload) = crate::host::http_client::UploadProbe::new(body);
-            let body = DrainOnDrop::new(body, Arc::clone(&slot));
+            // Tells an unread body's drain whether the callee answered; a
+            // dropped sender (this send abandoned) reads as "no".
+            let (answered_tx, answered) = tokio::sync::oneshot::channel();
+            let body = DrainOnDrop::new(body, Arc::clone(&slot), answered);
             let request = hyper::Request::from_parts(parts, body.boxed_unsync());
-            let response = tokio::time::timeout(
+            let dispatched = tokio::time::timeout(
                 first_byte_timeout,
                 dispatch_local(&target, request, destination, guest_meter),
             )
-            .await
-            .map_err(|_| wasmtime_wasi_http::Error::ConnectionReadTimeout)?
-            .map_err(|e| {
-                error!(err = ?e, workload_id = %target, "local dispatch failed");
-                wasmtime_wasi_http::Error::InternalError(Some(format!(
-                    "local dispatch failed: {e}"
-                )))
-            })?;
+            .await;
+            let _ = answered_tx.send(matches!(dispatched, Ok(Ok(_))));
+            let response = dispatched
+                .map_err(|_| wasmtime_wasi_http::Error::ConnectionReadTimeout)?
+                .map_err(|e| {
+                    error!(err = ?e, workload_id = %target, "local dispatch failed");
+                    wasmtime_wasi_http::Error::InternalError(Some(format!(
+                        "local dispatch failed: {e}"
+                    )))
+                })?;
             // The slot is held until the body drains, and
             // `between_bytes_timeout` is applied here because the body goes
             // straight back to the guest.
@@ -2101,6 +2106,11 @@ fn attach_slot(
 /// write or `finish` fails with `StreamError::Closed` (a guest sees "connection
 /// reset"). Draining the rest on its own task keeps the network's behavior.
 ///
+/// The drain starts only once the callee has answered. If the dispatch fails or
+/// times out, the body is dropped instead, closing the caller's stream as a
+/// failed network send would. Until then the caller's writes wait for channel
+/// capacity.
+///
 /// The drain has no timer: request options time the response, not the upload,
 /// and the network path doesn't cut a slow upload off either. It runs until the
 /// upload ends or fails, holding the request's outbound slot, so the caller's
@@ -2111,16 +2121,19 @@ fn attach_slot(
 struct DrainOnDrop {
     inner: Option<crate::host::http_client::UploadProbe>,
     slot: Option<Arc<crate::host::quota::ConnectionSlot>>,
+    answered: Option<tokio::sync::oneshot::Receiver<bool>>,
 }
 
 impl DrainOnDrop {
     fn new(
         inner: crate::host::http_client::UploadProbe,
         slot: Arc<crate::host::quota::ConnectionSlot>,
+        answered: tokio::sync::oneshot::Receiver<bool>,
     ) -> Self {
         Self {
             inner: Some(inner),
             slot: Some(slot),
+            answered: Some(answered),
         }
     }
 }
@@ -2157,7 +2170,9 @@ impl hyper::body::Body for DrainOnDrop {
 
 impl Drop for DrainOnDrop {
     fn drop(&mut self) {
-        let (Some(mut body), slot) = (self.inner.take(), self.slot.take()) else {
+        let (Some(mut body), slot, Some(answered)) =
+            (self.inner.take(), self.slot.take(), self.answered.take())
+        else {
             return;
         };
         if hyper::body::Body::is_end_stream(&body) {
@@ -2168,6 +2183,9 @@ impl Drop for DrainOnDrop {
         };
         runtime.spawn(async move {
             let _slot = slot;
+            if answered.await != Ok(true) {
+                return;
+            }
             while let Some(Ok(_)) = body.frame().await {}
         });
     }
@@ -4824,6 +4842,56 @@ mod tests {
         })
         .await;
         assert!(freed.is_ok(), "an ended upload should free its slot");
+    }
+
+    /// A local dispatch that fails leaves nothing to drain for: the upload is
+    /// closed, as a failed network send closes its body, and its slot freed.
+    #[tokio::test]
+    async fn a_failed_local_dispatch_closes_the_upload_and_frees_its_slot() {
+        let server = Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
+            .quotas(crate::host::quota::QuotaRegistry::new(
+                crate::host::quota::QuotaLimits {
+                    outbound_http: 1,
+                    ..Default::default()
+                },
+                None,
+            ))
+            .build()
+            .await
+            .unwrap();
+        // A service that drops the body and then the request without answering.
+        let (sender, mut jobs) = tokio::sync::mpsc::channel::<ServiceHttpJob>(1);
+        tokio::spawn(async move {
+            while let Some(job) = jobs.recv().await {
+                drop(job.req);
+                drop(job.resp_tx);
+            }
+        });
+
+        let (tx, request) = upload_request();
+        let failed = Box::into_pin(server.send_local_request(
+            "caller",
+            "callee".to_string(),
+            LocalTarget::Service(sender),
+            request,
+            None,
+        ))
+        .await;
+        assert!(failed.is_err(), "the dispatch should fail");
+        tokio::time::timeout(Duration::from_secs(5), tx.closed())
+            .await
+            .expect("a failed dispatch should close the upload");
+
+        let (_tx, request) = upload_request();
+        let (_response, _io) = Box::into_pin(server.send_local_request(
+            "caller",
+            "callee".to_string(),
+            early_answering_service(),
+            request,
+            None,
+        ))
+        .await
+        .expect("the failed dispatch should have freed its slot");
     }
 
     #[tokio::test]
