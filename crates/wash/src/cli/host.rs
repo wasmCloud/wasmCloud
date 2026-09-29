@@ -470,8 +470,9 @@ pub struct HostCommand {
     /// counts it in the `host_path.would_deny` metric. `hostPath` volumes were
     /// never gated, so enforcing immediately would stop every workload using
     /// one on upgrade; run in `count` first, set the allowlist, watch the
-    /// metric, then switch to `enforce`. Reserved host paths and anything
-    /// inside the scratch root are refused in either mode.
+    /// metric, then switch to `enforce`. Reserved host paths, kernel
+    /// filesystems such as `/proc`, `/sys` and `/dev`, and anything inside the
+    /// scratch root are refused in either mode.
     #[arg(
         long = "host-path-volumes",
         env = "WASH_HOST_PATH_VOLUMES",

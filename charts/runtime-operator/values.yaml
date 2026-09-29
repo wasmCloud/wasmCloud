@@ -918,8 +918,10 @@ runtime:
         # a volume outside `allowed`, or one containing `scratchRoot` (such as
         # `/tmp` with the default root), is mounted, logged and counted in
         # the `host_path.would_deny` metric. `hostPath` was never gated, so
-        # set `allowed`, watch that metric, then switch to `enforce`. Anything
-        # inside `scratchRoot` is refused in either mode.
+        # set `allowed`, watch that metric, then switch to `enforce`. The
+        # host's own credential paths, kernel filesystems (`/proc`, `/sys`,
+        # `/dev`) and anything inside `scratchRoot` are refused in either
+        # mode.
         mode: ""
       # -- Where `emptyDir` volumes live. Empty uses `wasmcloud-scratch` under
       # the container's temporary directory. Point it at a mounted volume to

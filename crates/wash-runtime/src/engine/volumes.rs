@@ -143,7 +143,8 @@ pub(crate) async fn resolve_component_volume_mounts_in_map(
 }
 
 /// Host paths no workload volume may expose: the host's own credentials and
-/// configuration.
+/// configuration. Kernel filesystems such as `/proc` are refused as well,
+/// whatever is reserved (see [`kernel_mounts`]).
 ///
 /// A `hostPath` volume is refused when it lies inside a reserved path, or
 /// contains one, since a volume containing a credential file exposes it — and,
@@ -202,6 +203,19 @@ impl ReservedHostPaths {
         let exposed = |reserved: &std::path::Path| {
             canonical.starts_with(reserved) || reserved.starts_with(&canonical)
         };
+        if let Some(kernel) = kernel_mounts().into_iter().find(|mount| exposed(mount)) {
+            tracing::warn!(
+                volume = %canonical.display(),
+                mount = %kernel.display(),
+                "refused a hostPath volume that would expose a kernel filesystem"
+            );
+            anyhow::bail!(
+                "hostPath volume '{}' would expose the kernel filesystem at '{}', through which a \
+                 workload could reach the host's memory, devices or kernel settings",
+                volume.display(),
+                kernel.display()
+            );
+        }
         match self
             .0
             .iter()
@@ -228,7 +242,8 @@ impl ReservedHostPaths {
 ///
 /// Same shape as [`crate::sockets::policy::EgressMode`], for the same reason:
 /// `hostPath` volumes were never gated, so enforcing on upgrade would stop
-/// every workload that declares one. Reserved paths are refused in either mode.
+/// every workload that declares one. Reserved paths and kernel filesystems are
+/// refused in either mode.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum HostPathMode {
     /// Log and count a volume outside the allowlist, and mount it anyway.
@@ -350,6 +365,81 @@ impl HostPathPolicy {
     }
 }
 
+/// Where kernel filesystems are mounted: no volume may lie inside one or
+/// contain one. Through `/proc/self/mem` a workload could read the host's
+/// memory, keys included, and change it through a writable volume; `/sys` and
+/// `/dev` reach kernel settings and devices. A container's `/dev` is usually a
+/// plain tmpfs of device nodes, so it is listed by path as well as by type.
+fn kernel_mounts() -> Vec<PathBuf> {
+    let mut mounts: Vec<PathBuf> = ["/proc", "/sys", "/dev"]
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+    if let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") {
+        mounts.extend(kernel_mount_points(&mountinfo));
+    }
+    mounts
+}
+
+/// Filesystem types that expose the kernel rather than stored data.
+const KERNEL_FILESYSTEMS: &[&str] = &[
+    "proc",
+    "sysfs",
+    "devtmpfs",
+    "devpts",
+    "debugfs",
+    "tracefs",
+    "securityfs",
+    "cgroup",
+    "cgroup2",
+    "bpf",
+    "configfs",
+    "efivarfs",
+    "pstore",
+    "binfmt_misc",
+    "mqueue",
+    "fusectl",
+];
+
+/// The mount points in a `/proc/<pid>/mountinfo` whose filesystem type is one
+/// of [`KERNEL_FILESYSTEMS`].
+fn kernel_mount_points(mountinfo: &str) -> impl Iterator<Item = PathBuf> + '_ {
+    mountinfo.lines().filter_map(|line| {
+        // `id parent dev root mount-point options [optional...] - type source ...`
+        let (fields, rest) = line.split_once(" - ")?;
+        let mount_point = fields.split(' ').nth(4)?;
+        let fs_type = rest.split(' ').next()?;
+        KERNEL_FILESYSTEMS
+            .contains(&fs_type)
+            .then(|| PathBuf::from(unescape_mountinfo(mount_point)))
+    })
+}
+
+/// Undo mountinfo's octal escapes (`\040` for a space, and so on).
+fn unescape_mountinfo(field: &str) -> String {
+    let mut out = Vec::with_capacity(field.len());
+    let mut rest = field.as_bytes();
+    while let Some((&byte, tail)) = rest.split_first() {
+        let escaped = match (byte, tail) {
+            (b'\\', [a, b, c, ..]) => std::str::from_utf8(&[*a, *b, *c])
+                .ok()
+                .and_then(|digits| u8::from_str_radix(digits, 8).ok()),
+            _ => None,
+        };
+        match (escaped, tail) {
+            (Some(unescaped), [_, _, _, after @ ..]) => {
+                out.push(unescaped);
+                rest = after;
+            }
+            _ => {
+                out.push(byte);
+                rest = tail;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Walk from the root by handle, rejecting links at every component.
 fn open_canonical_dir(path: &Path) -> std::io::Result<std::fs::File> {
     use cap_primitives::fs::{open_ambient_dir, open_dir_nofollow};
@@ -456,6 +546,43 @@ mod reserved_tests {
         assert!(reserved.check(&secret).is_err());
     }
 
+    /// Kernel filesystems are refused with no reservations configured at all,
+    /// as is any volume that contains one, `/` included.
+    #[cfg(unix)]
+    #[test]
+    fn kernel_filesystems_are_never_exposed() {
+        let none = ReservedHostPaths::default();
+        for path in ["/", "/dev"] {
+            let err = none.check(Path::new(path)).unwrap_err().to_string();
+            assert!(err.contains("kernel filesystem"), "{path}: {err}");
+        }
+        #[cfg(target_os = "linux")]
+        for path in ["/proc", "/proc/self", "/sys", "/sys/kernel"] {
+            assert!(none.check(Path::new(path)).is_err(), "{path}");
+        }
+        let data = tempfile::tempdir().unwrap();
+        none.check(data.path()).unwrap();
+    }
+
+    /// A procfs or sysfs mounted somewhere other than its usual place is found
+    /// by type, and a mount point with a space in it is read back whole.
+    #[test]
+    fn kernel_mounts_are_found_by_type() {
+        let mountinfo = "\
+22 1 0:21 / /host/proc rw,nosuid shared:5 - proc proc rw
+23 1 0:22 / /data rw,relatime shared:6 - ext4 /dev/sda1 rw
+24 1 0:23 / /mnt/with\\040space rw - sysfs sysfs rw
+25 1 0:24 / /var/lib/kubelet rw - overlay overlay rw";
+        let found: Vec<PathBuf> = kernel_mount_points(mountinfo).collect();
+        assert_eq!(
+            found,
+            [
+                PathBuf::from("/host/proc"),
+                PathBuf::from("/mnt/with space")
+            ]
+        );
+    }
+
     /// A reserved path created after the host started, such as an OCI cache
     /// on its first pull, is reserved from then on.
     #[test]
@@ -508,6 +635,7 @@ mod pinned_tests {
 
     #[tokio::test]
     async fn p2_and_p3_preopens_keep_the_checked_directory_and_permissions() {
+        crate::init_crypto();
         let root = tempfile::tempdir().unwrap();
         let safe = root.path().join("data");
         let secret = root.path().join("secret");
@@ -682,6 +810,20 @@ mod allowlist_tests {
         let err = enforcing.open(root.path()).unwrap_err();
         assert!(err.to_string().contains("--allowed-host-path"), "{err}");
         assert_eq!(meters.host_path_denied(), 1);
+    }
+
+    /// Count mode relaxes the allowlist only: a kernel filesystem stays refused,
+    /// even when an operator lists it as allowed.
+    #[cfg(unix)]
+    #[test]
+    fn a_kernel_filesystem_is_refused_in_either_mode_even_when_allowed() {
+        for mode in [HostPathMode::Count, HostPathMode::Enforce] {
+            let (policy, _) = policy(&[Path::new("/")], mode);
+            for path in ["/", "/dev"] {
+                let err = policy.open(Path::new(path)).unwrap_err().to_string();
+                assert!(err.contains("kernel filesystem"), "{mode:?} {path}: {err}");
+            }
+        }
     }
 
     /// Count mode relaxes the allowlist only: a reserved path stays refused.
