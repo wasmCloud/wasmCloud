@@ -73,8 +73,15 @@ mkdir -p "$WORK_DIR" "$TARGET_DIR"
 chown -R bench:bench /var/lib/bench
 # scripts/k6bench runs kind through Docker. provision.yml installs docker.io,
 # which creates the group; without it the k6bench workflow can't run here.
+# The workflow stops the socket-activated daemon after each run, so the next
+# criterion or gungraun bench doesn't share the host with it; that one command
+# is all the sudo the bench user gets.
 if getent group docker >/dev/null; then
   usermod -aG docker bench
+  printf 'bench ALL=(root) NOPASSWD: /usr/bin/systemctl stop docker.service\n' \
+    >/etc/sudoers.d/bench-docker
+  chmod 0440 /etc/sudoers.d/bench-docker
+  visudo -cf /etc/sudoers.d/bench-docker
 fi
 
 step "install AWS CLI v2 + zstd"

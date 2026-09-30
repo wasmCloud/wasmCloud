@@ -78,6 +78,10 @@ pub struct RunMeta {
     pub k6_ended: u64,
     #[serde(default)]
     pub pinned: bool,
+    /// CPU a native k6 used over its run, in cores. A dockerized k6 is
+    /// sampled into `cluster.ndjson` instead.
+    #[serde(default)]
+    pub k6_cpu_cores: Option<f64>,
     #[serde(default)]
     pub wash_image: String,
     #[serde(default)]
@@ -238,19 +242,19 @@ impl Run {
             .all(|t| t.ok)
     }
 
-    /// k6, not wasmCloud, set the ceiling: it dropped iterations it couldn't
-    /// schedule, or its pinned core was saturated. Such a run is not published.
+    /// k6, not wasmCloud, set the ceiling: its pinned core was saturated. Such
+    /// a run is reported but not published.
+    ///
+    /// Dropped iterations alone don't say so: k6 also drops them when a slow
+    /// system ties up every VU, and that is wasmCloud's result to publish
+    /// (`sustained` already fails the SLO for it). Unpinned, k6 can use any
+    /// core, so there is no ceiling to check.
     pub fn generator_saturated(&self) -> bool {
-        let dropped = match self.summary.profile.as_str() {
-            // A stress run is expected to drop past its knee; only the steps
-            // it sustained have to be clean, and `sustained` already says so.
-            "stress" => false,
-            _ => self.stats.iter().any(ScenarioStats::dropped_too_many),
-        };
-        let k6_cpu = self
-            .cluster_avg(|name| name.ends_with("-k6"))
-            .map(|(cpu, _)| cpu);
-        dropped || (self.meta.pinned && k6_cpu.is_some_and(|c| c > GENERATOR_CPU_CEILING))
+        let k6_cpu = self.meta.k6_cpu_cores.or_else(|| {
+            self.cluster_avg(|name| name.ends_with("-k6"))
+                .map(|(cpu, _)| cpu)
+        });
+        self.meta.pinned && k6_cpu.is_some_and(|c| c > GENERATOR_CPU_CEILING)
     }
 
     /// Mean CPU (cores) and peak memory (MiB) of the matching containers over
@@ -503,6 +507,28 @@ mod tests {
         assert!(measure.requests < total);
         assert!(run.metrics().iter().any(|m| m.name == "p99_ms"));
         assert!(!run.generator_saturated());
+        Ok(())
+    }
+
+    #[test]
+    fn only_k6_cpu_marks_a_run_generator_saturated() -> Result<()> {
+        let mut run = Run::load(&fixture("constant"))?;
+        run.meta.pinned = true;
+        run.meta.k6_cpu_cores = Some(0.95);
+        assert!(run.generator_saturated(), "a pinned k6 at 95% of its core");
+
+        // A slow system makes k6 drop iterations too; that is a failed SLO
+        // to publish, not a saturated generator.
+        run.meta.k6_cpu_cores = Some(0.2);
+        if let Some(measure) = run.stats.iter_mut().find(|s| s.name == "measure") {
+            measure.dropped = measure.offered;
+        }
+        assert!(!run.generator_saturated());
+        assert!(run.scenario("measure").is_some_and(|m| !m.sustained(250.0)));
+
+        run.meta.pinned = false;
+        run.meta.k6_cpu_cores = Some(3.0);
+        assert!(!run.generator_saturated(), "unpinned k6 has no ceiling");
         Ok(())
     }
 

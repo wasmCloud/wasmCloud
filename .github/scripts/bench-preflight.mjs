@@ -202,12 +202,22 @@ if (!existsSync(cargoBin)) {
 }
 ok(`cargo: ${runStdout(cargoBin, ['--version'])}`);
 
-// 10. Nothing left running in Docker from an earlier k6bench job. A leftover
-//     kind cluster keeps kube-apiserver and etcd busy on every CPU, which
-//     skews criterion and gungraun as much as k6. The local registry idles
-//     and is allowed.
+// 10. Docker idle. The daemon is socket-activated, and `docker ps` would start
+//     it (and the always-restart local registry), so ask systemd instead,
+//     which doesn't. A criterion or gungraun bench refuses to share the host
+//     with a running daemon; k6bench.yml stops it after every run, so one
+//     running here means that teardown didn't happen. A k6 run starts it
+//     anyway, and only needs no leftover containers: a stray kind cluster
+//     keeps kube-apiserver and etcd busy on every CPU.
 const hasDocker = spawnSync('sh', ['-c', 'command -v docker'], { stdio: 'ignore' }).status === 0;
-if (hasDocker) {
+const dockerUp =
+  hasDocker &&
+  spawnSync('systemctl', ['is-active', '--quiet', 'docker.service'], { stdio: 'ignore' }).status ===
+    0;
+if (dockerUp && process.env.WASMCLOUD_BENCH_K6 !== '1') {
+  fail('docker daemon is running; stop it first (sudo systemctl stop docker.service)');
+}
+if (dockerUp) {
   const allowed = new Set(['kind-registry']);
   const running = spawnSync('docker', ['ps', '--format', '{{.Names}}'], { encoding: 'utf8' });
   if (running.status !== 0) {
@@ -219,8 +229,8 @@ if (hasDocker) {
   if (stray.length > 0) {
     fail(`containers still running: ${stray.join(', ')} (kind delete cluster --name k6bench)`);
   }
-  ok('docker: no leftover containers');
 }
+ok(dockerUp ? 'docker: no leftover containers' : 'docker: daemon not running');
 
 // 11. k6bench runs only: the tools scripts/k6bench/run.sh drives, and room
 //     for the node and wasmCloud images.
@@ -232,6 +242,12 @@ if (process.env.WASMCLOUD_BENCH_K6 === '1') {
     if (spawnSync('sh', ['-c', `command -v ${tool}`], { stdio: 'ignore' }).status !== 0) {
       fail(`${tool} not on PATH (scripts/bench/ansible/provision.yml installs it)`);
     }
+  }
+  // With the daemon stopped, #10 couldn't see a cluster a failed teardown left
+  // behind; run.sh would otherwise reuse it, stopped nodes and all.
+  const clusters = runStdout('kind', ['get', 'clusters']);
+  if (clusters.split('\n').includes('k6bench')) {
+    fail('kind cluster k6bench left over from an earlier run (kind delete cluster --name k6bench)');
   }
   const dockerRoot = runStdout('docker', ['info', '--format', '{{.DockerRootDir}}']);
   const dfs = statfsSync(dockerRoot);

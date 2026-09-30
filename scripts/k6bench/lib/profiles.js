@@ -15,8 +15,8 @@ function arrival(rate, duration, startTime) {
     duration: `${duration}s`,
     startTime: `${startTime}s`,
     // Pre-allocate for ~50 ms of latency: a VU k6 has to create mid-run
-    // delays its iteration, which it counts as dropped and marks the run
-    // generator-saturated. maxVUs covers ~500 ms before that happens anyway.
+    // delays its iteration, which it counts as dropped against the SLO.
+    // maxVUs covers ~500 ms before that happens anyway.
     preAllocatedVUs: cfg.preVUs || Math.max(50, Math.ceil(rate * 0.05)),
     maxVUs: cfg.maxVUs || Math.max(200, Math.ceil(rate * 0.5)),
     gracefulStop: '5s',

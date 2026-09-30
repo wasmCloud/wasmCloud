@@ -133,14 +133,13 @@ Each run writes `bench-results/<utc>_<scenario>_<profile>/`
 `--markdown` for GitHub. `k6 jsonl <dir>` emits the `history.json` rows that
 CI publishes, and `k6 delta <a> <b>` is what `compare.sh` runs.
 
-**Generator-saturated runs.** A run is marked `generator_saturated` when
-either of these happens:
-
-- k6 drops more than 0.1% of the iterations it should have started.
-- On a pinned run, k6's container averages over 90% of its core.
-
-That means k6 set the ceiling, not wasmCloud. Such a run still gets a report,
-but CI keeps it off the dashboard.
+**Generator-saturated runs.** A pinned run where k6 averaged over 90% of its
+core is marked `generator_saturated`: k6 set the ceiling, not wasmCloud. It
+still gets a report, but CI keeps it off the dashboard. k6's CPU comes from
+`docker stats` for a dockerized k6 and from the shell's `times` for a native
+one. Dropped iterations don't count here, because k6 also drops them when a
+slow system ties up every VU. They fail the SLO instead, and that result is
+published.
 
 ## Running against your own cluster
 
@@ -191,6 +190,9 @@ Each run:
 - uploads a 90-day artifact
 - goes to the same S3 layout and `history.json` as the criterion benches
   (`bench: "k6"`, `group: <scenario>`, `param: <profile>-<rate>`)
+- ends by deleting the cluster and stopping the socket-activated Docker daemon,
+  so the criterion and gungraun benches, whose pre-flight refuses a running
+  daemon, get the host as they expect it
 
 As in `bench.yml`, a pull-request ref never reaches S3.
 
