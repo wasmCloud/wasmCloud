@@ -941,6 +941,18 @@ pub trait OutgoingHandler: Send + Sync + 'static {
     /// connection permits) for up to the pool idle timeout after the workload
     /// is gone. The default is a no-op for stateless implementations.
     fn on_workload_unbind(&self, _workload_id: &str) {}
+
+    /// Called once, when the host is built, with the address check its socket
+    /// policy applies to raw sockets.
+    ///
+    /// A handler that connects to the network itself should pass every
+    /// resolved address through [`EgressAddressGate::filter`] and dial only
+    /// what it returns, or a name the guest's `allowedHosts` permits can
+    /// resolve to the machine's loopback or the cloud metadata address. The
+    /// default ignores it, which leaves a custom transport as it was.
+    ///
+    /// [`EgressAddressGate::filter`]: crate::host::egress_policy::EgressAddressGate::filter
+    fn install_egress_gate(&self, _gate: crate::host::egress_policy::EgressAddressGate) {}
 }
 
 /// Default [`OutgoingHandler`] — sends requests through per-workload
@@ -959,6 +971,9 @@ pub struct DefaultOutgoingHandler {
     /// Where each workload's HTTP allowance comes from; applied when `clients`
     /// is built. See [`Self::with_quotas`].
     quotas: Arc<crate::host::quota::QuotaRegistry>,
+    /// Shared with every client cache this handler builds, so a gate
+    /// installed before or after one is built reaches it either way.
+    egress: Arc<OnceLock<crate::host::egress_policy::EgressAddressGate>>,
 }
 
 impl Default for DefaultOutgoingHandler {
@@ -971,6 +986,7 @@ impl Default for DefaultOutgoingHandler {
         Self {
             clients: OnceLock::new(),
             quotas: crate::host::quota::QuotaRegistry::new(Default::default(), None),
+            egress: Arc::default(),
         }
     }
 }
@@ -993,16 +1009,19 @@ impl DefaultOutgoingHandler {
         tls: Arc<dyn crate::host::http_client::ClientTlsConfigResolver>,
     ) -> Self {
         let quotas = crate::host::quota::QuotaRegistry::new(Default::default(), None);
+        let egress = Arc::default();
         let cell = OnceLock::new();
         let _ = cell.set(
             crate::host::http_client::WorkloadClients::with_tls_config_resolver(
                 tls,
                 Arc::clone(&quotas),
-            ),
+            )
+            .with_egress_gate_cell(Arc::clone(&egress)),
         );
         Self {
             clients: cell,
             quotas,
+            egress,
         }
     }
 
@@ -1040,12 +1059,14 @@ impl DefaultOutgoingHandler {
                 crate::host::http_client::WorkloadClients::with_tls_config_resolver(
                     clients.tls_config_resolver(),
                     Arc::clone(&quotas),
-                ),
+                )
+                .with_egress_gate_cell(Arc::clone(&self.egress)),
             );
         }
         Self {
             clients: cell,
             quotas,
+            egress: self.egress,
         }
     }
 
@@ -1055,6 +1076,7 @@ impl DefaultOutgoingHandler {
                 crate::host::http_client::default_client_tls_config(),
                 Arc::clone(&self.quotas),
             )
+            .with_egress_gate_cell(Arc::clone(&self.egress))
         })
     }
 }
@@ -1090,6 +1112,12 @@ impl OutgoingHandler for DefaultOutgoingHandler {
         if let Some(clients) = self.clients.get() {
             clients.invalidate(workload_id);
         }
+    }
+
+    fn install_egress_gate(&self, gate: crate::host::egress_policy::EgressAddressGate) {
+        // Into the shared cell, which every client cache this handler builds
+        // reads, so no cache needs visiting.
+        let _ = self.egress.set(gate);
     }
 }
 
@@ -1196,6 +1224,10 @@ pub(crate) fn live_handler(host: &crate::host::HostRef) -> anyhow::Result<Arc<dy
 pub trait HostHandler: Send + Sync + 'static {
     /// Inject meters into the handler
     async fn inject_meters(&self, _meters: &Meters) {}
+    /// Called once, when the host is built, with the address check its socket
+    /// policy applies to raw sockets, for every connection this handler makes
+    /// on a workload's behalf. See [`OutgoingHandler::install_egress_gate`].
+    fn install_egress_gate(&self, _gate: crate::host::egress_policy::EgressAddressGate) {}
     /// Start the HTTP server
     async fn start(&self) -> anyhow::Result<()>;
     /// Stop the HTTP server
@@ -1568,6 +1600,9 @@ pub struct Ingress<T: Router, O: OutgoingHandler = DefaultOutgoingHandler> {
     /// h2 (ALPN) variant of the outgoing handler's client TLS configuration,
     /// derived once on the first gRPC request; see [`Ingress::grpc_tls`].
     grpc_tls: OnceLock<Arc<rustls::ClientConfig>>,
+    /// The host's address check, for the gRPC path that connects without the
+    /// outgoing handler; installed by [`HostHandler::install_egress_gate`].
+    egress_gate: OnceLock<crate::host::egress_policy::EgressAddressGate>,
     /// Same-host local routing: when enabled, outgoing requests whose
     /// authority matches a hostname this ingress serves are dispatched
     /// in-memory to the co-located workload instead of egressing to the
@@ -1768,6 +1803,7 @@ impl<T: Router, O: OutgoingHandler> IngressBuilder<T, O> {
             connections: ConnectionLimit::new(max_connections),
             meters: RwLock::new(Meters::new(MeterKind::Off)),
             grpc_tls: OnceLock::new(),
+            egress_gate: OnceLock::new(),
             local_routing: self.local_routing,
             // Always a registry: see `take_local_slot` for why an unbounded
             // local-dispatch path is not an option.
@@ -2181,6 +2217,11 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         *self.meters.write().await = meters.clone();
     }
 
+    fn install_egress_gate(&self, gate: crate::host::egress_policy::EgressAddressGate) {
+        let _ = self.egress_gate.set(gate.clone());
+        self.outgoing_handler.install_egress_gate(gate);
+    }
+
     async fn start(&self) -> anyhow::Result<()> {
         let addr = self.addr;
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
@@ -2439,7 +2480,12 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 Some(client) => {
                     Box::new(async move { client.send_grpc_request(request, options).await })
                 }
-                None => Box::new(send_grpc_request(request, options, self.grpc_tls())),
+                None => Box::new(send_grpc_request(
+                    request,
+                    options,
+                    self.grpc_tls(),
+                    self.egress_gate.get().cloned(),
+                )),
             }
         } else if let Some((target, destination)) =
             self.local_destination(workload_id, request.uri())
@@ -3811,6 +3857,7 @@ async fn send_grpc_request(
     mut request: hyper::Request<WasiBody>,
     options: Option<RequestOptions>,
     tls: Arc<rustls::ClientConfig>,
+    gate: Option<crate::host::egress_policy::EgressAddressGate>,
 ) -> SendResult {
     use crate::host::http_client::{
         connect_http_tcp, connect_http_tls, request_authority, spawn_conn_worker, to_origin_form,
@@ -3831,7 +3878,7 @@ async fn send_grpc_request(
     let use_tls = request.uri().scheme() == Some(&hyper::http::uri::Scheme::HTTPS);
 
     let authority = request_authority(&request, use_tls).ok_or(Error::HttpRequestUriInvalid)?;
-    let tcp_stream = connect_http_tcp(&authority, connect_timeout).await?;
+    let tcp_stream = connect_http_tcp(&authority, connect_timeout, gate.as_ref()).await?;
 
     let (mut sender, conn_worker) = if use_tls {
         // The cached gRPC TLS configuration is shared across workloads; give
@@ -4014,6 +4061,7 @@ mod tests {
             build_request(&uri),
             grpc_options(),
             h2_client_config(&crate::host::http_client::default_client_tls_config()),
+            None,
         )
         .await
         else {
@@ -4032,8 +4080,13 @@ mod tests {
         }
         .build()
         .unwrap();
-        let Ok((response, io)) =
-            send_grpc_request(build_request(&uri), grpc_options(), h2_client_config(&tls)).await
+        let Ok((response, io)) = send_grpc_request(
+            build_request(&uri),
+            grpc_options(),
+            h2_client_config(&tls),
+            None,
+        )
+        .await
         else {
             panic!("request with the private CA trusted should succeed");
         };
