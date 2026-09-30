@@ -2009,7 +2009,6 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
             let Ok(slot) = slot else {
                 return Err(wasmtime_wasi_http::Error::ConnectionLimitReached);
             };
-            let slot = SharedSlot::new(slot);
             let first_byte_timeout = options
                 .and_then(|o| o.first_byte_timeout)
                 .unwrap_or(Duration::from_secs(600));
@@ -2020,8 +2019,9 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
             // as the network path does.
             let (parts, body) = request.into_parts();
             let (body, upload) = crate::host::http_client::UploadProbe::new(body);
-            let (settle, answered) = Settle::new(slot.clone());
-            let body = DrainOnDrop::new(body, slot.clone(), answered);
+            let local = LocalRequest::new(slot, body);
+            let settle = Settle(Some(local.clone()));
+            let body = DrainOnDrop::new(local.clone());
             let request = hyper::Request::from_parts(parts, body.boxed_unsync());
             let dispatched = tokio::time::timeout(
                 first_byte_timeout,
@@ -2040,7 +2040,7 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
             // The slot is held until the body drains, and
             // `between_bytes_timeout` is applied here because the body goes
             // straight back to the guest.
-            let response = attach_slot(response, slot)
+            let response = attach_slot(response, local)
                 .map(|body| TimedBody::new(body, between_bytes_timeout).boxed_unsync());
             Ok((response, crate::host::http_client::upload_io(upload)))
         })
@@ -2062,7 +2062,7 @@ fn h2_client_config(base: &rustls::ClientConfig) -> Arc<rustls::ClientConfig> {
 /// quota read as idle.
 struct SlotBody {
     inner: WasiBody,
-    _slot: SharedSlot,
+    _request: LocalRequest,
 }
 
 impl hyper::body::Body for SlotBody {
@@ -2085,65 +2085,175 @@ impl hyper::body::Body for SlotBody {
     }
 }
 
-/// Wrap a response body so `slot` lives until the body is drained.
-fn attach_slot(resp: hyper::Response<WasiBody>, slot: SharedSlot) -> hyper::Response<WasiBody> {
-    resp.map(|inner| WasiBody::new(SlotBody { inner, _slot: slot }))
+/// Hold the local request's slot until the response body is drained.
+fn attach_slot(
+    resp: hyper::Response<WasiBody>,
+    request: LocalRequest,
+) -> hyper::Response<WasiBody> {
+    resp.map(|inner| {
+        WasiBody::new(SlotBody {
+            inner,
+            _request: request,
+        })
+    })
 }
 
-/// A local request's outbound slot, shared by its request body (and that body's
-/// drain) and its response body, and returned when all are done.
-/// [`SharedSlot::release`] returns it early for a failed dispatch, so a body
-/// still queued at a service doesn't hold the caller's quota.
+/// Share a local upload and its quota slot with the response and upload drain.
+/// Failure closes the upload and returns the slot even if the request is queued.
 #[derive(Clone)]
-struct SharedSlot(Arc<std::sync::Mutex<Option<crate::host::quota::ConnectionSlot>>>);
+struct LocalRequest(Arc<std::sync::Mutex<LocalRequestInner>>);
 
-impl SharedSlot {
-    fn new(slot: crate::host::quota::ConnectionSlot) -> Self {
-        Self(Arc::new(std::sync::Mutex::new(Some(slot))))
+struct LocalRequestInner {
+    slot: Option<crate::host::quota::ConnectionSlot>,
+    body: LocalUpload,
+    waker: Option<std::task::Waker>,
+}
+
+enum LocalUpload {
+    Open(crate::host::http_client::UploadProbe),
+    Done,
+    Closed,
+}
+
+impl LocalRequest {
+    fn new(
+        slot: crate::host::quota::ConnectionSlot,
+        body: crate::host::http_client::UploadProbe,
+    ) -> Self {
+        Self(Arc::new(std::sync::Mutex::new(LocalRequestInner {
+            slot: Some(slot),
+            body: LocalUpload::Open(body),
+            waker: None,
+        })))
     }
 
-    fn release(&self) {
-        if let Ok(mut slot) = self.0.lock() {
-            slot.take();
+    fn fail(&self) {
+        let (body, slot, waker) = {
+            let mut request = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            let body = if matches!(request.body, LocalUpload::Open(_)) {
+                Some(std::mem::replace(&mut request.body, LocalUpload::Closed))
+            } else {
+                None
+            };
+            (body, request.slot.take(), request.waker.take())
+        };
+        drop(body);
+        drop(slot);
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    /// Release the upload while the response still holds its quota slot.
+    fn finish_upload(&self) {
+        let finished = {
+            let mut request = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                std::mem::replace(&mut request.body, LocalUpload::Done),
+                request.waker.take(),
+            )
+        };
+        drop(finished);
+    }
+
+    /// Whether a dropped upload still has frames to drain. If not, the upload is
+    /// released now, including one closed by a failed dispatch.
+    fn needs_drain(&self) -> bool {
+        let finished = {
+            let mut request = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            if let LocalUpload::Open(body) = &request.body
+                && !hyper::body::Body::is_end_stream(body)
+            {
+                return true;
+            }
+            (
+                std::mem::replace(&mut request.body, LocalUpload::Done),
+                request.waker.take(),
+            )
+        };
+        drop(finished);
+        false
+    }
+
+    /// Read the upload's next frame. Only [`DrainOnDrop`] and its drain task
+    /// read, since a pending read keeps a single waker.
+    fn poll_frame(
+        &self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<bytes::Bytes>, wasmtime_wasi_http::Error>>>
+    {
+        let mut request = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let polled = match &mut request.body {
+            LocalUpload::Open(inner) => {
+                hyper::body::Body::poll_frame(std::pin::Pin::new(inner), cx)
+            }
+            LocalUpload::Done => return std::task::Poll::Ready(None),
+            LocalUpload::Closed => {
+                request.body = LocalUpload::Done;
+                return std::task::Poll::Ready(Some(Err(
+                    wasmtime_wasi_http::Error::ConnectionTerminated,
+                )));
+            }
+        };
+        let finished = match &polled {
+            std::task::Poll::Pending => {
+                // The lock makes registering a pending reader atomic with failure.
+                if request
+                    .waker
+                    .as_ref()
+                    .is_none_or(|w| !w.will_wake(cx.waker()))
+                {
+                    request.waker = Some(cx.waker().clone());
+                }
+                None
+            }
+            std::task::Poll::Ready(frame) => {
+                request.waker = None;
+                if matches!(frame, None | Some(Err(_))) {
+                    Some(std::mem::replace(&mut request.body, LocalUpload::Done))
+                } else {
+                    None
+                }
+            }
+        };
+        drop(request);
+        drop(finished);
+        polled
+    }
+
+    fn is_end_stream(&self) -> bool {
+        match &self.0.lock().unwrap_or_else(|e| e.into_inner()).body {
+            LocalUpload::Open(body) => hyper::body::Body::is_end_stream(body),
+            LocalUpload::Done => true,
+            LocalUpload::Closed => false,
+        }
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        match &self.0.lock().unwrap_or_else(|e| e.into_inner()).body {
+            LocalUpload::Open(body) => hyper::body::Body::size_hint(body),
+            LocalUpload::Done => hyper::body::SizeHint::with_exact(0),
+            LocalUpload::Closed => hyper::body::SizeHint::default(),
         }
     }
 }
 
-/// Settles a local dispatch for its upload drain. Answered, the slot stays
-/// shared and the drain reads to EOF. Failed, timed out, or dropped unsettled
-/// (the send abandoned), the slot is released and the drain stops.
-struct Settle {
-    slot: SharedSlot,
-    answered: Option<tokio::sync::oneshot::Sender<bool>>,
-}
+/// A successful dispatch keeps its upload and slot. Failure or cancellation
+/// closes the upload and releases the slot, even if the request is queued.
+struct Settle(Option<LocalRequest>);
 
 impl Settle {
-    fn new(slot: SharedSlot) -> (Self, tokio::sync::oneshot::Receiver<bool>) {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        (
-            Self {
-                slot,
-                answered: Some(tx),
-            },
-            rx,
-        )
-    }
-
     fn answered(mut self, answered: bool) {
-        if let Some(tx) = self.answered.take() {
-            let _ = tx.send(answered);
-        }
-        if !answered {
-            self.slot.release();
+        if answered {
+            self.0.take();
         }
     }
 }
 
 impl Drop for Settle {
     fn drop(&mut self) {
-        // Dropping the sender tells the drain "no".
-        if self.answered.take().is_some() {
-            self.slot.release();
+        if let Some(request) = self.0.take() {
+            request.fail();
         }
     }
 }
@@ -2151,25 +2261,16 @@ impl Drop for Settle {
 /// Request body handed to a locally routed callee. A callee dropping it unread
 /// would close the caller's upload ("connection reset"), so from the drop on
 /// the rest is drained on a task, holding the request's outbound slot. The drain
-/// has no timer (the quota bounds open drains); a failed, timed-out or abandoned
-/// dispatch stops it and closes the caller's upload.
+/// has no timer (the quota bounds open drains). A failed, timed-out or abandoned
+/// dispatch closes the upload, and whoever holds the body, whether the callee, a
+/// queued job or the drain, reads `ConnectionTerminated` rather than a clean end.
 struct DrainOnDrop {
-    inner: Option<crate::host::http_client::UploadProbe>,
-    slot: Option<SharedSlot>,
-    answered: Option<tokio::sync::oneshot::Receiver<bool>>,
+    inner: Option<LocalRequest>,
 }
 
 impl DrainOnDrop {
-    fn new(
-        inner: crate::host::http_client::UploadProbe,
-        slot: SharedSlot,
-        answered: tokio::sync::oneshot::Receiver<bool>,
-    ) -> Self {
-        Self {
-            inner: Some(inner),
-            slot: Some(slot),
-            answered: Some(answered),
-        }
+    fn new(inner: LocalRequest) -> Self {
+        Self { inner: Some(inner) }
     }
 }
 
@@ -2181,13 +2282,12 @@ impl hyper::body::Body for DrainOnDrop {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
-        let Some(inner) = self.inner.as_mut() else {
+        let Some(inner) = self.inner.as_ref() else {
             return std::task::Poll::Ready(None);
         };
-        let polled = std::pin::Pin::new(inner).poll_frame(cx);
+        let polled = inner.poll_frame(cx);
         if matches!(polled, std::task::Poll::Ready(None | Some(Err(_)))) {
             self.inner = None;
-            self.slot = None;
         }
         polled
     }
@@ -2205,42 +2305,18 @@ impl hyper::body::Body for DrainOnDrop {
 
 impl Drop for DrainOnDrop {
     fn drop(&mut self) {
-        let (Some(mut body), slot, Some(mut answered)) =
-            (self.inner.take(), self.slot.take(), self.answered.take())
-        else {
+        let Some(body) = self.inner.take() else {
             return;
         };
-        if hyper::body::Body::is_end_stream(&body) {
+        if !body.needs_drain() {
             return;
         }
-        // A dispatch already settled as failed needs no task. A received value
-        // must not be polled for again, hence `settled`.
-        let mut settled = match answered.try_recv() {
-            Ok(true) => true,
-            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => false,
-            _ => return,
-        };
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            body.finish_upload();
             return;
         };
         runtime.spawn(async move {
-            let _slot = slot;
-            loop {
-                tokio::select! {
-                    biased;
-                    outcome = &mut answered, if !settled => {
-                        if outcome != Ok(true) {
-                            return;
-                        }
-                        settled = true;
-                    }
-                    frame = body.frame() => {
-                        if !matches!(frame, Some(Ok(_))) {
-                            return;
-                        }
-                    }
-                }
-            }
+            while let Some(Ok(_)) = std::future::poll_fn(|cx| body.poll_frame(cx)).await {}
         });
     }
 }
@@ -4943,19 +5019,19 @@ mod tests {
         .expect("the failed dispatch should have freed its slot");
     }
 
-    /// A dispatch that times out while its job is still queued at the service
-    /// returns its slot at once, though the queued body lives on.
+    /// A queued dispatch timeout closes the upload and returns its slot.
     #[tokio::test]
-    async fn a_timed_out_queued_dispatch_releases_its_slot() {
+    async fn a_timed_out_queued_dispatch_closes_the_upload_and_releases_its_slot() {
         let server = ingress_with_outbound_limit(1).await;
         // Alive, so the job is accepted, but never polled.
-        let (sender, _queued) = tokio::sync::mpsc::channel::<ServiceHttpJob>(8);
+        let (sender, mut queued) = tokio::sync::mpsc::channel::<ServiceHttpJob>(8);
         let options = RequestOptions {
             first_byte_timeout: Some(Duration::from_millis(50)),
             ..Default::default()
         };
 
-        let (_tx, request) = upload_request();
+        let (tx, request) = upload_request();
+        upload(&tx).await.expect("the first frame should fit");
         let timed_out = Box::into_pin(server.send_local_request(
             "caller",
             "callee".to_string(),
@@ -4971,6 +5047,18 @@ mod tests {
             ),
             "the queued dispatch should time out"
         );
+        tokio::time::timeout(Duration::from_secs(5), tx.closed())
+            .await
+            .expect("the timeout should close the queued upload");
+        assert!(upload(&tx).await.is_err(), "further writes should fail");
+        let mut body = queued.recv().await.unwrap().req.into_body();
+        assert!(!hyper::body::Body::is_end_stream(&body));
+        assert!(matches!(
+            body.frame().await,
+            Some(Err(wasmtime_wasi_http::Error::ConnectionTerminated))
+        ));
+        assert!(hyper::body::Body::is_end_stream(&body));
+        assert!(body.frame().await.is_none(), "the error should appear once");
 
         let (_tx, request) = upload_request();
         let (_response, _io) = Box::into_pin(server.send_local_request(
@@ -4982,6 +5070,161 @@ mod tests {
         ))
         .await
         .expect("the timed-out dispatch should have released its slot");
+    }
+
+    #[tokio::test]
+    async fn an_empty_local_upload_finishes_while_the_response_holds_its_slot() {
+        let server = ingress_with_outbound_limit(1).await;
+        let send = || {
+            Box::into_pin(server.send_local_request(
+                "caller",
+                "callee".to_string(),
+                early_answering_service(),
+                hyper::Request::new(WasiBody::default()),
+                None,
+            ))
+        };
+
+        let (response, io) = send().await.expect("the response should arrive");
+        tokio::time::timeout(Duration::from_secs(5), Box::into_pin(io))
+            .await
+            .expect("the empty upload should finish before the response is dropped")
+            .expect("the empty upload should succeed");
+        assert!(matches!(
+            send().await,
+            Err(wasmtime_wasi_http::Error::ConnectionLimitReached)
+        ));
+        drop(response);
+        let (_response, _io) = send()
+            .await
+            .expect("dropping the response should free the slot");
+    }
+
+    #[tokio::test]
+    async fn a_dropped_queued_dispatch_closes_the_upload() {
+        let server = Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
+            .build()
+            .await
+            .unwrap();
+        let (sender, mut queued) = tokio::sync::mpsc::channel::<ServiceHttpJob>(1);
+        let (tx, request) = upload_request();
+        let mut send = Box::into_pin(server.send_local_request(
+            "caller",
+            "callee".to_string(),
+            LocalTarget::Service(sender),
+            request,
+            None,
+        ));
+        assert!(futures::poll!(send.as_mut()).is_pending());
+        assert_eq!(queued.len(), 1, "the request should still be queued");
+
+        drop(send);
+        assert!(tx.is_closed(), "cancellation should close the upload");
+        let mut body = queued.recv().await.unwrap().req.into_body();
+        assert!(!hyper::body::Body::is_end_stream(&body));
+        assert!(matches!(
+            body.frame().await,
+            Some(Err(wasmtime_wasi_http::Error::ConnectionTerminated))
+        ));
+        assert!(body.frame().await.is_none(), "the error should appear once");
+    }
+
+    #[tokio::test]
+    async fn closing_a_local_upload_wakes_a_pending_reader() {
+        let (tx, request) = upload_request();
+        let (body, _upload) = crate::host::http_client::UploadProbe::new(request.into_body());
+        let slot = crate::host::quota::GuestConnectionQuota::new(Default::default(), None)
+            .try_acquire_outbound_http()
+            .unwrap();
+        let closer = LocalRequest::new(slot, body);
+        let mut body = DrainOnDrop::new(closer.clone());
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let reader = tokio::spawn(async move {
+            let mut frame = Box::pin(body.frame());
+            assert!(futures::poll!(frame.as_mut()).is_pending());
+            started_tx.send(()).unwrap();
+            frame.await
+        });
+        started_rx.await.unwrap();
+
+        closer.fail();
+        let frame = tokio::time::timeout(Duration::from_secs(5), reader)
+            .await
+            .expect("closing the upload should wake the reader")
+            .unwrap();
+        assert!(matches!(
+            frame,
+            Some(Err(wasmtime_wasi_http::Error::ConnectionTerminated))
+        ));
+        assert!(tx.is_closed(), "closing the body should close its writer");
+    }
+
+    #[test]
+    fn a_failed_upload_dropped_unread_needs_no_drain() {
+        let (_tx, request) = upload_request();
+        let (body, _upload) = crate::host::http_client::UploadProbe::new(request.into_body());
+        let slot = crate::host::quota::GuestConnectionQuota::new(Default::default(), None)
+            .try_acquire_outbound_http()
+            .unwrap();
+        let request = LocalRequest::new(slot, body);
+        assert!(request.needs_drain(), "an open upload should be drained");
+
+        request.fail();
+        assert!(
+            !request.needs_drain(),
+            "a failed upload has nothing to drain"
+        );
+        assert!(
+            request.is_end_stream(),
+            "the dropped failure should be released"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_partial_upload_errors_at_the_callee() {
+        let server = Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
+            .build()
+            .await
+            .unwrap();
+        let (sender, mut jobs) = tokio::sync::mpsc::channel::<ServiceHttpJob>(1);
+        let (read_tx, read_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let job = jobs.recv().await.unwrap();
+            let mut body = job.req.into_body();
+            assert_eq!(
+                body.frame().await.unwrap().unwrap().into_data().unwrap(),
+                bytes::Bytes::from_static(b"upload")
+            );
+            let _ = read_tx.send(body.frame().await);
+            drop(job.resp_tx);
+        });
+
+        let (tx, request) = upload_request();
+        upload(&tx).await.expect("the first frame should fit");
+        let sent = Box::into_pin(server.send_local_request(
+            "caller",
+            "callee".to_string(),
+            LocalTarget::Service(sender),
+            request,
+            Some(RequestOptions {
+                first_byte_timeout: Some(Duration::from_millis(50)),
+                ..Default::default()
+            }),
+        ))
+        .await;
+        assert!(matches!(
+            sent,
+            Err(wasmtime_wasi_http::Error::ConnectionReadTimeout)
+        ));
+        let read = tokio::time::timeout(Duration::from_secs(5), read_rx)
+            .await
+            .expect("the callee should see the upload fail")
+            .unwrap();
+        assert!(matches!(
+            read,
+            Some(Err(wasmtime_wasi_http::Error::ConnectionTerminated))
+        ));
+        assert!(tx.is_closed());
     }
 
     /// A callee that drops the body and then works before answering must not
