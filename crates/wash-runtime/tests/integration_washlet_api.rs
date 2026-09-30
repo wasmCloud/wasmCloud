@@ -20,7 +20,8 @@
 //!   the host ID, the `hostgroup` label, and the environment the operator
 //!   records verbatim, plus a workload count that tracks running workloads.
 //!
-//! Requires Docker (NATS); marked `#[ignore]`, run with `cargo test --include-ignored`.
+//! Requires Docker (NATS) or `NATS_URL`; marked `#[ignore]`, run with
+//! `cargo test --include-ignored`. A local server exercises the same cases.
 
 #![cfg(feature = "washlet")]
 
@@ -29,7 +30,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use futures::StreamExt as _;
+use futures::{FutureExt as _, StreamExt as _};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use testcontainers::{
@@ -50,6 +51,36 @@ const ENVIRONMENT: &str = "e2e-env";
 /// runner busy with the rest of the suite.
 const ABANDON_MARGIN: Duration = Duration::from_secs(10);
 
+async fn nats_clients() -> Result<(
+    Option<ContainerAsync<GenericImage>>,
+    Arc<async_nats::Client>,
+    async_nats::Client,
+)> {
+    wash_runtime::init_crypto();
+    let (container, url) = match std::env::var("NATS_URL") {
+        Ok(url) => (None, url),
+        Err(_) => {
+            let container = GenericImage::new("nats", "2.12.8-alpine")
+                .with_exposed_port(4222.tcp())
+                .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+                .start()
+                .await
+                .context("failed to start NATS container")?;
+            let port = container.get_host_port_ipv4(4222).await?;
+            (Some(container), format!("nats://127.0.0.1:{port}"))
+        }
+    };
+    let host = Arc::new(
+        async_nats::connect(&url)
+            .await
+            .context("failed to connect host NATS client")?,
+    );
+    let operator = async_nats::connect(&url)
+        .await
+        .context("failed to connect operator NATS client")?;
+    Ok((container, host, operator))
+}
+
 struct TestHarness {
     api_client: async_nats::Client,
     host_id: String,
@@ -59,7 +90,7 @@ struct TestHarness {
     shutdown: Pin<Box<dyn Future<Output = Result<()>> + Send>>,
     /// Present only under [`TestHarnessBuilder::with_ingress`].
     ingress: Option<Arc<dyn HostHandler>>,
-    _container: ContainerAsync<GenericImage>,
+    _container: Option<ContainerAsync<GenericImage>>,
 }
 
 /// A NATS container and a washlet on it, configured the way the code under
@@ -96,28 +127,7 @@ impl TestHarnessBuilder {
             .try_init()
             .ok();
 
-        let container = GenericImage::new("nats", "2.12.8-alpine")
-            .with_exposed_port(4222.tcp())
-            .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
-            .start()
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to start NATS container: {e}"))?;
-        let port = container
-            .get_host_port_ipv4(4222)
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to get NATS host port: {e}"))?;
-        let nats_url = format!("nats://127.0.0.1:{port}");
-
-        // The washlet holds its own client; the tests drive the API over a
-        // separate connection, mirroring the operator being a distinct peer.
-        let washlet_client = Arc::new(
-            async_nats::connect(&nats_url)
-                .await
-                .context("failed to connect washlet NATS client")?,
-        );
-        let api_client = async_nats::connect(&nats_url)
-            .await
-            .context("failed to connect API NATS client")?;
+        let (container, washlet_client, api_client) = nats_clients().await?;
 
         let mut builder = ClusterHostBuilder::default()
             .with_host_group(HOST_GROUP)
@@ -306,9 +316,7 @@ impl StallingRegistry {
         self.reached.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Fires a start whose only component pulls from here, so it hangs. The
-    /// handle is the caller's to abort; the reply never comes.
-    fn spawn_start(&self, harness: &TestHarness, workload_id: &str) -> tokio::task::JoinHandle<()> {
+    fn start_request(&self, workload_id: &str) -> v2::WorkloadStartRequest {
         let mut request = empty_start_request(workload_id);
         request.workload = request.workload.map(|workload| v2::Workload {
             wit_world: Some(v2::WitWorld {
@@ -321,6 +329,13 @@ impl StallingRegistry {
             }),
             ..workload
         });
+        request
+    }
+
+    /// Fires a start whose only component pulls from here, so it hangs. The
+    /// handle is the caller's to abort; the reply never comes.
+    fn spawn_start(&self, harness: &TestHarness, workload_id: &str) -> tokio::task::JoinHandle<()> {
+        let request = self.start_request(workload_id);
         let client = harness.api_client.clone();
         let subject = harness.subject("workload.start");
         tokio::spawn(async move {
@@ -378,13 +393,7 @@ impl HostCommandHandler for AttachedPolicy {
         request: v2::WorkloadStartRequest,
     ) -> Result<v2::WorkloadStartResponse> {
         if request.workload_id == "denied" {
-            return Ok(v2::WorkloadStartResponse {
-                workload_status: Some(v2::WorkloadStatus {
-                    workload_id: request.workload_id,
-                    workload_state: v2::WorkloadState::Error.into(),
-                    message: "admission denied".into(),
-                }),
-            });
+            anyhow::bail!("admission denied");
         }
         defaults.start(request).await
     }
@@ -425,29 +434,9 @@ impl HostCommandHandler for AttachedPolicy {
 }
 
 #[tokio::test]
-#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+#[ignore = "requires Docker (NATS) or NATS_URL"]
 async fn attached_control_delegates_and_leaves_caller_host_running() -> Result<()> {
-    let container = GenericImage::new("nats", "2.12.8-alpine")
-        .with_exposed_port(4222.tcp())
-        .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
-        .start()
-        .await?;
-    let port = container.get_host_port_ipv4(4222).await?;
-    let url = format!("nats://127.0.0.1:{port}");
-    let nats = Arc::new(async_nats::connect(&url).await?);
-    let operator = async_nats::connect(&url).await?;
-    check_attached_control(nats, operator).await
-}
-
-#[tokio::test]
-#[ignore = "requires NATS_URL pointing to a local nats-server"]
-async fn attached_control_with_local_nats() -> Result<()> {
-    let Ok(url) = std::env::var("NATS_URL") else {
-        eprintln!("NATS_URL is unset; local NATS attachment check skipped");
-        return Ok(());
-    };
-    let nats = Arc::new(async_nats::connect(&url).await?);
-    let operator = async_nats::connect(&url).await?;
+    let (_container, nats, operator) = nats_clients().await?;
     check_attached_control(nats, operator).await
 }
 
@@ -455,7 +444,12 @@ async fn check_attached_control(
     nats: Arc<async_nats::Client>,
     operator: async_nats::Client,
 ) -> Result<()> {
-    let host = HostBuilder::default().build()?.start().await?;
+    let host = HostBuilder::default()
+        .with_label("product", "desktop")
+        .with_environment("desktop-env")
+        .build()?
+        .start()
+        .await?;
     host.workload_start(wash_runtime::types::WorkloadStartRequest {
         workload_id: "local-1".into(),
         workload: wash_runtime::types::Workload {
@@ -472,16 +466,22 @@ async fn check_attached_control(
     let host_id = host.id().to_string();
     let mut heartbeats = operator.subscribe(heartbeat_subject(&host_id)).await?;
     operator.flush().await?;
-    let channel = AttachedHostControl::attach(
-        host.clone(),
-        nats,
-        "attached-group",
-        Some(Arc::new(AttachedPolicy)),
-    )
-    .await?;
+    let channel = AttachedHostControl::builder(host.clone(), nats.clone())
+        .with_host_group("attached-group")
+        .with_handler(Arc::new(AttachedPolicy))
+        .with_max_concurrent_starts(1)
+        .with_heartbeat_interval(Duration::from_millis(30))
+        .attach()
+        .await?;
 
     let beat: v2::HostHeartbeat = rpc(&operator, rpc_subject(&host_id, "heartbeat"), &()).await?;
     assert_eq!(beat.id, host_id);
+    assert_eq!(beat.environment, "desktop-env");
+    assert_eq!(
+        beat.labels.get("product").map(String::as_str),
+        Some("desktop")
+    );
+    assert!(!host.labels().contains_key("hostgroup"));
     assert_eq!(
         beat.labels.get("hostgroup").map(String::as_str),
         Some("attached-group")
@@ -579,12 +579,181 @@ async fn check_attached_control(
     )
     .await;
     assert!(!matches!(after_shutdown, Ok(Ok(_))));
+    while matches!(heartbeats.next().now_or_never(), Some(Some(_))) {}
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), heartbeats.next())
+            .await
+            .is_err(),
+        "attachment kept publishing after shutdown"
+    );
+    assert_eq!(
+        host.workload_status(wash_runtime::types::WorkloadStatusRequest {
+            workload_id: "local-1".into(),
+        })
+        .await?
+        .workload_status
+        .workload_state,
+        wash_runtime::types::WorkloadState::Running
+    );
+    // The stopped attachment can be replaced without rebuilding the host.
+    let replacement = AttachedHostControl::attach(host.clone(), nats, "replacement", None).await?;
+    replacement.shutdown().await?;
     host.stop().await?;
     Ok(())
 }
 
 #[tokio::test]
-#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+#[ignore = "requires Docker (NATS) or NATS_URL"]
+async fn attached_control_reports_a_closed_subscription_without_stopping_the_host() -> Result<()> {
+    let (_container, nats, _) = nats_clients().await?;
+    let host = HostBuilder::default().build()?.start().await?;
+    let host_id = host.id().to_string();
+    let channel = AttachedHostControl::attach(host.clone(), nats.clone(), "attached", None).await?;
+    nats.drain().await?;
+    let error = tokio::time::timeout(Duration::from_secs(5), channel.stopped())
+        .await?
+        .err()
+        .context("closed subscription was reported healthy")?;
+    assert!(error.to_string().contains("host API subscription closed"));
+    assert!(channel.shutdown().await.is_err());
+    assert_eq!(host.heartbeat().await?.id, host_id);
+    // A failed registration must also leave the caller's host untouched.
+    assert!(
+        AttachedHostControl::attach(host.clone(), nats, "failed", None)
+            .await
+            .is_err()
+    );
+    assert_eq!(host.heartbeat().await?.id, host_id);
+    host.stop().await
+}
+
+struct StallingPolicy {
+    entered: tokio::sync::Notify,
+    cancelled: std::sync::atomic::AtomicBool,
+}
+
+struct MarkCancelled<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for MarkCancelled<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl HostCommandHandler for StallingPolicy {
+    async fn start(
+        &self,
+        _defaults: &HostControlDefaults,
+        _request: v2::WorkloadStartRequest,
+    ) -> Result<v2::WorkloadStartResponse> {
+        let _cancelled = MarkCancelled(&self.cancelled);
+        self.entered.notify_one();
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS) or NATS_URL"]
+async fn attached_control_reports_forced_abort_and_leaves_host_recovery_to_the_owner() -> Result<()>
+{
+    let (_container, nats, operator) = nats_clients().await?;
+    let host = HostBuilder::default().build()?.start().await?;
+    let id = host.id().to_string();
+    let handler = Arc::new(StallingPolicy {
+        entered: tokio::sync::Notify::new(),
+        cancelled: std::sync::atomic::AtomicBool::new(false),
+    });
+    let channel = AttachedHostControl::builder(host.clone(), nats)
+        .with_handler(handler.clone())
+        .with_max_concurrent_starts(1)
+        .attach()
+        .await?;
+    let client = operator.clone();
+    let start_subject = rpc_subject(&id, "workload.start");
+    let request = tokio::spawn(async move {
+        rpc::<_, v2::WorkloadStartResponse>(&client, start_subject, &empty_start_request("stalled"))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), handler.entered.notified()).await?;
+    let status: v2::WorkloadStatusResponse = rpc(
+        &operator,
+        rpc_subject(&id, "workload.status"),
+        &v2::WorkloadStatusRequest {
+            workload_id: "local".into(),
+        },
+    )
+    .await?;
+    assert_eq!(
+        status_of(status.workload_status)?.workload_state(),
+        v2::WorkloadState::NotFound
+    );
+    let began = std::time::Instant::now();
+    let error = channel
+        .shutdown()
+        .await
+        .err()
+        .context("forced abort was reported as clean shutdown")?;
+    assert!(error.to_string().contains("exceeded the shutdown drain"));
+    assert!(began.elapsed() >= COMMAND_DRAIN_TIMEOUT);
+    assert!(began.elapsed() < COMMAND_DRAIN_TIMEOUT + ABANDON_MARGIN);
+    assert!(handler.cancelled.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(host.heartbeat().await?.id, id);
+    assert!(channel.shutdown().await.is_err());
+    request.abort();
+    host.stop().await
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS) or NATS_URL"]
+async fn attached_control_reports_an_aborted_native_start_and_preserves_local_workloads()
+-> Result<()> {
+    let (_container, nats, operator) = nats_clients().await?;
+    let host = HostBuilder::default().build()?.start().await?;
+    host.workload_start(wash_runtime::types::WorkloadStartRequest {
+        workload_id: "local".into(),
+        workload: wash_runtime::types::Workload {
+            namespace: "default".into(),
+            name: "local".into(),
+            annotations: Default::default(),
+            service: None,
+            components: vec![],
+            host_interfaces: vec![],
+            volumes: vec![],
+        },
+    })
+    .await?;
+    let channel = AttachedHostControl::attach(host.clone(), nats, "attached", None).await?;
+    let registry = StallingRegistry::bind().await?;
+    let subject = rpc_subject(host.id(), "workload.start");
+    let request = registry.start_request("stalled-native");
+    let start = tokio::spawn(async move {
+        rpc::<_, v2::WorkloadStartResponse>(&operator, subject, &request).await
+    });
+    wait_for(Duration::from_secs(10), || registry.reached() > 0).await?;
+    let error = channel
+        .shutdown()
+        .await
+        .err()
+        .context("an aborted native start was reported as clean shutdown")?;
+    assert!(error.to_string().contains("exceeded the shutdown drain"));
+    assert_eq!(
+        host.workload_status(wash_runtime::types::WorkloadStatusRequest {
+            workload_id: "local".into(),
+        })
+        .await?
+        .workload_status
+        .workload_state,
+        wash_runtime::types::WorkloadState::Running
+    );
+    start.abort();
+    // Native cancellation need not release the interrupted ID. The owner
+    // chooses to stop this host rather than reuse it after an abort error.
+    host.stop().await
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS) or NATS_URL; run with `cargo test --include-ignored`"]
 async fn duplicate_workload_id_rejected_over_washlet_api() -> Result<()> {
     let harness = setup().await?;
     let workload_id = "washlet-api-e2e-duplicate";
@@ -642,7 +811,7 @@ async fn duplicate_workload_id_rejected_over_washlet_api() -> Result<()> {
 /// must be idempotent: unknown IDs answer NOT_FOUND, they don't error and
 /// they don't create state.
 #[tokio::test]
-#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+#[ignore = "requires Docker (NATS) or NATS_URL; run with `cargo test --include-ignored`"]
 async fn unknown_workload_ids_answer_not_found() -> Result<()> {
     let harness = setup().await?;
     let workload_id = "washlet-api-e2e-unknown";
@@ -668,7 +837,7 @@ async fn unknown_workload_ids_answer_not_found() -> Result<()> {
 /// the pull, so this pins the release on the failure path: a corrected start
 /// with the same ID succeeds without an intervening stop.
 #[tokio::test]
-#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+#[ignore = "requires Docker (NATS) or NATS_URL; run with `cargo test --include-ignored`"]
 async fn pull_failure_does_not_consume_workload_id() -> Result<()> {
     let harness = setup().await?;
     let workload_id = "washlet-api-e2e-pull-failure";
@@ -723,7 +892,7 @@ async fn pull_failure_does_not_consume_workload_id() -> Result<()> {
 /// operator deletes a host it has not heard from inside its unreachable
 /// window, and every workload on that host goes with it.
 #[tokio::test]
-#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+#[ignore = "requires Docker (NATS) or NATS_URL; run with `cargo test --include-ignored`"]
 async fn heartbeats_continue_while_a_start_is_in_flight() -> Result<()> {
     const HEARTBEAT: Duration = Duration::from_millis(200);
     let mut harness = TestHarness::builder()
@@ -771,7 +940,7 @@ async fn heartbeats_continue_while_a_start_is_in_flight() -> Result<()> {
 /// how many images a host pulls and compiles at once. Only starts wait on it:
 /// a stop or a status stuck behind a slow start is a host that looks wedged.
 #[tokio::test]
-#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+#[ignore = "requires Docker (NATS) or NATS_URL; run with `cargo test --include-ignored`"]
 async fn concurrent_workload_starts_are_bounded() -> Result<()> {
     const LIMIT: usize = 2;
     let harness = TestHarness::builder()
@@ -825,7 +994,7 @@ async fn concurrent_workload_starts_are_bounded() -> Result<()> {
 /// `HostApi` directly because this permit is exactly what stops that herd
 /// forming here.
 #[tokio::test]
-#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+#[ignore = "requires Docker (NATS) or NATS_URL; run with `cargo test --include-ignored`"]
 async fn a_burst_of_starts_keeps_the_host_answering() -> Result<()> {
     const BURST: usize = 15;
     const LIMIT: usize = 2;
@@ -901,7 +1070,7 @@ async fn a_burst_of_starts_keeps_the_host_answering() -> Result<()> {
 /// workload tells the operator the teardown is done — so the record goes while
 /// the start is still queued to run it.
 #[tokio::test]
-#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+#[ignore = "requires Docker (NATS) or NATS_URL; run with `cargo test --include-ignored`"]
 async fn a_stop_during_a_queued_start_reports_the_workload() -> Result<()> {
     // One permit, held by a start that never finishes pulling, so the workload
     // below is still waiting for it.
@@ -955,7 +1124,7 @@ async fn a_stop_during_a_queued_start_reports_the_workload() -> Result<()> {
 /// answers promptly — the start owns the teardown and finishes it — so the
 /// operator is neither misled nor left waiting out its own timeout.
 #[tokio::test]
-#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+#[ignore = "requires Docker (NATS) or NATS_URL; run with `cargo test --include-ignored`"]
 async fn a_stop_during_a_start_reports_the_workload() -> Result<()> {
     let harness = setup().await?;
     let workload_id = "washlet-api-e2e-stop-races-start";
@@ -1000,7 +1169,7 @@ async fn a_stop_during_a_start_reports_the_workload() -> Result<()> {
 /// label placement matches on, and the environment recorded verbatim for
 /// tenant attribution. The workload count tracks running workloads.
 #[tokio::test]
-#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+#[ignore = "requires Docker (NATS) or NATS_URL; run with `cargo test --include-ignored`"]
 async fn heartbeat_reports_identity_and_workload_count() -> Result<()> {
     let mut harness = setup().await?;
 
@@ -1045,7 +1214,7 @@ async fn heartbeat_reports_identity_and_workload_count() -> Result<()> {
 /// Stopping the ingress directly is the same exit an error or a panic takes:
 /// `AcceptingGuard` drops however the loop ends.
 #[tokio::test]
-#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+#[ignore = "requires Docker (NATS) or NATS_URL; run with `cargo test --include-ignored`"]
 async fn a_stopped_ingress_stops_the_host() -> Result<()> {
     let mut harness = TestHarness::builder().with_ingress().start().await?;
     let ingress = harness
@@ -1108,7 +1277,7 @@ async fn a_stopped_ingress_stops_the_host() -> Result<()> {
 /// that lost its ingress is the one thing this must not do, and it would do it
 /// about half the time if the branch that fired were the evidence.
 #[tokio::test]
-#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+#[ignore = "requires Docker (NATS) or NATS_URL; run with `cargo test --include-ignored`"]
 async fn a_shutdown_racing_a_dead_ingress_still_reports_the_ingress() -> Result<()> {
     let mut harness = TestHarness::builder().with_ingress().start().await?;
     let ingress = harness
@@ -1143,7 +1312,7 @@ async fn a_shutdown_racing_a_dead_ingress_still_reports_the_ingress() -> Result<
 /// that out means the pod is killed before `host.stop()` unbinds anything, so
 /// the drain is bounded and whatever outlasts it is abandoned.
 #[tokio::test]
-#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+#[ignore = "requires Docker (NATS) or NATS_URL; run with `cargo test --include-ignored`"]
 async fn shutdown_abandons_a_start_that_outlasts_the_drain() -> Result<()> {
     let mut harness = setup().await?;
     let registry = StallingRegistry::bind().await?;
