@@ -93,7 +93,7 @@ pub async fn start_postgres_workload(
 
     // Base URL without a database — the plugin strips it and the workload's
     // interface config supplies `database`.
-    let bouncer_url = format!("postgres://postgres:postgres@{host_addr}/");
+    let bouncer_url = url::Url::parse(&format!("postgres://postgres:postgres@{host_addr}/"))?;
     let host = HostBuilder::new()
         .with_engine(engine)
         .with_http_handler(Arc::new(ingress))

@@ -312,7 +312,10 @@ impl CliCommand for DevCommand {
                 plugin::wasi_keyvalue::RedisKeyValue::from_url(redis_url)
                     .context("failed to configure Redis keyvalue plugin")?,
             ))?;
-            debug!(url = %redis_url, "WASI KeyValue plugin registered with Redis backend");
+            debug!(
+                url = %crate::config::redact_url(redis_url),
+                "WASI KeyValue plugin registered with Redis backend"
+            );
         } else if let Some(nats_url) = &dev_config.wasi_keyvalue_nats_url {
             let nats_client = async_nats::connect(nats_url.as_str())
                 .await
@@ -320,7 +323,10 @@ impl CliCommand for DevCommand {
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasi_keyvalue::NatsKeyValue::new(&nats_client),
             ))?;
-            debug!(url = %nats_url, "WASI KeyValue plugin registered with NATS backend");
+            debug!(
+                url = %crate::config::redact_url(nats_url),
+                "WASI KeyValue plugin registered with NATS backend"
+            );
         } else if let Some(keyvalue_path) = &dev_config.wasi_keyvalue_path {
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasi_keyvalue::FilesystemKeyValue::new(keyvalue_path.clone()),

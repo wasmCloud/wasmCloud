@@ -4793,8 +4793,12 @@ mod tests {
         let keyvalue_iface = WitInterface::from("wasi:keyvalue/store,atomics,batch@0.2.0-draft");
         let cases: Vec<(Arc<dyn HostPlugin>, WitInterface)> = vec![
             (
-                Arc::new(WasmcloudPostgres::new("postgres://user:pass@localhost:5432/db").unwrap())
-                    as Arc<dyn HostPlugin>,
+                Arc::new(
+                    WasmcloudPostgres::new(
+                        &url::Url::parse("postgres://user:pass@localhost:5432/db").unwrap(),
+                    )
+                    .unwrap(),
+                ) as Arc<dyn HostPlugin>,
                 postgres_iface,
             ),
             (

@@ -69,9 +69,9 @@ futures = { version = "0.3", default-features = false }
 flate2 = { version = "1.0", default-features = false }
 http = { version = "1", default-features = false }
 humansize = { version = "2.1", default-features = false }
-hyper = { version = "1.6.0", default-features = false }
+hyper = { version = "1.11.1", default-features = false }
 hyper-rustls = { version = "0.27", default-features = false }
-hyper-util = { version = "0.1.18", default-features = false }
+hyper-util = { version = "0.1.21", default-features = false }
 humantime = { version = "2.3.0" }
 k8s-openapi = { version = "0.25", default-features = false }
 kube = { version = "1", default-features = false }
@@ -121,21 +121,21 @@ tonic-prost-build = { version = "0.14", default-features = false }
 tracing = { version = "0.1.41", default-features = false, features = ["attributes"] }
 tracing-opentelemetry = { version = "0.32", default-features = false }
 tracing-subscriber = { version = "0.3.19", default-features = false, features = ["env-filter", "ansi", "time", "json"] }
-url = { version = "2.5", default-features = false }
+url = { version = "2.5", default-features = false, features = ["serde"] }
 uuid = { version = "1.17.0", default-features = false }
 wasm-pkg-client = { version = "0.16.1", default-features = false }
 wasm-pkg-core = { version = "0.16.1", default-features = false }
-wasm-metadata = { version = "0.254.0", default-features = false, features = ["oci"] }
+wasm-metadata = { version = "0.259.0", default-features = false, features = ["oci"] }
 wasmcloud = { path = "crates/wasmcloud", default-features = false }
-wasmtime = { version = "48.0.2", default-features = false }
-wasmtime-wasi = { version = "48.0.2", default-features = false }
-wasmtime-wasi-io = { version = "48.0.2", default-features = false }
-wasmtime-wasi-http = { version = "48.0.2", default-features = false }
-wasmtime-wasi-tls = { version = "48.0.2", default-features = false }
+wasmtime = { version = "48.0.3", default-features = false }
+wasmtime-wasi = { version = "48.0.3", default-features = false }
+wasmtime-wasi-io = { version = "48.0.3", default-features = false }
+wasmtime-wasi-http = { version = "48.0.3", default-features = false }
+wasmtime-wasi-tls = { version = "48.0.3", default-features = false }
 windows-sys = { version = "0.61", default-features = false }
-wit-component = { version = "0.254.0", default-features = false }
+wit-component = { version = "0.259.0", default-features = false }
 wash-runtime = { path = "crates/wash-runtime", default-features = false }
-wat = { version = "1.254.0", default-features = false }
+wat = { version = "1.259.0", default-features = false }
 zeroize = { version = "1.8", default-features = false, features = ["alloc"] }
 
 # postgres deps
