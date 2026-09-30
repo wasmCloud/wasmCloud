@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "scenario": "http-hello",
+  "profile": "constant",
+  "rate": 200,
+  "duration": "20s",
+  "warmup": "5s",
+  "workloads": 100,
+  "target": "kind",
+  "target_url": "http://k6bench-worker:30950",
+  "k6_mode": "docker",
+  "k6_version": "k6 v2.3.0 (commit/e088784614, go1.27.1, linux/arm64)",
+  "k6_exit": 0,
+  "k6_started": 1790703156,
+  "k6_ended": 1790703182,
+  "pinned": false,
+  "wash_image": "ghcr.io/wasmcloud/wash:2.10.1",
+  "operator_image": "ghcr.io/wasmcloud/runtime-operator:2.10.1",
+  "components": ["192.168.97.3:5000/k6bench/hello:73bb8d81c89d", "192.168.97.3:5000/k6bench/relay:741de8dfdb7a"],
+  "deploy_ready_s": 1,
+  "git_sha": "b8140c72570db770bfff425235d281434a6d0d4f",
+  "git_dirty": true
+}

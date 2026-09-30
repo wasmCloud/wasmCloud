@@ -1,0 +1,504 @@
+#!/usr/bin/env bash
+# Run a k6 load scenario against wasmCloud. The same script runs on a laptop,
+# in the k6bench workflow on the Hetzner bench host, and against a customer's
+# own cluster. See README.md for the full walkthrough.
+#
+#   run.sh [run] [options]   bring up (or reuse) the stack, run one scenario
+#   run.sh up    [options]   bring up the kind cluster + chart + registry only
+#   run.sh down              delete the kind cluster
+#
+# Results land in bench-results/<utc>_<scenario>_<profile>/ (or --out-dir):
+# summary.json, cluster.ndjson, metadata.json, run.log, and raw.ndjson.gz
+# with --raw. `bench-tools k6 report <dir>` renders them.
+
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo="$(cd "$here/../.." && pwd)"
+
+usage() {
+  cat <<'EOF'
+usage: run.sh [run|up|down] [options]
+
+scenario
+  --scenario NAME        http-hello | fan-out-10 | chain-5 | many-workloads  [http-hello]
+  --profile NAME         constant | stress | spike                            [constant]
+  --rate N               requests/s for constant and spike (spike base)       [1000]
+  --duration D           measured window, e.g. 90s, 3m                        [2m]
+  --warmup D             unreported warm-up before it                         [30s]
+  --workloads N          many-workloads only: number of workloads             [100]
+  --stress-rates LIST    stress only: comma-separated step rates
+  --slo-p99-ms N         p99 ceiling for thresholds and stress                [250]
+
+target
+  --target kind|kube     kind: this script's own cluster; kube: the current
+                         kubectl context (a cluster wasmCloud already runs on) [kind]
+  --target-url URL       where k6 sends requests (required for --target kube)
+  --namespace NS         namespace for the bench workloads                    [k6bench]
+  --registry REF         registry the hosts pull bench components from; with
+                         --target kube it must be reachable from the cluster
+
+images
+  --wasmcloud-version V  wash + operator image tag from ghcr.io/wasmcloud     [chart appVersion]
+  --build-local          build wash + operator images from this tree, kind-load them
+  --reuse-stack          keep the installed chart and images as they are (fast
+                         iteration on scenarios; needs an existing cluster)
+
+run
+  --pin                  pin kind nodes and k6 to CPUs (bench host layout)
+  --raw                  also keep k6's per-request JSON stream (large)
+  --out-dir DIR          result directory
+  --keep                 leave the scenario's workloads deployed afterwards
+  --down                 delete the kind cluster afterwards
+  --ci                   CI mode: implies --pin --down, no colors
+EOF
+}
+
+cmd=run
+case "${1:-}" in run | up | down) cmd="$1"; shift ;; -h | --help) usage; exit 0 ;; esac
+
+scenario=http-hello
+profile=constant
+rate=1000
+duration=2m
+warmup=30s
+workloads=100
+stress_rates=""
+slo_p99_ms=250
+target=kind
+target_url=""
+namespace=k6bench
+registry=""
+wasmcloud_version=""
+build_local=0
+reuse_stack=0
+pin=0
+raw=0
+out_dir=""
+keep=0
+down=0
+ci=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --scenario) scenario="$2"; shift ;;
+    --profile) profile="$2"; shift ;;
+    --rate) rate="$2"; shift ;;
+    --duration) duration="$2"; shift ;;
+    --warmup) warmup="$2"; shift ;;
+    --workloads) workloads="$2"; shift ;;
+    --stress-rates) stress_rates="$2"; shift ;;
+    --slo-p99-ms) slo_p99_ms="$2"; shift ;;
+    --target) target="$2"; shift ;;
+    --target-url) target_url="$2"; shift ;;
+    --namespace) namespace="$2"; shift ;;
+    --registry) registry="$2"; shift ;;
+    --wasmcloud-version) wasmcloud_version="$2"; shift ;;
+    --build-local) build_local=1 ;;
+    --reuse-stack) reuse_stack=1 ;;
+    --pin) pin=1 ;;
+    --raw) raw=1 ;;
+    --out-dir) out_dir="$2"; shift ;;
+    --keep) keep=1 ;;
+    --down) down=1 ;;
+    --ci) ci=1; pin=1; down=1 ;;
+    -h | --help) usage; exit 0 ;;
+    *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+cluster="${K6BENCH_CLUSTER:-k6bench}"
+release=wasmcloud
+k6_image="${K6BENCH_K6_IMAGE:-grafana/k6:2.3.0}"
+registry_name="${K6BENCH_REGISTRY_NAME:-kind-registry}"
+registry_port="${K6BENCH_REGISTRY_PORT:-5001}"
+# Bench-host CPU layout (--pin): see README.md. isolcpus= on the bench host
+# reserves the k6 CPU; the rest are split between the two kind nodes.
+cpus_control_plane="${K6BENCH_CPUS_CONTROL_PLANE:-0}"
+cpus_hosts="${K6BENCH_CPUS_HOSTS:-1-4}"
+cpus_k6="${K6BENCH_CPUS_K6:-${WASMCLOUD_BENCH_ISOLATED_CPU:-5}}"
+
+log() { printf '==> %s\n' "$*" >&2; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required (see README.md prerequisites)"; }
+
+kctl() { kubectl --context "kind-$cluster" "$@"; }
+[ "$target" = kube ] && kctl() { kubectl "$@"; }
+
+cluster_exists() { kind get clusters 2>/dev/null | grep -qx "$cluster"; }
+
+chart_version() { sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$repo/charts/runtime-operator/Chart.yaml"; }
+
+# --- kind stack -------------------------------------------------------------
+
+ensure_registry() {
+  if [ -z "$(docker ps -q -f "name=^${registry_name}$")" ]; then
+    if [ -n "$(docker ps -aq -f "name=^${registry_name}$")" ]; then
+      docker start "$registry_name" >/dev/null
+    else
+      log "starting local registry $registry_name on 127.0.0.1:$registry_port"
+      docker run -d --restart=always -p "127.0.0.1:${registry_port}:5000" \
+        --name "$registry_name" registry:2 >/dev/null
+    fi
+  fi
+  if ! docker inspect "$registry_name" -f '{{json .NetworkSettings.Networks}}' | grep -q '"kind"'; then
+    docker network connect kind "$registry_name"
+  fi
+}
+
+# Pods can't resolve a Docker container name, so hosts pull by kind-network IP.
+registry_in_cluster() {
+  echo "$(docker inspect "$registry_name" -f '{{(index .NetworkSettings.Networks "kind").IPAddress}}'):5000"
+}
+
+build_images() {
+  local tag ctx
+  ctx="$(mktemp -d)"
+  # git ls-files, not the directory: .dockerignore skips only target/, and
+  # examples/*/target and fixture targets are several GB. COPYFILE_DISABLE
+  # keeps macOS tar from adding ._* files, which break WIT bindgen.
+  (cd "$repo" && git ls-files -z --cached --others --exclude-standard |
+    COPYFILE_DISABLE=1 tar -cf "$ctx/src.tar" --null -T -)
+  # Tagged by the context, not HEAD: uncommitted changes must get a new tag
+  # or the chart upgrade leaves the host pods on the previous image.
+  tag="k6bench-$(sha256 "$ctx/src.tar")"
+  log "building wash and runtime-operator images ($tag) from the working tree"
+  mkdir "$ctx/src" && tar -xf "$ctx/src.tar" -C "$ctx/src"
+  docker build -t "wash:$tag" "$ctx/src" >&2
+  docker build -t "runtime-operator:$tag" "$ctx/src/runtime-operator" >&2
+  rm -rf "$ctx"
+  kind load docker-image --name "$cluster" "wash:$tag" "runtime-operator:$tag" >&2
+  image_args="--set runtime.image.registry= --set runtime.image.repository=wash
+    --set runtime.image.tag=$tag --set runtime.image.pull_policy=Never
+    --set operator.image.registry= --set operator.image.repository=runtime-operator
+    --set operator.image.tag=$tag --set operator.image.pull_policy=Never"
+  wash_image="wash:$tag"
+  operator_image="runtime-operator:$tag"
+}
+
+pin_nodes() {
+  log "pinning $cluster-control-plane to CPU $cpus_control_plane, $cluster-worker to CPUs $cpus_hosts"
+  docker update --cpuset-cpus "$cpus_control_plane" "$cluster-control-plane" >/dev/null
+  docker update --cpuset-cpus "$cpus_hosts" "$cluster-worker" >/dev/null
+}
+
+stack_up() {
+  need docker; need kind; need kubectl; need helm
+  if cluster_exists; then
+    log "reusing kind cluster $cluster"
+    if [ "$reuse_stack" = 1 ]; then
+      ensure_registry
+      wash_image="$(kctl -n "$namespace" get deploy hostgroup-default -o jsonpath='{.spec.template.spec.containers[0].image}')"
+      operator_image="$(kctl -n "$namespace" get deploy runtime-operator -o jsonpath='{.spec.template.spec.containers[0].image}')"
+      log "reusing installed chart ($wash_image)"
+      return
+    fi
+  else
+    log "creating kind cluster $cluster"
+    kind create cluster --name "$cluster" --config "$here/kind-config.yaml" --wait 120s >&2
+  fi
+  ensure_registry
+  [ "$pin" = 1 ] && pin_nodes
+
+  local version="${wasmcloud_version:-$(chart_version)}"
+  image_args="--set runtime.image.tag=$version --set operator.image.tag=$version"
+  wash_image="ghcr.io/wasmcloud/wash:$version"
+  operator_image="ghcr.io/wasmcloud/runtime-operator:$version"
+  [ "$build_local" = 1 ] && build_images
+
+  log "installing runtime-operator chart ($wash_image)"
+  # shellcheck disable=SC2086 # image_args is a list of flags
+  helm upgrade --install "$release" "$repo/charts/runtime-operator" \
+    --kube-context "kind-$cluster" -n "$namespace" --create-namespace \
+    -f "$here/values.yaml" $image_args --wait --timeout 5m >&2
+}
+
+stack_down() {
+  if cluster_exists; then
+    log "deleting kind cluster $cluster"
+    kind delete cluster --name "$cluster" >&2
+  fi
+}
+
+# --- components + manifests -------------------------------------------------
+
+sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -c1-12; }
+
+# `wash oci push`, from PATH (or $WASH) when there is one, else from the wash
+# image. The container pushes over the kind network, so it needs no port on
+# the host and works the same on macOS and Linux.
+oci_push() {
+  local ref="$1" wasm="$2" wash="${WASH:-}"
+  [ -z "$wash" ] && command -v wash >/dev/null 2>&1 && wash=wash
+  if [ -n "$wash" ]; then
+    "$wash" oci push --insecure "$ref" "$wasm" >/dev/null
+    return
+  fi
+  local net_arg=""
+  [ "$target" = kind ] && net_arg="--network kind"
+  # shellcheck disable=SC2086
+  docker run --rm $net_arg -v "$(dirname "$wasm"):/w:ro" \
+    "ghcr.io/wasmcloud/wash:$(chart_version)" \
+    oci push --insecure "$ref" "/w/$(basename "$wasm")" >/dev/null
+}
+
+# Build and push the bench components. The tag is the wasm's content hash: a
+# host caches an OCI artifact by tag, so re-pushing a changed component under
+# the same tag would not take effect.
+push_components() {
+  local push_to="$1" pull_from="$2" name wasm tag
+  log "building bench components"
+  (cd "$here/components" && cargo build --release --target wasm32-wasip2 --quiet >&2)
+  for name in hello relay; do
+    wasm="$here/components/target/wasm32-wasip2/release/k6bench_${name}.wasm"
+    tag="$(sha256 "$wasm")"
+    oci_push "$push_to/k6bench/$name:$tag" "$wasm"
+    eval "image_${name}=\"$pull_from/k6bench/$name:$tag\""
+  done
+}
+
+render() {
+  local file="$1"
+  # shellcheck disable=SC2154 # image_hello/image_relay are set by push_components
+  sed -e "s|__HELLO_IMAGE__|$image_hello|g" -e "s|__RELAY_IMAGE__|$image_relay|g" "$file"
+}
+
+manifests() {
+  local base="$here/manifests/$scenario" count=0 i
+  case "$scenario" in
+    fan-out-10) count=10 ;;
+    many-workloads) count="$workloads" ;;
+  esac
+  [ -f "$base.yaml" ] && render "$base.yaml"
+  # many-workloads' first Service is the NodePort all its traffic enters by.
+  local svc_type nodeport
+  i=0
+  while [ "$i" -lt "$count" ]; do
+    svc_type=ClusterIP nodeport=""
+    [ "$i" = 0 ] && svc_type=NodePort nodeport="      nodePort: 30950"
+    echo "---"
+    render "$base.each.yaml" | sed -e "s|__I__|$i|g" -e "s|__SVC_TYPE__|$svc_type|" \
+      -e "s|^__NODEPORT__\$|$nodeport|" | sed '/^$/d'
+    i=$((i + 1))
+  done
+}
+
+default_host() {
+  case "$scenario" in
+    http-hello) echo hello.k6bench ;;
+    fan-out-10) echo fanout.k6bench ;;
+    chain-5) echo chain.k6bench ;;
+    many-workloads) echo hello-0.k6bench ;;
+  esac
+}
+
+# --- k6 ---------------------------------------------------------------------
+
+# Returns how k6 should run and where it should send traffic, as
+# "<native|docker> <url>". On Linux the worker's IP is reachable from the host
+# and skips Docker's userland port proxy; elsewhere a dockerized k6 on the kind
+# network gets the same direct path.
+k6_mode() {
+  if [ "$target" = kube ]; then
+    if command -v k6 >/dev/null 2>&1; then echo "native $target_url"; else echo "docker $target_url"; fi
+    return
+  fi
+  local ip
+  ip="$(docker inspect "$cluster-worker" -f '{{(index .NetworkSettings.Networks "kind").IPAddress}}')"
+  if command -v k6 >/dev/null 2>&1 && curl -s -o /dev/null -m 2 "http://$ip:30950/"; then
+    echo "native http://$ip:30950"
+  else
+    echo "docker http://$cluster-worker:30950"
+  fi
+}
+
+# Five 200s in a row, not one: a host pod rolled by a chart upgrade can
+# answer once more while its replacement is still picking up the workloads.
+wait_routable() {
+  local url="$1" host="$2" mode="$3" i=0 ok=0 code
+  while [ "$i" -lt 90 ]; do
+    if [ "$mode" = native ]; then
+      code="$(curl -s -o /dev/null -w '%{http_code}' -m 2 -H "Host: $host" "$url/" || true)"
+    else
+      code="$(docker run --rm --network kind curlimages/curl:8.11.1 \
+        -s -o /dev/null -w '%{http_code}' -m 2 -H "Host: $host" "$url/" 2>/dev/null || true)"
+    fi
+    if [ "$code" = 200 ]; then
+      ok=$((ok + 1))
+      [ "$ok" -ge 5 ] && return 0
+    else
+      ok=0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  die "$host never answered 200 at $url (last: $code)"
+}
+
+# About one sample a second of every kind node (and a dockerized k6) until
+# killed. One `docker stats` per container, so a container that isn't up yet
+# (k6, before it starts) doesn't cost the others their sample.
+sample_cluster() {
+  local out="$1" name
+  shift
+  while :; do
+    for name in "$@"; do
+      docker stats --no-stream --format \
+        "{\"ts\":$(date +%s),\"name\":\"{{.Name}}\",\"cpu\":\"{{.CPUPerc}}\",\"mem\":\"{{.MemUsage}}\"}" \
+        "$name" >>"$out" 2>/dev/null &
+    done
+    wait
+    sleep 1
+  done
+}
+
+run_k6() {
+  local mode="$1" url="$2" script="scenarios/$scenario.js" k6_env status
+  k6_env="-e TARGET_URL=$url -e PROFILE=$profile -e RATE=$rate -e DURATION=$duration
+    -e WARMUP=$warmup -e WORKLOADS=$workloads -e SLO_P99_MS=$slo_p99_ms"
+  [ -n "$stress_rates" ] && k6_env="$k6_env -e STRESS_RATES=$stress_rates"
+  # The progress bar is one line per second in a log; the summary is enough.
+  [ "${K6BENCH_PROGRESS:-0}" = 1 ] || k6_env="$k6_env --quiet"
+  [ "$ci" = 1 ] && k6_env="$k6_env --no-color"
+
+  set +e
+  if [ "$mode" = native ]; then
+    local raw_arg="" pin_cmd=""
+    [ "$raw" = 1 ] && raw_arg="--out json=$out_dir/raw.ndjson.gz"
+    [ "$pin" = 1 ] && command -v taskset >/dev/null 2>&1 && pin_cmd="taskset -c $cpus_k6"
+    # shellcheck disable=SC2086 # word-split flag lists
+    (cd "$here" && GOMAXPROCS=1 $pin_cmd k6 run $k6_env -e "OUT_DIR=$out_dir" $raw_arg "$script") >&2
+    status=$?
+  else
+    local raw_arg="" pin_arg="" net_arg=""
+    [ "$raw" = 1 ] && raw_arg="--out json=/out/raw.ndjson.gz"
+    [ "$pin" = 1 ] && pin_arg="--cpuset-cpus $cpus_k6 -e GOMAXPROCS=1"
+    [ "$target" = kind ] && net_arg="--network kind"
+    # shellcheck disable=SC2086
+    docker run --rm --name "$cluster-k6" $net_arg $pin_arg -u "$(id -u):$(id -g)" \
+      -v "$here:/k6bench:ro" -v "$out_dir:/out" -w /k6bench "$k6_image" \
+      run $k6_env -e OUT_DIR=/out $raw_arg "$script" >&2
+    status=$?
+  fi
+  set -e
+  echo "$status"
+}
+
+k6_version() {
+  if [ "$1" = native ]; then k6 version | head -1; else docker run --rm "$k6_image" version | head -1; fi
+}
+
+# --- main -------------------------------------------------------------------
+
+case "$cmd" in
+  up) stack_up; exit 0 ;;
+  down) stack_down; exit 0 ;;
+esac
+
+[ -f "$here/scenarios/$scenario.js" ] || die "unknown scenario $scenario (see scenarios/)"
+case "$target" in
+  kind) ;;
+  kube)
+    [ -n "$target_url" ] || die "--target kube needs --target-url (how k6 reaches the host group)"
+    [ -n "$registry" ] || die "--target kube needs --registry (reachable from the cluster)"
+    ;;
+  *) die "--target must be kind or kube" ;;
+esac
+
+stamp="$(date -u +%Y-%m-%dT%H%M%SZ)"
+out_dir="${out_dir:-$repo/bench-results/${stamp}_${scenario}_${profile}}"
+mkdir -p "$out_dir"
+out_dir="$(cd "$out_dir" && pwd)"
+exec > >(tee -a "$out_dir/run.log") 2>&1
+
+wash_image=""
+operator_image=""
+if [ "$target" = kind ]; then
+  stack_up
+  # A native wash pushes through the host port; the wash image pushes from
+  # inside the kind network. Either way the hosts pull by kind-network IP.
+  if [ -n "${WASH:-}" ] || command -v wash >/dev/null 2>&1; then
+    push_components "localhost:$registry_port" "$(registry_in_cluster)"
+  else
+    push_components "$registry_name:5000" "$(registry_in_cluster)"
+  fi
+else
+  need kubectl
+  kctl create namespace "$namespace" --dry-run=client -o yaml | kctl apply -f - >/dev/null
+  push_components "$registry" "$registry"
+fi
+
+cleanup() {
+  if [ -n "${sampler_pid:-}" ]; then
+    kill "$sampler_pid" 2>/dev/null || true
+    wait "$sampler_pid" 2>/dev/null || true
+  fi
+  if [ "$keep" = 0 ]; then
+    log "removing $scenario workloads"
+    manifests | kctl -n "$namespace" delete --ignore-not-found --wait=false -f - >/dev/null 2>&1 || true
+  fi
+  [ "$down" = 1 ] && [ "$target" = kind ] && stack_down
+  return 0
+}
+trap cleanup EXIT
+
+log "deploying $scenario workloads"
+manifests >"$out_dir/manifests.yaml"
+deploy_start="$(date +%s)"
+kctl -n "$namespace" apply -f "$out_dir/manifests.yaml" >&2
+kctl -n "$namespace" wait --for=condition=Ready workloaddeployment --all --timeout=10m >&2
+sched_s=$(($(date +%s) - deploy_start))
+
+read -r mode url <<<"$(k6_mode)"
+host_header="$(default_host)"
+wait_routable "$url" "$host_header" "$mode"
+log "k6 ($mode) → $url  scenario=$scenario profile=$profile rate=$rate duration=$duration"
+
+sampled=("$cluster-control-plane" "$cluster-worker")
+[ "$mode" = docker ] && sampled+=("$cluster-k6")
+if [ "$target" = kind ]; then
+  sample_cluster "$out_dir/cluster.ndjson" "${sampled[@]}" &
+  sampler_pid=$!
+fi
+
+k6_started="$(date +%s)"
+k6_status="$(run_k6 "$mode" "$url" | tail -1)"
+k6_ended="$(date +%s)"
+
+# 0 = pass, 99 = thresholds breached (a result, not a harness failure).
+case "$k6_status" in
+  0 | 99) ;;
+  *) die "k6 exited $k6_status" ;;
+esac
+
+cat >"$out_dir/metadata.json" <<EOF
+{
+  "schema": 1,
+  "scenario": "$scenario",
+  "profile": "$profile",
+  "rate": $rate,
+  "duration": "$duration",
+  "warmup": "$warmup",
+  "workloads": $workloads,
+  "target": "$target",
+  "target_url": "$url",
+  "k6_mode": "$mode",
+  "k6_version": "$(k6_version "$mode")",
+  "k6_exit": $k6_status,
+  "k6_started": $k6_started,
+  "k6_ended": $k6_ended,
+  "pinned": $([ "$pin" = 1 ] && echo true || echo false),
+  "wash_image": "$wash_image",
+  "operator_image": "$operator_image",
+  "components": ["$image_hello", "$image_relay"],
+  "deploy_ready_s": $sched_s,
+  "git_sha": "$(git -C "$repo" rev-parse HEAD)",
+  "git_dirty": $([ -n "$(git -C "$repo" status --porcelain)" ] && echo true || echo false)
+}
+EOF
+
+log "results in $out_dir"
+if [ "$ci" = 0 ]; then
+  (cd "$repo" && cargo run -p bench-tools --quiet -- k6 report "$out_dir") || true
+fi

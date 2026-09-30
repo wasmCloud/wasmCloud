@@ -10,6 +10,7 @@
 //   s3://${WASMCLOUD_BENCH_S3_BUCKET}/runs/<date>/<short-sha>/<run-id>/<bench>/
 //     ├─ criterion.tar.zst   raw criterion data
 //     ├─ gungraun.tar.zst    raw gungraun (cachegrind) data (when applicable)
+//     ├─ k6.tar.zst          scripts/k6bench result dir (k6 runs only)
 //     ├─ results.jsonl       one JSON row per (group, param, metric)
 //     ├─ metadata.json       run-level facts
 //     └─ run.log             cargo bench stdout/stderr
@@ -28,6 +29,8 @@
 //   WASMCLOUD_BENCH_CF_DISTRIBUTION_ID   CloudFront distribution to invalidate
 //
 // Reads (optional):
+//   WASMCLOUD_BENCH_K6_DIR  a scripts/k6bench result directory; switches this
+//                           script from criterion/gungraun output to that run
 //   CARGO_TARGET_DIR        default /var/lib/bench/target
 //   GITHUB_RUN_ID           default "local"
 //   GITHUB_RUN_ATTEMPT      default "1"
@@ -49,6 +52,7 @@ const bench = required('WASMCLOUD_BENCH_NAME');
 const bucket = required('WASMCLOUD_BENCH_S3_BUCKET');
 const distId = required('WASMCLOUD_BENCH_CF_DISTRIBUTION_ID');
 
+const k6Dir = process.env.WASMCLOUD_BENCH_K6_DIR;
 const targetDir = process.env.CARGO_TARGET_DIR ?? '/var/lib/bench/target';
 const critDir = join(targetDir, 'criterion');
 const gungraunDir = join(targetDir, 'gungraun');
@@ -74,23 +78,28 @@ process.on('exit', () => {
 //    uses level 3 — meaningful compression-ratio difference on criterion
 //    output, so we pin to -19 explicitly.
 let archived = 0;
-if (existsSync(critDir)) {
+if (k6Dir) {
+  run('tar', ['-cf', join(work, 'k6.tar.zst'), '-I', 'zstd -19 -T0', '-C', k6Dir, '.']);
+  archived++;
+} else if (existsSync(critDir)) {
   run('tar', ['-cf', join(work, 'criterion.tar.zst'), '-I', 'zstd -19 -T0', '-C', critDir, '.']);
   archived++;
 }
-if (existsSync(gungraunDir)) {
+if (!k6Dir && existsSync(gungraunDir)) {
   run('tar', ['-cf', join(work, 'gungraun.tar.zst'), '-I', 'zstd -19 -T0', '-C', gungraunDir, '.']);
   archived++;
 }
 if (archived === 0) {
-  console.log(`::warning::no criterion or gungraun output at ${targetDir}; uploading metadata only`);
+  console.log(`::warning::no bench output at ${targetDir}; uploading metadata only`);
 }
 
 // 2. Per-(group, param) JSONL rows for trend ingestion. bench-tools jsonl
 //    emits an empty stream for benches whose layout doesn't feed
 //    history.json today, which keeps the branch in one place (the Rust
 //    binary) instead of being repeated here.
-const jsonl = run('cargo', ['run', '-p', 'bench-tools', '--quiet', '--', 'jsonl', '--bench', bench]);
+const jsonl = k6Dir
+  ? run('cargo', ['run', '-p', 'bench-tools', '--quiet', '--', 'k6', 'jsonl', k6Dir])
+  : run('cargo', ['run', '-p', 'bench-tools', '--quiet', '--', 'jsonl', '--bench', bench]);
 writeFileSync(join(work, 'results.jsonl'), jsonl ? `${jsonl}\n` : '');
 
 // 3. Run-level metadata.
@@ -113,11 +122,12 @@ const metadata = {
   kernel: run('uname', ['-r']),
   cpu: cpuModel,
   cpus_online: parseInt(run('nproc'), 10),
+  ...(k6Dir ? { k6: JSON.parse(readFileSync(join(k6Dir, 'metadata.json'), 'utf8')) } : {}),
 };
 writeFileSync(join(work, 'metadata.json'), `${JSON.stringify(metadata, null, 2)}\n`);
 
 // 4. Pick up the run log written by run-bench.sh, if present.
-const logSrc = join(targetDir, `run-${bench}-${runId}.log`);
+const logSrc = k6Dir ? join(k6Dir, 'run.log') : join(targetDir, `run-${bench}-${runId}.log`);
 if (existsSync(logSrc)) {
   run('cp', [logSrc, join(work, 'run.log')]);
 }
@@ -127,6 +137,7 @@ console.log(`uploading per-run artifacts to s3://${bucket}/${prefix}/`);
 for (const file of [
   'criterion.tar.zst',
   'gungraun.tar.zst',
+  'k6.tar.zst',
   'results.jsonl',
   'metadata.json',
   'run.log',
@@ -136,14 +147,15 @@ for (const file of [
   run('aws', ['s3', 'cp', '--no-progress', path, `s3://${bucket}/${prefix}/${basename(path)}`]);
 }
 
-// 6. Drop the source log now that it's archived in S3.
-if (existsSync(logSrc)) {
+// 6. Drop the source log now that it's archived in S3. A k6 run's log stays
+//    with the rest of its result directory.
+if (!k6Dir && existsSync(logSrc)) {
   unlinkSync(logSrc);
 }
 
 // 7. Read-modify-write the public history.json aggregate. Safe without
-//    locking because the workflow is `concurrency: bench-host` — there's
-//    only ever one writer.
+//    locking because bench.yml and k6bench.yml both run on the bench host's
+//    single self-hosted runner — there's only ever one writer.
 console.log(`updating s3://${bucket}/history.json`);
 let existing = [];
 const head = spawnSync('aws', ['s3api', 'head-object', '--bucket', bucket, '--key', 'history.json'], {
@@ -155,10 +167,13 @@ if (head.status === 0) {
   existing = JSON.parse(readFileSync(histPath, 'utf8'));
 }
 
+// A k6 run where the load generator, not wasmCloud, set the ceiling is
+// archived above but kept off the trend timeline.
 const newRows = jsonl
   .split('\n')
   .filter((line) => line.length > 0)
-  .map((line) => JSON.parse(line));
+  .map((line) => JSON.parse(line))
+  .filter((row) => !row.generator_saturated);
 
 // Dedup key matches what build-history.sh uses: (sha, bench, group,
 // param, run_attempt, metric). Rows from before the metric-field schema

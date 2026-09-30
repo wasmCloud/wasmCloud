@@ -1,0 +1,31 @@
+# Bench components for scripts/k6bench. A workspace of its own so the root
+# workspace never builds wasm, and so a customer can build these with nothing
+# but `cargo build --release --target wasm32-wasip2`.
+[workspace]
+resolver = "3"
+members = ["hello", "relay"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+publish = false
+
+[workspace.dependencies]
+futures = { version = "0.3", default-features = false, features = ["alloc"] }
+wstd = "0.6"
+
+[workspace.lints.rust]
+warnings = "deny"
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
