@@ -9,7 +9,8 @@
 //!   are read, so the warm-up never counts.
 //! - `metadata.json`: what `run.sh` ran and against which images.
 //! - `cluster.ndjson`: ~1 s `docker stats` samples of the kind nodes and a
-//!   dockerized k6 (absent for `--target kube`).
+//!   dockerized k6 (absent for `--target kube`), plus `/proc` samples of a
+//!   native k6 on Linux.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -21,6 +22,9 @@ use serde::Deserialize;
 const MAX_ERROR_RATE: f64 = 0.01;
 /// Share of its pinned core above which k6 itself is the bottleneck.
 const GENERATOR_CPU_CEILING: f64 = 0.9;
+/// k6's CPU is judged over its busiest window this long, so saturation on
+/// one stress step or the spike peak isn't averaged away by the rest.
+const GENERATOR_WINDOW_S: u64 = 10;
 /// Share of offered iterations k6 may drop before a window counts as not
 /// sustained. A handful of drops in 100k is a scheduling blip, not a ceiling.
 const MAX_DROPPED_RATIO: f64 = 0.001;
@@ -78,8 +82,8 @@ pub struct RunMeta {
     pub k6_ended: u64,
     #[serde(default)]
     pub pinned: bool,
-    /// CPU a native k6 used over its run, in cores. A dockerized k6 is
-    /// sampled into `cluster.ndjson` instead.
+    /// CPU a native k6 used over its run, in cores: the fallback when
+    /// `cluster.ndjson` has no k6 samples.
     #[serde(default)]
     pub k6_cpu_cores: Option<f64>,
     #[serde(default)]
@@ -250,33 +254,59 @@ impl Run {
     /// (`sustained` already fails the SLO for it). Unpinned, k6 can use any
     /// core, so there is no ceiling to check.
     pub fn generator_saturated(&self) -> bool {
-        let k6_cpu = self.meta.k6_cpu_cores.or_else(|| {
-            self.cluster_avg(|name| name.ends_with("-k6"))
-                .map(|(cpu, _)| cpu)
-        });
+        let k6_cpu = self
+            .peak_cpu(|name| name.ends_with("-k6"), GENERATOR_WINDOW_S)
+            .or(self.meta.k6_cpu_cores);
         self.meta.pinned && k6_cpu.is_some_and(|c| c > GENERATOR_CPU_CEILING)
+    }
+
+    /// Highest mean CPU (cores) of the matching samples over any `window_s`
+    /// stretch of the measured window; the whole-window mean if it's shorter.
+    pub fn peak_cpu(&self, pick: impl Fn(&str) -> bool, window_s: u64) -> Option<f64> {
+        let window = self.measured_samples(pick);
+        let (first, last) = (window.first()?.ts, window.last()?.ts);
+        if last - first + 1 < window_s {
+            return Some(window.iter().map(|s| s.cpu_cores).sum::<f64>() / window.len() as f64);
+        }
+        (first..=last + 1 - window_s)
+            .filter_map(|from| {
+                let cpu: Vec<f64> = window
+                    .iter()
+                    .filter(|s| s.ts >= from && s.ts < from + window_s)
+                    .map(|s| s.cpu_cores)
+                    .collect();
+                (!cpu.is_empty()).then(|| cpu.iter().sum::<f64>() / cpu.len() as f64)
+            })
+            .reduce(f64::max)
     }
 
     /// Mean CPU (cores) and peak memory (MiB) of the matching containers over
     /// the measured window (after warm-up, until k6 ended).
     pub fn cluster_avg(&self, pick: impl Fn(&str) -> bool) -> Option<(f64, f64)> {
-        let start = self.meta.k6_started + parse_seconds(&self.meta.warmup).unwrap_or(0);
-        let end = if self.meta.k6_ended == 0 {
-            u64::MAX
-        } else {
-            self.meta.k6_ended
-        };
-        let window: Vec<&Sample> = self
-            .samples
-            .iter()
-            .filter(|s| pick(&s.name) && s.ts >= start && s.ts <= end)
-            .collect();
+        let window = self.measured_samples(pick);
         if window.is_empty() {
             return None;
         }
         let cpu = window.iter().map(|s| s.cpu_cores).sum::<f64>() / window.len() as f64;
         let mem = window.iter().map(|s| s.mem_mib).fold(0.0, f64::max);
         Some((cpu, mem))
+    }
+
+    /// Matching samples after warm-up until k6 ended, oldest first.
+    fn measured_samples(&self, pick: impl Fn(&str) -> bool) -> Vec<&Sample> {
+        let start = self.meta.k6_started + parse_seconds(&self.meta.warmup).unwrap_or(0);
+        let end = if self.meta.k6_ended == 0 {
+            u64::MAX
+        } else {
+            self.meta.k6_ended
+        };
+        let mut window: Vec<&Sample> = self
+            .samples
+            .iter()
+            .filter(|s| pick(&s.name) && s.ts >= start && s.ts <= end)
+            .collect();
+        window.sort_by_key(|s| s.ts);
+        window
     }
 
     /// The headline numbers for this run's profile, in display order.
@@ -513,6 +543,8 @@ mod tests {
     #[test]
     fn only_k6_cpu_marks_a_run_generator_saturated() -> Result<()> {
         let mut run = Run::load(&fixture("constant"))?;
+        // Without k6 samples, run.sh's whole-run figure decides.
+        run.samples.retain(|s| !s.name.ends_with("-k6"));
         run.meta.pinned = true;
         run.meta.k6_cpu_cores = Some(0.95);
         assert!(run.generator_saturated(), "a pinned k6 at 95% of its core");
@@ -529,6 +561,35 @@ mod tests {
         run.meta.pinned = false;
         run.meta.k6_cpu_cores = Some(3.0);
         assert!(!run.generator_saturated(), "unpinned k6 has no ceiling");
+        Ok(())
+    }
+
+    #[test]
+    fn k6_saturated_on_one_step_marks_the_run() -> Result<()> {
+        let mut run = Run::load(&fixture("constant"))?;
+        run.meta.pinned = true;
+        run.meta.k6_cpu_cores = None;
+        run.meta.warmup = "0s".into();
+        run.meta.k6_started = 1_000;
+        run.meta.k6_ended = 1_120;
+        let k6 = |ts: u64, cpu_cores: f64| Sample {
+            ts,
+            name: "k6bench-k6".into(),
+            cpu_cores,
+            mem_mib: 50.0,
+        };
+        // 100 s idle-ish, then 20 s pegged: a 0.4-core mean, but saturated.
+        run.samples = (1_000..1_100)
+            .map(|ts| k6(ts, 0.3))
+            .chain((1_100..1_120).map(|ts| k6(ts, 0.98)))
+            .collect();
+        assert!(run.generator_saturated());
+
+        // A single-second spike is a scheduling blip, not a ceiling.
+        run.samples = (1_000..1_120)
+            .map(|ts| k6(ts, if ts == 1_050 { 1.0 } else { 0.3 }))
+            .collect();
+        assert!(!run.generator_saturated());
         Ok(())
     }
 

@@ -353,6 +353,35 @@ sample_cluster() {
   done
 }
 
+# A native k6's CPU and RSS each second from /proc, in docker stats' format
+# under the name a dockerized k6 has, so the saturation check sees the
+# busiest window, not the run's average. Linux only; a no-op elsewhere.
+sample_native_k6() {
+  local out="$1" name="$2" hz pid="" prev_ticks="" prev_up="" ticks up rss
+  [ -r /proc/uptime ] || return 0
+  hz="$(getconf CLK_TCK)"
+  while :; do
+    if [ -z "$pid" ] || [ ! -r "/proc/$pid/stat" ]; then
+      pid="$(pgrep -xn k6 || true)"
+      prev_ticks=""
+      [ -n "$pid" ] || { sleep 1; continue; }
+    fi
+    # utime + stime are fields 14 and 15; comm ("k6") has no spaces.
+    ticks="$(awk '{ print $14 + $15 }' "/proc/$pid/stat" 2>/dev/null)" || { pid=""; continue; }
+    rss="$(awk '/^VmRSS:/ { print $2 }' "/proc/$pid/status" 2>/dev/null)"
+    up="$(cut -d' ' -f1 /proc/uptime)"
+    if [ -n "$prev_ticks" ] && [ -n "$ticks" ] && [ -n "$rss" ]; then
+      awk -v ts="$(date +%s)" -v name="$name" -v hz="$hz" -v rss="$rss" \
+        -v dt="$ticks" -v pt="$prev_ticks" -v up="$up" -v pu="$prev_up" \
+        'BEGIN { if (up > pu) printf "{\"ts\":%d,\"name\":\"%s\",\"cpu\":\"%.2f%%\",\"mem\":\"%.1fMiB / 0B\"}\n", ts, name, (dt - pt) / hz / (up - pu) * 100, rss / 1024 }' \
+        >>"$out"
+    fi
+    prev_ticks="$ticks"
+    prev_up="$up"
+    sleep 1
+  done
+}
+
 run_k6() {
   local mode="$1" url="$2" script="scenarios/$scenario.js" k6_env status
   k6_env="-e TARGET_URL=$url -e PROFILE=$profile -e RATE=$rate -e DURATION=$duration
@@ -464,10 +493,11 @@ else
 fi
 
 cleanup() {
-  if [ -n "${sampler_pid:-}" ]; then
-    kill "$sampler_pid" 2>/dev/null || true
-    wait "$sampler_pid" 2>/dev/null || true
-  fi
+  local pid
+  for pid in ${sampler_pid:-} ${k6_sampler_pid:-}; do
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
   if [ "$keep" = 0 ]; then
     log "removing $scenario workloads"
     manifests | kctl -n "$namespace" delete --ignore-not-found --wait=false -f - >/dev/null 2>&1 || true
@@ -494,6 +524,10 @@ sampled=("$cluster-control-plane" "$cluster-worker")
 if [ "$target" = kind ]; then
   sample_cluster "$out_dir/cluster.ndjson" "${sampled[@]}" &
   sampler_pid=$!
+fi
+if [ "$mode" = native ]; then
+  sample_native_k6 "$out_dir/cluster.ndjson" "$cluster-k6" &
+  k6_sampler_pid=$!
 fi
 
 k6_started="$(date +%s)"

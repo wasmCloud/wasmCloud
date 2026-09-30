@@ -52,13 +52,9 @@ defaults:
   run:
     shell: bash
 
-# Not bench.yml's `bench-host` group: a release fires both workflows, and
-# GitHub keeps only one pending run per group, so a dispatch arriving during
-# the release run would cancel a queued release run. The single self-hosted
-# runner already serializes jobs, and its queue never drops one.
-concurrency:
-  group: bench-host-k6
-  cancel-in-progress: false
+# No concurrency group: GitHub keeps only one pending run per group, so a
+# dispatch would cancel a queued release run. The single self-hosted runner
+# already serializes jobs, and its queue never drops one.
 
 permissions: {}
 
