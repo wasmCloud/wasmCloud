@@ -497,7 +497,13 @@ async fn start_host_with_component_plugin_router(
 
 /// Start a p3 host with a component plugin whose `host.plugins` entry declares
 /// `bindings`, the way an operator turns label routing on for one.
-#[cfg(feature = "host-component-plugins")]
+#[cfg(all(
+    feature = "host-component-plugins",
+    feature = "wasi-blobstore",
+    feature = "wasi-config",
+    feature = "wasi-keyvalue",
+    feature = "wasi-logging"
+))]
 pub async fn start_host_with_component_plugin_bindings(
     addr: &str,
     plugin_id: &'static str,

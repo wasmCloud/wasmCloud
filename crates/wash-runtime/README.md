@@ -180,9 +180,15 @@ its callers' operations itself. Presenting a calling workload's own identity is
 a separate, delegated form that is not built yet.
 
 A plugin that cannot apply a `tls` block fails to load rather than connecting
-without it. `wasmcloud-nats` dials the granted servers with that trust and
-requires TLS; another plugin applies it by implementing
-`HostPlugin::configure_tls_policy`.
+without it. A native plugin applies it to its own client (`wasmcloud-nats`
+dials the granted servers with that trust and requires TLS). A component
+plugin applies it through `wasmcloud:tls/client` or `wasi:tls/client`: the
+host runs the handshake with the selected trust and identity over the plugin's
+own socket, so the key never reaches the guest, and refuses a handshake to a
+server name no grant declares `tls` for. The plugin owns that socket, so
+whether it runs TLS at all is still its choice. An identity's expiry or
+rotation reaches the plugin's next handshake; a session already established
+stays authenticated until the plugin or the peer closes it.
 
 `wash host` keeps workload `hostPath` volumes away from every file the catalogs
 name, as it does for its other credentials, and from kernel filesystems such as
@@ -193,6 +199,28 @@ it never shares a host with workloads that should not reach it, and keep its
 certificate short-lived with `refresh`. A short lifetime bounds how long a
 stolen key can open new connections; it does not end connections already made
 with it.
+
+### Upgrading a plugin that already imports `wasi:tls`
+
+Before plugin TLS grants, a component plugin's `wasi:tls` import (in a build
+with the `wasi-tls` feature) trusted the host's default roots. It now takes
+its trust from the grant, and a handshake to a host no grant declares `tls`
+for is refused. The plugin still loads, with a warning, so the failure shows
+up at the first connection. To keep trusting the public roots, add an empty
+`tls` block for each host the plugin handshakes with:
+
+```yaml
+allowedHosts:
+  - host: "api.example.com"
+    tls: {}
+```
+
+The entry must name the host with no port or scheme. `wasi:tls` and
+`wasmcloud:tls/client` see only the server name, so only a grant for the whole
+host applies to them; `api.example.com:443` with `tls: {}` loads but leaves
+every handshake refused. The same entry also permits egress to every port of
+that host, which is the cost of a handshake that cannot say which port it is
+on.
 
 ## License
 

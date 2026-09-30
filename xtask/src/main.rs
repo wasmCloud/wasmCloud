@@ -121,6 +121,8 @@ const P3_FIXTURES: &[&str] = &[
     "cli-service-p3",
     "socket-test-p3",
     "tls-echo-client-p3",
+    "tls-plugin-p3",
+    "tls-plugin-caller-p3",
     "inter-component-call-p3-caller",
     "inter-component-call-p3-callee",
     "stream-producer-p3",

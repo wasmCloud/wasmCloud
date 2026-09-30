@@ -76,3 +76,12 @@ world otel {
     import wasi:otel/metrics@0.2.0-rc.2;
     import wasi:otel/logs@0.2.0-rc.2;
 }
+
+/// Client TLS for host component plugins: `wasmcloud:tls` and the upstream
+/// `wasi:tls` it mirrors, served from one grant-backed implementation.
+world plugin-tls {
+    import wasmcloud:tls/types@0.1.0;
+    import wasmcloud:tls/client@0.1.0;
+    import wasi:tls/types@0.3.0-draft;
+    import wasi:tls/client@0.3.0-draft;
+}
