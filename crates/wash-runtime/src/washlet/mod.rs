@@ -10,13 +10,17 @@ use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
 use futures::{FutureExt as _, StreamExt as _};
 use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 use tracing::{debug, error, info, instrument, warn};
 
 pub const HOST_API_PREFIX: &str = "runtime.host";
 pub const OPERATOR_API_PREFIX: &str = "runtime.operator";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(300);
+const CLEANUP_AGE: Duration = Duration::from_secs(3600);
+const CONTROL_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const ATTACHMENT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Built-in workload operations on the same host as the control loop.
 /// A handler can add policy or logging and then delegate to these methods.
@@ -24,6 +28,7 @@ const ATTACHMENT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct HostControlDefaults {
     host: Arc<Host>,
     starts: Arc<tokio::sync::Semaphore>,
+    handler_starts: Arc<tokio::sync::Semaphore>,
 }
 
 impl HostControlDefaults {
@@ -60,6 +65,14 @@ impl HostControlDefaults {
 
 /// Optional command customization. The default implementation of each method
 /// delegates to the runtime; overrides can do work before or after delegation.
+///
+/// Each override is responsible for its product's admission and workload
+/// ownership. Errors become typed workload error replies. Start overrides are
+/// limited separately from native starts, so delegating does not acquire the
+/// same permit twice. Stop and status never wait for a start permit.
+///
+/// Methods run concurrently and may be cancelled after the shutdown drain.
+/// Keep side effects cancellation-safe; do not detach work from these futures.
 #[async_trait]
 pub trait HostCommandHandler: Send + Sync {
     async fn start(
@@ -85,14 +98,105 @@ pub trait HostCommandHandler: Send + Sync {
     }
 }
 
+type ControlCompletion =
+    futures::future::Shared<futures::future::BoxFuture<'static, Result<(), Arc<anyhow::Error>>>>;
+
 /// The runtime's NATS control loop attached to a caller-owned, already-started host.
-/// Call [`Self::shutdown`] before stopping that host.
+/// Call [`Self::shutdown`] before stopping that host. Dropping this handle aborts
+/// the loop and its tasks; graceful shutdown requires awaiting `shutdown`.
 pub struct AttachedHostControl {
     shutdown: Mutex<Option<oneshot::Sender<()>>>,
-    task: Mutex<Option<JoinHandle<anyhow::Result<()>>>>,
+    abort: AbortHandle,
+    completion: ControlCompletion,
+}
+
+/// Configure control for an existing host without changing its engine,
+/// plugins, ingress, or lifecycle ownership.
+pub struct AttachedHostControlBuilder {
+    host: Arc<Host>,
+    nats_client: Arc<async_nats::Client>,
+    options: ControlLoopOptions,
+}
+
+impl AttachedHostControlBuilder {
+    /// Override the hostgroup in control heartbeats only. Other labels and
+    /// the environment still come from the caller's host.
+    pub fn with_host_group(mut self, host_group: impl Into<String>) -> Self {
+        self.options.host_group = Some(host_group.into());
+        self
+    }
+
+    /// Inject product admission and ownership for remote commands.
+    pub fn with_handler(mut self, handler: Arc<dyn HostCommandHandler>) -> Self {
+        self.options.handler = Some(handler);
+        self
+    }
+
+    /// Set the heartbeat cadence. Zero retains the default interval.
+    pub fn with_heartbeat_interval(mut self, interval: Duration) -> Self {
+        self.options.heartbeat_interval = if interval.is_zero() {
+            HEARTBEAT_INTERVAL
+        } else {
+            interval
+        };
+        self
+    }
+
+    /// Bound native starts and custom start handlers. Zero is read as one,
+    /// as it is for [`ClusterHostBuilder::with_max_concurrent_starts`].
+    pub fn with_max_concurrent_starts(mut self, starts: usize) -> Self {
+        self.options.max_concurrent_starts = starts.max(1);
+        self
+    }
+
+    /// Set cleanup for the host's configured OCI cache. Zero retains the
+    /// default interval; a host without a cache never starts a cleanup timer.
+    pub fn with_artifact_cleaner(mut self, frequency: Duration, max_age: Duration) -> Self {
+        self.options.cleanup_interval = if frequency.is_zero() {
+            CLEANUP_INTERVAL
+        } else {
+            frequency
+        };
+        self.options.cleanup_age = max_age;
+        self
+    }
+
+    /// Beat this probe whenever the control loop turns.
+    pub fn with_liveness(mut self, liveness: Arc<crate::host::probes::Liveness>) -> Self {
+        self.options.liveness = Some(liveness);
+        self
+    }
+
+    /// Subscribe and flush before returning. Failure leaves the caller's
+    /// host running; this attachment never owns or stops it.
+    pub async fn attach(self) -> anyhow::Result<AttachedHostControl> {
+        let subscription = subscribe_host(&self.host, &self.nats_client).await?;
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let task = spawn_control_loop(
+            self.host,
+            self.nats_client,
+            subscription,
+            shutdown_rx,
+            self.options,
+        );
+        Ok(AttachedHostControl::new(shutdown_tx, task))
+    }
 }
 
 impl AttachedHostControl {
+    /// Configure a native control loop on the same running host. Defaults
+    /// match `ClusterHost`; heartbeat labels come from the host unless overridden.
+    pub fn builder(
+        host: Arc<Host>,
+        nats_client: Arc<async_nats::Client>,
+    ) -> AttachedHostControlBuilder {
+        AttachedHostControlBuilder {
+            host,
+            nats_client,
+            options: ControlLoopOptions::default(),
+        }
+    }
+
     /// Subscribe and flush before returning, so the first request can be served.
     pub async fn attach(
         host: Arc<Host>,
@@ -100,31 +204,46 @@ impl AttachedHostControl {
         host_group: impl Into<String>,
         handler: Option<Arc<dyn HostCommandHandler>>,
     ) -> anyhow::Result<Self> {
-        let host_group = host_group.into();
-        let subscription = subscribe_host(&host, &nats_client).await?;
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let task = spawn_control_loop(
-            host,
-            nats_client,
-            subscription,
-            shutdown_rx,
-            handler,
-            Some(host_group),
-            HEARTBEAT_INTERVAL,
-            Duration::from_secs(300),
-            Duration::from_secs(3600),
-            default_max_concurrent_starts(),
-            None,
-            false,
-        );
-        Ok(Self {
+        let mut builder = Self::builder(host, nats_client).with_host_group(host_group);
+        if let Some(handler) = handler {
+            builder = builder.with_handler(handler);
+        }
+        builder.attach().await
+    }
+
+    fn new(shutdown_tx: oneshot::Sender<()>, task: JoinHandle<anyhow::Result<()>>) -> Self {
+        let abort = task.abort_handle();
+        let completion = async move {
+            task.await
+                .context("host control task failed")
+                .and_then(std::convert::identity)
+                .map_err(Arc::new)
+        }
+        .boxed()
+        .shared();
+        Self {
             shutdown: Mutex::new(Some(shutdown_tx)),
-            task: Mutex::new(Some(task)),
-        })
+            abort,
+            completion,
+        }
+    }
+
+    /// Observe an unexpected exit without requesting shutdown. Multiple
+    /// observers receive the same result, and cancelling a wait is safe.
+    pub async fn stopped(&self) -> anyhow::Result<()> {
+        self.completion
+            .clone()
+            .await
+            .map_err(|error| anyhow!("{error:#}"))
     }
 
     /// Stop subscriptions and drain or abort commands within the runtime's bounds.
     /// The caller's host remains running.
+    ///
+    /// Cancellation of this wait does not detach the loop; another call can
+    /// finish waiting. Concurrent callers all await the same completion.
+    /// A forced abort is an error: a cancelled handler or native start may
+    /// require owner-specific recovery before the host can accept that ID again.
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         if let Some(tx) = self
             .shutdown
@@ -134,37 +253,22 @@ impl AttachedHostControl {
         {
             let _ = tx.send(());
         }
-        let task = self
-            .task
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some(mut task) = task {
-            match tokio::time::timeout(ATTACHMENT_SHUTDOWN_TIMEOUT, &mut task).await {
-                Ok(result) => result??,
-                Err(_) => {
-                    task.abort();
-                    let _ = tokio::time::timeout(COMMAND_ABORT_TIMEOUT, task).await;
-                    anyhow::bail!(
-                        "attached host control did not stop within {ATTACHMENT_SHUTDOWN_TIMEOUT:?}"
-                    );
-                }
+        match tokio::time::timeout(ATTACHMENT_SHUTDOWN_TIMEOUT, self.stopped()).await {
+            Ok(result) => result,
+            Err(_) => {
+                self.abort.abort();
+                let _ = tokio::time::timeout(COMMAND_ABORT_TIMEOUT, self.stopped()).await;
+                anyhow::bail!(
+                    "attached host control did not stop within {ATTACHMENT_SHUTDOWN_TIMEOUT:?}"
+                );
             }
         }
-        Ok(())
     }
 }
 
 impl Drop for AttachedHostControl {
     fn drop(&mut self) {
-        if let Some(task) = self
-            .task
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
-            task.abort();
-        }
+        self.abort.abort();
     }
 }
 
@@ -188,6 +292,8 @@ const MAX_CONCURRENT_STARTS: usize = 4;
 /// period a terminating pod gets, so it is killed before `host.stop()` unbinds
 /// anything. Better to abandon them and stop the host, which unbinds whatever
 /// they had bound anyway.
+/// Attached loops report abandoned commands as an error so the caller can
+/// recover the surviving host or stop it before reusing interrupted workloads.
 pub const COMMAND_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long an aborted command is given to unwind before the host stops
@@ -412,8 +518,8 @@ impl ClusterHostBuilder {
             prepared_host: host,
             nats_client,
             heartbeat_interval,
-            cleanup_interval: self.cleanup_interval.unwrap_or(Duration::from_secs(300)),
-            cleanup_age: self.cleanup_age.unwrap_or(Duration::from_secs(3600)),
+            cleanup_interval: self.cleanup_interval.unwrap_or(CLEANUP_INTERVAL),
+            cleanup_age: self.cleanup_age.unwrap_or(CLEANUP_AGE),
             max_concurrent_starts: self
                 .max_concurrent_starts
                 .unwrap_or_else(default_max_concurrent_starts),
@@ -431,6 +537,8 @@ enum Ended {
     IngressStopped,
     /// A command task panicked or was cancelled.
     CommandPanicked(tokio::task::JoinError),
+    /// The NATS API subscription ended and cannot serve further commands.
+    SubscriptionClosed,
 }
 
 pub struct ClusterHost {
@@ -443,27 +551,7 @@ pub struct ClusterHost {
     liveness: Option<Arc<crate::host::probes::Liveness>>,
 }
 
-async fn subscribe_host(
-    host: &Host,
-    nats_client: &async_nats::Client,
-) -> anyhow::Result<async_nats::Subscriber> {
-    let subscription = nats_client
-        .subscribe(host_subject(host.id()))
-        .await
-        .context("failed to subscribe for API requests")?;
-    nats_client
-        .flush()
-        .await
-        .context("failed to register host API subscription")?;
-    Ok(subscription)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn spawn_control_loop(
-    host: Arc<Host>,
-    nats_client: Arc<async_nats::Client>,
-    mut api_subscription: async_nats::Subscriber,
-    mut one_shot_rx: oneshot::Receiver<()>,
+struct ControlLoopOptions {
     handler: Option<Arc<dyn HostCommandHandler>>,
     host_group: Option<String>,
     heartbeat_interval: Duration,
@@ -472,7 +560,59 @@ fn spawn_control_loop(
     max_concurrent_starts: usize,
     liveness: Option<Arc<crate::host::probes::Liveness>>,
     stop_host: bool,
+}
+
+impl Default for ControlLoopOptions {
+    fn default() -> Self {
+        Self {
+            handler: None,
+            host_group: None,
+            heartbeat_interval: HEARTBEAT_INTERVAL,
+            cleanup_interval: CLEANUP_INTERVAL,
+            cleanup_age: CLEANUP_AGE,
+            max_concurrent_starts: default_max_concurrent_starts(),
+            liveness: None,
+            stop_host: false,
+        }
+    }
+}
+
+async fn subscribe_host(
+    host: &Host,
+    nats_client: &async_nats::Client,
+) -> anyhow::Result<async_nats::Subscriber> {
+    tokio::time::timeout(CONTROL_STARTUP_TIMEOUT, async {
+        let subscription = nats_client
+            .subscribe(host_subject(host.id()))
+            .await
+            .context("failed to subscribe for API requests")?;
+        nats_client
+            .flush()
+            .await
+            .context("failed to register host API subscription")?;
+        Ok(subscription)
+    })
+    .await
+    .context("timed out registering host API subscription")?
+}
+
+fn spawn_control_loop(
+    host: Arc<Host>,
+    nats_client: Arc<async_nats::Client>,
+    mut api_subscription: async_nats::Subscriber,
+    mut one_shot_rx: oneshot::Receiver<()>,
+    options: ControlLoopOptions,
 ) -> JoinHandle<anyhow::Result<()>> {
+    let ControlLoopOptions {
+        handler,
+        host_group,
+        heartbeat_interval,
+        cleanup_interval,
+        cleanup_age,
+        max_concurrent_starts,
+        liveness,
+        stop_host,
+    } = options;
     let host_id = host.id().to_string();
     tokio::task::spawn(async move {
         let heartbeat_subject = heartbeat_subject(&host_id);
@@ -484,12 +624,14 @@ fn spawn_control_loop(
         let defaults = HostControlDefaults {
             host: host.clone(),
             starts: starts.clone(),
+            handler_starts: Arc::new(tokio::sync::Semaphore::new(max_concurrent_starts)),
         };
         // Commands run as their own tasks, so shutdown has to wait for
-        // them: `host.stop()` unbinds every plugin, and a start still
-        // running past it would bind against stopped plugins and leave
-        // a service nothing tears down.
+        // them before this loop or an attached host's owner stops the
+        // host. `host.stop()` unbinds every plugin; a start running past
+        // it would bind against stopped plugins.
         let mut commands = tokio::task::JoinSet::new();
+        let mut background = tokio::task::JoinSet::new();
 
         // Read once. Nothing changes the host's config after it is
         // built, so a host with no cache directory has none for its
@@ -539,35 +681,37 @@ fn spawn_control_loop(
                 liveness.beat();
             }
             tokio::select! {
+                biased;
                 // Shutdown signal
                 _ = &mut one_shot_rx => break Ended::Requested,
                 // The accept loop returned and nothing restarts it, so
                 // this host would hold every workload it was given,
                 // keep heartbeating, and serve no HTTP for as long as
-                // it runs. Stopping is what puts those workloads on a
-                // host that can serve them; they are lost either way.
+                // it runs. Stop an owned host or report the failure
+                // to an attached host's owner.
                 () = &mut ingress_stopped => break Ended::IngressStopped,
                 // Reaps finished commands. A panicked one is fatal: it
                 // may have died holding a workload id it claimed and
                 // never committed or released, and no later stop can
                 // free that slot — the id would be refused as "already
-                // exists" for the life of the host. Taking the host
-                // down is what a panic here did before commands ran as
-                // their own tasks, and a restart is what clears it.
-                //
-                // Fatal by way of the shutdown below: skipping
-                // `host.stop()` would leave the ingress accepting and
-                // the plugins bound on a host that is already finished.
+                // exists" for the life of the host. End control and
+                // stop an owned host, or report the panic so an
+                // attached host's owner can recover it.
                 Some(finished) = commands.join_next() => {
                     if let Err(e) = finished {
                         break Ended::CommandPanicked(e);
+                    }
+                }
+                Some(finished) = background.join_next() => {
+                    if let Err(error) = finished {
+                        error!(%error, "host control background task failed");
                     }
                 }
                 // OCI cache cleanup
                 cache_dir = next_cache_cleanup(&mut oci_cleanup) => {
                     if let Ok(slot) = Arc::clone(&cleanup_slot).try_acquire_owned() {
                         let age = cleanup_age;
-                        tokio::spawn(async move {
+                        background.spawn(async move {
                             let _slot = slot;
                             if let Err(e) = oci::cleanup_cache(&*cache_dir, age).await {
                                 error!("error during OCI cache cleanup: {e}");
@@ -590,7 +734,7 @@ fn spawn_control_loop(
                             let nats_client = nats_client.clone();
                             let subject = heartbeat_subject.clone();
                             let host_group = host_group.clone();
-                            tokio::spawn(async move {
+                            background.spawn(async move {
                                 let _slot = slot;
                                 match host_heartbeat(&host, host_group.as_deref()).await.and_then(|heartbeat| {
                                     serde_json::to_vec(&heartbeat).context("failed to serialize heartbeat")
@@ -618,7 +762,10 @@ fn spawn_control_loop(
                     }
                 }
                 // Handle API requests
-                Some(msg) = api_subscription.next() => {
+                message = api_subscription.next() => {
+                    let Some(msg) = message else {
+                        break Ended::SubscriptionClosed;
+                    };
                     // `select!` runs one branch to completion, so a
                     // command awaited here would hold up the heartbeat
                     // above for as long as it takes to pull and compile.
@@ -654,9 +801,8 @@ fn spawn_control_loop(
 
         // `wash host` watches the same accept loop and asks for a
         // shutdown the moment it ends, so both branches above can be
-        // ready at once and `select!` picks between them at random.
-        // Which one fired is therefore not evidence of anything; the
-        // ingress itself is. Only checked on the `Requested` path, so
+        // ready at once. Shutdown has priority, but must still report a
+        // failed ingress. Only checked on the `Requested` path, so
         // the future is never polled after it has already completed.
         let ended = match ended {
             Ended::Requested if ingress_stopped.as_mut().now_or_never().is_some() => {
@@ -665,23 +811,32 @@ fn spawn_control_loop(
             ended => ended,
         };
 
-        let unsubscribed = api_subscription
-            .unsubscribe()
+        starts.close();
+        defaults.handler_starts.close();
+        background.abort_all();
+        let unsubscribed = tokio::time::timeout(CONTROL_IO_TIMEOUT, api_subscription.unsubscribe())
             .await
-            .context("failed to unsubscribe from API requests");
+            .context("timed out unsubscribing from API requests")
+            .and_then(|result| result.context("failed to unsubscribe from API requests"));
         if let Err(e) = &unsubscribed {
             error!("failed to unsubscribe from API requests: {e}");
         }
         // Anything still queued gives its workload id back and returns
         // rather than starting something this host is about to tear
         // down.
-        starts.close();
+        let mut command_failure = None;
         let drained = tokio::time::timeout(COMMAND_DRAIN_TIMEOUT, async {
-            while let Some(finished) = commands.join_next().await {
-                if let Err(e) = finished {
-                    error!("command task failed during shutdown: {e}");
-                }
-            }
+            tokio::join!(
+                async {
+                    while let Some(finished) = commands.join_next().await {
+                        if let Err(e) = finished {
+                            error!("command task failed during shutdown: {e}");
+                            command_failure = Some(e);
+                        }
+                    }
+                },
+                async { while background.join_next().await.is_some() {} },
+            );
         })
         .await;
         let mut commands_still_running = false;
@@ -700,15 +855,21 @@ fn spawn_control_loop(
             // out holds the shutdown past the pod's grace period, so
             // `host.stop()` never runs at all.
             let unwound = tokio::time::timeout(COMMAND_ABORT_TIMEOUT, async {
-                while let Some(finished) = commands.join_next().await {
-                    // A panic while unwinding still matters: the task
-                    // may hold a workload id it never released.
-                    if let Err(e) = finished
-                        && !e.is_cancelled()
-                    {
-                        error!("aborted command task failed: {e}");
-                    }
-                }
+                tokio::join!(
+                    async {
+                        while let Some(finished) = commands.join_next().await {
+                            // A panic while unwinding still matters: the task
+                            // may hold a workload id it never released.
+                            if let Err(e) = finished
+                                && !e.is_cancelled()
+                            {
+                                error!("aborted command task failed: {e}");
+                                command_failure = Some(e);
+                            }
+                        }
+                    },
+                    async { while background.join_next().await.is_some() {} }
+                );
             })
             .await;
             if unwound.is_err() {
@@ -719,6 +880,13 @@ fn spawn_control_loop(
                 );
             }
         }
+        // A successful shutdown reaches the server after UNSUB, command
+        // replies and the last already-queued heartbeat. The client belongs
+        // to the caller, so only flush it; never drain its other subscriptions.
+        let flushed = tokio::time::timeout(CONTROL_IO_TIMEOUT, nats_client.flush())
+            .await
+            .context("timed out flushing host control shutdown")
+            .and_then(|result| result.context("failed to flush host control shutdown"));
         let stopped = if stop_host {
             host.stop().await.context("failed to stop host")
         } else {
@@ -728,16 +896,24 @@ fn spawn_control_loop(
             Ended::Requested => {
                 stopped?;
                 unsubscribed?;
+                flushed?;
+                if let Some(error) = command_failure {
+                    return Err(anyhow!("command task failed during shutdown: {error}"));
+                }
                 if commands_still_running {
                     Err(anyhow!("command tasks did not unwind after abort"))
+                } else if drained.is_err() && !stop_host {
+                    Err(anyhow!(
+                        "host control tasks exceeded the shutdown drain and were aborted; \
+                                 the caller-owned host may require workload recovery"
+                    ))
                 } else {
                     Ok(())
                 }
             }
             Ended::IngressStopped => {
-                // Stopped first either way, so the workloads unbind
-                // cleanly; the error is what tells whoever owns this
-                // host that it did not stop because it was asked to.
+                // An owned host is stopped first. An attached host's
+                // owner receives the error and controls recovery.
                 stopped?;
                 Err(anyhow!(
                     "HTTP ingress stopped accepting connections; \
@@ -747,6 +923,10 @@ fn spawn_control_loop(
             Ended::CommandPanicked(e) => {
                 stopped?;
                 Err(anyhow!("command task failed: {e}"))
+            }
+            Ended::SubscriptionClosed => {
+                stopped?;
+                Err(anyhow!("host API subscription closed"))
             }
         }
     })
@@ -800,14 +980,15 @@ impl ClusterHost {
             nats_client,
             subscription,
             one_shot_rx,
-            None,
-            None,
-            heartbeat_interval,
-            cleanup_interval,
-            self.cleanup_age,
-            max_concurrent_starts,
-            liveness,
-            true,
+            ControlLoopOptions {
+                heartbeat_interval,
+                cleanup_interval,
+                cleanup_age: self.cleanup_age,
+                max_concurrent_starts,
+                liveness,
+                stop_host: true,
+                ..ControlLoopOptions::default()
+            },
         );
 
         Ok((host, async move {
@@ -999,28 +1180,81 @@ async fn handle_command(
     match command.as_str() {
         "heartbeat" => to_api(&host_heartbeat(&defaults.host, host_group).await?),
         "workload.start" => {
-            let req = from_api(payload)?;
-            let response = match handler {
-                Some(handler) => handler.start(defaults, req).await?,
-                None => defaults.start(req).await?,
+            let req: types::v2::WorkloadStartRequest = match from_api(payload) {
+                Ok(request) => request,
+                Err(error) => {
+                    return to_api(&workload_start_error(
+                        "",
+                        format!("invalid request: {error:#}"),
+                    ));
+                }
             };
-            to_api(&response)
+            let workload_id = req.workload_id.clone();
+            let response = match handler {
+                Some(handler) => {
+                    async {
+                        let _permit = defaults
+                            .handler_starts
+                            .acquire()
+                            .await
+                            .context("host control is no longer accepting starts")?;
+                        handler.start(defaults, req).await
+                    }
+                    .await
+                }
+                None => defaults.start(req).await,
+            };
+            to_api(
+                &response.unwrap_or_else(|error| {
+                    workload_start_error(&workload_id, format!("{error:#}"))
+                }),
+            )
         }
         "workload.stop" => {
-            let req = from_api(payload)?;
-            let response = match handler {
-                Some(handler) => handler.stop(defaults, req).await?,
-                None => defaults.stop(req).await?,
+            let req: types::v2::WorkloadStopRequest = match from_api(payload) {
+                Ok(request) => request,
+                Err(error) => {
+                    return to_api(&types::v2::WorkloadStopResponse {
+                        workload_status: Some(command_error(
+                            "",
+                            format!("invalid request: {error:#}"),
+                        )),
+                    });
+                }
             };
-            to_api(&response)
+            let workload_id = req.workload_id.clone();
+            let response = match handler {
+                Some(handler) => handler.stop(defaults, req).await,
+                None => defaults.stop(req).await,
+            };
+            to_api(
+                &response.unwrap_or_else(|error| types::v2::WorkloadStopResponse {
+                    workload_status: Some(command_error(&workload_id, format!("{error:#}"))),
+                }),
+            )
         }
         "workload.status" => {
-            let req = from_api(payload)?;
-            let response = match handler {
-                Some(handler) => handler.status(defaults, req).await?,
-                None => defaults.status(req).await?,
+            let req: types::v2::WorkloadStatusRequest = match from_api(payload) {
+                Ok(request) => request,
+                Err(error) => {
+                    return to_api(&types::v2::WorkloadStatusResponse {
+                        workload_status: Some(command_error(
+                            "",
+                            format!("invalid request: {error:#}"),
+                        )),
+                    });
+                }
             };
-            to_api(&response)
+            let workload_id = req.workload_id.clone();
+            let response = match handler {
+                Some(handler) => handler.status(defaults, req).await,
+                None => defaults.status(req).await,
+            };
+            to_api(
+                &response.unwrap_or_else(|error| types::v2::WorkloadStatusResponse {
+                    workload_status: Some(command_error(&workload_id, format!("{error:#}"))),
+                }),
+            )
         }
         _ => anyhow::bail!("unknown command: {command}"),
     }
@@ -1093,14 +1327,17 @@ fn workload_start_error(workload_id: &str, message: String) -> types::v2::Worklo
     // own text, and a second one under that name displaces it.
     error!(workload_id, reason = message, "failed to start workload");
     types::v2::WorkloadStartResponse {
-        workload_status: Some(types::v2::WorkloadStatus {
-            workload_id: workload_id.to_string(),
-            workload_state: types::v2::WorkloadState::Error.into(),
-            message,
-        }),
+        workload_status: Some(command_error(workload_id, message)),
     }
 }
 
+fn command_error(workload_id: &str, message: String) -> types::v2::WorkloadStatus {
+    types::v2::WorkloadStatus {
+        workload_id: workload_id.to_string(),
+        workload_state: types::v2::WorkloadState::Error.into(),
+        message,
+    }
+}
 #[instrument(skip_all, fields(
     workload_id = %req.workload_id,
     workload.name=?req.workload.as_ref().map(|w| &w.name).unwrap_or(&"<none>".to_string()),
@@ -1162,8 +1399,9 @@ async fn workload_start(
         }
     };
 
-    // Every exit from here gives the id back, so a start that never began
-    // cannot leave it reserved against the next one.
+    // Completed failure paths give the id back. Cancelling this future
+    // can leave the reservation behind; attached control reports forced
+    // cancellation so the host's owner can recover or stop the host.
     let prepared = async {
         let (components, host_interfaces) = if let Some(wit_world) = wit_world {
             let mut pulled_components = Vec::with_capacity(wit_world.components.len());
@@ -1518,6 +1756,239 @@ mod tests {
     use crate::host::allowed_hosts::AllowedHost;
     use crate::host::allowed_ip_name::AllowedIpName;
 
+    #[tokio::test]
+    async fn cancelled_and_concurrent_shutdowns_wait_for_the_same_task() -> anyhow::Result<()> {
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (observed_tx, observed_rx) = oneshot::channel();
+        let (finish_tx, finish_rx) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            shutdown_rx.await?;
+            let _ = observed_tx.send(());
+            finish_rx.await?;
+            Ok(())
+        });
+        let channel = AttachedHostControl::new(shutdown_tx, task);
+        // Poll and cancel the first wait after it has signalled shutdown.
+        assert!(channel.shutdown().now_or_never().is_none());
+        observed_rx.await?;
+        let mut second = Box::pin(channel.shutdown());
+        assert!(second.as_mut().now_or_never().is_none());
+        assert!(channel.shutdown().now_or_never().is_none());
+        let _ = finish_tx.send(());
+        second.await?;
+        channel.shutdown().await?;
+        channel.stopped().await
+    }
+
+    struct NotifyOnDrop(Option<oneshot::Sender<()>>);
+
+    impl Drop for NotifyOnDrop {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_after_a_cancelled_shutdown_still_aborts_the_task() -> anyhow::Result<()> {
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (observed_tx, observed_rx) = oneshot::channel();
+        let (dropped_tx, dropped_rx) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _drop = NotifyOnDrop(Some(dropped_tx));
+            shutdown_rx.await?;
+            let _ = observed_tx.send(());
+            std::future::pending::<()>().await;
+            Ok(())
+        });
+        let channel = AttachedHostControl::new(shutdown_tx, task);
+        assert!(channel.shutdown().now_or_never().is_none());
+        observed_rx.await?;
+        drop(channel);
+        tokio::time::timeout(Duration::from_secs(1), dropped_rx).await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn every_completion_observer_receives_the_exit_error() -> anyhow::Result<()> {
+        let (shutdown_tx, _) = oneshot::channel();
+        let task = tokio::spawn(async { Err(anyhow!("control subscription failed")) });
+        let channel = AttachedHostControl::new(shutdown_tx, task);
+        for result in [
+            channel.stopped().await,
+            channel.shutdown().await,
+            channel.shutdown().await,
+        ] {
+            let error = result.err().context("exit failure was lost")?;
+            assert!(error.to_string().contains("control subscription failed"));
+        }
+        Ok(())
+    }
+
+    fn command_message(command: &str, payload: Vec<u8>) -> async_nats::Message {
+        async_nats::Message {
+            subject: rpc_subject("test-host", command).into(),
+            reply: None,
+            length: payload.len(),
+            payload: payload.into(),
+            headers: None,
+            status: None,
+            description: None,
+        }
+    }
+
+    fn control_defaults(host: Arc<Host>) -> HostControlDefaults {
+        HostControlDefaults {
+            host,
+            starts: Arc::new(tokio::sync::Semaphore::new(1)),
+            handler_starts: Arc::new(tokio::sync::Semaphore::new(1)),
+        }
+    }
+
+    struct RefusingCommands;
+
+    #[async_trait]
+    impl HostCommandHandler for RefusingCommands {
+        async fn start(
+            &self,
+            _defaults: &HostControlDefaults,
+            _request: types::v2::WorkloadStartRequest,
+        ) -> anyhow::Result<types::v2::WorkloadStartResponse> {
+            anyhow::bail!("admission denied");
+        }
+
+        async fn stop(
+            &self,
+            _defaults: &HostControlDefaults,
+            _request: types::v2::WorkloadStopRequest,
+        ) -> anyhow::Result<types::v2::WorkloadStopResponse> {
+            anyhow::bail!("ownership denied");
+        }
+
+        async fn status(
+            &self,
+            _defaults: &HostControlDefaults,
+            _request: types::v2::WorkloadStatusRequest,
+        ) -> anyhow::Result<types::v2::WorkloadStatusResponse> {
+            anyhow::bail!("status denied");
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_requests_and_handler_errors_have_typed_replies() -> anyhow::Result<()> {
+        let host = crate::host::HostBuilder::default().build()?.start().await?;
+        let defaults = control_defaults(host.clone());
+        for command in ["workload.start", "workload.stop", "workload.status"] {
+            for payload in [br#"{"workloadId":"denied"}"#.to_vec(), b"{".to_vec()] {
+                let malformed = payload == b"{";
+                let msg = command_message(command, payload);
+                let reply = handle_command(&defaults, &msg, Some(&RefusingCommands), None).await?;
+                let reply: serde_json::Value = serde_json::from_slice(&reply)?;
+                let status = reply
+                    .get("workloadStatus")
+                    .context("missing typed status")?;
+                assert_eq!(
+                    status
+                        .get("workloadState")
+                        .and_then(serde_json::Value::as_str),
+                    Some("WORKLOAD_STATE_ERROR")
+                );
+                let id = status
+                    .get("workloadId")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                assert_eq!(id, if malformed { "" } else { "denied" });
+            }
+        }
+        let msg = command_message(
+            "workload.start",
+            br#"{"workloadId":"missing-body"}"#.to_vec(),
+        );
+        let reply: types::v2::WorkloadStartResponse =
+            serde_json::from_slice(&handle_command(&defaults, &msg, None, None).await?)?;
+        let status = reply
+            .workload_status
+            .context("missing default error reply")?;
+        assert_eq!(status.workload_state(), types::v2::WorkloadState::Error);
+        assert_eq!(status.workload_id, "missing-body");
+        host.stop().await
+    }
+
+    struct BlockingStart {
+        entered: std::sync::atomic::AtomicUsize,
+        gate: tokio::sync::Semaphore,
+    }
+
+    #[async_trait]
+    impl HostCommandHandler for BlockingStart {
+        async fn start(
+            &self,
+            defaults: &HostControlDefaults,
+            request: types::v2::WorkloadStartRequest,
+        ) -> anyhow::Result<types::v2::WorkloadStartResponse> {
+            self.entered
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _permit = self.gate.acquire().await?;
+            defaults.start(request).await
+        }
+    }
+
+    #[tokio::test]
+    async fn custom_starts_are_bounded_without_blocking_status_or_native_delegation()
+    -> anyhow::Result<()> {
+        let host = crate::host::HostBuilder::default().build()?.start().await?;
+        let defaults = control_defaults(host.clone());
+        let handler = BlockingStart {
+            entered: std::sync::atomic::AtomicUsize::new(0),
+            gate: tokio::sync::Semaphore::new(0),
+        };
+        let message = |id: &str| -> anyhow::Result<_> {
+            Ok(command_message(
+                "workload.start",
+                serde_json::to_vec(&types::v2::WorkloadStartRequest {
+                    workload_id: id.into(),
+                    workload: Some(types::v2::Workload::default()),
+                })?,
+            ))
+        };
+        let first_msg = message("first")?;
+        let second_msg = message("second")?;
+        let mut first = Box::pin(handle_command(&defaults, &first_msg, Some(&handler), None));
+        let mut second = Box::pin(handle_command(&defaults, &second_msg, Some(&handler), None));
+        assert!(first.as_mut().now_or_never().is_none());
+        assert!(second.as_mut().now_or_never().is_none());
+        assert_eq!(handler.entered.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let status_msg = command_message(
+            "workload.status",
+            serde_json::to_vec(&types::v2::WorkloadStatusRequest {
+                workload_id: "local".into(),
+            })?,
+        );
+        let status: types::v2::WorkloadStatusResponse = serde_json::from_slice(
+            &handle_command(&defaults, &status_msg, Some(&handler), None).await?,
+        )?;
+        assert_eq!(
+            status
+                .workload_status
+                .context("missing status")?
+                .workload_state(),
+            types::v2::WorkloadState::NotFound
+        );
+        handler.gate.add_permits(2);
+        for bytes in [first.await?, second.await?] {
+            let response: types::v2::WorkloadStartResponse = serde_json::from_slice(&bytes)?;
+            assert_eq!(
+                response
+                    .workload_status
+                    .context("missing start status")?
+                    .workload_state(),
+                types::v2::WorkloadState::Running
+            );
+        }
+        host.stop().await
+    }
+
     struct AnnotatingStatus;
 
     #[async_trait]
@@ -1541,6 +2012,7 @@ mod tests {
         let defaults = HostControlDefaults {
             host: host.clone(),
             starts: Arc::new(tokio::sync::Semaphore::new(1)),
+            handler_starts: Arc::new(tokio::sync::Semaphore::new(1)),
         };
         let reply = AnnotatingStatus
             .status(
