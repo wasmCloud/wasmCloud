@@ -138,7 +138,8 @@ fn hostname() -> Result<String> {
 }
 
 fn num_cpus_online() -> Result<u32> {
-    let s = run(&["nproc"])?;
+    // macOS has no nproc; getconf answers the same question there.
+    let s = run(&["nproc"]).or_else(|_| run(&["getconf", "_NPROCESSORS_ONLN"]))?;
     s.parse()
         .with_context(|| format!("nproc output not a number: {s:?}"))
 }

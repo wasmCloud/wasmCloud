@@ -1,0 +1,221 @@
+# link-0 (entry, chain.k6bench) → link-1 → … → link-4, one localRoute hop each.
+# Entry point: k6 reaches it on every node at :30950.
+apiVersion: v1
+kind: Service
+metadata:
+  name: chain-link-0
+spec:
+  # No selector: the operator writes this Service's EndpointSlice, pointing at
+  # the host pods running the workload below, and registers chain-link-0.<namespace>
+  # as a Host alias for it.
+  type: NodePort
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+      nodePort: 30950
+---
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: chain-link-0
+spec:
+  replicas: 1
+  kubernetes:
+    service:
+      name: chain-link-0
+  template:
+    spec:
+      hostSelector:
+        hostgroup: default
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            host: chain.k6bench
+            localRoute: chain-link-0.internal
+      components:
+        - name: relay
+          image: __RELAY_IMAGE__
+          localResources:
+            allowedHosts:
+              - chain-link-1.internal
+            environment:
+              config:
+                TARGETS: "http://chain-link-1.internal/"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chain-link-1
+spec:
+  # No selector: the operator writes this Service's EndpointSlice, pointing at
+  # the host pods running the workload below, and registers chain-link-1.<namespace>
+  # as a Host alias for it.
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+---
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: chain-link-1
+spec:
+  replicas: 1
+  kubernetes:
+    service:
+      name: chain-link-1
+  template:
+    spec:
+      hostSelector:
+        hostgroup: default
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            host: chain-link-1.k6bench
+            localRoute: chain-link-1.internal
+      components:
+        - name: relay
+          image: __RELAY_IMAGE__
+          localResources:
+            allowedHosts:
+              - chain-link-2.internal
+            environment:
+              config:
+                TARGETS: "http://chain-link-2.internal/"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chain-link-2
+spec:
+  # No selector: the operator writes this Service's EndpointSlice, pointing at
+  # the host pods running the workload below, and registers chain-link-2.<namespace>
+  # as a Host alias for it.
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+---
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: chain-link-2
+spec:
+  replicas: 1
+  kubernetes:
+    service:
+      name: chain-link-2
+  template:
+    spec:
+      hostSelector:
+        hostgroup: default
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            host: chain-link-2.k6bench
+            localRoute: chain-link-2.internal
+      components:
+        - name: relay
+          image: __RELAY_IMAGE__
+          localResources:
+            allowedHosts:
+              - chain-link-3.internal
+            environment:
+              config:
+                TARGETS: "http://chain-link-3.internal/"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chain-link-3
+spec:
+  # No selector: the operator writes this Service's EndpointSlice, pointing at
+  # the host pods running the workload below, and registers chain-link-3.<namespace>
+  # as a Host alias for it.
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+---
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: chain-link-3
+spec:
+  replicas: 1
+  kubernetes:
+    service:
+      name: chain-link-3
+  template:
+    spec:
+      hostSelector:
+        hostgroup: default
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            host: chain-link-3.k6bench
+            localRoute: chain-link-3.internal
+      components:
+        - name: relay
+          image: __RELAY_IMAGE__
+          localResources:
+            allowedHosts:
+              - chain-link-4.internal
+            environment:
+              config:
+                TARGETS: "http://chain-link-4.internal/"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chain-link-4
+spec:
+  # No selector: the operator writes this Service's EndpointSlice, pointing at
+  # the host pods running the workload below, and registers chain-link-4.<namespace>
+  # as a Host alias for it.
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+---
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: chain-link-4
+spec:
+  replicas: 1
+  kubernetes:
+    service:
+      name: chain-link-4
+  template:
+    spec:
+      hostSelector:
+        hostgroup: default
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            host: chain-link-4.k6bench
+            localRoute: chain-link-4.internal
+      components:
+        - name: relay
+          image: __RELAY_IMAGE__

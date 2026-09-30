@@ -10,6 +10,7 @@
 //   WASMCLOUD_BENCH_HOSTNAME       expected hostname (workflow: vars.WASMCLOUD_BENCH_HOSTNAME)
 //   WASMCLOUD_BENCH_ISOLATED_CPU   override for the isolated-CPU index (default: "5")
 //   CARGO_TARGET_DIR               persistent target dir (default: /var/lib/bench/target)
+//   WASMCLOUD_BENCH_K6             "1" for a k6bench run: also check its tools (#11)
 //
 // Each invariant prints one line on success ("pre-flight: …") or a
 // GitHub Actions error annotation on failure and exits non-zero.
@@ -200,5 +201,45 @@ if (!existsSync(cargoBin)) {
   fail(`cargo not found at ${cargoBin}`);
 }
 ok(`cargo: ${runStdout(cargoBin, ['--version'])}`);
+
+// 10. Nothing left running in Docker from an earlier k6bench job. A leftover
+//     kind cluster keeps kube-apiserver and etcd busy on every CPU, which
+//     skews criterion and gungraun as much as k6. The local registry idles
+//     and is allowed.
+const hasDocker = spawnSync('sh', ['-c', 'command -v docker'], { stdio: 'ignore' }).status === 0;
+if (hasDocker) {
+  const allowed = new Set(['kind-registry']);
+  const running = spawnSync('docker', ['ps', '--format', '{{.Names}}'], { encoding: 'utf8' });
+  if (running.status !== 0) {
+    fail(`docker ps failed: ${running.stderr.trim()}`);
+  }
+  const stray = running.stdout
+    .split('\n')
+    .filter((n) => n && !allowed.has(n));
+  if (stray.length > 0) {
+    fail(`containers still running: ${stray.join(', ')} (kind delete cluster --name k6bench)`);
+  }
+  ok('docker: no leftover containers');
+}
+
+// 11. k6bench runs only: the tools scripts/k6bench/run.sh drives, and room
+//     for the node and wasmCloud images.
+if (process.env.WASMCLOUD_BENCH_K6 === '1') {
+  if (!hasDocker || spawnSync('docker', ['info'], { stdio: 'ignore' }).status !== 0) {
+    fail('docker is not usable by this user');
+  }
+  for (const tool of ['kind', 'kubectl', 'helm', 'k6']) {
+    if (spawnSync('sh', ['-c', `command -v ${tool}`], { stdio: 'ignore' }).status !== 0) {
+      fail(`${tool} not on PATH (scripts/bench/ansible/provision.yml installs it)`);
+    }
+  }
+  const dockerRoot = runStdout('docker', ['info', '--format', '{{.DockerRootDir}}']);
+  const dfs = statfsSync(dockerRoot);
+  const dockerFree = Number(dfs.bavail) * Number(dfs.bsize);
+  if (dockerFree < 2 * MIN_FREE_BYTES) {
+    fail(`less than 10 GiB free for docker at ${dockerRoot}`);
+  }
+  ok(`k6bench tools present; ${Math.floor(dockerFree / 1024 ** 3)} GiB free at ${dockerRoot}`);
+}
 
 ok('all checks passed');

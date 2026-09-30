@@ -509,6 +509,14 @@ write to fire, which keeps untrusted fork code off the self-hosted
 bench host. The `release` matrix is intentionally narrower than the
 dispatch choice list — see §9.3.
 
+**Sibling pipeline:** [`k6bench.yml`](../../.github/workflows/k6bench.yml)
+runs the system-level k6 load tests in [`../k6bench/`](../k6bench/README.md)
+on this same runner, with the same triggers, and pushes to the same bucket and
+`history.json` through `bench-push-results.mjs` (`WASMCLOUD_BENCH_K6_DIR`). It
+uses its own concurrency group, `bench-host-k6`, so a release queues one run
+of each instead of cancelling one. The single runner still serializes them, so
+`history.json` keeps exactly one writer.
+
 **Why no `pull_request_target` trigger:** see §9.4. Self-hosted runners
 on a public repo are a foot-gun if exposed to fork PRs (a fork can
 ship a malicious workflow file or build script to your bench host).
@@ -893,6 +901,7 @@ cache). For longer staleness:
 | [`../../.github/workflows/bench.yml`](../../.github/workflows/bench.yml)                                       | Trends pipeline (workflow_dispatch + release auto-trigger)                                                                                                                                                                |
 | [`../../.github/workflows/bench-compare.yml`](../../.github/workflows/bench-compare.yml)                       | Comparison pipeline (workflow_dispatch only — see §9.4 for the rationale against a PR-label trigger)                                                                                                                      |
 | [`../../.github/workflows/bench-host-checks.yml`](../../.github/workflows/bench-host-checks.yml)               | Monthly upstream-version checks (no bench-host involvement; opens / updates / auto-closes a tracking issue per check — see §15)                                                                                           |
+| [`../k6bench/`](../k6bench/README.md) + [`../../.github/workflows/k6bench.yml`](../../.github/workflows/k6bench.yml) | System-level k6 load tests on a kind cluster, same host and S3/history.json pipeline (`bench: "k6"`); own README |
 | [`../../.github/scripts/bench-check-runner-version.mjs`](../../.github/scripts/bench-check-runner-version.mjs) | Compares `RUNNER_VERSION` in `install-runner.sh` to the latest actions/runner release; runs from bench-host-checks.yml                                                                                                    |
 
 Sensitive values (the bench host's IP, IPv6, and hostname) are kept in
@@ -943,6 +952,7 @@ into layers, each with its own cadence.
 | GitHub Actions runner agent            | monthly check, bump on changelog review           | `install-runner.sh` (`RUNNER_VERSION` + `RUNNER_SHA256`)                                           | Auto-tracked via [`bench-host-checks.yml`](../../.github/workflows/bench-host-checks.yml); see below.                                                                                                                  |
 | Action SHA pins (`actions/checkout@…`) | weekly via Dependabot                             | `.github/workflows/*.yml`                                                                          | Low risk — these execute on hosted runners, not the bench host.                                                                                                                                                        |
 | AWS CLI v2                             | yearly                                            | `install-runner.sh` (curl from official zip)                                                       | Unpinned; we just pull whatever's current at install time.                                                                                                                                                             |
+| Docker, kind, kubectl, helm, k6 (k6bench) | quarterly (with the kernel bump) | `provision.yml` (`k6bench_tools` / `k6bench_archives`, URL + sha256) | kubectl tracks the kind node image pinned in `scripts/k6bench/kind-config.yaml`; bump both together. Docker is Ubuntu's `docker.io`, socket-activated. |
 
 ### Monthly: the actions/runner version check
 
@@ -984,9 +994,6 @@ dashboard shows one annotated step instead of N small ones:
 Deliberately not built; document the "why not yet" so the next person
 doesn't reinvent or reattempt without context.
 
-- **Auto-trigger on `release: published`** — would let new tags
-  populate the `releases` view automatically. Easy add when we want
-  it; out for v1 because we're still tuning what to bench per release.
 - **Comment-driven dispatch** (e.g. `@rust-timer queue` style) —
   needs a fine-grained PAT or GH App. Worth doing once we want PR
   authors to dispatch their own benches.

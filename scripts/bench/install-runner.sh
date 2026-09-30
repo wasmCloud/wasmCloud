@@ -71,6 +71,11 @@ if ! id bench >/dev/null 2>&1; then
 fi
 mkdir -p "$WORK_DIR" "$TARGET_DIR"
 chown -R bench:bench /var/lib/bench
+# scripts/k6bench runs kind through Docker. provision.yml installs docker.io,
+# which creates the group; without it the k6bench workflow can't run here.
+if getent group docker >/dev/null; then
+  usermod -aG docker bench
+fi
 
 step "install AWS CLI v2 + zstd"
 export DEBIAN_FRONTEND=noninteractive
