@@ -1180,14 +1180,15 @@ impl WorkloadReservation for Host {
         }
         if workloads.contains_key(workload_id) {
             let message = format!(
-                "Workload ID [{workload_id}] already exists (the exising workload must be stopped to reuse the ID)"
+                "Workload ID [{workload_id}] already exists (the existing workload must be stopped to reuse the ID)"
             );
             // Logged here rather than where the response is built, because this
-            // refusal returns before the start ever begins. At `warn`, not
-            // `error`: this is the guard that makes a replayed start request
-            // idempotent, and a scheduler retrying one is not a host
-            // malfunction.
-            tracing::warn!(workload_id, reason = message, "refused to start workload");
+            // refusal returns before the start ever begins. At `debug`, not
+            // `warn`: this is the guard that makes a replayed start request
+            // idempotent, a scheduler retrying one is expected and leaves the
+            // original workload running, and the refusal is still returned to
+            // the caller as an error.
+            debug!(workload_id, reason = message, "refused to start workload");
             return Err(message);
         }
         workloads.insert(workload_id.to_string(), HostWorkload::Starting(reservation));
