@@ -304,13 +304,20 @@ k6_mode() {
     if command -v k6 >/dev/null 2>&1; then echo "native $target_url"; else echo "docker $target_url"; fi
     return
   fi
-  local ip
+  local ip i
   ip="$(docker inspect "$cluster-worker" -f '{{(index .NetworkSettings.Networks "kind").IPAddress}}')"
-  if command -v k6 >/dev/null 2>&1 && curl -s -o /dev/null -m 2 "http://$ip:30950/"; then
-    echo "native http://$ip:30950"
-  else
-    echo "docker http://$cluster-worker:30950"
+  # The NodePort can lag the workloads' Ready condition; retry so an early
+  # probe doesn't swap in a dockerized k6.
+  if command -v k6 >/dev/null 2>&1; then
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      if curl -s -o /dev/null -m 2 "http://$ip:30950/"; then
+        echo "native http://$ip:30950"
+        return
+      fi
+      [ "$i" = 10 ] || sleep 2
+    done
   fi
+  echo "docker http://$cluster-worker:30950"
 }
 
 # Five 200s in a row, not one: a host pod rolled by a chart upgrade can
