@@ -59,6 +59,11 @@ pub mod wasmcloud_secrets;
 
 mod egress;
 pub use egress::PluginEgressPolicy;
+pub mod tls;
+pub use tls::{
+    IdentitySource, PluginAllowedHost, PluginTlsPolicy, TlsCatalog, TlsGrant, TlsRoots, TlsTrust,
+    TrustBundle,
+};
 
 /// NATS-native capability: core pub/sub, JetStream, and KV.
 #[cfg(feature = "wasmcloud-nats")]
@@ -426,6 +431,24 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
             "plugin '{}' does not connect out, so it cannot enforce allowedHosts, \
              allowedIpNameLookups, or allowedHostLoopbackPorts. Drop those fields from its \
              `host.plugins` entry — the rest of the entry still applies",
+            self.id()
+        )
+    }
+
+    /// Installs the TLS trust the `tls` blocks on this plugin's `allowedHosts`
+    /// declared.
+    ///
+    /// A plugin that accepts it must connect with TLS, using the returned
+    /// [`TlsTrust::client_config`], to every destination
+    /// [`PluginTlsPolicy::for_url`] returns trust for. The default refuses the
+    /// declaration, for the reason [`HostPlugin::configure_egress_policy`]
+    /// does: a plugin whose client never reads the trust would connect without
+    /// it, and possibly without TLS at all. Reached only when an entry declares
+    /// `tls`.
+    fn configure_tls_policy(&self, _policy: Arc<PluginTlsPolicy>) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "plugin '{}' cannot apply the `tls` declared on its allowedHosts entries, so its \
+             connections would not use that trust. Drop `tls` from its `host.plugins` entry",
             self.id()
         )
     }

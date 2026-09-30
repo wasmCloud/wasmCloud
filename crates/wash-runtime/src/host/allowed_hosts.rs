@@ -258,6 +258,18 @@ impl AllowedHost {
     }
 }
 
+impl AllowedHost {
+    /// The scheme this entry pins, if it names one.
+    #[must_use]
+    pub fn scheme(&self) -> Option<&str> {
+        match self {
+            AllowedHost::Any | AllowedHost::Authority(_) => None,
+            AllowedHost::Url(url) => Some(url.scheme()),
+            AllowedHost::SuffixWildcard { scheme, .. } => scheme.as_ref().map(Scheme::as_str),
+        }
+    }
+}
+
 /// Whether a policy entry's host text is a literal IP equal to `addr`.
 ///
 /// Compares parsed addresses, so `::ffff:10.0.0.1` and `10.0.0.1` are the same

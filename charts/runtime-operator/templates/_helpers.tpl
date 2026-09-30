@@ -201,10 +201,18 @@ Shared by deployment.yaml (which needs both partitions, to render
 host-plugin-config.yaml (which needs only `fileBacked`, to render the
 `wash host` config file).
 
+Also renders the host group's `trustBundles` and `identities` catalogs, which
+`allowedHosts[].tls` selects from by name. An entry naming a `secretName`
+becomes paths under /etc/wasmcloud/host-plugin-tls/<secretName>, where
+deployment.yaml mounts that Secret; one naming paths passes through. A Secret
+identity refreshes every 30s unless it says otherwise, since a Secret rotates
+in place.
+
 Takes the host group dict directly (e.g. `.` inside
 `range .Values.runtime.hostGroups`). Returns a JSON object
-`{fileBacked, cli, configFromNames, secretFromNames, needsConfigFile}`
-and parses the result with `fromJson`.
+`{fileBacked, cli, configFromNames, secretFromNames, trustBundles, identities,
+tlsSecretNames, trustSecretNames, needsConfigFile}` and parses the result with
+`fromJson`.
 */}}
 {{- define "runtime-operator.hostPluginPartition" -}}
 {{- /* Removed keys, refused rather than ignored. Helm drops values nothing
@@ -228,6 +236,43 @@ and parses the result with `fromJson`.
 {{- end }}
 {{- $configFromNames := list }}
 {{- $secretFromNames := list }}
+{{- $tlsSecretNames := list }}
+{{- $trustSecretNames := list }}
+{{- $trustBundles := dict }}
+{{- range $name, $bundle := (default dict .trustBundles) }}
+{{- $out := omit $bundle "secretName" "caKey" }}
+{{- if $bundle.secretName }}
+{{- if $bundle.ca }}
+{{- fail (printf "trustBundles.%s: `secretName` cannot be combined with `ca`; name the Secret's key with `caKey`" $name) }}
+{{- end }}
+{{- if not $bundle.caKey }}
+{{- fail (printf "trustBundles.%s: `secretName` needs `caKey`, the key in that Secret holding the CA bundle" $name) }}
+{{- end }}
+{{- $_ := set $out "ca" (printf "/etc/wasmcloud/host-plugin-tls/%s/%s" $bundle.secretName $bundle.caKey) }}
+{{- $tlsSecretNames = append $tlsSecretNames $bundle.secretName }}
+{{- $trustSecretNames = append $trustSecretNames $bundle.secretName }}
+{{- end }}
+{{- $_ := set $trustBundles $name $out }}
+{{- end }}
+{{- $identities := dict }}
+{{- range $name, $identity := (default dict .identities) }}
+{{- $out := omit $identity "secretName" "certKey" "keyKey" }}
+{{- if $identity.secretName }}
+{{- if or $identity.cert $identity.key }}
+{{- fail (printf "identities.%s: `secretName` cannot be combined with `cert` or `key`; name the Secret's keys with `certKey` and `keyKey`" $name) }}
+{{- end }}
+{{- if not (and $identity.certKey $identity.keyKey) }}
+{{- fail (printf "identities.%s: `secretName` needs `certKey` and `keyKey`, the keys in that Secret holding the certificate chain and its key" $name) }}
+{{- end }}
+{{- $_ := set $out "cert" (printf "/etc/wasmcloud/host-plugin-tls/%s/%s" $identity.secretName $identity.certKey) }}
+{{- $_ := set $out "key" (printf "/etc/wasmcloud/host-plugin-tls/%s/%s" $identity.secretName $identity.keyKey) }}
+{{- if not $identity.refresh }}
+{{- $_ := set $out "refresh" "30s" }}
+{{- end }}
+{{- $tlsSecretNames = append $tlsSecretNames $identity.secretName }}
+{{- end }}
+{{- $_ := set $identities $name $out }}
+{{- end }}
 {{- range $fileBacked }}
 {{- range .configFrom }}
 {{- $configFromNames = append $configFromNames . }}
@@ -244,7 +289,7 @@ and parses the result with `fromJson`.
 {{- end }}
 {{- end }}
 {{- end }}
-{{- dict "fileBacked" $fileBacked "cli" $cli "configFromNames" ($configFromNames | uniq) "secretFromNames" ($secretFromNames | uniq) "needsConfigFile" (gt (len $fileBacked) 0) | toJson }}
+{{- dict "fileBacked" $fileBacked "cli" $cli "configFromNames" ($configFromNames | uniq) "secretFromNames" ($secretFromNames | uniq) "trustBundles" $trustBundles "identities" $identities "tlsSecretNames" ($tlsSecretNames | uniq) "trustSecretNames" ($trustSecretNames | uniq) "needsConfigFile" (gt (len $fileBacked) 0) | toJson }}
 {{- end }}
 
 {{/*
@@ -289,6 +334,14 @@ secrets:
   {{ . }}:
     dir: /etc/wasmcloud/host-plugin-secrets/{{ . }}
   {{- end }}
+{{- end }}
+{{- with $partition.trustBundles }}
+trustBundles:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- with $partition.identities }}
+identities:
+  {{- toYaml . | nindent 2 }}
 {{- end }}
 host:
   {{- if $partition.fileBacked }}
@@ -376,8 +429,10 @@ Takes the same `hostPluginPartition` result as `runtime-operator.hostPluginConfi
 {{- if $partition.configFromNames }}
 configmap.reloader.stakater.com/reload: {{ join "," $partition.configFromNames | quote }}
 {{- end }}
-{{- if $partition.secretFromNames }}
-secret.reloader.stakater.com/reload: {{ join "," $partition.secretFromNames | quote }}
+{{- /* Identities are left out: the host re-reads them on `refresh`. */}}
+{{- $secretNames := concat (default list $partition.secretFromNames) (default list $partition.trustSecretNames) | uniq }}
+{{- if $secretNames }}
+secret.reloader.stakater.com/reload: {{ join "," $secretNames | quote }}
 {{- end }}
 {{- end }}
 
