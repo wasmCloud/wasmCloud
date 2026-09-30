@@ -187,10 +187,12 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: render markdown summary
+        env:
+          RESULTS_DIR: ${{ steps.run.outputs.dir }}
         run: |
           # shellcheck disable=SC1091
           . "$HOME/.cargo/env"
-          cargo run -p bench-tools --quiet -- k6 report --markdown "${{ steps.run.outputs.dir }}" \
+          cargo run -p bench-tools --quiet -- k6 report --markdown "$RESULTS_DIR" \
             >> "${GITHUB_STEP_SUMMARY}"
 
       - name: upload k6bench artifact
@@ -225,3 +227,10 @@ jobs:
       - name: delete kind cluster
         if: ${{ always() }}
         run: kind delete cluster --name k6bench || true
+
+      # Docker is socket-activated; stopping the daemon returns the host to
+      # how criterion and gungraun expect it (their pre-flight refuses a
+      # running daemon). The sudoers rule is installed by install-runner.sh.
+      - name: stop docker
+        if: ${{ always() }}
+        run: sudo -n systemctl stop docker.service

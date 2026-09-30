@@ -367,8 +367,15 @@ run_k6() {
     local raw_arg="" pin_cmd=""
     [ "$raw" = 1 ] && raw_arg="--out json=$out_dir/raw.ndjson.gz"
     [ "$pin" = 1 ] && command -v taskset >/dev/null 2>&1 && pin_cmd="taskset -c $cpus_k6"
+    # `times` reports the subshell's children, which is k6 alone: the CPU it
+    # used, for the generator-saturation check. A dockerized k6 is sampled.
     # shellcheck disable=SC2086 # word-split flag lists
-    (cd "$here" && GOMAXPROCS=1 $pin_cmd k6 run $k6_env -e "OUT_DIR=$out_dir" $raw_arg "$script") >&2
+    (
+      cd "$here" && GOMAXPROCS=1 $pin_cmd k6 run $k6_env -e "OUT_DIR=$out_dir" $raw_arg "$script"
+      rc=$?
+      times >"$out_dir/.k6-times"
+      exit "$rc"
+    ) >&2
     status=$?
   else
     local raw_arg="" pin_arg="" net_arg=""
@@ -385,6 +392,22 @@ run_k6() {
   echo "$status"
 }
 
+# Cores a native k6 averaged over its run, from `times`' children line
+# (`0m12.3s 0m1.2s`: user, system), or `null` when k6 ran in Docker.
+k6_cpu_cores() {
+  local wall="$1" file="$out_dir/.k6-times"
+  if [ ! -f "$file" ] || [ "$wall" -le 0 ]; then
+    echo null
+    return
+  fi
+  awk -v wall="$wall" 'NR == 2 {
+    cpu = 0
+    for (i = 1; i <= 2; i++) { split($i, t, /[ms]/); cpu += t[1] * 60 + t[2] }
+    printf "%.3f\n", cpu / wall
+  }' "$file"
+  rm -f "$file"
+}
+
 k6_version() {
   if [ "$1" = native ]; then k6 version | head -1; else docker run --rm "$k6_image" version | head -1; fi
 }
@@ -397,6 +420,17 @@ case "$cmd" in
 esac
 
 [ -f "$here/scenarios/$scenario.js" ] || die "unknown scenario $scenario (see scenarios/)"
+# These reach k6's command line and metadata.json unquoted; in CI they come
+# from free-text workflow inputs.
+is_int() { case "$1" in '' | *[!0-9]*) return 1 ;; esac; }
+is_duration() { printf '%s' "$1" | grep -Eq '^[0-9]+[smh]?$'; }
+is_int "$rate" || die "--rate must be a whole number of requests/s: $rate"
+is_int "$workloads" || die "--workloads must be a whole number: $workloads"
+is_int "$slo_p99_ms" || die "--slo-p99-ms must be a whole number: $slo_p99_ms"
+is_duration "$duration" || die "--duration must look like 90s, 3m or 1h: $duration"
+is_duration "$warmup" || die "--warmup must look like 30s, 2m or 1h: $warmup"
+[ -z "$stress_rates" ] || printf '%s' "$stress_rates" | grep -Eq '^[0-9]+(,[0-9]+)*$' ||
+  die "--stress-rates must be comma-separated whole numbers: $stress_rates"
 case "$target" in
   kind) ;;
   kube)
@@ -489,6 +523,7 @@ cat >"$out_dir/metadata.json" <<EOF
   "k6_started": $k6_started,
   "k6_ended": $k6_ended,
   "pinned": $([ "$pin" = 1 ] && echo true || echo false),
+  "k6_cpu_cores": $(k6_cpu_cores $((k6_ended - k6_started))),
   "wash_image": "$wash_image",
   "operator_image": "$operator_image",
   "components": ["$image_hello", "$image_relay"],

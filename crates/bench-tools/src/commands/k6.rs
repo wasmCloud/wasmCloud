@@ -336,43 +336,40 @@ fn delta(a: &Run, b: &Run, style: Style) -> String {
         let _ = writeln!(s, "\n{}", style.paint("1", &title));
     }
 
+    let am = a.metrics();
     let bm = b.metrics();
-    for ma in a.metrics() {
-        let Some(mb) = bm.iter().find(|m| m.name == ma.name) else {
-            continue;
-        };
-        let pct = if ma.value == 0.0 {
-            0.0
-        } else {
-            (mb.value - ma.value) / ma.value * 100.0
-        };
-        let improved = match ma.better {
-            Better::Higher => pct > 0.0,
-            Better::Lower => pct < 0.0,
-        };
-        let (mark, code) = if pct.abs() < NOISE_PCT {
-            ("≈ noise", "2")
-        } else if improved {
-            ("▲ improved", "32")
-        } else {
-            ("▼ regressed", "31")
-        };
+    // Every metric either run has: one missing from the candidate is itself a
+    // result (a stress run that sustained nothing has no max_sustainable_rps).
+    let mut names: Vec<&str> = am.iter().map(|m| m.name.as_str()).collect();
+    for m in &bm {
+        if !names.contains(&m.name.as_str()) {
+            names.push(&m.name);
+        }
+    }
+    for name in names {
+        let ma = am.iter().find(|m| m.name == name);
+        let mb = bm.iter().find(|m| m.name == name);
+        let row = compare(ma, mb);
+        let shown = |m: Option<&Metric>| m.map_or_else(|| "—".to_string(), fmt_value);
+        let pct = row
+            .pct
+            .map_or_else(|| "n/a".to_string(), |p| format!("{p:+.1}%"));
         let _ = match style {
             Style::Markdown => writeln!(
                 s,
-                "| `{}` | {} | {} | {pct:+.1}% | {mark} |",
-                ma.name,
-                fmt_value(&ma),
-                fmt_value(mb)
+                "| `{name}` | {} | {} | {pct} | {} |",
+                shown(ma),
+                shown(mb),
+                row.mark
             ),
             _ => writeln!(
                 s,
-                "  {:<26} {:>14} → {:<14} {:>+7.1}%  {}",
-                ma.name,
-                fmt_value(&ma),
-                fmt_value(mb),
+                "  {:<26} {:>14} → {:<14} {:>8}  {}",
+                name,
+                shown(ma),
+                shown(mb),
                 pct,
-                style.paint(code, mark)
+                style.paint(row.code, row.mark)
             ),
         };
     }
@@ -385,4 +382,98 @@ fn delta(a: &Run, b: &Run, style: Style) -> String {
         }
     }
     s
+}
+
+/// One delta line's verdict.
+struct Verdict {
+    /// Percent change, or `None` where there is none to give: a metric only
+    /// one run has, or a move from zero.
+    pct: Option<f64>,
+    mark: &'static str,
+    code: &'static str,
+}
+
+fn compare(a: Option<&Metric>, b: Option<&Metric>) -> Verdict {
+    let row = |pct, mark, code| Verdict { pct, mark, code };
+    let (a, b) = match (a, b) {
+        (Some(a), Some(b)) => (a, b),
+        (Some(_), None) => return row(None, "▼ missing in candidate", "31"),
+        _ => return row(None, "new in candidate", "2"),
+    };
+    let pct = if a.value == 0.0 {
+        (b.value == 0.0).then_some(0.0)
+    } else {
+        Some((b.value - a.value) / a.value * 100.0)
+    };
+    if pct.is_some_and(|p| p.abs() < NOISE_PCT) {
+        return row(pct, "≈ noise", "2");
+    }
+    let improved = match a.better {
+        Better::Higher => b.value > a.value,
+        Better::Lower => b.value < a.value,
+    };
+    if improved {
+        row(pct, "▲ improved", "32")
+    } else {
+        row(pct, "▼ regressed", "31")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn metric(value: f64, better: Better) -> Metric {
+        Metric {
+            name: "m".to_string(),
+            value,
+            unit: "ratio",
+            better,
+        }
+    }
+
+    #[test]
+    fn a_move_from_zero_is_not_noise() {
+        let row = compare(
+            Some(&metric(0.0, Better::Lower)),
+            Some(&metric(0.05, Better::Lower)),
+        );
+        assert_eq!(row.pct, None);
+        assert_eq!(row.mark, "▼ regressed");
+
+        let still = compare(
+            Some(&metric(0.0, Better::Lower)),
+            Some(&metric(0.0, Better::Lower)),
+        );
+        assert_eq!(still.mark, "≈ noise");
+    }
+
+    #[test]
+    fn a_metric_missing_from_the_candidate_is_a_regression() {
+        let row = compare(Some(&metric(8000.0, Better::Higher)), None);
+        assert_eq!(row.mark, "▼ missing in candidate");
+        assert_eq!(
+            compare(None, Some(&metric(1.0, Better::Higher))).mark,
+            "new in candidate"
+        );
+    }
+
+    #[test]
+    fn small_moves_are_noise_and_direction_follows_better() {
+        let up = compare(
+            Some(&metric(100.0, Better::Higher)),
+            Some(&metric(110.0, Better::Higher)),
+        );
+        assert_eq!(up.mark, "▲ improved");
+        let slower = compare(
+            Some(&metric(10.0, Better::Lower)),
+            Some(&metric(11.0, Better::Lower)),
+        );
+        assert_eq!(slower.mark, "▼ regressed");
+        let noise = compare(
+            Some(&metric(100.0, Better::Higher)),
+            Some(&metric(101.0, Better::Higher)),
+        );
+        assert_eq!(noise.mark, "≈ noise");
+    }
 }

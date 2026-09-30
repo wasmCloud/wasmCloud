@@ -32,7 +32,7 @@ export const cfg = {
   // VUs parked on k6's 60 s default and every iteration dropped.
   requestTimeout: env('REQUEST_TIMEOUT', '10s'),
   // stress: one constant-rate step per entry; the highest step that holds the
-  // SLO with <1% errors and no dropped iterations is max_sustainable_rps.
+  // SLO with <1% errors and <0.1% dropped iterations is max_sustainable_rps.
   stressRates: env('STRESS_RATES', '500,1000,2000,3000,4000,6000,8000,10000,12000,15000')
     .split(',')
     .map((r) => parseInt(r, 10)),
