@@ -2090,12 +2090,10 @@ fn attach_slot(resp: hyper::Response<WasiBody>, slot: SharedSlot) -> hyper::Resp
     resp.map(|inner| WasiBody::new(SlotBody { inner, _slot: slot }))
 }
 
-/// A local request's outbound slot, shared by its response body and its upload
-/// drain and returned when both are done, as a network connection's would be.
-///
-/// [`SharedSlot::release`] returns it early, for a dispatch that failed: its
-/// body can still sit in a service's queue, and must not hold the caller's
-/// quota until the service gets to it.
+/// A local request's outbound slot, shared by its request body (and that body's
+/// drain) and its response body, and returned when all are done.
+/// [`SharedSlot::release`] returns it early for a failed dispatch, so a body
+/// still queued at a service doesn't hold the caller's quota.
 #[derive(Clone)]
 struct SharedSlot(Arc<std::sync::Mutex<Option<crate::host::quota::ConnectionSlot>>>);
 
@@ -2150,27 +2148,11 @@ impl Drop for Settle {
     }
 }
 
-/// Request body handed to a locally routed callee, drained on drop.
-///
-/// The caller writes its outgoing body into a channel whose receiver is this
-/// body. Over the network, hyper's connection holds the receiver until the body
-/// ends, even when the server answers without reading it. Here the callee owns
-/// it, and dropping it unread closes the caller's stream, so the caller's next
-/// write or `finish` fails with `StreamError::Closed` (a guest sees "connection
-/// reset"). Draining the rest on its own task keeps the network's behavior.
-///
-/// The drain starts as soon as the body is dropped, so a callee that works
-/// before answering doesn't stall the upload. If the dispatch then fails or
-/// times out, the drain stops and drops the body, closing the caller's stream
-/// as a failed network send would.
-///
-/// The drain has no timer: request options time the response, not the upload,
-/// and the network path doesn't cut a slow upload off either. It runs until the
-/// upload ends or fails, holding the request's outbound slot, so the caller's
-/// quota bounds open drains the way it bounds connections.
-///
-/// A body read to its end or to an error is released at once, so only an
-/// unread upload costs a task.
+/// Request body handed to a locally routed callee. A callee dropping it unread
+/// would close the caller's upload ("connection reset"), so from the drop on
+/// the rest is drained on a task, holding the request's outbound slot. The drain
+/// has no timer (the quota bounds open drains); a failed, timed-out or abandoned
+/// dispatch stops it and closes the caller's upload.
 struct DrainOnDrop {
     inner: Option<crate::host::http_client::UploadProbe>,
     slot: Option<SharedSlot>,
@@ -2231,12 +2213,18 @@ impl Drop for DrainOnDrop {
         if hyper::body::Body::is_end_stream(&body) {
             return;
         }
+        // A dispatch already settled as failed needs no task. A received value
+        // must not be polled for again, hence `settled`.
+        let mut settled = match answered.try_recv() {
+            Ok(true) => true,
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => false,
+            _ => return,
+        };
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
         runtime.spawn(async move {
             let _slot = slot;
-            let mut settled = false;
             loop {
                 tokio::select! {
                     biased;
@@ -4784,6 +4772,21 @@ mod tests {
         (tx, request)
     }
 
+    /// An ingress whose guests may hold at most `limit` outbound requests.
+    async fn ingress_with_outbound_limit(limit: usize) -> Ingress<DevRouter> {
+        Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
+            .quotas(crate::host::quota::QuotaRegistry::new(
+                crate::host::quota::QuotaLimits {
+                    outbound_http: limit,
+                    ..Default::default()
+                },
+                None,
+            ))
+            .build()
+            .await
+            .unwrap()
+    }
+
     /// A co-located service that answers every request without reading its
     /// body, dropping it first.
     fn early_answering_service() -> LocalTarget {
@@ -4857,17 +4860,7 @@ mod tests {
     #[tokio::test]
     async fn local_upload_drains_count_against_the_outbound_quota() {
         let limit = 2;
-        let server = Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
-            .quotas(crate::host::quota::QuotaRegistry::new(
-                crate::host::quota::QuotaLimits {
-                    outbound_http: limit,
-                    ..Default::default()
-                },
-                None,
-            ))
-            .build()
-            .await
-            .unwrap();
+        let server = ingress_with_outbound_limit(limit).await;
         let send = |request| {
             Box::into_pin(server.send_local_request(
                 "caller",
@@ -4914,17 +4907,7 @@ mod tests {
     /// closed, as a failed network send closes its body, and its slot freed.
     #[tokio::test]
     async fn a_failed_local_dispatch_closes_the_upload_and_frees_its_slot() {
-        let server = Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
-            .quotas(crate::host::quota::QuotaRegistry::new(
-                crate::host::quota::QuotaLimits {
-                    outbound_http: 1,
-                    ..Default::default()
-                },
-                None,
-            ))
-            .build()
-            .await
-            .unwrap();
+        let server = ingress_with_outbound_limit(1).await;
         // A service that drops the body and then the request without answering.
         let (sender, mut jobs) = tokio::sync::mpsc::channel::<ServiceHttpJob>(1);
         tokio::spawn(async move {
@@ -4964,17 +4947,7 @@ mod tests {
     /// returns its slot at once, though the queued body lives on.
     #[tokio::test]
     async fn a_timed_out_queued_dispatch_releases_its_slot() {
-        let server = Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
-            .quotas(crate::host::quota::QuotaRegistry::new(
-                crate::host::quota::QuotaLimits {
-                    outbound_http: 1,
-                    ..Default::default()
-                },
-                None,
-            ))
-            .build()
-            .await
-            .unwrap();
+        let server = ingress_with_outbound_limit(1).await;
         // Alive, so the job is accepted, but never polled.
         let (sender, _queued) = tokio::sync::mpsc::channel::<ServiceHttpJob>(8);
         let options = RequestOptions {
