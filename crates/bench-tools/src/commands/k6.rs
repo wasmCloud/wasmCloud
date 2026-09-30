@@ -154,7 +154,7 @@ fn report(run: &Run, style: Style) -> String {
         for (label, suffix) in [
             ("hosts node", "-worker"),
             ("control-plane node", "-control-plane"),
-            ("k6 container", "-k6"),
+            ("k6", "-k6"),
         ] {
             if let Some((cpu, mem)) = run.cluster_avg(|n| n.ends_with(suffix)) {
                 let line = format!("{cpu:.2} cores avg, {mem:.0} MiB peak");

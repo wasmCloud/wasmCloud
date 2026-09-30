@@ -513,9 +513,9 @@ dispatch choice list — see §9.3.
 runs the system-level k6 load tests in [`../k6bench/`](../k6bench/README.md)
 on this same runner, with the same triggers, and pushes to the same bucket and
 `history.json` through `bench-push-results.mjs` (`WASMCLOUD_BENCH_K6_DIR`). It
-uses its own concurrency group, `bench-host-k6`, so a release queues one run
-of each instead of cancelling one. The single runner still serializes them, so
-`history.json` keeps exactly one writer.
+has no concurrency group, since GitHub keeps one pending run per group and a
+dispatch would cancel a queued release run. The single runner still serializes
+them, so `history.json` keeps exactly one writer.
 
 **Why no `pull_request_target` trigger:** see §9.4. Self-hosted runners
 on a public repo are a foot-gun if exposed to fork PRs (a fork can

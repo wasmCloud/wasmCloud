@@ -267,16 +267,18 @@
         content: |
           { "userland-proxy": false }
         mode: "0644"
-      notify: restart docker
       tags: [k6bench]
 
+    # Installing docker.io starts the daemon, and bench.yml's pre-flight fails
+    # while it runs; stopped, the next activation reads daemon.json.
     - name: Docker socket-activated only
       ansible.builtin.systemd:
         name: "{{ item.name }}"
         enabled: "{{ item.enabled }}"
+        state: "{{ item.state }}"
       loop:
-        - { name: docker.socket, enabled: true }
-        - { name: docker.service, enabled: false }
+        - { name: docker.socket, enabled: true, state: started }
+        - { name: docker.service, enabled: false, state: stopped }
       tags: [k6bench]
 
     - name: Install k6bench binaries
@@ -394,11 +396,6 @@
     - name: regenerate grub config
       ansible.builtin.command: update-grub
       listen: regenerate grub config
-
-    - name: restart docker
-      ansible.builtin.systemd:
-        name: docker.service
-        state: restarted
 
     - name: reload systemd
       ansible.builtin.systemd:
