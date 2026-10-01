@@ -2623,6 +2623,82 @@ pub struct UnresolvedWorkload {
     tls_provider: Option<SharedTlsProvider>,
 }
 
+type PendingBinding = (Arc<dyn HostPlugin>, HashSet<WitInterface>);
+
+/// Resources a native start has acquired, recorded before each binding await.
+/// The host retains this journal when a start is cancelled, until teardown
+/// succeeds; a later stop can retry a failed cleanup without reusing its ID.
+#[derive(Clone, Default)]
+pub(crate) struct StartCleanup(Arc<std::sync::Mutex<StartCleanupState>>);
+
+#[derive(Clone, Default)]
+struct StartCleanupState {
+    bindings: Vec<PendingBinding>,
+    resolved: Option<ResolvedWorkload>,
+}
+
+impl StartCleanup {
+    fn binding(&self, plugin: Arc<dyn HostPlugin>, interfaces: HashSet<WitInterface>) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .bindings
+            .push((plugin, interfaces));
+    }
+
+    pub(crate) fn resolved(&self, workload: &ResolvedWorkload) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .resolved = Some(workload.clone());
+    }
+
+    pub(crate) async fn release(&self, workload_id: &str) -> anyhow::Result<()> {
+        let state = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let mut failure = None;
+        if let Some(resolved) = &state.resolved {
+            resolved.begin_teardown();
+            for component in resolved.components.read().await.values() {
+                component.instances.close();
+            }
+            if let Some(handler) = resolved.http_handler.handler() {
+                // Both callbacks tolerate an ID that was never registered.
+                if let Err(error) = handler.on_workload_unbind(workload_id).await {
+                    failure = Some(error);
+                }
+                if resolved.service.is_some() {
+                    if let Err(error) = handler.on_service_http_unbind(workload_id).await {
+                        failure = Some(error);
+                    }
+                    if let Err(error) = handler
+                        .on_trigger_service_messaging_unbind(workload_id)
+                        .await
+                    {
+                        failure = Some(error);
+                    }
+                }
+            }
+        }
+        for (plugin, interfaces) in state.bindings.iter().rev() {
+            if let Err(error) = plugin
+                .on_workload_unbind(workload_id, WitInterfaces::new(interfaces))
+                .await
+            {
+                warn!(plugin_id = plugin.id(), workload_id, %error, "cancelled workload cleanup failed");
+                failure = Some(error);
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
 impl UnresolvedWorkload {
     /// Creates a new unresolved workload from its constituent parts.
     ///
@@ -2731,12 +2807,23 @@ impl UnresolvedWorkload {
     /// Bind this workload to the host plugins based on the requested
     /// interfaces. Returns a list of plugins and the component IDs they were bound to.
     #[allow(clippy::type_complexity)]
-    #[instrument(skip_all)]
     pub async fn bind_plugins(
         &mut self,
         plugins: &HashMap<&'static str, Arc<dyn HostPlugin + 'static>>,
         plugin_bindings: &crate::plugin::PluginBindings,
     ) -> anyhow::Result<Vec<(Arc<dyn HostPlugin + 'static>, Vec<String>)>> {
+        self.bind_plugins_for_start(plugins, plugin_bindings, None)
+            .await
+    }
+
+    #[allow(clippy::type_complexity)]
+    #[instrument(name = "bind_plugins", skip_all)]
+    async fn bind_plugins_for_start(
+        &mut self,
+        plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
+        plugin_bindings: &crate::plugin::PluginBindings,
+        cleanup: Option<&StartCleanup>,
+    ) -> anyhow::Result<Vec<(Arc<dyn HostPlugin>, Vec<String>)>> {
         // Track bound plugins with their matched interfaces for cleanup on failure
         let mut bound_plugins_with_interfaces: Vec<BoundPluginWithInterfaces> = Vec::new();
         let mut bound_plugins: Vec<(Arc<dyn HostPlugin + 'static>, Vec<String>)> = Vec::new();
@@ -3031,6 +3118,9 @@ impl UnresolvedWorkload {
                 );
 
                 // Call on_workload_bind with the workload and all matched interfaces
+                if let Some(cleanup) = cleanup {
+                    cleanup.binding(Arc::clone(p), plugin_matched_interfaces.clone());
+                }
                 if let Err(e) = p
                     .on_workload_bind(self, WitInterfaces::new(&plugin_matched_interfaces))
                     .instrument(bind_span)
@@ -3209,18 +3299,31 @@ impl UnresolvedWorkload {
     /// - Plugin binding fails
     /// - Component linking fails
     /// - Plugin notification fails
-    #[instrument(name="resolve_workload", skip_all, fields(workload.id = self.id.as_ref(), workload.name = self.name.as_ref(), workload.namespace = self.namespace.as_ref()))]
     pub async fn resolve(
-        mut self,
+        self,
         plugins: Option<&HashMap<&'static str, Arc<dyn HostPlugin + 'static>>>,
         plugin_bindings: &crate::plugin::PluginBindings,
         host: &crate::host::HostRef,
         meters: &crate::observability::Meters,
     ) -> anyhow::Result<ResolvedWorkload> {
+        self.resolve_for_start(plugins, plugin_bindings, host, meters, None)
+            .await
+    }
+
+    #[instrument(name="resolve_workload", skip_all, fields(workload.id = self.id.as_ref(), workload.name = self.name.as_ref(), workload.namespace = self.namespace.as_ref()))]
+    pub(crate) async fn resolve_for_start(
+        mut self,
+        plugins: Option<&HashMap<&'static str, Arc<dyn HostPlugin>>>,
+        plugin_bindings: &crate::plugin::PluginBindings,
+        host: &crate::host::HostRef,
+        meters: &crate::observability::Meters,
+        cleanup: Option<&StartCleanup>,
+    ) -> anyhow::Result<ResolvedWorkload> {
         // Bind to plugins
         let bound_plugins = if let Some(plugins) = plugins {
             trace!("binding plugins to workload");
-            self.bind_plugins(plugins, plugin_bindings).await?
+            self.bind_plugins_for_start(plugins, plugin_bindings, cleanup)
+                .await?
         } else {
             Vec::new()
         };
@@ -3257,6 +3360,9 @@ impl UnresolvedWorkload {
         };
 
         // Link components before plugin resolution
+        if let Some(cleanup) = cleanup {
+            cleanup.resolved(&resolved_workload);
+        }
         if let Err(e) = resolved_workload.link_components().await {
             // If linking fails, unbind all plugins before returning the error
             warn!(

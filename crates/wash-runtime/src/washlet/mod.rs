@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -19,8 +20,12 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(300);
 const CLEANUP_AGE: Duration = Duration::from_secs(3600);
 const CONTROL_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
-const ATTACHMENT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const ATTACHMENT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 const CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(1);
+/// Maximum accepted start commands, including starts waiting for a native permit.
+pub const MAX_PENDING_STARTS: usize = 64;
+const MAX_PENDING_QUERIES: usize = 64;
+const MAX_PENDING_REPLIES: usize = MAX_PENDING_STARTS + MAX_PENDING_QUERIES;
 
 /// Built-in workload operations on the same host as the control loop.
 /// A handler can add policy or logging and then delegate to these methods.
@@ -28,6 +33,7 @@ const CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(1);
 pub struct HostControlDefaults {
     host: Arc<Host>,
     starts: Arc<tokio::sync::Semaphore>,
+    _control: Option<Arc<crate::host::HostControlLease>>,
 }
 
 impl HostControlDefaults {
@@ -69,7 +75,8 @@ impl HostControlDefaults {
 /// ownership. Errors become typed workload error replies. Delegating to
 /// [`HostControlDefaults::start`] reserves the workload id and then waits for
 /// the host's start permit; an override that does work before delegating
-/// bounds that work itself. Stop and status never wait for a start permit.
+/// bounds that work itself. The loop admits at most [`MAX_PENDING_STARTS`]
+/// start tasks, including overrides. Stop and status never wait for a start permit.
 ///
 /// Methods run concurrently and may be cancelled after the shutdown drain.
 /// Keep side effects cancellation-safe; do not detach work from these futures.
@@ -122,7 +129,7 @@ impl AttachedHostControlBuilder {
     /// Override the hostgroup in control heartbeats only. Other labels and
     /// the environment still come from the caller's host.
     pub fn with_host_group(mut self, host_group: impl Into<String>) -> Self {
-        self.options.host_group = Some(host_group.into());
+        self.options.host_group = Some(Arc::from(host_group.into()));
         self
     }
 
@@ -169,15 +176,20 @@ impl AttachedHostControlBuilder {
         self
     }
 
-    /// Subscribe and flush before returning. Failure leaves the caller's
-    /// host running; this attachment never owns or stops it.
+    /// Verify the API subscription with a broker round trip before returning.
+    /// The client must publish to `runtime.host.{id}.__control.ready` and
+    /// subscribe to `runtime.host.{id}.>`. Failure leaves the host running.
     pub async fn attach(self) -> anyhow::Result<AttachedHostControl> {
-        let subscription = subscribe_host(&self.host, &self.nats_client).await?;
+        self.options.validate()?;
+        let control = self.host.acquire_control()?;
+        let (subscription, pending) = subscribe_host(&self.host, &self.nats_client).await?;
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let task = spawn_control_loop(
             self.host,
             self.nats_client,
             subscription,
+            pending,
+            control,
             shutdown_rx,
             self.options,
         );
@@ -199,7 +211,8 @@ impl AttachedHostControl {
         }
     }
 
-    /// Subscribe and flush before returning, so the first request can be served.
+    /// Verify registration before returning, so the first request can be served.
+    /// See [`AttachedHostControlBuilder::attach`] for the client's permissions.
     pub async fn attach(
         host: Arc<Host>,
         nats_client: Arc<async_nats::Client>,
@@ -244,8 +257,9 @@ impl AttachedHostControl {
     ///
     /// Cancellation of this wait does not detach the loop; another call can
     /// finish waiting. Concurrent callers all await the same completion.
-    /// A forced abort is an error: a cancelled handler or native start may
-    /// require owner-specific recovery before the host can accept that ID again.
+    /// A forced abort is an error. Native starts retain their IDs until resource
+    /// cleanup finishes; failed cleanup can be retried with a workload stop.
+    /// Custom handlers remain responsible for recovery of their own side effects.
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         if let Some(tx) = self
             .shutdown
@@ -295,7 +309,8 @@ const MAX_CONCURRENT_STARTS: usize = 4;
 /// anything. Better to abandon them and stop the host, which unbinds whatever
 /// they had bound anyway.
 /// Attached loops report abandoned commands as an error so the caller can
-/// recover the surviving host or stop it before reusing interrupted workloads.
+/// recover custom handler side effects. Cancelled native starts release their
+/// reservations after resource cleanup, without stopping unrelated workloads.
 pub const COMMAND_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long an aborted command is given to unwind before the host stops
@@ -555,7 +570,7 @@ pub struct ClusterHost {
 
 struct ControlLoopOptions {
     handler: Option<Arc<dyn HostCommandHandler>>,
-    host_group: Option<String>,
+    host_group: Option<Arc<str>>,
     heartbeat_interval: Duration,
     cleanup_interval: Duration,
     cleanup_age: Duration,
@@ -579,20 +594,90 @@ impl Default for ControlLoopOptions {
     }
 }
 
+impl ControlLoopOptions {
+    fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.max_concurrent_starts <= tokio::sync::Semaphore::MAX_PERMITS,
+            "max_concurrent_starts exceeds the semaphore limit"
+        );
+        Ok(())
+    }
+}
+
+struct OwnedHostStartup(Option<Arc<Host>>);
+
+impl Drop for OwnedHostStartup {
+    fn drop(&mut self) {
+        if let Some(host) = self.0.take() {
+            tokio::spawn(async move {
+                if let Err(error) = host.stop().await {
+                    error!(%error, "failed to stop host after cancelled control startup");
+                }
+            });
+        }
+    }
+}
+
+fn control_ready_subject(host_id: &str) -> String {
+    rpc_subject(host_id, "__control.ready")
+}
+
+/// Observe our marker through the subscription being verified. SUB and PUB
+/// share a connection, so receiving it proves the broker processed the SUB.
+/// A rejected wildcard cannot be masked by a separate, permitted subscription.
+async fn verify_subscription(
+    subscription: &mut async_nats::Subscriber,
+    nats_client: &async_nats::Client,
+    host_id: &str,
+) -> anyhow::Result<VecDeque<async_nats::Message>> {
+    let subject = control_ready_subject(host_id);
+    let marker = uuid::Uuid::new_v4().to_string();
+    nats_client
+        .publish(subject.clone(), marker.clone().into())
+        .await
+        .context("failed to publish host API registration marker")?;
+    let mut pending = VecDeque::new();
+    while let Some(message) = subscription.next().await {
+        if message.subject.as_str() == subject && message.payload.as_ref() == marker.as_bytes() {
+            return Ok(pending);
+        }
+        anyhow::ensure!(
+            pending.len() < MAX_PENDING_REPLIES,
+            "too many requests during host API registration"
+        );
+        pending.push_back(message);
+    }
+    anyhow::bail!("host API subscription closed during registration")
+}
+
+async fn control_barrier(host_id: &str, client: &async_nats::Client) -> anyhow::Result<()> {
+    let mut subscription = client.subscribe(control_ready_subject(host_id)).await?;
+    verify_subscription(&mut subscription, client, host_id).await?;
+    subscription.unsubscribe().await?;
+    client
+        .flush()
+        .await
+        .context("failed to flush control barrier unsubscribe")
+}
+
+fn control_interval(interval: Duration) -> tokio::time::Interval {
+    let mut timer = tokio::time::interval(interval);
+    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    timer
+}
+
 async fn subscribe_host(
     host: &Host,
     nats_client: &async_nats::Client,
-) -> anyhow::Result<async_nats::Subscriber> {
+) -> anyhow::Result<(async_nats::Subscriber, VecDeque<async_nats::Message>)> {
     tokio::time::timeout(CONTROL_STARTUP_TIMEOUT, async {
-        let subscription = nats_client
+        let mut subscription = nats_client
             .subscribe(host_subject(host.id()))
             .await
             .context("failed to subscribe for API requests")?;
-        nats_client
-            .flush()
-            .await
-            .context("failed to register host API subscription")?;
-        Ok(subscription)
+        let pending = verify_subscription(&mut subscription, nats_client, host.id()).await
+            .context("failed to verify host API subscription; check subscribe and registration-marker publish permissions")?;
+        Ok((subscription, pending))
     })
     .await
     .context("timed out registering host API subscription")?
@@ -602,6 +687,8 @@ fn spawn_control_loop(
     host: Arc<Host>,
     nats_client: Arc<async_nats::Client>,
     mut api_subscription: async_nats::Subscriber,
+    mut pending: VecDeque<async_nats::Message>,
+    control: Arc<crate::host::HostControlLease>,
     mut one_shot_rx: oneshot::Receiver<()>,
     options: ControlLoopOptions,
 ) -> JoinHandle<anyhow::Result<()>> {
@@ -618,7 +705,7 @@ fn spawn_control_loop(
     let host_id = host.id().to_string();
     tokio::task::spawn(async move {
         let heartbeat_subject = heartbeat_subject(&host_id);
-        let mut heartbeat_timer = tokio::time::interval(heartbeat_interval);
+        let mut heartbeat_timer = control_interval(heartbeat_interval);
 
         // Only `workload.start` waits on this permit; stops and status
         // never do, so neither queues behind a pull.
@@ -626,6 +713,7 @@ fn spawn_control_loop(
         let defaults = HostControlDefaults {
             host: host.clone(),
             starts: starts.clone(),
+            _control: Some(control),
         };
         // Commands run as their own tasks, so shutdown has to wait for
         // them before this loop or an attached host's owner stops the
@@ -633,6 +721,20 @@ fn spawn_control_loop(
         // it would bind against stopped plugins.
         let mut commands = tokio::task::JoinSet::new();
         let mut background = tokio::task::JoinSet::new();
+        let start_slots = Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_STARTS));
+        let query_slots = Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_QUERIES));
+        // One publisher and a bounded queue prevent disconnected NATS from
+        // turning rejected requests into unbounded reply tasks.
+        let (replies, mut reply_rx) = tokio::sync::mpsc::channel::<ApiReply>(MAX_PENDING_REPLIES);
+        let reply_client = Arc::clone(&nats_client);
+        let mut publisher = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            while let Some((subject, bytes)) = reply_rx.recv().await {
+                if let Err(error) = reply_client.publish(subject, bytes.into()).await {
+                    error!(%error, "failed to publish API response");
+                }
+            }
+        }));
+        let mut publisher_finished = false;
 
         // Read once. Nothing changes the host's config after it is
         // built, so a host with no cache directory has none for its
@@ -643,7 +745,7 @@ fn spawn_control_loop(
             .config()
             .oci_cache_dir
             .clone()
-            .map(|dir| (Arc::new(dir), tokio::time::interval(cleanup_interval)));
+            .map(|dir| (Arc::new(dir), control_interval(cleanup_interval)));
 
         // Heartbeats and cache cleanup run as their own tasks, for the
         // reason commands already do: `select!` runs one branch to
@@ -691,16 +793,15 @@ fn spawn_control_loop(
                 // it runs. Stop an owned host or report the failure
                 // to an attached host's owner.
                 () = &mut ingress_stopped => break Ended::IngressStopped,
-                // Reaps finished commands. A panicked one is fatal: it
-                // may have died holding a workload id it claimed and
-                // never committed or released, and no later stop can
-                // free that slot — the id would be refused as "already
-                // exists" for the life of the host. End control and
-                // stop an owned host, or report the panic so an
-                // attached host's owner can recover it.
+                ended = async {
+                // Fairly choose work even when a short timer is always ready.
+                // Shutdown and ingress failure retain priority in the outer select.
+                tokio::select! {
+                // Native starts own cancellation cleanup. A handler panic
+                // still ends control so its owner can recover custom effects.
                 Some(finished) = commands.join_next() => {
                     if let Err(e) = finished {
-                        break Ended::CommandPanicked(e);
+                        return Some(Ended::CommandPanicked(e));
                     }
                 }
                 Some(finished) = background.join_next() => {
@@ -763,10 +864,25 @@ fn spawn_control_loop(
                     }
                 }
                 // Handle API requests
-                message = api_subscription.next() => {
+                finished = &mut publisher => {
+                    publisher_finished = true;
+                    return Some(match finished {
+                        Err(error) => Ended::CommandPanicked(error),
+                        Ok(()) => Ended::SubscriptionClosed,
+                    });
+                }
+                message = async {
+                    match pending.pop_front() {
+                        Some(message) => Some(message),
+                        None => api_subscription.next().await,
+                    }
+                } => {
                     let Some(msg) = message else {
-                        break Ended::SubscriptionClosed;
+                        return Some(Ended::SubscriptionClosed);
                     };
+                    if command_name(&msg) == "__control.ready" {
+                        return None;
+                    }
                     // `select!` runs one branch to completion, so a
                     // command awaited here would hold up the heartbeat
                     // above for as long as it takes to pull and compile.
@@ -778,17 +894,29 @@ fn spawn_control_loop(
                     // a start claims the id before it fetches anything,
                     // and a stop that finds the claim hands the teardown
                     // back to the start holding it.
-                    let nats_client = nats_client.clone();
+                    let slots = if command_name(&msg) == "workload.start" {
+                        &start_slots
+                    } else {
+                        &query_slots
+                    };
+                    let Ok(slot) = Arc::clone(slots).try_acquire_owned() else {
+                        if let Some(reply) = busy_reply(&msg) {
+                            // Once this queue is full, callers time out rather
+                            // than consuming more memory during an outage.
+                            let _ = replies.try_send(reply);
+                        }
+                        return None;
+                    };
+                    let replies = replies.clone();
                     let defaults = defaults.clone();
                     let handler = handler.clone();
                     let host_group = host_group.clone();
                     commands.spawn(async move {
+                        let _slot = slot;
                         match handle_command(&defaults, &msg, handler.as_deref(), host_group.as_deref()).await {
                             Ok(resp_bytes) => {
-                                if let Some(reply_to) = msg.reply
-                                    && let Err(e) = nats_client.publish(reply_to, resp_bytes.into()).await
-                                {
-                                    error!("failed to publish API response: {e}");
+                                if let Some(reply_to) = msg.reply {
+                                    let _ = replies.send((reply_to, resp_bytes)).await;
                                 }
                             }
                             Err(e) => {
@@ -796,6 +924,13 @@ fn spawn_control_loop(
                             }
                         }
                     });
+                }
+                }
+                None
+                } => {
+                    if let Some(ended) = ended {
+                        break ended;
+                    }
                 }
             }
         };
@@ -813,6 +948,7 @@ fn spawn_control_loop(
         };
 
         starts.close();
+        drop(replies);
         background.abort_all();
         let unsubscribed = tokio::time::timeout(CONTROL_IO_TIMEOUT, api_subscription.unsubscribe())
             .await
@@ -825,6 +961,7 @@ fn spawn_control_loop(
         // rather than starting something this host is about to tear
         // down.
         let mut command_failure = None;
+        let mut publisher_failure = None;
         let drained = tokio::time::timeout(COMMAND_DRAIN_TIMEOUT, async {
             tokio::join!(
                 async {
@@ -836,6 +973,14 @@ fn spawn_control_loop(
                     }
                 },
                 async { while background.join_next().await.is_some() {} },
+                async {
+                    if !publisher_finished {
+                        if let Err(error) = (&mut publisher).await {
+                            publisher_failure = Some(error);
+                        }
+                        publisher_finished = true;
+                    }
+                },
             );
         })
         .await;
@@ -846,6 +991,7 @@ fn spawn_control_loop(
                          aborting them before control shutdown"
             );
             commands.abort_all();
+            publisher.abort();
             // `abort_all` only asks. Wait for the tasks to reach their
             // next await and unwind, or `host.stop()` unbinds plugins
             // underneath one still binding them.
@@ -868,7 +1014,13 @@ fn spawn_control_loop(
                             }
                         }
                     },
-                    async { while background.join_next().await.is_some() {} }
+                    async { while background.join_next().await.is_some() {} },
+                    async {
+                        if !publisher_finished {
+                            let _ = (&mut publisher).await;
+                            publisher_finished = true;
+                        }
+                    }
                 );
             })
             .await;
@@ -880,13 +1032,20 @@ fn spawn_control_loop(
                 );
             }
         }
-        // A successful shutdown reaches the server after UNSUB, command
-        // replies and the last already-queued heartbeat. The client belongs
-        // to the caller, so only flush it; never drain its other subscriptions.
-        let flushed = tokio::time::timeout(CONTROL_IO_TIMEOUT, nats_client.flush())
-            .await
-            .context("timed out flushing host control shutdown")
-            .and_then(|result| result.context("failed to flush host control shutdown"));
+        let recovered = tokio::time::timeout(
+            crate::timeouts::plugin_stop() + Duration::from_secs(1),
+            host.wait_start_cleanup(),
+        )
+        .await
+        .context("timed out cleaning up cancelled workload starts")
+        .and_then(std::convert::identity);
+        // A marker echoed by the server confirms processing of UNSUB and
+        // earlier replies; Client::flush alone only writes to the socket.
+        let flushed =
+            tokio::time::timeout(CONTROL_IO_TIMEOUT, control_barrier(&host_id, &nats_client))
+                .await
+                .context("timed out flushing host control shutdown")
+                .and_then(|result| result.context("failed to flush host control shutdown"));
         let stopped = if stop_host {
             host.stop().await.context("failed to stop host")
         } else {
@@ -908,12 +1067,15 @@ fn spawn_control_loop(
                 if let Some(error) = command_failure {
                     return Err(anyhow!("command task failed during shutdown: {error}"));
                 }
+                if let Some(error) = publisher_failure {
+                    return Err(anyhow!("reply publisher failed during shutdown: {error}"));
+                }
+                recovered?;
                 if commands_still_running {
                     Err(anyhow!("command tasks did not unwind after abort"))
                 } else if drained.is_err() {
                     Err(anyhow!(
-                        "host control tasks exceeded the shutdown drain and were aborted; \
-                                 the caller-owned host may require workload recovery"
+                        "host control tasks exceeded the shutdown drain and were aborted"
                     ))
                 } else {
                     Ok(())
@@ -945,7 +1107,10 @@ impl ClusterHost {
         &self.prepared_host
     }
 
-    /// Start the cluser host
+    /// Start the host and verify its control subscription before returning.
+    /// The NATS client needs the permissions documented by
+    /// [`AttachedHostControlBuilder::attach`], along with heartbeat and reply
+    /// publishing. Failed or cancelled registration tears down the started host.
     pub async fn start(
         self,
     ) -> anyhow::Result<(impl HostApi, impl Future<Output = anyhow::Result<()>>)> {
@@ -974,12 +1139,25 @@ impl ClusterHost {
 
         host.log_interfaces();
 
-        let subscription = match subscribe_host(&host, &nats_client).await {
+        let mut startup = OwnedHostStartup(Some(host.clone()));
+        let control = host.acquire_control()?;
+        let options = ControlLoopOptions {
+            heartbeat_interval,
+            cleanup_interval,
+            cleanup_age: self.cleanup_age,
+            max_concurrent_starts,
+            liveness,
+            stop_host: true,
+            ..ControlLoopOptions::default()
+        };
+        options.validate()?;
+        let (subscription, pending) = match subscribe_host(&host, &nats_client).await {
             Ok(subscription) => subscription,
             Err(error) => {
                 if let Err(stop_error) = host.clone().stop().await {
                     warn!(%stop_error, "failed to stop host after control subscription failed");
                 }
+                startup.0 = None;
                 return Err(error);
             }
         };
@@ -987,17 +1165,12 @@ impl ClusterHost {
             host.clone(),
             nats_client,
             subscription,
+            pending,
+            control,
             one_shot_rx,
-            ControlLoopOptions {
-                heartbeat_interval,
-                cleanup_interval,
-                cleanup_age: self.cleanup_age,
-                max_concurrent_starts,
-                liveness,
-                stop_host: true,
-                ..ControlLoopOptions::default()
-            },
+            options,
         );
+        startup.0 = None;
 
         Ok((host, async move {
             let _ = one_shot_tx.send(());
@@ -1168,12 +1341,46 @@ pub fn heartbeat_subject(host_id: &str) -> String {
 
 /// Helper function to serialize a message to the API format.
 fn to_api<T: prost::Message + serde::Serialize>(msg: &T) -> Result<Vec<u8>, anyhow::Error> {
-    serde_json::to_vec_pretty(msg).map_err(anyhow::Error::new)
+    serde_json::to_vec(msg).map_err(anyhow::Error::new)
 }
 
 /// Helper function to deserialize a message from the API format.
 fn from_api<'de, T: serde::Deserialize<'de>>(bytes: &'de [u8]) -> Result<T, anyhow::Error> {
     serde_json::from_slice(bytes).map_err(anyhow::Error::new)
+}
+
+type ApiReply = (async_nats::Subject, Vec<u8>);
+
+fn command_name(msg: &async_nats::Message) -> &str {
+    msg.subject.splitn(4, '.').nth(3).unwrap_or_default()
+}
+
+fn busy_reply(msg: &async_nats::Message) -> Option<ApiReply> {
+    #[derive(serde::Deserialize, Default)]
+    struct Identity {
+        #[serde(default, rename = "workloadId", alias = "workload_id")]
+        workload_id: String,
+    }
+    let reply = msg.reply.clone()?;
+    let id = serde_json::from_slice::<Identity>(&msg.payload).unwrap_or_default();
+    let status = Some(command_error(
+        &id.workload_id,
+        "host control is busy; retry this command".into(),
+    ));
+    let bytes = match command_name(msg) {
+        "workload.start" => to_api(&types::v2::WorkloadStartResponse {
+            workload_status: status,
+        }),
+        "workload.stop" => to_api(&types::v2::WorkloadStopResponse {
+            workload_status: status,
+        }),
+        "workload.status" => to_api(&types::v2::WorkloadStatusResponse {
+            workload_status: status,
+        }),
+        _ => return None,
+    }
+    .ok()?;
+    Some((reply, bytes))
 }
 
 #[instrument(level = "debug", skip_all, fields(subject = %msg.subject))]
@@ -1183,9 +1390,9 @@ async fn handle_command(
     handler: Option<&dyn HostCommandHandler>,
     host_group: Option<&str>,
 ) -> Result<Vec<u8>, anyhow::Error> {
-    let command = msg.subject.split('.').skip(3).collect::<Vec<_>>().join(".");
+    let command = command_name(msg);
     let payload = &msg.payload;
-    match command.as_str() {
+    match command {
         "heartbeat" => to_api(&host_heartbeat(&defaults.host, host_group).await?),
         "workload.start" => {
             let req: types::v2::WorkloadStartRequest = match from_api(payload) {
@@ -1342,7 +1549,7 @@ fn command_error(workload_id: &str, message: String) -> types::v2::WorkloadStatu
     workload.namespace=?req.workload.as_ref().map(|w| &w.namespace).unwrap_or(&"<none>".to_string())),
     )]
 async fn workload_start(
-    host: &impl WorkloadReservation,
+    host: &Host,
     req: types::v2::WorkloadStartRequest,
     config: &HostConfig,
     starts: &tokio::sync::Semaphore,
@@ -1384,12 +1591,14 @@ async fn workload_start(
         }
     };
 
+    let mut guard = host.start_guard(&workload_id, reservation);
     // Queued with the id already claimed. Waiting for a permit is time like
     // any other in which a stop or a status has to find this workload.
     let _permit = match starts.acquire().await {
         Ok(permit) => permit,
         Err(e) => {
             host.workload_release(&workload_id, reservation).await;
+            guard.disarm();
             return Ok(workload_start_error(
                 &workload_id,
                 format!("host is no longer accepting starts: {e}"),
@@ -1397,9 +1606,7 @@ async fn workload_start(
         }
     };
 
-    // Completed failure paths give the id back. Cancelling this future
-    // can leave the reservation behind; attached control reports forced
-    // cancellation so the host's owner can recover or stop the host.
+    // The guard retains the reservation until cancellation cleanup finishes.
     let prepared = async {
         let (components, host_interfaces) = if let Some(wit_world) = wit_world {
             let mut pulled_components = Vec::with_capacity(wit_world.components.len());
@@ -1502,6 +1709,7 @@ async fn workload_start(
         Ok(request) => request,
         Err(message) => {
             host.workload_release(&workload_id, reservation).await;
+            guard.disarm();
             return Ok(workload_start_error(&workload_id, message));
         }
     };
@@ -1512,6 +1720,8 @@ async fn workload_start(
         name=?request.workload.name,
         "Starting workload");
 
+    // Transfer cleanup ownership to the native start, with no intervening await.
+    guard.disarm();
     Ok(host
         .workload_start_reserved(reservation, request)
         .await?
@@ -1840,6 +2050,7 @@ mod tests {
         HostControlDefaults {
             host,
             starts: Arc::new(tokio::sync::Semaphore::new(1)),
+            _control: None,
         }
     }
 
@@ -2073,6 +2284,7 @@ mod tests {
         let defaults = HostControlDefaults {
             host: host.clone(),
             starts: Arc::new(tokio::sync::Semaphore::new(1)),
+            _control: None,
         };
         let reply = AnnotatingStatus
             .status(
@@ -2141,7 +2353,8 @@ mod tests {
                 .build()?
                 .start()
                 .await?;
-            let subscription = subscribe_host(&host, &client).await?;
+            let subscription = client.subscribe(host_subject(host.id())).await?;
+            client.flush().await?;
             server.abort();
             let _ = server.await;
             tokio::time::timeout(Duration::from_secs(5), async {
@@ -2158,6 +2371,8 @@ mod tests {
                 host.clone(),
                 client,
                 subscription,
+                VecDeque::new(),
+                host.acquire_control()?,
                 rx,
                 ControlLoopOptions {
                     stop_host,
@@ -2182,6 +2397,267 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    /// Reject exactly the permission under test while handling the connection
+    /// handshake. A denied SUB must not be mistaken for successful readiness.
+    async fn restricted_nats_peer(
+        deny_subscribe: bool,
+    ) -> anyhow::Result<(
+        Arc<async_nats::Client>,
+        tokio_util::task::AbortOnDropHandle<anyhow::Result<()>>,
+    )> {
+        use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
+        crate::init_crypto();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await?;
+            socket
+                .write_all(b"INFO {\"max_payload\":1048576}\r\n")
+                .await?;
+            let (reader, mut writer) = socket.into_split();
+            let mut reader = BufReader::new(reader);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).await? == 0 {
+                    break;
+                }
+                let parts: Vec<_> = line.split_whitespace().collect();
+                match parts.first().copied() {
+                    Some("PING") => writer.write_all(b"PONG\r\n").await?,
+                    Some("SUB") if deny_subscribe => {
+                        writer
+                            .write_all(b"-ERR 'Permissions Violation for Subscription'\r\n")
+                            .await?;
+                    }
+                    Some("PUB") => {
+                        let size: usize = parts.last().context("missing payload size")?.parse()?;
+                        let mut payload = vec![0; size + 2];
+                        reader.read_exact(&mut payload).await?;
+                        if !deny_subscribe {
+                            writer
+                                .write_all(b"-ERR 'Permissions Violation for Publish'\r\n")
+                                .await?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        }));
+        let client = Arc::new(
+            async_nats::ConnectOptions::new()
+                .client_capacity(16)
+                .connect(format!("nats://{addr}"))
+                .await?,
+        );
+        Ok((client, server))
+    }
+
+    #[tokio::test]
+    async fn denied_control_permissions_fail_registration_and_release_the_lease()
+    -> anyhow::Result<()> {
+        for deny_subscribe in [true, false] {
+            let (client, _server) = restricted_nats_peer(deny_subscribe).await?;
+            let host = crate::host::HostBuilder::default().build()?.start().await?;
+            let error = AttachedHostControl::builder(host.clone(), client)
+                .attach()
+                .await
+                .err()
+                .context("registration succeeded with denied permissions")?;
+            assert!(format!("{error:#}").contains("timed out"));
+            assert!(host.acquire_control().is_ok());
+            assert_eq!(host.heartbeat().await?.id, host.id());
+            host.stop().await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelling_owned_registration_stops_the_started_ingress() -> anyhow::Result<()> {
+        use crate::host::http::{DevRouter, HostHandler as _, Ingress};
+        let (client, _server) = restricted_nats_peer(true).await?;
+        let ingress = Arc::new(
+            Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse()?)
+                .build()
+                .await?,
+        );
+        let cluster = ClusterHostBuilder::default()
+            .with_host_group("cancelled-start")
+            .with_nats_client(client)
+            .with_http_handler(ingress.clone())
+            .build()?;
+        let start = tokio::spawn(cluster.start());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(ingress.stopped().now_or_never().is_none());
+        start.abort();
+        assert!(start.await.is_err());
+        tokio::time::timeout(Duration::from_secs(2), ingress.stopped()).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn periodic_control_work_skips_missed_ticks() {
+        let mut interval = control_interval(Duration::from_secs(1));
+        interval.tick().await;
+        tokio::time::sleep(Duration::from_millis(2100)).await;
+        interval.tick().await;
+        assert!(interval.tick().now_or_never().is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires NATS_URL"]
+    async fn registration_retains_requests_received_before_the_marker() -> anyhow::Result<()> {
+        crate::init_crypto();
+        let client = Arc::new(async_nats::connect(std::env::var("NATS_URL")?).await?);
+        let host = crate::host::HostBuilder::default().build()?.start().await?;
+        let mut subscription = client.subscribe(host_subject(host.id())).await?;
+        let inbox = client.new_inbox();
+        let mut response = client.subscribe(inbox.clone()).await?;
+        // Both SUBs, the real RPC, and the marker use one connection, fixing
+        // their server order without relying on Client::flush or a delay.
+        client
+            .publish_with_reply(
+                rpc_subject(host.id(), "heartbeat"),
+                inbox,
+                b"null".as_slice().into(),
+            )
+            .await?;
+        let pending = tokio::time::timeout(
+            Duration::from_secs(2),
+            verify_subscription(&mut subscription, &client, host.id()),
+        )
+        .await??;
+        assert_eq!(pending.len(), 1);
+        let (tx, rx) = oneshot::channel();
+        let control = AttachedHostControl::new(
+            tx,
+            spawn_control_loop(
+                host.clone(),
+                client,
+                subscription,
+                pending,
+                host.acquire_control()?,
+                rx,
+                ControlLoopOptions::default(),
+            ),
+        );
+        let reply = tokio::time::timeout(Duration::from_secs(2), response.next())
+            .await?
+            .context("reply subscription closed")?;
+        let heartbeat: types::v2::HostHeartbeat = from_api(&reply.payload)?;
+        assert_eq!(heartbeat.id, host.id());
+        control.shutdown().await?;
+        host.stop().await
+    }
+
+    #[derive(Default)]
+    struct CountingReplies(std::sync::atomic::AtomicUsize);
+
+    #[async_trait]
+    impl HostCommandHandler for CountingReplies {
+        async fn start(
+            &self,
+            _defaults: &HostControlDefaults,
+            _request: types::v2::WorkloadStartRequest,
+        ) -> anyhow::Result<types::v2::WorkloadStartResponse> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            anyhow::bail!("test response")
+        }
+        async fn status(
+            &self,
+            _defaults: &HostControlDefaults,
+            _request: types::v2::WorkloadStatusRequest,
+        ) -> anyhow::Result<types::v2::WorkloadStatusResponse> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            anyhow::bail!("test response")
+        }
+    }
+
+    #[tokio::test]
+    async fn saturated_replies_during_an_outage_bound_tasks_and_keep_the_loop_alive()
+    -> anyhow::Result<()> {
+        let (client, server) = restricted_nats_peer(false).await?;
+        let host = crate::host::HostBuilder::default().build()?.start().await?;
+        let subscription = client.subscribe(host_subject(host.id())).await?;
+        client.flush().await?;
+        server.abort();
+        let _ = server.await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while client.connection_state() != async_nats::connection::State::Disconnected {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        // Fill the client's bounded send channel so even the single publisher
+        // cannot enqueue another response while the broker is unreachable.
+        let mut saturated = false;
+        for _ in 0..1024 {
+            if tokio::time::timeout(
+                Duration::from_millis(50),
+                client.publish("test.backpressure", Vec::new().into()),
+            )
+            .await
+            .is_err()
+            {
+                saturated = true;
+                break;
+            }
+        }
+        assert!(saturated, "NATS send channel did not fill");
+        let mut pending = VecDeque::new();
+        for index in 0..1024 {
+            let mut msg = command_message(
+                if index % 2 == 0 {
+                    "workload.start"
+                } else {
+                    "workload.status"
+                },
+                br#"{"workloadId":"backpressure","workload":{}}"#.to_vec(),
+            );
+            msg.reply = Some("_INBOX.backpressure".into());
+            pending.push_back(msg);
+        }
+        let handler = Arc::new(CountingReplies::default());
+        let liveness = crate::host::probes::Liveness::new(Duration::from_millis(100));
+        let (tx, rx) = oneshot::channel();
+        let control = AttachedHostControl::new(
+            tx,
+            spawn_control_loop(
+                host.clone(),
+                client,
+                subscription,
+                pending,
+                host.acquire_control()?,
+                rx,
+                ControlLoopOptions {
+                    handler: Some(handler.clone()),
+                    liveness: Some(liveness.clone()),
+                    heartbeat_interval: Duration::from_millis(10),
+                    ..ControlLoopOptions::default()
+                },
+            ),
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let accepted = handler.0.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(accepted > 0);
+        assert!(
+            accepted <= MAX_PENDING_REPLIES + MAX_PENDING_STARTS + MAX_PENDING_QUERIES + 1,
+            "unbounded commands ran while replies were stalled: {accepted}"
+        );
+        assert!(
+            liveness
+                .silence()
+                .is_some_and(|silence| silence < Duration::from_millis(100))
+        );
+        let error = tokio::time::timeout(Duration::from_secs(10), control.shutdown())
+            .await?
+            .err()
+            .context("disconnected attached shutdown lost its error")?;
+        assert!(error.to_string().contains("timed out"));
+        assert_eq!(host.heartbeat().await?.id, host.id());
+        host.stop().await
     }
 
     /// Port 1 is privileged and nothing in a test environment listens on it, so
