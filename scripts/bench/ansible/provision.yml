@@ -281,6 +281,32 @@
         - { name: docker.service, enabled: false, state: stopped }
       tags: [k6bench]
 
+    # install-runner.sh does the same on a fresh host, but exits before it
+    # once /opt/actions-runner exists, so a registered host only gets it here.
+    - name: Check for the bench user
+      ansible.builtin.command: id bench
+      register: bench_user
+      changed_when: false
+      failed_when: false
+      tags: [k6bench]
+
+    - name: Let the bench user use Docker
+      ansible.builtin.user:
+        name: bench
+        groups: docker
+        append: true
+      when: bench_user.rc == 0
+      tags: [k6bench]
+
+    - name: Let the bench user stop the Docker daemon
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/bench-docker
+        content: "bench ALL=(root) NOPASSWD: /usr/bin/systemctl stop docker.service\n"
+        mode: "0440"
+        validate: visudo -cf %s
+      when: bench_user.rc == 0
+      tags: [k6bench]
+
     - name: Install k6bench binaries
       ansible.builtin.get_url:
         url: "{{ item.url }}"
