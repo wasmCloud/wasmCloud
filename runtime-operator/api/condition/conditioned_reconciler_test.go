@@ -471,3 +471,61 @@ func TestConditionedReconciler(t *testing.T) {
 		})
 	}
 }
+
+// A write that lands between the reconcile's read and its status patch must
+// win under the optimistic lock, and is overwritten without it.
+func TestConditionedReconcilerOptimisticLock(t *testing.T) {
+	const concurrentCondition ConditionType = "Concurrent"
+	const finalizerName = "lock-test-finalizer"
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add corev1 to scheme: %v", err)
+	}
+	scheme.AddKnownTypes(corev1.SchemeGroupVersion, &conditionedResource{})
+
+	for _, locked := range []bool{true, false} {
+		obj := &conditionedResource{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace:  testNamespace,
+				Name:       testName,
+				Finalizers: []string{finalizerName},
+			},
+		}
+		kubeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(obj).
+			WithStatusSubresource(obj).
+			Build()
+
+		r := NewConditionedReconciler(kubeClient, scheme, obj, time.Second)
+		r.SetFinalizer(finalizerName, func(context.Context, *conditionedResource) error { return nil })
+		r.SetCondition(testCondition, func(ctx context.Context, _ *conditionedResource) error {
+			if locked {
+				RequireOptimisticLock(ctx)
+			}
+			newer := &conditionedResource{}
+			if err := kubeClient.Get(ctx, client.ObjectKeyFromObject(obj), newer); err != nil {
+				return err
+			}
+			newer.Status.SetConditions(ReadyCondition(concurrentCondition))
+			return kubeClient.Status().Update(ctx, newer)
+		})
+
+		result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(obj)})
+		if err != nil {
+			t.Fatalf("locked=%v: reconcile: %v", locked, err)
+		}
+
+		stored := &conditionedResource{}
+		if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(obj), stored); err != nil {
+			t.Fatalf("locked=%v: get: %v", locked, err)
+		}
+		keptConcurrent := stored.Status.GetCondition(concurrentCondition).Status == ConditionTrue
+		if keptConcurrent != locked {
+			t.Errorf("locked=%v: concurrent write kept = %v", locked, keptConcurrent)
+		}
+		if locked && result.RequeueAfter == 0 {
+			t.Errorf("a conflicting patch was not requeued")
+		}
+	}
+}

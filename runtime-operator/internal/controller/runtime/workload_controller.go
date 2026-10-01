@@ -98,13 +98,20 @@ func (r *WorkloadReconciler) reconcileHostSelection(ctx context.Context, workloa
 	}
 
 	condition.ForceStatusUpdate(ctx)
+	// A read that predates the recorded HostID would pick a second host and
+	// overwrite the first after the start already went to it.
+	condition.RequireOptimisticLock(ctx)
 	if workload.Spec.HostID != "" {
+		host, err := r.lookupHostByID(ctx, workload.Spec.HostID)
+		if err == nil && host != nil && !host.DeletionTimestamp.IsZero() {
+			return condition.ErrStatusUnknown(fmt.Errorf("pinned host %s is being deleted", workload.Spec.HostID))
+		}
 		workload.Status.HostID = workload.Spec.HostID
 		// Best-effort lookup of the pinned host's Environment so the
 		// ENVIRONMENT status column reflects the host's tenant. A miss
 		// here just leaves the field empty; placement will surface the
 		// real failure if the HostID is invalid.
-		if host, err := r.lookupHostByID(ctx, workload.Spec.HostID); err == nil && host != nil {
+		if err == nil && host != nil {
 			workload.Status.Environment = host.Environment
 		}
 		return condition.ErrSkipReconciliation()
@@ -181,12 +188,26 @@ func (r *WorkloadReconciler) findFreeHost(ctx context.Context, workload *runtime
 	})
 	for i := range hostList.Items {
 		host := &hostList.Items[i]
-		if host.Status.IsAvailable() {
+		if isSchedulable(host) {
 			return host, nil
 		}
 	}
 
 	return nil, fmt.Errorf("no suitable host found")
+}
+
+// isSchedulable reports whether new workloads may be placed on host. A Host
+// being deleted stays Ready until it is gone, but its finalizer may already
+// have listed the workloads it cleans up, so one placed now would be missed.
+func isSchedulable(host *runtimev1alpha1.Host) bool {
+	return host.DeletionTimestamp.IsZero() && host.Status.IsAvailable()
+}
+
+func schedulableHostIndexValue(rawObj client.Object) []string {
+	if host, ok := rawObj.(*runtimev1alpha1.Host); ok && isSchedulable(host) {
+		return []string{string(condition.ConditionTrue)}
+	}
+	return []string{}
 }
 
 // lookupHostByID finds a Host CRD by HostID. Hosts always live in the
@@ -274,6 +295,25 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 	// don't replace
 	if workload.Status.WorkloadID != "" {
 		return nil
+	}
+
+	// The host may have gone, or started deleting, after it was chosen. Its
+	// finalizer has listed its Workloads already, so one started there now is
+	// missed. A pinned host that is not registered yet is still tried.
+	host, err := r.lookupHostByID(ctx, workload.Status.HostID)
+	if err != nil {
+		return err
+	}
+	goingAway := host != nil && !host.DeletionTimestamp.IsZero()
+	if goingAway || (host == nil && workload.Spec.HostID == "") {
+		hostID := workload.Status.HostID
+		if workload.Spec.HostID == "" {
+			workload.Status.HostID = ""
+			workload.Status.Environment = ""
+			condition.ForceStatusUpdate(ctx)
+			condition.RequireOptimisticLock(ctx)
+		}
+		return condition.ErrStatusUnknown(fmt.Errorf("host %s is gone or being deleted", hostID))
 	}
 
 	volumes := make([]*runtimev2.Volume, 0, len(workload.Spec.Volumes))
@@ -402,6 +442,19 @@ func (r *WorkloadReconciler) reconcileSync(ctx context.Context, workload *runtim
 		return condition.ErrStatusUnknown(fmt.Errorf("workload is not placed yet"))
 	}
 
+	// A draining host still answers status, so the Host is the only sign it
+	// is going away. Failing sync lets the ReplicaSet replace the workload.
+	host, err := r.lookupHostByID(ctx, workload.Status.HostID)
+	if err != nil {
+		return err
+	}
+	if host == nil {
+		return fmt.Errorf("host %s no longer exists", workload.Status.HostID)
+	}
+	if !host.DeletionTimestamp.IsZero() {
+		return fmt.Errorf("host %s is being deleted", workload.Status.HostID)
+	}
+
 	client := NewWashHostClient(r.Bus, workload.Status.HostID)
 	req := &runtimev2.WorkloadStatusRequest{
 		WorkloadId: workload.Status.WorkloadID,
@@ -459,17 +512,25 @@ func (r *WorkloadReconciler) finalize(ctx context.Context, workload *runtimev1al
 		WorkloadId: workloadID,
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, workloadStopTimeout)
+	stopCtx, cancel := context.WithTimeout(ctx, workloadStopTimeout)
 	defer cancel()
 
-	_, err := client.Stop(ctx, req)
-	if err != nil {
-		logger := ctrl.LoggerFrom(ctx)
-		logger.Error(err, "failed to stop workload on host", "hostID", workload.Status.HostID, "workloadID", workloadID)
-		// don't return error, we want to remove the finalizer anyway
-		// this might leave a dangling workload on the host, but there's not much we can do about it if the host is down
+	_, err := client.Stop(stopCtx, req)
+	if err == nil {
+		return nil
 	}
-
+	// A host that is still heartbeating may well be running the workload,
+	// so keep the finalizer and retry. Give up once it stops heartbeating:
+	// waiting for its Host to be reaped could block the deletion for good.
+	host, lookupErr := r.lookupHostByID(ctx, workload.Status.HostID)
+	if lookupErr != nil {
+		return lookupErr
+	}
+	if host != nil && host.Status.IsAvailable() {
+		return fmt.Errorf("stop workload on host %s: %w", workload.Status.HostID, err)
+	}
+	ctrl.LoggerFrom(ctx).Error(err, "failed to stop workload on an unavailable host, dropping it",
+		"hostID", workload.Status.HostID, "workloadID", workloadID)
 	return nil
 }
 
@@ -497,14 +558,24 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	r.reconciler = reconciler
 
-	err := mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Host{}, workloadSchedulableHostsIndex, func(rawObj client.Object) []string {
-		if host, ok := rawObj.(*runtimev1alpha1.Host); ok {
-			if host.Status.IsAvailable() {
-				return []string{string(condition.ConditionTrue)}
+	// Index Hosts by HostID for lookupHostByID. WorkloadRouteReconciler reads
+	// it too.
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&runtimev1alpha1.Host{},
+		hostIDIndex,
+		func(rawObj client.Object) []string {
+			host, ok := rawObj.(*runtimev1alpha1.Host)
+			if !ok || host.HostID == "" {
+				return nil
 			}
-		}
-		return []string{}
-	})
+			return []string{host.HostID}
+		},
+	); err != nil {
+		return err
+	}
+
+	err := mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Host{}, workloadSchedulableHostsIndex, schedulableHostIndexValue)
 	if err != nil {
 		return err
 	}
