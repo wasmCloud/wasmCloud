@@ -459,17 +459,25 @@ func (r *WorkloadReconciler) finalize(ctx context.Context, workload *runtimev1al
 		WorkloadId: workloadID,
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, workloadStopTimeout)
+	stopCtx, cancel := context.WithTimeout(ctx, workloadStopTimeout)
 	defer cancel()
 
-	_, err := client.Stop(ctx, req)
-	if err != nil {
-		logger := ctrl.LoggerFrom(ctx)
-		logger.Error(err, "failed to stop workload on host", "hostID", workload.Status.HostID, "workloadID", workloadID)
-		// don't return error, we want to remove the finalizer anyway
-		// this might leave a dangling workload on the host, but there's not much we can do about it if the host is down
+	_, err := client.Stop(stopCtx, req)
+	if err == nil {
+		return nil
 	}
-
+	// A host that is still heartbeating may well be running the workload,
+	// so keep the finalizer and retry. Give up once it stops heartbeating:
+	// waiting for its Host to be reaped could block the deletion for good.
+	host, lookupErr := r.lookupHostByID(ctx, workload.Status.HostID)
+	if lookupErr != nil {
+		return lookupErr
+	}
+	if host != nil && host.Status.IsAvailable() {
+		return fmt.Errorf("stop workload on host %s: %w", workload.Status.HostID, err)
+	}
+	ctrl.LoggerFrom(ctx).Error(err, "failed to stop workload on an unavailable host, dropping it",
+		"hostID", workload.Status.HostID, "workloadID", workloadID)
 	return nil
 }
 
@@ -496,6 +504,23 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	reconciler.SetCondition(condition.TypeReady, r.reconcileReady)
 
 	r.reconciler = reconciler
+
+	// Index Hosts by HostID for lookupHostByID. WorkloadRouteReconciler reads
+	// it too.
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&runtimev1alpha1.Host{},
+		hostIDIndex,
+		func(rawObj client.Object) []string {
+			host, ok := rawObj.(*runtimev1alpha1.Host)
+			if !ok || host.HostID == "" {
+				return nil
+			}
+			return []string{host.HostID}
+		},
+	); err != nil {
+		return err
+	}
 
 	err := mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Host{}, workloadSchedulableHostsIndex, func(rawObj client.Object) []string {
 		if host, ok := rawObj.(*runtimev1alpha1.Host); ok {
