@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -175,6 +177,7 @@ type ctxKey string
 type ReconcilerContext struct {
 	ForceUpdate       bool
 	ForceRequeue      bool
+	OptimisticLock    bool
 	ReconcileInterval time.Duration
 }
 
@@ -192,6 +195,13 @@ func GetReconcilerContext(ctx context.Context) *ReconcilerContext {
 // ForceStatusUpdate forces a full "Status" update, regardless if conditions have changed.
 func ForceStatusUpdate(ctx context.Context) {
 	GetReconcilerContext(ctx).ForceUpdate = true
+}
+
+// RequireOptimisticLock makes this pass's status patch conditional on the object
+// not having changed since it was read, for a condition that records a decision
+// a stale read would make differently. A conflict requeues the object instead.
+func RequireOptimisticLock(ctx context.Context) {
+	GetReconcilerContext(ctx).OptimisticLock = true
 }
 
 // ForceRequeue forces an immediate requeue, regardless if status has changed.
@@ -279,7 +289,15 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 	}
 
 	if reconcilerCtx.ForceUpdate {
-		if err := r.client.Status().Patch(ctx, obj, client.MergeFrom(originalObject)); err != nil {
+		patch := client.MergeFrom(originalObject)
+		if reconcilerCtx.OptimisticLock {
+			patch = client.MergeFromWithOptions(originalObject, client.MergeFromWithOptimisticLock{})
+		}
+		if err := r.client.Status().Patch(ctx, obj, patch); err != nil {
+			if apierrors.IsConflict(err) {
+				log.FromContext(ctx).V(1).Info("status patch built from a stale read was rejected; requeueing")
+				return reconcile.Result{RequeueAfter: time.Second}, nil
+			}
 			return reconcile.Result{}, err
 		}
 	}
