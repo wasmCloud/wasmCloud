@@ -150,6 +150,16 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
             .cloned()
     }
 
+    /// Forget the default recorded for this workload by
+    /// [`Multiplexer::set_default`], so its backend is released once nothing else
+    /// holds it. Other workloads' defaults are untouched.
+    pub fn forget_default(&self, workload_id: &str) {
+        self.defaults
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(workload_id);
+    }
+
     /// Register a backend provider keyed by its `backend_type()`.
     pub fn with_provider(mut self, provider: Arc<dyn BackendProvider<Id>>) -> Self {
         self.providers.insert(provider.backend_type(), provider);
