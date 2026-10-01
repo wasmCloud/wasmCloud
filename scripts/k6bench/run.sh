@@ -347,7 +347,10 @@ wait_routable() {
     if [ "$mode" = native ]; then
       code="$(curl -s -o /dev/null -w '%{http_code}' -m 2 -H "Host: $host" "$url/" || true)"
     else
-      code="$(docker run --rm --network kind curlimages/curl:8.11.1 \
+      local net_arg=""
+      [ "$target" = kind ] && net_arg="--network kind"
+      # shellcheck disable=SC2086
+      code="$(docker run --rm $net_arg curlimages/curl:8.11.1 \
         -s -o /dev/null -w '%{http_code}' -m 2 -H "Host: $host" "$url/" 2>/dev/null || true)"
     fi
     if [ "$code" = 200 ]; then
