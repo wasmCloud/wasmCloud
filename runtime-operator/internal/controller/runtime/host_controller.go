@@ -50,6 +50,8 @@ type HostReconciler struct {
 	// Host object is created here regardless of where the underlying host
 	// pod runs; tenant attribution lives on the Host's Environment field.
 	OperatorNamespace string
+	// RetiredHosts rejects heartbeats from removed Hosts and Pods.
+	RetiredHosts *RetiredHosts
 
 	// fleet gates host deletion; the heartbeat subscription writes to it.
 	fleet fleetWitness
@@ -250,6 +252,7 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		client:            r.Client,
 		operatorNamespace: r.OperatorNamespace,
 		fleet:             &r.fleet,
+		retiredHosts:      r.RetiredHosts,
 	}
 	if err := mgr.Add(statusUpdater); err != nil {
 		return err
@@ -286,6 +289,8 @@ type hostStatusUpdater struct {
 	operatorNamespace string
 	// fleet is stamped on every heartbeat that arrives.
 	fleet *fleetWitness
+	// retiredHosts rejects late heartbeats after a Pod disappears.
+	retiredHosts *RetiredHosts
 }
 
 func (h *hostStatusUpdater) Start(ctx context.Context) error {
@@ -318,6 +323,13 @@ func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger
 	// Stamped before the bookkeeping below, which can fail on its own: arrival
 	// is what proves the path from hosts to the operator works.
 	h.fleet.heard(time.Now())
+	var startedAt time.Time
+	if req.GetStartedAt() != nil {
+		startedAt = req.GetStartedAt().AsTime()
+	}
+	if h.retiredHosts.contains(req.Id) || h.retiredHosts.fromRetiredPod(req.Hostname, startedAt) {
+		return
+	}
 
 	// Every Host object lives in the operator's own namespace. Tenant
 	// attribution is recorded on the Host's Environment field,
@@ -349,6 +361,18 @@ func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger
 	if getErr != nil && !apierrors.IsNotFound(getErr) {
 		log.Error(getErr, "failed to read Host resource", "host", req.FriendlyName, "hostID", req.Id)
 		return
+	}
+
+	// A host keeps heartbeating while its Pod drains, after the Pod's Host was
+	// deleted. Recreating the Host would offer the draining host new Workloads.
+	if apierrors.IsNotFound(getErr) {
+		draining, err := hostPodDraining(ctx, h.client, req.Hostname)
+		if err != nil {
+			log.Error(err, "failed to check for a draining host Pod", "host", req.FriendlyName, "hostID", req.Id)
+		}
+		if draining {
+			return
+		}
 	}
 
 	if apierrors.IsNotFound(getErr) || hostSpecChanged(existing, host) {
