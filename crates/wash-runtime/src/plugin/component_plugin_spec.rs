@@ -62,7 +62,8 @@ pub struct ComponentPluginSpec {
     pub ports: Arc<[crate::host::declared_port::DeclaredPort]>,
     /// The TLS trust the `tls` blocks on `allowed_hosts` declared, already
     /// loaded. `None` (the default) declares none; a plugin declaring some must
-    /// import `wasmcloud:tls/client` or `wasi:tls/client` to load.
+    /// import a supported HTTP or TLS client to load. Required TLS disables
+    /// raw sockets and requires HTTPS or the host-owned TLS dialer.
     pub tls_policy: Option<Arc<crate::plugin::PluginTlsPolicy>>,
 }
 

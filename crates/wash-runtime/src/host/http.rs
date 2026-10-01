@@ -911,6 +911,80 @@ pub trait OutgoingHandler: Send + Sync + 'static {
         None
     }
 
+    /// Install `caller`'s per-destination TLS policy, or remove it with
+    /// `None`: which trust verifies each destination the caller reaches and
+    /// which identity it presents there.
+    ///
+    /// A handler accepting one must apply it to every request from `caller`,
+    /// gRPC included. The default refuses, so a caller whose declared TLS this
+    /// handler cannot apply fails to start instead of sending without it.
+    ///
+    /// # Errors
+    ///
+    /// This handler cannot apply per-caller TLS.
+    fn set_caller_tls(
+        &self,
+        caller: &str,
+        policy: Option<Arc<dyn crate::host::http_client::CallerTlsPolicy>>,
+    ) -> anyhow::Result<()> {
+        match policy {
+            None => Ok(()),
+            Some(_) => anyhow::bail!(
+                "this host's outgoing HTTP handler cannot apply per-caller TLS, which '{caller}' \
+                 declares"
+            ),
+        }
+    }
+
+    /// The TLS decision for `caller`'s request to `uri`, made once, before the
+    /// host chooses between a co-located workload and the network: a request
+    /// whose TLS is selected or refused is never short-circuited, which would
+    /// bypass that decision. [`Self::send_request_with`] carries it to the
+    /// send. The default has nothing to decide.
+    fn destination_tls(
+        &self,
+        _caller: &str,
+        _uri: &http::Uri,
+    ) -> crate::host::http_client::DestinationTls {
+        crate::host::http_client::DestinationTls::Default
+    }
+
+    /// [`Self::send_request`] under the decision [`Self::destination_tls`]
+    /// made for this request. A handler that makes decisions sends by the one
+    /// it is given rather than deciding again. The default ignores it.
+    fn send_request_with(
+        &self,
+        workload_id: &str,
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+        fut: RequestIoFuture,
+        _tls: crate::host::http_client::DestinationTls,
+    ) -> SendFuture {
+        self.send_request(workload_id, request, options, fut)
+    }
+
+    /// Whether this handler never presents a client certificate for any
+    /// caller. A component plugin that declared no `tls` may run on a handler
+    /// that cannot take its caller policy only when this holds: otherwise the
+    /// plugin could authenticate with a credential it was never granted.
+    fn never_presents_client_identity(&self) -> bool {
+        false
+    }
+
+    /// [`Self::grpc_transport`] for a request to `uri`, so a handler applying
+    /// per-caller TLS can select it per destination. The default ignores `uri`.
+    ///
+    /// # Errors
+    ///
+    /// The caller's TLS refuses the destination.
+    fn grpc_transport_for(
+        &self,
+        workload_id: &str,
+        _uri: &http::Uri,
+    ) -> Result<Option<crate::host::http_client::PooledClient>, wasmtime_wasi_http::Error> {
+        Ok(self.grpc_transport(workload_id))
+    }
+
     /// Pooled HTTP/2 transport for `workload_id`'s gRPC egress.
     ///
     /// gRPC requests never reach `send_request` — the
@@ -955,6 +1029,15 @@ pub trait OutgoingHandler: Send + Sync + 'static {
     fn install_egress_gate(&self, _gate: crate::host::egress_policy::EgressAddressGate) {}
 }
 
+/// Per-caller TLS policies, by caller id. Read on every outgoing request and
+/// written only when a caller starts or stops, so a lock-free swap of the
+/// whole map.
+type CallerPolicies = Arc<
+    arc_swap::ArcSwap<
+        std::collections::BTreeMap<String, Arc<dyn crate::host::http_client::CallerTlsPolicy>>,
+    >,
+>;
+
 /// Default [`OutgoingHandler`] — sends requests through per-workload
 /// keep-alive connection pools ([`crate::host::http_client::WorkloadClients`])
 /// so a workload's repeated and concurrent requests to the same authority
@@ -965,6 +1048,9 @@ pub trait OutgoingHandler: Send + Sync + 'static {
 /// Construction does no I/O: unless a configuration is supplied up front, the
 /// TLS configuration (and any trust-store read) is built lazily on first use.
 pub struct DefaultOutgoingHandler {
+    /// Per-destination TLS a caller registered (see
+    /// [`OutgoingHandler::set_caller_tls`]).
+    callers: CallerPolicies,
     /// Set eagerly by [`Self::with_tls_config`]; populated lazily with the
     /// process-wide default roots otherwise.
     clients: OnceLock<crate::host::http_client::WorkloadClients>,
@@ -984,6 +1070,7 @@ impl Default for DefaultOutgoingHandler {
     /// [`DefaultOutgoingHandler::with_quotas`].
     fn default() -> Self {
         Self {
+            callers: CallerPolicies::default(),
             clients: OnceLock::new(),
             quotas: crate::host::quota::QuotaRegistry::new(Default::default(), None),
             egress: Arc::default(),
@@ -1019,6 +1106,7 @@ impl DefaultOutgoingHandler {
             .with_egress_gate_cell(Arc::clone(&egress)),
         );
         Self {
+            callers: CallerPolicies::default(),
             clients: cell,
             quotas,
             egress,
@@ -1064,10 +1152,43 @@ impl DefaultOutgoingHandler {
             );
         }
         Self {
+            // Carried over, as the resolver is: a rebuilt cache must not forget
+            // a caller's TLS.
+            callers: self.callers,
             clients: cell,
             quotas,
             egress: self.egress,
         }
+    }
+
+    /// The TLS decision for `workload_id`'s request to `uri`: its registered
+    /// policy if it has one, and the resolver's otherwise.
+    fn selection(
+        &self,
+        workload_id: &str,
+        uri: &http::Uri,
+    ) -> crate::host::http_client::DestinationTls {
+        let callers = self.callers.load();
+        let policy = if callers.is_empty() {
+            None
+        } else {
+            callers.get(workload_id).cloned()
+        };
+        self.clients()
+            .selection(workload_id, uri, policy.as_deref())
+    }
+
+    /// `workload_id`'s pooled client under a decision already made.
+    fn client_with(
+        &self,
+        workload_id: &str,
+        uri: &http::Uri,
+        tls: crate::host::http_client::DestinationTls,
+    ) -> Result<crate::host::http_client::PooledClient, wasmtime_wasi_http::Error> {
+        self.clients().client_with(workload_id, tls).map_err(|reason| {
+            warn!(workload_id, uri = %uri, reason = %reason, "outgoing request refused by its TLS policy");
+            wasmtime_wasi_http::Error::HttpRequestDenied
+        })
     }
 
     fn clients(&self) -> &crate::host::http_client::WorkloadClients {
@@ -1087,10 +1208,34 @@ impl OutgoingHandler for DefaultOutgoingHandler {
         workload_id: &str,
         request: hyper::Request<WasiBody>,
         options: Option<RequestOptions>,
-        _fut: RequestIoFuture,
+        fut: RequestIoFuture,
     ) -> SendFuture {
-        let client = self.clients().client(workload_id);
-        Box::new(async move { client.send_request(request, options).await })
+        let tls = self.selection(workload_id, request.uri());
+        self.send_request_with(workload_id, request, options, fut, tls)
+    }
+
+    fn send_request_with(
+        &self,
+        workload_id: &str,
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+        _fut: RequestIoFuture,
+        tls: crate::host::http_client::DestinationTls,
+    ) -> SendFuture {
+        match self.client_with(workload_id, request.uri(), tls) {
+            Ok(client) => Box::new(async move { client.send_request(request, options).await }),
+            // Drained as an allowed-hosts denial is, so a 0.2 guest still
+            // writing its body sees the denial rather than a reset.
+            Err(_) => deny_request(request),
+        }
+    }
+
+    fn destination_tls(
+        &self,
+        caller: &str,
+        uri: &http::Uri,
+    ) -> crate::host::http_client::DestinationTls {
+        self.selection(caller, uri)
     }
 
     fn client_tls_config(&self) -> Option<Arc<rustls::ClientConfig>> {
@@ -1099,6 +1244,40 @@ impl OutgoingHandler for DefaultOutgoingHandler {
 
     fn grpc_transport(&self, workload_id: &str) -> Option<crate::host::http_client::PooledClient> {
         Some(self.clients().client(workload_id))
+    }
+
+    fn grpc_transport_for(
+        &self,
+        workload_id: &str,
+        uri: &http::Uri,
+    ) -> Result<Option<crate::host::http_client::PooledClient>, wasmtime_wasi_http::Error> {
+        self.client_with(workload_id, uri, self.selection(workload_id, uri))
+            .map(Some)
+    }
+
+    fn set_caller_tls(
+        &self,
+        caller: &str,
+        policy: Option<Arc<dyn crate::host::http_client::CallerTlsPolicy>>,
+    ) -> anyhow::Result<()> {
+        self.callers.rcu(|callers| {
+            let mut callers = (**callers).clone();
+            match &policy {
+                Some(policy) => {
+                    callers.insert(caller.to_string(), Arc::clone(policy));
+                }
+                None => {
+                    callers.remove(caller);
+                }
+            }
+            callers
+        });
+        // Connections authenticated under the policy being replaced must not
+        // serve the new one.
+        if let Some(clients) = self.clients.get() {
+            clients.invalidate(caller);
+        }
+        Ok(())
     }
 
     fn on_workload_bind(&self, workload_id: &str, call_concurrency: usize) {
@@ -1312,6 +1491,32 @@ pub trait HostHandler: Send + Sync + 'static {
         false
     }
 
+    /// Install `caller`'s per-destination TLS policy for its outgoing
+    /// requests, or remove it with `None`. See
+    /// [`OutgoingHandler::set_caller_tls`]; the default refuses a policy.
+    ///
+    /// # Errors
+    ///
+    /// This handler cannot apply per-caller TLS.
+    fn set_caller_tls(
+        &self,
+        caller: &str,
+        policy: Option<Arc<dyn crate::host::http_client::CallerTlsPolicy>>,
+    ) -> anyhow::Result<()> {
+        match policy {
+            None => Ok(()),
+            Some(_) => anyhow::bail!(
+                "this host's HTTP handler cannot apply per-caller TLS, which '{caller}' declares"
+            ),
+        }
+    }
+
+    /// See [`OutgoingHandler::never_presents_client_identity`]. The default is
+    /// false.
+    fn never_presents_client_identity(&self) -> bool {
+        false
+    }
+
     /// Handle an outgoing HTTP request from a workload, enforcing its
     /// `allowed_hosts`. `fut` is as described on
     /// [`OutgoingHandler::send_request`].
@@ -1338,6 +1543,11 @@ pub struct NullServer {}
 impl HostHandler for NullServer {
     async fn start(&self) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    /// It sends nothing at all.
+    fn never_presents_client_identity(&self) -> bool {
+        true
     }
 
     async fn stop(&self) -> anyhow::Result<()> {
@@ -2454,6 +2664,18 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
             .contains_key(workload_id)
     }
 
+    fn set_caller_tls(
+        &self,
+        caller: &str,
+        policy: Option<Arc<dyn crate::host::http_client::CallerTlsPolicy>>,
+    ) -> anyhow::Result<()> {
+        self.outgoing_handler.set_caller_tls(caller, policy)
+    }
+
+    fn never_presents_client_identity(&self) -> bool {
+        self.outgoing_handler.never_presents_client_identity()
+    }
+
     fn outgoing_request(
         &self,
         workload_id: &str,
@@ -2476,32 +2698,54 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
             // handler serves it from its own per-workload HTTP/2 pool, under
             // the same quota; otherwise the runtime opens a connection per
             // request.
-            match self.outgoing_handler.grpc_transport(workload_id) {
-                Some(client) => {
+            match self
+                .outgoing_handler
+                .grpc_transport_for(workload_id, request.uri())
+            {
+                Ok(Some(client)) => {
                     Box::new(async move { client.send_grpc_request(request, options).await })
                 }
-                None => Box::new(send_grpc_request(
+                Ok(None) => Box::new(send_grpc_request(
                     request,
                     options,
                     self.grpc_tls(),
                     self.egress_gate.get().cloned(),
                 )),
+                Err(wasmtime_wasi_http::Error::HttpRequestDenied) => deny_request(request),
+                Err(err) => Box::new(async move { Err(err) }),
             }
-        } else if let Some((target, destination)) =
-            self.local_destination(workload_id, request.uri())
-        {
-            // Same-host short-circuit: dispatch to a co-located workload's
-            // incoming path in-memory. Checked after the gRPC branch so gRPC
-            // always egresses over the network, and after `allowed_hosts` so
-            // the short-circuit never widens a workload's egress policy.
-            // `fut`, the guest's response-consumption outcome, is dropped here
-            // as wasmtime's default sender drops it.
-            debug!(workload_id, target, uri = %request.uri(), "routing outgoing request to co-located workload");
-            span.record("wasmcloud.http.route", "local");
-            self.send_local_request(workload_id, target, destination, request, options)
         } else {
-            self.outgoing_handler
-                .send_request(workload_id, request, options, fut)
+            use crate::host::http_client::DestinationTls;
+            // One TLS decision, made before choosing a route and carried into
+            // the send: a request whose TLS is selected or refused goes to the
+            // handler that applies it, never to a co-located workload.
+            let tls = self
+                .outgoing_handler
+                .destination_tls(workload_id, request.uri());
+            let local = match &tls {
+                DestinationTls::Default | DestinationTls::WithoutIdentity => {
+                    self.local_destination(workload_id, request.uri())
+                }
+                DestinationTls::Selected { .. } | DestinationTls::Refused(_) => None,
+            };
+            match local {
+                // Same-host short-circuit: dispatch to a co-located workload's
+                // incoming path in-memory. Checked after the gRPC branch so
+                // gRPC always egresses over the network, and after
+                // `allowed_hosts` so the short-circuit never widens a
+                // workload's egress policy. `fut`, the guest's
+                // response-consumption outcome, is dropped here as wasmtime's
+                // default sender drops it.
+                Some((target, destination)) => {
+                    debug!(workload_id, target, uri = %request.uri(), "routing outgoing request to co-located workload");
+                    span.record("wasmcloud.http.route", "local");
+                    self.send_local_request(workload_id, target, destination, request, options)
+                }
+                None => {
+                    self.outgoing_handler
+                        .send_request_with(workload_id, request, options, fut, tls)
+                }
+            }
         };
         // Instrument the whole send so the span is current while the response
         // is awaited; `record_outbound_status` then lands on this span.
@@ -4527,6 +4771,149 @@ mod tests {
                     "spy: no real request".to_string(),
                 )))
             })
+        }
+    }
+
+    /// A custom handler that never learned about caller TLS refuses a policy,
+    /// so the caller fails to start instead of sending without its trust.
+    #[tokio::test]
+    async fn caller_tls_cannot_fall_back_to_an_unaware_custom_handler() {
+        struct Nothing;
+        impl crate::host::http_client::CallerTlsPolicy for Nothing {
+            fn select(
+                &self,
+                _request: &crate::host::http_client::TlsRequest<'_>,
+            ) -> crate::host::http_client::DestinationTls {
+                crate::host::http_client::DestinationTls::Default
+            }
+        }
+        let server = Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
+            .outgoing_handler(SpyHandler {
+                called: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            })
+            .build()
+            .await
+            .unwrap();
+        assert!(
+            server
+                .set_caller_tls("plugin", Some(Arc::new(Nothing)))
+                .is_err()
+        );
+        server.set_caller_tls("plugin", None).unwrap();
+    }
+
+    /// Without a caller policy the resolver decides, and a request it refuses
+    /// or selects TLS for is kept off the co-located short-circuit too.
+    #[test]
+    fn destination_tls_falls_back_to_the_resolver() {
+        use crate::host::http_client::{ClientTlsConfigResolver, DestinationTls, TlsRequest};
+        struct RefuseInternal(Arc<rustls::ClientConfig>);
+        impl ClientTlsConfigResolver for RefuseInternal {
+            fn config_for(&self, _workload_id: &str) -> Arc<rustls::ClientConfig> {
+                Arc::clone(&self.0)
+            }
+            fn host_config(&self) -> Arc<rustls::ClientConfig> {
+                Arc::clone(&self.0)
+            }
+            fn config_for_destination(&self, request: &TlsRequest<'_>) -> DestinationTls {
+                match request.uri.host() {
+                    Some("refused.internal") => DestinationTls::Refused("no".into()),
+                    _ => DestinationTls::Default,
+                }
+            }
+        }
+        let handler = DefaultOutgoingHandler::with_tls_config_resolver(Arc::new(RefuseInternal(
+            crate::host::http_client::default_client_tls_config(),
+        )));
+        let decide = |host: &str| {
+            handler.destination_tls("workload", &format!("https://{host}/").parse().unwrap())
+        };
+        assert!(matches!(
+            decide("refused.internal"),
+            DestinationTls::Refused(_)
+        ));
+        assert!(matches!(decide("other.internal"), DestinationTls::Default));
+    }
+
+    /// A caller is kept off the co-located short-circuit exactly where its
+    /// policy decides something the short-circuit would skip, and only while
+    /// the policy is installed.
+    #[test]
+    fn a_callers_policy_decides_its_destination_tls() {
+        use crate::host::http_client::{CallerTlsPolicy, DestinationTls, TlsRequest};
+        struct ByHost;
+        impl CallerTlsPolicy for ByHost {
+            fn select(&self, request: &TlsRequest<'_>) -> DestinationTls {
+                match request.uri.host() {
+                    Some("selected.internal") => DestinationTls::Selected {
+                        key: "k".into(),
+                        config: crate::host::http_client::default_client_tls_config(),
+                    },
+                    Some("refused.internal") => DestinationTls::Refused("no".into()),
+                    Some("default.internal") => DestinationTls::Default,
+                    _ => DestinationTls::WithoutIdentity,
+                }
+            }
+        }
+        let handler = DefaultOutgoingHandler::default();
+        let applies = |caller: &str, host: &str| {
+            !matches!(
+                handler.destination_tls(caller, &format!("https://{host}/").parse().unwrap()),
+                DestinationTls::Default | DestinationTls::WithoutIdentity
+            )
+        };
+        assert!(!applies("plugin", "selected.internal"));
+        handler
+            .set_caller_tls("plugin", Some(Arc::new(ByHost)))
+            .unwrap();
+        assert!(applies("plugin", "selected.internal"));
+        assert!(applies("plugin", "refused.internal"));
+        assert!(!applies("plugin", "default.internal"));
+        assert!(!applies("plugin", "other.internal"));
+        assert!(!applies("other", "selected.internal"));
+        handler.set_caller_tls("plugin", None).unwrap();
+        assert!(!applies("plugin", "selected.internal"));
+    }
+
+    /// A refusal from the caller's policy reaches the guest as
+    /// `http-request-denied`, for gRPC as for plain HTTP.
+    #[tokio::test]
+    async fn a_refusing_caller_policy_denies_every_request() {
+        struct Refuse;
+        impl crate::host::http_client::CallerTlsPolicy for Refuse {
+            fn select(
+                &self,
+                _request: &crate::host::http_client::TlsRequest<'_>,
+            ) -> crate::host::http_client::DestinationTls {
+                crate::host::http_client::DestinationTls::Refused("test".into())
+            }
+        }
+        let server = Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse().unwrap())
+            .build()
+            .await
+            .unwrap();
+        server
+            .set_caller_tls("plugin", Some(Arc::new(Refuse)))
+            .unwrap();
+        for grpc in [false, true] {
+            let mut request = build_request("https://example.com/");
+            if grpc {
+                request
+                    .headers_mut()
+                    .insert("content-type", "application/grpc".parse().unwrap());
+            }
+            let result = Box::into_pin(server.outgoing_request(
+                "plugin",
+                request,
+                None,
+                no_io(),
+                &[AllowedHost::Any],
+            ))
+            .await;
+            assert!(
+                matches!(result, Err(wasmtime_wasi_http::Error::HttpRequestDenied)),
+                "grpc: {grpc}"
+            );
         }
     }
 

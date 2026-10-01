@@ -289,6 +289,9 @@ pub struct ComponentHostPlugin {
     runtime: PluginRuntime,
     egress_policy: crate::plugin::PluginEgressPolicy,
     tls_policy: Option<Arc<crate::plugin::PluginTlsPolicy>>,
+    /// Whether the plugin imports `wasi:http`, so its egress takes a caller
+    /// TLS policy: `tls_policy`, or [`crate::plugin::tls::NoGrantedIdentity`].
+    http_tls: bool,
     world: WitWorld,
     exports: Arc<Vec<ExportedInterface>>,
     /// Every exported function, flattened, for the TriggerService to resolve up front.
@@ -327,8 +330,8 @@ impl ComponentHostPlugin {
     /// a workload's `LocalResources` do. `host_ref` tracks host teardown and
     /// supplies its optional outgoing HTTP handler.
     /// `tls_policy` is the trust the `tls` blocks on those hosts declared,
-    /// served through the plugin's `wasmcloud:tls` or `wasi:tls` import; a
-    /// plugin that imports neither cannot apply it, and fails to build.
+    /// served through its HTTP or TLS imports. Required TLS disables raw
+    /// sockets and requires HTTPS or the host-owned TLS dialer.
     /// `socket_policy` supplies the host-wide gate and address policy. If it is
     /// omitted, the default keeps host loopback closed; a non-empty loopback
     /// grant then warns and remains denied.
@@ -355,6 +358,10 @@ impl ComponentHostPlugin {
         tls_policy: Option<Arc<crate::plugin::PluginTlsPolicy>>,
     ) -> anyhow::Result<Self> {
         crate::host::declared_port::validate_plugin_ports(&ports, &format!("host plugin '{id}'"))?;
+        anyhow::ensure!(
+            !tls_policy.as_ref().is_some_and(|p| p.requires_tls()) || ports.is_empty(),
+            "host component plugin '{id}' requires TLS and cannot declare raw listening ports"
+        );
         let socket_policy = socket_policy.unwrap_or_default();
         let egress_policy = crate::plugin::PluginEgressPolicy::new(
             Arc::clone(&allowed_hosts),
@@ -415,13 +422,19 @@ impl ComponentHostPlugin {
             introspect_imports(&component)?.iter().map(|i| &i.wit),
         );
         anyhow::ensure!(
-            tls_policy.is_none() || clients.tls_client,
+            tls_policy.is_none() || clients.any(),
             "host component plugin '{id}' declares `tls` on its allowedHosts entries, but imports \
-             neither `wasmcloud:tls/client` nor `wasi:tls/client`, so nothing would apply that \
+             no supported HTTP or TLS client interface, so nothing would apply that \
              trust. Drop `tls` from its `host.plugins` entry, or build the plugin against one of \
              those interfaces"
         );
-        if tls_policy.is_none() && clients.tls_client {
+        anyhow::ensure!(
+            !tls_policy.as_ref().is_some_and(|p| p.requires_tls())
+                || clients.dialer
+                || clients.http_client,
+            "host component plugin '{id}' requires TLS but imports neither a host-owned TLS dialer nor an HTTP client"
+        );
+        if tls_policy.is_none() && (clients.tls_client || clients.dialer) {
             warn!(
                 plugin_id = id,
                 "host component plugin imports client TLS, but no allowedHosts entry declares \
@@ -520,6 +533,7 @@ impl ComponentHostPlugin {
                 },
             },
             egress_policy,
+            http_tls: clients.http_client,
             tls_policy,
             world,
             exports: Arc::new(exports),
@@ -795,6 +809,21 @@ fn intern_plugin_id(id: &str) -> &'static str {
     Box::leak(id.to_owned().into_boxed_str())
 }
 
+/// The id a plugin's outgoing HTTP is pooled, quota'd and TLS-selected
+/// under. It starts with a control character, which the host refuses in a
+/// workload id, so no workload can share a plugin's pools or policy by
+/// taking its name.
+pub(crate) fn plugin_egress_caller(id: &str) -> String {
+    format!("\u{1f}plugin\u{1f}{id}")
+}
+
+impl ComponentHostPlugin {
+    /// The host's HTTP handler, when there is one and the host is still up.
+    fn http_handler(&self) -> Option<Arc<dyn crate::host::http::HostHandler>> {
+        self.runtime.store.host_ref.as_ref()?.handler()
+    }
+}
+
 #[async_trait]
 impl HostPlugin for ComponentHostPlugin {
     fn id(&self) -> &'static str {
@@ -845,6 +874,35 @@ impl HostPlugin for ComponentHostPlugin {
     }
 
     async fn start(&self) -> anyhow::Result<()> {
+        // Before the plugin runs anything: its HTTPS takes the declared trust
+        // from its first request, and a handler that cannot apply it fails the
+        // start rather than letting the plugin send without it. A plugin that
+        // declared none still gets a policy, so it never presents the host's
+        // client identity.
+        if self.http_tls
+            && let Some(handler) = self.http_handler()
+        {
+            let policy: Arc<dyn crate::host::http_client::CallerTlsPolicy> = match &self.tls_policy
+            {
+                Some(policy) => Arc::clone(policy) as _,
+                None => Arc::new(crate::plugin::tls::NoGrantedIdentity),
+            };
+            match handler.set_caller_tls(&plugin_egress_caller(self.id), Some(policy)) {
+                Ok(()) => {}
+                Err(err) if self.tls_policy.is_some() => {
+                    return Err(err.context(format!("host component plugin '{}'", self.id)));
+                }
+                Err(_) if handler.never_presents_client_identity() => {}
+                Err(err) => {
+                    return Err(err.context(format!(
+                        "host component plugin '{}' imports wasi:http, and this host's HTTP \
+                         handler can neither withhold its client identity from the plugin nor \
+                         guarantee it presents none",
+                        self.id
+                    )));
+                }
+            }
+        }
         let (tx, rx) = tokio::sync::mpsc::channel(CAPABILITY_CHANNEL_CAPACITY);
         // Publish the sender and snapshot the bound workloads atomically (see
         // [`replay_snapshot`]); leftover binds (a stop()/start() cycle) replay,
@@ -1100,6 +1158,13 @@ impl HostPlugin for ComponentHostPlugin {
                 "host component plugin supervisor did not stop in time; aborting it"
             );
             handle.abort();
+        }
+        // Last: until the plugin has stopped it may still be sending, and must
+        // not fall back to the host's default TLS while it does.
+        if self.http_tls
+            && let Some(handler) = self.http_handler()
+        {
+            let _ = handler.set_caller_tls(&plugin_egress_caller(self.id), None);
         }
         debug!(id = self.id, "stopped host component plugin");
         Ok(())
@@ -2041,9 +2106,17 @@ fn build_plugin_store(
     // its sockets registered, so reusing one would fail the next incarnation's
     // bind with `AddressInUse`.
     let loopback = store_context.network.replace();
+    let tls_required = store_context
+        .tls_policy
+        .as_ref()
+        .is_some_and(|p| p.requires_tls());
     let sockets_ctx = crate::sockets::WasiSocketsCtx {
         socket_addr_check: crate::sockets::SocketAddrCheck::new(move |addr, reason| {
-            policy.decide(reason, addr)
+            if tls_required {
+                crate::sockets::AddrDecision::Deny(crate::sockets::DenyReason::NotPermitted)
+            } else {
+                policy.decide(reason, addr)
+            }
         }),
         loopback,
         allowed_ip_name_lookups: Arc::clone(&store_context.allowed_ip_name_lookups),
@@ -2051,6 +2124,7 @@ fn build_plugin_store(
     };
 
     let mut ctx_builder = Ctx::builder(id, id)
+        .with_egress_caller(plugin_egress_caller(id))
         .with_plugins(
             native_plugins
                 .iter()
@@ -2059,7 +2133,11 @@ fn build_plugin_store(
         )
         .with_sockets(sockets_ctx)
         .with_allowed_hosts(Arc::clone(&store_context.allowed_hosts))
-        .with_plugin_tls(store_context.tls_policy.clone());
+        .with_plugin_tls(store_context.tls_policy.clone())
+        .with_plugin_network(crate::plugin::tls::PluginNetwork {
+            sockets: Arc::clone(&store_context.socket_policy),
+            names: Arc::clone(&store_context.allowed_ip_name_lookups),
+        });
     if let Some(host) = &store_context.host_ref {
         ctx_builder = ctx_builder.with_host(host);
     }

@@ -129,7 +129,7 @@ host:
     - id: wasmcloud-nats
       allowedHosts:
         - host: "tls://nats.internal:4222"
-          tls: { trust: nats-ca, identity: nats-client }
+          tls: { trust: nats-ca, identity: nats-client }   # add `required: true` to enforce; see below
       allowedIpNameLookups: ["nats.internal"]
 ```
 
@@ -182,13 +182,67 @@ a separate, delegated form that is not built yet.
 A plugin that cannot apply a `tls` block fails to load rather than connecting
 without it. A native plugin applies it to its own client (`wasmcloud-nats`
 dials the granted servers with that trust and requires TLS). A component
-plugin applies it through `wasmcloud:tls/client` or `wasi:tls/client`: the
-host runs the handshake with the selected trust and identity over the plugin's
-own socket, so the key never reaches the guest, and refuses a handshake to a
-server name no grant declares `tls` for. The plugin owns that socket, so
-whether it runs TLS at all is still its choice. An identity's expiry or
-rotation reaches the plugin's next handshake; a session already established
-stays authenticated until the plugin or the peer closes it.
+plugin applies it through any of the following; the key never reaches the
+guest:
+
+- `wasi:http`: HTTPS requests from both WASI HTTP versions, gRPC included,
+  select the grant for their endpoint through the host's TLS resolver, and
+  pools are kept apart per plugin and selection. An outgoing handler that
+  cannot apply per-caller TLS makes the plugin fail to start rather than send
+  without it.
+- `wasmcloud:tls/client` or `wasi:tls/client`: the host runs the handshake over
+  the plugin's own socket. It sees only the server name, so only a grant for
+  the whole host (no port or scheme) applies, and a handshake no such grant
+  declares `tls` for is refused. The plugin owns that socket, so whether it
+  runs TLS at all is still its choice.
+- `wasmcloud:tls/dialer`: see below.
+
+A component plugin never presents the host's own client identity
+(`--http-client-cert-path`). A custom outgoing handler must either apply
+per-caller TLS or return `true` from `never_presents_client_identity`; with
+neither, a component plugin importing `wasi:http` fails to start. Its HTTPS to
+an endpoint without a TLS grant
+verifies the server as the host does and presents no certificate, whether or
+not the plugin declared `tls` anywhere.
+
+What an identity's expiry reaches depends on the path:
+
+- `wasi:http`: every request is checked when it is dispatched, so while a
+  granted identity has expired its requests are refused, even on a pooled
+  connection opened earlier. A request already sent completes.
+- `wasmcloud:tls/client` and `wasi:tls/client`: expiry and rotation reach the
+  plugin's next handshake. A session already established stays authenticated
+  until the plugin or the peer closes it.
+- `wasmcloud:tls/dialer`: `connect` refuses while the identity has expired. A
+  connection opened earlier stays open, and authenticated, until either side
+  closes it.
+
+None of these is revocation: a credential that must stop working now needs the
+server to stop accepting it.
+
+Without `required: true`, a component with raw socket permission can still
+send plaintext or run its own TLS; importing a TLS interface does not prove it
+uses it.
+
+If **any** grant sets `required: true`, the component plugin cannot create or
+use raw TCP or UDP sockets, even through wildcard or loopback grants, and
+cannot declare listening ports. Its outgoing HTTP requests must use HTTPS and
+match a TLS grant; plaintext requests and HTTPS without declared trust fail.
+These restrictions hold even when the host's socket policy is in count mode.
+
+For other protocols under `required: true`, import `wasmcloud:tls/dialer@0.1.0`
+and call `connect("nats.internal", 4222)`. The host checks the grant for
+`tls://nats.internal:4222`, DNS permission, resolved addresses, loopback
+grants, and connection quota, then completes TLS before returning a connection
+whose `send` and
+`receive` streams carry application bytes. The component never gets a raw
+socket. The dialer requires TLS from the start; it does not implement
+STARTTLS. It is a wasmCloud addition: `wasmcloud:tls/client` and `types`
+follow `wasi:tls`, and `dialer` has no upstream counterpart.
+
+The restrictions cover this plugin's own host networking interfaces. Other
+capabilities granted to the plugin keep their own policies; `required` does
+not impose TLS on another component's or native plugin's connections.
 
 `wash host` keeps workload `hostPath` volumes away from every file the catalogs
 name, as it does for its other credentials, and from kernel filesystems such as
@@ -220,7 +274,8 @@ The entry must name the host with no port or scheme. `wasi:tls` and
 host applies to them; `api.example.com:443` with `tls: {}` loads but leaves
 every handshake refused. The same entry also permits egress to every port of
 that host, which is the cost of a handshake that cannot say which port it is
-on.
+on. A plugin that should reach only one port can use `wasmcloud:tls/dialer`,
+whose grants are per endpoint.
 
 ## License
 

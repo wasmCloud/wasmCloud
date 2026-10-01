@@ -20,6 +20,22 @@ impl HttpGuest for Component {
             .get_path_with_query()
             .unwrap_or_else(|| "/".to_string());
         let (route, query) = path.split_once('?').unwrap_or((path.as_str(), ""));
+        let endpoint = query_get(query, "endpoint").unwrap_or_default();
+        let reply = match route {
+            "/dial" => Some(probe::dial(endpoint).await),
+            "/http" => Some(
+                probe::http_get(
+                    endpoint,
+                    query_get(query, "grpc").as_deref() == Some("true"),
+                )
+                .await,
+            ),
+            "/raw" => Some(probe::raw_denied().await.to_string()),
+            _ => None,
+        };
+        if let Some(reply) = reply {
+            return Ok(make_response(200, reply.into_bytes()));
+        }
         if route != "/ping" {
             return Ok(make_response(404, Vec::new()));
         }

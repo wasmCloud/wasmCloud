@@ -866,6 +866,14 @@ impl Host {
         &self,
         request: WorkloadStartRequest,
     ) -> anyhow::Result<ResolvedWorkload> {
+        // Egress pools and caller policies are keyed by id, and host component
+        // plugins use ids beginning with a control character; a workload id
+        // containing one could collide with them.
+        anyhow::ensure!(
+            !request.workload_id.chars().any(char::is_control),
+            "workload id {:?} contains a control character",
+            request.workload_id
+        );
         let service_present = request.workload.service.is_some();
         let workload_id = request.workload_id.clone();
 

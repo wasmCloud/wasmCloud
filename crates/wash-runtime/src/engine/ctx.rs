@@ -335,6 +335,11 @@ pub struct Ctx {
         allow(dead_code)
     )]
     pub(crate) plugin_tls: Option<Arc<crate::plugin::PluginTlsPolicy>>,
+    #[cfg_attr(
+        not(all(feature = "host-component-plugins", feature = "oci")),
+        allow(dead_code)
+    )]
+    pub(crate) plugin_network: Option<Arc<crate::plugin::tls::PluginNetwork>>,
 }
 
 impl Ctx {
@@ -530,6 +535,8 @@ pub struct CtxBuilder {
     http_handler: Option<crate::host::HostRef>,
     allowed_hosts: Arc<[AllowedHost]>,
     plugin_tls: Option<Arc<crate::plugin::PluginTlsPolicy>>,
+    plugin_network: Option<Arc<crate::plugin::tls::PluginNetwork>>,
+    egress_caller: Option<Arc<str>>,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -548,6 +555,8 @@ impl CtxBuilder {
             plugins: HashMap::new(),
             allowed_hosts: Default::default(),
             plugin_tls: None,
+            plugin_network: None,
+            egress_caller: None,
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
         }
@@ -616,6 +625,29 @@ impl CtxBuilder {
         self
     }
 
+    #[cfg_attr(
+        not(all(feature = "host-component-plugins", feature = "oci")),
+        allow(dead_code)
+    )]
+    pub(crate) fn with_plugin_network(
+        mut self,
+        network: crate::plugin::tls::PluginNetwork,
+    ) -> Self {
+        self.plugin_network = Some(Arc::new(network));
+        self
+    }
+
+    /// The id outgoing HTTP from this context is sent as, when it is not the
+    /// workload id — a host component plugin's own caller id.
+    #[cfg_attr(
+        not(all(feature = "host-component-plugins", feature = "oci")),
+        allow(dead_code)
+    )]
+    pub(crate) fn with_egress_caller(mut self, caller: impl Into<Arc<str>>) -> Self {
+        self.egress_caller = Some(caller.into());
+        self
+    }
+
     pub fn build(self) -> Ctx {
         let plugins = self
             .plugins
@@ -625,7 +657,9 @@ impl CtxBuilder {
 
         let http_hooks = CtxHttpHooks {
             host: HostLink(self.http_handler),
-            workload_id: self.workload_id.clone(),
+            workload_id: self
+                .egress_caller
+                .unwrap_or_else(|| self.workload_id.clone()),
             allowed_hosts: self.allowed_hosts,
             warned_unserved: false,
         };
@@ -658,6 +692,7 @@ impl CtxBuilder {
             plugins,
             http_hooks,
             plugin_tls: self.plugin_tls,
+            plugin_network: self.plugin_network,
         }
     }
 }

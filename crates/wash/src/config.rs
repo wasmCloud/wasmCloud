@@ -628,7 +628,9 @@ pub struct HostPluginConfig {
     /// `tls: {}` is the platform's default roots and no identity. A plugin that
     /// cannot apply a `tls` block fails to load rather than connecting without
     /// it: a native plugin must support it, and a component plugin must import
-    /// `wasmcloud:tls/client` or `wasi:tls/client`.
+    /// a supported HTTP or TLS client. `required: true` disables all raw sockets
+    /// and plaintext HTTP for the component plugin; it must use HTTPS or
+    /// `wasmcloud:tls/dialer` with matching TLS trust.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_hosts: Vec<wash_runtime::plugin::PluginAllowedHost>,
     /// Names this plugin may resolve. Empty denies every lookup.

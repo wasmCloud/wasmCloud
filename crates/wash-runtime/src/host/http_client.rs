@@ -910,6 +910,70 @@ pub trait ClientTlsConfigResolver: Send + Sync + 'static {
     /// [`OutgoingHandler::client_tls_config`]: crate::host::http::OutgoingHandler::client_tls_config
     /// [`DefaultOutgoingHandler`]: crate::host::http::DefaultOutgoingHandler
     fn host_config(&self) -> Arc<rustls::ClientConfig>;
+
+    /// The TLS `workload_id` uses toward one destination, when that is not
+    /// simply [`Self::config_for`]: the hook for a policy that selects trust
+    /// and identity per destination. The default selects nothing.
+    ///
+    /// Consulted per request and must be as cheap as [`Self::config_for`]. A
+    /// caller with a policy registered on the handler (see
+    /// [`crate::host::http::OutgoingHandler::set_caller_tls`]) is answered by
+    /// that policy instead.
+    fn config_for_destination(&self, _request: &TlsRequest<'_>) -> DestinationTls {
+        DestinationTls::Default
+    }
+}
+
+/// One outbound request, as a TLS selection sees it.
+///
+/// Non-exhaustive so the host can describe more of the request, such as the
+/// workload a plugin is acting for, without breaking existing policies.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug)]
+pub struct TlsRequest<'a> {
+    /// The host-assigned id of the caller whose pools and quota the request
+    /// uses: a workload, or a plugin's egress caller.
+    pub caller: &'a str,
+    /// The destination.
+    pub uri: &'a http::Uri,
+}
+
+impl<'a> TlsRequest<'a> {
+    pub fn new(caller: &'a str, uri: &'a http::Uri) -> Self {
+        Self { caller, uri }
+    }
+}
+
+/// What a caller's TLS policy selects for one outbound destination.
+#[derive(Clone)]
+pub enum DestinationTls {
+    /// Nothing specific: the caller's usual configuration.
+    Default,
+    /// The caller's usual server verification, presenting no client
+    /// certificate even when its usual configuration holds one. For a caller
+    /// whose policy grants it no identity toward this destination.
+    WithoutIdentity,
+    /// Connect with `config`. Connections are pooled apart per caller and
+    /// `key`, so two selections never share a connection or a session — and a
+    /// replaced policy, carrying new keys, never reuses one its predecessor
+    /// authenticated.
+    Selected {
+        key: Arc<str>,
+        config: Arc<rustls::ClientConfig>,
+    },
+    /// Refuse the request, for the reason given.
+    Refused(Arc<str>),
+}
+
+/// A caller's per-destination TLS: which trust verifies each destination and
+/// which identity is presented to it — one decision with the grant that
+/// allows the destination at all.
+pub trait CallerTlsPolicy: Send + Sync + 'static {
+    /// The TLS for `request`. Must not block.
+    ///
+    /// A selection that depends on more than the destination, such as the
+    /// caller, must say so in its key, since the key is what keeps pools apart.
+    fn select(&self, request: &TlsRequest<'_>) -> DestinationTls;
 }
 
 /// One configuration for every workload, which is what a host without
@@ -923,6 +987,35 @@ impl ClientTlsConfigResolver for Arc<rustls::ClientConfig> {
         Arc::clone(self)
     }
 }
+
+/// `config` with its client certificate resolver replaced by one that never
+/// presents a certificate.
+fn without_identity(config: &rustls::ClientConfig) -> Arc<rustls::ClientConfig> {
+    #[derive(Debug)]
+    struct NoIdentity;
+    impl rustls::client::ResolvesClientCert for NoIdentity {
+        fn resolve(
+            &self,
+            _root_hint_subjects: &[&[u8]],
+            _sigschemes: &[rustls::SignatureScheme],
+        ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+            None
+        }
+
+        fn has_certs(&self) -> bool {
+            false
+        }
+    }
+    let mut config = config.clone();
+    config.client_auth_cert_resolver = Arc::new(NoIdentity);
+    Arc::new(config)
+}
+
+/// Between a workload id and a selection key in the client cache. A control
+/// character: the host refuses a workload id containing one, and selection
+/// keys never do, so a selected pool can never be mistaken for another
+/// workload's.
+const SELECTION_SEPARATOR: char = '\u{1f}';
 
 /// Per-workload pooled clients sharing one host-wide ceiling.
 ///
@@ -954,6 +1047,9 @@ pub struct WorkloadClients {
     /// rather than per-client state: it arrives when the workload binds,
     /// before any request builds a client, and is dropped when it unbinds.
     call_concurrency: Arc<std::sync::RwLock<BTreeMap<String, usize>>>,
+    /// Callers with a pool built for a selection, so [`Self::invalidate`]
+    /// scans for those only when there can be any.
+    selected: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
     clients: moka::sync::Cache<String, PooledClient>,
     /// The address check every client's new connections pass; see
     /// [`Self::install_egress_gate`].
@@ -1003,8 +1099,10 @@ impl WorkloadClients {
             tls,
             quotas,
             call_concurrency: Arc::new(std::sync::RwLock::new(BTreeMap::new())),
+            selected: Arc::default(),
             clients: moka::sync::Cache::builder()
                 .time_to_idle(WORKLOAD_CLIENT_IDLE)
+                .support_invalidation_closures()
                 .build(),
             egress: Arc::default(),
         }
@@ -1059,13 +1157,102 @@ impl WorkloadClients {
     /// connections and TLS session tickets (see
     /// [`crate::host::http::OutgoingHandler`]).
     pub fn client(&self, workload_id: &str) -> PooledClient {
+        self.pooled(workload_id, workload_id, || {
+            self.tls.config_for(workload_id)
+        })
+    }
+
+    /// The pooled client for `workload_id`'s request to `uri`: [`Self::client`],
+    /// unless `policy` — or, without one, the resolver's
+    /// [`ClientTlsConfigResolver::config_for_destination`] — selects other TLS
+    /// for that destination. A selection gets a pool of its own, drawing on the
+    /// same quota as the workload's other connections.
+    ///
+    /// # Errors
+    ///
+    /// The selection refused the request; the reason is returned.
+    pub fn client_for(
+        &self,
+        workload_id: &str,
+        uri: &http::Uri,
+        policy: Option<&dyn CallerTlsPolicy>,
+    ) -> Result<PooledClient, Arc<str>> {
+        self.client_with(workload_id, self.selection(workload_id, uri, policy))
+    }
+
+    /// The TLS decision for `workload_id`'s request to `uri`: `policy`'s, or
+    /// without one the resolver's
+    /// [`ClientTlsConfigResolver::config_for_destination`]. Everything that
+    /// routes or sends a request takes this one decision.
+    pub fn selection(
+        &self,
+        workload_id: &str,
+        uri: &http::Uri,
+        policy: Option<&dyn CallerTlsPolicy>,
+    ) -> DestinationTls {
+        let request = TlsRequest::new(workload_id, uri);
+        match policy {
+            Some(policy) => policy.select(&request),
+            None => self.tls.config_for_destination(&request),
+        }
+    }
+
+    /// The pooled client for a decision [`Self::selection`] already made.
+    ///
+    /// # Errors
+    ///
+    /// The decision refused the request; the reason is returned.
+    pub fn client_with(
+        &self,
+        workload_id: &str,
+        selection: DestinationTls,
+    ) -> Result<PooledClient, Arc<str>> {
+        match selection {
+            DestinationTls::Default => Ok(self.client(workload_id)),
+            // Two separators: no selection key produces that, since keys hold
+            // no control characters.
+            DestinationTls::WithoutIdentity => Ok(self.selected_pool(
+                workload_id,
+                format!("{workload_id}{SELECTION_SEPARATOR}{SELECTION_SEPARATOR}"),
+                || without_identity(&self.tls.config_for(workload_id)),
+            )),
+            DestinationTls::Selected { key, config } => Ok(self.selected_pool(
+                workload_id,
+                format!("{workload_id}{SELECTION_SEPARATOR}{key}"),
+                || config,
+            )),
+            DestinationTls::Refused(reason) => Err(reason),
+        }
+    }
+
+    fn selected_pool(
+        &self,
+        workload_id: &str,
+        cache_key: String,
+        config: impl FnOnce() -> Arc<rustls::ClientConfig>,
+    ) -> PooledClient {
+        self.pooled(workload_id, &cache_key, || {
+            self.selected
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(workload_id.to_string());
+            config()
+        })
+    }
+
+    fn pooled(
+        &self,
+        workload_id: &str,
+        cache_key: &str,
+        config: impl FnOnce() -> Arc<rustls::ClientConfig>,
+    ) -> PooledClient {
         // Looked up on every call, not just on a client-cache miss, so the
         // quota's idle window is refreshed alongside the client's and a
         // workload's allowance cannot expire out from under a client that is
         // still serving it. The quota's window is the longer of the two, so it
         // outlives the client either way.
         let quota = self.quotas.for_guest(workload_id);
-        self.clients.get_with_by_ref(workload_id, || {
+        self.clients.get_with_by_ref(cache_key, || {
             let calls = self
                 .call_concurrency
                 .read()
@@ -1074,7 +1261,7 @@ impl WorkloadClients {
                 .copied()
                 .unwrap_or(1);
             PooledClient::bounded(
-                self.tls.config_for(workload_id),
+                config(),
                 Some(Arc::from(workload_id)),
                 quota.outbound_http_permits(),
                 // An unset host-wide ceiling is spelled as an effectively
@@ -1102,6 +1289,21 @@ impl WorkloadClients {
     /// window ([`WORKLOAD_CLIENT_IDLE`]) once nothing refers to the workload.
     pub fn invalidate(&self, workload_id: &str) {
         self.clients.invalidate(workload_id);
+        // A scan of the whole cache, so only for a caller that has selected
+        // pools; most workloads never do.
+        let had_selected = self
+            .selected
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(workload_id);
+        if had_selected {
+            let selected = format!("{workload_id}{SELECTION_SEPARATOR}");
+            // Only fails when the cache was built without closure support,
+            // which this one never is.
+            let _ = self
+                .clients
+                .invalidate_entries_if(move |key, _| key.starts_with(&selected));
+        }
         // moka may defer dropping the evicted value to a maintenance pass;
         // force it so the pool (and the permits its idle connections pin) is
         // released now, not on the next cache access.
@@ -1696,6 +1898,42 @@ mod tests {
         };
         let config = opts.build().expect("a matching pair builds");
         assert!(config.client_auth_cert_resolver.has_certs());
+    }
+
+    /// A caller whose policy grants it no identity never presents the host's,
+    /// and is pooled apart from the caller's usual client.
+    #[tokio::test]
+    async fn without_identity_withholds_the_hosts_client_certificate() {
+        struct NoGrant;
+        impl CallerTlsPolicy for NoGrant {
+            fn select(&self, _request: &TlsRequest<'_>) -> DestinationTls {
+                DestinationTls::WithoutIdentity
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let host = ClientTlsOptions {
+            client_identity: Some(write_identity(dir.path(), "id")),
+            ..Default::default()
+        }
+        .build()
+        .unwrap();
+        let clients = WorkloadClients::new(host);
+        let uri: http::Uri = "https://api.internal/".parse().unwrap();
+        assert!(
+            clients
+                .client("plugin")
+                .tls
+                .client_auth_cert_resolver
+                .has_certs()
+        );
+        let withheld = clients.client_for("plugin", &uri, Some(&NoGrant)).unwrap();
+        let resolver = &withheld.tls.client_auth_cert_resolver;
+        assert!(!resolver.has_certs());
+        assert!(
+            resolver
+                .resolve(&[], &[rustls::SignatureScheme::ED25519])
+                .is_none()
+        );
     }
 
     /// A crossed pair fails at build time rather than on every handshake,
@@ -2806,6 +3044,49 @@ mod tests {
         assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert!(meters.would_deny(crate::sockets::DenyReason::BlockedRange) >= 1);
         assert_eq!(meters.denied(crate::sockets::DenyReason::BlockedRange), 0);
+    }
+
+    /// A caller whose policy selects its own TLS, or withholds an identity,
+    /// gets a pool of its own; that pool is behind the host's gate too.
+    #[tokio::test]
+    async fn a_callers_selected_pools_are_gated_too() {
+        struct Select(DestinationTls);
+        impl CallerTlsPolicy for Select {
+            fn select(&self, _request: &TlsRequest<'_>) -> DestinationTls {
+                self.0.clone()
+            }
+        }
+        let (addr, conns) = spawn_counting_server().await;
+        let (gate, _) = egress_gate(
+            crate::sockets::policy::EgressMode::Enforce,
+            Default::default(),
+        );
+        let clients = WorkloadClients::new(default_client_tls_config());
+        assert!(clients.install_egress_gate(gate));
+        let uri: http::Uri = format!("http://localhost:{}/", addr.port())
+            .parse()
+            .unwrap();
+        for selection in [
+            DestinationTls::WithoutIdentity,
+            DestinationTls::Selected {
+                key: "grant".into(),
+                config: default_client_tls_config(),
+            },
+        ] {
+            let client = clients
+                .client_for("plugin", &uri, Some(&Select(selection)))
+                .unwrap();
+            let err = client
+                .send_request(request(&uri.to_string()), test_options())
+                .await
+                .err()
+                .expect("loopback must be refused");
+            assert!(
+                matches!(err, HttpError::DestinationIpProhibited),
+                "expected DestinationIpProhibited, got {err:?}"
+            );
+        }
+        assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

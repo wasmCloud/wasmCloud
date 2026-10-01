@@ -5,6 +5,8 @@ package acme:tlsplugin@0.1.0;
 world tls-plugin {
     import wasi:sockets/types@0.3.0;
     import wasmcloud:tls/client@0.1.0;
+    import wasmcloud:tls/dialer@0.1.0;
+    import wasi:http/client@0.3.0;
     import wasi:tls/client@0.3.0-draft;
     export acme:tlsprobe/probe@0.1.0;
 }

@@ -814,7 +814,13 @@ runtime:
       #                   identity needs an exact host, never a `*.suffix`;
       #                   a trust bundle may cover a `*.suffix` of two or
       #                   more labels, never `*` or `*.com`. A plugin that
-      #                   cannot apply the trust fails to load.
+      #                   cannot apply the trust fails to load. HTTP and
+      #                   gRPC over HTTPS use the matching trust. With
+      #                   `required: true` in any entry's `tls`, a component
+      #                   must use HTTPS or wasmcloud:tls/dialer: raw
+      #                   sockets, listening ports and plaintext HTTP are
+      #                   disabled. Without it, raw sockets can still send
+      #                   plaintext.
       #
       #                   The guarantee differs. A component plugin is
       #                   checked at the address a name resolved to, against
