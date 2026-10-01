@@ -31,7 +31,8 @@ See [Security Team Membership](#security-team-membership) for details.
 
 You believe you have found a vulnerability in a wasmCloud project or in a dependency of a wasmCloud
 project. This includes any repository in the [wasmCloud GitHub
-organization](https://github.com/wasmCloud).
+organization](https://github.com/wasmCloud). For what this repository treats as a vulnerability,
+and what it does not, see the [threat model](THREAT_MODEL.md).
 
 ### When Not To Send A Report
 
