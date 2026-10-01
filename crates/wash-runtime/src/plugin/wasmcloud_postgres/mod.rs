@@ -103,7 +103,17 @@ struct PreparedEntry {
     sql: String,
     param_types: Vec<PgType>,
     database: String,
-    component_id: String,
+    /// The workload whose component prepared it, so that workload's unbind
+    /// reaps it.
+    workload_id: String,
+}
+
+/// The database a component's unnamed postgres import is configured for.
+struct ComponentDatabase {
+    /// The workload the component belongs to, so that workload's unbind
+    /// drops the mapping.
+    workload_id: String,
+    database: String,
 }
 
 /// wasmcloud:postgres host plugin.
@@ -122,8 +132,8 @@ pub struct WasmcloudPostgres {
     pools: Arc<RwLock<HashMap<String, Pool>>>,
     /// prepared_statement_token -> PreparedEntry
     prepared_statements: Arc<RwLock<HashMap<String, PreparedEntry>>>,
-    /// component_id -> database_name
-    component_databases: Arc<RwLock<HashMap<String, String>>>,
+    /// component_id -> database the component is configured for
+    component_databases: Arc<RwLock<HashMap<String, ComponentDatabase>>>,
     /// Notifies the pool reaper that an unbind happened
     pool_reaper_notify: Arc<tokio::sync::Notify>,
     /// Multiplexing core for `(implements ..)` named imports: builds and shares
@@ -228,7 +238,7 @@ impl WasmcloudPostgres {
             .read()
             .await
             .get(component_id)
-            .cloned()
+            .map(|c| c.database.clone())
     }
 }
 
@@ -342,8 +352,7 @@ impl<'a> prepared::Host for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<String, StatementPrepareError>> {
         let plugin = self.try_get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID)?;
 
-        let component_id = self.component_id.to_string();
-        let database = match plugin.database_for_component(&component_id).await {
+        let database = match plugin.database_for_component(&self.component_id).await {
             Some(db) => db,
             None => {
                 return Ok(Err(StatementPrepareError::Unexpected(
@@ -389,7 +398,7 @@ impl<'a> prepared::Host for ActiveCtx<'a> {
                 sql: statement,
                 param_types,
                 database,
-                component_id,
+                workload_id: self.workload_id.to_string(),
             },
         );
 
@@ -411,7 +420,7 @@ impl<'a> prepared::Host for ActiveCtx<'a> {
                     sql: entry.sql.clone(),
                     param_types: entry.param_types.clone(),
                     database: entry.database.clone(),
-                    component_id: entry.component_id.clone(),
+                    workload_id: entry.workload_id.clone(),
                 },
                 None => return Ok(Err(PreparedStatementExecError::UnknownPreparedQuery)),
             }
@@ -531,8 +540,12 @@ impl HostPlugin for WasmcloudPostgres {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
                 // Determine which databases are still in use
-                let in_use: HashSet<String> =
-                    component_databases.read().await.values().cloned().collect();
+                let in_use: HashSet<String> = component_databases
+                    .read()
+                    .await
+                    .values()
+                    .map(|c| c.database.clone())
+                    .collect();
 
                 // Remove pools for databases with no remaining components
                 let mut pools_lock = pools.write().await;
@@ -571,6 +584,7 @@ impl HostPlugin for WasmcloudPostgres {
         let pg_sync: Vec<&WitInterface> = pg.iter().copied().filter(|i| !is_async(i)).collect();
 
         let component_id = component_handle.id().to_string();
+        let workload_id = component_handle.workload_id().to_string();
         // Clone the component (cheap, Arc-backed) before taking the mutable
         // linker borrow — named-import linking needs both.
         #[cfg(feature = "wasm_component_model_implements")]
@@ -601,10 +615,13 @@ impl HostPlugin for WasmcloudPostgres {
                     database = %database,
                     "Binding postgres plugin to component (per-component database)"
                 );
-                self.component_databases
-                    .write()
-                    .await
-                    .insert(component_id.clone(), database);
+                self.component_databases.write().await.insert(
+                    component_id.clone(),
+                    ComponentDatabase {
+                        workload_id: workload_id.clone(),
+                        database,
+                    },
+                );
                 bindings::wasmcloud::postgres0_1_1_draft::query::add_to_linker::<_, SharedCtx>(
                     linker,
                     extract_active_ctx,
@@ -660,10 +677,13 @@ impl HostPlugin for WasmcloudPostgres {
                     database = %database,
                     "Binding async postgres plugin to component (per-component database)"
                 );
-                self.component_databases
-                    .write()
-                    .await
-                    .insert(component_id.clone(), database);
+                self.component_databases.write().await.insert(
+                    component_id.clone(),
+                    ComponentDatabase {
+                        workload_id: workload_id.clone(),
+                        database,
+                    },
+                );
                 async_p3::add_default_to_linker(linker)?;
             }
 
@@ -688,22 +708,19 @@ impl HostPlugin for WasmcloudPostgres {
     ) -> anyhow::Result<()> {
         tracing::debug!(workload_id = %workload_id, "Unbinding postgres plugin from workload");
 
-        // Remove component → database mappings for this workload (legacy path).
-        {
-            let mut component_databases = self.component_databases.write().await;
-            component_databases.retain(|component_id, _| !component_id.starts_with(workload_id));
-        }
+        self.component_databases
+            .write()
+            .await
+            .retain(|_, c| c.workload_id != workload_id);
 
-        // Clean up prepared statements created by this workload's components.
-        // Both the legacy per-database path and implements-routed named imports
-        // tag each entry with the creating `component_id`, so match on it
-        // directly — a pure-multiplex workload never populates
-        // `component_databases`, so deriving the set from there would miss its
-        // prepared statements.
-        {
-            let mut prepared = self.prepared_statements.write().await;
-            prepared.retain(|_, entry| !entry.component_id.starts_with(workload_id));
-        }
+        // Both the per-database path and implements-routed named imports tag
+        // each entry with its workload; a pure-multiplex workload never
+        // populates `component_databases`, so its statements can't be found
+        // through it.
+        self.prepared_statements
+            .write()
+            .await
+            .retain(|_, entry| entry.workload_id != workload_id);
 
         // Signal the pool reaper to check for idle pools
         self.pool_reaper_notify.notify_one();
@@ -716,27 +733,42 @@ impl HostPlugin for WasmcloudPostgres {
 mod tests {
     use super::*;
 
-    fn entry(component_id: &str) -> PreparedEntry {
+    fn entry(workload_id: &str) -> PreparedEntry {
         PreparedEntry {
             sql: "SELECT 1".to_string(),
             param_types: Vec::new(),
             database: String::new(),
-            component_id: component_id.to_string(),
+            workload_id: workload_id.to_string(),
         }
     }
 
-    /// Unbinding a workload reaps prepared statements tagged with any of its
-    /// component ids — covering both the legacy path and implements-routed named
-    /// imports (which set an empty `database` but the same `component_id`), and
-    /// leaving other workloads' statements untouched.
+    fn database(workload_id: &str, database: &str) -> ComponentDatabase {
+        ComponentDatabase {
+            workload_id: workload_id.to_string(),
+            database: database.to_string(),
+        }
+    }
+
+    /// Component ids are fresh UUIDs that share nothing with their workload's
+    /// id, so unbind must match on the workload each entry was tagged with —
+    /// exactly, so a workload whose id prefixes another's leaves it alone.
     #[tokio::test]
-    async fn unbind_reaps_only_this_workloads_prepared_statements() {
+    async fn unbind_reaps_only_this_workloads_state() {
         let pg = WasmcloudPostgres::new(&Url::parse("postgres://u:p@localhost/").unwrap()).unwrap();
+        let (a, b) = (
+            uuid::Uuid::now_v7().to_string(),
+            uuid::Uuid::now_v7().to_string(),
+        );
+        {
+            let mut databases = pg.component_databases.write().await;
+            databases.insert(a.clone(), database("workload-a", "orders"));
+            databases.insert(b.clone(), database("workload-ab", "users"));
+        }
         {
             let mut prepared = pg.prepared_statements.write().await;
-            prepared.insert("legacy".to_string(), entry("workload-a-component-0"));
-            prepared.insert("named".to_string(), entry("workload-a-component-1"));
-            prepared.insert("other".to_string(), entry("workload-b-component-0"));
+            prepared.insert("legacy".to_string(), entry("workload-a"));
+            prepared.insert("named".to_string(), entry("workload-a"));
+            prepared.insert("other".to_string(), entry("workload-ab"));
         }
 
         let empty = HashSet::new();
@@ -744,6 +776,11 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(pg.database_for_component(&a).await, None);
+        assert_eq!(
+            pg.database_for_component(&b).await.as_deref(),
+            Some("users")
+        );
         let prepared = pg.prepared_statements.read().await;
         assert!(!prepared.contains_key("legacy"), "legacy entry reaped");
         assert!(!prepared.contains_key("named"), "named entry reaped");

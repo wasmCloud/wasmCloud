@@ -117,14 +117,14 @@ impl PgId {
     }
 
     /// Prepare a statement on this connection and register it in the plugin's
-    /// shared prepared-statement table, tagged with `component_id` so the
+    /// shared prepared-statement table, tagged with `workload_id` so the
     /// workload's unbind reaps it. Returns the lookup token. The empty `database`
     /// marks the entry as implements-routed (exec routes by connection, not by
     /// database name).
     async fn prepare(
         &self,
         store: &RwLock<HashMap<String, PreparedEntry>>,
-        component_id: &str,
+        workload_id: &str,
         statement: String,
     ) -> Result<String, StatementPrepareError> {
         let client = self
@@ -141,7 +141,7 @@ impl PgId {
                 sql: statement,
                 param_types: stmt.params().to_vec(),
                 database: String::new(),
-                component_id: component_id.to_string(),
+                workload_id: workload_id.to_string(),
             },
         );
         Ok(token)
@@ -274,9 +274,8 @@ impl<'a> bindings::named_imports::wasmcloud::postgres0_1_1_draft::prepared::Host
         statement: String,
     ) -> wasmtime::Result<Result<String, StatementPrepareError>> {
         let plugin = self.try_get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID)?;
-        let component_id = self.component_id.to_string();
         Ok(id
-            .prepare(&plugin.prepared_statements, &component_id, statement)
+            .prepare(&plugin.prepared_statements, &self.workload_id, statement)
             .await)
     }
 
