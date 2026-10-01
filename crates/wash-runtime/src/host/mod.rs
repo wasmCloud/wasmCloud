@@ -234,6 +234,10 @@ pub enum HostWorkload {
     /// arrived while the workload was still starting — the start that has yet
     /// to hand its work over.
     Stopping(Reservation),
+    /// A plugin failed the workload while it was still starting. The start
+    /// that holds the [`Reservation`] releases what it built and then leaves
+    /// the reason as the workload's `Error`; until then the id stays reserved.
+    Failing(Reservation, String),
     Error(String),
 }
 
@@ -281,6 +285,7 @@ impl std::fmt::Display for HostWorkload {
             HostWorkload::Starting(_) => write!(f, "Starting"),
             HostWorkload::Running(_) => write!(f, "Running"),
             HostWorkload::Stopping(_) => write!(f, "Stopping"),
+            HostWorkload::Failing(_, err) => write!(f, "Failing: {err}"),
             HostWorkload::Error(err) => write!(f, "Error: {err}"),
         }
     }
@@ -291,7 +296,7 @@ impl From<&HostWorkload> for WorkloadState {
         match hw {
             HostWorkload::Starting(_) => WorkloadState::Starting,
             HostWorkload::Running(_) => WorkloadState::Running,
-            HostWorkload::Stopping(_) => WorkloadState::Stopping,
+            HostWorkload::Stopping(_) | HostWorkload::Failing(..) => WorkloadState::Stopping,
             HostWorkload::Error(_) => WorkloadState::Error,
         }
     }
@@ -558,8 +563,9 @@ impl Host {
     }
 
     /// Close out a teardown that marked `workload_id` as
-    /// `Stopping(reservation)`: drop the id, or leave `Some(reason)` behind as
-    /// the workload's `Error` for a later stop to collect.
+    /// `Stopping(reservation)` or `Failing(reservation, ..)`: drop the id, or
+    /// leave the failure behind as the workload's `Error` for a later stop to
+    /// collect.
     ///
     /// Conditional on the marker still being this teardown's, because a
     /// teardown runs outside the map's lock. If the slot holds anything else —
@@ -573,11 +579,14 @@ impl Host {
         reason: Option<String>,
     ) {
         let mut workloads = self.workloads.write().await;
-        if !matches!(workloads.get(workload_id), Some(HostWorkload::Stopping(held)) if *held == reservation)
-        {
-            return;
-        }
-        match reason {
+        let failure = match workloads.get(workload_id) {
+            Some(HostWorkload::Stopping(held)) if *held == reservation => None,
+            Some(HostWorkload::Failing(held, failure)) if *held == reservation => {
+                Some(failure.clone())
+            }
+            _ => return,
+        };
+        match reason.or(failure) {
             Some(reason) => {
                 workloads.insert(workload_id.to_string(), HostWorkload::Error(reason));
             }
@@ -611,17 +620,23 @@ impl Host {
                     }
                 }
                 // Still starting: no teardown follows here, because the start
-                // owns everything it has built. Recording the failure now is
-                // what tells it its slot is gone, so it releases what it bound
-                // and leaves this `Error` for a stop to collect.
+                // owns everything it has built. `Failing` under the start's own
+                // reservation tells it its slot is gone while keeping the id
+                // held, so it releases what it bound and then publishes the
+                // reason as `Error`.
                 Some(slot @ HostWorkload::Starting(_)) => {
-                    *slot = HostWorkload::Error(reason.clone());
+                    if let HostWorkload::Starting(held) = *slot {
+                        *slot = HostWorkload::Failing(held, reason.clone());
+                    }
                     None
                 }
                 // Already being torn down, already failed, or gone: the workload
                 // is on its way out either way, and the slot belongs to whoever
                 // is finishing it.
-                Some(HostWorkload::Stopping(_) | HostWorkload::Error(_)) | None => None,
+                Some(
+                    HostWorkload::Stopping(_) | HostWorkload::Failing(..) | HostWorkload::Error(_),
+                )
+                | None => None,
             }
         };
         if let Some(resolved) = resolved {
@@ -1072,15 +1087,15 @@ impl HostApi for Host {
             //
             // - `Running`: this stop owns it. Mark it under a reservation of
             //   this stop's, tear down, and drop the id.
-            // - `Starting`: the start owns it and has not produced a workload
-            //   yet. Leave a `Stopping` marker carrying the start's own
+            // - `Starting` / `Failing`: the start owns it and has not produced a
+            //   workload yet. Leave a `Stopping` marker carrying the start's own
             //   reservation; the start sees it, tears down what it built, and
-            //   drops the id.
+            //   drops the id rather than leaving a plugin's failure behind.
             // - `Stopping`: a teardown is already under way and the id stays
-            //   reserved until it finishes. Repeating the stop cannot help and
-            //   freeing the id would hand it to a new workload that the running
-            //   teardown would then unbind, so this stop reports the state and
-            //   leaves the slot alone.
+            //   reserved until it finishes. Repeating the stop cannot
+            //   help and freeing the id would hand it to a new workload that the
+            //   running teardown would then unbind, so this stop reports the
+            //   state and leaves the slot alone.
             // - `Error`: nothing is bound (every failure path releases before
             //   recording the error), so the slot can just go.
             let reservation = self.reserve();
@@ -1100,7 +1115,9 @@ impl HostApi for Host {
                     // The start owns it. Mark the id under the reservation the
                     // start itself holds, so it recognises the marker as its to
                     // finish.
-                    Some(HostWorkload::Starting(held)) => StopAction::Mark(*held),
+                    Some(HostWorkload::Starting(held) | HostWorkload::Failing(held, _)) => {
+                        StopAction::Mark(*held)
+                    }
                     // A teardown is already under way, holding the id until it
                     // is done; nothing here is this stop's to write.
                     Some(HostWorkload::Stopping(_)) => StopAction::Leave,
@@ -1198,14 +1215,21 @@ impl WorkloadReservation for Host {
     #[instrument(skip_all, fields(workload.id = workload_id))]
     async fn workload_release(&self, workload_id: &str, reservation: Reservation) {
         let mut workloads = self.workloads.write().await;
-        // Either state this reservation can still be in holds nothing bound: a
-        // start that never began, or one a stop handed the teardown back to
-        // before it had built anything. Anything else belongs to someone else.
-        if matches!(
-            workloads.get(workload_id),
-            Some(HostWorkload::Starting(held) | HostWorkload::Stopping(held)) if *held == reservation
-        ) {
-            workloads.remove(workload_id);
+        // Every state this reservation can still be in holds nothing bound: a
+        // start that never began, or one a stop or failure handed the teardown
+        // back to before it had built anything. Anything else belongs to
+        // someone else.
+        match workloads.get(workload_id) {
+            Some(HostWorkload::Starting(held) | HostWorkload::Stopping(held))
+                if *held == reservation =>
+            {
+                workloads.remove(workload_id);
+            }
+            Some(HostWorkload::Failing(held, reason)) if *held == reservation => {
+                let reason = reason.clone();
+                workloads.insert(workload_id.to_string(), HostWorkload::Error(reason));
+            }
+            _ => {}
         }
     }
 
@@ -1233,6 +1257,14 @@ impl WorkloadReservation for Host {
             // the slot `Stopping` under this start's own reservation.
             let handed_back =
                 matches!(slot, Some(HostWorkload::Stopping(held)) if *held == reservation);
+            // A plugin failed it mid-start, which hands the teardown back the
+            // same way but leaves its reason to publish.
+            let failed = match slot {
+                Some(HostWorkload::Failing(held, reason)) if *held == reservation => {
+                    Some(reason.clone())
+                }
+                _ => None,
+            };
             match started {
                 Ok(resolved) if mine => {
                     workloads.insert(
@@ -1247,14 +1279,17 @@ impl WorkloadReservation for Host {
                 }
                 // Stopped (or failed) while starting. The stop could not tear
                 // this down because it did not exist yet, so that falls to us.
-                // The `Stopping` marker is left in place for the whole teardown:
-                // it keeps the id reserved, so a new start cannot claim it and
-                // then be unbound by our teardown.
-                Ok(resolved) => (
-                    WorkloadState::Stopping,
-                    "Workload was stopped while starting".to_string(),
-                    Some(resolved),
-                ),
+                // The `Stopping` or `Failing` marker is left in place for the
+                // whole teardown: it keeps the id reserved, so a new start
+                // cannot claim it and then be unbound by our teardown.
+                Ok(resolved) => match failed {
+                    Some(reason) => (WorkloadState::Error, reason, Some(resolved)),
+                    None => (
+                        WorkloadState::Stopping,
+                        "Workload was stopped while starting".to_string(),
+                        Some(resolved),
+                    ),
+                },
                 Err(err) => {
                     // `{:#}` so the whole context chain reaches the caller and
                     // the log below: the outer layer alone ("failed to pull
@@ -1267,6 +1302,10 @@ impl WorkloadReservation for Host {
                         // bound — `workload_start_inner` released it before
                         // returning — so the id can go now.
                         workloads.remove(&workload_id);
+                    } else if let Some(reason) = failed {
+                        // Nothing is bound here either; the plugin's reason is
+                        // the one the workload failed with.
+                        workloads.insert(workload_id.clone(), HostWorkload::Error(reason));
                     }
                     (WorkloadState::Error, message, None)
                 }
@@ -1286,9 +1325,7 @@ impl WorkloadReservation for Host {
 
         if let Some(resolved) = orphaned {
             release(&workload_id, &resolved).await;
-            // Only if the `Stopping` marker is still this start's. It may not be
-            // — a failure reported mid-start writes `Error` over it — and then
-            // the slot is not ours to drop.
+            // Drops the id, or publishes the reason a plugin failed it with.
             self.finish_teardown(&workload_id, reservation, None).await;
         }
 
@@ -2618,6 +2655,179 @@ mod tests {
             host.workloads.read().await.is_empty(),
             "the id is dropped once its teardown finishes"
         );
+    }
+
+    /// A plugin failing a workload that is still starting hands the teardown
+    /// to the start, which publishes the failure as `Error` only once it has
+    /// released what it bound.
+    #[tokio::test]
+    async fn test_a_failure_mid_start_is_published_once_released() {
+        let plugin = Arc::new(BindRecordingPlugin {
+            bind_delay: Duration::from_millis(300),
+            ..Default::default()
+        });
+        let host = Arc::new(host_with(Arc::clone(&plugin)));
+
+        let starting = {
+            let host = Arc::clone(&host);
+            tokio::spawn(async move { host.workload_start(marker_request("evicted")).await })
+        };
+
+        // Fail it while the plugin's bind is still sleeping.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        host.fail_workload("evicted", "crash-looping".to_string())
+            .await;
+
+        let started = starting
+            .await
+            .expect("the start task should not panic")
+            .expect("workload_start should report rather than error");
+        assert_eq!(started.workload_status.workload_state, WorkloadState::Error);
+        assert_eq!(started.workload_status.message, "crash-looping");
+        assert_eq!(
+            plugin.unbound(),
+            vec!["evicted".to_string()],
+            "the start releases what it bound, once"
+        );
+        assert!(
+            matches!(
+                host.workloads.read().await.get("evicted"),
+                Some(HostWorkload::Error(reason)) if reason == "crash-looping"
+            ),
+            "the failure is published once the teardown is done"
+        );
+    }
+
+    /// A stop arriving after a mid-start failure takes effect: the id stays
+    /// reserved while the start tears down — a redeploy claiming it then would
+    /// be unbound by that teardown, which is keyed by workload id — and is
+    /// dropped once it is done, rather than left behind as `Error` for a
+    /// second stop to collect.
+    #[tokio::test]
+    async fn test_a_stop_after_a_mid_start_failure_frees_the_id_once_released() {
+        let plugin = Arc::new(BindRecordingPlugin {
+            bind_delay: Duration::from_millis(300),
+            unbind_delay: Duration::from_millis(300),
+            ..Default::default()
+        });
+        let host = Arc::new(host_with(Arc::clone(&plugin)));
+
+        let starting = {
+            let host = Arc::clone(&host);
+            tokio::spawn(async move { host.workload_start(marker_request("evicted")).await })
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        host.fail_workload("evicted", "crash-looping".to_string())
+            .await;
+        host.workload_stop(WorkloadStopRequest {
+            workload_id: "evicted".to_string(),
+        })
+        .await
+        .expect("a stop should report rather than error");
+        let redeployed = host
+            .workload_start(marker_request("evicted"))
+            .await
+            .expect("workload_start should report rather than error");
+        assert_eq!(
+            redeployed.workload_status.workload_state,
+            WorkloadState::Error,
+            "the id is still held, so a start under it is refused"
+        );
+
+        starting
+            .await
+            .expect("the start task should not panic")
+            .expect("workload_start should report rather than error");
+        assert_eq!(
+            plugin.unbound(),
+            vec!["evicted".to_string()],
+            "the start releases what it bound, once"
+        );
+        assert!(
+            host.workloads.read().await.is_empty(),
+            "the stop takes effect once the teardown is done"
+        );
+    }
+
+    /// Records the workloads it is told to unbind.
+    #[derive(Default)]
+    struct UnbindRecordingHandler {
+        unbound: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::host::http::HostHandler for UnbindRecordingHandler {
+        async fn start(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn port(&self) -> u16 {
+            0
+        }
+
+        async fn on_workload_resolved(
+            &self,
+            _resolved_handle: &ResolvedWorkload,
+            _component_id: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
+            self.unbound
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(workload_id.to_string());
+            Ok(())
+        }
+
+        fn outgoing_request(
+            &self,
+            _workload_id: &str,
+            _request: hyper::Request<wasmtime_wasi_http::WasiBody>,
+            _options: Option<wasmtime_wasi_http::RequestOptions>,
+            _fut: crate::host::http::RequestIoFuture,
+            _allowed_hosts: &[crate::host::allowed_hosts::AllowedHost],
+        ) -> crate::host::http::SendFuture {
+            Box::new(async {
+                Err(wasmtime_wasi_http::Error::InternalError(Some(
+                    "no egress in this test".to_string(),
+                )))
+            })
+        }
+    }
+
+    /// A workload that serves no HTTP can still send it, and its egress state
+    /// lives in the HTTP handler, so stopping it must reach the handler too.
+    #[tokio::test]
+    async fn test_stopping_a_workload_that_serves_no_http_unbinds_the_http_handler() {
+        let handler = Arc::new(UnbindRecordingHandler::default());
+        let host = Host::builder()
+            .with_plugin(Arc::new(BindRecordingPlugin::default()))
+            .expect("failed to register plugin")
+            .with_http_handler(Arc::clone(&handler) as Arc<dyn crate::host::http::HostHandler>)
+            .build()
+            .expect("failed to build host");
+        let started = host
+            .workload_start(marker_request("sender"))
+            .await
+            .expect("workload_start should report rather than error");
+        assert_eq!(
+            started.workload_status.workload_state,
+            WorkloadState::Running
+        );
+
+        host.workload_stop(WorkloadStopRequest {
+            workload_id: "sender".to_string(),
+        })
+        .await
+        .expect("stopping should succeed");
+        assert_eq!(*handler.unbound.lock().unwrap(), ["sender"]);
     }
 
     #[test]
