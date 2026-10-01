@@ -46,7 +46,9 @@ pub type BucketHandle = String;
 /// Memory-based keyvalue plugin
 #[derive(Clone, Default)]
 pub struct InMemoryKeyValue {
-    /// Storage for all buckets, keyed by workload ID, then bucket name
+    /// Storage for all buckets, keyed by workload ID, then bucket name. Only
+    /// bind adds a workload; a call still running after its workload unbound
+    /// writes to a scratch map instead of recreating the entry.
     storage: Arc<RwLock<HashMap<String, HashMap<String, BucketData>>>>,
 }
 
@@ -68,7 +70,10 @@ impl<'a> bindings::wasi::keyvalue::store::Host for ActiveCtx<'a> {
         let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let mut storage = plugin.storage.write().await;
-        let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
+        let mut scratch = HashMap::new();
+        let workload_storage = storage
+            .get_mut(self.workload_id.as_ref())
+            .unwrap_or(&mut scratch);
 
         // Create bucket if it doesn't exist
         if !workload_storage.contains_key(&identifier) {
@@ -124,7 +129,10 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
         let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let mut storage = plugin.storage.write().await;
-        let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
+        let mut scratch = HashMap::new();
+        let workload_storage = storage
+            .get_mut(self.workload_id.as_ref())
+            .unwrap_or(&mut scratch);
 
         match workload_storage.get_mut(bucket_name) {
             Some(bucket_data) => {
@@ -148,7 +156,10 @@ impl<'a> bindings::wasi::keyvalue::store::HostBucket for ActiveCtx<'a> {
         let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let mut storage = plugin.storage.write().await;
-        let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
+        let mut scratch = HashMap::new();
+        let workload_storage = storage
+            .get_mut(self.workload_id.as_ref())
+            .unwrap_or(&mut scratch);
 
         match workload_storage.get_mut(bucket_name) {
             Some(bucket_data) => {
@@ -260,7 +271,10 @@ impl<'a> bindings::wasi::keyvalue::atomics::Host for ActiveCtx<'a> {
         let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let mut storage = plugin.storage.write().await;
-        let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
+        let mut scratch = HashMap::new();
+        let workload_storage = storage
+            .get_mut(self.workload_id.as_ref())
+            .unwrap_or(&mut scratch);
 
         match workload_storage.get_mut(bucket_name) {
             Some(bucket_data) => {
@@ -344,7 +358,10 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
         let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let mut storage = plugin.storage.write().await;
-        let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
+        let mut scratch = HashMap::new();
+        let workload_storage = storage
+            .get_mut(self.workload_id.as_ref())
+            .unwrap_or(&mut scratch);
 
         match workload_storage.get_mut(bucket_name) {
             Some(bucket_data) => {
@@ -370,7 +387,10 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
         let plugin = self.try_get_plugin::<InMemoryKeyValue>(WASI_KEYVALUE_ID)?;
 
         let mut storage = plugin.storage.write().await;
-        let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
+        let mut scratch = HashMap::new();
+        let workload_storage = storage
+            .get_mut(self.workload_id.as_ref())
+            .unwrap_or(&mut scratch);
 
         match workload_storage.get_mut(bucket_name) {
             Some(bucket_data) => {
@@ -563,5 +583,43 @@ mod tests {
         let storage = kv.storage.read().await;
         assert_eq!(storage[&workload]["bucket-a"].data["k"], b"a");
         assert_eq!(storage[&workload]["bucket-b"].data["k"], b"b");
+    }
+
+    /// A call still running when its workload unbinds cannot bring the
+    /// workload's storage back, since nothing would ever remove it again.
+    #[tokio::test]
+    async fn a_write_after_unbind_does_not_recreate_storage() {
+        use bindings::wasi::keyvalue::store::{Host, HostBucket};
+
+        let kv = Arc::new(InMemoryKeyValue::new());
+        kv.storage
+            .write()
+            .await
+            .insert("workload".to_string(), HashMap::new());
+        let plugin: Arc<dyn HostPlugin + Send + Sync> = kv.clone();
+        let ctx = crate::engine::ctx::Ctx::builder("workload", "component")
+            .with_plugins(HashMap::from([(WASI_KEYVALUE_ID, plugin)]))
+            .build();
+        let mut shared = SharedCtx::new(ctx);
+        let mut active = extract_active_ctx(&mut shared);
+        let bucket = Host::open(&mut active, "bucket".to_string())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let empty = HashSet::new();
+        kv.on_workload_unbind("workload", WitInterfaces::new(&empty))
+            .await
+            .unwrap();
+
+        let set = HostBucket::set(&mut active, bucket, "key".to_string(), b"value".to_vec())
+            .await
+            .unwrap();
+        assert!(set.is_err(), "the bucket went with its workload");
+        Host::open(&mut active, "other".to_string())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(kv.storage.read().await.is_empty());
     }
 }
