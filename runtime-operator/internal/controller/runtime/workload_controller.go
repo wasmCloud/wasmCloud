@@ -99,12 +99,16 @@ func (r *WorkloadReconciler) reconcileHostSelection(ctx context.Context, workloa
 
 	condition.ForceStatusUpdate(ctx)
 	if workload.Spec.HostID != "" {
+		host, err := r.lookupHostByID(ctx, workload.Spec.HostID)
+		if err == nil && host != nil && !host.DeletionTimestamp.IsZero() {
+			return condition.ErrStatusUnknown(fmt.Errorf("pinned host %s is being deleted", workload.Spec.HostID))
+		}
 		workload.Status.HostID = workload.Spec.HostID
 		// Best-effort lookup of the pinned host's Environment so the
 		// ENVIRONMENT status column reflects the host's tenant. A miss
 		// here just leaves the field empty; placement will surface the
 		// real failure if the HostID is invalid.
-		if host, err := r.lookupHostByID(ctx, workload.Spec.HostID); err == nil && host != nil {
+		if err == nil && host != nil {
 			workload.Status.Environment = host.Environment
 		}
 		return condition.ErrSkipReconciliation()
@@ -181,12 +185,26 @@ func (r *WorkloadReconciler) findFreeHost(ctx context.Context, workload *runtime
 	})
 	for i := range hostList.Items {
 		host := &hostList.Items[i]
-		if host.Status.IsAvailable() {
+		if isSchedulable(host) {
 			return host, nil
 		}
 	}
 
 	return nil, fmt.Errorf("no suitable host found")
+}
+
+// isSchedulable reports whether new workloads may be placed on host. A Host
+// being deleted stays Ready until it is gone, but its finalizer may already
+// have listed the workloads it cleans up, so one placed now would be missed.
+func isSchedulable(host *runtimev1alpha1.Host) bool {
+	return host.DeletionTimestamp.IsZero() && host.Status.IsAvailable()
+}
+
+func schedulableHostIndexValue(rawObj client.Object) []string {
+	if host, ok := rawObj.(*runtimev1alpha1.Host); ok && isSchedulable(host) {
+		return []string{string(condition.ConditionTrue)}
+	}
+	return []string{}
 }
 
 // lookupHostByID finds a Host CRD by HostID. Hosts always live in the
@@ -522,14 +540,7 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	err := mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Host{}, workloadSchedulableHostsIndex, func(rawObj client.Object) []string {
-		if host, ok := rawObj.(*runtimev1alpha1.Host); ok {
-			if host.Status.IsAvailable() {
-				return []string{string(condition.ConditionTrue)}
-			}
-		}
-		return []string{}
-	})
+	err := mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Host{}, workloadSchedulableHostsIndex, schedulableHostIndexValue)
 	if err != nil {
 		return err
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -203,6 +204,82 @@ func TestFinalizeGivesUpFailedStopOnUnavailableHost(t *testing.T) {
 
 	if err := r.finalize(context.Background(), placedWorkload()); err != nil {
 		t.Fatalf("finalize: %v", err)
+	}
+}
+
+// A Host being deleted is still Ready, but nothing new may be placed on it.
+func TestFindFreeHostSkipsHostBeingDeleted(t *testing.T) {
+	deleting := &runtimev1alpha1.Host{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "deleting",
+			Namespace:         testNamespace,
+			DeletionTimestamp: &metav1.Time{Time: time.Now()},
+			Finalizers:        []string{hostFinalizerName},
+		},
+		HostID: "deleting-host",
+	}
+	deleting.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
+	live := &runtimev1alpha1.Host{
+		ObjectMeta: metav1.ObjectMeta{Name: "live", Namespace: testNamespace},
+		HostID:     "live-host",
+	}
+	live.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
+
+	s := runtime.NewScheme()
+	if err := runtimev1alpha1.AddToScheme(s); err != nil {
+		t.Fatalf("add runtime v1alpha1: %v", err)
+	}
+	r := &WorkloadReconciler{
+		Client: fake.NewClientBuilder().
+			WithScheme(s).
+			WithObjects(deleting, live).
+			WithIndex(&runtimev1alpha1.Host{}, workloadSchedulableHostsIndex, schedulableHostIndexValue).
+			Build(),
+		OperatorNamespace: testNamespace,
+		AllowSharedHosts:  true,
+	}
+	workload := &runtimev1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{Name: "pending"},
+	}
+
+	// findFreeHost shuffles its candidates, so one pick could miss the bug.
+	for range 20 {
+		host, err := r.findFreeHost(context.Background(), workload)
+		if err != nil {
+			t.Fatalf("findFreeHost: %v", err)
+		}
+		if host.HostID != live.HostID {
+			t.Fatalf("placed on host %q, want %q", host.HostID, live.HostID)
+		}
+	}
+}
+
+// Pinning skips findFreeHost, so it must refuse a Host being deleted itself.
+func TestHostSelectionWaitsOnPinnedHostBeingDeleted(t *testing.T) {
+	deleting := &runtimev1alpha1.Host{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "deleting",
+			Namespace:         testNamespace,
+			DeletionTimestamp: &metav1.Time{Time: time.Now()},
+			Finalizers:        []string{hostFinalizerName},
+		},
+		HostID: testHeartbeatHostID,
+	}
+	r := &WorkloadReconciler{
+		Client:            newWorkloadFinalizeClient(t, deleting),
+		OperatorNamespace: testNamespace,
+	}
+	workload := &runtimev1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{Name: "pinned"},
+	}
+	workload.Spec.HostID = testHeartbeatHostID
+	workload.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadConditionConfig))
+
+	if err := r.reconcileHostSelection(context.Background(), workload); err == nil {
+		t.Fatal("host selection accepted a pinned host that is being deleted")
+	}
+	if workload.Status.HostID != "" {
+		t.Errorf("recorded HostID %q for a host that is being deleted", workload.Status.HostID)
 	}
 }
 
