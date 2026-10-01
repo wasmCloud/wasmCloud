@@ -83,10 +83,12 @@ func TestPlacementCarriesComponentInstanceLimits(t *testing.T) {
 	}
 }
 
+const testWorkloadUID = "workload-uid"
+
 // A Workload deleted mid-start has a host but no recorded workload id; it must still be stopped.
 func TestFinalizeStopsWorkloadWithoutRecordedPlacement(t *testing.T) {
 	reply, err := protojson.Marshal(&runtimev2.WorkloadStopResponse{
-		WorkloadStatus: &runtimev2.WorkloadStatus{WorkloadId: "workload-uid"},
+		WorkloadStatus: &runtimev2.WorkloadStatus{WorkloadId: testWorkloadUID},
 	})
 	if err != nil {
 		t.Fatalf("marshal stop response: %v", err)
@@ -95,7 +97,7 @@ func TestFinalizeStopsWorkloadWithoutRecordedPlacement(t *testing.T) {
 	bus := &mockBus{reply: &wasmbus.Message{Data: reply}}
 	r := &WorkloadReconciler{Bus: bus}
 	workload := &runtimev1alpha1.Workload{
-		ObjectMeta: metav1.ObjectMeta{Name: "deleted-mid-start", Namespace: "default", UID: "workload-uid"},
+		ObjectMeta: metav1.ObjectMeta{Name: "deleted-mid-start", Namespace: "default", UID: testWorkloadUID},
 		Status:     runtimev1alpha1.WorkloadStatus{HostID: "host-1"},
 	}
 
@@ -110,8 +112,8 @@ func TestFinalizeStopsWorkloadWithoutRecordedPlacement(t *testing.T) {
 	if err := protojson.Unmarshal(bus.gotData, &req); err != nil {
 		t.Fatalf("unmarshal stop request: %v", err)
 	}
-	if req.GetWorkloadId() != "workload-uid" {
-		t.Errorf("stop named workload %q, want the Workload's UID %q", req.GetWorkloadId(), "workload-uid")
+	if req.GetWorkloadId() != testWorkloadUID {
+		t.Errorf("stop named workload %q, want the Workload's UID %q", req.GetWorkloadId(), testWorkloadUID)
 	}
 }
 
@@ -120,7 +122,7 @@ func TestFinalizeSkipsWorkloadWithoutHost(t *testing.T) {
 	bus := &mockBus{err: errors.New("no request expected")}
 	r := &WorkloadReconciler{Bus: bus}
 	workload := &runtimev1alpha1.Workload{
-		ObjectMeta: metav1.ObjectMeta{Name: "unscheduled", Namespace: "default", UID: "workload-uid"},
+		ObjectMeta: metav1.ObjectMeta{Name: "unscheduled", Namespace: "default", UID: testWorkloadUID},
 	}
 
 	if err := r.finalize(context.Background(), workload); err != nil {
