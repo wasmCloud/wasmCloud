@@ -72,6 +72,10 @@ pub struct RunMeta {
     pub warmup: String,
     #[serde(default)]
     pub workloads: u64,
+    /// How workloads call each other: `local` (same-host local routing) or
+    /// `network` (Service DNS). Empty in runs that predate the flag.
+    #[serde(default)]
+    pub routing: String,
     #[serde(default)]
     pub k6_mode: String,
     #[serde(default)]
@@ -199,10 +203,20 @@ impl Run {
         })
     }
 
-    /// The `param` of the history row: the profile, plus the offered rate for
-    /// the fixed-rate profiles and the workload count for many-workloads,
-    /// since numbers at a different rate or count don't compare.
+    /// The `param` of the history row: [`Self::load_param`], plus `-network`
+    /// for a run whose workloads called each other through Service DNS.
     pub fn param(&self) -> String {
+        let mut param = self.load_param();
+        if self.meta.routing == "network" {
+            param.push_str("-network");
+        }
+        param
+    }
+
+    /// The load offered: the profile, plus the offered rate for the
+    /// fixed-rate profiles and the workload count for many-workloads, since
+    /// numbers at a different rate or count don't compare.
+    pub fn load_param(&self) -> String {
         let mut param = match self.summary.profile.as_str() {
             "stress" => "stress".to_string(),
             p => format!("{p}-{}", self.meta.rate.max(self.offered_base_rate())),
@@ -537,6 +551,16 @@ mod tests {
         assert!(measure.requests < total);
         assert!(run.metrics().iter().any(|m| m.name == "p99_ms"));
         assert!(!run.generator_saturated());
+        Ok(())
+    }
+
+    #[test]
+    fn network_routing_keys_its_own_history_row() -> Result<()> {
+        let mut run = Run::load(&fixture("constant"))?;
+        assert_eq!(run.param(), "constant-200");
+        run.meta.routing = "network".into();
+        assert_eq!(run.param(), "constant-200-network");
+        assert_eq!(run.load_param(), "constant-200");
         Ok(())
     }
 

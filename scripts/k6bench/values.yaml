@@ -16,7 +16,8 @@ runtime:
         enabled: true
         port: 80
         # fan-out-10 and chain-5 call co-located workloads by their
-        # `localRoute` names, served in memory by the same host.
+        # `localRoute` names, served in memory by the same host. run.sh
+        # turns it off for `--routing network`.
         localBypassRouting: true
       # Bench components come from the plain-HTTP registry run.sh starts on
       # the kind network. Nothing else is pulled by the hosts.
