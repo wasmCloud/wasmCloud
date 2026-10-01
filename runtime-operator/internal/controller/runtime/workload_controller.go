@@ -98,6 +98,9 @@ func (r *WorkloadReconciler) reconcileHostSelection(ctx context.Context, workloa
 	}
 
 	condition.ForceStatusUpdate(ctx)
+	// A read that predates the recorded HostID would pick a second host and
+	// overwrite the first after the start already went to it.
+	condition.RequireOptimisticLock(ctx)
 	if workload.Spec.HostID != "" {
 		host, err := r.lookupHostByID(ctx, workload.Spec.HostID)
 		if err == nil && host != nil && !host.DeletionTimestamp.IsZero() {
