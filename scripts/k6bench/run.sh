@@ -422,11 +422,15 @@ run_k6() {
     local raw_arg="" pin_cmd=""
     [ "$raw" = 1 ] && raw_arg="--out json=$out_dir/raw.ndjson.gz"
     [ "$pin" = 1 ] && command -v taskset >/dev/null 2>&1 && pin_cmd="taskset -c $cpus_k6"
+    if [ "$pin" = 1 ]; then
+      pin_cmd="env GOMAXPROCS=1"
+      command -v taskset >/dev/null 2>&1 && pin_cmd="$pin_cmd taskset -c $cpus_k6"
+    fi
     # `times` reports the subshell's children, which is k6 alone: the CPU it
     # used, for the generator-saturation check. A dockerized k6 is sampled.
     # shellcheck disable=SC2086 # word-split flag lists
     (
-      cd "$here" && GOMAXPROCS=1 $pin_cmd k6 run $k6_env -e "OUT_DIR=$out_dir" $raw_arg "$script"
+      cd "$here" && $pin_cmd k6 run $k6_env -e "OUT_DIR=$out_dir" $raw_arg "$script"
       rc=$?
       times >"$out_dir/.k6-times"
       exit "$rc"
