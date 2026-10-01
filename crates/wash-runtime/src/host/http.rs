@@ -1225,7 +1225,9 @@ pub trait HostHandler: Send + Sync + 'static {
         resolved_handle: &ResolvedWorkload,
         component_id: &str,
     ) -> anyhow::Result<()>;
-    /// Unregister a workload
+    /// Unregister a workload. Called once for every workload that stops,
+    /// including one that never registered here, so an unknown id is not an
+    /// error.
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()>;
 
     /// Register a long-lived service instance that serves HTTP ingress: inbound
