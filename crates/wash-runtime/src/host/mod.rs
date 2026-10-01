@@ -2750,6 +2750,86 @@ mod tests {
         );
     }
 
+    /// Records the workloads it is told to unbind.
+    #[derive(Default)]
+    struct UnbindRecordingHandler {
+        unbound: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::host::http::HostHandler for UnbindRecordingHandler {
+        async fn start(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn port(&self) -> u16 {
+            0
+        }
+
+        async fn on_workload_resolved(
+            &self,
+            _resolved_handle: &ResolvedWorkload,
+            _component_id: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
+            self.unbound
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(workload_id.to_string());
+            Ok(())
+        }
+
+        fn outgoing_request(
+            &self,
+            _workload_id: &str,
+            _request: hyper::Request<wasmtime_wasi_http::WasiBody>,
+            _options: Option<wasmtime_wasi_http::RequestOptions>,
+            _fut: crate::host::http::RequestIoFuture,
+            _allowed_hosts: &[crate::host::allowed_hosts::AllowedHost],
+        ) -> crate::host::http::SendFuture {
+            Box::new(async {
+                Err(wasmtime_wasi_http::Error::InternalError(Some(
+                    "no egress in this test".to_string(),
+                )))
+            })
+        }
+    }
+
+    /// A workload that serves no HTTP can still send it, and its egress state
+    /// lives in the HTTP handler, so stopping it must reach the handler too.
+    #[tokio::test]
+    async fn test_stopping_a_workload_that_serves_no_http_unbinds_the_http_handler() {
+        let handler = Arc::new(UnbindRecordingHandler::default());
+        let host = Host::builder()
+            .with_plugin(Arc::new(BindRecordingPlugin::default()))
+            .expect("failed to register plugin")
+            .with_http_handler(Arc::clone(&handler) as Arc<dyn crate::host::http::HostHandler>)
+            .build()
+            .expect("failed to build host");
+        let started = host
+            .workload_start(marker_request("sender"))
+            .await
+            .expect("workload_start should report rather than error");
+        assert_eq!(
+            started.workload_status.workload_state,
+            WorkloadState::Running
+        );
+
+        host.workload_stop(WorkloadStopRequest {
+            workload_id: "sender".to_string(),
+        })
+        .await
+        .expect("stopping should succeed");
+        assert_eq!(*handler.unbound.lock().unwrap(), ["sender"]);
+    }
+
     #[test]
     fn test_extract_component_interfaces_with_http_export() {
         // Create a component that exports wasi:http/incoming-handler

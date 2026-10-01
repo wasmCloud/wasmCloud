@@ -2513,20 +2513,20 @@ impl ResolvedWorkload {
                     }
                 }
             }
+        }
 
-            // A handler that is already gone has nothing left to unbind from,
-            // so teardown treats that as done rather than as a failure.
-            if component.exports_wasi_http()
-                && let Some(http_handler) = self.http_handler.handler()
-                && let Err(e) = http_handler.on_workload_unbind(self.id()).await
-            {
-                warn!(
-                    component_id = component.id(),
-                    workload_id = self.id.as_ref(),
-                    error = ?e,
-                    "failed to unbind HTTP handler from workload, continuing cleanup"
-                );
-            }
+        // Once per workload, whatever it exports: a workload that only sends
+        // HTTP still holds egress state (pooled connections, TLS sessions,
+        // connection permits) to release. A handler that is already gone has
+        // nothing left to unbind from, so teardown treats that as done.
+        if let Some(http_handler) = self.http_handler.handler()
+            && let Err(e) = http_handler.on_workload_unbind(self.id()).await
+        {
+            warn!(
+                workload_id = self.id.as_ref(),
+                error = ?e,
+                "failed to unbind HTTP handler from workload, continuing cleanup"
+            );
         }
 
         // The service item records plugin bindings just like a component;
