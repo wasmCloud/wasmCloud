@@ -94,31 +94,31 @@ func TestServerErrorStream(t *testing.T) {
 	bus := NewNatsBus(nc)
 	server := NewServer(bus, "test")
 	bomb := errors.New("bomb")
-	bombCh := make(chan error, 1)
-	_ = server.RegisterHandler("bomb", ServerHandlerFunc(func(ctx context.Context, msg *Message) error {
-		reply := NewMessage(msg.Reply)
-		_ = server.Publish(reply)
+	if err := server.RegisterHandler("bomb", ServerHandlerFunc(func(ctx context.Context, msg *Message) error {
 		return bomb
-	}))
-
-	go func() {
-		for err := range server.ErrorStream() {
-			bombCh <- err.Err
-		}
-	}()
-
-	_, err = server.Request(context.TODO(), NewMessage("bomb"))
-	if err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
 
-	select {
-	case err := <-bombCh:
-		if want, got := bomb, err; want != got {
-			t.Fatalf("want %v, got %v", want, got)
+	// reportError drops an error unless a receiver is already waiting on the
+	// stream, so keep triggering the handler until one lands.
+	deadline := time.After(5 * time.Second)
+	retry := time.NewTicker(50 * time.Millisecond)
+	defer retry.Stop()
+	for {
+		if err := server.Publish(NewMessage("bomb")); err != nil {
+			t.Fatal(err)
 		}
-	default:
-		t.Fatal("expected error")
+		select {
+		case serverErr := <-server.ErrorStream():
+			if want, got := bomb, serverErr.Err; want != got {
+				t.Fatalf("want %v, got %v", want, got)
+			}
+			return
+		case <-retry.C:
+		case <-deadline:
+			t.Fatal("expected error")
+		}
 	}
 }
 
