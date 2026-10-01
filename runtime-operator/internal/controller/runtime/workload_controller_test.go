@@ -37,7 +37,11 @@ func TestPlacementCarriesComponentInstanceLimits(t *testing.T) {
 	}
 
 	bus := &mockBus{reply: &wasmbus.Message{Data: reply}}
-	r := &WorkloadReconciler{Bus: bus}
+	host := &runtimev1alpha1.Host{
+		ObjectMeta: metav1.ObjectMeta{Name: testHeartbeatHostID, Namespace: testNamespace},
+		HostID:     testHeartbeatHostID,
+	}
+	r := &WorkloadReconciler{Client: newWorkloadClient(t, host), Bus: bus, OperatorNamespace: testNamespace}
 	workload := &runtimev1alpha1.Workload{
 		ObjectMeta: metav1.ObjectMeta{Name: "limits", Namespace: metav1.NamespaceDefault},
 		Spec: runtimev1alpha1.WorkloadSpec{
@@ -51,7 +55,7 @@ func TestPlacementCarriesComponentInstanceLimits(t *testing.T) {
 				ReclaimMinInstances:  2,
 			}},
 		},
-		Status: runtimev1alpha1.WorkloadStatus{HostID: "host-1"},
+		Status: runtimev1alpha1.WorkloadStatus{HostID: testHeartbeatHostID},
 	}
 
 	// Placement ends by skipping the rest of the reconciliation, having sent
@@ -137,9 +141,9 @@ func TestFinalizeSkipsWorkloadWithoutHost(t *testing.T) {
 	}
 }
 
-// newWorkloadFinalizeClient builds a fake client wired with the HostID index
-// finalize uses to decide whether a failed stop can be given up on.
-func newWorkloadFinalizeClient(t *testing.T, objs ...client.Object) client.Client {
+// newWorkloadClient builds a fake client wired with the HostID index the
+// Workload reconciler uses to look up the Host it is placed on.
+func newWorkloadClient(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()
 	s := runtime.NewScheme()
 	if err := runtimev1alpha1.AddToScheme(s); err != nil {
@@ -179,7 +183,7 @@ func TestFinalizeRetriesFailedStopOnReadyHost(t *testing.T) {
 	host.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
 	stopErr := errors.New("nats: timeout")
 	r := &WorkloadReconciler{
-		Client:            newWorkloadFinalizeClient(t, host),
+		Client:            newWorkloadClient(t, host),
 		Bus:               &mockBus{err: stopErr},
 		OperatorNamespace: testNamespace,
 	}
@@ -197,7 +201,7 @@ func TestFinalizeGivesUpFailedStopOnUnavailableHost(t *testing.T) {
 		HostID:     testHeartbeatHostID,
 	}
 	r := &WorkloadReconciler{
-		Client:            newWorkloadFinalizeClient(t, host),
+		Client:            newWorkloadClient(t, host),
 		Bus:               &mockBus{err: errors.New("nats: timeout")},
 		OperatorNamespace: testNamespace,
 	}
@@ -266,7 +270,7 @@ func TestHostSelectionWaitsOnPinnedHostBeingDeleted(t *testing.T) {
 		HostID: testHeartbeatHostID,
 	}
 	r := &WorkloadReconciler{
-		Client:            newWorkloadFinalizeClient(t, deleting),
+		Client:            newWorkloadClient(t, deleting),
 		OperatorNamespace: testNamespace,
 	}
 	workload := &runtimev1alpha1.Workload{
@@ -283,10 +287,110 @@ func TestHostSelectionWaitsOnPinnedHostBeingDeleted(t *testing.T) {
 	}
 }
 
+func deletingHost(hostID string) *runtimev1alpha1.Host {
+	return &runtimev1alpha1.Host{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              hostID,
+			Namespace:         testNamespace,
+			DeletionTimestamp: &metav1.Time{Time: time.Now()},
+			Finalizers:        []string{hostFinalizerName},
+		},
+		HostID: hostID,
+	}
+}
+
+// A host chosen before its deletion began must not get the start: its
+// finalizer has listed its Workloads already and would miss this one.
+func TestPlacementSkipsHostBeingDeleted(t *testing.T) {
+	for _, pinned := range []bool{false, true} {
+		bus := &mockBus{err: errors.New("no request expected")}
+		r := &WorkloadReconciler{
+			Client:            newWorkloadClient(t, deletingHost(testHeartbeatHostID)),
+			Bus:               bus,
+			OperatorNamespace: testNamespace,
+		}
+		workload := &runtimev1alpha1.Workload{ObjectMeta: metav1.ObjectMeta{Name: "chosen"}}
+		workload.Status.HostID = testHeartbeatHostID
+		if pinned {
+			workload.Spec.HostID = testHeartbeatHostID
+		}
+
+		if err := r.reconcilePlacement(context.Background(), workload); err == nil {
+			t.Fatalf("pinned=%v: placement succeeded on a host being deleted", pinned)
+		}
+		if bus.gotSubject != "" {
+			t.Errorf("pinned=%v: sent %q to a host being deleted", pinned, bus.gotSubject)
+		}
+		// Unpinned goes back to host selection; pinned has nowhere else to go.
+		wantHostID := ""
+		if pinned {
+			wantHostID = testHeartbeatHostID
+		}
+		if workload.Status.HostID != wantHostID {
+			t.Errorf("pinned=%v: HostID = %q, want %q", pinned, workload.Status.HostID, wantHostID)
+		}
+	}
+}
+
+// A chosen host whose Host is already gone is not started on either. A pinned
+// one may simply not be registered yet, so its start is still sent.
+func TestPlacementSkipsHostThatIsGone(t *testing.T) {
+	for _, pinned := range []bool{false, true} {
+		bus := &mockBus{err: errors.New("host unreachable")}
+		r := &WorkloadReconciler{Client: newWorkloadClient(t), Bus: bus, OperatorNamespace: testNamespace}
+		workload := &runtimev1alpha1.Workload{ObjectMeta: metav1.ObjectMeta{Name: "chosen"}}
+		workload.Status.HostID = testHeartbeatHostID
+		if pinned {
+			workload.Spec.HostID = testHeartbeatHostID
+		}
+
+		_ = r.reconcilePlacement(context.Background(), workload)
+		if sent := bus.gotSubject != ""; sent != pinned {
+			t.Errorf("pinned=%v: start sent = %v", pinned, sent)
+		}
+		if !pinned && workload.Status.HostID != "" {
+			t.Errorf("an unpinned workload kept HostID %q for a host that is gone", workload.Status.HostID)
+		}
+	}
+}
+
+// A draining host still answers status, so sync has to read the Host itself.
+func TestSyncFailsWhenHostIsGoingAway(t *testing.T) {
+	for name, objs := range map[string][]client.Object{
+		"deleted":       nil,
+		"being deleted": {deletingHost(testHeartbeatHostID)},
+	} {
+		bus := &mockBus{err: errors.New("no request expected")}
+		r := &WorkloadReconciler{
+			Client:            newWorkloadClient(t, objs...),
+			Bus:               bus,
+			OperatorNamespace: testNamespace,
+		}
+
+		if err := r.reconcileSync(context.Background(), placedWorkload()); err == nil {
+			t.Errorf("%s: sync succeeded for a workload whose host is %s", name, name)
+		}
+		if bus.gotSubject != "" {
+			t.Errorf("%s: asked the host for status anyway (%q)", name, bus.gotSubject)
+		}
+	}
+
+	live := &runtimev1alpha1.Host{
+		ObjectMeta: metav1.ObjectMeta{Name: "live", Namespace: testNamespace},
+		HostID:     testHeartbeatHostID,
+	}
+	bus := &mockBus{err: errors.New("host unreachable")}
+	r := &WorkloadReconciler{Client: newWorkloadClient(t, live), Bus: bus, OperatorNamespace: testNamespace}
+	_ = r.reconcileSync(context.Background(), placedWorkload())
+	if bus.gotSubject == "" {
+		t.Errorf("sync never asked a live host for the workload's status")
+	}
+}
+
 // Once the Host is gone there is nothing left to stop the workload on.
 func TestFinalizeGivesUpFailedStopWhenHostIsGone(t *testing.T) {
 	r := &WorkloadReconciler{
-		Client:            newWorkloadFinalizeClient(t),
+		Client:            newWorkloadClient(t),
 		Bus:               &mockBus{err: errors.New("nats: no responders available for request")},
 		OperatorNamespace: testNamespace,
 	}
