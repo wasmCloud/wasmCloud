@@ -424,7 +424,6 @@ run_k6() {
   if [ "$mode" = native ]; then
     local raw_arg="" pin_cmd=""
     [ "$raw" = 1 ] && raw_arg="--out json=$out_dir/raw.ndjson.gz"
-    [ "$pin" = 1 ] && command -v taskset >/dev/null 2>&1 && pin_cmd="taskset -c $cpus_k6"
     if [ "$pin" = 1 ]; then
       pin_cmd="env GOMAXPROCS=1"
       command -v taskset >/dev/null 2>&1 && pin_cmd="$pin_cmd taskset -c $cpus_k6"
