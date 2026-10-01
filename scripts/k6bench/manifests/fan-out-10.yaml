@@ -1,5 +1,5 @@
-# Entry point: calls all ten leaves (fan-out-10.each.yaml) concurrently over
-# same-host local routing (their localRoute names).
+# Entry point: calls all ten leaves (fan-out-10.each.yaml) concurrently, by
+# their localRoute names (`--routing local`) or Service DNS (`--routing network`).
 # Entry point: k6 reaches it on every node at :30950.
 apiVersion: v1
 kind: Service
@@ -41,16 +41,16 @@ spec:
           image: __RELAY_IMAGE__
           localResources:
             allowedHosts:
-              - fanout-leaf-0.internal
-              - fanout-leaf-1.internal
-              - fanout-leaf-2.internal
-              - fanout-leaf-3.internal
-              - fanout-leaf-4.internal
-              - fanout-leaf-5.internal
-              - fanout-leaf-6.internal
-              - fanout-leaf-7.internal
-              - fanout-leaf-8.internal
-              - fanout-leaf-9.internal
+              - fanout-leaf-0.__CALL_DOMAIN__
+              - fanout-leaf-1.__CALL_DOMAIN__
+              - fanout-leaf-2.__CALL_DOMAIN__
+              - fanout-leaf-3.__CALL_DOMAIN__
+              - fanout-leaf-4.__CALL_DOMAIN__
+              - fanout-leaf-5.__CALL_DOMAIN__
+              - fanout-leaf-6.__CALL_DOMAIN__
+              - fanout-leaf-7.__CALL_DOMAIN__
+              - fanout-leaf-8.__CALL_DOMAIN__
+              - fanout-leaf-9.__CALL_DOMAIN__
             environment:
               config:
-                TARGETS: "http://fanout-leaf-0.internal/,http://fanout-leaf-1.internal/,http://fanout-leaf-2.internal/,http://fanout-leaf-3.internal/,http://fanout-leaf-4.internal/,http://fanout-leaf-5.internal/,http://fanout-leaf-6.internal/,http://fanout-leaf-7.internal/,http://fanout-leaf-8.internal/,http://fanout-leaf-9.internal/"
+                TARGETS: "http://fanout-leaf-0.__CALL_DOMAIN__/,http://fanout-leaf-1.__CALL_DOMAIN__/,http://fanout-leaf-2.__CALL_DOMAIN__/,http://fanout-leaf-3.__CALL_DOMAIN__/,http://fanout-leaf-4.__CALL_DOMAIN__/,http://fanout-leaf-5.__CALL_DOMAIN__/,http://fanout-leaf-6.__CALL_DOMAIN__/,http://fanout-leaf-7.__CALL_DOMAIN__/,http://fanout-leaf-8.__CALL_DOMAIN__/,http://fanout-leaf-9.__CALL_DOMAIN__/"

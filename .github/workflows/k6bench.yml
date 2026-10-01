@@ -29,6 +29,14 @@ on:
           - constant
           - stress
           - spike
+      routing:
+        description: "fan-out-10 and chain-5: local (same-host local routing), network (Service DNS), or both (ignored for release-set)"
+        type: choice
+        default: local
+        options:
+          - local
+          - network
+          - both
       rate:
         description: requests/s for constant and spike
         type: string
@@ -71,16 +79,19 @@ jobs:
       checkout_ref: ${{ steps.set.outputs.checkout_ref }}
       release: ${{ steps.set.outputs.release }}
     env:
-      # What every release publishes to the timeline. stress gives the
-      # headline max_sustainable_rps; the constant runs give p99 at a fixed
-      # rate, which is what compares release to release.
-      RELEASE_RUNS: '["http-hello:constant","http-hello:stress","fan-out-10:constant","many-workloads:constant"]'
+      # What every release publishes to the timeline, as
+      # `scenario:profile[:routing]`. stress gives the headline
+      # max_sustainable_rps; the constant runs give p99 at a fixed rate, which
+      # is what compares release to release. The call-graph scenarios run with
+      # and without local routing, so the timeline shows what it saves.
+      RELEASE_RUNS: '["http-hello:constant","http-hello:stress","fan-out-10:constant:local","fan-out-10:constant:network","chain-5:constant:local","chain-5:constant:network","many-workloads:constant"]'
     steps:
       - id: set
         env:
           EVENT: ${{ github.event_name }}
           INPUT_SCENARIO: ${{ inputs.scenario }}
           INPUT_PROFILE: ${{ inputs.profile }}
+          INPUT_ROUTING: ${{ inputs.routing }}
           INPUT_REF: ${{ inputs.ref }}
           DEFAULT_REF: ${{ github.ref }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -94,7 +105,14 @@ jobs:
             if [ "$INPUT_SCENARIO" = "release-set" ]; then
               runs="${RELEASE_RUNS}"
             else
-              runs="[\"${INPUT_SCENARIO}:${INPUT_PROFILE}\"]"
+              case "${INPUT_SCENARIO}:${INPUT_ROUTING}" in
+                fan-out-10:both | chain-5:both)
+                  runs="[\"${INPUT_SCENARIO}:${INPUT_PROFILE}:local\",\"${INPUT_SCENARIO}:${INPUT_PROFILE}:network\"]" ;;
+                fan-out-10:* | chain-5:*)
+                  runs="[\"${INPUT_SCENARIO}:${INPUT_PROFILE}:${INPUT_ROUTING}\"]" ;;
+                *)
+                  runs="[\"${INPUT_SCENARIO}:${INPUT_PROFILE}\"]" ;;
+              esac
             fi
             ref="${INPUT_REF:-${DEFAULT_REF}}"
             ref="${ref#refs/heads/}"; ref="${ref#refs/tags/}"
@@ -165,10 +183,12 @@ jobs:
           set -euo pipefail
           # shellcheck disable=SC1091
           . "$HOME/.cargo/env"
-          scenario="${RUN%%:*}"
-          profile="${RUN##*:}"
-          out="${RUNNER_TEMP}/k6bench/${scenario}-${profile}"
-          args=(--ci --scenario "$scenario" --profile "$profile"
+          IFS=: read -r scenario profile routing <<<"$RUN"
+          routing="${routing:-local}"
+          name="${scenario}-${profile}"
+          [ "$routing" = local ] || name="${name}-${routing}"
+          out="${RUNNER_TEMP}/k6bench/${name}"
+          args=(--ci --scenario "$scenario" --profile "$profile" --routing "$routing"
                 --rate "$INPUT_RATE" --duration "$INPUT_DURATION" --out-dir "$out")
           [ "$INPUT_RAW" = 1 ] && args+=(--raw)
           if [ "$RELEASE" = true ]; then
@@ -179,7 +199,7 @@ jobs:
           ./scripts/k6bench/run.sh "${args[@]}"
           {
             echo "dir=${out}"
-            echo "name=k6-${scenario}-${profile}"
+            echo "name=k6-${name}"
           } >> "$GITHUB_OUTPUT"
 
       - name: render markdown summary

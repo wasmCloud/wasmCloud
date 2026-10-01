@@ -51,7 +51,9 @@ pub fn run(cmd: Cmd) -> Result<()> {
         } => {
             let a = Run::load(&baseline)?;
             let b = Run::load(&candidate)?;
-            if a.summary.scenario != b.summary.scenario || a.param() != b.param() {
+            // Only the load has to match: local against network routing at
+            // the same load is a comparison worth making.
+            if a.summary.scenario != b.summary.scenario || a.load_param() != b.load_param() {
                 bail!(
                     "runs don't compare: {} {} vs {} {}",
                     a.summary.scenario,
@@ -119,6 +121,7 @@ fn report(run: &Run, style: Style) -> String {
         ("wash", meta.wash_image.clone()),
         ("k6", format!("{} ({})", meta.k6_version, meta.k6_mode)),
         ("target", meta.target.clone()),
+        ("routing", meta.routing.clone()),
         ("pinned", meta.pinned.to_string()),
     ];
     if let Some(ready) = meta.deploy_ready_s {
@@ -321,10 +324,15 @@ fn jsonl(run: &Run) -> Result<()> {
 
 fn delta(a: &Run, b: &Run, style: Style) -> String {
     let mut s = String::new();
+    let param = if a.param() == b.param() {
+        a.param()
+    } else {
+        format!("{} → {}", a.param(), b.param())
+    };
     let title = format!(
         "k6 delta — {} · {}   {}  →  {}",
         a.summary.scenario,
-        a.param(),
+        param,
         a.dir.file_name().unwrap_or_default().to_string_lossy(),
         b.dir.file_name().unwrap_or_default().to_string_lossy(),
     );

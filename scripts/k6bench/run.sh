@@ -29,6 +29,10 @@ scenario
   --workloads N          many-workloads only: number of workloads             [100]
   --stress-rates LIST    stress only: comma-separated step rates
   --slo-p99-ms N         p99 ceiling for thresholds and stress                [250]
+  --routing MODE         fan-out-10 and chain-5 only: how workloads call each
+                         other. local: same-host local routing, by localRoute
+                         name; network: through Service DNS, with the host's
+                         local routing off                                    [local]
 
 target
   --target kind|kube     kind: this script's own cluster; kube: the current
@@ -65,6 +69,7 @@ warmup=30s
 workloads=100
 stress_rates=""
 slo_p99_ms=250
+routing=local
 target=kind
 target_url=""
 namespace=k6bench
@@ -89,6 +94,7 @@ while [ $# -gt 0 ]; do
     --workloads) workloads="$2"; shift ;;
     --stress-rates) stress_rates="$2"; shift ;;
     --slo-p99-ms) slo_p99_ms="$2"; shift ;;
+    --routing) routing="$2"; shift ;;
     --target) target="$2"; shift ;;
     --target-url) target_url="$2"; shift ;;
     --namespace) namespace="$2"; shift ;;
@@ -127,6 +133,8 @@ kctl() { kubectl --context "kind-$cluster" "$@"; }
 [ "$target" = kube ] && kctl() { kubectl "$@"; }
 
 cluster_exists() { kind get clusters 2>/dev/null | grep -qx "$cluster"; }
+
+local_routing() { [ "$routing" = local ] && echo true || echo false; }
 
 chart_version() { sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$repo/charts/runtime-operator/Chart.yaml"; }
 
@@ -191,6 +199,11 @@ stack_up() {
       ensure_registry
       wash_image="$(kctl -n "$namespace" get deploy hostgroup-default -o jsonpath='{.spec.template.spec.containers[0].image}')"
       operator_image="$(kctl -n "$namespace" get deploy runtime-operator -o jsonpath='{.spec.template.spec.containers[0].image}')"
+      local installed=false
+      kctl -n "$namespace" get deploy hostgroup-default -o jsonpath='{.spec.template.spec.containers[0].args}' |
+        grep -q -- --http-local-routing && installed=true
+      [ "$installed" = "$(local_routing)" ] ||
+        die "installed hosts have local routing $installed; rerun without --reuse-stack for --routing $routing"
       log "reusing installed chart ($wash_image)"
       return
     fi
@@ -203,15 +216,16 @@ stack_up() {
 
   local version="${wasmcloud_version:-$(chart_version)}"
   image_args="--set runtime.image.tag=$version --set operator.image.tag=$version"
+  host_args="--set runtime.hostGroups[0].http.localBypassRouting=$(local_routing)"
   wash_image="ghcr.io/wasmcloud/wash:$version"
   operator_image="ghcr.io/wasmcloud/runtime-operator:$version"
   [ "$build_local" = 1 ] && build_images
 
-  log "installing runtime-operator chart ($wash_image)"
-  # shellcheck disable=SC2086 # image_args is a list of flags
+  log "installing runtime-operator chart ($wash_image, local routing $(local_routing))"
+  # shellcheck disable=SC2086 # image_args and host_args are lists of flags
   helm upgrade --install "$release" "$repo/charts/runtime-operator" \
     --kube-context "kind-$cluster" -n "$namespace" --create-namespace \
-    -f "$here/values.yaml" $image_args --wait --timeout 5m >&2
+    -f "$here/values.yaml" $image_args $host_args --wait --timeout 5m >&2
 }
 
 stack_down() {
@@ -258,10 +272,15 @@ push_components() {
   done
 }
 
+# __CALL_DOMAIN__ is what a relay calls its targets by: their `.internal`
+# localRoute names, or `<service>.<namespace>`, which cluster DNS resolves to
+# the Service and the host serves as a Host alias.
 render() {
-  local file="$1"
+  local file="$1" domain=internal
+  [ "$routing" = network ] && domain="$namespace"
   # shellcheck disable=SC2154 # image_hello/image_relay are set by push_components
-  sed -e "s|__HELLO_IMAGE__|$image_hello|g" -e "s|__RELAY_IMAGE__|$image_relay|g" "$file"
+  sed -e "s|__HELLO_IMAGE__|$image_hello|g" -e "s|__RELAY_IMAGE__|$image_relay|g" \
+    -e "s|__CALL_DOMAIN__|$domain|g" "$file"
 }
 
 manifests() {
@@ -475,9 +494,19 @@ case "$target" in
     ;;
   *) die "--target must be kind or kube" ;;
 esac
+case "$routing" in
+  local | network) ;;
+  *) die "--routing must be local or network" ;;
+esac
+case "$scenario" in
+  fan-out-10 | chain-5) ;;
+  *) [ "$routing" = local ] || die "--routing applies only to fan-out-10 and chain-5" ;;
+esac
 
 stamp="$(date -u +%Y-%m-%dT%H%M%SZ)"
-out_dir="${out_dir:-$repo/bench-results/${stamp}_${scenario}_${profile}}"
+suffix=""
+[ "$routing" = network ] && suffix=_network
+out_dir="${out_dir:-$repo/bench-results/${stamp}_${scenario}_${profile}${suffix}}"
 mkdir -p "$out_dir"
 out_dir="$(cd "$out_dir" && pwd)"
 exec > >(tee -a "$out_dir/run.log") 2>&1
@@ -524,7 +553,7 @@ sched_s=$(($(date +%s) - deploy_start))
 read -r mode url <<<"$(k6_mode)"
 host_header="$(default_host)"
 wait_routable "$url" "$host_header" "$mode"
-log "k6 ($mode) → $url  scenario=$scenario profile=$profile rate=$rate duration=$duration"
+log "k6 ($mode) → $url  scenario=$scenario profile=$profile routing=$routing rate=$rate duration=$duration"
 
 sampled=("$cluster-control-plane" "$cluster-worker")
 [ "$mode" = docker ] && sampled+=("$cluster-k6")
@@ -556,6 +585,7 @@ cat >"$out_dir/metadata.json" <<EOF
   "duration": "$duration",
   "warmup": "$warmup",
   "workloads": $workloads,
+  "routing": "$routing",
   "target": "$target",
   "target_url": "$url",
   "k6_mode": "$mode",

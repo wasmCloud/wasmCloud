@@ -1,6 +1,6 @@
 // A `relay` that calls 10 co-located `hello` workloads concurrently per
-// request, over same-host local routing. Measures latency amplification
-// across an inter-workload call graph.
+// request, by local routing or Service DNS (`run.sh --routing`). Measures
+// latency amplification across an inter-workload call graph.
 
 import http from 'k6/http';
 import { cfg } from '../lib/config.js';

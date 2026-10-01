@@ -1,5 +1,5 @@
-// Five `relay` hops in a line (link-0 → … → link-4), each over same-host local
-// routing. Per-hop overhead ≈ (chain p50 − http-hello p50) / 4.
+// Five `relay` hops in a line (link-0 → … → link-4), each by local routing or
+// Service DNS (`run.sh --routing`). Per-hop overhead ≈ (chain p50 − http-hello p50) / 4.
 
 import http from 'k6/http';
 import { cfg } from '../lib/config.js';

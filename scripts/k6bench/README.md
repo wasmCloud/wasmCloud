@@ -66,7 +66,7 @@ scenarios, not for publishing.
 | Scenario         | Deployed                                              | What it isolates                                               |
 | ---------------- | ----------------------------------------------------- | -------------------------------------------------------------- |
 | `http-hello`     | one `hello` workload                                  | the platform's per-request cost; counterpart of `http_invoke`  |
-| `fan-out-10`     | a `relay` calling 10 `hello`s concurrently            | inter-workload call graph, same-host local routing             |
+| `fan-out-10`     | a `relay` calling 10 `hello`s concurrently            | inter-workload call graph                                      |
 | `chain-5`        | five `relay`s in a line                               | per-hop overhead: (chain p50 − hello p50) / 4                  |
 | `many-workloads` | `--workloads N` `hello`s, requests rotate Host header | routing and per-workload cost as the count grows               |
 
@@ -77,6 +77,32 @@ rendered once per instance with `__I__` as the index. The components are in
 
 - `hello` returns a static 200.
 - `relay` calls every URL in its `TARGETS` config and returns 200 only if all of them did.
+
+### Local routing
+
+`fan-out-10` and `chain-5` make calls between workloads. `--routing` picks how
+those calls travel:
+
+- `local` (default): the relays call their targets by `localRoute` name
+  (`*.internal`), and the host's local routing (`http.localBypassRouting`) is
+  on. The same host serves the call in memory.
+- `network`: the relays call `<service>.<namespace>`, and the host's local
+  routing is off. Each call goes out through cluster DNS, the Service and the
+  node's network stack, then back into the host's ingress.
+
+Run both at the same load and compare them. The difference is what local
+routing saves:
+
+```bash
+./scripts/k6bench/run.sh --scenario chain-5 --routing local   --rate 500 --out-dir bench-results/chain-local
+./scripts/k6bench/run.sh --scenario chain-5 --routing network --rate 500 --out-dir bench-results/chain-network
+./scripts/k6bench/compare.sh bench-results/chain-local bench-results/chain-network
+```
+
+Switching modes reinstalls the chart and restarts the hosts, so
+`--reuse-stack` refuses a run whose mode doesn't match the installed hosts. A
+`network` run's history row has `-network` appended to its `param`, and its
+default result directory ends in `_network`.
 
 `run.sh` pushes each component to the local registry, tagged by its content
 hash. The host caches images by tag, so reusing a tag would keep serving the
@@ -123,7 +149,7 @@ Each run writes `bench-results/<utc>_<scenario>_<profile>/`
 | File             | Contents                                                                   |
 | ---------------- | -------------------------------------------------------------------------- |
 | `summary.json`   | k6's `handleSummary` data plus each scenario's offered rate and length     |
-| `metadata.json`  | what ran: scenario, profile, images, k6 version and mode, pinning, git sha |
+| `metadata.json`  | what ran: scenario, profile, routing, images, k6 version and mode, git sha |
 | `cluster.ndjson` | ~1 s `docker stats` samples of the kind nodes and a dockerized k6          |
 | `manifests.yaml` | the rendered WorkloadDeployments                                           |
 | `run.log`        | everything run.sh and k6 printed                                           |
@@ -160,8 +186,10 @@ To run against a cluster where wasmCloud is already installed:
 - `--target-url` is how k6 reaches the scenario's entry Service. The manifests
   make it a NodePort on 30950, so `http://<any-node>:30950` works. Behind a
   LoadBalancer or Ingress, point this at that address instead.
-- `fan-out-10` and `chain-5` need `http.localBypassRouting: true` on the host
-  group.
+- `fan-out-10` and `chain-5` with `--routing local` need
+  `http.localBypassRouting: true` on the host group. `--routing network` needs
+  it off, or nothing differs but the names. `run.sh` doesn't change a cluster
+  it didn't install.
 
 The k6 scripts also run on their own, without `run.sh`, against anything
 already deployed:
@@ -178,10 +206,12 @@ The environment variables they read are listed in [`lib/config.js`](lib/config.j
 the Hetzner bench host, on `release: published` and on demand
 (`workflow_dispatch`):
 
-- **Release:** runs the release set (`http-hello` constant and stress,
-  `fan-out-10`, `many-workloads`) against the images published for that tag.
-- **Dispatch:** runs one scenario, or the release set, against any ref. A ref
-  that isn't a release tag is built with `--build-local`.
+- **Release:** runs the release set against the images published for that
+  tag: `http-hello` constant and stress, `fan-out-10` and `chain-5` with
+  local and with network routing, and `many-workloads`.
+- **Dispatch:** runs one scenario, or the release set, against any ref. For
+  `fan-out-10` and `chain-5`, the `routing` input picks `local`, `network` or
+  `both`. A ref that isn't a release tag is built with `--build-local`.
 
 Each run:
 
