@@ -7,6 +7,9 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
@@ -130,5 +133,88 @@ func TestFinalizeSkipsWorkloadWithoutHost(t *testing.T) {
 	}
 	if bus.gotSubject != "" {
 		t.Errorf("finalize sent %q for a Workload with no host", bus.gotSubject)
+	}
+}
+
+// newWorkloadFinalizeClient builds a fake client wired with the HostID index
+// finalize uses to decide whether a failed stop can be given up on.
+func newWorkloadFinalizeClient(t *testing.T, objs ...client.Object) client.Client {
+	t.Helper()
+	s := runtime.NewScheme()
+	if err := runtimev1alpha1.AddToScheme(s); err != nil {
+		t.Fatalf("add runtime v1alpha1: %v", err)
+	}
+	return fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(objs...).
+		WithIndex(&runtimev1alpha1.Host{}, hostIDIndex,
+			func(obj client.Object) []string {
+				host, ok := obj.(*runtimev1alpha1.Host)
+				if !ok || host.HostID == "" {
+					return nil
+				}
+				return []string{host.HostID}
+			}).
+		Build()
+}
+
+func placedWorkload() *runtimev1alpha1.Workload {
+	w := &runtimev1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{Name: "placed"},
+	}
+	w.Status.HostID = testHeartbeatHostID
+	w.Status.WorkloadID = "workload-id"
+	w.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadConditionPlacement))
+	return w
+}
+
+// A stop that fails on a host still heartbeating may have left the workload
+// running, so the finalizer must stay and the stop be retried.
+func TestFinalizeRetriesFailedStopOnReadyHost(t *testing.T) {
+	host := &runtimev1alpha1.Host{
+		ObjectMeta: metav1.ObjectMeta{Name: "host", Namespace: testNamespace},
+		HostID:     testHeartbeatHostID,
+	}
+	host.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
+	stopErr := errors.New("nats: timeout")
+	r := &WorkloadReconciler{
+		Client:            newWorkloadFinalizeClient(t, host),
+		Bus:               &mockBus{err: stopErr},
+		OperatorNamespace: testNamespace,
+	}
+
+	if err := r.finalize(context.Background(), placedWorkload()); !errors.Is(err, stopErr) {
+		t.Fatalf("finalize returned %v, want the stop error so it is retried", err)
+	}
+}
+
+// A host that stopped heartbeating may never answer, and its Host may never be
+// reaped, so waiting on it could block the deletion for good.
+func TestFinalizeGivesUpFailedStopOnUnavailableHost(t *testing.T) {
+	host := &runtimev1alpha1.Host{
+		ObjectMeta: metav1.ObjectMeta{Name: "host", Namespace: testNamespace},
+		HostID:     testHeartbeatHostID,
+	}
+	r := &WorkloadReconciler{
+		Client:            newWorkloadFinalizeClient(t, host),
+		Bus:               &mockBus{err: errors.New("nats: timeout")},
+		OperatorNamespace: testNamespace,
+	}
+
+	if err := r.finalize(context.Background(), placedWorkload()); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+}
+
+// Once the Host is gone there is nothing left to stop the workload on.
+func TestFinalizeGivesUpFailedStopWhenHostIsGone(t *testing.T) {
+	r := &WorkloadReconciler{
+		Client:            newWorkloadFinalizeClient(t),
+		Bus:               &mockBus{err: errors.New("nats: no responders available for request")},
+		OperatorNamespace: testNamespace,
+	}
+
+	if err := r.finalize(context.Background(), placedWorkload()); err != nil {
+		t.Fatalf("finalize: %v", err)
 	}
 }
