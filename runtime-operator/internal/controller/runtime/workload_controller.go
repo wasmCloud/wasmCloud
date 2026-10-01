@@ -297,6 +297,25 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 		return nil
 	}
 
+	// The host may have gone, or started deleting, after it was chosen. Its
+	// finalizer has listed its Workloads already, so one started there now is
+	// missed. A pinned host that is not registered yet is still tried.
+	host, err := r.lookupHostByID(ctx, workload.Status.HostID)
+	if err != nil {
+		return err
+	}
+	goingAway := host != nil && !host.DeletionTimestamp.IsZero()
+	if goingAway || (host == nil && workload.Spec.HostID == "") {
+		hostID := workload.Status.HostID
+		if workload.Spec.HostID == "" {
+			workload.Status.HostID = ""
+			workload.Status.Environment = ""
+			condition.ForceStatusUpdate(ctx)
+			condition.RequireOptimisticLock(ctx)
+		}
+		return condition.ErrStatusUnknown(fmt.Errorf("host %s is gone or being deleted", hostID))
+	}
+
 	volumes := make([]*runtimev2.Volume, 0, len(workload.Spec.Volumes))
 	for _, v := range workload.Spec.Volumes {
 		vol := &runtimev2.Volume{
@@ -421,6 +440,19 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 func (r *WorkloadReconciler) reconcileSync(ctx context.Context, workload *runtimev1alpha1.Workload) error {
 	if !workload.Status.AllTrue(runtimev1alpha1.WorkloadConditionPlacement) {
 		return condition.ErrStatusUnknown(fmt.Errorf("workload is not placed yet"))
+	}
+
+	// A draining host still answers status, so the Host is the only sign it
+	// is going away. Failing sync lets the ReplicaSet replace the workload.
+	host, err := r.lookupHostByID(ctx, workload.Status.HostID)
+	if err != nil {
+		return err
+	}
+	if host == nil {
+		return fmt.Errorf("host %s no longer exists", workload.Status.HostID)
+	}
+	if !host.DeletionTimestamp.IsZero() {
+		return fmt.Errorf("host %s is being deleted", workload.Status.HostID)
 	}
 
 	client := NewWashHostClient(r.Bus, workload.Status.HostID)
