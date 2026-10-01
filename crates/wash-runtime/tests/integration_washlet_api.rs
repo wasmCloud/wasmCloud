@@ -57,7 +57,20 @@ async fn nats_clients() -> Result<(
     async_nats::Client,
 )> {
     wash_runtime::init_crypto();
-    let (container, url) = match std::env::var("NATS_URL") {
+    let (container, url) = nats_endpoint().await?;
+    let host = Arc::new(
+        async_nats::connect(&url)
+            .await
+            .context("failed to connect host NATS client")?,
+    );
+    let operator = async_nats::connect(&url)
+        .await
+        .context("failed to connect operator NATS client")?;
+    Ok((container, host, operator))
+}
+
+async fn nats_endpoint() -> Result<(Option<ContainerAsync<GenericImage>>, String)> {
+    Ok(match std::env::var("NATS_URL") {
         Ok(url) => (None, url),
         Err(_) => {
             let container = GenericImage::new("nats", "2.12.8-alpine")
@@ -69,16 +82,7 @@ async fn nats_clients() -> Result<(
             let port = container.get_host_port_ipv4(4222).await?;
             (Some(container), format!("nats://127.0.0.1:{port}"))
         }
-    };
-    let host = Arc::new(
-        async_nats::connect(&url)
-            .await
-            .context("failed to connect host NATS client")?,
-    );
-    let operator = async_nats::connect(&url)
-        .await
-        .context("failed to connect operator NATS client")?;
-    Ok((container, host, operator))
+    })
 }
 
 struct TestHarness {
@@ -153,16 +157,23 @@ impl TestHarnessBuilder {
         let cluster_host = builder.build().context("failed to build cluster host")?;
         let host_id = cluster_host.host().id().to_string();
 
-        // Subscribe (and flush, so the server has registered the SUB) before the
-        // host starts publishing.
-        let heartbeat_sub = api_client
+        // Verify the heartbeat SUB before starting the host. Client::flush
+        // alone only writes to the socket, without a server acknowledgement.
+        let mut heartbeat_sub = api_client
             .subscribe(heartbeat_subject(&host_id))
             .await
             .context("failed to subscribe to heartbeats")?;
+        let marker = b"test-heartbeat-subscription";
         api_client
-            .flush()
-            .await
-            .context("failed to flush heartbeat subscription")?;
+            .publish(heartbeat_subject(&host_id), marker.as_slice().into())
+            .await?;
+        let echoed = tokio::time::timeout(Duration::from_secs(5), heartbeat_sub.next())
+            .await?
+            .context("heartbeat subscription closed during registration")?;
+        anyhow::ensure!(
+            echoed.payload.as_ref() == marker,
+            "heartbeat registration marker was not echoed"
+        );
 
         let (_host, shutdown) = cluster_host
             .start()
@@ -723,12 +734,13 @@ async fn attached_control_reports_an_aborted_native_start_and_preserves_local_wo
         },
     })
     .await?;
-    let channel = AttachedHostControl::attach(host.clone(), nats, "attached", None).await?;
+    let channel = AttachedHostControl::attach(host.clone(), nats.clone(), "attached", None).await?;
     let registry = StallingRegistry::bind().await?;
     let subject = rpc_subject(host.id(), "workload.start");
     let request = registry.start_request("stalled-native");
+    let start_client = operator.clone();
     let start = tokio::spawn(async move {
-        rpc::<_, v2::WorkloadStartResponse>(&operator, subject, &request).await
+        rpc::<_, v2::WorkloadStartResponse>(&start_client, subject, &request).await
     });
     wait_for(Duration::from_secs(10), || registry.reached() > 0).await?;
     let error = channel
@@ -747,8 +759,27 @@ async fn attached_control_reports_an_aborted_native_start_and_preserves_local_wo
         wash_runtime::types::WorkloadState::Running
     );
     start.abort();
-    // Native cancellation need not release the interrupted ID. The owner
-    // chooses to stop this host rather than reuse it after an abort error.
+    assert_eq!(
+        host.workload_status(wash_runtime::types::WorkloadStatusRequest {
+            workload_id: "stalled-native".into(),
+        })
+        .await?
+        .workload_status
+        .workload_state,
+        wash_runtime::types::WorkloadState::NotFound
+    );
+    let replacement = AttachedHostControl::attach(host.clone(), nats, "replacement", None).await?;
+    let reused: v2::WorkloadStartResponse = rpc(
+        &operator,
+        rpc_subject(host.id(), "workload.start"),
+        &empty_start_request("stalled-native"),
+    )
+    .await?;
+    assert_eq!(
+        status_of(reused.workload_status)?.workload_state(),
+        v2::WorkloadState::Running
+    );
+    replacement.shutdown().await?;
     host.stop().await
 }
 
@@ -1340,4 +1371,336 @@ async fn shutdown_abandons_a_start_that_outlasts_the_drain() -> Result<()> {
          it must abandon the start once the {COMMAND_DRAIN_TIMEOUT:?} drain is up"
     );
     Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS) or NATS_URL"]
+async fn registration_waits_for_the_broker_before_the_first_request() -> Result<()> {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    wash_runtime::init_crypto();
+    let (_container, url) = nats_endpoint().await?;
+    let address = reqwest::Url::parse(&url)?;
+    let endpoint = (
+        address.host_str().context("missing NATS host")?.to_string(),
+        address.port().unwrap_or(4222),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_addr = listener.local_addr()?;
+    let reached = Arc::new(tokio::sync::Semaphore::new(0));
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let proxy = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+        let reached = reached.clone();
+        let release = release.clone();
+        async move {
+            let (downstream, _) = listener.accept().await?;
+            let upstream = tokio::net::TcpStream::connect(endpoint).await?;
+            let (mut down_r, mut down_w) = downstream.into_split();
+            let (mut up_r, mut up_w) = upstream.into_split();
+            let to_client = async { tokio::io::copy(&mut up_r, &mut down_w).await };
+            let to_server = async {
+                let mut buffer = [0; 65536];
+                let mut held = false;
+                loop {
+                    let count = down_r.read(&mut buffer).await?;
+                    if count == 0 {
+                        break;
+                    }
+                    if !held && buffer[..count].windows(4).any(|bytes| bytes == b"SUB ") {
+                        held = true;
+                        reached.add_permits(1);
+                        let permit = release.acquire().await?;
+                        permit.forget();
+                    }
+                    up_w.write_all(&buffer[..count]).await?;
+                }
+                anyhow::Ok(())
+            };
+            tokio::select! { result = to_client => { result?; }, result = to_server => { result?; } }
+            anyhow::Ok(())
+        }
+    }));
+    let client = Arc::new(async_nats::connect(format!("nats://{proxy_addr}")).await?);
+    let operator = async_nats::connect(url).await?;
+    let host = HostBuilder::default().build()?.start().await?;
+    let attach = tokio::spawn(AttachedHostControl::builder(host.clone(), client).attach());
+    let permit = tokio::time::timeout(Duration::from_secs(2), reached.acquire()).await??;
+    permit.forget();
+    assert!(
+        !attach.is_finished(),
+        "attach returned before the server saw SUB"
+    );
+    release.add_permits(1);
+    let control = tokio::time::timeout(Duration::from_secs(2), attach).await???;
+    let beat: v2::HostHeartbeat = rpc(&operator, rpc_subject(host.id(), "heartbeat"), &()).await?;
+    assert_eq!(beat.id, host.id());
+    control.shutdown().await?;
+    host.stop().await?;
+    drop(proxy);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS) or NATS_URL"]
+async fn a_second_attachment_cannot_bypass_the_first_handlers_policy() -> Result<()> {
+    let (_container, nats, operator) = nats_clients().await?;
+    let host = HostBuilder::default().build()?.start().await?;
+    let first = AttachedHostControl::builder(host.clone(), nats.clone())
+        .with_handler(Arc::new(AttachedPolicy))
+        .attach()
+        .await?;
+    let error = AttachedHostControl::builder(host.clone(), nats.clone())
+        .attach()
+        .await
+        .err()
+        .context("a second controller was admitted")?;
+    assert!(error.to_string().contains("active control attachment"));
+    let response: v2::WorkloadStartResponse = rpc(
+        &operator,
+        rpc_subject(host.id(), "workload.start"),
+        &empty_start_request("denied"),
+    )
+    .await?;
+    assert_eq!(
+        status_of(response.workload_status)?.workload_state(),
+        v2::WorkloadState::Error
+    );
+    assert_eq!(
+        host.workload_status(wash_runtime::types::WorkloadStatusRequest {
+            workload_id: "denied".into(),
+        })
+        .await?
+        .workload_status
+        .workload_state,
+        wash_runtime::types::WorkloadState::NotFound
+    );
+    first.shutdown().await?;
+    let next = AttachedHostControl::builder(host.clone(), nats)
+        .attach()
+        .await?;
+    next.shutdown().await?;
+    host.stop().await
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS) or NATS_URL"]
+async fn continuously_ready_timers_do_not_starve_commands() -> Result<()> {
+    let (_container, nats, operator) = nats_clients().await?;
+    let host = HostBuilder::default().build()?.start().await?;
+    let control = AttachedHostControl::builder(host.clone(), nats)
+        .with_heartbeat_interval(Duration::from_nanos(1))
+        .attach()
+        .await?;
+    for _ in 0..20 {
+        let beat: v2::HostHeartbeat = tokio::time::timeout(
+            Duration::from_secs(1),
+            rpc(&operator, rpc_subject(host.id(), "heartbeat"), &()),
+        )
+        .await??;
+        assert_eq!(beat.id, host.id());
+    }
+    control.shutdown().await?;
+    host.stop().await
+}
+
+struct GatedStarts {
+    entered: std::sync::atomic::AtomicUsize,
+    gate: tokio::sync::Semaphore,
+}
+
+#[async_trait::async_trait]
+impl HostCommandHandler for GatedStarts {
+    async fn start(
+        &self,
+        defaults: &HostControlDefaults,
+        request: v2::WorkloadStartRequest,
+    ) -> Result<v2::WorkloadStartResponse> {
+        self.entered
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let permit = self.gate.acquire().await?;
+        permit.forget();
+        defaults.start(request).await
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS) or NATS_URL"]
+async fn pending_starts_are_bounded_and_queries_remain_responsive() -> Result<()> {
+    use wash_runtime::washlet::MAX_PENDING_STARTS;
+    let (_container, nats, operator) = nats_clients().await?;
+    let host = HostBuilder::default().build()?.start().await?;
+    let handler = Arc::new(GatedStarts {
+        entered: std::sync::atomic::AtomicUsize::new(0),
+        gate: tokio::sync::Semaphore::new(0),
+    });
+    let control = AttachedHostControl::builder(host.clone(), nats)
+        .with_max_concurrent_starts(1)
+        .with_handler(handler.clone())
+        .attach()
+        .await?;
+    let inbox = operator.new_inbox();
+    let mut responses = operator.subscribe(inbox.clone()).await?;
+    for index in 0..MAX_PENDING_STARTS * 2 {
+        operator
+            .publish_with_reply(
+                rpc_subject(host.id(), "workload.start"),
+                inbox.clone(),
+                serde_json::to_vec(&empty_start_request(&format!("bounded-{index}")))?.into(),
+            )
+            .await?;
+    }
+    wait_for(Duration::from_secs(2), || {
+        handler.entered.load(std::sync::atomic::Ordering::SeqCst) == MAX_PENDING_STARTS
+    })
+    .await?;
+    for _ in 0..MAX_PENDING_STARTS {
+        let msg = tokio::time::timeout(Duration::from_secs(2), responses.next())
+            .await?
+            .context("reply subscription closed")?;
+        let response: v2::WorkloadStartResponse = serde_json::from_slice(&msg.payload)?;
+        let status = status_of(response.workload_status)?;
+        assert_eq!(status.workload_state(), v2::WorkloadState::Error);
+        assert!(status.message.contains("busy"));
+        assert_eq!(
+            host.workload_status(wash_runtime::types::WorkloadStatusRequest {
+                workload_id: status.workload_id,
+            })
+            .await?
+            .workload_status
+            .workload_state,
+            wash_runtime::types::WorkloadState::NotFound
+        );
+    }
+    let stop: v2::WorkloadStopResponse = rpc(
+        &operator,
+        rpc_subject(host.id(), "workload.stop"),
+        &v2::WorkloadStopRequest {
+            workload_id: "unrelated".into(),
+        },
+    )
+    .await?;
+    assert_eq!(
+        status_of(stop.workload_status)?.workload_state(),
+        v2::WorkloadState::NotFound
+    );
+    let beat: v2::HostHeartbeat = rpc(&operator, rpc_subject(host.id(), "heartbeat"), &()).await?;
+    assert_eq!(beat.id, host.id());
+    handler.gate.add_permits(MAX_PENDING_STARTS);
+    for _ in 0..MAX_PENDING_STARTS {
+        let msg = tokio::time::timeout(Duration::from_secs(5), responses.next())
+            .await?
+            .context("reply subscription closed")?;
+        let response: v2::WorkloadStartResponse = serde_json::from_slice(&msg.payload)?;
+        assert_eq!(
+            status_of(response.workload_status)?.workload_state(),
+            v2::WorkloadState::Running
+        );
+    }
+    assert_eq!(
+        handler.entered.load(std::sync::atomic::Ordering::SeqCst),
+        MAX_PENDING_STARTS
+    );
+    control.shutdown().await?;
+    host.stop().await
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS) or NATS_URL"]
+async fn dropping_real_control_aborts_commands_and_releases_its_lease() -> Result<()> {
+    let (_container, nats, operator) = nats_clients().await?;
+    let host = HostBuilder::default().build()?.start().await?;
+    let handler = Arc::new(StallingPolicy {
+        entered: tokio::sync::Notify::new(),
+        cancelled: std::sync::atomic::AtomicBool::new(false),
+    });
+    let control = AttachedHostControl::builder(host.clone(), nats.clone())
+        .with_handler(handler.clone())
+        .attach()
+        .await?;
+    operator
+        .publish(
+            rpc_subject(host.id(), "workload.start"),
+            serde_json::to_vec(&empty_start_request("dropped"))?.into(),
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(2), handler.entered.notified()).await?;
+    drop(control);
+    wait_for(Duration::from_secs(2), || {
+        handler.cancelled.load(std::sync::atomic::Ordering::SeqCst)
+    })
+    .await?;
+    let replacement = AttachedHostControl::builder(host.clone(), nats)
+        .attach()
+        .await?;
+    // Poll and cancel a real shutdown wait, then let concurrent callers finish it.
+    assert!(replacement.shutdown().now_or_never().is_none());
+    let (left, right) = tokio::join!(replacement.shutdown(), replacement.shutdown());
+    left?;
+    right?;
+    host.stop().await
+}
+
+struct PanicOnRelease {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl HostCommandHandler for PanicOnRelease {
+    async fn start(
+        &self,
+        _defaults: &HostControlDefaults,
+        _request: v2::WorkloadStartRequest,
+    ) -> Result<v2::WorkloadStartResponse> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        std::panic::resume_unwind(Box::new("deliberate regression-test panic"))
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS) or NATS_URL"]
+async fn a_handler_panic_during_the_real_drain_is_reported() -> Result<()> {
+    let (_container, nats, operator) = nats_clients().await?;
+    let host = HostBuilder::default().build()?.start().await?;
+    let handler = Arc::new(PanicOnRelease {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let control = AttachedHostControl::builder(host.clone(), nats)
+        .with_handler(handler.clone())
+        .attach()
+        .await?;
+    operator
+        .publish(
+            rpc_subject(host.id(), "workload.start"),
+            serde_json::to_vec(&empty_start_request("panic"))?.into(),
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(2), handler.entered.notified()).await?;
+    let shutdown = tokio::spawn(async move { control.shutdown().await });
+    // Observe the server processing UNSUB while the handler is still blocked.
+    // Its subsequent panic must be collected by the shutdown drain.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Ok(Err(error)) = tokio::time::timeout(
+                Duration::from_millis(20),
+                operator.request(rpc_subject(host.id(), "heartbeat"), Vec::new().into()),
+            )
+            .await
+                && error.kind() == async_nats::RequestErrorKind::NoResponders
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    handler.release.notify_one();
+    let error = shutdown
+        .await?
+        .err()
+        .context("panic was reported as clean shutdown")?;
+    assert!(error.to_string().contains("command task failed"));
+    assert_eq!(host.heartbeat().await?.id, host.id());
+    host.stop().await
 }

@@ -66,6 +66,7 @@ pub mod egress_policy;
 pub mod ports;
 pub mod probes;
 pub mod quota;
+mod start;
 pub(crate) mod sysinfo;
 use sysinfo::SystemMonitor;
 
@@ -313,6 +314,8 @@ pub struct Host {
     engine: Engine,
     /// Workloads mapped from ID to the workload and its current state
     workloads: Arc<RwLock<HashMap<String, HostWorkload>>>,
+    cancelled_starts: start::CancelledStarts,
+    start_cleanup: tokio_util::task::TaskTracker,
     /// Source of the [`Reservation`] a start or a teardown stamps on the slot it
     /// owns. Monotonic for the life of the host, so a reservation identifies one
     /// occupant of a workload id and never a later one.
@@ -324,6 +327,8 @@ pub struct Host {
     /// its plugins are stopping, so a workload started onto one would be
     /// unroutable and, once the ingress drain ends, silently unregistered.
     stopped: std::sync::atomic::AtomicBool,
+    #[cfg(feature = "washlet")]
+    control: std::sync::Mutex<std::sync::Weak<HostControlLease>>,
     /// Plugins in a map from their ID to the plugin itself
     plugins: HashMap<&'static str, Arc<dyn HostPlugin>>,
     /// What the operator declared about each plugin's bindings — the host layer
@@ -354,6 +359,11 @@ pub struct Host {
 ///
 /// Only the builder and host hold this token strongly. Callers get weak refs.
 struct HostLifetime(());
+
+/// Shared by the control loop and its commands, so cancellation cannot release
+/// control ownership while a command still holds the host.
+#[cfg(feature = "washlet")]
+pub(crate) struct HostControlLease;
 
 /// A weak link to a host's lifetime and optional HTTP handler. Every guest
 /// store uses the lifetime check, even without HTTP egress.
@@ -402,6 +412,46 @@ impl HostRef {
 }
 
 impl Host {
+    pub(crate) fn start_guard(
+        &self,
+        workload_id: &str,
+        reservation: Reservation,
+    ) -> start::StartGuard {
+        start::StartGuard::new(self, workload_id, reservation)
+    }
+
+    pub(crate) async fn wait_start_cleanup(&self) -> anyhow::Result<()> {
+        self.start_cleanup.wait().await;
+        let cancelled = self
+            .cancelled_starts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        anyhow::ensure!(
+            cancelled.is_empty(),
+            "cancelled workloads require a workload stop to retry cleanup"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "washlet")]
+    pub(crate) fn acquire_control(&self) -> anyhow::Result<Arc<HostControlLease>> {
+        anyhow::ensure!(
+            !self.stopped.load(std::sync::atomic::Ordering::SeqCst),
+            "cannot attach control to a stopped host"
+        );
+        let mut control = self
+            .control
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        anyhow::ensure!(
+            control.upgrade().is_none(),
+            "host already has an active control attachment"
+        );
+        let lease = Arc::new(HostControlLease);
+        *control = Arc::downgrade(&lease);
+        Ok(lease)
+    }
+
     /// Create a new builder for the host.
     pub fn builder() -> HostBuilder {
         HostBuilder::default()
@@ -675,6 +725,11 @@ impl Host {
             .await
             .context("failed to stop HTTP handler")?;
 
+        // Cancelled starts finish teardown before global plugin shutdown.
+        if let Err(error) = self.wait_start_cleanup().await {
+            tracing::warn!(%error, "stopping plugins with failed workload cleanup");
+        }
+
         // Stop all plugins, log errors but continue stopping others. The cap
         // must outlast the plugin-stop budget: a host component plugin's
         // `stop()` waits the full budget for its supervisor and only then
@@ -703,6 +758,10 @@ impl Host {
             }
         }
 
+        self.cancelled_starts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
         Ok(())
     }
 
@@ -879,6 +938,7 @@ impl Host {
     async fn workload_start_inner(
         &self,
         request: WorkloadStartRequest,
+        cleanup: &crate::engine::workload::StartCleanup,
     ) -> anyhow::Result<ResolvedWorkload> {
         let service_present = request.workload.service.is_some();
         let workload_id = request.workload_id.clone();
@@ -903,11 +963,12 @@ impl Host {
         // `resolve` binds the workload's plugins, and gives back whatever it
         // bound if any part of that fails.
         let mut resolved_workload = unresolved_workload
-            .resolve(
+            .resolve_for_start(
                 Some(&self.plugins),
                 &self.plugin_bindings,
                 &self.host_ref(),
                 &self.meters,
+                Some(cleanup),
             )
             .await?;
 
@@ -921,6 +982,7 @@ impl Host {
             return Err(e);
         }
 
+        cleanup.resolved(&resolved_workload);
         Ok(resolved_workload)
     }
 }
@@ -1072,6 +1134,28 @@ impl HostApi for Host {
         &self,
         request: WorkloadStopRequest,
     ) -> anyhow::Result<WorkloadStopResponse> {
+        let recovery = self
+            .cancelled_starts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&request.workload_id)
+            .cloned();
+        if let Some(recovery) = recovery {
+            recovery
+                .recover(
+                    &request.workload_id,
+                    &self.workloads,
+                    &self.cancelled_starts,
+                )
+                .await?;
+            return Ok(WorkloadStopResponse {
+                workload_status: WorkloadStatus {
+                    workload_id: request.workload_id,
+                    workload_state: WorkloadState::Stopping,
+                    message: "cancelled workload resources released".into(),
+                },
+            });
+        }
         let has_workload = self
             .workloads
             .read()
@@ -1240,7 +1324,8 @@ impl WorkloadReservation for Host {
         request: WorkloadStartRequest,
     ) -> anyhow::Result<WorkloadStartResponse> {
         let workload_id = request.workload_id.clone();
-        let started = self.workload_start_inner(request).await;
+        let mut guard = self.start_guard(&workload_id, reservation);
+        let started = self.workload_start_inner(request, &guard.cleanup()).await;
 
         // Commit under the same lock the id was reserved under, and only into
         // the slot this start reserved. Anything else in that slot means the
@@ -1267,6 +1352,7 @@ impl WorkloadReservation for Host {
             };
             match started {
                 Ok(resolved) if mine => {
+                    guard.disarm();
                     workloads.insert(
                         workload_id.clone(),
                         HostWorkload::Running(Box::new(resolved)),
@@ -1291,6 +1377,7 @@ impl WorkloadReservation for Host {
                     ),
                 },
                 Err(err) => {
+                    guard.disarm();
                     // `{:#}` so the whole context chain reaches the caller and
                     // the log below: the outer layer alone ("failed to pull
                     // image for component 'x'") never names the cause.
@@ -1329,6 +1416,7 @@ impl WorkloadReservation for Host {
             self.finish_teardown(&workload_id, reservation, None).await;
         }
 
+        guard.disarm();
         Ok(WorkloadStartResponse {
             workload_status: WorkloadStatus {
                 workload_id,
@@ -1729,8 +1817,16 @@ impl HostBuilder {
         Ok(Host {
             engine,
             workloads: Arc::default(),
+            cancelled_starts: Arc::default(),
+            start_cleanup: {
+                let tasks = tokio_util::task::TaskTracker::new();
+                tasks.close();
+                tasks
+            },
             reservations: std::sync::atomic::AtomicU64::default(),
             stopped: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(feature = "washlet")]
+            control: std::sync::Mutex::default(),
             plugins: self.plugins,
             plugin_bindings: Arc::new(self.plugin_bindings),
             id: self.id,
@@ -2356,6 +2452,208 @@ mod tests {
             .expect("failed to register plugin")
             .build()
             .expect("failed to build host")
+    }
+
+    #[derive(Clone, Copy)]
+    enum CancelAt {
+        WorkloadBind,
+        ItemBind,
+        Resolved,
+    }
+
+    struct CancelledBindingPlugin {
+        cancel_at: CancelAt,
+        entered: tokio::sync::Notify,
+        cleanup_entered: tokio::sync::Notify,
+        cleanup_gate: tokio::sync::Semaphore,
+        live: std::sync::atomic::AtomicBool,
+        fail_cleanup: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl HostPlugin for CancelledBindingPlugin {
+        fn id(&self) -> &'static str {
+            "cancelled-binding"
+        }
+
+        fn world(&self) -> WitWorld {
+            WitWorld {
+                imports: HashSet::new(),
+                exports: HashSet::from([WitInterface::from("test:probe/marker@0.1.0")]),
+            }
+        }
+
+        async fn on_workload_bind(
+            &self,
+            _workload: &crate::engine::workload::UnresolvedWorkload,
+            _interfaces: crate::plugin::WitInterfaces<'_>,
+        ) -> anyhow::Result<()> {
+            self.live.store(true, std::sync::atomic::Ordering::SeqCst);
+            if matches!(self.cancel_at, CancelAt::WorkloadBind) {
+                self.entered.notify_one();
+                std::future::pending::<()>().await;
+            }
+            Ok(())
+        }
+
+        async fn on_workload_item_bind<'a>(
+            &self,
+            item: &mut crate::engine::workload::WorkloadItem<'a>,
+            _interfaces: crate::plugin::WitInterfaces<'_>,
+        ) -> anyhow::Result<()> {
+            if matches!(self.cancel_at, CancelAt::ItemBind) {
+                self.entered.notify_one();
+                std::future::pending::<()>().await;
+            }
+            item.linker().instance("test:probe/marker@0.1.0")?;
+            Ok(())
+        }
+
+        async fn on_workload_resolved(
+            &self,
+            _workload: &crate::engine::workload::ResolvedWorkload,
+            _component_id: &str,
+        ) -> anyhow::Result<()> {
+            if matches!(self.cancel_at, CancelAt::Resolved) {
+                self.entered.notify_one();
+                std::future::pending::<()>().await;
+            }
+            Ok(())
+        }
+
+        async fn on_workload_unbind(
+            &self,
+            _workload_id: &str,
+            interfaces: crate::plugin::WitInterfaces<'_>,
+        ) -> anyhow::Result<()> {
+            assert!(interfaces.contains("test", "probe", &["marker"]));
+            self.cleanup_entered.notify_one();
+            let permit = self.cleanup_gate.acquire().await?;
+            permit.forget();
+            anyhow::ensure!(
+                !self
+                    .fail_cleanup
+                    .swap(false, std::sync::atomic::Ordering::SeqCst),
+                "cleanup failed once"
+            );
+            self.live.store(false, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_native_starts_keep_the_id_until_binding_cleanup_finishes()
+    -> anyhow::Result<()> {
+        for cancel_at in [
+            CancelAt::WorkloadBind,
+            CancelAt::ItemBind,
+            CancelAt::Resolved,
+        ] {
+            let plugin = Arc::new(CancelledBindingPlugin {
+                cancel_at,
+                entered: tokio::sync::Notify::new(),
+                cleanup_entered: tokio::sync::Notify::new(),
+                cleanup_gate: tokio::sync::Semaphore::new(0),
+                live: std::sync::atomic::AtomicBool::new(false),
+                fail_cleanup: std::sync::atomic::AtomicBool::new(false),
+            });
+            let host = Host::builder()
+                .with_plugin(plugin.clone())?
+                .build()?
+                .start()
+                .await?;
+            host.workload_start(empty_workload_start_request("local"))
+                .await?;
+            #[cfg(feature = "washlet")]
+            let lease = host.acquire_control()?;
+            let task = tokio::spawn({
+                let host = host.clone();
+                async move { host.workload_start(marker_request("cancelled")).await }
+            });
+            tokio::time::timeout(Duration::from_secs(5), plugin.entered.notified()).await?;
+            assert!(plugin.live.load(std::sync::atomic::Ordering::SeqCst));
+            task.abort();
+            assert!(task.await.is_err());
+            #[cfg(feature = "washlet")]
+            drop(lease);
+            tokio::time::timeout(Duration::from_secs(1), plugin.cleanup_entered.notified()).await?;
+            let refused = host
+                .workload_start(empty_workload_start_request("cancelled"))
+                .await?;
+            assert_eq!(refused.workload_status.workload_state, WorkloadState::Error);
+            #[cfg(feature = "washlet")]
+            assert!(host.acquire_control().is_err());
+            plugin.cleanup_gate.add_permits(1);
+            tokio::time::timeout(Duration::from_secs(1), host.wait_start_cleanup()).await??;
+            assert!(!plugin.live.load(std::sync::atomic::Ordering::SeqCst));
+            let reused = host
+                .workload_start(empty_workload_start_request("cancelled"))
+                .await?;
+            assert_eq!(
+                reused.workload_status.workload_state,
+                WorkloadState::Running
+            );
+            assert_eq!(
+                host.workload_status(WorkloadStatusRequest {
+                    workload_id: "local".into()
+                })
+                .await?
+                .workload_status
+                .workload_state,
+                WorkloadState::Running
+            );
+            #[cfg(feature = "washlet")]
+            assert!(host.acquire_control().is_ok());
+            host.stop().await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_stop_retries_failed_cancelled_start_cleanup() -> anyhow::Result<()> {
+        let plugin = Arc::new(CancelledBindingPlugin {
+            cancel_at: CancelAt::ItemBind,
+            entered: tokio::sync::Notify::new(),
+            cleanup_entered: tokio::sync::Notify::new(),
+            cleanup_gate: tokio::sync::Semaphore::new(2),
+            live: std::sync::atomic::AtomicBool::new(false),
+            fail_cleanup: std::sync::atomic::AtomicBool::new(true),
+        });
+        let host = Host::builder()
+            .with_plugin(plugin.clone())?
+            .build()?
+            .start()
+            .await?;
+        let task = tokio::spawn({
+            let host = host.clone();
+            async move { host.workload_start(marker_request("retry")).await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), plugin.entered.notified()).await?;
+        task.abort();
+        assert!(task.await.is_err());
+        assert!(host.wait_start_cleanup().await.is_err());
+        assert!(plugin.live.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(
+            host.workload_start(empty_workload_start_request("retry"))
+                .await?
+                .workload_status
+                .workload_state,
+            WorkloadState::Error
+        );
+        host.workload_stop(WorkloadStopRequest {
+            workload_id: "retry".into(),
+        })
+        .await?;
+        assert!(!plugin.live.load(std::sync::atomic::Ordering::SeqCst));
+        host.wait_start_cleanup().await?;
+        assert_eq!(
+            host.workload_start(empty_workload_start_request("retry"))
+                .await?
+                .workload_status
+                .workload_state,
+            WorkloadState::Running
+        );
+        host.stop().await
     }
 
     #[test]
