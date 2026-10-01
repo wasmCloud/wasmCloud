@@ -2518,11 +2518,14 @@ impl ResolvedWorkload {
             // so teardown treats that as done rather than as a failure.
             if component.exports_wasi_http()
                 && let Some(http_handler) = self.http_handler.handler()
+                && let Err(e) = http_handler.on_workload_unbind(self.id()).await
             {
-                anyhow::Context::context(
-                    http_handler.on_workload_unbind(self.id()).await,
-                    "failed to notify HTTP handler of workload",
-                )?;
+                warn!(
+                    component_id = component.id(),
+                    workload_id = self.id.as_ref(),
+                    error = ?e,
+                    "failed to unbind HTTP handler from workload, continuing cleanup"
+                );
             }
         }
 

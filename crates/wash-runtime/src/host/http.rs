@@ -2539,7 +2539,9 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
     }
 
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
-        self.router.on_workload_unbind(workload_id).await?;
+        // A router that fails to forget the workload must not keep the rest of
+        // its state alive too.
+        let routed = self.router.on_workload_unbind(workload_id).await;
 
         self.workload_handles.write().await.remove(workload_id);
         self.service_handlers.write().await.remove(workload_id);
@@ -2549,7 +2551,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         // linger until idle expiry.
         self.outgoing_handler.on_workload_unbind(workload_id);
 
-        Ok(())
+        routed
     }
 
     async fn on_service_http_resolved(
@@ -2577,9 +2579,9 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
     async fn on_service_http_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
         // Drop the router registration too, so a stopped service replica leaves
         // the hostname's replica set and stops being selected.
-        self.router.on_workload_unbind(workload_id).await?;
+        let routed = self.router.on_workload_unbind(workload_id).await;
         self.service_handlers.write().await.remove(workload_id);
-        Ok(())
+        routed
     }
 
     async fn on_trigger_service_messaging_resolved(
@@ -4726,6 +4728,96 @@ mod tests {
         let allow_any = [AllowedHost::Any];
         let _ = server.outgoing_request("test-workload", request, None, no_io(), &allow_any);
         assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// A router that cannot forget a workload.
+    struct UnbindFailingRouter;
+
+    #[async_trait::async_trait]
+    impl Router for UnbindFailingRouter {
+        async fn on_workload_resolved(
+            &self,
+            _resolved_handle: &ResolvedWorkload,
+            _component_id: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn on_workload_unbind(&self, _workload_id: &str) -> anyhow::Result<()> {
+            anyhow::bail!("router unavailable")
+        }
+
+        fn allow_outgoing_request(
+            &self,
+            _workload_id: &str,
+            _request: &hyper::Request<WasiBody>,
+            _options: Option<RequestOptions>,
+            _allowed_hosts: &[AllowedHost],
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn route_incoming_request(
+            &self,
+            _req: &hyper::Request<hyper::body::Incoming>,
+        ) -> Result<String, RouteError> {
+            Err(RouteError::MissingHost)
+        }
+    }
+
+    /// Records the workloads whose egress state it was told to drop.
+    #[derive(Clone, Default)]
+    struct UnbindSpy {
+        unbound: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl OutgoingHandler for UnbindSpy {
+        fn send_request(
+            &self,
+            _workload_id: &str,
+            _request: hyper::Request<WasiBody>,
+            _options: Option<RequestOptions>,
+            _fut: RequestIoFuture,
+        ) -> SendFuture {
+            Box::new(async {
+                Err(wasmtime_wasi_http::Error::InternalError(Some(
+                    "spy: no real request".to_string(),
+                )))
+            })
+        }
+
+        fn on_workload_unbind(&self, workload_id: &str) {
+            self.unbound.lock().unwrap().push(workload_id.to_string());
+        }
+    }
+
+    /// The router failing to forget a workload still reports the failure, but
+    /// does not keep the ingress's handlers or egress state for it alive.
+    #[tokio::test]
+    async fn a_failing_router_unbind_still_releases_the_workload() {
+        let spy = UnbindSpy::default();
+        let server = Ingress::builder(UnbindFailingRouter, "127.0.0.1:0".parse().unwrap())
+            .outgoing_handler(spy.clone())
+            .build()
+            .await
+            .unwrap();
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        server
+            .on_service_http_resolved("wl", &[], sender)
+            .await
+            .unwrap();
+
+        assert!(server.on_workload_unbind("wl").await.is_err());
+        assert!(server.service_handlers.read().await.is_empty());
+        assert_eq!(*spy.unbound.lock().unwrap(), ["wl"]);
+
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        server
+            .on_service_http_resolved("wl", &[], sender)
+            .await
+            .unwrap();
+        assert!(server.on_service_http_unbind("wl").await.is_err());
+        assert!(server.service_handlers.read().await.is_empty());
     }
 
     /// A request the policy refuses must reach the guest as
