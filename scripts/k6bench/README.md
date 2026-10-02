@@ -24,7 +24,9 @@ Prerequisites:
 - Rust with the `wasm32-wasip2` target (the repo's `rust-toolchain.toml` installs it)
 
 `k6` and `wash` are optional. Without them, `run.sh` uses the
-`grafana/k6:2.3.0` and `ghcr.io/wasmcloud/wash` images.
+`grafana/k6:2.3.0` and `ghcr.io/wasmcloud/wash` images. Building the bench
+components compiles `wash` from the tree once, the first time
+`cargo xtask build-fixtures` runs.
 
 ```bash
 # One scenario: creates the kind cluster on first use, installs the chart,
@@ -73,11 +75,15 @@ scenarios, not for publishing.
 
 Each scenario is a k6 script in [`scenarios/`](scenarios/). Its
 WorkloadDeployments are in [`manifests/`](manifests/). A `*.each.yaml` file is
-rendered once per instance with `__I__` as the index. The components are in
-[`components/`](components/), a Cargo workspace of its own. Both are Rust:
+rendered once per instance with `__I__` as the index. The components are
+`wash-runtime` test fixtures in
+[`crates/wash-runtime/tests/fixtures/`](../../crates/wash-runtime/tests/fixtures/),
+built with `cargo xtask build-fixtures`:
 
-- `hello` returns a static 200.
-- `relay` calls every URL in its `TARGETS` config and returns 200 only if all of them did.
+- `hello` is `http-handler-p2`, the fixture behind the `http_invoke` criterion
+  bench. It returns a static 200.
+- `relay` is `http-relay`. It calls every URL in its `TARGETS` config and returns
+  200 only if all of them did.
 
 ### Local routing
 

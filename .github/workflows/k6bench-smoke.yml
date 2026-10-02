@@ -9,6 +9,9 @@ on:
     paths:
       - scripts/k6bench/**
       - crates/bench-tools/**
+      - crates/wash-runtime/tests/fixtures/http-handler-p2/**
+      - crates/wash-runtime/tests/fixtures/http-relay/**
+      - xtask/**
       - .github/workflows/k6bench*.yml
 
 permissions:
