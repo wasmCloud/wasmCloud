@@ -16,12 +16,16 @@ use tracing::{debug, error, info, instrument, warn};
 
 pub const HOST_API_PREFIX: &str = "runtime.host";
 pub const OPERATOR_API_PREFIX: &str = "runtime.operator";
+
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(300);
 const CLEANUP_AGE: Duration = Duration::from_secs(3600);
+
 const CONTROL_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const ATTACHMENT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 const CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// Maximum accepted start commands, including starts waiting for a native permit.
 pub const MAX_PENDING_STARTS: usize = 64;
 const MAX_PENDING_QUERIES: usize = 64;
@@ -30,6 +34,7 @@ const MAX_PENDING_REPLIES: usize = MAX_PENDING_STARTS + MAX_PENDING_QUERIES;
 /// Built-in workload operations on the same host as the control loop.
 /// A handler can add policy or logging and then delegate to these methods.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct HostControlDefaults {
     host: Arc<Host>,
     starts: Arc<tokio::sync::Semaphore>,
@@ -122,7 +127,7 @@ pub struct AttachedHostControl {
 pub struct AttachedHostControlBuilder {
     host: Arc<Host>,
     nats_client: Arc<async_nats::Client>,
-    options: ControlLoopOptions,
+    options: HostControlLoopOptions,
 }
 
 impl AttachedHostControlBuilder {
@@ -207,7 +212,7 @@ impl AttachedHostControl {
         AttachedHostControlBuilder {
             host,
             nats_client,
-            options: ControlLoopOptions::default(),
+            options: HostControlLoopOptions::default(),
         }
     }
 
@@ -568,7 +573,7 @@ pub struct ClusterHost {
     liveness: Option<Arc<crate::host::probes::Liveness>>,
 }
 
-struct ControlLoopOptions {
+struct HostControlLoopOptions {
     handler: Option<Arc<dyn HostCommandHandler>>,
     host_group: Option<Arc<str>>,
     heartbeat_interval: Duration,
@@ -579,7 +584,7 @@ struct ControlLoopOptions {
     stop_host: bool,
 }
 
-impl Default for ControlLoopOptions {
+impl Default for HostControlLoopOptions {
     fn default() -> Self {
         Self {
             handler: None,
@@ -594,7 +599,7 @@ impl Default for ControlLoopOptions {
     }
 }
 
-impl ControlLoopOptions {
+impl HostControlLoopOptions {
     fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.max_concurrent_starts <= tokio::sync::Semaphore::MAX_PERMITS,
@@ -690,9 +695,9 @@ fn spawn_control_loop(
     mut pending: VecDeque<async_nats::Message>,
     control: Arc<crate::host::HostControlLease>,
     mut one_shot_rx: oneshot::Receiver<()>,
-    options: ControlLoopOptions,
+    options: HostControlLoopOptions,
 ) -> JoinHandle<anyhow::Result<()>> {
-    let ControlLoopOptions {
+    let HostControlLoopOptions {
         handler,
         host_group,
         heartbeat_interval,
@@ -785,148 +790,156 @@ fn spawn_control_loop(
             }
             tokio::select! {
                 biased;
+
                 // Shutdown signal
                 _ = &mut one_shot_rx => break Ended::Requested,
+
                 // The accept loop returned and nothing restarts it, so
                 // this host would hold every workload it was given,
                 // keep heartbeating, and serve no HTTP for as long as
                 // it runs. Stop an owned host or report the failure
                 // to an attached host's owner.
                 () = &mut ingress_stopped => break Ended::IngressStopped,
+
                 ended = async {
-                // Fairly choose work even when a short timer is always ready.
-                // Shutdown and ingress failure retain priority in the outer select.
-                tokio::select! {
-                // Native starts own cancellation cleanup. A handler panic
-                // still ends control so its owner can recover custom effects.
-                Some(finished) = commands.join_next() => {
-                    if let Err(e) = finished {
-                        return Some(Ended::CommandPanicked(e));
-                    }
-                }
-                Some(finished) = background.join_next() => {
-                    if let Err(error) = finished {
-                        error!(%error, "host control background task failed");
-                    }
-                }
-                // OCI cache cleanup
-                cache_dir = next_cache_cleanup(&mut oci_cleanup) => {
-                    if let Ok(slot) = Arc::clone(&cleanup_slot).try_acquire_owned() {
-                        let age = cleanup_age;
-                        background.spawn(async move {
-                            let _slot = slot;
-                            if let Err(e) = oci::cleanup_cache(&*cache_dir, age).await {
-                                error!("error during OCI cache cleanup: {e}");
+                    // Fairly choose work even when a short timer is always ready.
+                    // Shutdown and ingress failure retain priority in the outer select.
+                    tokio::select! {
+                        // Native starts own cancellation cleanup. A handler panic
+                        // still ends control so its owner can recover custom effects.
+                        Some(finished) = commands.join_next() => {
+                            if let Err(e) = finished {
+                                return Some(Ended::CommandPanicked(e));
                             }
-                        });
-                    }
-                }
-                // Send heartbeat
-                _ = heartbeat_timer.tick() => {
-                    // Dropped rather than queued when the last one is
-                    // still going. Nothing here returns on failure:
-                    // returning would drop `commands`, aborting
-                    // in-flight starts after they have reserved their
-                    // ids, and skip the `host.stop()` that unbinds
-                    // their plugins. A missed heartbeat is worth none
-                    // of that; the next tick tries again.
-                    match Arc::clone(&heartbeat_slot).try_acquire_owned() {
-                        Ok(slot) => {
-                            let host = host.clone();
-                            let nats_client = nats_client.clone();
-                            let subject = heartbeat_subject.clone();
+                        }
+
+                        Some(finished) = background.join_next() => {
+                            if let Err(error) = finished {
+                                error!(%error, "host control background task failed");
+                            }
+                        }
+
+                        // OCI cache cleanup
+                        cache_dir = next_cache_cleanup(&mut oci_cleanup) => {
+                            if let Ok(slot) = Arc::clone(&cleanup_slot).try_acquire_owned() {
+                                let age = cleanup_age;
+                                background.spawn(async move {
+                                    let _slot = slot;
+                                    if let Err(e) = oci::cleanup_cache(&*cache_dir, age).await {
+                                        error!("error during OCI cache cleanup: {e}");
+                                    }
+                                });
+                            }
+                        }
+
+                        // Send heartbeat
+                        _ = heartbeat_timer.tick() => {
+                            // Dropped rather than queued when the last one is
+                            // still going. Nothing here returns on failure:
+                            // returning would drop `commands`, aborting
+                            // in-flight starts after they have reserved their
+                            // ids, and skip the `host.stop()` that unbinds
+                            // their plugins. A missed heartbeat is worth none
+                            // of that; the next tick tries again.
+                            match Arc::clone(&heartbeat_slot).try_acquire_owned() {
+                                Ok(slot) => {
+                                    let host = host.clone();
+                                    let nats_client = nats_client.clone();
+                                    let subject = heartbeat_subject.clone();
+                                    let host_group = host_group.clone();
+                                    background.spawn(async move {
+                                        let _slot = slot;
+                                        match host_heartbeat(&host, host_group.as_deref()).await.and_then(|heartbeat| {
+                                            serde_json::to_vec(&heartbeat).context("failed to serialize heartbeat")
+                                        }) {
+                                            Ok(heartbeat_bytes) => {
+                                                if let Err(e) = nats_client
+                                                    .publish(subject, heartbeat_bytes.into())
+                                                    .await
+                                                {
+                                                    error!("failed to publish heartbeat: {e}");
+                                                }
+                                            }
+                                            Err(e) => error!("failed to build heartbeat: {e}"),
+                                        }
+                                    });
+                                }
+                                // Every tick this reports is one the operator
+                                // did not hear, which is what its unreachable
+                                // window is for. Said out loud because the
+                                // cause — a NATS that is not draining — is
+                                // otherwise visible only as a host going quiet.
+                                Err(_) => warn!(
+                                    "previous heartbeat has not finished publishing; skipping this one"
+                                ),
+                            }
+                        }
+
+                        // Handle API requests
+                        finished = &mut publisher => {
+                            publisher_finished = true;
+                            return Some(match finished {
+                                Err(error) => Ended::CommandPanicked(error),
+                                Ok(()) => Ended::SubscriptionClosed,
+                            });
+                        }
+
+                        message = async {
+                            match pending.pop_front() {
+                                Some(message) => Some(message),
+                                None => api_subscription.next().await,
+                            }
+                        } => {
+                            let Some(msg) = message else {
+                                return Some(Ended::SubscriptionClosed);
+                            };
+                            if command_name(&msg) == "__control.ready" {
+                                return None;
+                            }
+                            // `select!` runs one branch to completion, so a
+                            // command awaited here would hold up the heartbeat
+                            // above for as long as it takes to pull and compile.
+                            // A host whose heartbeats stop looks unreachable to
+                            // the operator, which deletes it and its workloads.
+                            //
+                            // Commands naming one workload are ordered by the
+                            // host's reservation on that id, not by this loop:
+                            // a start claims the id before it fetches anything,
+                            // and a stop that finds the claim hands the teardown
+                            // back to the start holding it.
+                            let slots = if command_name(&msg) == "workload.start" {
+                                &start_slots
+                            } else {
+                                &query_slots
+                            };
+                            let Ok(slot) = Arc::clone(slots).try_acquire_owned() else {
+                                if let Some(reply) = busy_reply(&msg) {
+                                    // Once this queue is full, callers time out rather
+                                    // than consuming more memory during an outage.
+                                    let _ = replies.try_send(reply);
+                                }
+                                return None;
+                            };
+                            let replies = replies.clone();
+                            let defaults = defaults.clone();
+                            let handler = handler.clone();
                             let host_group = host_group.clone();
-                            background.spawn(async move {
+                            commands.spawn(async move {
                                 let _slot = slot;
-                                match host_heartbeat(&host, host_group.as_deref()).await.and_then(|heartbeat| {
-                                    serde_json::to_vec(&heartbeat).context("failed to serialize heartbeat")
-                                }) {
-                                    Ok(heartbeat_bytes) => {
-                                        if let Err(e) = nats_client
-                                            .publish(subject, heartbeat_bytes.into())
-                                            .await
-                                        {
-                                            error!("failed to publish heartbeat: {e}");
+                                match handle_command(&defaults, &msg, handler.as_deref(), host_group.as_deref()).await {
+                                    Ok(resp_bytes) => {
+                                        if let Some(reply_to) = msg.reply {
+                                            let _ = replies.send((reply_to, resp_bytes)).await;
                                         }
                                     }
-                                    Err(e) => error!("failed to build heartbeat: {e}"),
+                                    Err(e) => {
+                                        error!("error handling command: {e}");
+                                    }
                                 }
                             });
                         }
-                        // Every tick this reports is one the operator
-                        // did not hear, which is what its unreachable
-                        // window is for. Said out loud because the
-                        // cause — a NATS that is not draining — is
-                        // otherwise visible only as a host going quiet.
-                        Err(_) => warn!(
-                            "previous heartbeat has not finished publishing; skipping this one"
-                        ),
                     }
-                }
-                // Handle API requests
-                finished = &mut publisher => {
-                    publisher_finished = true;
-                    return Some(match finished {
-                        Err(error) => Ended::CommandPanicked(error),
-                        Ok(()) => Ended::SubscriptionClosed,
-                    });
-                }
-                message = async {
-                    match pending.pop_front() {
-                        Some(message) => Some(message),
-                        None => api_subscription.next().await,
-                    }
-                } => {
-                    let Some(msg) = message else {
-                        return Some(Ended::SubscriptionClosed);
-                    };
-                    if command_name(&msg) == "__control.ready" {
-                        return None;
-                    }
-                    // `select!` runs one branch to completion, so a
-                    // command awaited here would hold up the heartbeat
-                    // above for as long as it takes to pull and compile.
-                    // A host whose heartbeats stop looks unreachable to
-                    // the operator, which deletes it and its workloads.
-                    //
-                    // Commands naming one workload are ordered by the
-                    // host's reservation on that id, not by this loop:
-                    // a start claims the id before it fetches anything,
-                    // and a stop that finds the claim hands the teardown
-                    // back to the start holding it.
-                    let slots = if command_name(&msg) == "workload.start" {
-                        &start_slots
-                    } else {
-                        &query_slots
-                    };
-                    let Ok(slot) = Arc::clone(slots).try_acquire_owned() else {
-                        if let Some(reply) = busy_reply(&msg) {
-                            // Once this queue is full, callers time out rather
-                            // than consuming more memory during an outage.
-                            let _ = replies.try_send(reply);
-                        }
-                        return None;
-                    };
-                    let replies = replies.clone();
-                    let defaults = defaults.clone();
-                    let handler = handler.clone();
-                    let host_group = host_group.clone();
-                    commands.spawn(async move {
-                        let _slot = slot;
-                        match handle_command(&defaults, &msg, handler.as_deref(), host_group.as_deref()).await {
-                            Ok(resp_bytes) => {
-                                if let Some(reply_to) = msg.reply {
-                                    let _ = replies.send((reply_to, resp_bytes)).await;
-                                }
-                            }
-                            Err(e) => {
-                                error!("error handling command: {e}");
-                            }
-                        }
-                    });
-                }
-                }
-                None
+                    None
                 } => {
                     if let Some(ended) = ended {
                         break ended;
@@ -947,9 +960,12 @@ fn spawn_control_loop(
             ended => ended,
         };
 
+        // Stop admitting native starts and periodic work; let replies drain.
         starts.close();
         drop(replies);
         background.abort_all();
+
+        // Stop receiving API requests before draining accepted commands.
         let unsubscribed = tokio::time::timeout(CONTROL_IO_TIMEOUT, api_subscription.unsubscribe())
             .await
             .context("timed out unsubscribing from API requests")
@@ -957,9 +973,9 @@ fn spawn_control_loop(
         if let Err(e) = &unsubscribed {
             error!("failed to unsubscribe from API requests: {e}");
         }
-        // Anything still queued gives its workload id back and returns
-        // rather than starting something this host is about to tear
-        // down.
+
+        // Let accepted commands finish and replies publish within the drain
+        // budget. Queued native starts release their IDs now admission is closed.
         let mut command_failure = None;
         let mut publisher_failure = None;
         let drained = tokio::time::timeout(COMMAND_DRAIN_TIMEOUT, async {
@@ -984,6 +1000,8 @@ fn spawn_control_loop(
             );
         })
         .await;
+
+        // Cancel tasks that exceeded the drain budget, then wait for them to unwind.
         let mut commands_still_running = false;
         if drained.is_err() {
             warn!(
@@ -992,14 +1010,9 @@ fn spawn_control_loop(
             );
             commands.abort_all();
             publisher.abort();
-            // `abort_all` only asks. Wait for the tasks to reach their
-            // next await and unwind, or `host.stop()` unbinds plugins
-            // underneath one still binding them.
-            //
-            // Bounded: an aborted task cancels at its next await, and a
-            // command inside a synchronous compile has none. Waiting it
-            // out holds the shutdown past the pod's grace period, so
-            // `host.stop()` never runs at all.
+
+            // Await cancellation before stopping plugins that may still be binding.
+            // Bound the wait because synchronous compilation can delay cancellation.
             let unwound = tokio::time::timeout(COMMAND_ABORT_TIMEOUT, async {
                 tokio::join!(
                     async {
@@ -1024,6 +1037,8 @@ fn spawn_control_loop(
                 );
             })
             .await;
+
+            // Remember tasks still running so attached control reports incomplete shutdown.
             if unwound.is_err() {
                 commands_still_running = true;
                 warn!(
@@ -1032,13 +1047,16 @@ fn spawn_control_loop(
                 );
             }
         }
+
+        // Wait for resource cleanup spawned by cancelled native starts.
         let recovered = tokio::time::timeout(
             crate::timeouts::plugin_stop() + Duration::from_secs(1),
-            host.wait_start_cleanup(),
+            host.wait_for_workload_start_cleanup(),
         )
         .await
         .context("timed out cleaning up cancelled workload starts")
         .and_then(std::convert::identity);
+
         // A marker echoed by the server confirms processing of UNSUB and
         // earlier replies; Client::flush alone only writes to the socket.
         let flushed =
@@ -1046,11 +1064,15 @@ fn spawn_control_loop(
                 .await
                 .context("timed out flushing host control shutdown")
                 .and_then(|result| result.context("failed to flush host control shutdown"));
+
+        // Stop the host only when control owns its lifecycle.
         let stopped = if stop_host {
             host.stop().await.context("failed to stop host")
         } else {
             Ok(())
         };
+
+        // Report the exit reason and shutdown failures according to host ownership.
         match ended {
             Ended::Requested => {
                 stopped?;
@@ -1062,6 +1084,8 @@ fn spawn_control_loop(
                     }
                     return Ok(());
                 }
+
+                // Attached hosts stay running; surface failures to their owner.
                 unsubscribed?;
                 flushed?;
                 if let Some(error) = command_failure {
@@ -1141,14 +1165,14 @@ impl ClusterHost {
 
         let mut startup = OwnedHostStartup(Some(host.clone()));
         let control = host.acquire_control()?;
-        let options = ControlLoopOptions {
+        let options = HostControlLoopOptions {
             heartbeat_interval,
             cleanup_interval,
             cleanup_age: self.cleanup_age,
             max_concurrent_starts,
             liveness,
             stop_host: true,
-            ..ControlLoopOptions::default()
+            ..HostControlLoopOptions::default()
         };
         options.validate()?;
         let (subscription, pending) = match subscribe_host(&host, &nats_client).await {
@@ -1591,14 +1615,14 @@ async fn workload_start(
         }
     };
 
-    let mut guard = host.start_guard(&workload_id, reservation);
+    let mut start_guard = host.workload_start_guard(&workload_id, reservation);
     // Queued with the id already claimed. Waiting for a permit is time like
     // any other in which a stop or a status has to find this workload.
     let _permit = match starts.acquire().await {
         Ok(permit) => permit,
         Err(e) => {
             host.workload_release(&workload_id, reservation).await;
-            guard.disarm();
+            start_guard.disarm();
             return Ok(workload_start_error(
                 &workload_id,
                 format!("host is no longer accepting starts: {e}"),
@@ -1709,7 +1733,7 @@ async fn workload_start(
         Ok(request) => request,
         Err(message) => {
             host.workload_release(&workload_id, reservation).await;
-            guard.disarm();
+            start_guard.disarm();
             return Ok(workload_start_error(&workload_id, message));
         }
     };
@@ -1721,7 +1745,7 @@ async fn workload_start(
         "Starting workload");
 
     // Transfer cleanup ownership to the native start, with no intervening await.
-    guard.disarm();
+    start_guard.disarm();
     Ok(host
         .workload_start_reserved(reservation, request)
         .await?
@@ -2374,9 +2398,9 @@ mod tests {
                 VecDeque::new(),
                 host.acquire_control()?,
                 rx,
-                ControlLoopOptions {
+                HostControlLoopOptions {
                     stop_host,
-                    ..ControlLoopOptions::default()
+                    ..HostControlLoopOptions::default()
                 },
             );
             let result = tokio::time::timeout(Duration::from_secs(5), task).await??;
@@ -2559,7 +2583,7 @@ mod tests {
                 pending,
                 host.acquire_control()?,
                 rx,
-                ControlLoopOptions::default(),
+                HostControlLoopOptions::default(),
             ),
         );
         let reply = tokio::time::timeout(Duration::from_secs(2), response.next())
@@ -2650,11 +2674,11 @@ mod tests {
                 pending,
                 host.acquire_control()?,
                 rx,
-                ControlLoopOptions {
+                HostControlLoopOptions {
                     handler: Some(handler.clone()),
                     liveness: Some(liveness.clone()),
                     heartbeat_interval: Duration::from_millis(10),
-                    ..ControlLoopOptions::default()
+                    ..HostControlLoopOptions::default()
                 },
             ),
         );

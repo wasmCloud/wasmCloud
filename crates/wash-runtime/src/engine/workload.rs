@@ -2629,15 +2629,15 @@ type PendingBinding = (Arc<dyn HostPlugin>, HashSet<WitInterface>);
 /// The host retains this journal when a start is cancelled, until teardown
 /// succeeds; a later stop can retry a failed cleanup without reusing its ID.
 #[derive(Clone, Default)]
-pub(crate) struct StartCleanup(Arc<std::sync::Mutex<StartCleanupState>>);
+pub(crate) struct WorkloadStartResources(Arc<std::sync::Mutex<WorkloadStartResourceState>>);
 
 #[derive(Clone, Default)]
-struct StartCleanupState {
+struct WorkloadStartResourceState {
     bindings: Vec<PendingBinding>,
     resolved: Option<ResolvedWorkload>,
 }
 
-impl StartCleanup {
+impl WorkloadStartResources {
     fn binding(&self, plugin: Arc<dyn HostPlugin>, interfaces: HashSet<WitInterface>) {
         self.0
             .lock()
@@ -2822,7 +2822,7 @@ impl UnresolvedWorkload {
         &mut self,
         plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
         plugin_bindings: &crate::plugin::PluginBindings,
-        cleanup: Option<&StartCleanup>,
+        cleanup: Option<&WorkloadStartResources>,
     ) -> anyhow::Result<Vec<(Arc<dyn HostPlugin>, Vec<String>)>> {
         // Track bound plugins with their matched interfaces for cleanup on failure
         let mut bound_plugins_with_interfaces: Vec<BoundPluginWithInterfaces> = Vec::new();
@@ -3317,7 +3317,7 @@ impl UnresolvedWorkload {
         plugin_bindings: &crate::plugin::PluginBindings,
         host: &crate::host::HostRef,
         meters: &crate::observability::Meters,
-        cleanup: Option<&StartCleanup>,
+        cleanup: Option<&WorkloadStartResources>,
     ) -> anyhow::Result<ResolvedWorkload> {
         // Bind to plugins
         let bound_plugins = if let Some(plugins) = plugins {

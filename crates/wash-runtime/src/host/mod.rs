@@ -314,8 +314,12 @@ pub struct Host {
     engine: Engine,
     /// Workloads mapped from ID to the workload and its current state
     workloads: Arc<RwLock<HashMap<String, HostWorkload>>>,
-    cancelled_starts: start::CancelledStarts,
-    start_cleanup: tokio_util::task::TaskTracker,
+    /// Cancelled workload starts retained until cleanup succeeds, allowing
+    /// workload stops to retry failed teardown without reusing their IDs.
+    workload_start_recoveries: start::WorkloadStartRecoveries,
+    /// Background cleanup spawned when workload starts are cancelled;
+    /// awaited before control or host shutdown completes.
+    workload_start_cleanup_tasks: tokio_util::task::TaskTracker,
     /// Source of the [`Reservation`] a start or a teardown stamps on the slot it
     /// owns. Monotonic for the life of the host, so a reservation identifies one
     /// occupant of a workload id and never a later one.
@@ -327,6 +331,9 @@ pub struct Host {
     /// its plugins are stopping, so a workload started onto one would be
     /// unroutable and, once the ingress drain ends, silently unregistered.
     stopped: std::sync::atomic::AtomicBool,
+    /// Attachment lease checked when attaching control to prevent a second
+    /// loop while commands or cleanup still hold it. Weak lets those owners
+    /// release the lease without the host keeping it alive.
     #[cfg(feature = "washlet")]
     control: std::sync::Mutex<std::sync::Weak<HostControlLease>>,
     /// Plugins in a map from their ID to the plugin itself
@@ -412,18 +419,18 @@ impl HostRef {
 }
 
 impl Host {
-    pub(crate) fn start_guard(
+    pub(crate) fn workload_start_guard(
         &self,
         workload_id: &str,
         reservation: Reservation,
-    ) -> start::StartGuard {
-        start::StartGuard::new(self, workload_id, reservation)
+    ) -> start::WorkloadStartGuard {
+        start::WorkloadStartGuard::new(self, workload_id, reservation)
     }
 
-    pub(crate) async fn wait_start_cleanup(&self) -> anyhow::Result<()> {
-        self.start_cleanup.wait().await;
+    pub(crate) async fn wait_for_workload_start_cleanup(&self) -> anyhow::Result<()> {
+        self.workload_start_cleanup_tasks.wait().await;
         let cancelled = self
-            .cancelled_starts
+            .workload_start_recoveries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         anyhow::ensure!(
@@ -726,7 +733,7 @@ impl Host {
             .context("failed to stop HTTP handler")?;
 
         // Cancelled starts finish teardown before global plugin shutdown.
-        if let Err(error) = self.wait_start_cleanup().await {
+        if let Err(error) = self.wait_for_workload_start_cleanup().await {
             tracing::warn!(%error, "stopping plugins with failed workload cleanup");
         }
 
@@ -758,7 +765,7 @@ impl Host {
             }
         }
 
-        self.cancelled_starts
+        self.workload_start_recoveries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
@@ -938,7 +945,7 @@ impl Host {
     async fn workload_start_inner(
         &self,
         request: WorkloadStartRequest,
-        cleanup: &crate::engine::workload::StartCleanup,
+        cleanup: &crate::engine::workload::WorkloadStartResources,
     ) -> anyhow::Result<ResolvedWorkload> {
         let service_present = request.workload.service.is_some();
         let workload_id = request.workload_id.clone();
@@ -1134,8 +1141,11 @@ impl HostApi for Host {
         &self,
         request: WorkloadStopRequest,
     ) -> anyhow::Result<WorkloadStopResponse> {
+        // A cancelled start may still hold its ID and partial bindings. Wait
+        // for or retry its cleanup, then return directly: recovery releases
+        // the reservation, leaving no running workload for normal stop handling.
         let recovery = self
-            .cancelled_starts
+            .workload_start_recoveries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&request.workload_id)
@@ -1145,7 +1155,7 @@ impl HostApi for Host {
                 .recover(
                     &request.workload_id,
                     &self.workloads,
-                    &self.cancelled_starts,
+                    &self.workload_start_recoveries,
                 )
                 .await?;
             return Ok(WorkloadStopResponse {
@@ -1324,8 +1334,10 @@ impl WorkloadReservation for Host {
         request: WorkloadStartRequest,
     ) -> anyhow::Result<WorkloadStartResponse> {
         let workload_id = request.workload_id.clone();
-        let mut guard = self.start_guard(&workload_id, reservation);
-        let started = self.workload_start_inner(request, &guard.cleanup()).await;
+        let mut start_guard = self.workload_start_guard(&workload_id, reservation);
+        let started = self
+            .workload_start_inner(request, &start_guard.cleanup())
+            .await;
 
         // Commit under the same lock the id was reserved under, and only into
         // the slot this start reserved. Anything else in that slot means the
@@ -1352,7 +1364,7 @@ impl WorkloadReservation for Host {
             };
             match started {
                 Ok(resolved) if mine => {
-                    guard.disarm();
+                    start_guard.disarm();
                     workloads.insert(
                         workload_id.clone(),
                         HostWorkload::Running(Box::new(resolved)),
@@ -1377,7 +1389,7 @@ impl WorkloadReservation for Host {
                     ),
                 },
                 Err(err) => {
-                    guard.disarm();
+                    start_guard.disarm();
                     // `{:#}` so the whole context chain reaches the caller and
                     // the log below: the outer layer alone ("failed to pull
                     // image for component 'x'") never names the cause.
@@ -1416,7 +1428,7 @@ impl WorkloadReservation for Host {
             self.finish_teardown(&workload_id, reservation, None).await;
         }
 
-        guard.disarm();
+        start_guard.disarm();
         Ok(WorkloadStartResponse {
             workload_status: WorkloadStatus {
                 workload_id,
@@ -1817,8 +1829,8 @@ impl HostBuilder {
         Ok(Host {
             engine,
             workloads: Arc::default(),
-            cancelled_starts: Arc::default(),
-            start_cleanup: {
+            workload_start_recoveries: Arc::default(),
+            workload_start_cleanup_tasks: {
                 let tasks = tokio_util::task::TaskTracker::new();
                 tasks.close();
                 tasks
@@ -2584,7 +2596,11 @@ mod tests {
             #[cfg(feature = "washlet")]
             assert!(host.acquire_control().is_err());
             plugin.cleanup_gate.add_permits(1);
-            tokio::time::timeout(Duration::from_secs(1), host.wait_start_cleanup()).await??;
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                host.wait_for_workload_start_cleanup(),
+            )
+            .await??;
             assert!(!plugin.live.load(std::sync::atomic::Ordering::SeqCst));
             let reused = host
                 .workload_start(empty_workload_start_request("cancelled"))
@@ -2631,7 +2647,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), plugin.entered.notified()).await?;
         task.abort();
         assert!(task.await.is_err());
-        assert!(host.wait_start_cleanup().await.is_err());
+        assert!(host.wait_for_workload_start_cleanup().await.is_err());
         assert!(plugin.live.load(std::sync::atomic::Ordering::SeqCst));
         assert_eq!(
             host.workload_start(empty_workload_start_request("retry"))
@@ -2645,7 +2661,7 @@ mod tests {
         })
         .await?;
         assert!(!plugin.live.load(std::sync::atomic::Ordering::SeqCst));
-        host.wait_start_cleanup().await?;
+        host.wait_for_workload_start_cleanup().await?;
         assert_eq!(
             host.workload_start(empty_workload_start_request("retry"))
                 .await?
