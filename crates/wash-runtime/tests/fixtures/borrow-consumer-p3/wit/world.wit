@@ -1,0 +1,36 @@
+package wasmcloud:borrow-test-p3@0.1.0;
+
+interface factory {
+    resource token {
+        constructor(name: string);
+        greet: func() -> string;
+        greets: func() -> u32;
+    }
+
+    /// Lends a `token` from inside a record, so the borrow is nested in a param.
+    record lend {
+        label: string,
+        token: borrow<token>,
+    }
+}
+
+interface consumer {
+    use factory.{token, lend};
+
+    /// Borrows a `token` and calls a method on it.
+    accept: async func(t: borrow<token>) -> string;
+
+    /// Borrows `token` nested in a record, a tuple and an option.
+    accept-nested: async func(l: lend, pair: tuple<string, borrow<token>>, maybe: option<borrow<token>>) -> string;
+
+    /// Takes ownership of a `token` nested in a tuple.
+    adopt: async func(t: tuple<string, token>) -> string;
+}
+
+world consumer-component {
+    import wasi:cli/types@0.3.0;
+    import wasi:clocks/types@0.3.0;
+    import factory;
+
+    export consumer;
+}

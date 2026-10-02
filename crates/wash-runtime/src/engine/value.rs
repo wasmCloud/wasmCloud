@@ -189,13 +189,41 @@ pub(crate) fn lower(store: &mut StoreContextMut<SharedCtx>, v: &Val) -> wasmtime
     }
 }
 
+/// Dynamic-linker call params ready for the callee, plus the borrows that
+/// crossed by identity and must be released once the callee returns.
+pub(crate) struct LoweredParams {
+    pub(crate) vals: Vec<Val>,
+    identity_borrows: Vec<ResourceAny>,
+}
+
+impl LoweredParams {
+    /// Release the borrow slots of the handles lowered by identity.
+    ///
+    /// Lifting a guest `borrow` creates a borrow slot in the host table, scoped
+    /// to the import call. The copy path in [`lower`] clears it as a side
+    /// effect of `try_into_resource`; the identity path hands the handle
+    /// through untouched, so the slot would outlive the call and trap the
+    /// caller with "borrow handles still remain at the end of the call".
+    pub(crate) fn release_identity_borrows(
+        &self,
+        mut store: impl AsContextMut<Data = SharedCtx>,
+    ) -> wasmtime::Result<()> {
+        for any in &self.identity_borrows {
+            trace!(resource = ?any, "releasing identity-lowered borrow after linked call");
+            any.try_into_resource::<ResourceAny>(store.as_context_mut())
+                .context("failed to release identity-lowered borrow")?;
+        }
+        Ok(())
+    }
+}
+
 /// Lower dynamic-linker call params, using each param's declared type so host
 /// resource handles cross the linker by identity (see [`lower_with_type`]).
 pub(crate) fn lower_params(
     store: &mut StoreContextMut<'_, SharedCtx>,
     params: &[Val],
     param_tys: &[Type],
-) -> wasmtime::Result<Vec<Val>> {
+) -> wasmtime::Result<LoweredParams> {
     if params.len() != param_tys.len() {
         return Err(wasmtime::format_err!(
             "dynamic call arity mismatch: {} args vs {} param types",
@@ -203,11 +231,15 @@ pub(crate) fn lower_params(
             param_tys.len()
         ));
     }
-    let mut params_buf = Vec::with_capacity(params.len());
+    let mut lowered = LoweredParams {
+        vals: Vec::with_capacity(params.len()),
+        identity_borrows: Vec::new(),
+    };
     for (v, ty) in params.iter().zip(param_tys) {
-        params_buf.push(lower_with_type(store, v, ty)?);
+        let v = lower_with_type(store, v, ty, &mut lowered.identity_borrows)?;
+        lowered.vals.push(v);
     }
-    Ok(params_buf)
+    Ok(lowered)
 }
 
 /// Lift a dynamic-linker call's result values back into the caller's store,
@@ -223,25 +255,109 @@ pub(crate) fn lift_results(
     Ok(())
 }
 
-pub(crate) fn lower_with_type(
+/// Lower `v` against its declared type `ty`, walking into compound values so a
+/// linked component's handle crosses by identity wherever it is nested. Each
+/// borrow passed through this way is pushed onto `identity_borrows`.
+fn lower_with_type(
     store: &mut StoreContextMut<SharedCtx>,
     v: &Val,
     ty: &Type,
+    identity_borrows: &mut Vec<ResourceAny>,
 ) -> wasmtime::Result<Val> {
     if !carries_cross_store_handle(ty) {
         return lower(store, v);
     }
-
     match (ty, v) {
         (Type::Own(resource_ty) | Type::Borrow(resource_ty), &Val::Resource(any))
             if *resource_ty == ResourceType::host::<ResourceAny>()
                 && any.ty() == ResourceType::host::<ResourceAny>() =>
         {
             trace!(resource = ?any, "lowering host resource by identity");
+            if matches!(ty, Type::Borrow(_)) && !any.owned() {
+                identity_borrows.push(any);
+            }
             Ok(Val::Resource(any))
+        }
+        (Type::List(list), Val::List(vs)) => {
+            let ty = list.ty();
+            let vs = vs
+                .iter()
+                .map(|v| lower_with_type(store, v, &ty, identity_borrows));
+            Ok(Val::List(vs.collect::<wasmtime::Result<_>>()?))
+        }
+        (Type::FixedLengthList(list), Val::FixedLengthList(vs)) => {
+            let ty = list.ty();
+            let vs = vs
+                .iter()
+                .map(|v| lower_with_type(store, v, &ty, identity_borrows));
+            Ok(Val::FixedLengthList(vs.collect::<wasmtime::Result<_>>()?))
+        }
+        (Type::Map(map), Val::Map(vs)) => {
+            let (key_ty, value_ty) = (map.key(), map.value());
+            let vs = vs.iter().map(|(k, v)| {
+                Ok((
+                    lower_with_type(store, k, &key_ty, identity_borrows)?,
+                    lower_with_type(store, v, &value_ty, identity_borrows)?,
+                ))
+            });
+            Ok(Val::Map(vs.collect::<wasmtime::Result<_>>()?))
+        }
+        (Type::Record(record), Val::Record(fields)) => {
+            ensure_same_len("record fields", record.fields().len(), fields.len())?;
+            let vs = record.fields().zip(fields).map(|(field, (name, v))| {
+                Ok((
+                    name.clone(),
+                    lower_with_type(store, v, &field.ty, identity_borrows)?,
+                ))
+            });
+            Ok(Val::Record(vs.collect::<wasmtime::Result<_>>()?))
+        }
+        (Type::Tuple(tuple), Val::Tuple(vs)) => {
+            ensure_same_len("tuple elements", tuple.types().len(), vs.len())?;
+            let vs = tuple
+                .types()
+                .zip(vs)
+                .map(|(ty, v)| lower_with_type(store, v, &ty, identity_borrows));
+            Ok(Val::Tuple(vs.collect::<wasmtime::Result<_>>()?))
+        }
+        (Type::Variant(variant), Val::Variant(name, Some(payload))) => {
+            let case_ty = variant
+                .cases()
+                .find(|case| case.name == name)
+                .and_then(|case| case.ty)
+                .with_context(|| format!("variant case '{name}' carries no payload type"))?;
+            let payload = lower_with_type(store, payload, &case_ty, identity_borrows)?;
+            Ok(Val::Variant(name.clone(), Some(Box::new(payload))))
+        }
+        (Type::Option(option), Val::Option(Some(payload))) => {
+            let payload = lower_with_type(store, payload, &option.ty(), identity_borrows)?;
+            Ok(Val::Option(Some(Box::new(payload))))
+        }
+        (Type::Result(result), Val::Result(Ok(Some(payload)))) => {
+            let ok_ty = result.ok().context("result `ok` carries no payload type")?;
+            let payload = lower_with_type(store, payload, &ok_ty, identity_borrows)?;
+            Ok(Val::Result(Ok(Some(Box::new(payload)))))
+        }
+        (Type::Result(result), Val::Result(Err(Some(payload)))) => {
+            let err_ty = result
+                .err()
+                .context("result `err` carries no payload type")?;
+            let payload = lower_with_type(store, payload, &err_ty, identity_borrows)?;
+            Ok(Val::Result(Err(Some(Box::new(payload)))))
         }
         _ => lower(store, v),
     }
+}
+
+/// Error when a compound value's arity differs from its declared type's, so a
+/// mismatched linked signature fails instead of `zip` dropping the extras.
+fn ensure_same_len(what: &str, declared: usize, actual: usize) -> wasmtime::Result<()> {
+    if declared != actual {
+        return Err(wasmtime::format_err!(
+            "linked call {what} mismatch: callee declares {declared}, caller passed {actual}"
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn lift(store: &mut StoreContextMut<SharedCtx>, v: Val) -> wasmtime::Result<Val> {

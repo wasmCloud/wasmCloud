@@ -1211,7 +1211,7 @@ async fn invoke_shared_store_linked_export(
     let _active_ctx = AccessorActiveCtxGuard::new(accessor, &inv.plugin_component_id)?;
 
     let call: wasmtime::Result<()> = async {
-        let (func, params_buf) = accessor.with(|mut access| -> wasmtime::Result<_> {
+        let (func, lowered) = accessor.with(|mut access| -> wasmtime::Result<_> {
             let instance = access
                 .data_mut()
                 .exporter_instances
@@ -1233,18 +1233,19 @@ async fn invoke_shared_store_linked_export(
                     .collect::<Vec<_>>()
                     .into()
             });
-            let params_buf = lower_params(&mut access.as_context_mut(), params, tys)?;
-            Ok((func, params_buf))
+            let lowered = lower_params(&mut access.as_context_mut(), params, tys)?;
+            Ok((func, lowered))
         })?;
 
         trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoking dynamic export");
 
         let mut results_buf = vec![Val::Bool(false); results.len()];
-        func.call_concurrent(accessor, &params_buf, &mut results_buf)
+        func.call_concurrent(accessor, &lowered.vals, &mut results_buf)
             .await?;
 
         accessor.with(|mut access| -> wasmtime::Result<_> {
-            lift_results(&mut access.as_context_mut(), results_buf, results)
+            lift_results(&mut access.as_context_mut(), results_buf, results)?;
+            lowered.release_identity_borrows(access.as_context_mut())
         })?;
 
         Ok(())
@@ -1290,7 +1291,7 @@ pub(crate) async fn invoke_linked_sync_export(
                 .collect::<Vec<_>>()
                 .into()
         });
-        let params_buf = lower_params(store, params, tys)?;
+        let lowered = lower_params(store, params, tys)?;
         trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoking dynamic export");
 
         let mut results_buf = vec![Val::Bool(false); results.len()];
@@ -1298,7 +1299,7 @@ pub(crate) async fn invoke_linked_sync_export(
         let call_timeout = crate::timeouts::shared_store_call();
         timeout(
             call_timeout,
-            func.call_async(&mut store, &params_buf, &mut results_buf),
+            func.call_async(&mut store, &lowered.vals, &mut results_buf),
         )
         .await
         .map_err(|e| {
@@ -1306,6 +1307,7 @@ pub(crate) async fn invoke_linked_sync_export(
         })??;
 
         lift_results(store, results_buf, results)?;
+        lowered.release_identity_borrows(&mut *store)?;
         trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoked dynamic export");
         Ok(())
     }
