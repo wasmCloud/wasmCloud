@@ -1,0 +1,28 @@
+package wasmcloud:borrow-test@0.1.0;
+
+interface factory {
+    resource token {
+        constructor(name: string);
+        greet: func() -> string;
+        greets: func() -> u32;
+    }
+}
+
+interface consumer {
+    use factory.{token};
+
+    accept: func(t: borrow<token>) -> string;
+}
+
+interface middleware {
+    use factory.{token};
+
+    /// Borrows a `token` and forwards the borrow to `consumer` without touching it.
+    accept: func(t: borrow<token>) -> string;
+}
+
+world middleware-component {
+    import factory;
+    import consumer;
+    export middleware;
+}

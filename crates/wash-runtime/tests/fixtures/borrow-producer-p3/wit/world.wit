@@ -1,0 +1,20 @@
+package wasmcloud:borrow-test-p3@0.1.0;
+
+interface factory {
+    /// A guest-defined resource. Every other component in the workload sees it
+    /// as a host `ResourceAny` once it crosses the dynamic linker.
+    resource token {
+        constructor(name: string);
+        greet: func() -> string;
+        /// How many times `greet` ran on this instance. Lets a caller prove that
+        /// every hop hit the same resource.
+        greets: func() -> u32;
+    }
+}
+
+world producer {
+    import wasi:cli/types@0.3.0;
+    import wasi:clocks/types@0.3.0;
+
+    export factory;
+}
