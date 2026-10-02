@@ -358,41 +358,70 @@ async fn a_stopped_host_still_serves_an_established_connection() -> Result<()> {
     .await
     .context("failed to start the workload")?;
 
-    // One client, reused, so the second request rides the connection the first
-    // opened rather than dialing a listener that has stopped accepting.
-    let client = reqwest::Client::builder()
-        .pool_idle_timeout(std::time::Duration::from_secs(30))
-        .build()?;
-    let first = client.get(format!("http://{addr}/")).send().await?;
+    // One connection, driven by hand, so the second request can only ride the
+    // connection the first opened. A pooled client dials a fresh connection
+    // whenever the idle one is not back in its pool yet, and that dial meets a
+    // listener that has stopped accepting.
+    let stream = tokio::net::TcpStream::connect(addr)
+        .await
+        .context("failed to connect to the ingress")?;
+    let (mut conn, driver) =
+        hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(stream))
+            .await
+            .context("HTTP/1 handshake failed")?;
+    let driver = tokio::spawn(driver);
+
+    let first = get_over(&mut conn, addr)
+        .await
+        .context("the workload must serve before the drain")?;
     assert!(
-        first.status().is_success(),
+        first.is_success(),
         "the workload must serve before the drain"
     );
-    first.bytes().await?;
 
     Arc::clone(&host)
         .stop()
         .await
         .context("failed to stop the host")?;
     // Separates the two ways the request below can fail: a withdrawn route, or
-    // a connection the client did not reuse.
+    // a connection the server closed.
     assert_eq!(
         ingress.routed_workloads().await,
         1,
         "stop must leave the route in place for the drain"
     );
 
-    let during_drain = client
-        .get(format!("http://{addr}/"))
-        .send()
+    let during_drain = get_over(&mut conn, addr)
         .await
         .context("a request on an established connection must still be answered")?;
     assert!(
-        during_drain.status().is_success(),
+        during_drain.is_success(),
         "a draining host withdrew the route under an established connection and \
-         answered {} — an upstream proxy forwards that to the client rather than \
-         retrying another replica",
-        during_drain.status()
+         answered {during_drain} — an upstream proxy forwards that to the client \
+         rather than retrying another replica"
     );
+
+    drop(conn);
+    driver
+        .await?
+        .context("the connection ended with an error")?;
     Ok(())
+}
+
+/// Send a GET over `conn` once it is ready for another request, and read the
+/// whole response so the connection is free for the next one.
+async fn get_over(
+    conn: &mut hyper::client::conn::http1::SendRequest<http_body_util::Empty<bytes::Bytes>>,
+    addr: std::net::SocketAddr,
+) -> Result<hyper::StatusCode> {
+    use http_body_util::BodyExt as _;
+
+    conn.ready().await.context("the connection was closed")?;
+    let request = hyper::Request::get("/")
+        .header(hyper::header::HOST, addr.to_string())
+        .body(http_body_util::Empty::new())?;
+    let response = conn.send_request(request).await?;
+    let status = response.status();
+    response.into_body().collect().await?;
+    Ok(status)
 }
