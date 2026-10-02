@@ -167,6 +167,9 @@ build_images() {
   # examples/*/target and fixture targets are several GB. COPYFILE_DISABLE
   # keeps macOS tar from adding ._* files, which break WIT bindgen.
   (cd "$repo" && git ls-files -z --cached --others --exclude-standard |
+    while IFS= read -r -d '' f; do
+      if [ -e "$f" ] || [ -L "$f" ]; then printf '%s\0' "$f"; fi
+    done |
     COPYFILE_DISABLE=1 tar -cf "$ctx/src.tar" --null -T -)
   # Tagged by the context, not HEAD: uncommitted changes must get a new tag
   # or the chart upgrade leaves the host pods on the previous image.
