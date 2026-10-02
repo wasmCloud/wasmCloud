@@ -103,6 +103,30 @@ impl Default for Config {
 }
 
 impl Config {
+    /// The files and directories the `configs:`/`secrets:` catalogs read, with
+    /// relative paths resolved against `project_dir` — paths a host reserves
+    /// so no workload volume can expose them.
+    pub fn reserved_host_paths(&self, project_dir: &Path) -> Vec<PathBuf> {
+        let resolve = |path: &PathBuf| {
+            if path.is_relative() {
+                project_dir.join(path)
+            } else {
+                path.clone()
+            }
+        };
+        self.config_sources
+            .values()
+            .flat_map(|source| [&source.file, &source.dir])
+            .chain(
+                self.secret_sources
+                    .values()
+                    .flat_map(|source| [&source.file, &source.dir]),
+            )
+            .flatten()
+            .map(resolve)
+            .collect()
+    }
+
     /// Get the WIT directory from the configuration, defaulting to "./wit" if not set
     pub fn wit_dir(&self) -> PathBuf {
         if let Some(wit_config) = &self.wit

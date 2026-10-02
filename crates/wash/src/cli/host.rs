@@ -436,6 +436,63 @@ pub struct HostCommand {
     #[arg(long = "oci-ca-path", env = "WASH_OCI_CA_PATHS", value_delimiter = ',')]
     pub oci_ca_paths: Vec<PathBuf>,
 
+    /// Host paths no workload's `hostPath` volume may lie inside or contain,
+    /// on top of the ones this host reserves itself: every credential and CA
+    /// file its flags name, its OCI cache, the `configs:`/`secrets:` catalog
+    /// sources, and the configuration files it read. Name anything else that holds a
+    /// credential, such as a file a plugin's config points at.
+    ///
+    /// Accepts a comma-separated list and/or repeated flags. Paths must not
+    /// contain commas.
+    #[arg(
+        long = "reserved-host-path",
+        env = "WASH_RESERVED_HOST_PATHS",
+        value_delimiter = ','
+    )]
+    pub reserved_host_paths: Vec<PathBuf>,
+
+    /// Directories a workload's `hostPath` volume may lie within. A volume is
+    /// judged by its canonical path, so `..` and symlinks cannot step outside
+    /// one. With none, no `hostPath` volume is permitted.
+    ///
+    /// Whether a volume outside them is refused or only counted is
+    /// `--host-path-volumes`. Accepts a comma-separated list and/or repeated
+    /// flags. Paths must not contain commas.
+    #[arg(
+        long = "allowed-host-path",
+        env = "WASH_ALLOWED_HOST_PATHS",
+        value_delimiter = ','
+    )]
+    pub allowed_host_paths: Vec<PathBuf>,
+
+    /// How the `hostPath` allowlist is applied.
+    ///
+    /// `count` (the default) mounts a volume outside `--allowed-host-path`, or
+    /// one containing the `emptyDir` scratch root such as `/tmp`, logs it, and
+    /// counts it in the `host_path.would_deny` metric. `hostPath` volumes were
+    /// never gated, so enforcing immediately would stop every workload using
+    /// one on upgrade; run in `count` first, set the allowlist, watch the
+    /// metric, then switch to `enforce`. Reserved host paths, kernel
+    /// filesystems such as `/proc`, `/sys` and `/dev`, and anything inside the
+    /// scratch root are refused in either mode.
+    #[arg(
+        long = "host-path-volumes",
+        env = "WASH_HOST_PATH_VOLUMES",
+        value_enum,
+        default_value = "count"
+    )]
+    pub host_path_volumes: HostPathVolumes,
+
+    /// Where `emptyDir` volumes live. Defaults to `wasmcloud-scratch` under
+    /// the system temporary directory.
+    ///
+    /// The host claims a directory of its own here, removes each workload's
+    /// scratch when the workload stops, and at startup removes what hosts that
+    /// are no longer running left behind. No `hostPath` volume may lie inside
+    /// it; one that contains it is refused under `--host-path-volumes=enforce`.
+    #[arg(long = "scratch-root", env = "WASH_SCRATCH_ROOT")]
+    pub scratch_root: Option<PathBuf>,
+
     /// How long to keep serving after a shutdown signal, before stopping.
     ///
     /// A pod leaves its Service when Kubernetes marks it Terminating, but that
@@ -661,6 +718,65 @@ fn host_plugin_registry_credentials(
 }
 
 impl HostCommand {
+    /// Every path this host reads credentials or configuration from, which no
+    /// workload volume may expose.
+    fn reserved_paths(&self, config: &crate::config::Config, ctx: &CliContext) -> Vec<PathBuf> {
+        let project_dir = ctx.project_dir();
+        let mut paths: Vec<PathBuf> = [
+            &self.scheduler_nats_tls_ca,
+            &self.scheduler_nats_tls_cert,
+            &self.scheduler_nats_tls_key,
+            &self.data_nats_tls_ca,
+            &self.data_nats_tls_cert,
+            &self.data_nats_tls_key,
+            &self.tls_cert_path,
+            &self.tls_key_path,
+            &self.tls_ca_path,
+            &self.http_client_cert_path,
+            &self.http_client_key_path,
+            // Writable, and what it caches is loaded as plugin code.
+            &self.oci_cache_dir,
+        ]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .chain(self.http_client_ca_paths.iter().cloned())
+        .chain(self.oci_ca_paths.iter().cloned())
+        .chain(self.reserved_host_paths.iter().cloned())
+        .collect();
+        paths.push(ctx.user_config_path());
+        paths.push(crate::config::locate_project_config(project_dir));
+        paths.extend(config.reserved_host_paths(project_dir));
+        // A component plugin's wasm is code the host runs with a plugin's
+        // grants; a workload able to write it could replace the plugin.
+        paths.extend(
+            config
+                .host()
+                .all_plugins()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|plugin| plugin.source.file.as_ref())
+                .map(|file| {
+                    if file.is_relative() {
+                        project_dir.join(file)
+                    } else {
+                        file.clone()
+                    }
+                }),
+        );
+        paths.extend(
+            self.host_plugins
+                .iter()
+                .filter_map(|spec| match &spec.source {
+                    wash_runtime::component_source::ComponentSource::File(file) => {
+                        Some(file.clone())
+                    }
+                    _ => None,
+                }),
+        );
+        paths
+    }
+
     /// Build outbound TLS and start identity refresh when configured.
     fn egress_handler(&self) -> anyhow::Result<wash_runtime::host::http::DefaultOutgoingHandler> {
         use wash_runtime::host::client_identity::{RotatingClientIdentity, spawn_refresh};
@@ -878,7 +994,13 @@ impl CliCommand for HostCommand {
 
         let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)
-            .with_fuel_consumption(ctx.meters().consumes_fuel());
+            .with_fuel_consumption(ctx.meters().consumes_fuel())
+            .with_reserved_host_paths(self.reserved_paths(&config, ctx))
+            .with_allowed_host_paths(self.allowed_host_paths.iter().cloned())
+            .with_host_path_mode(self.host_path_volumes.into());
+        if let Some(root) = &self.scratch_root {
+            engine_builder = engine_builder.with_scratch_root(root);
+        }
         for proposal in &self.wasm_proposals {
             engine_builder = engine_builder.with_wasm_proposal(*proposal);
         }
@@ -902,7 +1024,9 @@ impl CliCommand for HostCommand {
                 allow_private: !self.deny_private_ranges,
             },
             quotas: Some(Arc::clone(&quotas)),
-            meters: Some(Arc::new(wash_runtime::host::quota::PolicyMeters::default())),
+            // Published as metrics, so the would-deny counters count mode
+            // promises can be watched before switching to enforce.
+            meters: Some(wash_runtime::host::quota::PolicyMeters::default().into_metered()),
             // The host's one record of which real ports are spoken for. Every
             // guest policy is derived from this one, so they all read the same
             // table and a port reserved here is seen by all of them.
@@ -1451,11 +1575,12 @@ host:
 
 #[cfg(test)]
 mod shutdown_tests {
+    use std::path::PathBuf;
     use std::time::Duration;
 
     use clap::Parser;
 
-    use super::HostCommand;
+    use super::{HostCommand, HostPathVolumes};
 
     #[derive(Debug, Parser)]
     struct TestCli {
@@ -1493,6 +1618,27 @@ mod shutdown_tests {
         assert_eq!(
             parse(&["--drain-delay=30s"]).drain_delay,
             Duration::from_secs(30)
+        );
+    }
+
+    /// Upgrading must not stop a workload that mounts a `hostPath`, so the
+    /// allowlist counts until an operator turns it on.
+    #[test]
+    fn host_path_volumes_count_until_enforced() {
+        let host = parse(&[]);
+        assert_eq!(host.host_path_volumes, HostPathVolumes::Count);
+        assert!(host.allowed_host_paths.is_empty());
+
+        // The chart's spelling: one flag per directory.
+        let host = parse(&[
+            "--allowed-host-path=/data",
+            "--allowed-host-path=/srv/shared",
+            "--host-path-volumes=enforce",
+        ]);
+        assert_eq!(host.host_path_volumes, HostPathVolumes::Enforce);
+        assert_eq!(
+            host.allowed_host_paths,
+            [PathBuf::from("/data"), PathBuf::from("/srv/shared")]
         );
     }
 }
@@ -1554,6 +1700,23 @@ impl From<GuestMemoryMode> for wash_runtime::engine::guest_memory::GuestMemoryMo
         match mode {
             GuestMemoryMode::Count => Self::Count,
             GuestMemoryMode::Enforce => Self::Enforce,
+        }
+    }
+}
+
+/// CLI spelling of [`wash_runtime::engine::HostPathMode`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum HostPathVolumes {
+    #[default]
+    Count,
+    Enforce,
+}
+
+impl From<HostPathVolumes> for wash_runtime::engine::HostPathMode {
+    fn from(mode: HostPathVolumes) -> Self {
+        match mode {
+            HostPathVolumes::Count => Self::Count,
+            HostPathVolumes::Enforce => Self::Enforce,
         }
     }
 }

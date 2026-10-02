@@ -312,6 +312,8 @@ pub struct Ctx {
     pub workload_id: Arc<str>,
     /// The WASI context used to provide WASI functionality to the components using this context.
     pub ctx: WasiCtx,
+    /// Directory handles retained from workload validation.
+    pub(crate) volume_mounts: Vec<super::volumes::ResolvedVolumeMount>,
     /// The HTTP context used to provide HTTP functionality to the component.
     pub http: WasiHttpCtx,
     /// The sockets context used to provide socket functionality (with loopback support).
@@ -616,6 +618,7 @@ impl CtxBuilder {
             }),
             workload_id: self.workload_id,
             component_id: self.component_id,
+            volume_mounts: Vec::new(),
             http: WasiHttpCtx::new(),
             sockets: self.sockets.unwrap_or_default(),
             #[cfg(feature = "wasi-tls")]
