@@ -1227,7 +1227,9 @@ pub trait HostHandler: Send + Sync + 'static {
     ) -> anyhow::Result<()>;
     /// Unregister a workload. Called once for every workload that stops,
     /// including one that never registered here, so an unknown id is not an
-    /// error.
+    /// error. A start that fails or is cancelled calls it too, without knowing
+    /// how far registration got, and holds the workload's id until it succeeds:
+    /// an error here is retried rather than skipped.
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()>;
 
     /// Register a long-lived service instance that serves HTTP ingress: inbound
@@ -1244,7 +1246,9 @@ pub trait HostHandler: Send + Sync + 'static {
     ) -> anyhow::Result<()> {
         Ok(())
     }
-    /// Unregister a service HTTP instance. Default: no-op.
+    /// Unregister a service HTTP instance. As with
+    /// [`HostHandler::on_workload_unbind`], an unknown id is not an error.
+    /// Default: no-op.
     async fn on_service_http_unbind(&self, _workload_id: &str) -> anyhow::Result<()> {
         Ok(())
     }
@@ -1259,7 +1263,9 @@ pub trait HostHandler: Send + Sync + 'static {
     ) -> anyhow::Result<()> {
         Ok(())
     }
-    /// Unregister a trigger service messaging instance. Default: no-op.
+    /// Unregister a trigger service messaging instance. As with
+    /// [`HostHandler::on_workload_unbind`], an unknown id is not an error.
+    /// Default: no-op.
     async fn on_trigger_service_messaging_unbind(&self, _workload_id: &str) -> anyhow::Result<()> {
         Ok(())
     }
