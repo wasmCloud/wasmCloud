@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 
@@ -14,7 +15,14 @@ import (
 const (
 	WorkloadReplicaSetConditionScaleUp   condition.ConditionType = "ScaleUp"
 	WorkloadReplicaSetConditionScaleDown condition.ConditionType = "ScaleDown"
+
+	messagingInterfaceNamespace     = "wasmcloud"
+	messagingInterfacePackage       = "messaging"
+	messagingConsumerGroupConfigKey = "consumer_group"
+	broadcastConsumerGroup          = "broadcast"
 )
+
+var errMissingMessagingConsumerGroup = errors.New("workload replicas > 1 without an explicit messaging consumer group")
 
 type WorkloadReplicaTemplate struct {
 	// +kubebuilder:validation:Optional
@@ -39,6 +47,50 @@ type WorkloadReplicaSetSpec struct {
 	Replicas *int32 `json:"replicas,omitempty"`
 	// +kubebuilder:validation:Required
 	Template WorkloadReplicaTemplate `json:"template,omitempty"`
+}
+
+// ValidateMessagingConsumerGroups rejects a replica set that would give every
+// replica a consumer group of its own. Each replica is a Workload carrying a
+// distinct name, and the runtime derives its default consumer group from that
+// name, so `replicas: 2` without an explicit `consumer_group` subscribes two
+// groups and every message is delivered twice instead of load-balanced. Setting
+// the key to `broadcast` is how a workload asks for that fan-out on purpose.
+func (s *WorkloadReplicaSetSpec) ValidateMessagingConsumerGroups() error {
+	if s.Replicas == nil || *s.Replicas <= 1 {
+		return nil
+	}
+
+	missing := func(item string) error {
+		return fmt.Errorf(
+			"%w: set %q on %s to a shared group name so replicas load-balance, or to %q so every replica receives every message",
+			errMissingMessagingConsumerGroup, messagingConsumerGroupConfigKey, item, broadcastConsumerGroup)
+	}
+
+	for _, iface := range s.Template.Spec.HostInterfaces {
+		if iface.Namespace != messagingInterfaceNamespace || iface.Package != messagingInterfacePackage {
+			continue
+		}
+		if hasConsumerGroup(iface.Config) {
+			continue
+		}
+		for _, component := range s.Template.Spec.Components {
+			if component.LocalResources == nil || !hasConsumerGroup(component.LocalResources.Config) {
+				return missing(fmt.Sprintf("component %q", component.Name))
+			}
+		}
+		if service := s.Template.Spec.Service; service != nil {
+			if service.LocalResources == nil || !hasConsumerGroup(service.LocalResources.Config) {
+				return missing("the workload service")
+			}
+		}
+	}
+
+	return nil
+}
+
+func hasConsumerGroup(config map[string]string) bool {
+	_, ok := config[messagingConsumerGroupConfigKey]
+	return ok
 }
 
 type ReplicaSetStatus struct {
