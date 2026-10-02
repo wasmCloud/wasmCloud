@@ -1415,7 +1415,11 @@ async fn registration_waits_for_the_broker_before_the_first_request() -> Result<
                 }
                 anyhow::Ok(())
             };
-            tokio::select! { result = to_client => { result?; }, result = to_server => { result?; } }
+            tokio::select! {
+                result = to_client => { result?; }
+
+                result = to_server => { result?; }
+            }
             anyhow::Ok(())
         }
     }));

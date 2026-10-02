@@ -8,25 +8,26 @@ use tokio::sync::RwLock;
 use tokio_util::task::TaskTracker;
 
 use super::{Host, HostWorkload, Reservation};
-use crate::engine::workload::StartCleanup;
+use crate::engine::workload::WorkloadStartResources;
 
 type Workloads = Arc<RwLock<HashMap<String, HostWorkload>>>;
-pub(super) type CancelledStarts = Arc<Mutex<HashMap<String, Arc<CancelledStart>>>>;
+pub(super) type WorkloadStartRecoveries = Arc<Mutex<HashMap<String, Arc<CancelledWorkloadStart>>>>;
 
-pub(super) struct CancelledStart {
+/// Retains a cancelled workload start's reservation and resources until teardown succeeds.
+pub(super) struct CancelledWorkloadStart {
     reservation: Reservation,
-    cleanup: StartCleanup,
+    cleanup: WorkloadStartResources,
     serial: tokio::sync::Mutex<()>,
     #[cfg(feature = "washlet")]
     _control: Option<Arc<super::HostControlLease>>,
 }
 
-impl CancelledStart {
+impl CancelledWorkloadStart {
     pub(super) async fn recover(
         &self,
         workload_id: &str,
         workloads: &Workloads,
-        cancelled: &CancelledStarts,
+        cancelled: &WorkloadStartRecoveries,
     ) -> anyhow::Result<()> {
         let _serial = self.serial.lock().await;
         if cancelled
@@ -74,27 +75,28 @@ impl CancelledStart {
     }
 }
 
-pub(crate) struct StartGuard {
+/// Transfers an unfinished workload start to tracked cleanup when its future is dropped.
+pub(crate) struct WorkloadStartGuard {
     workload_id: String,
     reservation: Reservation,
     workloads: Workloads,
-    cancelled: CancelledStarts,
+    cancelled: WorkloadStartRecoveries,
     tasks: TaskTracker,
-    cleanup: StartCleanup,
+    cleanup: WorkloadStartResources,
     armed: bool,
     #[cfg(feature = "washlet")]
     control: Option<Arc<super::HostControlLease>>,
 }
 
-impl StartGuard {
+impl WorkloadStartGuard {
     pub(super) fn new(host: &Host, workload_id: &str, reservation: Reservation) -> Self {
         Self {
             workload_id: workload_id.into(),
             reservation,
             workloads: Arc::clone(&host.workloads),
-            cancelled: Arc::clone(&host.cancelled_starts),
-            tasks: host.start_cleanup.clone(),
-            cleanup: StartCleanup::default(),
+            cancelled: Arc::clone(&host.workload_start_recoveries),
+            tasks: host.workload_start_cleanup_tasks.clone(),
+            cleanup: WorkloadStartResources::default(),
             armed: true,
             #[cfg(feature = "washlet")]
             control: host
@@ -105,7 +107,7 @@ impl StartGuard {
         }
     }
 
-    pub(crate) fn cleanup(&self) -> StartCleanup {
+    pub(crate) fn cleanup(&self) -> WorkloadStartResources {
         self.cleanup.clone()
     }
 
@@ -114,7 +116,7 @@ impl StartGuard {
     }
 }
 
-impl Drop for StartGuard {
+impl Drop for WorkloadStartGuard {
     fn drop(&mut self) {
         if !self.armed {
             return;
@@ -122,7 +124,7 @@ impl Drop for StartGuard {
         let workload_id = self.workload_id.clone();
         let workloads = Arc::clone(&self.workloads);
         let cancelled = Arc::clone(&self.cancelled);
-        let recovery = Arc::new(CancelledStart {
+        let recovery = Arc::new(CancelledWorkloadStart {
             reservation: self.reservation,
             cleanup: self.cleanup.clone(),
             serial: tokio::sync::Mutex::new(()),
