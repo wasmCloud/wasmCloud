@@ -2507,10 +2507,29 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires NATS_URL"]
+    #[ignore = "requires Docker (NATS) or NATS_URL"]
     async fn registration_retains_requests_received_before_the_marker() -> anyhow::Result<()> {
+        use testcontainers::{
+            GenericImage,
+            core::{IntoContainerPort as _, WaitFor},
+            runners::AsyncRunner as _,
+        };
+
         crate::init_crypto();
-        let client = Arc::new(async_nats::connect(std::env::var("NATS_URL")?).await?);
+        let (_container, url) = match std::env::var("NATS_URL") {
+            Ok(url) => (None, url),
+            Err(_) => {
+                let container = GenericImage::new("nats", "2.12.8-alpine")
+                    .with_exposed_port(4222.tcp())
+                    .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+                    .start()
+                    .await
+                    .context("failed to start NATS container")?;
+                let port = container.get_host_port_ipv4(4222).await?;
+                (Some(container), format!("nats://127.0.0.1:{port}"))
+            }
+        };
+        let client = Arc::new(async_nats::connect(url).await?);
         let host = crate::host::HostBuilder::default().build()?.start().await?;
         let mut subscription = client.subscribe(host_subject(host.id())).await?;
         let inbox = client.new_inbox();
