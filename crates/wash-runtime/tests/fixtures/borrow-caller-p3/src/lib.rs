@@ -9,6 +9,8 @@ mod bindings {
         generate_all,
         async: [
             "import:wasmcloud:borrow-test-p3/middleware@0.1.0#accept",
+            "import:wasmcloud:borrow-test-p3/middleware@0.1.0#accept-nested",
+            "import:wasmcloud:borrow-test-p3/middleware@0.1.0#adopt",
             "export:wasi:http/handler@0.3.0#handle",
         ],
     });
@@ -16,7 +18,7 @@ mod bindings {
 
 use bindings::exports::wasi::http::handler::Guest as Handler;
 use bindings::wasi::http::types::{ErrorCode, Fields, Request, Response};
-use bindings::wasmcloud::borrow_test_p3::factory::Token;
+use bindings::wasmcloud::borrow_test_p3::factory::{Lend, Token};
 use bindings::wasmcloud::borrow_test_p3::middleware;
 
 struct Component;
@@ -28,9 +30,20 @@ impl Handler for Component {
         let token = Token::new("world");
         // Lend it: caller -> middleware -> consumer, where `greet` runs on it.
         let via_middleware = middleware::accept(&token).await;
+        // Lend it again from inside a record, a tuple and an option.
+        let lend = Lend {
+            label: "nested".to_string(),
+            token: &token,
+        };
+        let nested = middleware::accept_nested(lend, ("pair".to_string(), &token), Some(&token)).await;
+        // Hand a second token over by value, inside a tuple.
+        let adopted = middleware::adopt(("adopted".to_string(), Token::new("owned"))).await;
         // The caller still owns the token and can keep using it.
         let direct = token.greet();
-        let body = format!("{via_middleware}|{direct}|greets={}", token.greets());
+        let body = format!(
+            "{via_middleware}|{nested}|{adopted}|{direct}|greets={}",
+            token.greets()
+        );
 
         let headers = Fields::new();
         let (mut tx, rx) = bindings::wit_stream::new::<u8>();

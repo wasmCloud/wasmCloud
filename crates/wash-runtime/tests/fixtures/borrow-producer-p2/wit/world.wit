@@ -10,6 +10,12 @@ interface factory {
         /// every hop hit the same resource.
         greets: func() -> u32;
     }
+
+    /// Lends a `token` from inside a record, so the borrow is nested in a param.
+    record lend {
+        label: string,
+        token: borrow<token>,
+    }
 }
 
 world producer {

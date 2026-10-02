@@ -31,7 +31,7 @@ use tokio::time::timeout;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::{debug, trace};
 use wasmtime::component::{
-    Accessor, ComponentExportIndex, InstancePre, ResourceAny, Val,
+    Accessor, ComponentExportIndex, InstancePre, Val,
     types::{ComponentFunc, Type},
 };
 use wasmtime::error::Context as _;
@@ -46,9 +46,7 @@ use crate::engine::instance_driver::{InstanceJob, LinkedJob};
 use crate::engine::instance_pool::{self, ComponentInstance, InstancePool};
 use crate::engine::store::relocate::{self, Relocated, bridgeable_element_type};
 use crate::engine::store::stream_pump::Done;
-use crate::engine::value::{
-    carries_cross_store_handle, is_identity_handle, lift_results, lower_params,
-};
+use crate::engine::value::{carries_cross_store_handle, lift_results, lower_params};
 use crate::engine::volumes::{ResolvedVolumeMount, resolve_component_volume_mounts_in_map};
 use crate::engine::workload::{WorkloadComponent, WorkloadMetadata};
 use crate::plugin::HostPlugin;
@@ -1213,7 +1211,7 @@ async fn invoke_shared_store_linked_export(
     let _active_ctx = AccessorActiveCtxGuard::new(accessor, &inv.plugin_component_id)?;
 
     let call: wasmtime::Result<()> = async {
-        let (func, params_buf, tys) = accessor.with(|mut access| -> wasmtime::Result<_> {
+        let (func, lowered) = accessor.with(|mut access| -> wasmtime::Result<_> {
             let instance = access
                 .data_mut()
                 .exporter_instances
@@ -1235,19 +1233,19 @@ async fn invoke_shared_store_linked_export(
                     .collect::<Vec<_>>()
                     .into()
             });
-            let params_buf = lower_params(&mut access.as_context_mut(), params, tys)?;
-            Ok((func, params_buf, tys))
+            let lowered = lower_params(&mut access.as_context_mut(), params, tys)?;
+            Ok((func, lowered))
         })?;
 
         trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoking dynamic export");
 
         let mut results_buf = vec![Val::Bool(false); results.len()];
-        func.call_concurrent(accessor, &params_buf, &mut results_buf)
+        func.call_concurrent(accessor, &lowered.vals, &mut results_buf)
             .await?;
 
         accessor.with(|mut access| -> wasmtime::Result<_> {
             lift_results(&mut access.as_context_mut(), results_buf, results)?;
-            release_identity_borrows(access.as_context_mut(), params, tys)
+            lowered.release_identity_borrows(access.as_context_mut())
         })?;
 
         Ok(())
@@ -1293,7 +1291,7 @@ pub(crate) async fn invoke_linked_sync_export(
                 .collect::<Vec<_>>()
                 .into()
         });
-        let params_buf = lower_params(store, params, tys)?;
+        let lowered = lower_params(store, params, tys)?;
         trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoking dynamic export");
 
         let mut results_buf = vec![Val::Bool(false); results.len()];
@@ -1301,7 +1299,7 @@ pub(crate) async fn invoke_linked_sync_export(
         let call_timeout = crate::timeouts::shared_store_call();
         timeout(
             call_timeout,
-            func.call_async(&mut store, &params_buf, &mut results_buf),
+            func.call_async(&mut store, &lowered.vals, &mut results_buf),
         )
         .await
         .map_err(|e| {
@@ -1309,35 +1307,9 @@ pub(crate) async fn invoke_linked_sync_export(
         })??;
 
         lift_results(store, results_buf, results)?;
-        release_identity_borrows(&mut *store, params, tys)?;
+        lowered.release_identity_borrows(&mut *store)?;
         trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoked dynamic export");
         Ok(())
     }
     .await
-}
-
-/// Release the borrow slots of host-resource params that were lowered by
-/// identity (see [`lower_with_type`]).
-///
-/// Lifting a guest `borrow` creates a borrow slot in the host table, scoped to
-/// the import call. The copy path in [`lower`] clears it as a side effect of
-/// `try_into_resource`; the identity path hands the handle through untouched,
-/// so the slot would outlive the call and trap the caller with "borrow handles
-/// still remain at the end of the call". Owned handles need nothing: an `own`
-/// never counts against the scope, and lowering it into the callee removes its
-/// host-table entry anyway.
-fn release_identity_borrows(
-    mut store: impl AsContextMut<Data = SharedCtx>,
-    params: &[Val],
-    param_tys: &[Type],
-) -> wasmtime::Result<()> {
-    for (v, ty) in params.iter().zip(param_tys) {
-        let Val::Resource(any) = v else { continue };
-        if matches!(ty, Type::Borrow(_)) && is_identity_handle(ty, v) && !any.owned() {
-            trace!(resource = ?any, "releasing identity-lowered borrow after linked call");
-            any.try_into_resource::<ResourceAny>(store.as_context_mut())
-                .context("failed to release identity-lowered borrow")?;
-        }
-    }
-    Ok(())
 }
