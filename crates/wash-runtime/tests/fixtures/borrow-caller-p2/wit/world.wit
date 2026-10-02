@@ -1,0 +1,21 @@
+package wasmcloud:borrow-test@0.1.0;
+
+interface factory {
+    resource token {
+        constructor(name: string);
+        greet: func() -> string;
+        greets: func() -> u32;
+    }
+}
+
+interface middleware {
+    use factory.{token};
+
+    accept: func(t: borrow<token>) -> string;
+}
+
+world caller {
+    import factory;
+    import middleware;
+    export wasi:http/incoming-handler@0.2.2;
+}

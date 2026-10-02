@@ -232,16 +232,22 @@ pub(crate) fn lower_with_type(
         return lower(store, v);
     }
 
-    match (ty, v) {
-        (Type::Own(resource_ty) | Type::Borrow(resource_ty), &Val::Resource(any))
-            if *resource_ty == ResourceType::host::<ResourceAny>()
-                && any.ty() == ResourceType::host::<ResourceAny>() =>
-        {
-            trace!(resource = ?any, "lowering host resource by identity");
-            Ok(Val::Resource(any))
-        }
-        _ => lower(store, v),
+    if is_identity_handle(ty, v) {
+        trace!(resource = ?v, "lowering host resource by identity");
+        return Ok(v.clone());
     }
+    lower(store, v)
+}
+
+/// `true` when `v` is a linked component's resource handle, declared as such
+/// (`own`/`borrow` of the host `ResourceAny` type) and carrying one. The linker
+/// passes these through by identity instead of re-marshalling them.
+pub(crate) fn is_identity_handle(ty: &Type, v: &Val) -> bool {
+    let (Type::Own(resource_ty) | Type::Borrow(resource_ty), Val::Resource(any)) = (ty, v) else {
+        return false;
+    };
+    *resource_ty == ResourceType::host::<ResourceAny>()
+        && any.ty() == ResourceType::host::<ResourceAny>()
 }
 
 pub(crate) fn lift(store: &mut StoreContextMut<SharedCtx>, v: Val) -> wasmtime::Result<Val> {

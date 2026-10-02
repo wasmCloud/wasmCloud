@@ -1,0 +1,24 @@
+package wasmcloud:borrow-test-p3@0.1.0;
+
+interface factory {
+    resource token {
+        constructor(name: string);
+        greet: func() -> string;
+        greets: func() -> u32;
+    }
+}
+
+interface consumer {
+    use factory.{token};
+
+    /// Borrows a `token` and calls a method on it.
+    accept: async func(t: borrow<token>) -> string;
+}
+
+world consumer-component {
+    import wasi:cli/types@0.3.0;
+    import wasi:clocks/types@0.3.0;
+    import factory;
+
+    export consumer;
+}
