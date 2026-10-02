@@ -1,0 +1,54 @@
+name: k6bench-smoke
+
+# Keeps scripts/k6bench runnable: a 20-second http-hello run on a
+# GitHub-hosted runner through the same run.sh the bench host and customers
+# use. Publishes nothing and never touches the bench host, so it's safe for
+# fork PRs.
+on:
+  pull_request:
+    paths:
+      - scripts/k6bench/**
+      - crates/bench-tools/**
+      - crates/wash-runtime/tests/fixtures/http-handler-p2/**
+      - crates/wash-runtime/tests/fixtures/http-relay/**
+      - xtask/**
+      - .github/workflows/k6bench*.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: k6bench-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: lint scripts
+        run: |
+          shellcheck scripts/k6bench/run.sh scripts/k6bench/compare.sh
+          for s in scripts/k6bench/scenarios/*.js; do
+            for p in constant stress spike; do
+              docker run --rm -v "$PWD/scripts/k6bench:/k6bench:ro" grafana/k6:2.3.0 \
+                inspect -e PROFILE="$p" "/k6bench/scenarios/$(basename "$s")" >/dev/null
+            done
+          done
+
+      - name: bench-tools tests
+        run: cargo test -p bench-tools
+
+      # Released images and a dockerized k6 and wash: the smoke test checks the
+      # harness, not a branch's host (the bench host's dispatch does that).
+      - name: http-hello smoke run
+        run: |
+          ./scripts/k6bench/run.sh --scenario http-hello --rate 200 --duration 20s \
+            --warmup 5s --slo-p99-ms 1000 --out-dir "$RUNNER_TEMP/smoke" --down
+          test -s "$RUNNER_TEMP/smoke/summary.json"
+          cargo run -p bench-tools --quiet -- k6 report --markdown "$RUNNER_TEMP/smoke" \
+            >> "$GITHUB_STEP_SUMMARY"
