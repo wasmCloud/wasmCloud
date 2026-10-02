@@ -30,6 +30,7 @@ members = [
     "feeds-callee-b",
     "feeds-caller",
     "postgres-implements",
+    "http-relay",
     # P3 fixtures (wasm32-wasip1 + reactor adapter)
     "http-handler-p3",
     "http-local-caller-p3",

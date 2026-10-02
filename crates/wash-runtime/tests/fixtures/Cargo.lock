@@ -464,6 +464,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-relay"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "wstd",
+]
+
+[[package]]
 name = "http-sleeper"
 version = "0.0.0"
 dependencies = [

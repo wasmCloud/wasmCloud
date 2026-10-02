@@ -295,13 +295,15 @@ oci_push() {
 push_components() {
   local push_to="$1" pull_from="$2" name wasm tag
   resolve_version
-  log "building bench components"
-  # Pin the target dir: a CARGO_TARGET_DIR (bench host CI sets one) would
-  # otherwise move the wasm out from under the path below.
-  (cd "$here/components" && cargo build --release --target wasm32-wasip2 \
-    --target-dir "$here/components/target" --quiet >&2)
+  # The components are wash-runtime test fixtures, shared with the criterion
+  # benches: hello is http_invoke's http-handler-p2.
+  log "building bench components (cargo xtask build-fixtures)"
+  (cd "$repo" && cargo xtask build-fixtures http-handler-p2 http-relay >&2)
   for name in hello relay; do
-    wasm="$here/components/target/wasm32-wasip2/release/k6bench_${name}.wasm"
+    case "$name" in
+      hello) wasm="$repo/crates/wash-runtime/tests/wasm/http_handler_p2.wasm" ;;
+      relay) wasm="$repo/crates/wash-runtime/tests/wasm/http_relay.wasm" ;;
+    esac
     tag="$(sha256 "$wasm")"
     oci_push "$push_to/k6bench/$name:$tag" "$wasm"
     eval "image_${name}=\"$pull_from/k6bench/$name:$tag\""

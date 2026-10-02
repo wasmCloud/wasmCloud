@@ -27,7 +27,10 @@ struct Cli {
 enum Task {
     /// Build the wash-runtime wasm test fixtures into
     /// `crates/wash-runtime/tests/wasm/`.
-    BuildFixtures,
+    BuildFixtures {
+        /// Build only these fixtures (by directory name); all of them if none.
+        names: Vec<String>,
+    },
     /// Regenerate the committed protobuf bindings in
     /// `crates/wash-runtime/src/washlet/generated/` from
     /// `/proto/wasmcloud/runtime/v2`. CI fails if they drift.
@@ -42,7 +45,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let workspace = workspace_dir().context("failed to locate workspace root")?;
     match cli.task {
-        Task::BuildFixtures => build_fixtures(&workspace),
+        Task::BuildFixtures { names } => build_fixtures(&workspace, &names),
         Task::E2eImages => e2e_images::run(&workspace),
         Task::GenerateProtos => protos::run(&workspace),
     }
@@ -105,6 +108,7 @@ const P2_FIXTURES: &[&str] = &[
     "feeds-callee-a",
     "feeds-callee-b",
     "feeds-caller",
+    "http-relay",
 ];
 
 const P3_FIXTURES: &[&str] = &[
@@ -162,7 +166,7 @@ const P3_FIXTURES: &[&str] = &[
     "dispatch-target",
 ];
 
-fn build_fixtures(workspace: &Path) -> Result<()> {
+fn build_fixtures(workspace: &Path, names: &[String]) -> Result<()> {
     let fixtures_dir = workspace.join("crates/wash-runtime/tests/fixtures");
     let wasm_dir = workspace.join("crates/wash-runtime/tests/wasm");
 
@@ -172,12 +176,18 @@ fn build_fixtures(workspace: &Path) -> Result<()> {
     fs::create_dir_all(&wasm_dir)
         .with_context(|| format!("failed to create {}", wasm_dir.display()))?;
 
+    let known = |name: &str| P2_FIXTURES.contains(&name) || P3_FIXTURES.contains(&name);
+    if let Some(unknown) = names.iter().find(|n| !known(n)) {
+        bail!("unknown fixture {unknown}");
+    }
+
     let wash = ensure_wash(workspace)?;
 
     let fixtures = P2_FIXTURES
         .iter()
         .map(|f| (*f, FixtureKind::P2))
-        .chain(P3_FIXTURES.iter().map(|f| (*f, FixtureKind::P3)));
+        .chain(P3_FIXTURES.iter().map(|f| (*f, FixtureKind::P3)))
+        .filter(|(f, _)| names.is_empty() || names.iter().any(|n| n == f));
     let mut count = 0;
     for (fixture, kind) in fixtures {
         build_and_stage(&wash, &fixtures_dir, &wasm_dir, fixture, kind)
