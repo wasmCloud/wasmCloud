@@ -1,4 +1,4 @@
-//! Teardown owned by a workload reservation, even after its start is cancelled.
+//! Teardown owned by a workload reservation, even after its start or stop is cancelled.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -8,15 +8,15 @@ use tokio::sync::RwLock;
 use tokio_util::task::TaskTracker;
 
 use super::{Host, HostWorkload, Reservation};
-use crate::engine::workload::WorkloadStartResources;
+use crate::engine::workload::WorkloadResources;
 
 type Workloads = Arc<RwLock<HashMap<String, HostWorkload>>>;
-pub(super) type WorkloadStartRecoveries = Arc<Mutex<HashMap<String, Arc<CancelledWorkloadStart>>>>;
+pub(super) type WorkloadRecoveries = Arc<Mutex<HashMap<String, Arc<WorkloadRecovery>>>>;
 
-/// Retains a cancelled workload start's reservation and resources until teardown succeeds.
-pub(super) struct CancelledWorkloadStart {
+/// Retains an interrupted operation's reservation and resources until teardown succeeds.
+pub(super) struct WorkloadRecovery {
     reservation: Reservation,
-    cleanup: WorkloadStartResources,
+    cleanup: WorkloadResources,
     serial: tokio::sync::Mutex<()>,
     /// The start answered its caller with a failure before its cleanup
     /// finished, so that failure outlives the cleanup as the workload's `Error`.
@@ -25,9 +25,9 @@ pub(super) struct CancelledWorkloadStart {
     _control: Option<Arc<super::HostControlLease>>,
 }
 
-impl CancelledWorkloadStart {
+impl WorkloadRecovery {
     /// Drop this recovery's bookkeeping, unless a later one replaced it.
-    fn forget(&self, workload_id: &str, cancelled: &WorkloadStartRecoveries) {
+    fn forget(&self, workload_id: &str, cancelled: &WorkloadRecoveries) {
         let mut cancelled = cancelled
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -43,7 +43,7 @@ impl CancelledWorkloadStart {
         &self,
         workload_id: &str,
         workloads: &Workloads,
-        cancelled: &WorkloadStartRecoveries,
+        cancelled: &WorkloadRecoveries,
     ) -> anyhow::Result<()> {
         let _serial = self.serial.lock().await;
         if cancelled
@@ -80,7 +80,7 @@ impl CancelledWorkloadStart {
                 }
                 _ => {
                     self.forget(workload_id, cancelled);
-                    anyhow::bail!("cancelled start no longer owns its workload reservation");
+                    anyhow::bail!("interrupted operation no longer owns its workload reservation");
                 }
             }
         }
@@ -89,7 +89,7 @@ impl CancelledWorkloadStart {
             self.cleanup.release(workload_id),
         )
         .await
-        .context("cancelled workload cleanup timed out")??;
+        .context("interrupted workload cleanup timed out")??;
         let mut workloads = workloads.write().await;
         let failure = match workloads.get(workload_id) {
             Some(HostWorkload::Stopping(held)) if *held == self.reservation => None,
@@ -112,29 +112,29 @@ impl CancelledWorkloadStart {
     }
 }
 
-/// Transfers an unfinished workload start to tracked cleanup when its future is dropped.
-pub(crate) struct WorkloadStartGuard {
+/// Transfers an unfinished workload operation to tracked cleanup when its future is dropped.
+pub(crate) struct WorkloadCleanupGuard {
     workload_id: String,
     reservation: Reservation,
     workloads: Workloads,
-    cancelled: WorkloadStartRecoveries,
+    cancelled: WorkloadRecoveries,
     tasks: TaskTracker,
-    cleanup: WorkloadStartResources,
+    cleanup: WorkloadResources,
     armed: bool,
     retain_failure: bool,
     #[cfg(feature = "washlet")]
     control: Option<Arc<super::HostControlLease>>,
 }
 
-impl WorkloadStartGuard {
+impl WorkloadCleanupGuard {
     pub(super) fn new(host: &Host, workload_id: &str, reservation: Reservation) -> Self {
         Self {
             workload_id: workload_id.into(),
             reservation,
             workloads: Arc::clone(&host.workloads),
-            cancelled: Arc::clone(&host.workload_start_recoveries),
-            tasks: host.workload_start_cleanup_tasks.clone(),
-            cleanup: WorkloadStartResources::default(),
+            cancelled: Arc::clone(&host.workload_recoveries),
+            tasks: host.workload_cleanup_tasks.clone(),
+            cleanup: WorkloadResources::default(),
             armed: true,
             retain_failure: false,
             #[cfg(feature = "washlet")]
@@ -146,8 +146,13 @@ impl WorkloadStartGuard {
         }
     }
 
-    pub(crate) fn cleanup(&self) -> WorkloadStartResources {
+    pub(crate) fn cleanup(&self) -> WorkloadResources {
         self.cleanup.clone()
+    }
+
+    pub(super) fn with_cleanup(mut self, cleanup: WorkloadResources) -> Self {
+        self.cleanup = cleanup;
+        self
     }
 
     pub(crate) fn disarm(&mut self) {
@@ -162,7 +167,7 @@ impl WorkloadStartGuard {
     }
 }
 
-impl Drop for WorkloadStartGuard {
+impl Drop for WorkloadCleanupGuard {
     fn drop(&mut self) {
         if !self.armed {
             return;
@@ -170,7 +175,7 @@ impl Drop for WorkloadStartGuard {
         let workload_id = self.workload_id.clone();
         let workloads = Arc::clone(&self.workloads);
         let cancelled = Arc::clone(&self.cancelled);
-        let recovery = Arc::new(CancelledWorkloadStart {
+        let recovery = Arc::new(WorkloadRecovery {
             reservation: self.reservation,
             cleanup: self.cleanup.clone(),
             serial: tokio::sync::Mutex::new(()),
@@ -188,7 +193,7 @@ impl Drop for WorkloadStartGuard {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             tracing::error!(
                 workload_id,
-                "workload start dropped outside the runtime; a workload stop is required to clean it up"
+                "workload operation dropped outside the runtime; a workload stop is required to clean it up"
             );
             return;
         };
@@ -196,7 +201,7 @@ impl Drop for WorkloadStartGuard {
         self.tasks.spawn_on(
             async move {
                 if let Err(error) = recovery.recover(&workload_id, &workloads, &cancelled).await {
-                    tracing::error!(workload_id, %error, "cancelled start requires a workload stop to retry cleanup");
+                    tracing::error!(workload_id, %error, "interrupted workload operation requires a stop to retry cleanup");
                 }
             },
             &runtime,

@@ -61,12 +61,12 @@ use crate::wit::{WitInterface, WitWorld};
 
 pub(crate) mod accept;
 pub mod allowed_loopback;
+mod cleanup;
 pub mod declared_port;
 pub mod egress_policy;
 pub mod ports;
 pub mod probes;
 pub mod quota;
-mod start;
 pub(crate) mod sysinfo;
 use sysinfo::SystemMonitor;
 
@@ -245,9 +245,9 @@ pub enum HostWorkload {
 /// Give back everything binding a workload allocated: its service, then its
 /// plugins.
 ///
-/// Stops and plugin failures release committed workloads here. Unfinished
-/// starts use their [`crate::engine::workload::WorkloadStartResources`] journal
-/// so cancellation can resume cleanup without repeating completed steps.
+/// Plugin failures release committed workloads here. Starts and stops use
+/// their [`crate::engine::workload::WorkloadResources`] journal so cancellation
+/// can resume cleanup without repeating completed steps.
 ///
 /// Which slot in the workload map may be written, and by whom, is what keeps
 /// this safe to run outside the map's lock: `unbind_all_plugins` is keyed by
@@ -312,12 +312,12 @@ pub struct Host {
     engine: Engine,
     /// Workloads mapped from ID to the workload and its current state
     workloads: Arc<RwLock<HashMap<String, HostWorkload>>>,
-    /// Cancelled workload starts retained until cleanup succeeds, allowing
+    /// Interrupted workload operations retained until cleanup succeeds, allowing
     /// workload stops to retry failed teardown without reusing their IDs.
-    workload_start_recoveries: start::WorkloadStartRecoveries,
-    /// Background cleanup spawned when workload starts are cancelled;
+    workload_recoveries: cleanup::WorkloadRecoveries,
+    /// Background cleanup spawned when workload starts or stops are cancelled;
     /// awaited before control or host shutdown completes.
-    workload_start_cleanup_tasks: tokio_util::task::TaskTracker,
+    workload_cleanup_tasks: tokio_util::task::TaskTracker,
     /// Source of the [`Reservation`] a start or a teardown stamps on the slot it
     /// owns. Monotonic for the life of the host, so a reservation identifies one
     /// occupant of a workload id and never a later one.
@@ -417,23 +417,23 @@ impl HostRef {
 }
 
 impl Host {
-    pub(crate) fn workload_start_guard(
+    pub(crate) fn workload_cleanup_guard(
         &self,
         workload_id: &str,
         reservation: Reservation,
-    ) -> start::WorkloadStartGuard {
-        start::WorkloadStartGuard::new(self, workload_id, reservation)
+    ) -> cleanup::WorkloadCleanupGuard {
+        cleanup::WorkloadCleanupGuard::new(self, workload_id, reservation)
     }
 
-    pub(crate) async fn wait_for_workload_start_cleanup(&self) -> anyhow::Result<()> {
-        self.workload_start_cleanup_tasks.wait().await;
+    pub(crate) async fn wait_for_workload_cleanup(&self) -> anyhow::Result<()> {
+        self.workload_cleanup_tasks.wait().await;
         let cancelled = self
-            .workload_start_recoveries
+            .workload_recoveries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         anyhow::ensure!(
             cancelled.is_empty(),
-            "cancelled workloads require a workload stop to retry cleanup"
+            "interrupted workloads require a workload stop to retry cleanup"
         );
         Ok(())
     }
@@ -448,12 +448,12 @@ impl Host {
             .control
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // The lease outlives its attachment for as long as a command or a
-        // start begun under it is still running or being cleaned up, so say
+        // The lease outlives its attachment for as long as a command or an
+        // operation begun under it is still running or being cleaned up, so say
         // that too: the caller may have shut the last attachment down already.
         anyhow::ensure!(
             control.upgrade().is_none(),
-            "host already has an active control attachment, or a workload start begun \
+            "host already has an active control attachment, or a workload operation begun \
              under the previous one is still running or being cleaned up"
         );
         let lease = Arc::new(HostControlLease);
@@ -734,8 +734,8 @@ impl Host {
             .await
             .context("failed to stop HTTP handler")?;
 
-        // Cancelled starts finish teardown before global plugin shutdown.
-        if let Err(error) = self.wait_for_workload_start_cleanup().await {
+        // Interrupted starts and stops finish teardown before global plugin shutdown.
+        if let Err(error) = self.wait_for_workload_cleanup().await {
             tracing::warn!(%error, "stopping plugins with failed workload cleanup");
         }
 
@@ -767,7 +767,7 @@ impl Host {
             }
         }
 
-        self.workload_start_recoveries
+        self.workload_recoveries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
@@ -947,7 +947,7 @@ impl Host {
     async fn workload_start_inner(
         &self,
         request: WorkloadStartRequest,
-        cleanup: &crate::engine::workload::WorkloadStartResources,
+        cleanup: &crate::engine::workload::WorkloadResources,
     ) -> anyhow::Result<ResolvedWorkload> {
         let service_present = request.workload.service.is_some();
         let workload_id = request.workload_id.clone();
@@ -1136,13 +1136,13 @@ impl HostApi for Host {
         &self,
         request: WorkloadStopRequest,
     ) -> anyhow::Result<WorkloadStopResponse> {
-        // A cancelled start may still hold its ID and partial bindings. Wait
+        // A cancelled start or stop may still hold its ID and bindings. Wait
         // for or retry its cleanup, then return directly: recovery releases
         // the reservation, leaving no running workload for normal stop handling.
         // What it can leave is the `Error` of a start that had already
         // reported its failure, which this stop collects like any other.
         let recovery = self
-            .workload_start_recoveries
+            .workload_recoveries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&request.workload_id)
@@ -1152,7 +1152,7 @@ impl HostApi for Host {
                 .recover(
                     &request.workload_id,
                     &self.workloads,
-                    &self.workload_start_recoveries,
+                    &self.workload_recoveries,
                 )
                 .await?;
             {
@@ -1168,7 +1168,7 @@ impl HostApi for Host {
                 workload_status: WorkloadStatus {
                     workload_id: request.workload_id,
                     workload_state: WorkloadState::Stopping,
-                    message: "cancelled workload resources released".into(),
+                    message: "interrupted workload resources released".into(),
                 },
             });
         }
@@ -1244,16 +1244,28 @@ impl HostApi for Host {
             };
 
             if let Some(resolved_workload) = resolved_workload {
+                // A control attachment may cancel this stop while the host
+                // stays alive. Keep its reservation and remaining cleanup
+                // together, just as for a cancelled start.
+                let mut cleanup_guard = self
+                    .workload_cleanup_guard(&request.workload_id, reservation)
+                    .with_cleanup(crate::engine::workload::WorkloadResources::for_teardown(
+                        &resolved_workload,
+                    ));
                 debug!(
                     workload_id = request.workload_id,
                     workload_name = resolved_workload.name(),
                     "stopping workload"
                 );
-                release(&request.workload_id, &resolved_workload).await;
+                cleanup_guard
+                    .cleanup()
+                    .release(&request.workload_id)
+                    .await?;
                 // Dropped only now, so the id stays reserved for the whole
                 // teardown.
                 self.finish_teardown(&request.workload_id, reservation, None)
                     .await;
+                cleanup_guard.disarm();
             }
 
             debug!(
@@ -1340,7 +1352,7 @@ impl WorkloadReservation for Host {
         request: WorkloadStartRequest,
     ) -> anyhow::Result<WorkloadStartResponse> {
         let workload_id = request.workload_id.clone();
-        let mut start_guard = self.workload_start_guard(&workload_id, reservation);
+        let mut start_guard = self.workload_cleanup_guard(&workload_id, reservation);
         let started = self
             .workload_start_inner(request, &start_guard.cleanup())
             .await;
@@ -1364,7 +1376,8 @@ impl WorkloadReservation for Host {
                 _ => None,
             };
             match started {
-                Ok(resolved) if mine => {
+                Ok(mut resolved) if mine => {
+                    start_guard.cleanup().commit(&mut resolved);
                     start_guard.disarm();
                     workloads.insert(
                         workload_id.clone(),
@@ -1832,8 +1845,8 @@ impl HostBuilder {
         Ok(Host {
             engine,
             workloads: Arc::default(),
-            workload_start_recoveries: Arc::default(),
-            workload_start_cleanup_tasks: {
+            workload_recoveries: Arc::default(),
+            workload_cleanup_tasks: {
                 let tasks = tokio_util::task::TaskTracker::new();
                 tasks.close();
                 tasks
@@ -2324,6 +2337,8 @@ mod tests {
         unbound: std::sync::Mutex<Vec<String>>,
         bind_delay: Duration,
         unbind_delay: Duration,
+        unbind_entered: tokio::sync::Notify,
+        unbind_gate: Option<Arc<tokio::sync::Semaphore>>,
     }
 
     impl BindRecordingPlugin {
@@ -2375,6 +2390,10 @@ mod tests {
             workload_id: &str,
             _interfaces: crate::plugin::WitInterfaces<'_>,
         ) -> anyhow::Result<()> {
+            self.unbind_entered.notify_one();
+            if let Some(gate) = &self.unbind_gate {
+                gate.acquire().await?.forget();
+            }
             if !self.unbind_delay.is_zero() {
                 tokio::time::sleep(self.unbind_delay).await;
             }
@@ -2599,11 +2618,8 @@ mod tests {
             #[cfg(feature = "washlet")]
             assert!(host.acquire_control().is_err());
             plugin.cleanup_gate.add_permits(1);
-            tokio::time::timeout(
-                Duration::from_secs(1),
-                host.wait_for_workload_start_cleanup(),
-            )
-            .await??;
+            tokio::time::timeout(Duration::from_secs(1), host.wait_for_workload_cleanup())
+                .await??;
             assert!(!plugin.live.load(std::sync::atomic::Ordering::SeqCst));
             let reused = host
                 .workload_start(empty_workload_start_request("cancelled"))
@@ -2650,7 +2666,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), plugin.entered.notified()).await?;
         task.abort();
         assert!(task.await.is_err());
-        assert!(host.wait_for_workload_start_cleanup().await.is_err());
+        assert!(host.wait_for_workload_cleanup().await.is_err());
         assert!(plugin.live.load(std::sync::atomic::Ordering::SeqCst));
         assert_eq!(
             host.workload_start(empty_workload_start_request("retry"))
@@ -2664,7 +2680,7 @@ mod tests {
         })
         .await?;
         assert!(!plugin.live.load(std::sync::atomic::Ordering::SeqCst));
-        host.wait_for_workload_start_cleanup().await?;
+        host.wait_for_workload_cleanup().await?;
         assert_eq!(
             host.workload_start(empty_workload_start_request("retry"))
                 .await?
@@ -2721,11 +2737,8 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(1), plugin.cleanup_entered.notified()).await?;
             assert!(host.workload_reserve("failed-start").await.is_err());
             plugin.cleanup_gate.add_permits(1);
-            tokio::time::timeout(
-                Duration::from_secs(1),
-                host.wait_for_workload_start_cleanup(),
-            )
-            .await??;
+            tokio::time::timeout(Duration::from_secs(1), host.wait_for_workload_cleanup())
+                .await??;
             assert!(!plugin.live.load(std::sync::atomic::Ordering::SeqCst));
             assert_eq!(
                 host.workload_start(empty_workload_start_request("failed-start"))
@@ -2895,6 +2908,127 @@ mod tests {
         Ok(request)
     }
 
+    // Attached control cancels this same native stop future
+    // when its shutdown drain expires, while leaving the host running.
+    #[tokio::test]
+    async fn cancelled_native_stop_can_be_retried() -> anyhow::Result<()> {
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let plugin = Arc::new(BindRecordingPlugin {
+            unbind_gate: Some(gate.clone()),
+            ..Default::default()
+        });
+        let host = host_with(plugin.clone()).start().await?;
+        let result = host
+            .workload_start(marker_request("stop-cancelled"))
+            .await?;
+        assert_eq!(
+            result.workload_status.workload_state,
+            WorkloadState::Running
+        );
+        let task = tokio::spawn({
+            let host = host.clone();
+            async move {
+                host.workload_stop(WorkloadStopRequest {
+                    workload_id: "stop-cancelled".into(),
+                })
+                .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(5), plugin.unbind_entered.notified()).await?;
+        task.abort();
+        assert!(task.await.is_err());
+        gate.add_permits(1);
+        host.workload_stop(WorkloadStopRequest {
+            workload_id: "stop-cancelled".into(),
+        })
+        .await?;
+        host.wait_for_workload_cleanup().await?;
+        let status = host
+            .workload_status(WorkloadStatusRequest {
+                workload_id: "stop-cancelled".into(),
+            })
+            .await?;
+        assert_eq!(
+            status.workload_status.workload_state,
+            WorkloadState::NotFound,
+            "retry reported success but an interrupted stop still owns the id"
+        );
+        assert_eq!(plugin.unbound(), vec!["stop-cancelled"]);
+        host.stop().await
+    }
+
+    #[tokio::test]
+    async fn cancelled_stop_retries_only_unfinished_callbacks() -> anyhow::Result<()> {
+        let first = Arc::new(ResumableStartPlugin::new("first", 0));
+        let last = Arc::new(ResumableStartPlugin::new("last", 1));
+        let host = Host::builder()
+            .with_plugin(first.clone())?
+            .with_plugin(last.clone())?
+            .build()?
+            .start()
+            .await?;
+        host.workload_start(two_plugin_request("stop-retry")?)
+            .await?;
+        #[cfg(feature = "washlet")]
+        let lease = host.acquire_control()?;
+        let task = tokio::spawn({
+            let host = host.clone();
+            async move {
+                host.workload_stop(WorkloadStopRequest {
+                    workload_id: "stop-retry".into(),
+                })
+                .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(5), first.cleanup_entered.notified()).await?;
+        assert_eq!(
+            last.cleanup_successes
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        task.abort();
+        assert!(task.await.is_err());
+        #[cfg(feature = "washlet")]
+        drop(lease);
+        // Recovery fails once, so neither the id nor the attachment lease can
+        // be reused until a later stop finishes the remaining callback.
+        first
+            .cleanup_failures
+            .store(1, std::sync::atomic::Ordering::SeqCst);
+        first.cleanup_gate.add_permits(1);
+        assert!(host.wait_for_workload_cleanup().await.is_err());
+        assert!(host.workload_reserve("stop-retry").await.is_err());
+        #[cfg(feature = "washlet")]
+        assert!(host.acquire_control().is_err());
+        first.cleanup_gate.add_permits(1);
+        host.workload_stop(WorkloadStopRequest {
+            workload_id: "stop-retry".into(),
+        })
+        .await?;
+        host.wait_for_workload_cleanup().await?;
+        assert_eq!(
+            first
+                .cleanup_successes
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(
+            last.cleanup_attempts
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        #[cfg(feature = "washlet")]
+        assert!(host.acquire_control().is_ok());
+        assert_eq!(
+            host.workload_start(empty_workload_start_request("stop-retry"))
+                .await?
+                .workload_status
+                .workload_state,
+            WorkloadState::Running
+        );
+        host.stop().await
+    }
+
     #[tokio::test]
     async fn interrupted_start_teardown_resumes_without_repeating_completed_unbinds()
     -> anyhow::Result<()> {
@@ -2935,11 +3069,8 @@ mod tests {
             assert!(task.await.is_err());
             assert!(host.workload_reserve("interrupted-teardown").await.is_err());
             first.cleanup_gate.add_permits(1);
-            tokio::time::timeout(
-                Duration::from_secs(1),
-                host.wait_for_workload_start_cleanup(),
-            )
-            .await??;
+            tokio::time::timeout(Duration::from_secs(1), host.wait_for_workload_cleanup())
+                .await??;
             assert_eq!(
                 first
                     .cleanup_successes
@@ -3005,13 +3136,13 @@ mod tests {
                     WorkloadState::Stopping
                 }
             );
-            assert!(host.wait_for_workload_start_cleanup().await.is_err());
+            assert!(host.wait_for_workload_cleanup().await.is_err());
             assert!(host.workload_reserve("retry-teardown").await.is_err());
             host.workload_stop(WorkloadStopRequest {
                 workload_id: "retry-teardown".into(),
             })
             .await?;
-            host.wait_for_workload_start_cleanup().await?;
+            host.wait_for_workload_cleanup().await?;
             assert_eq!(
                 first
                     .cleanup_attempts
@@ -3075,11 +3206,7 @@ mod tests {
             WorkloadState::Error
         );
         // The start's own cleanup failed once; the recovery it left retries it.
-        tokio::time::timeout(
-            Duration::from_secs(1),
-            host.wait_for_workload_start_cleanup(),
-        )
-        .await??;
+        tokio::time::timeout(Duration::from_secs(1), host.wait_for_workload_cleanup()).await??;
         assert_eq!(
             first
                 .cleanup_attempts
