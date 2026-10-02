@@ -51,8 +51,9 @@ removes its workloads when it finishes. Two flags change that:
 - `--reuse-stack` skips the chart install and image builds, so iterating on a
   scenario takes seconds.
 
-By default the chart runs the released images for its `appVersion`. Two flags
-change that:
+By default the chart runs the released images for its `appVersion`. If those
+aren't on ghcr.io yet (a release commit lands before its images do), it runs the
+latest GitHub release instead. Two flags change that:
 
 - `--wasmcloud-version X.Y.Z` runs another release.
 - `--build-local` builds `wash` and `runtime-operator` from the working tree and
