@@ -296,6 +296,7 @@
         groups: docker
         append: true
       when: bench_user.rc == 0
+      notify: restart actions runner
       tags: [k6bench]
 
     - name: Let the bench user stop the Docker daemon
@@ -433,6 +434,15 @@
         name: cpu-performance.service
         enabled: true
       listen: enable cpu-performance
+
+    # The running runner keeps the groups it started with, so jobs wouldn't
+    # see docker until it restarts. svc.sh records its unit name in .service.
+    # Restarting kills an in-flight job: provision while the runner is idle.
+    - name: restart actions runner
+      ansible.builtin.shell: systemctl restart "$(cat /opt/actions-runner/.service)"
+      args:
+        removes: /opt/actions-runner/.service
+      listen: restart actions runner
 
   post_tasks:
     - name: Note pending reboot if cmdline changed

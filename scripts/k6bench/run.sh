@@ -266,7 +266,10 @@ oci_push() {
 push_components() {
   local push_to="$1" pull_from="$2" name wasm tag
   log "building bench components"
-  (cd "$here/components" && cargo build --release --target wasm32-wasip2 --quiet >&2)
+  # Pin the target dir: a CARGO_TARGET_DIR (bench host CI sets one) would
+  # otherwise move the wasm out from under the path below.
+  (cd "$here/components" && cargo build --release --target wasm32-wasip2 \
+    --target-dir "$here/components/target" --quiet >&2)
   for name in hello relay; do
     wasm="$here/components/target/wasm32-wasip2/release/k6bench_${name}.wasm"
     tag="$(sha256 "$wasm")"
