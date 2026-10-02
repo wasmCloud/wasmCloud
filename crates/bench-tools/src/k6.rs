@@ -266,18 +266,42 @@ impl Run {
     /// Dropped iterations alone don't say so: k6 also drops them when a slow
     /// system ties up every VU, and that is wasmCloud's result to publish
     /// (`sustained` already fails the SLO for it). Unpinned, k6 can use any
-    /// core, so there is no ceiling to check.
+    /// core, so there is no ceiling to check. A stress run is judged only up
+    /// to the end of its knee step: saturating on a later step doesn't void
+    /// numbers measured before it.
     pub fn generator_saturated(&self) -> bool {
         let k6_cpu = self
-            .peak_cpu(|name| name.ends_with("-k6"), GENERATOR_WINDOW_S)
+            .peak_cpu(
+                |name| name.ends_with("-k6"),
+                GENERATOR_WINDOW_S,
+                self.knee_step_end(),
+            )
             .or(self.meta.k6_cpu_cores);
         self.meta.pinned && k6_cpu.is_some_and(|c| c > GENERATOR_CPU_CEILING)
     }
 
+    /// When a stress run's knee step ended. Steps run back to back after
+    /// warm-up (see `profiles.js`); without a knee every step counts.
+    fn knee_step_end(&self) -> u64 {
+        let Some(knee) = self.max_sustainable().1 else {
+            return u64::MAX;
+        };
+        let steps: f64 = self
+            .steps()
+            .iter()
+            .take_while(|s| s.offered_rps <= knee)
+            .filter_map(|s| self.summary.scenarios.get(&s.name))
+            .map(|shape| shape.duration_s)
+            .sum();
+        self.meta.k6_started + parse_seconds(&self.meta.warmup).unwrap_or(0) + steps as u64
+    }
+
     /// Highest mean CPU (cores) of the matching samples over any `window_s`
-    /// stretch of the measured window; the whole-window mean if it's shorter.
-    pub fn peak_cpu(&self, pick: impl Fn(&str) -> bool, window_s: u64) -> Option<f64> {
-        let window = self.measured_samples(pick);
+    /// stretch of the measured window before `until`; the whole-window mean
+    /// if it's shorter.
+    pub fn peak_cpu(&self, pick: impl Fn(&str) -> bool, window_s: u64, until: u64) -> Option<f64> {
+        let mut window = self.measured_samples(pick);
+        window.retain(|s| s.ts < until);
         let (first, last) = (window.first()?.ts, window.last()?.ts);
         if last - first + 1 < window_s {
             return Some(window.iter().map(|s| s.cpu_cores).sum::<f64>() / window.len() as f64);
@@ -614,6 +638,37 @@ mod tests {
             .map(|ts| k6(ts, if ts == 1_050 { 1.0 } else { 0.3 }))
             .collect();
         assert!(!run.generator_saturated());
+        Ok(())
+    }
+
+    #[test]
+    fn k6_saturated_past_the_knee_keeps_the_run() -> Result<()> {
+        let mut run = Run::load(&fixture("stress"))?;
+        run.meta.pinned = true;
+        run.meta.k6_cpu_cores = None;
+        // 9.0 ms breaks step_500, so the knee step ends 5 + 30 s in.
+        run.summary.slo_p99_ms = 9.0;
+        let start = run.meta.k6_started;
+        let knee_end = start + 35;
+        let pegged_from = |from: u64| -> Vec<Sample> {
+            (start..start + 185)
+                .map(|ts| Sample {
+                    ts,
+                    name: "k6bench-k6".into(),
+                    cpu_cores: if ts >= from { 0.98 } else { 0.3 },
+                    mem_mib: 50.0,
+                })
+                .collect()
+        };
+        run.samples = pegged_from(knee_end + 30);
+        assert!(!run.generator_saturated(), "pegged only after the knee");
+        run.samples = pegged_from(knee_end - 15);
+        assert!(run.generator_saturated(), "pegged on the knee step");
+
+        // No knee: every step was published, so every step counts.
+        run.summary.slo_p99_ms = 20.0;
+        run.samples = pegged_from(start + 150);
+        assert!(run.generator_saturated());
         Ok(())
     }
 
