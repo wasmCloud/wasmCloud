@@ -2629,33 +2629,55 @@ type PendingBinding = (Arc<dyn HostPlugin>, HashSet<WitInterface>);
 /// The host retains this journal when a start is cancelled, until teardown
 /// succeeds; a later stop can retry a failed cleanup without reusing its ID.
 #[derive(Clone, Default)]
-pub(crate) struct WorkloadStartResources(Arc<std::sync::Mutex<WorkloadStartResourceState>>);
+pub(crate) struct WorkloadStartResources {
+    state: Arc<std::sync::Mutex<WorkloadStartResourceState>>,
+    release_lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PendingHttpUnbind {
+    Workload,
+    ServiceHttp,
+    ServiceMessaging,
+}
 
 #[derive(Clone, Default)]
 struct WorkloadStartResourceState {
-    bindings: Vec<PendingBinding>,
+    bindings: Vec<Option<PendingBinding>>,
     resolved: Option<ResolvedWorkload>,
+    http_unbinds: Vec<PendingHttpUnbind>,
 }
 
 impl WorkloadStartResources {
     fn binding(&self, plugin: Arc<dyn HostPlugin>, interfaces: HashSet<WitInterface>) {
-        self.0
+        self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .bindings
-            .push((plugin, interfaces));
+            .push(Some((plugin, interfaces)));
     }
 
     pub(crate) fn resolved(&self, workload: &ResolvedWorkload) {
-        self.0
+        let mut state = self
+            .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .resolved = Some(workload.clone());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.resolved = Some(workload.clone());
+        state.http_unbinds = vec![PendingHttpUnbind::Workload];
+        if workload.service.is_some() {
+            state.http_unbinds.extend([
+                PendingHttpUnbind::ServiceHttp,
+                PendingHttpUnbind::ServiceMessaging,
+            ]);
+        }
     }
 
     pub(crate) async fn release(&self, workload_id: &str) -> anyhow::Result<()> {
+        // Record each successful step before another await, so failed or
+        // cancelled cleanup resumes without repeating completed callbacks.
+        let _release = self.release_lock.lock().await;
         let state = self
-            .0
+            .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
@@ -2666,30 +2688,69 @@ impl WorkloadStartResources {
                 component.instances.close();
             }
             if let Some(handler) = resolved.http_handler.handler() {
-                // Both callbacks tolerate an ID that was never registered.
-                if let Err(error) = handler.on_workload_unbind(workload_id).await {
-                    failure = Some(error);
-                }
-                if resolved.service.is_some() {
-                    if let Err(error) = handler.on_service_http_unbind(workload_id).await {
-                        failure = Some(error);
+                // Each hook tolerates an ID that was never registered.
+                for step in state.http_unbinds {
+                    let result = match step {
+                        PendingHttpUnbind::Workload => {
+                            handler.on_workload_unbind(workload_id).await
+                        }
+                        PendingHttpUnbind::ServiceHttp => {
+                            handler.on_service_http_unbind(workload_id).await
+                        }
+                        PendingHttpUnbind::ServiceMessaging => {
+                            handler
+                                .on_trigger_service_messaging_unbind(workload_id)
+                                .await
+                        }
+                    };
+                    match result {
+                        Ok(()) => self
+                            .state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .http_unbinds
+                            .retain(|pending| *pending != step),
+                        Err(error) => failure = Some(error),
                     }
-                    if let Err(error) = handler
-                        .on_trigger_service_messaging_unbind(workload_id)
-                        .await
-                    {
-                        failure = Some(error);
-                    }
                 }
+            } else {
+                self.state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .http_unbinds
+                    .clear();
+            }
+            let mut pending = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if pending.http_unbinds.is_empty() {
+                pending.resolved = None;
             }
         }
-        for (plugin, interfaces) in state.bindings.iter().rev() {
-            if let Err(error) = plugin
+        for (index, binding) in state.bindings.iter().enumerate().rev() {
+            let Some((plugin, interfaces)) = binding else {
+                continue;
+            };
+            match plugin
                 .on_workload_unbind(workload_id, WitInterfaces::new(interfaces))
                 .await
             {
-                warn!(plugin_id = plugin.id(), workload_id, %error, "cancelled workload cleanup failed");
-                failure = Some(error);
+                Ok(()) => {
+                    if let Some(pending) = self
+                        .state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .bindings
+                        .get_mut(index)
+                    {
+                        *pending = None;
+                    }
+                }
+                Err(error) => {
+                    warn!(plugin_id = plugin.id(), workload_id, %error, "cancelled workload cleanup failed");
+                    failure = Some(error);
+                }
             }
         }
         match failure {
@@ -3043,8 +3104,13 @@ impl UnresolvedWorkload {
                     match declared.resolve_by_name(&requested_interfaces, &schema, &narrows) {
                         Ok(resolved) => resolved,
                         Err(e) => {
-                            unbind_all(self.id(), &bound_plugins_with_interfaces, "binding policy")
-                                .await;
+                            unbind_all(
+                                self.id(),
+                                &bound_plugins_with_interfaces,
+                                "binding policy",
+                                cleanup,
+                            )
+                            .await;
                             bail!(e.context(format!(
                                 "workload {} cannot bind plugin '{plugin_id}'",
                                 self.id()
@@ -3091,8 +3157,13 @@ impl UnresolvedWorkload {
                         // Plugins bind in id order, so earlier ones are already
                         // holding state — a connection, a subscription — for a
                         // workload that is not going to deploy.
-                        unbind_all(self.id(), &bound_plugins_with_interfaces, "binding policy")
-                            .await;
+                        unbind_all(
+                            self.id(),
+                            &bound_plugins_with_interfaces,
+                            "binding policy",
+                            cleanup,
+                        )
+                        .await;
                         bail!(
                             "plugin '{plugin_id}' does not support named instances, but the \
                              workload declares {} bindings for {ns}:{pkg} (named: {}). Each \
@@ -3132,12 +3203,13 @@ impl UnresolvedWorkload {
                         "failed to bind plugin to workload"
                     );
                     // Clean up plugin that just failed first.
-                    if let Err(cleanup_err) = p
-                        .on_workload_unbind(
-                            self.id(),
-                            WitInterfaces::new(&plugin_matched_interfaces),
-                        )
-                        .await
+                    if cleanup.is_none()
+                        && let Err(cleanup_err) = p
+                            .on_workload_unbind(
+                                self.id(),
+                                WitInterfaces::new(&plugin_matched_interfaces),
+                            )
+                            .await
                     {
                         warn!(
                             plugin_id = plugin_id,
@@ -3145,7 +3217,13 @@ impl UnresolvedWorkload {
                             "failed to cleanup partially bound plugin after bind failure"
                         );
                     }
-                    unbind_all(self.id(), &bound_plugins_with_interfaces, "bind failure").await;
+                    unbind_all(
+                        self.id(),
+                        &bound_plugins_with_interfaces,
+                        "bind failure",
+                        cleanup,
+                    )
+                    .await;
                     bail!(e)
                 }
 
@@ -3200,12 +3278,13 @@ impl UnresolvedWorkload {
                         );
                         // This plugin's own on_workload_bind succeeded, so it can hold a state until unbind.
                         // Go ahead and unbind immediately before the completed plugins.
-                        if let Err(cleanup_err) = p
-                            .on_workload_unbind(
-                                self.id(),
-                                WitInterfaces::new(&plugin_matched_interfaces),
-                            )
-                            .await
+                        if cleanup.is_none()
+                            && let Err(cleanup_err) = p
+                                .on_workload_unbind(
+                                    self.id(),
+                                    WitInterfaces::new(&plugin_matched_interfaces),
+                                )
+                                .await
                         {
                             warn!(
                                 plugin_id = plugin_id,
@@ -3217,6 +3296,7 @@ impl UnresolvedWorkload {
                             self.id(),
                             &bound_plugins_with_interfaces,
                             "component bind failure",
+                            cleanup,
                         )
                         .await;
                         bail!(e)
@@ -3265,6 +3345,7 @@ impl UnresolvedWorkload {
                     self.id(),
                     &bound_plugins_with_interfaces,
                     "unmatched interfaces",
+                    cleanup,
                 )
                 .await;
                 bail!(
@@ -3369,7 +3450,9 @@ impl UnresolvedWorkload {
                 error = ?e,
                 "failed to link components, unbinding all plugins"
             );
-            let _ = resolved_workload.unbind_all_plugins().await;
+            if cleanup.is_none() {
+                let _ = resolved_workload.unbind_all_plugins().await;
+            }
             bail!(e);
         }
 
@@ -3394,7 +3477,9 @@ impl UnresolvedWorkload {
                 error = ?e,
                 "failed to resolve component volume mounts, unbinding all plugins"
             );
-            let _ = resolved_workload.unbind_all_plugins().await;
+            if cleanup.is_none() {
+                let _ = resolved_workload.unbind_all_plugins().await;
+            }
             bail!(e);
         }
 
@@ -3418,7 +3503,9 @@ impl UnresolvedWorkload {
                         error = ?e,
                         "failed to notify plugin of resolved workload, unbinding all plugins"
                     );
-                    let _ = resolved_workload.unbind_all_plugins().await;
+                    if cleanup.is_none() {
+                        let _ = resolved_workload.unbind_all_plugins().await;
+                    }
                     bail!(e);
                 }
             }
@@ -3435,7 +3522,9 @@ impl UnresolvedWorkload {
                 error = ?e,
                 "failed to notify HTTP handler of resolved workload, unbinding all plugins"
             );
-            let _ = resolved_workload.unbind_all_plugins().await;
+            if cleanup.is_none() {
+                let _ = resolved_workload.unbind_all_plugins().await;
+            }
             bail!(e);
         }
 
@@ -3777,7 +3866,17 @@ fn served_by_host(entry: &WitInterface, world: &WitWorld) -> bool {
 /// successfully keeps tracking a workload that never deploys. Cleanup errors
 /// are logged rather than returned — the caller is already failing, and the
 /// error it has is the one worth reporting.
-async fn unbind_all(workload_id: &str, bound: &[BoundPluginWithInterfaces], reason: &str) {
+async fn unbind_all(
+    workload_id: &str,
+    bound: &[BoundPluginWithInterfaces],
+    reason: &str,
+    cleanup: Option<&WorkloadStartResources>,
+) {
+    // Native starts roll back through their guard's journal, which records
+    // completed steps. Other callers perform their rollback here.
+    if cleanup.is_some() {
+        return;
+    }
     for (plugin, interfaces, _) in bound.iter().rev() {
         debug!(
             plugin_id = plugin.id(),
@@ -4194,6 +4293,152 @@ mod tests {
             });
             Ok(())
         }
+    }
+
+    struct RetriedHttpCleanup {
+        workload_unbinds: AtomicUsize,
+        service_http_unbinds: AtomicUsize,
+        messaging_unbinds: AtomicUsize,
+        service_http_entered: tokio::sync::Notify,
+        service_http_gate: tokio::sync::Semaphore,
+        fail_service_http: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait]
+    impl crate::host::http::HostHandler for RetriedHttpCleanup {
+        async fn start(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn port(&self) -> u16 {
+            0
+        }
+
+        async fn on_workload_resolved(
+            &self,
+            _workload: &ResolvedWorkload,
+            _component_id: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn on_workload_unbind(&self, _workload_id: &str) -> anyhow::Result<()> {
+            anyhow::ensure!(
+                self.workload_unbinds.fetch_add(1, Ordering::SeqCst) == 0,
+                "workload already unbound"
+            );
+            Ok(())
+        }
+
+        async fn on_service_http_unbind(&self, _workload_id: &str) -> anyhow::Result<()> {
+            self.service_http_unbinds.fetch_add(1, Ordering::SeqCst);
+            self.service_http_entered.notify_one();
+            let permit = self.service_http_gate.acquire().await?;
+            permit.forget();
+            anyhow::ensure!(
+                !self.fail_service_http.swap(false, Ordering::SeqCst),
+                "service HTTP cleanup failed once"
+            );
+            Ok(())
+        }
+
+        async fn on_trigger_service_messaging_unbind(
+            &self,
+            _workload_id: &str,
+        ) -> anyhow::Result<()> {
+            anyhow::ensure!(
+                self.messaging_unbinds.fetch_add(1, Ordering::SeqCst) == 0,
+                "messaging already unbound"
+            );
+            Ok(())
+        }
+
+        fn outgoing_request(
+            &self,
+            workload_id: &str,
+            request: hyper::Request<wasmtime_wasi_http::WasiBody>,
+            options: Option<wasmtime_wasi_http::RequestOptions>,
+            fut: crate::host::http::RequestIoFuture,
+            allowed_hosts: &[crate::host::allowed_hosts::AllowedHost],
+        ) -> crate::host::http::SendFuture {
+            crate::host::http::NullServer::default().outgoing_request(
+                workload_id,
+                request,
+                options,
+                fut,
+                allowed_hosts,
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn start_cleanup_retries_only_unfinished_http_hooks() -> anyhow::Result<()> {
+        for cancel in [false, true] {
+            let handler = Arc::new(RetriedHttpCleanup {
+                workload_unbinds: AtomicUsize::new(0),
+                service_http_unbinds: AtomicUsize::new(0),
+                messaging_unbinds: AtomicUsize::new(0),
+                service_http_entered: tokio::sync::Notify::new(),
+                service_http_gate: tokio::sync::Semaphore::new(if cancel { 0 } else { 2 }),
+                fail_service_http: std::sync::atomic::AtomicBool::new(!cancel),
+            });
+            let engine = wasmtime::Engine::default();
+            let service = WorkloadService::new(
+                "http-cleanup",
+                "http-cleanup",
+                "test",
+                Component::new(&engine, wat::parse_str("(component)")?)?,
+                Linker::new(&engine),
+                vec![],
+                LocalResources::default(),
+                0,
+                Arc::default(),
+            );
+            let host_handler: Arc<dyn crate::host::http::HostHandler> = handler.clone();
+            let resolved = UnresolvedWorkload::new(
+                "http-cleanup",
+                "http-cleanup",
+                "test",
+                Some(service),
+                [],
+                vec![],
+            )
+            .resolve(
+                None,
+                &crate::plugin::PluginBindings::default(),
+                &crate::host::HostRef::from_handler(&host_handler),
+                &crate::observability::Meters::default(),
+            )
+            .await?;
+            let resources = WorkloadStartResources::default();
+            resources.resolved(&resolved);
+            if cancel {
+                let task = tokio::spawn({
+                    let resources = resources.clone();
+                    async move { resources.release("http-cleanup").await }
+                });
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    handler.service_http_entered.notified(),
+                )
+                .await?;
+                assert_eq!(handler.workload_unbinds.load(Ordering::SeqCst), 1);
+                task.abort();
+                assert!(task.await.is_err());
+                handler.service_http_gate.add_permits(1);
+            } else {
+                assert!(resources.release("http-cleanup").await.is_err());
+                assert_eq!(handler.messaging_unbinds.load(Ordering::SeqCst), 1);
+            }
+            resources.release("http-cleanup").await?;
+            resources.release("http-cleanup").await?;
+            assert_eq!(handler.workload_unbinds.load(Ordering::SeqCst), 1);
+            assert_eq!(handler.service_http_unbinds.load(Ordering::SeqCst), 2);
+            assert_eq!(handler.messaging_unbinds.load(Ordering::SeqCst), 1);
+        }
+        Ok(())
     }
 
     /// Load a test fixture wasm file at runtime rather than compile time.

@@ -23,13 +23,21 @@ const CLEANUP_INTERVAL: Duration = Duration::from_secs(300);
 const CLEANUP_AGE: Duration = Duration::from_secs(3600);
 
 const CONTROL_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
-const ATTACHMENT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 const CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Maximum accepted start commands, including starts waiting for a native permit.
 pub const MAX_PENDING_STARTS: usize = 64;
 const MAX_PENDING_QUERIES: usize = 64;
 const MAX_PENDING_REPLIES: usize = MAX_PENDING_STARTS + MAX_PENDING_QUERIES;
+
+/// Covers every bounded shutdown step, including cleanup grace and scheduling slack.
+fn attachment_shutdown_timeout() -> Duration {
+    CONTROL_IO_TIMEOUT * 2
+        + COMMAND_DRAIN_TIMEOUT
+        + COMMAND_ABORT_TIMEOUT
+        + crate::timeouts::plugin_stop()
+        + Duration::from_secs(2)
+}
 
 /// Built-in workload operations on the same host as the control loop.
 /// A handler can add policy or logging and then delegate to these methods.
@@ -274,14 +282,13 @@ impl AttachedHostControl {
         {
             let _ = tx.send(());
         }
-        match tokio::time::timeout(ATTACHMENT_SHUTDOWN_TIMEOUT, self.stopped()).await {
+        let timeout = attachment_shutdown_timeout();
+        match tokio::time::timeout(timeout, self.stopped()).await {
             Ok(result) => result,
             Err(_) => {
                 self.abort.abort();
                 let _ = tokio::time::timeout(COMMAND_ABORT_TIMEOUT, self.stopped()).await;
-                anyhow::bail!(
-                    "attached host control did not stop within {ATTACHMENT_SHUTDOWN_TIMEOUT:?}"
-                );
+                anyhow::bail!("attached host control did not stop within {timeout:?}");
             }
         }
     }
@@ -2010,6 +2017,39 @@ mod tests {
         second.await?;
         channel.shutdown().await?;
         channel.stopped().await
+    }
+
+    #[tokio::test]
+    async fn attachment_shutdown_honors_the_configured_plugin_cleanup_budget() -> anyhow::Result<()>
+    {
+        const CHILD: &str = "WASH_TEST_ATTACHMENT_SHUTDOWN_BUDGET_CHILD";
+        if std::env::var(CHILD).as_deref() != Ok("1") {
+            // Timeout accessors cache environment settings; use a fresh process
+            // so this override cannot affect other tests running concurrently.
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args(["--exact", "washlet::tests::attachment_shutdown_honors_the_configured_plugin_cleanup_budget", "--nocapture"])
+                .env(CHILD, "1")
+                .env("WASH_PLUGIN_STOP_TIMEOUT_SECS", "20")
+                .output()?;
+            anyhow::ensure!(
+                output.status.success(),
+                "shutdown budget child test failed: {} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(());
+        }
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            shutdown_rx.await?;
+            // Longer than the former fixed 15-second attachment timeout,
+            // but within the configured native-start cleanup budget.
+            tokio::time::sleep(Duration::from_secs(16)).await;
+            Ok(())
+        });
+        let control = AttachedHostControl::new(shutdown_tx, task);
+        control.shutdown().await?;
+        control.stopped().await
     }
 
     struct NotifyOnDrop(Option<oneshot::Sender<()>>);

@@ -41,9 +41,11 @@ impl CancelledWorkloadStart {
         {
             let mut workloads = workloads.write().await;
             match workloads.get(workload_id) {
-                Some(HostWorkload::Starting(held) | HostWorkload::Stopping(held))
-                    if *held == self.reservation =>
-                {
+                Some(
+                    HostWorkload::Starting(held)
+                    | HostWorkload::Stopping(held)
+                    | HostWorkload::Failing(held, _),
+                ) if *held == self.reservation => {
                     workloads.insert(workload_id.into(), HostWorkload::Stopping(self.reservation));
                 }
                 None => return Ok(()),
