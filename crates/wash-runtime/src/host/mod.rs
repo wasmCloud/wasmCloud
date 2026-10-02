@@ -448,9 +448,13 @@ impl Host {
             .control
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The lease outlives its attachment for as long as a command or a
+        // start begun under it is still running or being cleaned up, so say
+        // that too: the caller may have shut the last attachment down already.
         anyhow::ensure!(
             control.upgrade().is_none(),
-            "host already has an active control attachment"
+            "host already has an active control attachment, or a workload start begun \
+             under the previous one is still running or being cleaned up"
         );
         let lease = Arc::new(HostControlLease);
         *control = Arc::downgrade(&lease);
@@ -1135,6 +1139,8 @@ impl HostApi for Host {
         // A cancelled start may still hold its ID and partial bindings. Wait
         // for or retry its cleanup, then return directly: recovery releases
         // the reservation, leaving no running workload for normal stop handling.
+        // What it can leave is the `Error` of a start that had already
+        // reported its failure, which this stop collects like any other.
         let recovery = self
             .workload_start_recoveries
             .lock()
@@ -1149,6 +1155,15 @@ impl HostApi for Host {
                     &self.workload_start_recoveries,
                 )
                 .await?;
+            {
+                let mut workloads = self.workloads.write().await;
+                if matches!(
+                    workloads.get(&request.workload_id),
+                    Some(HostWorkload::Error(_))
+                ) {
+                    workloads.remove(&request.workload_id);
+                }
+            }
             return Ok(WorkloadStopResponse {
                 workload_status: WorkloadStatus {
                     workload_id: request.workload_id,
@@ -1408,8 +1423,11 @@ impl WorkloadReservation for Host {
                     start_guard.disarm();
                 }
                 // Keep the guard armed so unfinished cleanup stays retryable by a stop.
+                // The caller is still told what failed, so recovery publishes
+                // that reason rather than dropping it with the id.
                 Err(error) => {
                     warn!(workload_id, %error, "failed to release unfinished workload start");
+                    start_guard.retain_failure();
                 }
             }
         }
@@ -3021,6 +3039,75 @@ mod tests {
             host.stop().await?;
         }
         Ok(())
+    }
+
+    /// A start that answered with a failure owes its caller that reason for as
+    /// long as the id is held. When its own cleanup fails and the recovery it
+    /// leaves behind finishes the job, the reason has to survive as the
+    /// workload's `Error` — it is the only place a status can read it from.
+    #[tokio::test]
+    async fn a_failed_start_keeps_its_reason_when_cleanup_needs_a_retry() -> anyhow::Result<()> {
+        let first = Arc::new(ResumableStartPlugin::new("first", 2));
+        first
+            .cleanup_failures
+            .store(1, std::sync::atomic::Ordering::SeqCst);
+        let last = Arc::new(ResumableStartPlugin {
+            resolved_gate: tokio::sync::Semaphore::new(0),
+            ..ResumableStartPlugin::new("last", 1)
+        });
+        let host = Host::builder()
+            .with_plugin(first.clone())?
+            .with_plugin(last.clone())?
+            .build()?
+            .start()
+            .await?;
+        let request = two_plugin_request("retained-failure")?;
+        let task = tokio::spawn({
+            let host = host.clone();
+            async move { host.workload_start(request).await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), last.resolved_entered.notified()).await?;
+        host.fail_workload("retained-failure", "plugin failed during resolution".into())
+            .await;
+        last.resolved_gate.add_permits(1);
+        assert_eq!(
+            task.await??.workload_status.workload_state,
+            WorkloadState::Error
+        );
+        // The start's own cleanup failed once; the recovery it left retries it.
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            host.wait_for_workload_start_cleanup(),
+        )
+        .await??;
+        assert_eq!(
+            first
+                .cleanup_attempts
+                .load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+        let status = host
+            .workload_status(WorkloadStatusRequest {
+                workload_id: "retained-failure".into(),
+            })
+            .await?;
+        assert_eq!(status.workload_status.workload_state, WorkloadState::Error);
+        assert_eq!(
+            status.workload_status.message,
+            "plugin failed during resolution"
+        );
+        host.workload_stop(WorkloadStopRequest {
+            workload_id: "retained-failure".into(),
+        })
+        .await?;
+        assert_eq!(
+            host.workload_start(empty_workload_start_request("retained-failure"))
+                .await?
+                .workload_status
+                .workload_state,
+            WorkloadState::Running
+        );
+        host.stop().await
     }
 
     #[test]

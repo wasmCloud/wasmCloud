@@ -42,7 +42,6 @@ fn attachment_shutdown_timeout() -> Duration {
 /// Built-in workload operations on the same host as the control loop.
 /// A handler can add policy or logging and then delegate to these methods.
 #[derive(Clone)]
-#[non_exhaustive]
 pub struct HostControlDefaults {
     host: Arc<Host>,
     starts: Arc<tokio::sync::Semaphore>,
@@ -90,6 +89,11 @@ impl HostControlDefaults {
 /// the host's start permit; an override that does work before delegating
 /// bounds that work itself. The loop admits at most [`MAX_PENDING_STARTS`]
 /// start tasks, including overrides. Stop and status never wait for a start permit.
+///
+/// A start or status the loop has no room for is not answered: its caller
+/// times out and retries, as it does when the host is unreachable. An error
+/// reply would name a workload this host never claimed, and a status would
+/// report a running workload as failed. A stop is never shed.
 ///
 /// Methods run concurrently and may be cancelled after the shutdown drain.
 /// Keep side effects cancellation-safe; do not detach work from these futures.
@@ -191,11 +195,15 @@ impl AttachedHostControlBuilder {
 
     /// Verify the API subscription with a broker round trip before returning.
     /// The client must publish to `runtime.host.{id}.__control.ready` and
-    /// subscribe to `runtime.host.{id}.>`. Failure leaves the host running.
+    /// subscribe to `runtime.host.{id}.>`, and must receive its own messages:
+    /// one connected with `no_echo` never sees the marker and cannot attach.
+    /// A broker that refuses either permission is reported as a timeout.
+    /// Failure leaves the host running.
     pub async fn attach(self) -> anyhow::Result<AttachedHostControl> {
         self.options.validate()?;
         let control = self.host.acquire_control()?;
-        let (subscription, pending) = subscribe_host(&self.host, &self.nats_client).await?;
+        let (subscription, pending) =
+            subscribe_host(&self.host, &self.nats_client, self.options.startup_timeout).await?;
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let task = spawn_control_loop(
             self.host,
@@ -568,6 +576,9 @@ enum Ended {
     CommandPanicked(tokio::task::JoinError),
     /// The NATS API subscription ended and cannot serve further commands.
     SubscriptionClosed,
+    /// The reply publisher returned while the loop still held its queue, so
+    /// commands would run and never be answered.
+    ReplyPublisherStopped,
 }
 
 pub struct ClusterHost {
@@ -589,6 +600,8 @@ struct HostControlLoopOptions {
     max_concurrent_starts: usize,
     liveness: Option<Arc<crate::host::probes::Liveness>>,
     stop_host: bool,
+    /// How long registration may wait for the broker to echo its marker.
+    startup_timeout: Duration,
 }
 
 impl Default for HostControlLoopOptions {
@@ -602,6 +615,7 @@ impl Default for HostControlLoopOptions {
             max_concurrent_starts: default_max_concurrent_starts(),
             liveness: None,
             stop_host: false,
+            startup_timeout: CONTROL_STARTUP_TIMEOUT,
         }
     }
 }
@@ -649,15 +663,26 @@ async fn verify_subscription(
         .await
         .context("failed to publish host API registration marker")?;
     let mut pending = VecDeque::new();
+    let mut shed = 0usize;
     while let Some(message) = subscription.next().await {
         if message.subject.as_str() == subject && message.payload.as_ref() == marker.as_bytes() {
+            if shed > 0 {
+                warn!(
+                    shed,
+                    "dropped commands that arrived during host API registration; \
+                     their callers will retry"
+                );
+            }
             return Ok(pending);
         }
-        anyhow::ensure!(
-            pending.len() < MAX_PENDING_REPLIES,
-            "too many requests during host API registration"
-        );
-        pending.push_back(message);
+        // Shed the way the running loop does rather than fail the
+        // registration: a busy control plane is no reason to refuse to attach.
+        // Stops are kept, because nothing retries one that goes unanswered.
+        if pending.len() < MAX_PENDING_REPLIES || command_name(&message) == "workload.stop" {
+            pending.push_back(message);
+        } else {
+            shed += 1;
+        }
     }
     anyhow::bail!("host API subscription closed during registration")
 }
@@ -681,18 +706,31 @@ fn control_interval(interval: Duration) -> tokio::time::Interval {
 async fn subscribe_host(
     host: &Host,
     nats_client: &async_nats::Client,
+    timeout: Duration,
 ) -> anyhow::Result<(async_nats::Subscriber, VecDeque<async_nats::Message>)> {
-    tokio::time::timeout(CONTROL_STARTUP_TIMEOUT, async {
+    tokio::time::timeout(timeout, async {
         let mut subscription = nats_client
             .subscribe(host_subject(host.id()))
             .await
             .context("failed to subscribe for API requests")?;
-        let pending = verify_subscription(&mut subscription, nats_client, host.id()).await
-            .context("failed to verify host API subscription; check subscribe and registration-marker publish permissions")?;
+        let pending = verify_subscription(&mut subscription, nats_client, host.id())
+            .await
+            .context("failed to verify host API subscription")?;
         Ok((subscription, pending))
     })
     .await
-    .context("timed out registering host API subscription")?
+    // A broker that refuses the SUB or the marker says so on the connection,
+    // not to this call, so a refusal looks the same from here as a marker that
+    // never comes back. Name every cause the caller can act on.
+    .with_context(|| {
+        format!(
+            "timed out registering host API subscription after {timeout:?}; check that the \
+             NATS client is connected, may subscribe to `{}` and publish to `{}`, and was \
+             not connected with `no_echo`",
+            host_subject(host.id()),
+            control_ready_subject(host.id()),
+        )
+    })?
 }
 
 fn spawn_control_loop(
@@ -713,6 +751,7 @@ fn spawn_control_loop(
         max_concurrent_starts,
         liveness,
         stop_host,
+        startup_timeout: _,
     } = options;
     let host_id = host.id().to_string();
     tokio::task::spawn(async move {
@@ -736,7 +775,7 @@ fn spawn_control_loop(
         let start_slots = Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_STARTS));
         let query_slots = Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_QUERIES));
         // One publisher and a bounded queue prevent disconnected NATS from
-        // turning rejected requests into unbounded reply tasks.
+        // turning answered commands into unbounded reply tasks.
         let (replies, mut reply_rx) = tokio::sync::mpsc::channel::<ApiReply>(MAX_PENDING_REPLIES);
         let reply_client = Arc::clone(&nats_client);
         let mut publisher = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
@@ -747,6 +786,9 @@ fn spawn_control_loop(
             }
         }));
         let mut publisher_finished = false;
+        // Whether the last start or status found no room, so a run of shed
+        // commands is reported once rather than once each.
+        let mut shedding = false;
 
         // Read once. Nothing changes the host's config after it is
         // built, so a host with no cache directory has none for its
@@ -887,7 +929,7 @@ fn spawn_control_loop(
                             publisher_finished = true;
                             return Some(match finished {
                                 Err(error) => Ended::CommandPanicked(error),
-                                Ok(()) => Ended::SubscriptionClosed,
+                                Ok(()) => Ended::ReplyPublisherStopped,
                             });
                         }
 
@@ -914,29 +956,59 @@ fn spawn_control_loop(
                             // a start claims the id before it fetches anything,
                             // and a stop that finds the claim hands the teardown
                             // back to the start holding it.
-                            let slots = if command_name(&msg) == "workload.start" {
+                            let command = command_name(&msg);
+                            let slots = if command == "workload.start" {
                                 &start_slots
                             } else {
                                 &query_slots
                             };
-                            let Ok(slot) = Arc::clone(slots).try_acquire_owned() else {
-                                if let Some(reply) = busy_reply(&msg) {
-                                    // Once this queue is full, callers time out rather
-                                    // than consuming more memory during an outage.
-                                    let _ = replies.try_send(reply);
+                            let slot = match Arc::clone(slots).try_acquire_owned() {
+                                Ok(slot) => {
+                                    shedding = false;
+                                    Some(slot)
                                 }
-                                return None;
+                                // A stop always runs. Nothing retries one that
+                                // was turned away, so shedding it would leave
+                                // its workload running with nobody tracking it.
+                                Err(_) if command == "workload.stop" => None,
+                                // Shed without a reply, so the caller times out
+                                // and retries. Any typed reply would be read as
+                                // the workload's own state: an errored start
+                                // naming an id this host never claimed, or a
+                                // running workload reported as failed.
+                                Err(_) => {
+                                    // Once per episode at `warn`: a flood is
+                                    // what fills the slots, and a line for each
+                                    // command in it would bury the first.
+                                    if shedding {
+                                        debug!(subject = %msg.subject, "host control is busy; dropping command");
+                                    } else {
+                                        warn!(
+                                            subject = %msg.subject,
+                                            "host control is busy; dropping commands for their callers to retry"
+                                        );
+                                        shedding = true;
+                                    }
+                                    return None;
+                                }
                             };
                             let replies = replies.clone();
                             let defaults = defaults.clone();
                             let handler = handler.clone();
                             let host_group = host_group.clone();
                             commands.spawn(async move {
-                                let _slot = slot;
                                 match handle_command(&defaults, &msg, handler.as_deref(), host_group.as_deref()).await {
                                     Ok(resp_bytes) => {
                                         if let Some(reply_to) = msg.reply {
-                                            let _ = replies.send((reply_to, resp_bytes)).await;
+                                            if slot.is_some() {
+                                                let _ = replies.send((reply_to, resp_bytes)).await;
+                                            } else {
+                                                // Without a slot nothing bounds
+                                                // how many of these wait on a
+                                                // full queue, so the reply goes
+                                                // out now or not at all.
+                                                let _ = replies.try_send((reply_to, resp_bytes));
+                                            }
                                         }
                                     }
                                     Err(e) => {
@@ -977,9 +1049,6 @@ fn spawn_control_loop(
             .await
             .context("timed out unsubscribing from API requests")
             .and_then(|result| result.context("failed to unsubscribe from API requests"));
-        if let Err(e) = &unsubscribed {
-            error!("failed to unsubscribe from API requests: {e}");
-        }
 
         // Let accepted commands finish and replies publish within the drain
         // budget. Queued native starts release their IDs now admission is closed.
@@ -1079,38 +1148,54 @@ fn spawn_control_loop(
             Ok(())
         };
 
+        // Everything shutdown left unfinished, in the order it limits what the
+        // host's owner can do next: work that may still be running, cleanup
+        // that needs a retry, then the control plane. All of it is reported
+        // together, so a broker outage cannot hide a command still unwinding.
+        let mut failures = Vec::new();
+        if commands_still_running {
+            failures.push("command tasks did not unwind after abort".to_string());
+        } else if drained.is_err() {
+            failures.push(
+                "host control tasks exceeded the shutdown drain and were aborted".to_string(),
+            );
+        }
+        if let Some(error) = command_failure {
+            failures.push(format!("command task failed during shutdown: {error}"));
+        }
+        if let Some(error) = publisher_failure {
+            failures.push(format!("reply publisher failed during shutdown: {error}"));
+        }
+        for result in [recovered, unsubscribed, flushed] {
+            if let Err(error) = result {
+                failures.push(format!("{error:#}"));
+            }
+        }
+        let incomplete = (!failures.is_empty()).then(|| failures.join("; "));
+
+        // Only a requested shutdown of an attached host returns these to its
+        // owner; every other exit reports something else, so say them here.
+        if let Some(incomplete) = &incomplete
+            && (stop_host || !matches!(ended, Ended::Requested))
+        {
+            warn!(reason = %incomplete, "host control shutdown was incomplete");
+        }
+
         // Report the exit reason and shutdown failures according to host ownership.
         match ended {
             Ended::Requested => {
                 stopped?;
-                if stop_host {
+                match incomplete {
+                    // Attached hosts stay running; surface failures to their owner.
+                    Some(incomplete) if !stop_host => Err(anyhow::Error::msg(incomplete)),
                     // The owned host stopped cleanly; control-plane errors
-                    // during shutdown are logged without failing the exit.
-                    if let Err(e) = &flushed {
-                        error!(error = %e, "failed to flush host control shutdown");
-                    }
-                    return Ok(());
+                    // during shutdown do not fail the exit.
+                    _ => Ok(()),
                 }
-
-                // Attached hosts stay running; surface failures to their owner.
-                unsubscribed?;
-                flushed?;
-                if let Some(error) = command_failure {
-                    return Err(anyhow!("command task failed during shutdown: {error}"));
-                }
-                if let Some(error) = publisher_failure {
-                    return Err(anyhow!("reply publisher failed during shutdown: {error}"));
-                }
-                recovered?;
-                if commands_still_running {
-                    Err(anyhow!("command tasks did not unwind after abort"))
-                } else if drained.is_err() {
-                    Err(anyhow!(
-                        "host control tasks exceeded the shutdown drain and were aborted"
-                    ))
-                } else {
-                    Ok(())
-                }
+            }
+            Ended::ReplyPublisherStopped => {
+                stopped?;
+                Err(anyhow!("host API reply publisher stopped"))
             }
             Ended::IngressStopped => {
                 // An owned host is stopped first. An attached host's
@@ -1182,7 +1267,8 @@ impl ClusterHost {
             ..HostControlLoopOptions::default()
         };
         options.validate()?;
-        let (subscription, pending) = match subscribe_host(&host, &nats_client).await {
+        let registered = subscribe_host(&host, &nats_client, options.startup_timeout).await;
+        let (subscription, pending) = match registered {
             Ok(subscription) => subscription,
             Err(error) => {
                 if let Err(stop_error) = host.clone().stop().await {
@@ -1384,34 +1470,6 @@ type ApiReply = (async_nats::Subject, Vec<u8>);
 
 fn command_name(msg: &async_nats::Message) -> &str {
     msg.subject.splitn(4, '.').nth(3).unwrap_or_default()
-}
-
-fn busy_reply(msg: &async_nats::Message) -> Option<ApiReply> {
-    #[derive(serde::Deserialize, Default)]
-    struct Identity {
-        #[serde(default, rename = "workloadId", alias = "workload_id")]
-        workload_id: String,
-    }
-    let reply = msg.reply.clone()?;
-    let id = serde_json::from_slice::<Identity>(&msg.payload).unwrap_or_default();
-    let status = Some(command_error(
-        &id.workload_id,
-        "host control is busy; retry this command".into(),
-    ));
-    let bytes = match command_name(msg) {
-        "workload.start" => to_api(&types::v2::WorkloadStartResponse {
-            workload_status: status,
-        }),
-        "workload.stop" => to_api(&types::v2::WorkloadStopResponse {
-            workload_status: status,
-        }),
-        "workload.status" => to_api(&types::v2::WorkloadStatusResponse {
-            workload_status: status,
-        }),
-        _ => return None,
-    }
-    .ok()?;
-    Some((reply, bytes))
 }
 
 #[instrument(level = "debug", skip_all, fields(subject = %msg.subject))]
@@ -2019,7 +2077,9 @@ mod tests {
         channel.stopped().await
     }
 
-    #[tokio::test]
+    // Paused, so the sixteen seconds below cost nothing: only timers are
+    // waited on, and the clock skips to whichever is due first.
+    #[tokio::test(start_paused = true)]
     async fn attachment_shutdown_honors_the_configured_plugin_cleanup_budget() -> anyhow::Result<()>
     {
         const CHILD: &str = "WASH_TEST_ATTACHMENT_SHUTDOWN_BUDGET_CHILD";
@@ -2031,10 +2091,12 @@ mod tests {
                 .env(CHILD, "1")
                 .env("WASH_PLUGIN_STOP_TIMEOUT_SECS", "20")
                 .output()?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // A filter that matches nothing also exits successfully, so a
+            // renamed test or module would otherwise pass here unrun.
             anyhow::ensure!(
-                output.status.success(),
-                "shutdown budget child test failed: {} {}",
-                String::from_utf8_lossy(&output.stdout),
+                output.status.success() && stdout.contains("1 passed"),
+                "shutdown budget child test failed or did not run: {stdout} {}",
                 String::from_utf8_lossy(&output.stderr)
             );
             return Ok(());
@@ -2465,16 +2527,21 @@ mod tests {
 
     /// Reject exactly the permission under test while handling the connection
     /// handshake. A denied SUB must not be mistaken for successful readiness.
+    /// The `Notify` fires when the peer reads a SUB, which is how a test
+    /// learns that registration has begun without guessing how long it takes.
     async fn restricted_nats_peer(
         deny_subscribe: bool,
     ) -> anyhow::Result<(
         Arc<async_nats::Client>,
         tokio_util::task::AbortOnDropHandle<anyhow::Result<()>>,
+        Arc<tokio::sync::Notify>,
     )> {
         use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
         crate::init_crypto();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
+        let subscribed = Arc::new(tokio::sync::Notify::new());
+        let saw_subscribe = Arc::clone(&subscribed);
         let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await?;
             socket
@@ -2490,10 +2557,13 @@ mod tests {
                 let parts: Vec<_> = line.split_whitespace().collect();
                 match parts.first().copied() {
                     Some("PING") => writer.write_all(b"PONG\r\n").await?,
-                    Some("SUB") if deny_subscribe => {
-                        writer
-                            .write_all(b"-ERR 'Permissions Violation for Subscription'\r\n")
-                            .await?;
+                    Some("SUB") => {
+                        saw_subscribe.notify_one();
+                        if deny_subscribe {
+                            writer
+                                .write_all(b"-ERR 'Permissions Violation for Subscription'\r\n")
+                                .await?;
+                        }
                     }
                     Some("PUB") => {
                         let size: usize = parts.last().context("missing payload size")?.parse()?;
@@ -2516,21 +2586,29 @@ mod tests {
                 .connect(format!("nats://{addr}"))
                 .await?,
         );
-        Ok((client, server))
+        Ok((client, server, subscribed))
     }
 
     #[tokio::test]
     async fn denied_control_permissions_fail_registration_and_release_the_lease()
     -> anyhow::Result<()> {
         for deny_subscribe in [true, false] {
-            let (client, _server) = restricted_nats_peer(deny_subscribe).await?;
+            let (client, _server, _) = restricted_nats_peer(deny_subscribe).await?;
             let host = crate::host::HostBuilder::default().build()?.start().await?;
-            let error = AttachedHostControl::builder(host.clone(), client)
+            let mut builder = AttachedHostControl::builder(host.clone(), client);
+            // A refusal only ever shows as the marker not coming back, so the
+            // default wait would be spent in full on each permission.
+            builder.options.startup_timeout = Duration::from_millis(500);
+            let error = builder
                 .attach()
                 .await
                 .err()
                 .context("registration succeeded with denied permissions")?;
-            assert!(format!("{error:#}").contains("timed out"));
+            let error = format!("{error:#}");
+            assert!(error.contains("timed out"));
+            // Nothing else tells the caller a refused permission from a slow
+            // broker, so the message has to name what to check.
+            assert!(error.contains("__control.ready") && error.contains("no_echo"));
             assert!(host.acquire_control().is_ok());
             assert_eq!(host.heartbeat().await?.id, host.id());
             host.stop().await?;
@@ -2541,7 +2619,7 @@ mod tests {
     #[tokio::test]
     async fn cancelling_owned_registration_stops_the_started_ingress() -> anyhow::Result<()> {
         use crate::host::http::{DevRouter, HostHandler as _, Ingress};
-        let (client, _server) = restricted_nats_peer(true).await?;
+        let (client, _server, subscribed) = restricted_nats_peer(true).await?;
         let ingress = Arc::new(
             Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse()?)
                 .build()
@@ -2553,7 +2631,9 @@ mod tests {
             .with_http_handler(ingress.clone())
             .build()?;
         let start = tokio::spawn(cluster.start());
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // The host subscribes only once it has started, so the peer seeing the
+        // SUB is the ingress being up and the start waiting on registration.
+        tokio::time::timeout(Duration::from_secs(5), subscribed.notified()).await?;
         assert!(ingress.stopped().now_or_never().is_none());
         start.abort();
         assert!(start.await.is_err());
@@ -2635,8 +2715,13 @@ mod tests {
         host.stop().await
     }
 
+    /// Counts what the loop let through: starts and statuses together, which
+    /// it bounds, and stops apart, which it never sheds.
     #[derive(Default)]
-    struct CountingReplies(std::sync::atomic::AtomicUsize);
+    struct CountingReplies {
+        accepted: std::sync::atomic::AtomicUsize,
+        stops: std::sync::atomic::AtomicUsize,
+    }
 
     #[async_trait]
     impl HostCommandHandler for CountingReplies {
@@ -2645,7 +2730,16 @@ mod tests {
             _defaults: &HostControlDefaults,
             _request: types::v2::WorkloadStartRequest,
         ) -> anyhow::Result<types::v2::WorkloadStartResponse> {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.accepted
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            anyhow::bail!("test response")
+        }
+        async fn stop(
+            &self,
+            _defaults: &HostControlDefaults,
+            _request: types::v2::WorkloadStopRequest,
+        ) -> anyhow::Result<types::v2::WorkloadStopResponse> {
+            self.stops.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             anyhow::bail!("test response")
         }
         async fn status(
@@ -2653,7 +2747,8 @@ mod tests {
             _defaults: &HostControlDefaults,
             _request: types::v2::WorkloadStatusRequest,
         ) -> anyhow::Result<types::v2::WorkloadStatusResponse> {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.accepted
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             anyhow::bail!("test response")
         }
     }
@@ -2661,7 +2756,8 @@ mod tests {
     #[tokio::test]
     async fn saturated_replies_during_an_outage_bound_tasks_and_keep_the_loop_alive()
     -> anyhow::Result<()> {
-        let (client, server) = restricted_nats_peer(false).await?;
+        const STOPS: usize = 8;
+        let (client, server, _) = restricted_nats_peer(false).await?;
         let host = crate::host::HostBuilder::default().build()?.start().await?;
         let subscription = client.subscribe(host_subject(host.id())).await?;
         client.flush().await?;
@@ -2702,6 +2798,16 @@ mod tests {
             msg.reply = Some("_INBOX.backpressure".into());
             pending.push_back(msg);
         }
+        // Last, so they reach the loop once every slot and the reply queue are
+        // taken by the commands above.
+        for _ in 0..STOPS {
+            let mut msg = command_message(
+                "workload.stop",
+                br#"{"workloadId":"backpressure"}"#.to_vec(),
+            );
+            msg.reply = Some("_INBOX.backpressure".into());
+            pending.push_back(msg);
+        }
         let handler = Arc::new(CountingReplies::default());
         let liveness = crate::host::probes::Liveness::new(Duration::from_millis(100));
         let (tx, rx) = oneshot::channel();
@@ -2722,18 +2828,34 @@ mod tests {
                 },
             ),
         );
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        let accepted = handler.0.load(std::sync::atomic::Ordering::SeqCst);
+        // Every stop ran, though nothing had room for one: a stop turned away
+        // is a workload left running. They were queued last, so this is also
+        // the loop having worked through everything ahead of them.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while handler.stops.load(std::sync::atomic::Ordering::SeqCst) < STOPS {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .context("stops were shed while host control was saturated")?;
+        let accepted = handler.accepted.load(std::sync::atomic::Ordering::SeqCst);
         assert!(accepted > 0);
         assert!(
             accepted <= MAX_PENDING_REPLIES + MAX_PENDING_STARTS + MAX_PENDING_QUERIES + 1,
             "unbounded commands ran while replies were stalled: {accepted}"
         );
-        assert!(
-            liveness
+        // Polled rather than read once: a stalled loop never beats again, while
+        // a healthy one on a loaded machine is merely late.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !liveness
                 .silence()
                 .is_some_and(|silence| silence < Duration::from_millis(100))
-        );
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .context("control loop stopped turning while replies were stalled")?;
         let error = tokio::time::timeout(Duration::from_secs(10), control.shutdown())
             .await?
             .err()

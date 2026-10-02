@@ -85,6 +85,26 @@ async fn nats_endpoint() -> Result<(Option<ContainerAsync<GenericImage>>, String
     })
 }
 
+/// Subscribe and wait for the server to have registered it. `Client::flush`
+/// only writes to the socket, with no acknowledgement from the server, so the
+/// proof is a marker published on the same connection and read back.
+async fn subscribe_registered(
+    client: &async_nats::Client,
+    subject: String,
+) -> Result<async_nats::Subscriber> {
+    let mut subscription = client.subscribe(subject.clone()).await?;
+    let marker = b"test-subscription-registered";
+    client.publish(subject, marker.as_slice().into()).await?;
+    let echoed = tokio::time::timeout(Duration::from_secs(5), subscription.next())
+        .await?
+        .context("subscription closed during registration")?;
+    anyhow::ensure!(
+        echoed.payload.as_ref() == marker,
+        "subscription registration marker was not echoed"
+    );
+    Ok(subscription)
+}
+
 struct TestHarness {
     api_client: async_nats::Client,
     host_id: String,
@@ -157,23 +177,10 @@ impl TestHarnessBuilder {
         let cluster_host = builder.build().context("failed to build cluster host")?;
         let host_id = cluster_host.host().id().to_string();
 
-        // Verify the heartbeat SUB before starting the host. Client::flush
-        // alone only writes to the socket, without a server acknowledgement.
-        let mut heartbeat_sub = api_client
-            .subscribe(heartbeat_subject(&host_id))
+        // Registered before the host starts, so its first heartbeat is seen.
+        let heartbeat_sub = subscribe_registered(&api_client, heartbeat_subject(&host_id))
             .await
             .context("failed to subscribe to heartbeats")?;
-        let marker = b"test-heartbeat-subscription";
-        api_client
-            .publish(heartbeat_subject(&host_id), marker.as_slice().into())
-            .await?;
-        let echoed = tokio::time::timeout(Duration::from_secs(5), heartbeat_sub.next())
-            .await?
-            .context("heartbeat subscription closed during registration")?;
-        anyhow::ensure!(
-            echoed.payload.as_ref() == marker,
-            "heartbeat registration marker was not echoed"
-        );
 
         let (_host, shutdown) = cluster_host
             .start()
@@ -475,8 +482,7 @@ async fn check_attached_control(
     })
     .await?;
     let host_id = host.id().to_string();
-    let mut heartbeats = operator.subscribe(heartbeat_subject(&host_id)).await?;
-    operator.flush().await?;
+    let mut heartbeats = subscribe_registered(&operator, heartbeat_subject(&host_id)).await?;
     let channel = AttachedHostControl::builder(host.clone(), nats.clone())
         .with_host_group("attached-group")
         .with_handler(Arc::new(AttachedPolicy))
@@ -1556,24 +1562,9 @@ async fn pending_starts_are_bounded_and_queries_remain_responsive() -> Result<()
         handler.entered.load(std::sync::atomic::Ordering::SeqCst) == MAX_PENDING_STARTS
     })
     .await?;
-    for _ in 0..MAX_PENDING_STARTS {
-        let msg = tokio::time::timeout(Duration::from_secs(2), responses.next())
-            .await?
-            .context("reply subscription closed")?;
-        let response: v2::WorkloadStartResponse = serde_json::from_slice(&msg.payload)?;
-        let status = status_of(response.workload_status)?;
-        assert_eq!(status.workload_state(), v2::WorkloadState::Error);
-        assert!(status.message.contains("busy"));
-        assert_eq!(
-            host.workload_status(wash_runtime::types::WorkloadStatusRequest {
-                workload_id: status.workload_id,
-            })
-            .await?
-            .workload_status
-            .workload_state,
-            wash_runtime::types::WorkloadState::NotFound
-        );
-    }
+    // Published after the starts on the same connection, so its reply means
+    // the loop has read every one of them — and a stop is answered however
+    // full the loop is.
     let stop: v2::WorkloadStopResponse = rpc(
         &operator,
         rpc_subject(host.id(), "workload.stop"),
@@ -1588,6 +1579,26 @@ async fn pending_starts_are_bounded_and_queries_remain_responsive() -> Result<()
     );
     let beat: v2::HostHeartbeat = rpc(&operator, rpc_subject(host.id(), "heartbeat"), &()).await?;
     assert_eq!(beat.id, host.id());
+    // The starts past the limit were shed without an answer. A reply of any
+    // kind would be read as the workload's own state: the operator records a
+    // start it gets an answer to as placed, and never sends it again.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), responses.next())
+            .await
+            .is_err(),
+        "a start the host had no room for was answered"
+    );
+    for index in MAX_PENDING_STARTS..MAX_PENDING_STARTS * 2 {
+        assert_eq!(
+            host.workload_status(wash_runtime::types::WorkloadStatusRequest {
+                workload_id: format!("bounded-{index}"),
+            })
+            .await?
+            .workload_status
+            .workload_state,
+            wash_runtime::types::WorkloadState::NotFound
+        );
+    }
     handler.gate.add_permits(MAX_PENDING_STARTS);
     for _ in 0..MAX_PENDING_STARTS {
         let msg = tokio::time::timeout(Duration::from_secs(5), responses.next())
@@ -1602,6 +1613,18 @@ async fn pending_starts_are_bounded_and_queries_remain_responsive() -> Result<()
     assert_eq!(
         handler.entered.load(std::sync::atomic::Ordering::SeqCst),
         MAX_PENDING_STARTS
+    );
+    // A caller that timed out on a shed start retries it, and now there is room.
+    handler.gate.add_permits(1);
+    let retried: v2::WorkloadStartResponse = rpc(
+        &operator,
+        rpc_subject(host.id(), "workload.start"),
+        &empty_start_request(&format!("bounded-{MAX_PENDING_STARTS}")),
+    )
+    .await?;
+    assert_eq!(
+        status_of(retried.workload_status)?.workload_state(),
+        v2::WorkloadState::Running
     );
     control.shutdown().await?;
     host.stop().await
