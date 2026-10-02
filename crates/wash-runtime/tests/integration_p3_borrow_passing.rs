@@ -5,14 +5,17 @@
 //! ```text
 //! request -> caller --Token::new--> producer                 (producer owns the token)
 //!            caller --borrow--> middleware --borrow--> consumer --greet()--> producer
+//!            caller --{record, tuple, option}--> middleware --same--> consumer --greet()x3--> producer
+//!            caller --tuple<string, own>--> middleware --same--> consumer --greet()--> producer
 //!            caller --greet()--> producer
 //! ```
 //!
 //! Every borrow that crosses the linker opens a slot in wasmtime's host table
 //! that must close before the import call returns, or wasmtime traps the caller
-//! with "borrow handles still remain at the end of the call". The response body
-//! proves it was one resource throughout: both greetings read `hello world` and
-//! the producer counted exactly two `greet` calls.
+//! with "borrow handles still remain at the end of the call". A handle nested in
+//! a compound param must cross by identity too. The response body proves it was
+//! one resource throughout: every greeting reads `hello world` and the producer
+//! counted exactly five `greet` calls.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -89,14 +92,22 @@ async fn test_p3_borrow_survives_two_linker_hops() -> Result<()> {
     assert!(
         status.is_success(),
         "borrow-passing handler should return 2xx, got {status} (body: {body:?}); \
-         a 5xx here with an empty body is the caller trapping on return from an \
-         import call because a lowered borrow was never released"
+         a 5xx here with an empty body is the caller trapping because a nested \
+         handle did not cross by identity or a lowered borrow was never released"
     );
 
-    // middleware wraps consumer, consumer greets through the producer; the caller then
-    // greets once more itself, so the producer saw two greet calls on the one
-    // token instance.
-    assert_eq!(body, "middleware:consumer:hello world|hello world|greets=2");
+    // middleware wraps consumer, consumer greets through the producer: once for
+    // the plain borrow, three times for the borrows nested in a record, a tuple
+    // and an option, and once on a second token it took ownership of inside a
+    // tuple. The caller then greets once more itself, so the producer saw five
+    // greet calls on the first token.
+    assert_eq!(
+        body,
+        "middleware:consumer:hello world\
+         |middleware:consumer:nested:pair:hello world,hello world,hello world\
+         |middleware:consumer:adopted:hello owned\
+         |hello world|greets=5"
+    );
 
     Ok(())
 }

@@ -10,7 +10,7 @@ mod bindings {
 }
 
 use bindings::exports::wasmcloud::borrow_test::middleware::Guest;
-use bindings::wasmcloud::borrow_test::factory::Token;
+use bindings::wasmcloud::borrow_test::factory::{Lend, Token};
 use bindings::wasmcloud::borrow_test::consumer;
 
 struct Component;
@@ -18,6 +18,17 @@ struct Component;
 impl Guest for Component {
     fn accept(t: &Token) -> String {
         format!("middleware:{}", consumer::accept(t))
+    }
+
+    fn accept_nested(l: Lend<'_>, pair: (String, &Token), maybe: Option<&Token>) -> String {
+        format!(
+            "middleware:{}",
+            consumer::accept_nested(&l, (&pair.0, pair.1), maybe)
+        )
+    }
+
+    fn adopt(t: (String, Token)) -> String {
+        format!("middleware:{}", consumer::adopt(t))
     }
 }
 

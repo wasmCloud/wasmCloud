@@ -6,13 +6,25 @@ interface factory {
         greet: func() -> string;
         greets: func() -> u32;
     }
+
+    /// Lends a `token` from inside a record, so the borrow is nested in a param.
+    record lend {
+        label: string,
+        token: borrow<token>,
+    }
 }
 
 interface consumer {
-    use factory.{token};
+    use factory.{token, lend};
 
     /// Borrows a `token` and calls a method on it.
     accept: func(t: borrow<token>) -> string;
+
+    /// Borrows `token` nested in a record, a tuple and an option.
+    accept-nested: func(l: lend, pair: tuple<string, borrow<token>>, maybe: option<borrow<token>>) -> string;
+
+    /// Takes ownership of a `token` nested in a tuple.
+    adopt: func(t: tuple<string, token>) -> string;
 }
 
 world consumer-component {
