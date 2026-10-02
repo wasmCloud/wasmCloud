@@ -138,6 +138,34 @@ local_routing() { [ "$routing" = local ] && echo true || echo false; }
 
 chart_version() { sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$repo/charts/runtime-operator/Chart.yaml"; }
 
+# HTTP status of ghcr.io/wasmcloud/<image>:<tag>'s manifest, 000 if unreachable.
+ghcr_status() {
+  local token
+  token="$(curl -fsS -m 10 "https://ghcr.io/token?scope=repository:wasmcloud/$1:pull" |
+    sed -n 's/.*"token":"\([^"]*\)".*/\1/p')" || true
+  curl -s -o /dev/null -w '%{http_code}' -m 10 -I -H "Authorization: Bearer $token" \
+    -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json' \
+    "https://ghcr.io/v2/wasmcloud/$1/manifests/$2" || true
+}
+
+# Sets wasmcloud_version unless --wasmcloud-version did: the chart's
+# appVersion, or the latest release while a release commit's images aren't
+# published yet.
+resolve_version() {
+  [ -z "$wasmcloud_version" ] || return 0
+  wasmcloud_version="$(chart_version)"
+  [ "$(ghcr_status wash "$wasmcloud_version")" = 404 ] ||
+    [ "$(ghcr_status runtime-operator "$wasmcloud_version")" = 404 ] || return 0
+  local latest
+  latest="$(curl -fsS -m 10 ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
+    https://api.github.com/repos/wasmCloud/wasmCloud/releases/latest |
+    sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p')" || true
+  [ -n "$latest" ] ||
+    die "images for chart appVersion $wasmcloud_version aren't published; pass --wasmcloud-version"
+  log "images for chart appVersion $wasmcloud_version aren't published yet; using latest release $latest"
+  wasmcloud_version="$latest"
+}
+
 # --- kind stack -------------------------------------------------------------
 
 ensure_registry() {
@@ -217,7 +245,8 @@ stack_up() {
   ensure_registry
   [ "$pin" = 1 ] && pin_nodes
 
-  local version="${wasmcloud_version:-$(chart_version)}"
+  resolve_version
+  local version="$wasmcloud_version"
   image_args="--set runtime.image.tag=$version --set operator.image.tag=$version"
   host_args="--set runtime.hostGroups[0].http.localBypassRouting=$(local_routing)"
   wash_image="ghcr.io/wasmcloud/wash:$version"
@@ -256,7 +285,7 @@ oci_push() {
   [ "$target" = kind ] && net_arg="--network kind"
   # shellcheck disable=SC2086
   docker run --rm $net_arg -v "$(dirname "$wasm"):/w:ro" \
-    "ghcr.io/wasmcloud/wash:$(chart_version)" \
+    "ghcr.io/wasmcloud/wash:$wasmcloud_version" \
     oci push --insecure "$ref" "/w/$(basename "$wasm")" >/dev/null
 }
 
@@ -265,6 +294,7 @@ oci_push() {
 # the same tag would not take effect.
 push_components() {
   local push_to="$1" pull_from="$2" name wasm tag
+  resolve_version
   log "building bench components"
   # Pin the target dir: a CARGO_TARGET_DIR (bench host CI sets one) would
   # otherwise move the wasm out from under the path below.
