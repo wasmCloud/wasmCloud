@@ -723,6 +723,9 @@ pub struct ResolvedWorkload {
     released: Arc<std::sync::atomic::AtomicBool>,
     /// The requested host [`WitInterface`]s to resolve this workload
     host_interfaces: Vec<WitInterface>,
+    /// Native bindings retained after a successful start so a cancelled stop
+    /// can resume the same per-plugin teardown journal.
+    teardown_bindings: Arc<[PendingBinding]>,
     /// TLS provider override for `wasi:tls` client connections in this workload.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -2625,12 +2628,12 @@ pub struct UnresolvedWorkload {
 
 type PendingBinding = (Arc<dyn HostPlugin>, HashSet<WitInterface>);
 
-/// Resources a native start has acquired, recorded before each binding await.
-/// The host retains this journal when a start is cancelled, until teardown
+/// Resources a native workload has acquired, recorded before each binding await.
+/// The host retains this journal when a start or stop is cancelled, until teardown
 /// succeeds; a later stop can retry a failed cleanup without reusing its ID.
 #[derive(Clone, Default)]
-pub(crate) struct WorkloadStartResources {
-    state: Arc<std::sync::Mutex<WorkloadStartResourceState>>,
+pub(crate) struct WorkloadResources {
+    state: Arc<std::sync::Mutex<WorkloadResourceState>>,
     release_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -2642,13 +2645,34 @@ enum PendingHttpUnbind {
 }
 
 #[derive(Clone, Default)]
-struct WorkloadStartResourceState {
+struct WorkloadResourceState {
     bindings: Vec<Option<PendingBinding>>,
     resolved: Option<ResolvedWorkload>,
     http_unbinds: Vec<PendingHttpUnbind>,
 }
 
-impl WorkloadStartResources {
+impl WorkloadResources {
+    pub(crate) fn commit(&self, workload: &mut ResolvedWorkload) {
+        workload.teardown_bindings = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .bindings
+            .iter()
+            .flatten()
+            .cloned()
+            .collect();
+    }
+
+    pub(crate) fn for_teardown(workload: &ResolvedWorkload) -> Self {
+        let resources = Self::default();
+        for (plugin, interfaces) in workload.teardown_bindings.iter() {
+            resources.binding(Arc::clone(plugin), interfaces.clone());
+        }
+        resources.resolved(workload);
+        resources
+    }
+
     fn binding(&self, plugin: Arc<dyn HostPlugin>, interfaces: HashSet<WitInterface>) {
         self.state
             .lock()
@@ -2883,7 +2907,7 @@ impl UnresolvedWorkload {
         &mut self,
         plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
         plugin_bindings: &crate::plugin::PluginBindings,
-        cleanup: Option<&WorkloadStartResources>,
+        cleanup: Option<&WorkloadResources>,
     ) -> anyhow::Result<Vec<(Arc<dyn HostPlugin>, Vec<String>)>> {
         // Track bound plugins with their matched interfaces for cleanup on failure
         let mut bound_plugins_with_interfaces: Vec<BoundPluginWithInterfaces> = Vec::new();
@@ -3398,7 +3422,7 @@ impl UnresolvedWorkload {
         plugin_bindings: &crate::plugin::PluginBindings,
         host: &crate::host::HostRef,
         meters: &crate::observability::Meters,
-        cleanup: Option<&WorkloadStartResources>,
+        cleanup: Option<&WorkloadResources>,
     ) -> anyhow::Result<ResolvedWorkload> {
         // Bind to plugins
         let bound_plugins = if let Some(plugins) = plugins {
@@ -3434,6 +3458,7 @@ impl UnresolvedWorkload {
             service_calls: Arc::default(),
             released: Arc::default(),
             host_interfaces: self.host_interfaces,
+            teardown_bindings: Arc::default(),
             http_handler: host.clone(),
             invocation: meters.invocation.clone(),
             #[cfg(feature = "wasi-tls")]
@@ -3870,7 +3895,7 @@ async fn unbind_all(
     workload_id: &str,
     bound: &[BoundPluginWithInterfaces],
     reason: &str,
-    cleanup: Option<&WorkloadStartResources>,
+    cleanup: Option<&WorkloadResources>,
 ) {
     // Native starts roll back through their guard's journal, which records
     // completed steps. Other callers perform their rollback here.
@@ -4412,7 +4437,7 @@ mod tests {
                 &crate::observability::Meters::default(),
             )
             .await?;
-            let resources = WorkloadStartResources::default();
+            let resources = WorkloadResources::default();
             resources.resolved(&resolved);
             if cancel {
                 let task = tokio::spawn({

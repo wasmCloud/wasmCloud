@@ -278,7 +278,7 @@ impl AttachedHostControl {
     ///
     /// Cancellation of this wait does not detach the loop; another call can
     /// finish waiting. Concurrent callers all await the same completion.
-    /// A forced abort is an error. Native starts retain their IDs until resource
+    /// A forced abort is an error. Native starts and stops retain their IDs until resource
     /// cleanup finishes; failed cleanup can be retried with a workload stop.
     /// Custom handlers remain responsible for recovery of their own side effects.
     pub async fn shutdown(&self) -> anyhow::Result<()> {
@@ -1124,13 +1124,13 @@ fn spawn_control_loop(
             }
         }
 
-        // Wait for resource cleanup spawned by cancelled native starts.
+        // Wait for resource cleanup spawned by cancelled native starts and stops.
         let recovered = tokio::time::timeout(
             crate::timeouts::plugin_stop() + Duration::from_secs(1),
-            host.wait_for_workload_start_cleanup(),
+            host.wait_for_workload_cleanup(),
         )
         .await
-        .context("timed out cleaning up cancelled workload starts")
+        .context("timed out cleaning up interrupted workload operations")
         .and_then(std::convert::identity);
 
         // A marker echoed by the server confirms processing of UNSUB and
@@ -1680,7 +1680,7 @@ async fn workload_start(
         }
     };
 
-    let mut start_guard = host.workload_start_guard(&workload_id, reservation);
+    let mut start_guard = host.workload_cleanup_guard(&workload_id, reservation);
     // Queued with the id already claimed. Waiting for a permit is time like
     // any other in which a stop or a status has to find this workload.
     let _permit = match starts.acquire().await {
