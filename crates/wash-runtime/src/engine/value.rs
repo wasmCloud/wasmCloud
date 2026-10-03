@@ -362,6 +362,11 @@ pub(crate) fn lift(store: &mut StoreContextMut<SharedCtx>, v: Val) -> wasmtime::
                 Ok(Val::Resource(
                     resource.try_into_resource_any(store.as_context_mut())?,
                 ))
+            } else if any.ty() == ResourceType::host::<ResourceAny>() {
+                // A resource returned through another linked component is
+                // already wrapped. Preserve its identity rather than nesting
+                // another ResourceAny handle around it.
+                Ok(Val::Resource(any))
             } else {
                 trace!(resource = ?any, "lifting resource");
                 let res = store.data_mut().table.push(any)?;
@@ -390,6 +395,30 @@ mod tests {
         let engine = wasmtime::Engine::new(&config).unwrap();
         let ctx = Ctx::builder("test-workload", "test-component").build();
         wasmtime::Store::new(&engine, SharedCtx::new(ctx))
+    }
+
+    #[test]
+    fn lift_linked_resource_preserves_identity() {
+        let mut store = make_store();
+        let inner = store
+            .data_mut()
+            .table
+            .push(42_u32)
+            .unwrap()
+            .try_into_resource_any(&mut store)
+            .unwrap();
+        let wrapped = store
+            .data_mut()
+            .table
+            .push(inner)
+            .unwrap()
+            .try_into_resource_any(&mut store)
+            .unwrap();
+        let value = Val::Resource(wrapped);
+        assert_eq!(
+            lift(&mut store.as_context_mut(), value.clone()).unwrap(),
+            value
+        );
     }
 
     #[test]

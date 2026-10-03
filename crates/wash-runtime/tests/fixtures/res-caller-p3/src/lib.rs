@@ -9,6 +9,7 @@ mod bindings {
         async: [
             "import:wasmcloud:resource-test/factory@0.1.0#make-token",
             "import:wasmcloud:resource-test/sink@0.1.0#accept",
+            "import:wasmcloud:resource-test/sink@0.1.0#bounce",
             "export:wasi:http/handler@0.3.0#handle",
         ],
     });
@@ -21,11 +22,38 @@ use bindings::wasmcloud::resource_test::{factory, sink};
 struct Component;
 
 impl Handler for Component {
-    async fn handle(_request: Request) -> Result<Response, ErrorCode> {
-        // make_token returns a host-owned handle; passing it to accept lowers
-        // it across the linker into res-sink-p3.
-        let token = factory::make_token("world".to_string()).await;
-        let body = sink::accept(token).await;
+    async fn handle(request: Request) -> Result<Response, ErrorCode> {
+        let body = if request.get_path_with_query().as_deref() == Some("/drop") {
+            for _ in 0..128 {
+                let token = factory::make_token("direct".into()).await;
+                let before = factory::stats();
+                assert_eq!(token.greet(), "hello direct");
+                assert_eq!(
+                    factory::stats(),
+                    before,
+                    "borrowing must not destroy the resource"
+                );
+                drop(token);
+
+                let token = factory::make_token("sink".into()).await;
+                assert_eq!(sink::accept(token).await, "sink:hello sink");
+
+                let token = factory::make_token("bounce".into()).await;
+                let token = sink::bounce(token).await;
+                assert_eq!(token.greet(), "hello bounce");
+                drop(token);
+            }
+            let environment = bindings::wasi::cli::environment::get_environment();
+            assert!(environment
+                .iter()
+                .any(|(k, v)| k == "RESOURCE_DROP_CONTEXT" && v == "res-caller"));
+            let (created, dropped, wrong_context) = factory::stats();
+            format!("{created},{dropped},{wrong_context}")
+        } else {
+            // The owned handle crosses both linker hops before the sink drops it.
+            let token = factory::make_token("world".to_string()).await;
+            sink::accept(token).await
+        };
 
         let headers = Fields::new();
         let (mut tx, rx) = bindings::wit_stream::new::<u8>();

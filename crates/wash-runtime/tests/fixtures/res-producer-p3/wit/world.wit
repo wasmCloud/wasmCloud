@@ -8,11 +8,13 @@ interface factory {
     }
 
     make-token: async func(name: string) -> token;
+    stats: func() -> tuple<u32, u32, u32>;
 }
 
 world res-producer {
     import wasi:cli/types@0.3.0;
     import wasi:clocks/types@0.3.0;
+    import wasi:cli/environment@0.3.0;
 
     export factory;
 }

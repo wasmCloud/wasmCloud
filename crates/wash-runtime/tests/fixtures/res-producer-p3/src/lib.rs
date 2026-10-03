@@ -13,10 +13,30 @@ mod bindings {
 
 use bindings::exports::wasmcloud::resource_test::factory::{Guest, GuestToken, Token};
 
+use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+
+static CREATED: AtomicU32 = AtomicU32::new(0);
+static DROPPED: AtomicU32 = AtomicU32::new(0);
+static WRONG_CONTEXT: AtomicU32 = AtomicU32::new(0);
+
 struct Component;
 
 struct TokenState {
     name: String,
+}
+
+impl Drop for TokenState {
+    fn drop(&mut self) {
+        DROPPED.fetch_add(1, Relaxed);
+        // Call the host directly: std::env / the P1 adapter may cache values.
+        let environment = bindings::wasi::cli::environment::get_environment();
+        if !environment
+            .iter()
+            .any(|(k, v)| k == "RESOURCE_DROP_CONTEXT" && v == "res-producer")
+        {
+            WRONG_CONTEXT.fetch_add(1, Relaxed);
+        }
+    }
 }
 
 impl GuestToken for TokenState {
@@ -29,7 +49,16 @@ impl Guest for Component {
     type Token = TokenState;
 
     async fn make_token(name: String) -> Token {
+        CREATED.fetch_add(1, Relaxed);
         Token::new(TokenState { name })
+    }
+
+    fn stats() -> (u32, u32, u32) {
+        (
+            CREATED.load(Relaxed),
+            DROPPED.load(Relaxed),
+            WRONG_CONTEXT.load(Relaxed),
+        )
     }
 }
 

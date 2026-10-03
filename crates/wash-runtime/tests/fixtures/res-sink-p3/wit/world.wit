@@ -6,6 +6,7 @@ interface factory {
     }
 
     make-token: async func(name: string) -> token;
+    stats: func() -> tuple<u32, u32, u32>;
 }
 
 interface sink {
@@ -14,12 +15,14 @@ interface sink {
     /// Takes ownership of a `token` and reports on it. The handle is lowered
     /// into this component by the dynamic linker (lower_with_type).
     accept: async func(t: token) -> string;
+    bounce: async func(t: token) -> token;
 }
 
 world res-sink {
     import factory;
     import wasi:cli/types@0.3.0;
     import wasi:clocks/types@0.3.0;
+    import wasi:cli/environment@0.3.0;
 
     export sink;
 }

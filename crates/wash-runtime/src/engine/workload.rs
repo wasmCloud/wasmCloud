@@ -12,7 +12,7 @@ use anyhow::{bail, ensure};
 use tokio::{sync::RwLock, task::JoinHandle};
 use tracing::{Instrument, debug, error, info, instrument, trace, warn};
 use wasmtime::component::{
-    Component, InstancePre, Linker, ResourceAny, ResourceType, types::ComponentItem,
+    Component, InstancePre, Linker, Resource, ResourceAny, ResourceType, types::ComponentItem,
 };
 use wasmtime::error::Context as _;
 use wasmtime_wasi::p2::bindings::CommandPre;
@@ -25,7 +25,7 @@ use crate::engine::linked_call::{
 };
 use crate::{
     engine::{
-        ctx::SharedCtx,
+        ctx::{SharedCtx, StoreActiveCtxGuard},
         dispatch::{DispatchTarget, INGRESS_BACKLOG, ServiceCalls, ServiceClaim},
         instance_pool::{self, InstancePolicy, InstancePool},
         linked_call::{
@@ -1758,8 +1758,22 @@ impl ResolvedWorkload {
 
                                 trace!(name = import_name, resource = export_name, ty = ?resource_ty, "linking resource import");
 
+                                let component_id = plugin_component.id.clone();
                                 linker_instance
-                                        .resource(export_name, ResourceType::host::<ResourceAny>(), |_, _| Ok(()))
+                                        .resource_async(export_name, ResourceType::host::<ResourceAny>(), move |store, rep| {
+                                            let component_id = component_id.clone();
+                                            Box::new(async move {
+                                                // lift() stores the real guest resource behind this
+                                                // host handle. Reclaim both, and run the destructor
+                                                // with the provider's capabilities, not the caller's.
+                                                let mut active = StoreActiveCtxGuard::new(store, &component_id)?;
+                                                let store = active.store_mut();
+                                                let resource = store.data_mut().table.delete(
+                                                    Resource::<ResourceAny>::new_own(rep),
+                                                )?;
+                                                resource.resource_drop_async(store).await
+                                            })
+                                        })
                                         .map_err(|e| {
                                             e.context(format!(
                                                 "failed to define resource import: {import_name}.{export_name}"

@@ -23,6 +23,13 @@
 //!
 //! Asserting the exact `"sink:hello world"` body therefore proves the one
 //! `token` resource survived both hops across the dynamic linker intact.
+//!
+//! Subsequent requests churn resources in the same warm instance: direct drop,
+//! ownership transfer to the sink, and ownership returned from the sink. The
+//! producer reports created/dropped counts synchronously (no ephemeral instance),
+//! proving exactly-once destruction before store teardown. Direct WASI environment
+//! reads check the destructor's provider context and restoration of caller/sink
+//! context; std::env is not used because the P1 adapter can cache environment data.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -47,7 +54,10 @@ fn component(name: &str, bytes: &'static [u8]) -> Component {
         name: name.to_string(),
         digest: None,
         bytes: bytes::Bytes::from_static(bytes),
-        local_resources: LocalResources::default(),
+        local_resources: LocalResources {
+            environment: HashMap::from([("RESOURCE_DROP_CONTEXT".into(), name.into())]),
+            ..Default::default()
+        },
         pool_size: 1,
         max_invocations: 100,
         max_concurrency: 1,
@@ -57,6 +67,9 @@ fn component(name: &str, bytes: &'static [u8]) -> Component {
 
 #[tokio::test]
 async fn test_p3_resource_handle_crosses_linker() -> Result<()> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
     let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
 
     let req = WorkloadStartRequest {
@@ -103,6 +116,29 @@ async fn test_p3_resource_handle_crosses_linker() -> Result<()> {
     // resource survived the trip across the linker into the sink.
     let body = response.text().await?;
     assert_eq!(body, "sink:hello world");
+
+    // A warm caller keeps its linked producer instance. Every resource must
+    // be destroyed exactly once before the next request, not at store teardown.
+    // Also exercise an owned handle returned through a third component (bounce).
+    for request in 1..=8 {
+        let response = timeout(
+            Duration::from_secs(30),
+            client
+                .get(format!("http://{addr}/drop"))
+                .header("HOST", "p3-resource")
+                .send(),
+        )
+        .await??;
+        let status = response.status();
+        let body = response.text().await?;
+        assert!(status.is_success(), "drop probe failed: {status}: {body}");
+        let count = 1 + request * 128 * 3;
+        assert_eq!(
+            body,
+            format!("{count},{count},0"),
+            "resource drop must run exactly once in the provider's context"
+        );
+    }
 
     Ok(())
 }
