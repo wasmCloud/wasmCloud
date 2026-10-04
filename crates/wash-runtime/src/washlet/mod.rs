@@ -642,13 +642,21 @@ struct OwnedHostStartup(Option<Arc<Host>>);
 
 impl Drop for OwnedHostStartup {
     fn drop(&mut self) {
-        if let Some(host) = self.0.take() {
-            tokio::spawn(async move {
-                if let Err(error) = host.stop().await {
-                    error!(%error, "failed to stop host after cancelled control startup");
-                }
-            });
-        }
+        let Some(host) = self.0.take() else {
+            return;
+        };
+        // Spawning needs a runtime, and panicking here would do so inside a
+        // destructor; a start future dropped off the runtime leaves the host
+        // to its owner.
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            error!("control startup dropped outside the runtime; the started host was not stopped");
+            return;
+        };
+        runtime.spawn(async move {
+            if let Err(error) = host.stop().await {
+                error!(%error, "failed to stop host after cancelled control startup");
+            }
+        });
     }
 }
 
