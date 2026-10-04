@@ -693,7 +693,9 @@ async fn verify_subscription(
         }
         // Shed the way the running loop does rather than fail the
         // registration: a busy control plane is no reason to refuse to attach.
-        // Stops are kept, because nothing retries one that goes unanswered.
+        // Stops are kept: the operator retries one that goes unanswered only
+        // while the host still heartbeats, and gives up on it otherwise, so
+        // a shed stop can mean a workload left running with nobody tracking it.
         if pending.len() < MAX_PENDING_REPLIES || command_name(&message) == "workload.stop" {
             pending.push_back(message);
         } else {
@@ -983,9 +985,12 @@ fn spawn_control_loop(
                                     shedding = false;
                                     Some(slot)
                                 }
-                                // A stop always runs. Nothing retries one that
-                                // was turned away, so shedding it would leave
-                                // its workload running with nobody tracking it.
+                                // A stop always runs. The operator retries one
+                                // that goes unanswered only while this host is
+                                // still heartbeating and drops it otherwise, and
+                                // a stop is cheap next to a start, so turning
+                                // one away risks a workload left running with
+                                // nobody tracking it for little gain.
                                 Err(_) if command == "workload.stop" => None,
                                 // Shed without a reply, so the caller times out
                                 // and retries. Any typed reply would be read as
