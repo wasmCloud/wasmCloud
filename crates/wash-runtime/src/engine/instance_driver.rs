@@ -584,7 +584,7 @@ impl InstanceDriver {
         let claimed = self
             .state
             .in_flight
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                 (n < self.max_concurrency).then_some(n + 1)
             })
             .is_ok();
@@ -595,14 +595,14 @@ impl InstanceDriver {
 
         // Count the call against this instance's budget. Admission past the
         // limit is refused, not just noted: racing callers can all get here
-        // before any of them marks the instance retired, and `fetch_update`
+        // before any of them marks the instance retired, and `try_update`
         // is what keeps the budget exact under that race. The instance then
         // drains what it admitted rather than being dropped mid-call the way
         // a checked-out store could be.
         if let Some(limit) = self.max_invocations {
             match self
                 .admitted
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                     (n < limit).then_some(n + 1)
                 }) {
                 Ok(previous) => {
@@ -708,7 +708,7 @@ mod tests {
         );
     }
 
-    /// The budget refuses over-admission even when callers race: `fetch_update`
+    /// The budget refuses over-admission even when callers race: `try_update`
     /// consumes the budget atomically, so exactly `max_invocations` admissions
     /// can ever succeed no matter how the threads interleave. (The sequential
     /// test above cannot distinguish this from bumping a counter after the

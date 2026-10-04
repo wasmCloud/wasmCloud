@@ -2994,7 +2994,7 @@ mod tests {
             permit.forget();
             if self
                 .cleanup_failures
-                .fetch_update(
+                .try_update(
                     std::sync::atomic::Ordering::SeqCst,
                     std::sync::atomic::Ordering::SeqCst,
                     |remaining| remaining.checked_sub(1),
