@@ -2692,12 +2692,35 @@ mod tests {
                 b"null".as_slice().into(),
             )
             .await?;
+        // Fill registration to its cap, then a few starts past it, then a stop:
+        // the excess starts are shed as the running loop would shed them, and
+        // the stop is kept however full registration is.
+        let start = rpc_subject(host.id(), "workload.start");
+        for _ in 1..MAX_PENDING_REPLIES + 4 {
+            client
+                .publish(
+                    start.clone(),
+                    br#"{"workloadId":"queued"}"#.as_slice().into(),
+                )
+                .await?;
+        }
+        client
+            .publish(
+                rpc_subject(host.id(), "workload.stop"),
+                br#"{"workloadId":"queued"}"#.as_slice().into(),
+            )
+            .await?;
         let pending = tokio::time::timeout(
             Duration::from_secs(2),
             verify_subscription(&mut subscription, &client, host.id()),
         )
         .await??;
-        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.len(), MAX_PENDING_REPLIES + 1);
+        assert_eq!(command_name(&pending[0]), "heartbeat");
+        assert_eq!(
+            command_name(pending.back().context("no retained stop")?),
+            "workload.stop"
+        );
         let (tx, rx) = oneshot::channel();
         let control = AttachedHostControl::new(
             tx,
