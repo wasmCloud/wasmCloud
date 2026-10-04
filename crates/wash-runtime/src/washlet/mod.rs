@@ -30,12 +30,16 @@ pub const MAX_PENDING_STARTS: usize = 64;
 const MAX_PENDING_QUERIES: usize = 64;
 const MAX_PENDING_REPLIES: usize = MAX_PENDING_STARTS + MAX_PENDING_QUERIES;
 
-/// Covers every bounded shutdown step, including cleanup grace and scheduling slack.
 fn attachment_shutdown_timeout() -> Duration {
+    attachment_shutdown_budget(crate::timeouts::plugin_stop())
+}
+
+/// Covers every bounded shutdown step, including cleanup grace and scheduling slack.
+fn attachment_shutdown_budget(plugin_stop: Duration) -> Duration {
     CONTROL_IO_TIMEOUT * 2
         + COMMAND_DRAIN_TIMEOUT
         + COMMAND_ABORT_TIMEOUT
-        + crate::timeouts::plugin_stop()
+        + plugin_stop
         + Duration::from_secs(2)
 }
 
@@ -282,6 +286,10 @@ impl AttachedHostControl {
     /// cleanup finishes; failed cleanup can be retried with a workload stop.
     /// Custom handlers remain responsible for recovery of their own side effects.
     pub async fn shutdown(&self) -> anyhow::Result<()> {
+        self.shutdown_within(attachment_shutdown_timeout()).await
+    }
+
+    async fn shutdown_within(&self, timeout: Duration) -> anyhow::Result<()> {
         if let Some(tx) = self
             .shutdown
             .lock()
@@ -290,7 +298,6 @@ impl AttachedHostControl {
         {
             let _ = tx.send(());
         }
-        let timeout = attachment_shutdown_timeout();
         match tokio::time::timeout(timeout, self.stopped()).await {
             Ok(result) => result,
             Err(_) => {
@@ -2077,40 +2084,24 @@ mod tests {
         channel.stopped().await
     }
 
-    // Paused, so the sixteen seconds below cost nothing: only timers are
-    // waited on, and the clock skips to whichever is due first.
+    // Paused, so the twenty seconds below cost nothing: only timers are
+    // waited on, and the clock skips to whichever is due first. The budget is
+    // computed from a parameter rather than read from the environment, so this
+    // runs in-process instead of re-running the binary with an override.
     #[tokio::test(start_paused = true)]
     async fn attachment_shutdown_honors_the_configured_plugin_cleanup_budget() -> anyhow::Result<()>
     {
-        const CHILD: &str = "WASH_TEST_ATTACHMENT_SHUTDOWN_BUDGET_CHILD";
-        if std::env::var(CHILD).as_deref() != Ok("1") {
-            // Timeout accessors cache environment settings; use a fresh process
-            // so this override cannot affect other tests running concurrently.
-            let output = std::process::Command::new(std::env::current_exe()?)
-                .args(["--exact", "washlet::tests::attachment_shutdown_honors_the_configured_plugin_cleanup_budget", "--nocapture"])
-                .env(CHILD, "1")
-                .env("WASH_PLUGIN_STOP_TIMEOUT_SECS", "20")
-                .output()?;
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            // A filter that matches nothing also exits successfully, so a
-            // renamed test or module would otherwise pass here unrun.
-            anyhow::ensure!(
-                output.status.success() && stdout.contains("1 passed"),
-                "shutdown budget child test failed or did not run: {stdout} {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            return Ok(());
-        }
+        let plugin_stop = Duration::from_secs(20);
+        let budget = attachment_shutdown_budget(plugin_stop);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let task = tokio::spawn(async move {
             shutdown_rx.await?;
-            // Longer than the former fixed 15-second attachment timeout,
-            // but within the configured native-start cleanup budget.
-            tokio::time::sleep(Duration::from_secs(16)).await;
+            // A loop still inside native-start cleanup, past every other step.
+            tokio::time::sleep(plugin_stop).await;
             Ok(())
         });
         let control = AttachedHostControl::new(shutdown_tx, task);
-        control.shutdown().await?;
+        control.shutdown_within(budget).await?;
         control.stopped().await
     }
 
