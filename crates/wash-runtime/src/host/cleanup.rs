@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::Context as _;
 use tokio::sync::RwLock;
@@ -12,6 +13,25 @@ use crate::engine::workload::WorkloadResources;
 
 type Workloads = Arc<RwLock<HashMap<String, HostWorkload>>>;
 pub(super) type WorkloadRecoveries = Arc<Mutex<HashMap<String, Arc<WorkloadRecovery>>>>;
+
+/// How long a recovery waits before retrying a failed teardown, doubling each
+/// time up to [`RECOVERY_RETRY_MAX`]. Nothing outside the host is obliged to
+/// send another stop for a workload it has already been told is stopping, so
+/// the host retries on its own until the plugin lets go.
+const RECOVERY_RETRY_INITIAL: Duration = Duration::from_millis(250);
+const RECOVERY_RETRY_MAX: Duration = Duration::from_secs(30);
+
+/// The ids of every interrupted operation whose teardown is still owed.
+pub(super) fn pending_recoveries(cancelled: &WorkloadRecoveries) -> Vec<String> {
+    let mut ids: Vec<String> = cancelled
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .keys()
+        .cloned()
+        .collect();
+    ids.sort();
+    ids
+}
 
 /// Retains an interrupted operation's reservation and resources until teardown succeeds.
 pub(super) struct WorkloadRecovery {
@@ -197,11 +217,23 @@ impl Drop for WorkloadCleanupGuard {
             );
             return;
         };
-        // Track cleanup before the cancelled command can be joined.
+        // Track cleanup before the cancelled command can be joined. Retried
+        // until it succeeds or the host stops: `recover` returns `Ok` once the
+        // recovery is no longer recorded, whether it finished or `Host::stop`
+        // cleared it, and a workload stop can retry it sooner.
         self.tasks.spawn_on(
             async move {
-                if let Err(error) = recovery.recover(&workload_id, &workloads, &cancelled).await {
-                    tracing::error!(workload_id, %error, "interrupted workload operation requires a stop to retry cleanup");
+                let mut backoff = RECOVERY_RETRY_INITIAL;
+                while let Err(error) = recovery.recover(&workload_id, &workloads, &cancelled).await
+                {
+                    tracing::warn!(
+                        workload_id,
+                        %error,
+                        retry_in = ?backoff,
+                        "interrupted workload cleanup failed; retrying"
+                    );
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(RECOVERY_RETRY_MAX);
                 }
             },
             &runtime,
