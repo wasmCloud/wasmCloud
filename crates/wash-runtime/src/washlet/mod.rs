@@ -283,7 +283,8 @@ impl AttachedHostControl {
     /// Cancellation of this wait does not detach the loop; another call can
     /// finish waiting. Concurrent callers all await the same completion.
     /// A forced abort is an error. Native starts and stops retain their IDs until resource
-    /// cleanup finishes; failed cleanup can be retried with a workload stop.
+    /// cleanup finishes; failed cleanup is retried by the host in the background, or at
+    /// once by a workload stop, and the error names the workloads still being cleaned up.
     /// Custom handlers remain responsible for recovery of their own side effects.
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         self.shutdown_within(attachment_shutdown_timeout()).await
