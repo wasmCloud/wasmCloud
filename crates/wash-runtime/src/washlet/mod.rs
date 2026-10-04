@@ -589,6 +589,11 @@ enum Ended {
     ReplyPublisherStopped,
 }
 
+/// A host that owns its lifecycle and serves the NATS control API. Its NATS
+/// user must be allowed to subscribe to `runtime.host.{id}.>`, publish to
+/// `runtime.host.{id}.__control.ready`, `runtime.operator.heartbeat.{id}` and
+/// request reply subjects, and must receive its own messages; see
+/// [`ClusterHost::start`].
 pub struct ClusterHost {
     prepared_host: Host,
     nats_client: Arc<async_nats::Client>,
@@ -1248,6 +1253,12 @@ impl ClusterHost {
     /// The NATS client needs the permissions documented by
     /// [`AttachedHostControlBuilder::attach`], along with heartbeat and reply
     /// publishing. Failed or cancelled registration tears down the started host.
+    ///
+    /// Earlier hosts only subscribed, so a deployment that locks the host's NATS
+    /// user down to its old subjects needs two more things from here on: leave
+    /// to publish to `runtime.host.{id}.__control.ready`, and a connection
+    /// without `no_echo`, or the host fails to start after the registration
+    /// timeout instead of serving no commands.
     pub async fn start(
         self,
     ) -> anyhow::Result<(impl HostApi, impl Future<Output = anyhow::Result<()>>)> {
