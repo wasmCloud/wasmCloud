@@ -1725,7 +1725,7 @@ impl HostBacklogBudget {
     fn release(&self, len: usize) {
         let _ = self
             .queued_bytes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
                 Some(held.saturating_sub(len as u64))
             });
     }

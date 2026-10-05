@@ -388,7 +388,7 @@ impl GuestMemoryBudget {
             GuestMemoryMode::Enforce => {
                 let taken =
                     self.in_use
-                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |in_use| {
+                        .try_update(Ordering::Relaxed, Ordering::Relaxed, |in_use| {
                             let next = in_use.saturating_add(bytes);
                             (next <= self.cap).then_some(next)
                         });
@@ -411,7 +411,7 @@ impl GuestMemoryBudget {
                 // counter wrapping past `u64::MAX` and reading as near-empty.
                 let in_use = self
                     .in_use
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |in_use| {
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |in_use| {
                         Some(in_use.saturating_add(bytes))
                     })
                     // Both variants carry the previous value; the closure
@@ -491,7 +491,7 @@ impl GuestMemoryBudget {
         // release into an enormous `in_use` and refuse everything thereafter.
         let _ = self
             .in_use
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |in_use| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |in_use| {
                 Some(in_use.saturating_sub(bytes))
             });
     }

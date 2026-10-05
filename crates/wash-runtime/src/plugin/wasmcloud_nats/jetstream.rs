@@ -172,7 +172,7 @@ impl FetchBudget {
         // hand the binding an unbounded budget for the rest of its life.
         let _ = self
             .outstanding
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
                 Some(held.saturating_sub(bytes))
             });
     }

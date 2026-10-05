@@ -568,7 +568,7 @@ impl AtomicCallState {
         mut next: impl FnMut(CallState) -> Option<CallState>,
     ) -> Result<CallState, CallState> {
         self.0
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |bits| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |bits| {
                 next(CallState::from_bits(bits)).map(CallState::bits)
             })
             .map(CallState::from_bits)
