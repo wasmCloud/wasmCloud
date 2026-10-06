@@ -1,0 +1,11 @@
+[package]
+name = "companion-caller-p3"
+edition = "2021"
+version = "0.0.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+futures = { workspace = true, features = ["alloc"] }
+wit-bindgen = { workspace = true, features = ["async-spawn", "inter-task-wakeup"] }
