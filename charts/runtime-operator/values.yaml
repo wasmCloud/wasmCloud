@@ -430,22 +430,22 @@ runtime:
     # -- Instance slots the pooling allocator keeps. Empty leaves wasmtime's
     # default of 1000.
     coreInstances: ""
-    # -- Whether `limits.memory` is enforced against total guest memory or only
-    # counted: `count` (the default) charges every guest `memory.grow` to the
-    # budget and reports what it would have refused, but allows it; `enforce`
-    # refuses growth past the budget, which the guest sees as `memory.grow`
-    # returning -1. Guest memory has never been bounded in aggregate, so run in
-    # `count` and watch the host's reported high-water mark before switching.
+    # -- Whether the host's guest memory budget is enforced or only counted:
+    # `enforce` (what an empty value renders) refuses growth past the budget,
+    # which the guest sees as `memory.grow` returning -1; `count` charges every
+    # guest `memory.grow` to the budget and reports what it would have refused,
+    # but allows it. Use `count` to size a host: watch its reported high-water
+    # mark, then return to `enforce`.
     #
-    # Before setting `enforce`, note that the chart passes `limits.memory`
-    # through as the guest budget unchanged — 100% of the pod. Guests are not
-    # all a host pod holds: wasmtime itself, compiled module images, NATS, OCI
-    # pulls and HTTP buffers come out of the same limit, and none of them is
-    # charged to this budget. A host left to derive its own budget keeps a
-    # quarter back for them. So an enforced budget equal to `limits.memory` can
-    # still be OOM-killed before it ever refuses a guest; give the host its
-    # headroom by setting `limits.memory` above the guest budget you want, or
-    # by overriding `WASH_HOST_MAX_GUEST_MEMORY` below it via `runtime.env`.
+    # The host derives the budget: three quarters of `limits.memory`, and
+    # never less than 256MiB — so keep `limits.memory` above 342Mi, or the
+    # floor leaves the host no headroom. Guests are not all a host pod holds:
+    # wasmtime itself, compiled module images, NATS, OCI pulls and HTTP
+    # buffers come out of the same limit, and none of them is charged to this
+    # budget, so the last quarter is kept back for them. The same budget sizes
+    # the `wasmcloud:nats` backlog ceiling. Name a different budget with
+    # `WASH_HOST_MAX_GUEST_MEMORY` via `runtime.env`; one equal to
+    # `limits.memory` can be OOM-killed before it ever refuses a guest.
     guestMemoryMode: ""
     # -- How many workloads a host pulls and compiles at once. Each start it
     # admits ends in a compile that spreads over every core the host can see,
@@ -837,13 +837,16 @@ runtime:
         # `allowedHostLoopbackPorts` entry naming the port. `127.0.0.1` keeps
         # meaning the guest's own virtual network either way.
         allowHostLoopback: false
-        # -- How the raw-socket egress policy is applied: `count` or `enforce`.
+        # -- How the raw-socket egress policy is applied: `enforce` or `count`.
         #
-        # Raw socket connect was never gated, so enforcing on upgrade would
-        # sever live traffic. `count` evaluates the policy, records what it
-        # would refuse, and allows the connection anyway. Watch the
-        # would-deny counters, then switch to `enforce`.
-        socketEgress: count
+        # `enforce` refuses a connection the policy does not permit: a workload
+        # reaches only what its `allowedHosts` declares. A socket connects to
+        # an address, not a name, so the entry that permits it is a literal IP
+        # or `*`; a DNS name or wildcard entry covers `wasi:http` only.
+        #
+        # `count` evaluates the policy, records what it would refuse in the
+        # would-deny counters, and allows the connection anyway.
+        socketEgress: enforce
         # -- Deny outbound connections to loopback, link-local (including the
         # cloud metadata address), multicast, and documentation ranges —
         # including whatever DNS returned for a permitted name.
@@ -950,7 +953,7 @@ runtime:
       #     memory: "2Gi"
       #   defaultHeapMemory: "512MiB"
       #   coreInstances: "200"
-      #   guestMemoryMode: "enforce"
+      #   guestMemoryMode: "count"
       #   maxConcurrentStarts: "1"
       # -- Per-host-group probes. Merged field by field over
       # `runtime.probes`, so a group can retune one timing and inherit the

@@ -67,17 +67,16 @@ pub enum GuestKind {
 
 /// How strictly the egress gate is applied.
 ///
-/// Turning the gate on is a breaking change for any guest doing socket egress
-/// without a declared `allowedHosts` — which, since the socket path was never
-/// gated, is all of them. [`EgressMode::Count`] exists so an operator can see
-/// what enforcement *would* break before it breaks.
+/// The gate refuses socket egress from any guest without a declared
+/// `allowedHosts` entry covering it. [`EgressMode::Count`] exists so an
+/// operator can see what enforcement refuses without severing that traffic.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum EgressMode {
     /// Evaluate the policy, log and count what it would refuse, allow it
-    /// anyway. The default, so upgrading a host does not sever live traffic.
-    #[default]
+    /// anyway.
     Count,
-    /// Refuse what the policy refuses.
+    /// Refuse what the policy refuses. The default.
+    #[default]
     Enforce,
 }
 
@@ -89,7 +88,7 @@ pub enum EgressMode {
 pub struct SocketPolicy {
     pub kind: GuestKind,
     /// Declared egress allowlist, shared with `wasi:http`. Empty denies every
-    /// connect once [`EgressMode::Enforce`] is on.
+    /// connect under [`EgressMode::Enforce`].
     pub allowed_hosts: Arc<[AllowedHost]>,
     /// Ports on the machine's own loopback this guest may reach through
     /// `host.wasmcloud.internal`. Empty denies every one.
@@ -118,10 +117,9 @@ pub struct SocketPolicy {
 
 impl Default for SocketPolicy {
     /// The same policy the `wash` CLI builds when an operator passes no socket
-    /// flags: range filtering on, egress gate counting rather than enforcing,
-    /// host loopback closed. An embedder that installs no policy of its own
-    /// gets what an operator running the host would get, rather than a
-    /// permissive one nobody chose.
+    /// flags: range filtering on, egress gate enforcing, host loopback closed.
+    /// An embedder that installs no policy of its own gets what an operator
+    /// running the host would get, rather than a permissive one nobody chose.
     ///
     /// No port table: the table is the host's single record of which real ports
     /// are spoken for, so it has to come from the host that owns it. Minting
@@ -136,7 +134,7 @@ impl Default for SocketPolicy {
             host_loopback_enabled: false,
             egress_addrs: EgressAddressPolicy::default(),
             host_owned_ports: None,
-            egress_mode: EgressMode::Count,
+            egress_mode: EgressMode::default(),
             quota: None,
             // The process-wide default, so every policy that takes it shares
             // one ceiling; a host that configures quotas passes its own.
@@ -357,7 +355,7 @@ impl SocketPolicy {
     }
 
     /// Apply a refusal under the current [`EgressMode`]: deny it, or count it
-    /// and let it through so an operator can see the blast radius first.
+    /// and let it through so an operator can see the blast radius.
     fn gate(&self, reason: DenyReason, addr: SocketAddr) -> Result<Plane, DenyReason> {
         match self.egress_mode {
             EgressMode::Enforce => Err(reason),
@@ -734,7 +732,7 @@ mod tests {
         );
     }
 
-    /// Count mode is the upgrade path: it must decide exactly as enforce would,
+    /// Count mode is the opt-out: it must decide exactly as enforce would,
     /// record it, and then let the traffic through.
     #[test]
     fn count_mode_allows_what_enforce_would_refuse_and_counts_it() {
@@ -755,8 +753,7 @@ mod tests {
         assert_eq!(meters.denied(DenyReason::NotPermitted), 0);
     }
 
-    /// A bind refusal is not part of the egress rollout: it was always denied,
-    /// so count mode must not weaken it.
+    /// A bind refusal is not egress, so count mode must not weaken it.
     #[test]
     fn count_mode_does_not_soften_bind_refusals() {
         let policy = SocketPolicy {
@@ -898,8 +895,8 @@ mod tests {
         );
     }
 
-    /// Nor is the sentinel: it is new capability, so there is nothing to
-    /// grandfather and count mode must keep it shut.
+    /// Nor is the sentinel: its grant is explicit on both sides, so count mode
+    /// must keep it shut.
     #[test]
     fn count_mode_does_not_open_the_host_loopback_door() {
         let policy = SocketPolicy {
@@ -923,8 +920,8 @@ mod tests {
         assert_eq!(policy.egress_addrs, EgressAddressPolicy::default());
         assert!(policy.egress_addrs.deny_special);
         assert!(policy.egress_addrs.allow_private);
-        // `--socket-egress count`, `--allow-host-loopback` off.
-        assert_eq!(policy.egress_mode, EgressMode::Count);
+        // `--socket-egress enforce`, `--allow-host-loopback` off.
+        assert_eq!(policy.egress_mode, EgressMode::Enforce);
         assert!(!policy.host_loopback_enabled);
     }
 }
