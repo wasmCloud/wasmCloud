@@ -157,7 +157,7 @@ jobs:
       fail-fast: false
       matrix:
         run: ${{ fromJSON(needs.matrix.outputs.runs) }}
-    uses: ./.github/workflows/k6bench-run.yml
+    uses: $/.github/workflows/k6bench-run.yml
     permissions:
       contents: read
       id-token: write

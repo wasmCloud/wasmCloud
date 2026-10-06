@@ -124,7 +124,7 @@ jobs:
       fail-fast: false
       matrix:
         bench: ${{ fromJSON(needs.matrix.outputs.benches) }}
-    uses: ./.github/workflows/bench-run.yml
+    uses: $/.github/workflows/bench-run.yml
     permissions:
       contents: read
       id-token: write
