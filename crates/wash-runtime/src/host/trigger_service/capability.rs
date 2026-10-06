@@ -16,6 +16,7 @@ use wasmtime::error::Context as _;
 use super::InFlightGuard;
 use crate::engine::ctx::{CallerIdentity, SharedCtx};
 use crate::engine::store::relocate::{self, Relocated};
+use crate::engine::store::resource_bridge;
 use crate::host::job_registry::{JobGuard, JobRegistry};
 
 /// One exported capability function the TriggerService should be ready to serve,
@@ -213,23 +214,6 @@ pub(super) struct CapabilityTask {
     pub(super) job_guard: JobGuard,
 }
 
-/// Free every resource whose proxy a caller has dropped since the last flush,
-/// using the top-level store access `resource_drop_async` requires (unavailable
-/// inside `run_concurrent`). Runs each guest resource destructor.
-pub(super) async fn flush_pending_resource_drops(store: &mut Store<SharedCtx>) {
-    let pending = store
-        .data_mut()
-        .resource_registry
-        .as_mut()
-        .map(crate::engine::store::resource_bridge::ResourceRegistry::take_pending_drops)
-        .unwrap_or_default();
-    for real in pending {
-        if let Err(e) = real.resource_drop_async(&mut *store).await {
-            tracing::warn!(err = %e, "failed to drop a proxied resource");
-        }
-    }
-}
-
 /// Drop every resource the plugin still owns, on store teardown, so nothing
 /// leaks when the plugin stops or restarts.
 pub(super) async fn drain_plugin_resources(store: &mut Store<SharedCtx>) {
@@ -282,9 +266,10 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
             for arg in args {
                 arg_vals.push(relocate::inject(access.as_context_mut(), arg)?);
             }
-            Ok((func_handle, arg_vals))
+            let lent = resource_bridge::take_lent(access.data_mut());
+            Ok((func_handle, arg_vals, lent))
         });
-        let (func_handle, arg_vals) = match prepared {
+        let (func_handle, arg_vals, lent) = match prepared {
             Ok(prepared) => prepared,
             Err(e) => {
                 let _ = reply.send(Err(e));
@@ -340,6 +325,7 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
         // pumps keep running under this persistent store's `run_concurrent`, so
         // their drain signals (`dones`) are dropped here rather than awaited.
         let extracted = accessor.with(|mut access| -> wasmtime::Result<Vec<Relocated>> {
+            resource_bridge::release_lent(access.as_context_mut(), lent)?;
             let mut dones = Vec::new();
             let mut out = Vec::with_capacity(results.len());
             for (val, ty) in results.iter().zip(result_tys.iter()) {

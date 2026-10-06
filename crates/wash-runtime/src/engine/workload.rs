@@ -25,14 +25,17 @@ use crate::engine::linked_call::{
 };
 use crate::{
     engine::{
+        companion,
         ctx::SharedCtx,
         dispatch::{DispatchTarget, INGRESS_BACKLOG, ServiceCalls, ServiceClaim},
         instance_pool::{self, InstancePolicy, InstancePool},
         linked_call::{
             ComponentCtxTemplate, EphemeralCallMode, EphemeralLinkedCall, LinkedExportInvocation,
-            LinkedTarget, func_is_bridge_safe, func_is_ephemeral_safe, invoke_linked_async_export,
-            invoke_linked_sync_export, new_store_from_templates,
+            LinkedTarget, Signature, func_carries_resource, func_crosses_to_companion,
+            func_is_bridge_safe, func_is_ephemeral_safe, invoke_linked_async_export,
+            new_store_from_templates,
         },
+        store::resource_bridge,
         volumes::{ResolvedVolumeMount, resolve_component_volume_mounts_in_map},
     },
     plugin::HostPlugin,
@@ -170,6 +173,13 @@ pub struct WorkloadMetadata {
     pub(crate) guest_memory: Arc<crate::engine::guest_memory::GuestMemoryBudget>,
     /// Linked component ids
     linked_components: HashSet<Arc<str>>,
+    /// The linked components instantiated into this component's own store. The
+    /// rest of `linked_components` run in stores of their own.
+    pub(crate) in_store_links: Arc<HashSet<Arc<str>>>,
+    /// The resource types this component imports as proxies for a resource
+    /// that lives in a companion store. An interface it exports that re-exports
+    /// one of them hands the same proxy on.
+    proxied_imports: Vec<ResourceType>,
     /// Workload annotations
     pub(crate) annotations: Arc<HashMap<String, String>>,
     /// Top-level imports already supplied by host plugins.
@@ -437,6 +447,8 @@ impl WorkloadService {
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
                 linked_components: Default::default(),
+                in_store_links: Arc::default(),
+                proxied_imports: Vec::new(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
             },
@@ -546,6 +558,8 @@ impl WorkloadComponent {
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
                 linked_components: Default::default(),
+                in_store_links: Arc::default(),
+                proxied_imports: Vec::new(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
             },
@@ -1297,19 +1311,22 @@ impl ResolvedWorkload {
     async fn resolve_workload_imports(&mut self, exports: &ExportMaps) -> anyhow::Result<()> {
         // Build a dependency graph: for each component, track which other components it imports from
         let mut dependencies: HashMap<Arc<str>, HashSet<Arc<str>>> = HashMap::new();
+        // The components something imports a sync function from. Read from the
+        // importer's side, which is also what decides how each call is routed.
+        let mut sync_exporters = HashSet::new();
 
         {
             let components = self.components.read().await;
             for (component_id, component) in components.iter() {
                 let mut deps = HashSet::new();
+                let engine = component.metadata.component.engine();
                 let ty = component.metadata.component.component_type();
-                for (import_name, import_item) in ty.imports(component.metadata.component.engine())
-                {
-                    if !matches!(import_item.ty, ComponentItem::ComponentInstance(_)) {
+                for (import_name, import_item) in ty.imports(engine) {
+                    let ComponentItem::ComponentInstance(imported) = &import_item.ty else {
                         continue;
-                    }
+                    };
                     let (interface, label) = resolve_import(import_name, import_item.implements);
-                    match label {
+                    let exporter = match label {
                         // For labeled imports without a labeled exporter, we
                         // record no dependency, as resolution will happen
                         // against the host.
@@ -1329,11 +1346,11 @@ impl ResolvedWorkload {
                             if should_link_component_import(
                                 import_name,
                                 &component.metadata.plugin_bound_instances,
-                            ) && let Some((labelled, _)) =
+                            ) {
                                 labelled_exporter(&exports.exporters, interface, l)?
-                                && labelled != component_id
-                            {
-                                deps.insert(labelled.clone());
+                                    .map(|(labelled, _)| labelled)
+                            } else {
+                                None
                             }
                         }
                         None => {
@@ -1350,16 +1367,43 @@ impl ResolvedWorkload {
                                      naming the component to use."
                                 );
                             }
-                            if let Some(exporter_id) = exports.unambiguous.get(interface)
-                                && exporter_id != component_id
-                            {
-                                // This import is provided by another component in the workload
-                                deps.insert(exporter_id.clone());
-                            }
+                            exports.unambiguous.get(interface)
+                        }
+                    };
+                    // This import is provided by another component in the workload
+                    if let Some(exporter_id) = exporter
+                        && exporter_id != component_id
+                    {
+                        deps.insert(exporter_id.clone());
+                        if imports_sync_function(imported, engine) {
+                            sync_exporters.insert(exporter_id.clone());
                         }
                     }
                 }
                 dependencies.insert(component_id.clone(), deps);
+            }
+
+            if let Some(service) = &self.service {
+                let engine = service.metadata.component.engine();
+                let ty = service.metadata.component.component_type();
+                for (import_name, import_item) in ty.imports(engine) {
+                    let ComponentItem::ComponentInstance(imported) = &import_item.ty else {
+                        continue;
+                    };
+                    if !should_link_component_import(
+                        import_name,
+                        &service.metadata.plugin_bound_instances,
+                    ) {
+                        continue;
+                    }
+                    let (interface, label) = resolve_import(import_name, import_item.implements);
+                    if let Some((exporter_id, _)) =
+                        linked_exporter(exports, interface, label, None)?
+                        && imports_sync_function(imported, engine)
+                    {
+                        sync_exporters.insert(exporter_id);
+                    }
+                }
             }
         }
 
@@ -1376,7 +1420,9 @@ impl ResolvedWorkload {
             "processing components in topological order"
         );
 
+        let companioned = companioned_exporters(&sync_exporters, &dependencies);
         let mut resolved_links: HashMap<Arc<str>, HashSet<Arc<str>>> = HashMap::new();
+        let mut resolved_in_store: HashMap<Arc<str>, HashSet<Arc<str>>> = HashMap::new();
 
         for component_id in sorted_component_ids {
             // In order to have mutable access to both the workload component and components that need
@@ -1399,25 +1445,31 @@ impl ResolvedWorkload {
                     linker,
                     exports,
                     &plugin_bound_instances,
+                    &companioned,
                     Some(component_id.as_ref()),
                 )
                 .await
             {
-                Ok(direct_links) => {
-                    let linked_components = expand_link_closure(&direct_links, &resolved_links);
-                    workload_component.linked_components = linked_components;
+                Ok(links) => {
+                    workload_component.linked_components =
+                        expand_link_closure(&links.all, &resolved_links);
+                    workload_component.in_store_links =
+                        Arc::new(expand_link_closure(&links.in_store, &resolved_in_store));
+                    workload_component.proxied_imports = links.proxied;
                     Ok(())
                 }
                 Err(err) => Err(err),
             };
 
             let linked_components = workload_component.linked_components.clone();
+            let in_store_links = HashSet::clone(&workload_component.in_store_links);
             let workload_component_id = workload_component.metadata.id.clone();
 
             self.components
                 .write()
                 .await
                 .insert(workload_component.metadata.id.clone(), workload_component);
+            resolved_in_store.insert(workload_component_id.clone(), in_store_links);
             resolved_links.insert(workload_component_id, linked_components);
             // Propagate any errors encountered during import resolution
             res?;
@@ -1434,13 +1486,16 @@ impl ResolvedWorkload {
                     linker,
                     exports,
                     &plugin_bound_instances,
+                    &companioned,
                     None,
                 )
                 .await
             {
-                Ok(direct_links) => {
-                    let linked_components = expand_link_closure(&direct_links, &resolved_links);
-                    service.metadata.linked_components = linked_components;
+                Ok(links) => {
+                    service.metadata.linked_components =
+                        expand_link_closure(&links.all, &resolved_links);
+                    service.metadata.in_store_links =
+                        Arc::new(expand_link_closure(&links.in_store, &resolved_in_store));
                     Ok(())
                 }
                 Err(err) => Err(err),
@@ -1461,6 +1516,9 @@ impl ResolvedWorkload {
         linker: &mut Linker<SharedCtx>,
         exports: &ExportMaps,
         plugin_bound_instances: &HashSet<String>,
+        // The components that run in companion stores; see
+        // `companioned_exporters`.
+        companioned_exporters: &HashSet<Arc<str>>,
         // The importer's own id. A component resolving an import to ITSELF is a
         // no-op rather than a lookup failure: it has already been removed from
         // the component map by the time the exporter is fetched below, so the
@@ -1468,10 +1526,70 @@ impl ResolvedWorkload {
         // path too, where it turns that hard deploy failure into a silent skip
         // to host - which is what the unlabelled case meant all along.
         importer_id: Option<&str>,
-    ) -> anyhow::Result<HashSet<Arc<str>>> {
-        let mut linked_components = HashSet::new();
+    ) -> anyhow::Result<DirectLinks> {
+        let mut links = DirectLinks::default();
         let ty = component.component_type();
         let imports: Vec<_> = ty.imports(component.engine()).collect();
+        // The resource types that live in this component's own store: those of
+        // every import the host serves rather than another component.
+        let mut host_resources = Vec::new();
+        // The resource types each companioned component defines itself, and so
+        // keeps in its companion, as this importer names them.
+        let mut own_resources: BTreeMap<Arc<str>, Vec<ResourceType>> = BTreeMap::new();
+        {
+            let components = self.components.read().await;
+            for (import_name, import_item) in &imports {
+                let ComponentItem::ComponentInstance(instance) = &import_item.ty else {
+                    continue;
+                };
+                let resources: Vec<_> = instance
+                    .exports(component.engine())
+                    .filter_map(|(name, export)| match export.ty {
+                        ComponentItem::Resource(ty) => Some((name, ty)),
+                        _ => None,
+                    })
+                    .collect();
+                let (interface, label) = resolve_import(import_name, import_item.implements);
+                let exporter =
+                    match should_link_component_import(import_name, plugin_bound_instances) {
+                        true => linked_exporter(exports, interface, label, importer_id)?,
+                        false => None,
+                    };
+                let Some((exporter_id, export_name)) = exporter else {
+                    host_resources.extend(resources.into_iter().map(|(_, ty)| ty));
+                    continue;
+                };
+                host_resources.extend(
+                    resources.iter().filter_map(|(name, ty)| {
+                        HOST_RESOURCE_ALIASES.contains(name).then_some(*ty)
+                    }),
+                );
+                let Some(exporter) = components
+                    .get(&exporter_id)
+                    .filter(|_| companioned_exporters.contains(&exporter_id))
+                else {
+                    continue;
+                };
+                let exported = &exporter.metadata.component;
+                let Some((ComponentItem::ComponentInstance(_), instance_idx)) =
+                    exported.get_export(None, &export_name)
+                else {
+                    continue;
+                };
+                for (name, ty) in resources {
+                    if let Some((ComponentItem::Resource(exported_ty), _)) =
+                        exported.get_export(Some(&instance_idx), name)
+                        && !HOST_RESOURCE_ALIASES.contains(&name)
+                        && !exporter.metadata.proxied_imports.contains(&exported_ty)
+                    {
+                        own_resources
+                            .entry(exporter_id.clone())
+                            .or_default()
+                            .push(ty);
+                    }
+                }
+            }
+        }
         // The cross-store stream bridge engages only for a p3-service workload:
         // there a long-lived service store must never be pinned/frozen by a
         // stream-carrying backend call, so such calls run ephemerally (relocated)
@@ -1503,21 +1621,7 @@ impl ResolvedWorkload {
                     ) = {
                         let (interface, label) =
                             resolve_import(import_name, import_item.implements);
-                        // A labelled import resolves ONLY through its label. It
-                        // must not fall back to the unlabelled single-exporter
-                        // route: a label that names no component here is one the
-                        // operator meant for a host interface, and quietly
-                        // handing it a guest component instead is the kind of
-                        // wrong that deploys.
-                        let resolved = match label {
-                            Some(l) => labelled_exporter(&exports.exporters, interface, l)?
-                                .map(|(id, export_name)| (id.clone(), export_name.to_string())),
-                            None => exports
-                                .unambiguous
-                                .get(interface)
-                                .map(|id| (id.clone(), interface.to_string())),
-                        }
-                        .filter(|(exporter, _)| Some(exporter.as_ref()) != importer_id);
+                        let resolved = linked_exporter(exports, interface, label, importer_id)?;
                         let Some((exporter_component, export_name)) = resolved else {
                             // Import not provided by another component in the workload.
                             // This is expected for host-provided interfaces (e.g. wasi:*).
@@ -1604,6 +1708,7 @@ impl ResolvedWorkload {
                         }
                     };
 
+                    let companioned = companioned_exporters.contains(&plugin_component_id);
                     for (export_name, export_ty) in
                         import_instance_ty.exports(plugin_component.metadata.component.engine())
                     {
@@ -1634,27 +1739,15 @@ impl ResolvedWorkload {
                                     "linking function import"
                                 );
                                 let export_is_async = func_ty.async_();
-                                // Plain-value async calls always run ephemerally
-                                // (params copied). In a p3-service workload, a call
-                                // carrying only relocatable `stream<T>` handles also
-                                // runs ephemerally — its args/results are relocated
-                                // (see `relocate`) rather than copied — so a
-                                // stream-carrying backend call can't pin or freeze
-                                // the service store.
                                 let plain_safe = func_is_ephemeral_safe(&func_ty);
-                                let relocate = !plain_safe
-                                    && is_service_workload
-                                    && func_is_bridge_safe(&func_ty);
-                                let target = if export_is_async && (plain_safe || relocate) {
-                                    let mode = if relocate {
-                                        EphemeralCallMode::Relocated {
-                                            param_tys: func_ty.params().map(|(_, ty)| ty).collect(),
-                                            result_tys: func_ty.results().collect(),
-                                        }
-                                    } else {
-                                        EphemeralCallMode::PlainValue
-                                    };
-                                    LinkedTarget::Ephemeral(Arc::new(EphemeralLinkedCall {
+                                let crosses = plain_safe
+                                    || func_crosses_to_companion(
+                                        &func_ty,
+                                        &host_resources,
+                                        !export_is_async,
+                                    );
+                                let callee = || {
+                                    Arc::new(EphemeralLinkedCall {
                                         pre: pre.clone(),
                                         invocation: self.invocation.clone(),
                                         engine: plugin_engine.clone(),
@@ -1664,8 +1757,70 @@ impl ResolvedWorkload {
                                         linked_component_ids: nested_linked_component_ids.clone(),
                                         #[cfg(feature = "wasi-tls")]
                                         tls_provider: self.tls_provider.clone(),
-                                        mode,
-                                    }))
+                                    })
+                                };
+                                // A sync import is served by a host function, which
+                                // cannot re-enter its own store, so its callee runs
+                                // beside it in a companion.
+                                let sync_callee = if export_is_async {
+                                    None
+                                } else {
+                                    ensure!(
+                                        crosses,
+                                        "{import_name}.{export_name} is a sync function a linked \
+                                         component cannot serve: its signature carries a host \
+                                         resource, an `error-context`, or a `stream`/`future` \
+                                         that cannot be moved, and a sync call is served from a \
+                                         store of the callee's own, which those cannot enter"
+                                    );
+                                    Some((callee(), Signature::of(&func_ty)))
+                                };
+                                let target = if let Some((callee, signature)) = &sync_callee {
+                                    LinkedTarget::Companion {
+                                        callee: Arc::clone(callee),
+                                        signature: signature.clone(),
+                                    }
+                                } else if plain_safe {
+                                    // Plain-value async calls always run
+                                    // ephemerally (params copied).
+                                    LinkedTarget::Ephemeral {
+                                        call: callee(),
+                                        mode: EphemeralCallMode::PlainValue,
+                                    }
+                                } else if companioned
+                                    && crosses
+                                    && func_carries_resource(&func_ty, |resource| {
+                                        !host_resources.contains(resource)
+                                    })
+                                {
+                                    // A call carrying a resource follows a
+                                    // companioned component to its companion,
+                                    // where that resource lives.
+                                    LinkedTarget::Companion {
+                                        callee: callee(),
+                                        signature: Signature::of(&func_ty),
+                                    }
+                                } else if func_carries_resource(&func_ty, |resource| {
+                                    own_resources
+                                        .get(&plugin_component_id)
+                                        .is_some_and(|own| own.contains(resource))
+                                }) {
+                                    bail!(
+                                        "{import_name}.{export_name} carries a resource its \
+                                         component keeps in a store of its own, alongside a host \
+                                         resource, an `error-context`, or a `stream`/`future` \
+                                         that cannot be moved there"
+                                    );
+                                } else if is_service_workload && func_is_bridge_safe(&func_ty) {
+                                    // In a p3-service workload, a call carrying only
+                                    // relocatable `stream<T>` handles also runs
+                                    // ephemerally, relocated (see `relocate`) rather
+                                    // than copied, so a stream-carrying backend call
+                                    // can't pin or freeze the service store.
+                                    LinkedTarget::Ephemeral {
+                                        call: callee(),
+                                        mode: EphemeralCallMode::Relocated(Signature::of(&func_ty)),
+                                    }
                                 } else {
                                     LinkedTarget::SharedStore
                                 };
@@ -1676,14 +1831,18 @@ impl ResolvedWorkload {
                                     plugin_component_id: plugin_component.id.clone(),
                                     func_idx,
                                     param_tys: Arc::default(),
+                                    attributes: Arc::default(),
                                     target,
                                 };
 
-                                linked_components.insert(inv.plugin_component_id.clone());
+                                links.all.insert(inv.plugin_component_id.clone());
+                                if matches!(inv.target, LinkedTarget::SharedStore) {
+                                    links.in_store.insert(inv.plugin_component_id.clone());
+                                }
 
                                 let export_name = inv.export_name.clone();
-                                if export_is_async {
-                                    linker_instance
+                                match sync_callee {
+                                    None => linker_instance
                                         .func_new_concurrent(
                                             export_name.as_ref(),
                                             move |accessor, _func_ty, params, results| {
@@ -1698,16 +1857,18 @@ impl ResolvedWorkload {
                                         )
                                         .map_err(|e| {
                                             e.context("failed to create concurrent func")
-                                        })?;
-                                } else {
-                                    linker_instance
+                                        })?,
+                                    Some((callee, signature)) => linker_instance
                                         .func_new_async(
                                             export_name.as_ref(),
                                             move |store, _func_ty, params, results| {
                                                 let inv = inv.clone();
+                                                let callee = Arc::clone(&callee);
+                                                let signature = signature.clone();
                                                 Box::new(async move {
-                                                    invoke_linked_sync_export(
-                                                        store, params, results, &inv,
+                                                    companion::invoke_sync(
+                                                        store, params, results, &inv, &callee,
+                                                        &signature,
                                                     )
                                                     .await
                                                 })
@@ -1715,7 +1876,7 @@ impl ResolvedWorkload {
                                         )
                                         .map_err(|e| {
                                             e.context("failed to wrap sync func in async func")
-                                        })?;
+                                        })?,
                                 }
                             }
                             ComponentItem::Resource(resource_ty) => {
@@ -1734,7 +1895,7 @@ impl ResolvedWorkload {
                                         continue;
                                     }
                                 };
-                                let ComponentItem::Resource(_) = item else {
+                                let ComponentItem::Resource(exported_ty) = item else {
                                     trace!(
                                         name = import_name,
                                         resource = export_name,
@@ -1745,12 +1906,7 @@ impl ResolvedWorkload {
 
                                 // TODO: This should be a comparison of the ComponentItem to the
                                 // host resource type, but for some reason the comparison fails.
-                                if export_name == "output-stream"
-                                    || export_name == "input-stream"
-                                    || export_name == "pollable"
-                                    || export_name == "tcp-socket"
-                                    || export_name == "incoming-value-async-body"
-                                {
+                                if HOST_RESOURCE_ALIASES.contains(&export_name) {
                                     trace!(
                                         name = import_name,
                                         resource = export_name,
@@ -1761,8 +1917,32 @@ impl ResolvedWorkload {
 
                                 trace!(name = import_name, resource = export_name, ty = ?resource_ty, "linking resource import");
 
-                                linker_instance
-                                        .resource(export_name, ResourceType::host::<ResourceAny>(), |_, _| Ok(()))
+                                // A resource that lives in a companion store is a
+                                // proxy everywhere else: one the exporter defines
+                                // and keeps there, or one it imported that way
+                                // and re-exports.
+                                let proxied = companioned
+                                    || plugin_component
+                                        .metadata
+                                        .proxied_imports
+                                        .contains(&exported_ty);
+                                if proxied {
+                                    links.proxied.push(resource_ty);
+                                }
+                                let defined = if proxied {
+                                    linker_instance.resource(
+                                        export_name,
+                                        resource_bridge::proxy_resource_type(),
+                                        companion::drop_proxy,
+                                    )
+                                } else {
+                                    linker_instance.resource(
+                                        export_name,
+                                        ResourceType::host::<ResourceAny>(),
+                                        |_, _| Ok(()),
+                                    )
+                                };
+                                defined
                                         .map_err(|e| {
                                             e.context(format!(
                                                 "failed to define resource import: {import_name}.{export_name}"
@@ -1794,7 +1974,7 @@ impl ResolvedWorkload {
             }
         }
 
-        Ok(linked_components)
+        Ok(links)
     }
 
     /// Gets the unique identifier of the workload
@@ -1875,9 +2055,9 @@ impl ResolvedWorkload {
                 .context("component ID not found in workload")?;
             let metadata = &component.metadata;
             let active_template = self.component_ctx_template(metadata);
-            let mut linked_templates = Vec::with_capacity(metadata.linked_components.len());
-            let mut linked_instances = Vec::with_capacity(metadata.linked_components.len());
-            for linked_id in &metadata.linked_components {
+            let mut linked_templates = Vec::with_capacity(metadata.in_store_links.len());
+            let mut linked_instances = Vec::with_capacity(metadata.in_store_links.len());
+            for linked_id in metadata.in_store_links.iter() {
                 let linked = components.get(linked_id).with_context(|| {
                     format!("linked component '{linked_id}' not found in workload")
                 })?;
@@ -2151,11 +2331,7 @@ impl ResolvedWorkload {
         &self,
         metadata: &WorkloadMetadata,
     ) -> anyhow::Result<ServiceStoreRecipe> {
-        let linked_component_ids = metadata
-            .linked_components
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
+        let linked_component_ids = metadata.in_store_links.iter().cloned().collect::<Vec<_>>();
         let linked_metadata = {
             let components = self.components.read().await;
             linked_component_ids
@@ -2341,10 +2517,10 @@ impl ResolvedWorkload {
             } else if types_are_bridge_safe(func.param_tys)
                 && types_are_bridge_safe(func.result_tys)
             {
-                EphemeralCallMode::Relocated {
-                    param_tys: func.param_tys.into(),
-                    result_tys: func.result_tys.into(),
-                }
+                EphemeralCallMode::Relocated(Signature {
+                    params: func.param_tys.into(),
+                    results: func.result_tys.into(),
+                })
             } else {
                 bail!(
                     "{interface}#{} carries a handle that cannot cross the boundary between a \
@@ -2361,18 +2537,21 @@ impl ResolvedWorkload {
                     plugin_component_id: Arc::clone(&component_id),
                     func_idx,
                     param_tys: Arc::default(),
-                    target: LinkedTarget::Ephemeral(Arc::new(EphemeralLinkedCall {
-                        pre: pre.clone(),
-                        invocation: self.invocation.clone(),
-                        engine: engine.clone(),
-                        http_handler: self.http_handler.clone(),
-                        components: self.components.clone(),
-                        active_component_id: Arc::clone(&component_id),
-                        linked_component_ids: linked_component_ids.clone(),
-                        #[cfg(feature = "wasi-tls")]
-                        tls_provider: self.tls_provider.clone(),
+                    attributes: Arc::default(),
+                    target: LinkedTarget::Ephemeral {
+                        call: Arc::new(EphemeralLinkedCall {
+                            pre: pre.clone(),
+                            invocation: self.invocation.clone(),
+                            engine: engine.clone(),
+                            http_handler: self.http_handler.clone(),
+                            components: self.components.clone(),
+                            active_component_id: Arc::clone(&component_id),
+                            linked_component_ids: linked_component_ids.clone(),
+                            #[cfg(feature = "wasi-tls")]
+                            tls_provider: self.tls_provider.clone(),
+                        }),
                         mode,
-                    })),
+                    },
                 },
             );
         }
@@ -2446,6 +2625,7 @@ impl ResolvedWorkload {
                     plugin_component_id: Arc::clone(&service_id),
                     func_idx,
                     param_tys: Arc::default(),
+                    attributes: Arc::default(),
                     target: LinkedTarget::Service(Arc::new(ServiceExportCall {
                         calls: Arc::clone(claim.calls()),
                         param_tys: func.param_tys.into(),
@@ -4027,6 +4207,80 @@ fn topological_sort_components(
     Ok(result)
 }
 
+/// The components one component's imports resolved to.
+#[derive(Default)]
+struct DirectLinks {
+    all: HashSet<Arc<str>>,
+    /// Those reached through the importer's own store.
+    in_store: HashSet<Arc<str>>,
+    /// The importer's resource imports that were defined as proxies.
+    proxied: Vec<ResourceType>,
+}
+
+/// Components whose sync and resource-carrying calls use companions.
+/// Includes their dependencies so resources passed between them have one owner.
+fn companioned_exporters(
+    sync_exporters: &HashSet<Arc<str>>,
+    dependencies: &HashMap<Arc<str>, HashSet<Arc<str>>>,
+) -> HashSet<Arc<str>> {
+    let mut companioned = sync_exporters.clone();
+    let mut pending: Vec<Arc<str>> = companioned.iter().cloned().collect();
+    while let Some(id) = pending.pop() {
+        for dep in dependencies.get(&id).into_iter().flatten() {
+            if companioned.insert(dep.clone()) {
+                pending.push(dep.clone());
+            }
+        }
+    }
+    companioned
+}
+
+/// The workload component, and the name of its export, that an import of
+/// `interface` resolves to.
+///
+/// A labelled import resolves ONLY through its label. It must not fall back to
+/// the unlabelled single-exporter route: a label that names no component here
+/// is one the operator meant for a host interface, and quietly handing it a
+/// guest component instead is the kind of wrong that deploys.
+fn linked_exporter(
+    exports: &ExportMaps,
+    interface: &str,
+    label: Option<&str>,
+    importer_id: Option<&str>,
+) -> anyhow::Result<Option<(Arc<str>, String)>> {
+    let resolved = match label {
+        Some(l) => labelled_exporter(&exports.exporters, interface, l)?
+            .map(|(id, export_name)| (id.clone(), export_name.to_string())),
+        None => exports
+            .unambiguous
+            .get(interface)
+            .map(|id| (id.clone(), interface.to_string())),
+    };
+    Ok(resolved.filter(|(exporter, _)| Some(exporter.as_ref()) != importer_id))
+}
+
+/// Whether an imported instance has a sync function, as its importer declares
+/// it. An exporter may declare the same function `async`.
+fn imports_sync_function(
+    imported: &wasmtime::component::types::ComponentInstance,
+    engine: &wasmtime::Engine,
+) -> bool {
+    imported.exports(engine).any(|(_, export)| match export.ty {
+        ComponentItem::ComponentFunc(func) => !func.async_(),
+        _ => false,
+    })
+}
+
+/// The resources a linked interface re-exports from the host under these
+/// names, which stay the host's own type.
+const HOST_RESOURCE_ALIASES: [&str; 5] = [
+    "output-stream",
+    "input-stream",
+    "pollable",
+    "tcp-socket",
+    "incoming-value-async-body",
+];
+
 /// Expand `direct_links` into the full transitive closure. One hop suffices
 /// because components are processed in topological order, so each
 /// `resolved_links[dep]` already holds that dep's complete closure.
@@ -4567,6 +4821,53 @@ mod tests {
             vec![WitInterface::from(MARKER)],
         ));
         HashMap::from([(plugin.id(), plugin as Arc<dyn HostPlugin>)])
+    }
+
+    #[tokio::test]
+    async fn sync_link_rejects_reexported_host_resources() {
+        let interface = r#"(instance
+            (export "input-stream" (type $r (sub resource)))
+            (export "consume" (func (param "value" (borrow $r)))))"#;
+        let mut exporter = component_from_wat(
+            "exporter",
+            r#"(component
+                (import "host" (instance $host
+                    (export "input-stream" (type (sub resource)))))
+                (alias export $host "input-stream" (type $r))
+                (core module $m (func (export "consume") (param i32)))
+                (core instance $i (instantiate $m))
+                (func $consume (param "value" (borrow $r))
+                    (canon lift (core func $i "consume")))
+                (instance $api
+                    (export "input-stream" (type $r))
+                    (export "consume" (func $consume)))
+                (export "test:probe/alias" (instance $api)))"#,
+        );
+        {
+            let mut host = exporter.metadata.linker.instance("host").unwrap();
+            host.resource("input-stream", ResourceType::host::<u32>(), |_, _| Ok(()))
+                .unwrap();
+        }
+        let importer = component_from_wat(
+            "importer",
+            &format!(r#"(component (import "test:probe/alias" {interface}))"#),
+        );
+        let handler: Arc<dyn crate::host::http::HostHandler> =
+            Arc::new(crate::host::http::NullServer::default());
+        let err = marker_workload(vec![exporter, importer])
+            .resolve(
+                None,
+                &crate::plugin::PluginBindings::new(),
+                &crate::host::HostRef::from_handler(&handler),
+                &crate::observability::Meters::default(),
+            )
+            .await
+            .expect_err("host resources cannot enter a companion store");
+        assert!(
+            err.to_string()
+                .contains("signature carries a host resource"),
+            "{err:#}"
+        );
     }
 
     /// Every component id `bind_plugins` reported as bound. Ids are fresh
@@ -6499,6 +6800,44 @@ mod tests {
                 .expect("unambiguous")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn companioned_exporters_reach_what_a_sync_exporter_imports() {
+        let ids: Vec<Arc<str>> = ["caller", "consumer", "producer", "logger", "unrelated"]
+            .into_iter()
+            .map(Arc::from)
+            .collect();
+        let [caller, consumer, producer, logger, unrelated] = ids.as_slice() else {
+            unreachable!()
+        };
+        let dependencies = HashMap::from([
+            (
+                caller.clone(),
+                HashSet::from([consumer.clone(), unrelated.clone()]),
+            ),
+            (consumer.clone(), HashSet::from([producer.clone()])),
+            (producer.clone(), HashSet::from([logger.clone()])),
+            (logger.clone(), HashSet::new()),
+            (unrelated.clone(), HashSet::new()),
+        ]);
+
+        let companioned = companioned_exporters(&HashSet::from([consumer.clone()]), &dependencies);
+
+        // Everything a resource can reach the sync exporter from, however far
+        // down, and nothing that merely imports it or sits beside it.
+        assert_eq!(
+            companioned,
+            HashSet::from([consumer.clone(), producer.clone(), logger.clone()])
+        );
+    }
+
+    #[test]
+    fn no_sync_exporter_means_nothing_is_companioned() {
+        let a: Arc<str> = Arc::from("a");
+        let b: Arc<str> = Arc::from("b");
+        let dependencies = HashMap::from([(a, HashSet::from([b]))]);
+        assert!(companioned_exporters(&HashSet::new(), &dependencies).is_empty());
     }
 
     #[test]

@@ -11,7 +11,6 @@ use std::{
     sync::Arc,
 };
 
-use wasmtime::StoreContextMut;
 use wasmtime::component::{Accessor, Instance, ResourceTable};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpHooks, WasiHttpView};
@@ -70,12 +69,17 @@ pub struct SharedCtx {
     /// Store-owned linked-component instances, keyed by component id.
     /// Dropping the store reclaims the instances without external cleanup.
     pub exporter_instances: HashMap<Arc<str>, Instance>,
-    /// Present only on a *host component plugin* store: the registry of real
-    /// resources it has handed out across the bridge. Its presence also marks
-    /// this store as the plugin (real) side when relocating `resource` handles —
-    /// a caller store leaves it `None` and holds opaque proxies instead. See
+    /// Present only on a store whose component hands its resources to other
+    /// stores — a host component plugin, or a linked component's companion: the
+    /// registry of the real resources behind the proxies those stores hold. See
     /// [`crate::engine::store::resource_bridge`].
     pub resource_registry: Option<crate::engine::store::resource_bridge::ResourceRegistry>,
+    /// Proxies made for `borrow` arguments, until the call they were made for
+    /// takes them; see [`crate::engine::store::resource_bridge::take_lent`].
+    pub(crate) lent_proxies: Vec<wasmtime::component::ResourceAny>,
+    /// This store's linked companions and the resources shared with them. See
+    /// [`crate::engine::companion`].
+    pub(crate) links: crate::engine::companion::LinkState,
     /// The in-flight calls on this store whose dispatchers may abandon them;
     /// read by the store's epoch callback. See [`crate::engine::abandon`].
     pub abandoned: Arc<crate::engine::abandon::AbandonedCalls>,
@@ -146,6 +150,8 @@ impl SharedCtx {
             contexts: Default::default(),
             exporter_instances: Default::default(),
             resource_registry: None,
+            lent_proxies: Vec::new(),
+            links: Default::default(),
             abandoned: Arc::default(),
             executed: Arc::default(),
             memory_limiter: Default::default(),
@@ -156,7 +162,11 @@ impl SharedCtx {
     /// Marks this store as a host-component-plugin store, enabling it to keep
     /// real resources alive as it hands proxies across the bridge.
     pub fn with_resource_registry(mut self) -> Self {
-        self.resource_registry = Some(Default::default());
+        self.resource_registry = Some(
+            crate::engine::store::resource_bridge::ResourceRegistry::new(
+                crate::engine::store::resource_bridge::Owner::Plugin,
+            ),
+        );
         self
     }
 
@@ -226,38 +236,6 @@ impl Drop for AccessorActiveCtxGuard<'_> {
                 .data_mut()
                 .set_active_ctx(&self.previous_component_id)
         });
-    }
-}
-
-pub(crate) struct StoreActiveCtxGuard<'a> {
-    store: StoreContextMut<'a, SharedCtx>,
-    previous_component_id: Arc<str>,
-}
-
-impl<'a> StoreActiveCtxGuard<'a> {
-    pub(crate) fn new(
-        mut store: StoreContextMut<'a, SharedCtx>,
-        id: &Arc<str>,
-    ) -> wasmtime::Result<Self> {
-        let previous_component_id = store.data().active_ctx.component_id.clone();
-        store.data_mut().set_active_ctx(id)?;
-        Ok(Self {
-            store,
-            previous_component_id,
-        })
-    }
-
-    pub(crate) fn store_mut(&mut self) -> &mut StoreContextMut<'a, SharedCtx> {
-        &mut self.store
-    }
-}
-
-impl Drop for StoreActiveCtxGuard<'_> {
-    fn drop(&mut self) {
-        let _ = self
-            .store
-            .data_mut()
-            .set_active_ctx(&self.previous_component_id);
     }
 }
 
@@ -720,34 +698,6 @@ mod tests {
         shared.set_active_ctx(&comp_a).unwrap();
         assert_eq!(shared.active_ctx.component_id.as_ref(), "comp-a");
         assert!(shared.contexts.is_empty());
-    }
-
-    #[test]
-    fn store_active_ctx_guard_restores_on_drop() {
-        setup();
-        use wasmtime::AsContextMut;
-
-        let mut config = wasmtime::Config::new();
-        config.wasm_component_model(true);
-        let engine = wasmtime::Engine::new(&config).unwrap();
-
-        let ctx_a = Ctx::builder("wk", "comp-a").build();
-        let ctx_b = Ctx::builder("wk", "comp-b").build();
-        let comp_b_id: Arc<str> = Arc::from("comp-b");
-
-        let mut shared = SharedCtx::new(ctx_a);
-        shared.contexts.insert(comp_b_id.clone(), ctx_b);
-        let mut store = wasmtime::Store::new(&engine, shared);
-
-        {
-            let mut guard = StoreActiveCtxGuard::new(store.as_context_mut(), &comp_b_id).unwrap();
-            assert_eq!(
-                guard.store_mut().data().active_ctx.component_id.as_ref(),
-                "comp-b"
-            );
-        }
-
-        assert_eq!(store.data().active_ctx.component_id.as_ref(), "comp-a");
     }
 
     /// A store an embedder built for itself must never be ended by
