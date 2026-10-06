@@ -36,8 +36,10 @@ jq -n \
       workflow_path: {
         include: [
           ".github/workflows/bench.yml",
+          ".github/workflows/bench-run.yml",
           ".github/workflows/bench-compare.yml",
-          ".github/workflows/k6bench.yml"
+          ".github/workflows/k6bench.yml",
+          ".github/workflows/k6bench-run.yml"
         ],
         exclude: []
       }

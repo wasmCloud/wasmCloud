@@ -15,11 +15,17 @@ test('publishes the data artifact and retries a conflicting history write', () =
     const bundle = join(root, 'bundle');
     mkdirSync(bin);
     mkdirSync(bundle);
-    const row = { sha: 'a'.repeat(40), bench: 'http_invoke', group: 'g', param: 'p', run_attempt: '1', metric: 'mean_ns', timestamp: '2026-10-06T12:00:00Z' };
+    const row = {
+      sha: 'a'.repeat(40), short_sha: 'a'.repeat(12), ref: 'main',
+      run_id: '123', run_attempt: '1', bench: 'http_invoke',
+      group: 'g', param: 'p', metric: 'mean_ns', timestamp: '2026-10-06T12:00:00Z',
+    };
     const competing = { ...row, sha: 'b'.repeat(40) };
     writeFileSync(join(bundle, 'metadata.json'), JSON.stringify({
       bench: 'http_invoke',
       run_id: '123',
+      run_attempt: '1',
+      ref: 'main',
       sha: 'a'.repeat(40),
       short_sha: 'a'.repeat(12),
       timestamp: '2026-10-06T12:00:00Z',
@@ -73,9 +79,12 @@ if (args[0] === 's3' && args[1] === 'cp') {
       PATH: `${bin}:${process.env.PATH}`,
       MOCK_S3: root,
       WASMCLOUD_BENCH_NAME: 'http_invoke',
+      WASMCLOUD_BENCH_REF: 'main',
+      WASMCLOUD_BENCH_SHA: 'a'.repeat(40),
       WASMCLOUD_BENCH_S3_BUCKET: 'bucket',
       WASMCLOUD_BENCH_CF_DISTRIBUTION_ID: 'distribution',
       GITHUB_RUN_ID: '123',
+      GITHUB_RUN_ATTEMPT: '1',
     };
     const validate = spawnSync(process.execPath, [script, 'validate', bundle], { env, encoding: 'utf8' });
     assert.equal(validate.status, 0, validate.stderr);
@@ -84,10 +93,52 @@ if (args[0] === 's3' && args[1] === 'cp') {
     assert.equal(JSON.parse(readFileSync(join(root, 'history.json'), 'utf8')).length, 2);
     assert.equal(readFileSync(join(root, 'bucket/runs/2026-10-06/aaaaaaaaaaaa/123/http_invoke/results.jsonl'), 'utf8'), JSON.stringify(row) + '\n');
 
+    writeFileSync(join(bundle, 'results.jsonl'), JSON.stringify({ ...row, sha: 'b'.repeat(40) }) + '\n');
+    const forged = spawnSync(process.execPath, [script, 'validate', bundle], { env, encoding: 'utf8' });
+    assert.notEqual(forged.status, 0);
+
     rmSync(join(bundle, 'results.jsonl'));
     symlinkSync(join(root, 'history.json'), join(bundle, 'results.jsonl'));
     const invalid = spawnSync(process.execPath, [script, 'validate', bundle], { env, encoding: 'utf8' });
     assert.notEqual(invalid.status, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('validates k6 rows against the resolved run', () => {
+  const root = mkdtempSync(join(tmpdir(), 'k6-publish-test-'));
+  try {
+    const metadata = {
+      bench: 'k6-http-hello-constant',
+      ref: 'v2.10.3',
+      sha: 'c'.repeat(40),
+      short_sha: 'c'.repeat(12),
+      run_id: '456',
+      run_attempt: '2',
+      timestamp: '2026-10-06T12:00:00Z',
+    };
+    const row = {
+      bench: 'k6', group: 'http-hello', param: 'constant-1000',
+      sha: metadata.sha, short_sha: metadata.short_sha, ref: metadata.ref,
+      run_id: metadata.run_id, run_attempt: metadata.run_attempt,
+    };
+    writeFileSync(join(root, 'metadata.json'), JSON.stringify(metadata));
+    writeFileSync(join(root, 'results.jsonl'), JSON.stringify(row) + '\n');
+    const env = {
+      ...process.env,
+      WASMCLOUD_BENCH_NAME: metadata.bench,
+      WASMCLOUD_BENCH_ROW_NAME: 'k6',
+      WASMCLOUD_BENCH_REF: metadata.ref,
+      WASMCLOUD_BENCH_SHA: metadata.sha,
+      GITHUB_RUN_ID: metadata.run_id,
+      GITHUB_RUN_ATTEMPT: metadata.run_attempt,
+    };
+    const valid = spawnSync(process.execPath, [script, 'validate', root], { env, encoding: 'utf8' });
+    assert.equal(valid.status, 0, valid.stderr);
+    writeFileSync(join(root, 'results.jsonl'), JSON.stringify({ ...row, run_attempt: '1' }) + '\n');
+    const stale = spawnSync(process.execPath, [script, 'validate', root], { env, encoding: 'utf8' });
+    assert.notEqual(stale.status, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

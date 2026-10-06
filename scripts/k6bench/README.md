@@ -209,8 +209,9 @@ The environment variables they read are listed in [`lib/config.js`](lib/config.j
 
 ## CI
 
-[`.github/workflows/k6bench.yml`](../../.github/workflows/k6bench.yml) runs on
-the Hetzner bench host, on `release: published` and on demand
+[`k6bench.yml`](../../.github/workflows/k6bench.yml) calls
+[`k6bench-run.yml`](../../.github/workflows/k6bench-run.yml) for each matrix
+entry on the Hetzner bench host, on `release: published` and on demand
 (`workflow_dispatch`):
 
 - **Release:** runs the release set against the images published for that
@@ -228,6 +229,7 @@ Each run:
 - prepares a data artifact for a GitHub-hosted publisher, which updates the
   same S3 layout and `history.json` as the criterion benches
   (`bench: "k6"`, `group: <scenario>`, `param: <profile>-<rate>`)
+- publishes as soon as that entry finishes, without waiting for the release set
 - ends by deleting the cluster and stopping the socket-activated Docker daemon,
   so the criterion and gungraun benches, whose pre-flight refuses a running
   daemon, get the host as they expect it

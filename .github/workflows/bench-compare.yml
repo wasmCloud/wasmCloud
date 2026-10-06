@@ -50,11 +50,7 @@ on:
         type: string
         required: true
 
-# Comparison runs share the bench-host concurrency group with the main bench
-# workflow so we never have two cargo bench processes on the host at once.
-concurrency:
-  group: bench-host
-  cancel-in-progress: false
+# The dedicated runner serializes comparison and trend measurements.
 
 # Workflow-level permissions are the floor; the job below stays at this
 # floor — comparison runs don't write to S3, don't post comments, and
