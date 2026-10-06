@@ -78,7 +78,6 @@ jobs:
     outputs:
       runs: ${{ steps.set.outputs.runs }}
       ref: ${{ steps.set.outputs.ref }}
-      checkout_ref: ${{ steps.set.outputs.checkout_ref }}
       release: ${{ steps.set.outputs.release }}
       sha: ${{ steps.commit.outputs.sha }}
     env:
@@ -165,7 +164,6 @@ jobs:
     with:
       run: ${{ matrix.run }}
       ref: ${{ needs.matrix.outputs.ref }}
-      checkout_ref: ${{ needs.matrix.outputs.checkout_ref }}
       commit_sha: ${{ needs.matrix.outputs.sha }}
       artifact_id: ${{ format('{0}', strategy.job-index) }}
       release: ${{ needs.matrix.outputs.release }}
