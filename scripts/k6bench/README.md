@@ -230,6 +230,7 @@ Each run:
   same S3 layout and `history.json` as the criterion benches
   (`bench: "k6"`, `group: <scenario>`, `param: <profile>-<rate>`)
 - publishes as soon as that entry finishes, without waiting for the release set
+- checks out the commit resolved before queuing, even if a branch or PR moves
 - ends by deleting the cluster and stopping the socket-activated Docker daemon,
   so the criterion and gungraun benches, whose pre-flight refuses a running
   daemon, get the host as they expect it

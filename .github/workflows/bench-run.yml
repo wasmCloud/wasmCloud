@@ -9,9 +9,6 @@ on:
       ref:
         required: true
         type: string
-      checkout_ref:
-        required: true
-        type: string
       commit_sha:
         required: true
         type: string
@@ -58,7 +55,8 @@ jobs:
       - name: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.checkout_ref }}
+          # Queued jobs measure the commit resolved by the matrix job.
+          ref: ${{ inputs.commit_sha }}
           fetch-depth: 0
           # Don't leave the GITHUB_TOKEN in .git/config; the bench host
           # then runs untrusted user code (the bench under test) and we

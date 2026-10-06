@@ -462,7 +462,8 @@ each matrix entry through [`bench-run.yml`](../../.github/workflows/bench-run.ym
   `http_invoke` / `wasmtime_baseline` / `wasmtime_serve`) and `ref`
   (any branch/tag/sha; defaults to the workflow's ref).
 - The single `[self-hosted, bench, hetzner]` runner serializes measurements.
-  Each entry publishes as soon as its own measurement completes.
+  Each entry measures the commit resolved before queuing and publishes as soon
+  as its own measurement completes.
 - The bench job has `contents: read`. Only the GitHub-hosted publisher has
   `id-token: write` for AWS OIDC.
 - `CARGO_TARGET_DIR=/var/lib/bench/target` so the cache survives

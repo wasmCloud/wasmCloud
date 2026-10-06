@@ -51,12 +51,9 @@ jobs:
       contents: read
     outputs:
       benches: ${{ steps.set.outputs.benches }}
-      # `ref` is the label recorded on each data row; `checkout_ref` is what
-      # actions/checkout is given. They differ only for a pull-request ref,
-      # where the row says `pull/123` but the checkout needs the full
-      # refs/pull/123/head.
+      # `ref` labels each data row; the matrix checkout resolves the commit.
+      # Pull-request labels use `pull/123`, while checkout uses the full ref.
       ref: ${{ steps.set.outputs.ref }}
-      checkout_ref: ${{ steps.set.outputs.checkout_ref }}
       sha: ${{ steps.commit.outputs.sha }}
     env:
       # Subset of inputs.bench.options to run automatically on `release:
@@ -134,7 +131,6 @@ jobs:
     with:
       bench: ${{ matrix.bench }}
       ref: ${{ needs.matrix.outputs.ref }}
-      checkout_ref: ${{ needs.matrix.outputs.checkout_ref }}
       commit_sha: ${{ needs.matrix.outputs.sha }}
       artifact_id: ${{ format('{0}', strategy.job-index) }}
     secrets:
