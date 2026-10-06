@@ -423,7 +423,7 @@ runtime:
       cpu: "250m"
       memory: "64Mi"
     limits:
-      memory: "512Mi"
+      memory: "768Mi"
     # -- Ceiling on any single guest linear memory. Empty leaves wasmtime's
     # default of 4GiB.
     defaultHeapMemory: ""
