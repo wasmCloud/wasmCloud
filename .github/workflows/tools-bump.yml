@@ -56,6 +56,9 @@ jobs:
         with:
           branch: bump/tool-versions
           delete-branch: true
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          signoff: true
           title: 'ci: bump pinned CI tool versions'
           commit-message: |
             ci: bump pinned CI tool versions
