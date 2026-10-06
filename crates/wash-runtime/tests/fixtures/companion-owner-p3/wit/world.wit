@@ -1,0 +1,30 @@
+package wasmcloud:companion-test@0.1.0;
+
+interface tokens {
+    /// A resource this component defines. Its constructor is sync, so the
+    /// component is reached by a sync call and runs in a store of its own.
+    resource token {
+        constructor(name: string);
+        /// Resolves with the message of the next `signal` on this token.
+        wait: async func() -> string;
+        signal: async func(msg: string);
+    }
+
+    /// Makes a token at once, and hands it over only after `release`.
+    make-held: async func(name: string) -> token;
+    release: func();
+
+    /// How many tokens exist right now.
+    live: func() -> u32;
+
+    /// Runs for `ms` without returning to the host.
+    hold: func(ms: u32);
+}
+
+world owner {
+    import wasi:cli/types@0.3.0;
+    import wasi:clocks/types@0.3.0;
+    import wasi:clocks/monotonic-clock@0.3.0;
+
+    export tokens;
+}

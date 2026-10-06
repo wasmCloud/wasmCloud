@@ -77,10 +77,7 @@ pub(crate) use messaging::{AsyncMessaging, MessagingTask};
 pub(crate) use capability::decode_bind_reply;
 
 #[cfg(feature = "host-component-plugins")]
-use capability::{
-    admit_and_spawn_call, admit_and_spawn_secret_source, drain_plugin_resources,
-    flush_pending_resource_drops,
-};
+use capability::{admit_and_spawn_call, admit_and_spawn_secret_source, drain_plugin_resources};
 pub(crate) use http::HttpTask;
 
 /// A host-invoked handler export the TriggerService serves, carrying the receiver end
@@ -695,7 +692,7 @@ impl PreparedTriggerDriver {
             // Closed channels end the driver; proxy drops only pause it.
             #[cfg(feature = "host-component-plugins")]
             {
-                flush_pending_resource_drops(&mut *store).await;
+                crate::engine::store::resource_bridge::flush_drops(&mut *store).await;
                 serve_again = outcomes.contains(&ServeOutcome::FlushDrops);
             }
             #[cfg(not(feature = "host-component-plugins"))]

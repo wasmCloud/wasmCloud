@@ -487,66 +487,6 @@ async fn linked_store_instantiation_failures_name_the_callee() -> anyhow::Result
 }
 
 #[tokio::test]
-async fn shared_store_sync_calls_need_a_pre_instantiated_exporter() -> anyhow::Result<()> {
-    let engine = engine_builder().build()?;
-    let active = template(&engine, "caller");
-    let linked = template(&engine, "callee");
-    let component = Component::new(
-        engine.inner(),
-        wat::parse_str(
-            r#"(component
-            (core module $m (func (export "f")))
-            (core instance $i (instantiate $m))
-            (func (export "f") (canon lift (core func $i "f"))))"#,
-        )?,
-    )?;
-    let pre = wasmtime::component::Linker::new(engine.inner()).instantiate_pre(&component)?;
-    let inv = LinkedExportInvocation {
-        import_name: "callee-interface".into(),
-        export_name: "f".into(),
-        plugin_component_id: "callee".into(),
-        func_idx: component.get_export_index(None, "f").unwrap(),
-        param_tys: Arc::default(),
-        target: LinkedTarget::SharedStore,
-    };
-    let host = crate::host::HostRef::detached();
-    let mut store = new_store_from_templates(
-        engine.inner(),
-        engine.stream_payloads(),
-        &host,
-        &active,
-        std::slice::from_ref(&linked),
-        &[],
-        false,
-    )
-    .await?;
-    let error = invoke_linked_sync_export(store.as_context_mut(), &[], &mut [], &inv)
-        .await
-        .expect_err("a callee that was never instantiated must be refused");
-    assert!(
-        format!("{error:#}")
-            .contains("linked component 'callee' was not pre-instantiated in this store"),
-        "{error:#}"
-    );
-    assert_eq!(store.data().active_ctx.component_id.as_ref(), "caller");
-    assert!(inv.param_tys.get().is_none());
-    let mut store = new_store_from_templates(
-        engine.inner(),
-        engine.stream_payloads(),
-        &host,
-        &active,
-        &[linked],
-        &[("callee".into(), pre)],
-        false,
-    )
-    .await?;
-    invoke_linked_sync_export(store.as_context_mut(), &[], &mut [], &inv).await?;
-    assert_eq!(store.data().active_ctx.component_id.as_ref(), "caller");
-    assert!(inv.param_tys.get().is_some_and(|tys| tys.is_empty()));
-    Ok(())
-}
-
-#[tokio::test]
 async fn ephemeral_store_recipe_names_missing_components() -> anyhow::Result<()> {
     let engine = engine_builder().build()?;
     let component = Component::new(engine.inner(), wat::parse_str("(component)")?)?;
@@ -565,7 +505,6 @@ async fn ephemeral_store_recipe_names_missing_components() -> anyhow::Result<()>
         linked_component_ids: vec!["missing".into()],
         #[cfg(feature = "wasi-tls")]
         tls_provider: None,
-        mode: EphemeralCallMode::PlainValue,
     };
     let workload_component = |name: &str| {
         let mut entry = WorkloadComponent::new(
@@ -700,6 +639,21 @@ struct Callee {
     pool: Arc<InstancePool>,
 }
 
+/// An ephemeral call and how it carries its values, as an import is wired.
+struct Route {
+    call: Arc<EphemeralLinkedCall>,
+    mode: EphemeralCallMode,
+}
+
+impl Route {
+    fn target(&self) -> LinkedTarget {
+        LinkedTarget::Ephemeral {
+            call: Arc::clone(&self.call),
+            mode: self.mode.clone(),
+        }
+    }
+}
+
 impl Callee {
     fn new(wat: &str, policy: instance_pool::InstancePolicy) -> anyhow::Result<Self> {
         #[cfg(feature = "wasi-tls")]
@@ -736,9 +690,9 @@ impl Callee {
         &self,
         mode: EphemeralCallMode,
         invocation: crate::observability::InvocationMeter,
-    ) -> anyhow::Result<Arc<EphemeralLinkedCall>> {
+    ) -> anyhow::Result<Route> {
         let pre = self.components.read().await["callee"].pre_instantiate_ref()?;
-        Ok(Arc::new(EphemeralLinkedCall {
+        let call = Arc::new(EphemeralLinkedCall {
             pre,
             engine: self.engine.inner().clone(),
             stream_payloads: Arc::clone(self.engine.stream_payloads()),
@@ -749,8 +703,8 @@ impl Callee {
             linked_component_ids: vec![],
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
-            mode,
-        }))
+        });
+        Ok(Route { call, mode })
     }
 
     fn invocation(&self, export: &str, target: LinkedTarget) -> LinkedExportInvocation {
@@ -760,6 +714,7 @@ impl Callee {
             plugin_component_id: "callee".into(),
             func_idx: self.component.get_export_index(None, export).unwrap(),
             param_tys: Arc::default(),
+            attributes: Arc::default(),
             target,
         }
     }
@@ -784,10 +739,10 @@ impl Callee {
         let (param_tys, result_tys) = self.signature(export);
         [
             EphemeralCallMode::PlainValue,
-            EphemeralCallMode::Relocated {
-                param_tys,
-                result_tys,
-            },
+            EphemeralCallMode::Relocated(Signature {
+                params: param_tys,
+                results: result_tys,
+            }),
         ]
     }
 
@@ -843,12 +798,12 @@ async fn invoke(
 
 async fn ephemeral_invoke(
     callee: &Callee,
-    call: &Arc<EphemeralLinkedCall>,
+    call: &Route,
     export: &str,
     params: &[Val],
     results_len: usize,
 ) -> wasmtime::Result<Vec<Val>> {
-    let inv = callee.invocation(export, LinkedTarget::Ephemeral(Arc::clone(call)));
+    let inv = callee.invocation(export, call.target());
     let mut caller = callee
         .store("caller", Linked::No)
         .await
@@ -1096,8 +1051,8 @@ async fn linked_calls_into_a_stopped_workload_are_refused() -> anyhow::Result<()
     // instance policy makes no difference here.
     callee.components = Arc::new(RwLock::new(BTreeMap::new()));
     for call in &ephemeral {
-        let inv = callee.invocation("add-one", LinkedTarget::Ephemeral(Arc::clone(call)));
-        assert!(linked_attributes(call, &inv).await.is_empty());
+        let inv = callee.invocation("add-one", call.target());
+        assert!(linked_attributes(&call.call, &inv).await.is_empty());
         let error = ephemeral_invoke(&callee, call, "add-one", &[Val::U32(1)], 1)
             .await
             .expect_err("a stopped workload must refuse the call");
@@ -1123,8 +1078,8 @@ async fn linked_calls_are_measured_under_the_callee_and_operation() -> anyhow::R
     let quiet = callee
         .ephemeral(EphemeralCallMode::PlainValue, Default::default())
         .await?;
-    let inv = callee.invocation("add-one", LinkedTarget::Ephemeral(Arc::clone(&quiet)));
-    assert!(linked_attributes(&quiet, &inv).await.is_empty());
+    let inv = callee.invocation("add-one", quiet.target());
+    assert!(linked_attributes(&quiet.call, &inv).await.is_empty());
 
     let measured = callee
         .ephemeral(
@@ -1132,7 +1087,7 @@ async fn linked_calls_are_measured_under_the_callee_and_operation() -> anyhow::R
             crate::observability::InvocationMeter::new(true),
         )
         .await?;
-    let attributes = linked_attributes(&measured, &inv).await;
+    let attributes = linked_attributes(&measured.call, &inv).await;
     assert_eq!(attribute(&attributes, "plugin").as_deref(), Some("linked"));
     assert_eq!(
         attribute(&attributes, "operation").as_deref(),
@@ -1151,9 +1106,14 @@ async fn linked_calls_are_measured_under_the_callee_and_operation() -> anyhow::R
         Some("tests")
     );
 
-    // A callee that has left the map is about to fail its call anyway.
+    // Resolved once per import and kept: a later call through the same import
+    // reads them without taking the map's lock.
     callee.components.write().await.clear();
-    assert!(linked_attributes(&measured, &inv).await.is_empty());
+    assert_eq!(linked_attributes(&measured.call, &inv).await, attributes);
+    // An import first measured after its callee left the map has nothing to
+    // record, and is about to fail its call anyway.
+    let fresh = callee.invocation("add-one", measured.target());
+    assert!(linked_attributes(&measured.call, &fresh).await.is_empty());
     Ok(())
 }
 

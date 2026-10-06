@@ -493,18 +493,15 @@ mod external_calls {
                 assert_eq!(route.import_name.as_ref(), API);
                 assert_eq!(route.export_name.as_ref(), "f");
                 assert_eq!(route.plugin_component_id.as_ref(), id);
-                let LinkedTarget::Ephemeral(call) = &route.target else {
+                let LinkedTarget::Ephemeral { mode, .. } = &route.target else {
                     panic!("expected component route")
                 };
-                match &call.mode {
+                match mode {
                     EphemeralCallMode::PlainValue => assert_eq!(payload, "u32"),
-                    EphemeralCallMode::Relocated {
-                        param_tys,
-                        result_tys,
-                    } => {
+                    EphemeralCallMode::Relocated(signature) => {
                         assert_ne!(payload, "u32");
-                        assert_eq!(&**param_tys, params);
-                        assert_eq!(&**result_tys, results);
+                        assert_eq!(&*signature.params, params);
+                        assert_eq!(&*signature.results, results);
                     }
                 }
                 let service_routes = resolved.service_export_invocations(&claim, API, &funcs)?;
