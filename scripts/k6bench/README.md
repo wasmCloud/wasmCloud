@@ -225,7 +225,8 @@ Each run:
 - gets a fresh kind cluster
 - writes a markdown step summary
 - uploads a 90-day artifact
-- goes to the same S3 layout and `history.json` as the criterion benches
+- prepares a data artifact for a GitHub-hosted publisher, which updates the
+  same S3 layout and `history.json` as the criterion benches
   (`bench: "k6"`, `group: <scenario>`, `param: <profile>-<rate>`)
 - ends by deleting the cluster and stopping the socket-activated Docker daemon,
   so the criterion and gungraun benches, whose pre-flight refuses a running
