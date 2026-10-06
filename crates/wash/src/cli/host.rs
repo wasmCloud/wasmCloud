@@ -489,14 +489,39 @@ pub struct HostCommand {
     /// How the raw-socket egress policy is applied.
     ///
     /// `enforce` (the default) refuses a connection the policy does not permit:
-    /// a workload reaches only what its `allowedHosts` declares. A socket
-    /// connects to an address, not a name, so the entry that permits it is a
-    /// literal IP or `*`; a DNS name or wildcard entry covers `wasi:http` only.
+    /// a workload reaches only what its `allowedHosts` declares. An entry
+    /// permits an address by naming it (a literal IP, or `*`) or by naming a
+    /// host the workload itself resolved into it — see
+    /// `--ip-name-lookup-grant-lifetime`.
     ///
     /// `count` evaluates the policy, records what it would refuse in the
-    /// `would_deny` counters, and allows the connection anyway.
+    /// `would_deny` counters, and allows the connection anyway — range
+    /// refusals included, not only a missing `allowedHosts` entry.
     #[arg(long = "socket-egress", value_enum, default_value = "enforce")]
     pub socket_egress: SocketEgressMode,
+
+    /// How long an address a workload resolved stays connectable under an
+    /// `allowedHosts` entry naming the host it resolved.
+    ///
+    /// A raw socket carries no name, so `allowedHosts: [db.internal:5432]`
+    /// permits a socket only to an address a `wasi:sockets` lookup of
+    /// `db.internal` handed that workload, on that port, for this long after
+    /// the lookup. Not a DNS TTL — the resolver returns none. A workload that
+    /// caches an address longer must resolve again before a new connect; open
+    /// connections are unaffected. `0s` turns name entries off for sockets.
+    ///
+    /// The grant is the address, not the server: two names behind one address
+    /// are indistinguishable, and a name that resolves to another private
+    /// service grants that service unless `--deny-private-ranges` is set.
+    //
+    // A blank value counts as unset, as for `--guest-memory-mode`.
+    #[arg(
+        long = "ip-name-lookup-grant-lifetime",
+        env = "WASH_IP_NAME_LOOKUP_GRANT_LIFETIME",
+        value_parser = parse_ip_name_lookup_grant_lifetime,
+        default_value = "60s"
+    )]
+    pub ip_name_lookup_grant_lifetime: Duration,
 
     /// Deny outbound connections to loopback, link-local (including the cloud
     /// metadata address), multicast, and documentation ranges — including
@@ -908,6 +933,10 @@ impl CliCommand for HostCommand {
             // guest policy is derived from this one, so they all read the same
             // table and a port reserved here is seen by all of them.
             host_owned_ports: Some(wash_runtime::host::ports::PortTable::new()),
+            resolved_names: wash_runtime::sockets::resolved_names::ResolvedNameLimits {
+                lifetime: self.ip_name_lookup_grant_lifetime,
+                ..Default::default()
+            },
             ..Default::default()
         });
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
@@ -1532,6 +1561,22 @@ mod policy_mode_tests {
     }
 
     #[test]
+    fn an_ip_name_lookup_grant_lasts_a_minute_unless_told_otherwise() {
+        assert_eq!(
+            parse(&[]).ip_name_lookup_grant_lifetime,
+            std::time::Duration::from_secs(60)
+        );
+        assert_eq!(
+            parse(&["--ip-name-lookup-grant-lifetime=5m"]).ip_name_lookup_grant_lifetime,
+            std::time::Duration::from_secs(300)
+        );
+        assert_eq!(
+            parse(&["--ip-name-lookup-grant-lifetime="]).ip_name_lookup_grant_lifetime,
+            std::time::Duration::from_secs(60)
+        );
+    }
+
+    #[test]
     fn count_is_still_selectable() {
         let host = parse(&["--guest-memory-mode=count", "--socket-egress=count"]);
         assert_eq!(host.guest_memory_mode, GuestMemoryMode::Count);
@@ -1573,6 +1618,15 @@ pub enum GuestMemoryMode {
     /// Refuse guest memory growth past `--max-guest-memory`.
     #[default]
     Enforce,
+}
+
+/// `--ip-name-lookup-grant-lifetime` from a flag or environment value, reading a
+/// blank one as unset.
+fn parse_ip_name_lookup_grant_lifetime(raw: &str) -> Result<Duration, String> {
+    if raw.trim().is_empty() {
+        return Ok(wash_runtime::sockets::resolved_names::ResolvedNameLimits::default().lifetime);
+    }
+    humantime::parse_duration(raw).map_err(|e| e.to_string())
 }
 
 /// [`GuestMemoryMode`] from a flag or environment value, reading a blank one

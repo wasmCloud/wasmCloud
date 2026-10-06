@@ -256,9 +256,11 @@ pub struct WorkloadConfig {
     /// strings such as `"*"`, `"*.example.com"`, `"example.com"`, or a
     /// literal IP address.
     ///
-    /// An omitted or empty list denies every lookup. Resolution is opt-in:
-    /// nothing substitutes an allow-all policy for a workload that
-    /// declared none.
+    /// A host named in `allowedHosts` may be resolved without being listed
+    /// here; this list is for names beyond those. Resolution is otherwise
+    /// opt-in: nothing substitutes an allow-all policy for a workload that
+    /// declared none, and the `*` an omitted `allowedHosts` becomes opens no
+    /// lookup.
     #[serde(default)]
     #[builder(default)]
     pub allowed_ip_name_lookups: Vec<AllowedIpName>,

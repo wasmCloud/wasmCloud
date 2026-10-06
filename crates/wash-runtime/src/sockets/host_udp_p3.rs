@@ -44,6 +44,27 @@ fn get_socket_mut<'a>(
         .map_err(SocketError::trap)
 }
 
+/// Hold a send with no explicit destination to the deadline its connect
+/// decision carried. A socket that is not connected has no peer to ask about,
+/// and the send rejects it.
+fn refresh_connected(
+    view: WasiSocketsCtxView<'_>,
+    socket: &Resource<UpstreamUdpSocket>,
+) -> SocketResult<()> {
+    let socket = get_socket_mut(view.table, socket)?;
+    let Ok(peer) = socket.remote_address() else {
+        return Ok(());
+    };
+    match socket.connected_until_mut() {
+        Some(valid_until) => view
+            .ctx
+            .socket_addr_check
+            .refresh_connected(peer, valid_until)
+            .map_err(se),
+        None => Ok(()),
+    }
+}
+
 impl<T> HostUdpSocketWithStore<T> for WasiSockets {
     async fn send(
         store: &Accessor<T, Self>,
@@ -100,6 +121,8 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
                     SocketResult::Ok(())
                 })?;
             }
+        } else {
+            store.with(|mut view| refresh_connected(view.get(), &socket))?;
         }
 
         enum SendTarget {
@@ -380,7 +403,12 @@ impl HostUdpSocket for WasiSocketsCtxView<'_> {
         let socket_ref = get_socket_mut(self.table, &socket)?;
         socket_ref.hold_quota_slot(allowed.permit);
         socket_ref
-            .connect(remote_address, allowed.plane, &mut loopback)
+            .connect(
+                remote_address,
+                allowed.plane,
+                allowed.valid_until,
+                &mut loopback,
+            )
             .map_err(se)?;
         Ok(())
     }
@@ -507,5 +535,150 @@ impl HostUdpSocket for WasiSocketsCtxView<'_> {
             .lock()
             .map_err(|e| wasmtime::format_err!("{e}"))?;
         socket.drop(&mut loopback)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sockets::WasiSocketsCtx;
+    use crate::sockets::policy::{EgressMode, SocketPolicy};
+    use crate::sockets::resolved_names::ResolvedNameLimits;
+    use std::time::{Duration, Instant};
+    use wasmtime_wasi::p3::bindings::sockets::types::IpAddressFamily;
+
+    struct Data {
+        ctx: WasiSocketsCtx,
+        table: ResourceTable,
+    }
+
+    fn view(data: &mut Data) -> WasiSocketsCtxView<'_> {
+        WasiSocketsCtxView {
+            ctx: &mut data.ctx,
+            table: &mut data.table,
+        }
+    }
+
+    const LIFETIME: Duration = Duration::from_millis(300);
+    const PEER: &str = "10.255.255.1:9";
+    /// A literal the policy permits outright, in the family the socket is not.
+    const OTHER_FAMILY: &str = "[fd00::1]:9";
+
+    /// An IPv4 socket connected to `PEER` on the strength of a name grant
+    /// that lapses after `LIFETIME`.
+    async fn connected_by_name() -> (Data, u32) {
+        let policy = SocketPolicy {
+            egress_mode: EgressMode::Enforce,
+            allowed_hosts: ["db.internal:9", OTHER_FAMILY]
+                .iter()
+                .map(|entry| entry.parse().unwrap())
+                .collect(),
+            resolved_names: ResolvedNameLimits {
+                lifetime: LIFETIME,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let peer: SocketAddr = PEER.parse().unwrap();
+        let mut data = Data {
+            ctx: WasiSocketsCtx::for_store(Arc::new(policy), Arc::default(), Arc::from([])),
+            table: ResourceTable::new(),
+        };
+        data.ctx
+            .resolved_names
+            .record("db.internal", [peer.ip()], Instant::now());
+
+        let socket = HostUdpSocket::create(&mut view(&mut data), IpAddressFamily::Ipv4)
+            .await
+            .unwrap();
+        let rep = socket.rep();
+        HostUdpSocket::bind(
+            &mut view(&mut data),
+            Resource::new_borrow(rep),
+            "0.0.0.0:0".parse::<SocketAddr>().unwrap().into(),
+        )
+        .await
+        .unwrap();
+        HostUdpSocket::connect(&mut view(&mut data), Resource::new_borrow(rep), peer.into())
+            .await
+            .unwrap();
+        (data, rep)
+    }
+
+    fn store(data: Data) -> wasmtime::Store<Data> {
+        let mut config = wasmtime::Config::new();
+        config.wasm_component_model_async(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        wasmtime::Store::new(&engine, data)
+    }
+
+    /// `send` with no address, as a guest on a connected socket calls it.
+    async fn send(store: &mut wasmtime::Store<Data>, rep: u32) -> Result<(), ErrorCode> {
+        store
+            .run_concurrent(async |accessor| {
+                let accessor = accessor.with_getter::<WasiSockets>(view);
+                <WasiSockets as HostUdpSocketWithStore<Data>>::send(
+                    &accessor,
+                    Resource::new_borrow(rep),
+                    vec![0],
+                    None,
+                )
+                .await
+                .map_err(|e| e.downcast().expect("an error code, not a trap"))
+            })
+            .await
+            .unwrap()
+    }
+
+    /// The p3 counterpart of the p2 stream test: `send` with no address rides
+    /// on the connect, so it has to hold to the deadline connect was given.
+    #[tokio::test]
+    async fn a_connected_socket_stops_sending_once_its_name_grant_lapses() {
+        let (data, rep) = connected_by_name().await;
+        let mut store = store(data);
+
+        // Whether the datagram leaves depends on the machine's routes; what
+        // matters is that policy did not refuse it.
+        assert!(!matches!(
+            send(&mut store, rep).await,
+            Err(ErrorCode::AccessDenied)
+        ));
+
+        tokio::time::sleep(LIFETIME + Duration::from_millis(100)).await;
+        assert!(matches!(
+            send(&mut store, rep).await,
+            Err(ErrorCode::AccessDenied)
+        ));
+    }
+
+    /// A reconnect the policy permits but the socket refuses — the wrong
+    /// address family — leaves the first peer connected. That peer must keep
+    /// the deadline it connected under, not the refused one's lack of one.
+    #[tokio::test]
+    async fn a_refused_reconnect_does_not_lift_the_first_peers_deadline() {
+        let (mut data, rep) = connected_by_name().await;
+        let other: SocketAddr = OTHER_FAMILY.parse().unwrap();
+        let reconnect = HostUdpSocket::connect(
+            &mut view(&mut data),
+            Resource::new_borrow(rep),
+            other.into(),
+        )
+        .await
+        .map_err(|e| e.downcast().expect("an error code, not a trap"));
+        assert!(matches!(reconnect, Err(ErrorCode::InvalidArgument)));
+
+        let socket = Resource::<UdpSocket>::new_borrow(rep);
+        assert_eq!(
+            data.table.get(&socket).unwrap().remote_address().unwrap(),
+            PEER.parse().unwrap(),
+            "the first peer is still connected"
+        );
+
+        let mut store = store(data);
+        tokio::time::sleep(LIFETIME + Duration::from_millis(100)).await;
+        assert!(matches!(
+            send(&mut store, rep).await,
+            Err(ErrorCode::AccessDenied)
+        ));
     }
 }

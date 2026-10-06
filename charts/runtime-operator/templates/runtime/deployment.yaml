@@ -246,6 +246,10 @@ spec:
             {{- end }}
             - name: WASH_GUEST_MEMORY_MODE
               value: "{{ $resources.guestMemoryMode | default "enforce" }}"
+            {{- with (.networking | default dict).ipNameLookupGrantLifetime }}
+            - name: WASH_IP_NAME_LOOKUP_GRANT_LIFETIME
+              value: "{{ . }}"
+            {{- end }}
             {{- /* Not `with`: Go templates treat the integer 0 as empty, and
                    `0` is the most serialized setting a host can be given (it
                    clamps to one start at a time). Tested for a number instead,

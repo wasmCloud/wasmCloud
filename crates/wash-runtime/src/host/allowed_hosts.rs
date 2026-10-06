@@ -36,7 +36,9 @@
 //!
 //! # Matching semantics
 //!
-//! - Hostname comparison is ASCII-case-insensitive.
+//! - Hostname comparison is ASCII-case-insensitive. An entry written in
+//!   Unicode is IDNA-encoded when parsed, in every form, so it is stored and
+//!   rendered as punycode.
 //! - `Authority` and `SuffixWildcard` with no explicit port match any
 //!   request port. With an explicit port they match exact.
 //! - `SuffixWildcard` with no explicit scheme matches any scheme. With an
@@ -44,6 +46,17 @@
 //! - `Url` matches scheme + host + port exactly. Paths on policy entries
 //!   aren't allowed (see above) and request paths/queries are not
 //!   inspected by the matcher.
+//!
+//! # Raw sockets
+//!
+//! A `wasi:sockets` destination is an address with no name or scheme. An entry
+//! permits it by naming the address ([`AllowedHost::permits_addr`]) or by
+//! naming a host the guest resolved into it ([`AllowedHost::permits_name`]).
+//! An entry naming a host also lets the guest resolve it
+//! ([`AllowedHost::permits_lookup`]), so one entry is the whole grant.
+//! Either way the port is [`AllowedHost::socket_port`]: explicit, else the
+//! scheme's default, else any. A native plugin's endpoint is held to the same
+//! port rule, whether it names an address or a host.
 //!
 //! # Examples
 //!
@@ -59,6 +72,7 @@
 //! ```
 
 use core::net::{IpAddr, SocketAddr};
+use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
 
@@ -230,32 +244,138 @@ impl AllowedHost {
     /// - [`AllowedHost::Authority`] and [`AllowedHost::Url`] match when the
     ///   entry's host is a literal IP equal to `addr`, and the port agrees.
     /// - [`AllowedHost::SuffixWildcard`] never matches: a suffix describes
-    ///   names, and an address has none. A guest that wants to reach a name has
-    ///   to resolve it, and the resolved address is then checked here — so the
-    ///   entry that permits it must name the address or be `*`.
+    ///   names, and an address has none. An entry naming a host permits an
+    ///   address only through [`Self::permits_name`], for a name the guest
+    ///   resolved.
     ///
-    /// The scheme, where an entry carries one, is not consulted: a raw socket
-    /// has no scheme, and requiring one would make every `https://` entry
-    /// useless for sockets rather than merely inapplicable.
+    /// The port is [`Self::socket_port`].
     #[must_use]
     pub fn permits_addr(&self, addr: SocketAddr) -> bool {
-        let port_matches = |policy_port: Option<u16>| match policy_port {
-            Some(p) => p == addr.port(),
-            None => true,
+        let host = match self {
+            AllowedHost::Any => return true,
+            AllowedHost::Authority(authority) => authority.host(),
+            AllowedHost::Url(url) => match url.host_str() {
+                Some(host) => host,
+                None => return false,
+            },
+            AllowedHost::SuffixWildcard { .. } => return false,
         };
-        match self {
-            AllowedHost::Any => true,
-            AllowedHost::Authority(authority) => {
-                host_is_addr(authority.host(), addr.ip()) && port_matches(authority.port_u16())
+        host_is_addr(host, addr.ip()) && self.socket_port_matches(addr.port())
+    }
+
+    /// Returns `true` if this entry names `name` and permits `port` on it.
+    ///
+    /// For a raw socket to an address the guest resolved `name` into — see
+    /// [`crate::sockets::resolved_names`]. `name` is that module's normalized
+    /// form: lowercase, IDNA-encoded, no terminal root dot — which is what
+    /// parsing made of this entry's own host. A wildcard requires at least one
+    /// label before its suffix, as it does for `wasi:http`.
+    ///
+    /// [`AllowedHost::Any`] answers `false`: it names nothing, and already
+    /// permits every address through [`Self::permits_addr`].
+    #[must_use]
+    pub fn permits_name(&self, name: &str, port: u16) -> bool {
+        let named = match self {
+            AllowedHost::Any => false,
+            AllowedHost::Authority(authority) => same_name(authority.host(), name),
+            AllowedHost::Url(url) => url.host_str().is_some_and(|host| same_name(host, name)),
+            AllowedHost::SuffixWildcard { suffix, .. } => {
+                let suffix = suffix.strip_suffix('.').unwrap_or(suffix);
+                name.len() > suffix.len()
+                    && name
+                        .get(name.len() - suffix.len()..)
+                        .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
             }
-            AllowedHost::Url(url) => {
-                url.host_str()
-                    .is_some_and(|host| host_is_addr(host, addr.ip()))
-                    && port_matches(url.port())
+        };
+        named && self.socket_port_matches(port)
+    }
+
+    /// Returns `true` if this entry permits resolving `host`.
+    ///
+    /// Being allowed to connect to a name includes being allowed to look it
+    /// up: a lookup reaches no further than the connection the entry already
+    /// grants, so asking an operator to repeat the name in
+    /// `allowedIpNameLookups` buys nothing. Port and scheme do not bear on a
+    /// lookup. `host` is the parsed, punycoded form of the requested name.
+    ///
+    /// [`AllowedHost::Any`] answers `false`. It names no host, and it is what
+    /// the wash config layer substitutes for an omitted `allowedHosts`; a
+    /// default nobody wrote must not open every lookup. Resolving any name
+    /// stays an explicit `allowedIpNameLookups: ["*"]`.
+    #[must_use]
+    pub fn permits_lookup(&self, host: &url::Host<String>) -> bool {
+        let policy_host = match self {
+            AllowedHost::Any => return false,
+            AllowedHost::Authority(authority) => authority.host(),
+            AllowedHost::Url(url) => match url.host_str() {
+                Some(host) => host,
+                None => return false,
+            },
+            AllowedHost::SuffixWildcard { .. } => "",
+        };
+        match host {
+            url::Host::Ipv4(addr) => host_is_addr(policy_host, IpAddr::V4(*addr)),
+            url::Host::Ipv6(addr) => host_is_addr(policy_host, IpAddr::V6(*addr)),
+            url::Host::Domain(domain) => {
+                let name = domain.strip_suffix('.').unwrap_or(domain);
+                // Any port: `permits_name` with the entry's own, or an
+                // arbitrary one where it names none.
+                self.permits_name(name, self.socket_port().unwrap_or(0))
             }
-            AllowedHost::SuffixWildcard { .. } => false,
         }
     }
+
+    /// The one port a raw socket may use under this entry, or `None` for any.
+    ///
+    /// An explicit port is exact. An entry with a scheme and no port means that
+    /// scheme's default port — `https://db.internal` is 443, not every port on
+    /// the host. The scheme is otherwise not consulted: a raw socket has none,
+    /// and nothing here can hold a guest to TLS. A scheme with no known default
+    /// (`postgres://`, `nats://`) and no port leaves the port open.
+    #[must_use]
+    pub fn socket_port(&self) -> Option<u16> {
+        match self {
+            AllowedHost::Any => None,
+            AllowedHost::Authority(authority) => authority.port_u16(),
+            AllowedHost::Url(url) => url.port_or_known_default(),
+            AllowedHost::SuffixWildcard { scheme, port, .. } => {
+                port.or_else(|| scheme.as_ref().and_then(|s| default_port(s.as_str())))
+            }
+        }
+    }
+
+    fn socket_port_matches(&self, port: u16) -> bool {
+        match self.socket_port() {
+            Some(permitted) => permitted == port,
+            None => true,
+        }
+    }
+}
+
+/// The default port of a scheme, for the schemes [`Url::port_or_known_default`]
+/// knows. The one table for it: `wasi:http` routing reads it too.
+pub(crate) fn default_port(scheme: &str) -> Option<u16> {
+    // Compared in place: this runs per request and per connect.
+    const PORTS: [(&str, u16); 5] = [
+        ("http", 80),
+        ("https", 443),
+        ("ws", 80),
+        ("wss", 443),
+        ("ftp", 21),
+    ];
+    PORTS
+        .iter()
+        .find(|(known, _)| scheme.eq_ignore_ascii_case(known))
+        .map(|(_, port)| *port)
+}
+
+/// Whether a policy entry's host text is the normalized `name`, ignoring case
+/// and a terminal root dot on the entry.
+fn same_name(policy_host: &str, name: &str) -> bool {
+    policy_host
+        .strip_suffix('.')
+        .unwrap_or(policy_host)
+        .eq_ignore_ascii_case(name)
 }
 
 /// Whether a policy entry's host text is a literal IP equal to `addr`.
@@ -312,7 +432,7 @@ impl FromStr for AllowedHost {
                 let (suffix_no_dot, port) = split_host_port(host_port)
                     .with_context(|| format!("invalid wildcard host '{wildcard_rest}'"))?;
                 return Ok(AllowedHost::SuffixWildcard {
-                    suffix: format!(".{}", suffix_no_dot.to_ascii_lowercase()),
+                    suffix: format!(".{}", idna_host(suffix_no_dot).to_ascii_lowercase()),
                     scheme: Some(scheme),
                     port,
                 });
@@ -324,7 +444,10 @@ impl FromStr for AllowedHost {
             // (e.g. `TryFrom<v2::LocalResources>` in washlet) already wrap
             // each error with `'<entry>':`, so duplicating it produces
             // unreadable nested quoting.
-            let url = Url::parse(trimmed).context("not a valid URL")?;
+            // `Url` IDNA-encodes a host only under a scheme it knows, so a
+            // `postgres://` entry is encoded here first.
+            let url = Url::parse(&format!("{scheme_part}://{}", idna_authority(rest)))
+                .context("not a valid URL")?;
             if url.host_str().is_none() {
                 return Err(anyhow!("URL has no host"));
             }
@@ -345,7 +468,7 @@ impl FromStr for AllowedHost {
             let (suffix_no_dot, port) = split_host_port(wildcard_rest)
                 .with_context(|| format!("invalid wildcard host '{wildcard_rest}'"))?;
             return Ok(AllowedHost::SuffixWildcard {
-                suffix: format!(".{}", suffix_no_dot.to_ascii_lowercase()),
+                suffix: format!(".{}", idna_host(suffix_no_dot).to_ascii_lowercase()),
                 scheme: None,
                 port,
             });
@@ -367,7 +490,8 @@ impl FromStr for AllowedHost {
         //    detect the "port suffix is present" case explicitly. IPv6 hosts
         //    are bracket-wrapped so their host portion contains `:` itself;
         //    the port (if any) follows `]:`, not the first `:`.
-        let authority = Authority::from_str(trimmed).context("invalid host[:port]")?;
+        let authority =
+            Authority::from_str(&idna_authority(trimmed)).context("invalid host[:port]")?;
         let s = authority.as_str();
         let has_port_suffix = if s.starts_with('[') {
             s.contains("]:")
@@ -379,6 +503,30 @@ impl FromStr for AllowedHost {
         }
         Ok(AllowedHost::Authority(authority))
     }
+}
+
+/// `host` IDNA-encoded, so an entry written in Unicode compares equal to the
+/// punycode a request or a lookup carries. ASCII is returned untouched.
+fn idna_host(host: &str) -> Cow<'_, str> {
+    if host.is_ascii() {
+        return Cow::Borrowed(host);
+    }
+    match url::Host::parse(host) {
+        Ok(url::Host::Domain(domain)) => Cow::Owned(domain),
+        _ => Cow::Borrowed(host),
+    }
+}
+
+/// [`idna_host`] applied to the host of a `host[:port][/]` string. A host that
+/// is not ASCII is not a bracketed IPv6 literal, so it ends at the first `:`
+/// or `/`.
+fn idna_authority(text: &str) -> Cow<'_, str> {
+    if text.is_ascii() {
+        return Cow::Borrowed(text);
+    }
+    let end = text.find([':', '/']).unwrap_or(text.len());
+    let (host, tail) = text.split_at(end);
+    Cow::Owned(format!("{}{tail}", idna_host(host)))
 }
 
 impl fmt::Display for AllowedHost {
@@ -815,5 +963,117 @@ mod tests {
         let h: AllowedHost = "https://*.example.com:8443".parse().unwrap();
         let json = serde_json::to_string(&h).unwrap();
         assert_eq!(json, "\"https://*.example.com:8443\"");
+    }
+
+    fn entry(s: &str) -> AllowedHost {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn a_name_entry_permits_its_name_on_its_port() {
+        assert!(entry("db.internal").permits_name("db.internal", 5432));
+        assert!(entry("DB.Internal:5432").permits_name("db.internal", 5432));
+        assert!(entry("db.internal.:5432").permits_name("db.internal", 5432));
+        assert!(!entry("db.internal:5432").permits_name("db.internal", 6379));
+        assert!(!entry("db.internal").permits_name("xdb.internal", 5432));
+        assert!(!entry("10.0.0.5").permits_name("db.internal", 5432));
+        assert!(!entry("*").permits_name("db.internal", 5432));
+    }
+
+    /// A lookup key is punycode, so every entry form has to be too.
+    #[test]
+    fn an_entry_written_in_unicode_matches_the_punycode_a_lookup_records() {
+        let apex = "xn--bcher-kva.example";
+        for text in [
+            "bücher.example:5432",
+            "BÜCHER.example:5432",
+            "postgres://bücher.example:5432",
+            "https://bücher.example:5432",
+        ] {
+            assert!(entry(text).permits_name(apex, 5432), "{text}");
+        }
+        for text in ["*.bücher.example:5432", "postgres://*.bücher.example:5432"] {
+            let e = entry(text);
+            assert!(e.permits_name(&format!("db.{apex}"), 5432), "{text}");
+            assert!(!e.permits_name(apex, 5432), "{text}");
+        }
+
+        // The same entries serve `wasi:http`, where the request carries
+        // punycode as well.
+        let request: Uri = "https://db.xn--bcher-kva.example/".parse().unwrap();
+        assert!(entry("*.bücher.example").matches(&request));
+        assert_eq!(
+            entry("*.bücher.example").to_string(),
+            "*.xn--bcher-kva.example"
+        );
+    }
+
+    #[test]
+    fn a_wildcard_entry_needs_a_subdomain_on_a_label_boundary() {
+        let wildcard = entry("*.svc.local:5432");
+        assert!(wildcard.permits_name("db.svc.local", 5432));
+        assert!(wildcard.permits_name("a.b.svc.local", 5432));
+        assert!(!wildcard.permits_name("svc.local", 5432));
+        assert!(!wildcard.permits_name("evilsvc.local", 5432));
+        assert!(!wildcard.permits_name("db.svc.local", 80));
+        assert!(entry("*.svc.local").permits_name("db.svc.local", 80));
+    }
+
+    /// A raw socket has no scheme, so a scheme-bearing entry with no port
+    /// means that scheme's default port rather than every port on the host —
+    /// for a literal address and a resolved name alike.
+    #[test]
+    fn a_scheme_with_no_port_means_its_default_port_for_sockets() {
+        for (text, port) in [
+            ("https://db.internal", 443),
+            ("http://db.internal", 80),
+            ("https://*.internal", 443),
+        ] {
+            let e = entry(text);
+            assert_eq!(e.socket_port(), Some(port), "{text}");
+            assert!(e.permits_name("db.internal", port), "{text}");
+            assert!(!e.permits_name("db.internal", 5432), "{text}");
+        }
+
+        let literal = entry("https://10.0.0.5");
+        assert!(literal.permits_addr("10.0.0.5:443".parse().unwrap()));
+        assert!(!literal.permits_addr("10.0.0.5:5432".parse().unwrap()));
+
+        // An explicit port wins, and a scheme with no known default leaves the
+        // port open.
+        assert!(entry("https://10.0.0.5:8443").permits_addr("10.0.0.5:8443".parse().unwrap()));
+        assert_eq!(entry("postgres://db.internal").socket_port(), None);
+        assert!(entry("postgres://10.0.0.5").permits_addr("10.0.0.5:5432".parse().unwrap()));
+        assert!(entry("postgres://db.internal:5432").permits_name("db.internal", 5432));
+        assert!(!entry("postgres://db.internal:5432").permits_name("db.internal", 5433));
+    }
+
+    /// Naming a host is the whole grant: it may be connected to, so it may be
+    /// resolved. `*` names nothing and opens no lookup.
+    #[test]
+    fn an_entry_naming_a_host_permits_resolving_it() {
+        let host = |s: &str| url::Host::parse(s).unwrap();
+
+        for text in [
+            "db.internal",
+            "db.internal:5432",
+            "postgres://db.internal:5432",
+        ] {
+            let e = entry(text);
+            assert!(e.permits_lookup(&host("db.internal")), "{text}");
+            assert!(e.permits_lookup(&host("DB.internal.")), "{text}");
+            assert!(!e.permits_lookup(&host("other.internal")), "{text}");
+        }
+
+        let wildcard = entry("https://*.svc.local");
+        assert!(wildcard.permits_lookup(&host("db.svc.local")));
+        assert!(!wildcard.permits_lookup(&host("svc.local")));
+        assert!(!wildcard.permits_lookup(&host("evilsvc.local")));
+
+        assert!(entry("10.0.0.5:5432").permits_lookup(&host("10.0.0.5")));
+        assert!(!entry("10.0.0.5:5432").permits_lookup(&host("10.0.0.6")));
+        assert!(!entry("db.internal").permits_lookup(&host("10.0.0.5")));
+
+        assert!(!entry("*").permits_lookup(&host("db.internal")));
     }
 }

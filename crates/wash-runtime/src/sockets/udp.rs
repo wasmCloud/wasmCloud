@@ -73,6 +73,9 @@ pub struct NetworkUdpSocket {
     /// guest's own virtual loopback by address alone.
     connected_plane: Option<super::Plane>,
 
+    /// When the decision that permitted the connected peer lapses, if it does.
+    connected_until: Option<std::time::Instant>,
+
     /// Peers this socket has sent to, when it is bound to the unspecified
     /// address and therefore reachable on every interface.
     ///
@@ -105,6 +108,7 @@ impl NetworkUdpSocket {
             socket_addr_check: None,
             quota_slot: None,
             connected_plane: None,
+            connected_until: None,
             egress_peers: None,
         })
     }
@@ -183,6 +187,34 @@ impl NetworkUdpSocket {
                 })
             }
         }
+    }
+
+    /// [`Self::connect`], recording the policy's plane and deadline for the
+    /// peer only once it is the peer.
+    ///
+    /// A refused connect can leave the previous peer connected, and that peer
+    /// keeps the decision it connected under — taking the new one early would
+    /// hand it a deadline it was never given. One that failed at the OS leaves
+    /// no peer, so nothing is kept.
+    fn connect_on(
+        &mut self,
+        addr: SocketAddr,
+        plane: super::Plane,
+        valid_until: Option<std::time::Instant>,
+    ) -> Result<(), ErrorCode> {
+        let connected = self.connect(addr);
+        match (&connected, self.is_connected()) {
+            (Ok(()), _) => {
+                self.connected_plane = Some(plane);
+                self.connected_until = valid_until;
+            }
+            (Err(_), true) => {}
+            (Err(_), false) => {
+                self.connected_plane = None;
+                self.connected_until = None;
+            }
+        }
+        connected
     }
 
     fn local_address(&self) -> Result<SocketAddr, ErrorCode> {
@@ -409,25 +441,24 @@ impl UdpSocket {
     ///
     /// `plane` comes from the socket policy rather than from the address; see
     /// [`TcpSocket::start_connect`](super::tcp::TcpSocket::start_connect).
+    /// `valid_until` is the policy's deadline for that decision, which a send
+    /// with no explicit destination holds itself to.
     pub(crate) fn connect(
         &mut self,
         addr: SocketAddr,
         plane: super::Plane,
+        valid_until: Option<std::time::Instant>,
         loopback: &mut super::loopback::Network,
     ) -> Result<(), ErrorCode> {
         match self {
-            Self::Network(socket) => {
-                socket.connected_plane = Some(plane);
-                socket.connect(addr)
-            }
+            Self::Network(socket) => socket.connect_on(addr, plane, valid_until),
             Self::Loopback(socket) => socket.connect(addr, loopback),
             // An unspecified-bound socket is simultaneously a real socket and a
             // virtual endpoint, so both sides record the peer, and the plane
             // recorded here is what later decides which half carries a datagram
             // sent with no explicit destination.
             Self::Unspecified { net, lo } => {
-                net.connected_plane = Some(plane);
-                net.connect(addr)?;
+                net.connect_on(addr, plane, valid_until)?;
                 lo.connect(addr, loopback)
             }
         }
@@ -442,6 +473,15 @@ impl UdpSocket {
             Self::Network(net) | Self::Unspecified { net, .. } => net.connected_plane,
             // A purely virtual endpoint has no other half to choose.
             Self::Loopback(_) => Some(super::Plane::Virtual),
+        }
+    }
+
+    /// The connected peer's deadline, for a send to check and extend. `None`
+    /// for a purely virtual endpoint, whose decision does not lapse.
+    pub(crate) fn connected_until_mut(&mut self) -> Option<&mut Option<std::time::Instant>> {
+        match self {
+            Self::Network(net) | Self::Unspecified { net, .. } => Some(&mut net.connected_until),
+            Self::Loopback(_) => None,
         }
     }
 

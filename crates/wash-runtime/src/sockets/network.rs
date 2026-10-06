@@ -56,6 +56,8 @@ pub(crate) fn error_code_from_io(error: std::io::ErrorKind) -> ErrorCode {
 pub struct Network {
     pub(crate) socket_addr_check: SocketAddrCheck,
     pub(crate) allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
+    pub(crate) allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
+    pub(crate) resolved_names: Arc<super::resolved_names::ResolvedNames>,
 }
 
 impl Network {

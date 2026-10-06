@@ -941,10 +941,13 @@ to grow to: instances are still only built when a call needs one. </p></td>
                   <td>allowed_hosts</td>
                   <td><a href="#string">string</a></td>
                   <td>repeated</td>
-                  <td><p>Allowed Hosts for TCP Outbound connections. &#34;localhost&#34; is always allowed.
-Can contain wildcards &#34;*&#34; as any part of the hostname.Ex: &#34;*.wasmcloud.io&#34; but not &#34;som*thing.wasmcloud.io&#34;
-Note this controls socket connections but not DNS lookups.
-Upon a successful lookup, the host will allow outbound connections to the specified hosts. </p></td>
+                  <td><p>Outbound egress allowlist, for wasi:http and wasi:sockets alike. Accepts
+&#34;*&#34;, &#34;host[:port]&#34;, &#34;scheme://host[:port]&#34; and &#34;*.suffix[:port]&#34;; a
+wildcard must be a leading &#34;*.&#34; label, so &#34;*.wasmcloud.io&#34; but not
+&#34;som*thing.wasmcloud.io&#34;. Empty or absent denies all egress.
+An entry naming a host also lets the component resolve that name, and
+permits a socket to an address it resolved the name into, on the entry&#39;s
+port. &#34;*&#34; permits connections but opens no lookup. </p></td>
                 </tr>
               
                 <tr>
@@ -952,9 +955,10 @@ Upon a successful lookup, the host will allow outbound connections to the specif
                   <td><a href="#string">string</a></td>
                   <td>repeated</td>
                   <td><p>Names the component may resolve through wasi:sockets/ip-name-lookup
-(resolve-addresses). Accepts &#34;*&#34; for any name, a wildcard such as
-&#34;*.wasmcloud.io&#34;, an exact name, or a literal IP address.
-Empty or absent denies every lookup with permanent-resolver-failure. </p></td>
+(resolve-addresses), beyond the hosts allowed_hosts names. Accepts &#34;*&#34;
+for any name, a wildcard such as &#34;*.wasmcloud.io&#34;, an exact name, or a
+literal IP address. With neither list naming it, a lookup is denied with
+permanent-resolver-failure. </p></td>
                 </tr>
               
                 <tr>
