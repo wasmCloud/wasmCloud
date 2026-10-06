@@ -193,7 +193,7 @@ impl PluginEgressPolicy {
 
     /// Apply a refusal under the host's [`EgressMode`], the counterpart of
     /// [`SocketPolicy::gate`]: refuse it, or count it and allow it so an
-    /// operator sees the blast radius before enforcement severs live traffic.
+    /// operator sees the blast radius without severing live traffic.
     fn gate(&self, reason: DenyReason, message: String) -> anyhow::Result<()> {
         match self.egress_mode {
             EgressMode::Enforce => Err(anyhow!(message)),
@@ -355,7 +355,7 @@ mod tests {
         );
     }
 
-    /// Count mode is how an operator sees the blast radius before enforcing,
+    /// Count mode is how an operator sees the blast radius without enforcing,
     /// so a native plugin measures it the same way a workload's sockets do.
     #[test]
     fn count_mode_counts_an_undeclared_endpoint_instead_of_refusing_it() {

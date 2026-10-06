@@ -494,10 +494,9 @@ impl QuotaRegistry {
 
 /// Counters for what the socket policy decided.
 ///
-/// `would_deny` is the migration signal: while the host runs in count mode it
+/// `would_deny` is the count-mode signal: while the host runs in count mode it
 /// records every refusal enforcement *would* have made, so an operator can see
-/// the blast radius before turning it on. If these are non-zero, enforcing
-/// breaks someone.
+/// the blast radius. If these are non-zero, enforcing breaks someone.
 #[derive(Debug, Default)]
 pub struct PolicyMeters {
     denied: [AtomicU64; DENY_REASONS],

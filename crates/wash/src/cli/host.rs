@@ -292,7 +292,7 @@ pub struct HostCommand {
     /// What this bounds is the *total* of every guest's linear memory, which
     /// no other knob does: `--default-heap-memory` bounds one memory and
     /// `--core-instances` bounds a count of slots. Whether it is enforced or
-    /// only accounted is `--guest-memory-mode`, which counts by default.
+    /// only accounted is `--guest-memory-mode`, which enforces by default.
     //
     // Deliberately no `default_value_t`: a parse-time default is
     // indistinguishable downstream from an operator typing the same number, and
@@ -302,16 +302,14 @@ pub struct HostCommand {
 
     /// How `--max-guest-memory` is applied.
     ///
-    /// `count` (the default) charges every guest `memory.grow` to the budget
-    /// and records what it would have refused, but allows the growth anyway.
-    /// Guest memory was never bounded in aggregate and the budget is derived
-    /// when unset, so enforcing on upgrade would hand every host a ceiling
-    /// nobody chose; run in `count` first, watch the reported high-water mark
-    /// and `would_refuse` count, then switch to `enforce`.
+    /// Under `enforce` (the default), a growth past the budget makes the
+    /// guest's `memory.grow` return -1 — the same failure it already sees on
+    /// hitting `--default-heap-memory` — rather than trapping it.
     ///
-    /// Under `enforce`, a growth past the budget makes the guest's
-    /// `memory.grow` return -1 — the same failure it already sees on hitting
-    /// `--default-heap-memory` — rather than trapping it.
+    /// `count` charges every guest `memory.grow` to the budget and records
+    /// what it would have refused, but allows the growth anyway. Use it to
+    /// size a budget: watch the reported high-water mark and `would_refuse`
+    /// count, then return to `enforce`.
     ///
     /// `enforce` makes `--max-guest-memory` a real ceiling, so it has to leave
     /// the host room to be a host: wasmtime, compiled module images, NATS, OCI
@@ -328,7 +326,7 @@ pub struct HostCommand {
         long = "guest-memory-mode",
         env = "WASH_GUEST_MEMORY_MODE",
         value_parser = parse_guest_memory_mode,
-        default_value = "count"
+        default_value = "enforce"
     )]
     pub guest_memory_mode: GuestMemoryMode,
 
@@ -490,11 +488,14 @@ pub struct HostCommand {
 
     /// How the raw-socket egress policy is applied.
     ///
-    /// `count` (the default) evaluates the policy, records what it would refuse,
-    /// and allows the connection anyway. Raw socket connect was never gated, so
-    /// enforcing immediately would sever live traffic on upgrade; run in `count`
-    /// first, watch the `would_deny` counters, then switch to `enforce`.
-    #[arg(long = "socket-egress", value_enum, default_value = "count")]
+    /// `enforce` (the default) refuses a connection the policy does not permit:
+    /// a workload reaches only what its `allowedHosts` declares. A socket
+    /// connects to an address, not a name, so the entry that permits it is a
+    /// literal IP or `*`; a DNS name or wildcard entry covers `wasi:http` only.
+    ///
+    /// `count` evaluates the policy, records what it would refuse in the
+    /// `would_deny` counters, and allows the connection anyway.
+    #[arg(long = "socket-egress", value_enum, default_value = "enforce")]
     pub socket_egress: SocketEgressMode,
 
     /// Deny outbound connections to loopback, link-local (including the cloud
@@ -1497,6 +1498,47 @@ mod shutdown_tests {
     }
 }
 
+#[cfg(test)]
+mod policy_mode_tests {
+    use clap::Parser;
+
+    use super::{GuestMemoryMode, HostCommand, SocketEgressMode};
+
+    #[derive(Debug, Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        host: HostCommand,
+    }
+
+    fn parse(args: &[&str]) -> HostCommand {
+        TestCli::parse_from(std::iter::once("wash-host").chain(args.iter().copied())).host
+    }
+
+    #[test]
+    fn a_host_given_no_flags_enforces_both_policies() {
+        let host = parse(&[]);
+        assert_eq!(host.guest_memory_mode, GuestMemoryMode::Enforce);
+        assert_eq!(host.socket_egress, SocketEgressMode::Enforce);
+    }
+
+    /// A ConfigMap key or `value: ""` reaches clap as a blank string, which
+    /// must read as unset rather than as a way out of enforcement.
+    #[test]
+    fn a_blank_guest_memory_mode_enforces() {
+        assert_eq!(
+            parse(&["--guest-memory-mode="]).guest_memory_mode,
+            GuestMemoryMode::Enforce
+        );
+    }
+
+    #[test]
+    fn count_is_still_selectable() {
+        let host = parse(&["--guest-memory-mode=count", "--socket-egress=count"]);
+        assert_eq!(host.guest_memory_mode, GuestMemoryMode::Count);
+        assert_eq!(host.socket_egress, SocketEgressMode::Count);
+    }
+}
+
 #[cfg(all(test, feature = "host-component-plugins"))]
 mod tests {
     use super::host_plugin_registry_credentials;
@@ -1527,9 +1569,9 @@ mod tests {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum GuestMemoryMode {
     /// Charge and report guest memory growth; allow it either way.
-    #[default]
     Count,
     /// Refuse guest memory growth past `--max-guest-memory`.
+    #[default]
     Enforce,
 }
 
@@ -1562,9 +1604,9 @@ impl From<GuestMemoryMode> for wash_runtime::engine::guest_memory::GuestMemoryMo
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum SocketEgressMode {
     /// Record what the policy would refuse; allow it anyway.
-    #[default]
     Count,
     /// Refuse what the policy refuses.
+    #[default]
     Enforce,
 }
 

@@ -10,13 +10,10 @@
 //! | [`HostMemoryBudgets::default_heap_memory`] | How large any single linear memory may grow | wasmtime's own default (4 GiB) |
 //! | [`HostMemoryBudgets::core_instances`] | Instance slots the pooling allocator keeps | wasmtime's own default (1000) |
 //!
-//! **Nothing here changes behaviour when the flags are unset.** Both pool knobs
-//! fall through to exactly the values wasmtime has always used, and the budget
-//! only *checks* the other two unless a host opts into enforcing it. What
-//! enforces it is [`crate::engine::guest_memory`], which counts rather than
-//! refuses by default — for the same reason: an unset budget is derived, never
-//! absent, so enforcing it out of the box would hand every host a ceiling
-//! nobody chose.
+//! Both pool knobs fall through to exactly the values wasmtime has always
+//! used when unset. The budget is derived when unset, never absent, and
+//! [`crate::engine::guest_memory`] enforces it by default: a host that names
+//! nothing still refuses guest growth past three quarters of its real limit.
 //!
 //! # Why the budget is worth naming apart from enforcing it
 //!
@@ -65,8 +62,8 @@ const MAX_DERIVED_MAX_GUEST_MEMORY: u64 = 1024 * 1024 * MIB;
 /// | `1.5Gi` | fractional, truncated toward zero |
 /// | `1e9`, `1.5E3` | decimal exponent |
 ///
-/// Kubernetes semantics rather than "binary everywhere", because the Helm chart
-/// feeds this the host group's own `resources.limits.memory` verbatim — a
+/// Kubernetes semantics rather than "binary everywhere", because an operator
+/// sizing a host pod writes this next to `resources.limits.memory` — a
 /// Kubernetes quantity, where `2Gi` and `2G` are genuinely different numbers.
 /// Reading `2G` as 2 GiB would have the host believe it has 7% more than the
 /// kernel will actually give it, and over-reading the budget is the dangerous
@@ -358,7 +355,7 @@ impl HostMemoryBudgets {
     /// The check is against the limit that would actually OOM-kill this
     /// process, not against the budget's own derivation, so it catches the
     /// misconfiguration however it arrived — a flag, an environment variable,
-    /// or a Helm chart passing `resources.limits.memory` straight through.
+    /// or a manifest setting it to the pod's own `resources.limits.memory`.
     /// A *derived* budget is three quarters of that limit and never trips it.
     pub fn enforcement_advisory(&self) -> Option<String> {
         let limit = detected_memory_limit()?;
@@ -386,8 +383,8 @@ impl HostMemoryBudgets {
 /// the host says the number leaves it no room to be a host.
 ///
 /// Above the derived 75%, so a host that named no budget never trips it, and
-/// below 100%, which is the value a chart passing `limits.memory` through
-/// produces.
+/// below 100%, which is the value a budget set to the pod's own
+/// `limits.memory` produces.
 const MAX_ENFORCED_SHARE_PERCENT: u64 = 90;
 
 /// What `is_pooling_allocator_supported` probes for at startup, and therefore
@@ -474,7 +471,7 @@ mod tests {
         assert_eq!(parse_bytes("4GiB"), Ok(4 * 1024 * MIB));
         assert_eq!(parse_bytes("512"), Ok(512));
         assert_eq!(parse_bytes(" 256 MiB "), Ok(256 * MIB));
-        // Kubernetes quantities, which the chart passes through verbatim from
+        // Kubernetes quantities, as an operator writes them next to
         // `resources.limits.memory`. `2Gi` and `2G` are different numbers and
         // must stay different: reading `2G` as binary would have the host
         // believe it has 7% more than the kernel will give it.
@@ -687,15 +684,15 @@ mod tests {
         );
     }
 
-    /// The chart passes `resources.limits.memory` through as the guest budget
-    /// verbatim, so an operator turning enforcement on gets a ceiling equal to
-    /// 100% of the pod — and the host's own overhead, which this budget does
-    /// not charge, then OOM-kills the pod before the budget refuses anything.
+    /// A budget set to the pod's own `resources.limits.memory` is a ceiling
+    /// equal to 100% of the pod — and the host's own overhead, which this
+    /// budget does not charge, then OOM-kills the pod before the budget
+    /// refuses anything.
     #[test]
     fn enforcing_a_budget_that_leaves_the_host_no_room_is_called_out() {
         let limit = detected_memory_limit().expect("a test machine has a readable memory limit");
 
-        // The whole limit: what the chart renders today.
+        // The whole limit.
         let whole = HostMemoryBudgets::resolve(Some(limit), None, None).unwrap();
         let advisory = whole
             .enforcement_advisory()
@@ -711,8 +708,8 @@ mod tests {
     }
 
     /// The derived budget is three quarters of the limit, so a host that named
-    /// no budget must never trip the advisory — otherwise every host that
-    /// turned enforcement on would be warned about a number it did not choose.
+    /// no budget must never trip the advisory — otherwise every host would be
+    /// warned, by default, about a number it did not choose.
     #[test]
     fn a_derived_budget_is_never_warned_about() {
         let derived = HostMemoryBudgets::resolve(None, None, None).unwrap();
