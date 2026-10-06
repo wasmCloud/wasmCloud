@@ -16,6 +16,7 @@ pub(crate) mod network;
 pub(crate) mod p2_tcp;
 pub(crate) mod p2_udp;
 pub mod policy;
+pub mod resolved_names;
 pub(crate) mod tcp;
 pub(crate) mod udp;
 pub(crate) mod util;
@@ -47,9 +48,42 @@ pub struct WasiSocketsCtx {
     pub(crate) socket_addr_check: SocketAddrCheck,
     pub(crate) allowed_network_uses: AllowedNetworkUses,
     /// Which names this component may resolve through
-    /// `wasi:sockets/ip-name-lookup`. Empty denies every lookup.
+    /// `wasi:sockets/ip-name-lookup`, beyond those `allowed_hosts` names.
     pub(crate) allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
+    /// The egress allowlist `socket_addr_check` decides against. Held here as
+    /// well because a name it permits connecting to may also be resolved.
+    pub(crate) allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
     pub(crate) loopback: Arc<std::sync::Mutex<loopback::Network>>,
+    /// What this store's lookups returned. Shared with `socket_addr_check`,
+    /// which is how a name entry in `allowedHosts` permits a socket.
+    pub(crate) resolved_names: Arc<resolved_names::ResolvedNames>,
+}
+
+impl WasiSocketsCtx {
+    /// One store's socket context under `policy`.
+    ///
+    /// The lookup history is allocated here, per store, and handed to both the
+    /// lookup hooks and the address check: `policy` is reused across stores and
+    /// must not carry it.
+    pub(crate) fn for_store(
+        policy: Arc<policy::SocketPolicy>,
+        loopback: Arc<std::sync::Mutex<loopback::Network>>,
+        allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
+    ) -> Self {
+        let resolved_names = Arc::new(resolved_names::ResolvedNames::new(policy.resolved_names));
+        let names = Arc::clone(&resolved_names);
+        let allowed_hosts = Arc::clone(&policy.allowed_hosts);
+        Self {
+            socket_addr_check: SocketAddrCheck::new(move |addr, reason| {
+                policy.decide_for_store(reason, addr, &names)
+            }),
+            allowed_network_uses: AllowedNetworkUses::default(),
+            allowed_ip_name_lookups,
+            allowed_hosts,
+            loopback,
+            resolved_names,
+        }
+    }
 }
 
 pub struct WasiSocketsCtxView<'a> {
@@ -171,6 +205,9 @@ pub struct Allowed {
     /// so waiting for a slot it must make progress to free deadlocks it against
     /// itself.
     pub permit: Option<crate::host::quota::ConnectionSlot>,
+    /// When this decision stops holding, for one resting on a resolved name —
+    /// see [`resolved_names`]. `None` does not lapse.
+    pub valid_until: Option<std::time::Instant>,
 }
 
 /// The answer to "may this address be used for this, and how".
@@ -193,6 +230,7 @@ impl AddrDecision {
             addr,
             plane,
             permit: None,
+            valid_until: None,
         })
     }
 
@@ -201,6 +239,7 @@ impl AddrDecision {
             addr,
             plane,
             permit: None,
+            valid_until: None,
         })
     }
 
@@ -235,6 +274,29 @@ impl SocketAddrCheck {
         reason: SocketAddrUse,
     ) -> Result<Allowed, util::ErrorCode> {
         (self.0)(addr, reason).into_allowed()
+    }
+
+    /// Whether a connected UDP socket may still send to `peer`, given the
+    /// deadline its connect decision carried.
+    ///
+    /// The policy is asked again only once that deadline has passed, so a send
+    /// costs a clock read, and nothing at all for a decision that does not
+    /// lapse. A guest that resolved the name again gets the new deadline; one
+    /// that did not is refused. Only real egress carries a deadline, so the
+    /// address decided again is never a rewritten sentinel.
+    pub(crate) fn refresh_connected(
+        &self,
+        peer: SocketAddr,
+        valid_until: &mut Option<std::time::Instant>,
+    ) -> Result<(), util::ErrorCode> {
+        match *valid_until {
+            Some(deadline) if std::time::Instant::now() >= deadline => {
+                let allowed = self.check(peer, SocketAddrUse::UdpOutgoingDatagram)?;
+                *valid_until = allowed.valid_until;
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 }
 

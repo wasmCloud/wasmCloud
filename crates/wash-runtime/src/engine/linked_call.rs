@@ -293,14 +293,11 @@ async fn build_ctx_from_template(
         Arc::clone(&template.local_resources.allowed_hosts),
         Arc::clone(&template.local_resources.allowed_host_loopback_ports),
     ));
-    let sockets_ctx = sockets::WasiSocketsCtx {
-        socket_addr_check: sockets::SocketAddrCheck::new(move |addr, reason| {
-            policy.decide(reason, addr)
-        }),
-        loopback: Arc::clone(&template.loopback),
-        allowed_ip_name_lookups: Arc::clone(&template.local_resources.allowed_ip_name_lookups),
-        ..Default::default()
-    };
+    let sockets_ctx = sockets::WasiSocketsCtx::for_store(
+        policy,
+        Arc::clone(&template.loopback),
+        Arc::clone(&template.local_resources.allowed_ip_name_lookups),
+    );
 
     for mount in all_volume_mounts {
         wasi_ctx_builder.preopened_dir(&mount.host_path, &mount.mount_path, mount.perms)?;

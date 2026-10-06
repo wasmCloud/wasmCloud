@@ -1987,14 +1987,13 @@ fn build_plugin_store(
     // its sockets registered, so reusing one would fail the next incarnation's
     // bind with `AddressInUse`.
     let loopback = store_context.network.replace();
-    let sockets_ctx = crate::sockets::WasiSocketsCtx {
-        socket_addr_check: crate::sockets::SocketAddrCheck::new(move |addr, reason| {
-            policy.decide(reason, addr)
-        }),
+    // The policy is reused by every incarnation; the lookup history
+    // `for_store` allocates is this incarnation's alone.
+    let sockets_ctx = crate::sockets::WasiSocketsCtx::for_store(
+        policy,
         loopback,
-        allowed_ip_name_lookups: Arc::clone(&store_context.allowed_ip_name_lookups),
-        ..Default::default()
-    };
+        Arc::clone(&store_context.allowed_ip_name_lookups),
+    );
 
     let mut ctx_builder = Ctx::builder(id, id)
         .with_plugins(

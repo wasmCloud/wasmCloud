@@ -23,6 +23,9 @@ pub struct NetworkOutgoingDatagramStream {
     /// If this has a value, the stream is "connected".
     pub(crate) remote_address: Option<SocketAddr>,
 
+    /// When the decision that permitted `remote_address` lapses, if it does.
+    pub(crate) valid_until: Option<std::time::Instant>,
+
     /// Socket address family.
     pub(crate) family: SocketAddressFamily,
 

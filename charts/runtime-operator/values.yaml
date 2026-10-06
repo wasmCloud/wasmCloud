@@ -792,7 +792,8 @@ runtime:
       # the host on its own. Without that controller the annotations are
       # inert, and a rotation needs a manual `kubectl rollout restart`.
       #
-      #   allowedIpNameLookups  names this plugin may resolve. Omitted/empty
+      #   allowedIpNameLookups  names this plugin may resolve, beyond the
+      #                   hosts `allowedHosts` names. Both omitted/empty
       #                   denies every lookup.
       #   allowedHostLoopbackPorts  ports this plugin may reach on host
       #                   loopback. Components use raw `wasi:sockets` with
@@ -840,13 +841,30 @@ runtime:
         # -- How the raw-socket egress policy is applied: `enforce` or `count`.
         #
         # `enforce` refuses a connection the policy does not permit: a workload
-        # reaches only what its `allowedHosts` declares. A socket connects to
-        # an address, not a name, so the entry that permits it is a literal IP
-        # or `*`; a DNS name or wildcard entry covers `wasi:http` only.
+        # reaches only what its `allowedHosts` declares. An entry permits an
+        # address by naming it (a literal IP, or `*`) or by naming a host the
+        # workload itself resolved into it — see `ipNameLookupGrantLifetime`.
         #
         # `count` evaluates the policy, records what it would refuse in the
-        # would-deny counters, and allows the connection anyway.
+        # would-deny counters, and allows the connection anyway — range
+        # refusals included, not only a missing `allowedHosts` entry.
         socketEgress: enforce
+        # -- How long an address a workload resolved stays connectable under an
+        # `allowedHosts` entry naming the host it resolved, e.g. "60s". Empty
+        # leaves the host's default of 60s.
+        #
+        # A raw socket carries no name, so `allowedHosts: [db.internal:5432]`
+        # permits a socket only to an address a lookup of `db.internal` handed
+        # that workload, on that port, for this long after the lookup. That
+        # entry also lets the workload resolve the name; `allowedIpNameLookups`
+        # is for names it resolves without connecting to them.
+        # Not a DNS TTL: a workload that caches an address longer must resolve
+        # again before a new connect, and open connections are unaffected.
+        #
+        # The grant is the address, not the server: two names behind one
+        # address are indistinguishable, and a name that resolves to another
+        # private service grants that service unless `denyPrivateRanges` is on.
+        ipNameLookupGrantLifetime: ""
         # -- Deny outbound connections to loopback, link-local (including the
         # cloud metadata address), multicast, and documentation ranges —
         # including whatever DNS returned for a permitted name.
