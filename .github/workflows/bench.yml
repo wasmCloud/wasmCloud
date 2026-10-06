@@ -125,7 +125,6 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
-      id-token: write   # OIDC token for AWS role assumption
     strategy:
       fail-fast: false
       # Redundant with the single-runner serialization, but documents intent.
@@ -192,26 +191,73 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-      # A pull-request ref is benched for its step summary and artifact only —
-      # it never reaches S3. Two reasons, both of which apply equally to the
-      # raw-head-sha spelling that has always been possible here:
-      #
-      #   - The trends timeline tracks merged history. A PR row would sit in
-      #     it labelled `pull/N` forever, describing code that may never land.
-      #   - `cargo bench` has by this point run the ref's build scripts and
-      #     proc macros on a persistent self-hosted host. Not assuming the AWS
-      #     role afterwards keeps that code and these credentials in disjoint
-      #     runs, rather than relying on it to have been well-behaved.
-      - name: configure aws credentials
+      # Package results without AWS credentials. Pull-request refs keep their
+      # summary and artifact but do not enter the public history.
+      - name: checkout workflow tools
         if: ${{ success() && !startsWith(needs.matrix.outputs.ref, 'pull/') }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .bench-publish-tools
+          persist-credentials: false
+
+      - name: prepare publish artifact
+        if: ${{ success() && !startsWith(needs.matrix.outputs.ref, 'pull/') }}
+        env:
+          BUNDLE_DIR: ${{ runner.temp }}/bench-publish
+        run: node .bench-publish-tools/.github/scripts/bench-push-results.mjs prepare "$BUNDLE_DIR"
+
+      - name: upload publish artifact
+        if: ${{ success() && !startsWith(needs.matrix.outputs.ref, 'pull/') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-publish-${{ strategy.job-index }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/bench-publish/
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    needs: [matrix, bench]
+    if: ${{ always() && needs.matrix.result == 'success' && !startsWith(needs.matrix.outputs.ref, 'pull/') }}
+    name: publish ${{ matrix.bench }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        bench: ${{ fromJSON(needs.matrix.outputs.benches) }}
+    steps:
+      - name: checkout workflow tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: download publish artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bench-publish-${{ strategy.job-index }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/bench-publish
+
+      - name: validate publish artifact
+        env:
+          WASMCLOUD_BENCH_NAME: ${{ matrix.bench }}
+          BUNDLE_DIR: ${{ runner.temp }}/bench-publish
+        run: node .github/scripts/bench-push-results.mjs validate "$BUNDLE_DIR"
+
+      - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.WASMCLOUD_BENCH_AWS_ROLE_ARN }}
           aws-region: ${{ secrets.WASMCLOUD_BENCH_S3_REGION }}
 
       - name: push results to s3 + invalidate CloudFront
-        if: ${{ success() && !startsWith(needs.matrix.outputs.ref, 'pull/') }}
         env:
+          WASMCLOUD_BENCH_NAME: ${{ matrix.bench }}
           WASMCLOUD_BENCH_S3_BUCKET: ${{ secrets.WASMCLOUD_BENCH_S3_BUCKET }}
           WASMCLOUD_BENCH_CF_DISTRIBUTION_ID: ${{ secrets.WASMCLOUD_BENCH_CF_DISTRIBUTION_ID }}
-        run: node .github/scripts/bench-push-results.mjs
+          BUNDLE_DIR: ${{ runner.temp }}/bench-publish
+        run: node .github/scripts/bench-push-results.mjs publish "$BUNDLE_DIR"
