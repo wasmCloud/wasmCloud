@@ -60,7 +60,7 @@ function prepare(out) {
     actor: process.env.GITHUB_ACTOR ?? '',
     ref: process.env.WASMCLOUD_BENCH_REF ?? process.env.GITHUB_REF_NAME ?? run('git', ['rev-parse', '--abbrev-ref', 'HEAD']),
     sha,
-    short_sha: sha.slice(0, 12),
+    short_sha: run('git', ['rev-parse', '--short=12', 'HEAD']),
     timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
     run_url:
       `${process.env.GITHUB_SERVER_URL ?? 'https://github.com'}/${process.env.GITHUB_REPOSITORY ?? ''}` +
@@ -80,11 +80,10 @@ function prepare(out) {
 }
 
 function publish(bundle) {
-  const metadata = validate(bundle);
+  const { metadata, rows } = validate(bundle);
   const bucket = required('WASMCLOUD_BENCH_S3_BUCKET');
   const distId = required('WASMCLOUD_BENCH_CF_DISTRIBUTION_ID');
   const prefix = `runs/${metadata.timestamp.slice(0, 10)}/${metadata.short_sha}/${metadata.run_id}/${metadata.bench}`;
-  const jsonl = readFileSync(join(bundle, 'results.jsonl'), 'utf8');
   const work = join(tmpdir(), `bench-publish-${process.pid}`);
   mkdirSync(work, { recursive: true });
   try {
@@ -96,11 +95,7 @@ function publish(bundle) {
       }
     }
 
-    const newRows = jsonl
-      .split('\n')
-      .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line))
-      .filter((row) => !row.generator_saturated);
+    const newRows = rows.filter((row) => !row.generator_saturated);
     const dedupKey = (row) =>
       JSON.stringify([row.sha, row.bench, row.group, row.param, row.run_attempt, row.metric ?? null]);
     const histOut = join(work, 'history.json');
@@ -147,19 +142,41 @@ function validate(bundle) {
   }
   const metadata = JSON.parse(readFileSync(join(bundle, 'metadata.json'), 'utf8'));
   const expectedBench = required('WASMCLOUD_BENCH_NAME');
+  const expectedRef = required('WASMCLOUD_BENCH_REF');
+  const expectedSha = required('WASMCLOUD_BENCH_SHA');
+  const expectedRowBench = process.env.WASMCLOUD_BENCH_ROW_NAME ?? expectedBench;
   if (metadata.bench !== expectedBench || !/^[a-z0-9][a-z0-9_-]*$/.test(expectedBench)) {
     throw new Error('artifact bench does not match this job');
+  }
+  if (metadata.ref !== expectedRef) {
+    throw new Error('artifact ref does not match this job');
   }
   if (metadata.run_id !== required('GITHUB_RUN_ID') || !/^\d+$/.test(metadata.run_id)) {
     throw new Error('artifact run ID does not match this job');
   }
-  if (!/^[a-f0-9]{40}$/.test(metadata.sha) || metadata.short_sha !== metadata.sha.slice(0, 12)) {
+  if (metadata.run_attempt !== required('GITHUB_RUN_ATTEMPT') || !/^\d+$/.test(metadata.run_attempt)) {
+    throw new Error('artifact attempt does not match this job');
+  }
+  if (metadata.sha !== expectedSha || !/^[a-f0-9]{40}$/.test(metadata.sha) ||
+      !/^[a-f0-9]{12,40}$/.test(metadata.short_sha) || !metadata.sha.startsWith(metadata.short_sha)) {
     throw new Error('invalid artifact commit');
   }
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(metadata.timestamp)) {
     throw new Error('invalid artifact timestamp');
   }
-  return metadata;
+  const rows = readFileSync(join(bundle, 'results.jsonl'), 'utf8')
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line));
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row) ||
+        row.bench !== expectedRowBench || row.sha !== metadata.sha ||
+        row.short_sha !== metadata.short_sha || row.ref !== metadata.ref ||
+        row.run_id !== metadata.run_id || row.run_attempt !== metadata.run_attempt) {
+      throw new Error('artifact row does not match this job');
+    }
+  }
+  return { metadata, rows };
 }
 
 function readHistory(bucket, work) {

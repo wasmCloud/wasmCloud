@@ -455,14 +455,14 @@ GitHub-hosted publisher
                     arewefastyet reads history.json
 ```
 
-**Workflow:** [`.github/workflows/bench.yml`](../../.github/workflows/bench.yml)
+**Workflows:** [`bench.yml`](../../.github/workflows/bench.yml) dispatches
+each matrix entry through [`bench-run.yml`](../../.github/workflows/bench-run.yml).
 
 - Trigger: `workflow_dispatch` and published releases. Inputs: `bench` (choice of
   `http_invoke` / `wasmtime_baseline` / `wasmtime_serve`) and `ref`
   (any branch/tag/sha; defaults to the workflow's ref).
-- `runs-on: [self-hosted, bench, hetzner]`
-- `concurrency: bench-host`, `cancel-in-progress: false` — an in-flight
-  bench is never interrupted.
+- The single `[self-hosted, bench, hetzner]` runner serializes measurements.
+  Each entry publishes as soon as its own measurement completes.
 - The bench job has `contents: read`. Only the GitHub-hosted publisher has
   `id-token: write` for AWS OIDC.
 - `CARGO_TARGET_DIR=/var/lib/bench/target` so the cache survives
@@ -489,10 +489,12 @@ GitHub-hosted publisher
 5. **Prepare publish artifact** —
    [`bench-push-results.mjs`](../../.github/scripts/bench-push-results.mjs)
    archives the data and generates JSONL and metadata without AWS credentials.
+   The host log is removed after the required uploads. Failed runs keep their
+   output in the job log.
 6. **Publish from a GitHub-hosted job** — downloads that data artifact, assumes
    `WASMCLOUD_BENCH_AWS_ROLE_ARN` through OIDC, uploads under `runs/…`,
    merges `history.json`, and invalidates CloudFront. The publisher checks
-   the artifact's bench and run ID before using it.
+   every row against the resolved commit, ref, bench, run ID, and attempt.
 
 **Triggers:** `workflow_dispatch` plus `release: published` (the latter
 auto-populates the releases timeline; see §9.3). GitHub requires repo write
@@ -514,8 +516,8 @@ Comparison runs use `workflow_dispatch` only.
 
 ### Restrict bench dispatch to maintainers
 
-Apply a repository Actions policy for `bench.yml`, `bench-compare.yml`, and
-`k6bench.yml` that allows the `@wasmCloud/ci-maintainers` and
+Apply a repository Actions policy for `bench.yml`, `bench-run.yml`,
+`bench-compare.yml`, `k6bench.yml`, and `k6bench-run.yml` that allows the `@wasmCloud/ci-maintainers` and
 `@wasmCloud/org-maintainers` teams to trigger them. It also allows
 `@automation-wasmcloud`, which publishes releases and triggers the automatic
 release benchmarks. The policy lives in GitHub settings, not in a workflow
@@ -529,7 +531,7 @@ the policy with:
 ```
 
 The script prints the stored policy. Check that `enforcement` is `active`, the
-three workflow paths are included, and the allowed actors match the two teams
+five workflow paths are included, and the allowed actors match the two teams
 and release account. Changes to those GitHub teams then take effect without
 editing workflow YAML.
 
@@ -606,8 +608,8 @@ against its baseline rather than read its absolute numbers, use **bench-compare*
 | `wasmtime_serve`    | criterion     | wall-clock                         | wasmtime serve subcommand baseline                                                                                                                             |
 | `gungraun_plugin`   | gungraun      | CPU instruction count (cachegrind) | host component plugin: the cross-store capability hop, and the plugin's `on-workload-bind` contribution separated from component instantiation. Both are far below what a wall-clock harness can resolve, which is why this is an instruction-count bench rather than a criterion one. Needs `--features host-component-plugins` (added by `run-bench.sh`) plus valgrind — no Apple Silicon support, so it runs on the bench host only |
 
-Anyone with repo-write can dispatch. The job queues on the
-`bench-host` concurrency group, so two dispatched runs serialize.
+The repository Actions policy restricts dispatch to the maintainer teams and
+release account. The single runner serializes dispatched measurements.
 
 ### 9.2 Via SSH (manual / debugging)
 
@@ -909,9 +911,11 @@ cache). For longer staleness:
 | [`build-history.sh`](./build-history.sh)                                                                       | Maintenance: rebuild `history.json` from scratch by scanning all per-run JSONL in S3                                                                                                                                      |
 | [`aws/setup-aws.sh`](./aws/setup-aws.sh)                                                                       | One-shot: bucket + OAC + CloudFront + WRITE role                                                                                                                                                                          |
 | [`../../.github/workflows/bench.yml`](../../.github/workflows/bench.yml)                                       | Trends pipeline (workflow_dispatch + release auto-trigger)                                                                                                                                                                |
+| [`../../.github/workflows/bench-run.yml`](../../.github/workflows/bench-run.yml)                               | One bench measurement and its separate GitHub-hosted publisher                                                                                                                                                             |
 | [`../../.github/workflows/bench-compare.yml`](../../.github/workflows/bench-compare.yml)                       | Comparison pipeline (workflow_dispatch only — see §9.4 for the rationale against a PR-label trigger)                                                                                                                      |
 | [`../../.github/workflows/bench-host-checks.yml`](../../.github/workflows/bench-host-checks.yml)               | Monthly upstream-version checks (no bench-host involvement; opens / updates / auto-closes a tracking issue per check — see §15)                                                                                           |
 | [`../k6bench/`](../k6bench/README.md) + [`../../.github/workflows/k6bench.yml`](../../.github/workflows/k6bench.yml) | System-level k6 load tests on a kind cluster, same host and S3/history.json pipeline (`bench: "k6"`); own README |
+| [`../../.github/workflows/k6bench-run.yml`](../../.github/workflows/k6bench-run.yml)                           | One k6 measurement and its separate GitHub-hosted publisher                                                                                                                                                                |
 | [`../../.github/scripts/bench-check-runner-version.mjs`](../../.github/scripts/bench-check-runner-version.mjs) | Compares `RUNNER_VERSION` in `install-runner.sh` to the latest actions/runner release; runs from bench-host-checks.yml                                                                                                    |
 
 Sensitive values (the bench host's IP, IPv6, and hostname) are kept in
@@ -1012,8 +1016,7 @@ doesn't reinvent or reattempt without context.
   storage cost ever shows up on the bill (currently ≪ $0.01/mo).
 - **Multi-host fan-out** — bench numbers across architectures
   (aarch64, Apple silicon) or multiple x86_64 baselines. Requires
-  rethinking the `concurrency: bench-host` group and the per-row
-  schema.
+  new runner labels and a host dimension in the per-row schema.
 - **Auto-regression alerting** — Slack/issue post when a bench
   regresses by N % with non-overlapping CI vs. baseline. The data
   is in S3 already; the consumer is missing.
