@@ -396,7 +396,7 @@ func buildBaseHelmSets() []string {
 		"runtime.hostGroups[0].webgpu.enabled=false",
 		"runtime.hostGroups[0].resources.requests.memory=64Mi",
 		"runtime.hostGroups[0].resources.requests.cpu=250m",
-		"runtime.hostGroups[0].resources.limits.memory=512Mi",
+		"runtime.hostGroups[0].resources.limits.memory=768Mi",
 		"runtime.hostGroups[0].resources.limits.cpu=500m",
 		// Driven by RUNTIME_LOG_LEVEL env var; empty value leaves the
 		// chart's `{{- if .logLevel }}` guard off, so wash uses INFO.
@@ -449,7 +449,7 @@ func buildBaseHelmSets() []string {
 			"runtime.hostGroups[1].webgpu.enabled=false",
 			"runtime.hostGroups[1].resources.requests.memory=64Mi",
 			"runtime.hostGroups[1].resources.requests.cpu=250m",
-			"runtime.hostGroups[1].resources.limits.memory=512Mi",
+			"runtime.hostGroups[1].resources.limits.memory=768Mi",
 			"runtime.hostGroups[1].resources.limits.cpu=500m",
 			fmt.Sprintf("runtime.hostGroups[1].logLevel=%s", runtimeLogLevel),
 		)

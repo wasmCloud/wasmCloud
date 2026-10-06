@@ -505,7 +505,7 @@ var _ = Describe("Manager", Ordered, func() {
 				fmt.Sprintf("%s.webgpu.enabled=false", hg),
 				fmt.Sprintf("%s.resources.requests.memory=64Mi", hg),
 				fmt.Sprintf("%s.resources.requests.cpu=250m", hg),
-				fmt.Sprintf("%s.resources.limits.memory=512Mi", hg),
+				fmt.Sprintf("%s.resources.limits.memory=768Mi", hg),
 				fmt.Sprintf("%s.resources.limits.cpu=500m", hg),
 				fmt.Sprintf("%s.logLevel=%s", hg, runtimeLogLevel),
 			)
@@ -843,7 +843,7 @@ spec:
 				fmt.Sprintf("%s.webgpu.enabled=false", hg),
 				fmt.Sprintf("%s.resources.requests.memory=64Mi", hg),
 				fmt.Sprintf("%s.resources.requests.cpu=250m", hg),
-				fmt.Sprintf("%s.resources.limits.memory=512Mi", hg),
+				fmt.Sprintf("%s.resources.limits.memory=768Mi", hg),
 				fmt.Sprintf("%s.resources.limits.cpu=500m", hg),
 				fmt.Sprintf("%s.logLevel=%s", hg, runtimeLogLevel),
 				// Same as the tenant group: it pulls fixtures, so it mounts the
