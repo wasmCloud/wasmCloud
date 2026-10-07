@@ -1,0 +1,56 @@
+# Entry point: calls all ten leaves (fan-out-10.each.yaml) concurrently, by
+# their localRoute names (`--routing local`) or Service DNS (`--routing network`).
+# Entry point: k6 reaches it on every node at :30950.
+apiVersion: v1
+kind: Service
+metadata:
+  name: fanout
+spec:
+  # No selector: the operator writes this Service's EndpointSlice, pointing at
+  # the host pods running the workload below, and registers fanout.<namespace>
+  # as a Host alias for it.
+  type: NodePort
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+      nodePort: 30950
+---
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: fanout
+spec:
+  replicas: 1
+  kubernetes:
+    service:
+      name: fanout
+  template:
+    spec:
+      hostSelector:
+        hostgroup: default
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            host: fanout.k6bench
+      components:
+        - name: relay
+          image: __RELAY_IMAGE__
+          localResources:
+            allowedHosts:
+              - fanout-leaf-0.__CALL_DOMAIN__
+              - fanout-leaf-1.__CALL_DOMAIN__
+              - fanout-leaf-2.__CALL_DOMAIN__
+              - fanout-leaf-3.__CALL_DOMAIN__
+              - fanout-leaf-4.__CALL_DOMAIN__
+              - fanout-leaf-5.__CALL_DOMAIN__
+              - fanout-leaf-6.__CALL_DOMAIN__
+              - fanout-leaf-7.__CALL_DOMAIN__
+              - fanout-leaf-8.__CALL_DOMAIN__
+              - fanout-leaf-9.__CALL_DOMAIN__
+            environment:
+              config:
+                TARGETS: "http://fanout-leaf-0.__CALL_DOMAIN__/,http://fanout-leaf-1.__CALL_DOMAIN__/,http://fanout-leaf-2.__CALL_DOMAIN__/,http://fanout-leaf-3.__CALL_DOMAIN__/,http://fanout-leaf-4.__CALL_DOMAIN__/,http://fanout-leaf-5.__CALL_DOMAIN__/,http://fanout-leaf-6.__CALL_DOMAIN__/,http://fanout-leaf-7.__CALL_DOMAIN__/,http://fanout-leaf-8.__CALL_DOMAIN__/,http://fanout-leaf-9.__CALL_DOMAIN__/"
