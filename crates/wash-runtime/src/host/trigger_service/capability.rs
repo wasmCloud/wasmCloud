@@ -17,7 +17,6 @@ use super::InFlightGuard;
 use crate::engine::ctx::{CallerIdentity, SharedCtx, WorkloadCaller};
 use crate::engine::lent_reply::{LentReplies, LentReply};
 use crate::engine::store::relocate::{self, Relocated};
-use crate::engine::store::resource_bridge;
 use crate::host::job_registry::{JobGuard, JobRegistry};
 use crate::plugin::SecretValue;
 use crate::plugin::component_host::{
@@ -415,11 +414,8 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
             let func_handle = instance
                 .get_func(&mut access, func_idx)
                 .with_context(|| format!("capability function {interface}/{func} not found"))?;
-            let mut arg_vals = Vec::with_capacity(args.len());
-            for arg in args {
-                arg_vals.push(relocate::inject(access.as_context_mut(), arg)?);
-            }
-            let lent = resource_bridge::take_lent(access.data_mut());
+            let (arg_vals, lent) =
+                relocate::inject_all(access.as_context_mut(), args).map_err(|e| e.error)?;
             Ok((func_handle, arg_vals, lent))
         });
         let (func_handle, arg_vals, lent) = match prepared {
@@ -448,6 +444,7 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
         let (call, task_id) = match started {
             Ok(started) => started,
             Err(e) => {
+                let _ = accessor.with(|mut access| lent.release(access.as_context_mut()));
                 reply.send(Err(e));
                 return Ok(());
             }
@@ -468,28 +465,15 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
         )
         .await;
         if let Err(e) = call_result {
+            let _ = accessor.with(|mut access| lent.release(access.as_context_mut()));
             reply.send(Err(
                 e.context(format!("capability call {interface}/{func} trapped"))
             ));
             return Ok(());
         }
 
-        // Extract the results in the plugin store. Any result `stream`/`future`
-        // pumps keep running under this persistent store's `run_concurrent`, so
-        // their drain signals (`dones`) are dropped here rather than awaited.
         let extracted = accessor.with(|mut access| -> wasmtime::Result<Vec<Relocated>> {
-            resource_bridge::release_lent(access.as_context_mut(), lent)?;
-            let mut dones = Vec::new();
-            let mut out = Vec::with_capacity(results.len());
-            for (val, ty) in results.iter().zip(result_tys.iter()) {
-                out.push(relocate::extract(
-                    access.as_context_mut(),
-                    val,
-                    ty,
-                    &mut dones,
-                )?);
-            }
-            Ok(out)
+            relocate::finish_call(access.as_context_mut(), lent, &results, &result_tys)
         });
         reply.send(extracted);
         Ok(())
