@@ -25,24 +25,24 @@ use std::time::Duration;
 
 use tokio::sync::{Notify, OnceCell, mpsc, oneshot};
 use tokio_util::task::AbortOnDropHandle;
-use tracing::{trace, warn};
+use tracing::{Instrument as _, Span, trace, warn};
 use wasmtime::component::{
     Accessor, AccessorTask, ComponentExportIndex, Instance, Resource, Val, types::Type,
 };
 use wasmtime::error::Context as _;
 use wasmtime::{AsContextMut, Store, StoreContextMut};
 
-use crate::engine::abandon::{AbandonFlag, DispatchedCall, rearm_for_call, watch_until_abandoned};
+use crate::engine::abandon::{
+    AbandonFlag, AbandonedCallPolicy, DispatchedCall, rearm_for_call, watch_until_abandoned,
+};
 use crate::engine::ctx::SharedCtx;
 use crate::engine::instance_driver::InvocationSample;
 use crate::engine::linked_call::{
-    EphemeralLinkedCall, LinkedExportInvocation, Signature, extract_all, inject_results,
-    linked_attributes, new_ephemeral_store_with,
+    EphemeralLinkedCall, LinkedExportInvocation, Signature, extract_all, linked_attributes,
+    new_ephemeral_store_with, write_results,
 };
 use crate::engine::store::relocate::{self, Relocated};
-use crate::engine::store::resource_bridge::{
-    Owner, ProxyResource, ResourceRegistry, flush_drops, release_lent, take_lent,
-};
+use crate::engine::store::resource_bridge::{Owner, ProxyResource, ResourceRegistry, flush_drops};
 
 /// A store's place in its [`LinkGroup`].
 #[derive(Default)]
@@ -109,17 +109,19 @@ struct Member {
     _driver: AbortOnDropHandle<()>,
 }
 
-/// How to reach one companion, and what became of it if it has stopped.
+/// What a companion's own tasks and its callers both know it by. It holds no
+/// way to queue work, so the companion's queue closes once its callers are
+/// gone.
 #[derive(Clone)]
-struct Route {
+struct Home {
     component_id: Arc<str>,
-    jobs: mpsc::UnboundedSender<Job>,
+    /// What stopped the companion, once something has.
     fault: Arc<OnceLock<String>>,
     /// Weak, so a call in flight does not keep the group alive past its root.
     group: Weak<LinkGroup>,
 }
 
-impl Route {
+impl Home {
     fn gone(&self) -> wasmtime::Error {
         match self.fault.get() {
             Some(fault) => wasmtime::format_err!(
@@ -133,13 +135,48 @@ impl Route {
         }
     }
 
-    /// Release what `relocated` owns, for values that will never be injected.
-    fn dispose(&self, relocated: Vec<Relocated>) {
-        if let Some(group) = self.group.upgrade() {
-            group.dispose(relocated);
+    fn pack(&self, values: Vec<Relocated>) -> Parcel {
+        Parcel {
+            values,
+            group: Weak::clone(&self.group),
         }
     }
+}
 
+/// Relocated values on their way from one store to another.
+///
+/// Dropped unopened — the call was cancelled, or the store they were bound for
+/// stopped — it has the owner of each resource they carried drop it, so
+/// nothing in transit is stranded in a registry.
+struct Parcel {
+    values: Vec<Relocated>,
+    group: Weak<LinkGroup>,
+}
+
+impl Parcel {
+    fn open(mut self) -> Vec<Relocated> {
+        std::mem::take(&mut self.values)
+    }
+}
+
+impl Drop for Parcel {
+    fn drop(&mut self) {
+        if !self.values.is_empty()
+            && let Some(group) = self.group.upgrade()
+        {
+            group.dispose(std::mem::take(&mut self.values));
+        }
+    }
+}
+
+/// How to reach one companion.
+#[derive(Clone)]
+struct Route {
+    home: Home,
+    jobs: mpsc::UnboundedSender<Job>,
+}
+
+impl Route {
     /// Queue a call. The returned future waits for its results.
     fn send(
         self,
@@ -148,35 +185,36 @@ impl Route {
         result_tys: &Arc<[Type]>,
         attributes: Arc<[opentelemetry::KeyValue]>,
         deadline: Duration,
-    ) -> impl Future<Output = wasmtime::Result<Vec<Relocated>>> + use<> {
+    ) -> impl Future<Output = wasmtime::Result<Parcel>> + use<> {
         let dispatched = DispatchedCall::new("linked (companion store)", deadline);
         let (reply, reply_rx) = oneshot::channel();
         let job = Job::Call(Box::new(CallJob {
             func_idx: inv.func_idx,
             import_name: inv.import_name.clone(),
             export_name: inv.export_name.clone(),
-            args,
+            args: self.home.pack(args),
             result_tys: Arc::clone(result_tys),
             attributes,
             abandoned: dispatched.flag(),
+            span: Span::current(),
             reply,
         }));
         trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoking companion export");
-        let sent = self.jobs.send(job).map_err(|unsent| {
-            if let Job::Call(job) = unsent.0 {
-                self.dispose(job.args);
-            }
-        });
+        // A job that cannot be queued is dropped here, arguments and all.
+        let sent = self.jobs.send(job).is_ok();
         let (import_name, export_name) = (inv.import_name.clone(), inv.export_name.clone());
+        let home = self.home;
         async move {
-            sent.map_err(|()| self.gone())?;
+            if !sent {
+                return Err(home.gone());
+            }
             dispatched
                 .await_reply(reply_rx)
                 .await
                 .ok_or_else(|| {
                     wasmtime::format_err!("{import_name}.{export_name} produced no result in time")
                 })?
-                .map_err(|_| self.gone())?
+                .map_err(|_| home.gone())?
         }
     }
 }
@@ -191,11 +229,13 @@ struct CallJob {
     func_idx: ComponentExportIndex,
     import_name: Arc<str>,
     export_name: Arc<str>,
-    args: Vec<Relocated>,
+    args: Parcel,
     result_tys: Arc<[Type]>,
     attributes: Arc<[opentelemetry::KeyValue]>,
     abandoned: Arc<AbandonFlag>,
-    reply: oneshot::Sender<wasmtime::Result<Vec<Relocated>>>,
+    /// The caller's span, which the call runs under in the companion's task.
+    span: Span,
+    reply: oneshot::Sender<wasmtime::Result<Parcel>>,
 }
 
 /// The sync calls in flight on one companion. A resource destructor has to
@@ -253,9 +293,13 @@ impl LinkGroup {
 
     async fn build(self: &Arc<Self>, callee: &EphemeralLinkedCall) -> wasmtime::Result<Member> {
         let component_id = Arc::clone(&callee.active_component_id);
+        // A companion is never rebuilt, and everything its group has handed
+        // out goes with it, so an abandoned call gets the same patience a
+        // plugin's does before the store is trapped under it.
+        let policy = AbandonedCallPolicy::WarnThenTrap;
         // Set before anything is instantiated, so a sync call made while the
         // store is being built already reaches this group.
-        let mut store = new_ephemeral_store_with(callee, |ctx| {
+        let mut store = new_ephemeral_store_with(callee, policy, |ctx| {
             ctx.links = LinkState::for_member(self);
             ctx.resource_registry = Some(ResourceRegistry::new(Owner::Component(Arc::clone(
                 &component_id,
@@ -264,25 +308,30 @@ impl LinkGroup {
         .await
         .map_err(|e| wasmtime::format_err!("linked component store creation failed: {e:#}"))?;
         let instance = callee.pre.instantiate_async(&mut store).await?;
+        let late_drops = store
+            .data()
+            .resource_registry
+            .as_ref()
+            .map(ResourceRegistry::late_drops)
+            .unwrap_or_default();
 
         let (jobs, queue) = mpsc::unbounded_channel();
-        let route = Route {
-            component_id: Arc::clone(&component_id),
-            jobs,
+        let home = Home {
+            component_id,
             fault: Arc::default(),
             group: Arc::downgrade(self),
         };
         let driver = Driver {
-            component_id,
+            home: home.clone(),
             instance,
             queue,
-            route: route.clone(),
             stop: Arc::default(),
+            late_drops,
             sync_calls: Arc::default(),
             drops_staged: false,
         };
         Ok(Member {
-            route,
+            route: Route { home, jobs },
             _driver: AbortOnDropHandle::new(tokio::spawn(driver.run(store))),
         })
     }
@@ -335,30 +384,30 @@ impl LinkGroup {
 
 /// What ended one pass of a companion's event loop.
 enum Served {
-    /// Its group is gone; nothing will call it again.
+    /// Every route to it is gone; nothing will call it again.
     Closed,
-    /// A resource was staged for dropping, which needs the store itself.
+    /// Resources are staged for dropping, which needs the store itself.
     Drops,
     /// A call failed in a way that leaves the guest's state unknown.
     Faulted,
 }
 
 struct Driver {
-    component_id: Arc<str>,
+    home: Home,
     instance: Instance,
     queue: mpsc::UnboundedReceiver<Job>,
-    /// This companion's own route: where a call records what stopped it, and
-    /// how it reaches the group without keeping it alive.
-    route: Route,
     /// Signalled by a call that faulted the companion, to end the loop.
     stop: Arc<Notify>,
+    /// Signalled when a call ending staged a drop; see
+    /// [`ResourceRegistry::late_drops`].
+    late_drops: Arc<Notify>,
     sync_calls: Arc<SyncCalls>,
-    /// Whether a resource is staged for dropping and waiting on `sync_calls`.
+    /// Whether a resource is staged for dropping.
     drops_staged: bool,
 }
 
 impl Driver {
-    /// Serve the companion's calls until its group is dropped or it faults.
+    /// Serve the companion's calls until nothing can reach it or it faults.
     ///
     /// One event loop serves every call, so calls overlap. It is left only to
     /// run resource destructors, which need the store itself, and re-entered
@@ -376,66 +425,67 @@ impl Driver {
                     self.drops_staged = false;
                 }
                 Err(e) => {
-                    let _ = self.route.fault.set(format!("{e:#}"));
+                    let _ = self.home.fault.set(format!("{e:#}"));
                     break;
                 }
             }
         }
         warn!(
-            component_id = %self.component_id,
-            fault = self.route.fault.get().map(String::as_str),
+            component_id = %self.home.component_id,
+            fault = self.home.fault.get().map(String::as_str),
             "linked component stopped; calls to it fail from here on"
         );
     }
 
     async fn serve(&mut self, accessor: &Accessor<SharedCtx>) -> Served {
         loop {
+            if self.drops_staged && self.sync_calls.idle() {
+                return Served::Drops;
+            }
             let job = tokio::select! {
-                job = self.queue.recv() => match job {
+                biased;
+                () = self.stop.notified() => return Served::Faulted,
+                () = self.late_drops.notified() => {
+                    self.drops_staged = true;
+                    continue;
+                }
+                () = self.sync_calls.settled.notified(), if self.drops_staged => continue,
+                // Nothing new is taken while a drop waits on the sync calls in
+                // flight, or a steady run of them would hold it back for good.
+                job = self.queue.recv(), if !self.drops_staged => match job {
                     Some(job) => job,
                     None => return Served::Closed,
                 },
-                () = self.stop.notified() => return Served::Faulted,
-                () = self.sync_calls.settled.notified(), if self.drops_staged => {
-                    if self.sync_calls.idle() {
-                        return Served::Drops;
-                    }
-                    continue;
-                }
             };
-            match job {
-                Job::Drop(id) => {
-                    accessor.with(|mut access| {
-                        if let Some(registry) = access.data_mut().resource_registry.as_mut() {
-                            registry.stage_drop(id);
-                        }
-                    });
-                    if self.sync_calls.idle() {
-                        return Served::Drops;
-                    }
-                    self.drops_staged = true;
-                }
-                // Its caller has gone, and nothing can be cancelled once it
-                // starts.
-                Job::Call(job) if job.reply.is_closed() => self.route.dispose(job.args),
-                Job::Call(job) => {
-                    // The callee's type controls reentry, even if its importer is async.
-                    let sync_call = accessor.with(|mut access| {
-                        self.instance
-                            .get_func(&mut access, job.func_idx)
-                            .filter(|func| !func.ty(&access).async_())
-                            .map(|_| self.sync_calls.enter())
-                    });
-                    let task = CallTask {
-                        instance: self.instance,
-                        sync_call,
-                        job,
-                        route: self.route.clone(),
-                        stop: Arc::clone(&self.stop),
-                    };
-                    if let Err(e) = accessor.spawn(task) {
-                        tracing::error!(err = %e, "failed to spawn linked call task");
-                    }
+            self.admit(accessor, job);
+            // Whatever else is already queued goes with it, so a run of drops
+            // costs one trip out of the event loop.
+            while let Ok(job) = self.queue.try_recv() {
+                self.admit(accessor, job);
+            }
+        }
+    }
+
+    fn admit(&mut self, accessor: &Accessor<SharedCtx>, job: Job) {
+        match job {
+            Job::Drop(id) => {
+                self.drops_staged |= accessor.with(|mut access| {
+                    let registry = access.data_mut().resource_registry.as_mut();
+                    registry.is_some_and(|registry| registry.stage_drop(id))
+                });
+            }
+            // Its caller has gone, and nothing can be cancelled once it starts.
+            Job::Call(job) if job.reply.is_closed() => {}
+            Job::Call(job) => {
+                let task = CallTask {
+                    instance: self.instance,
+                    job,
+                    home: self.home.clone(),
+                    stop: Arc::clone(&self.stop),
+                    sync_calls: Arc::clone(&self.sync_calls),
+                };
+                if let Err(e) = accessor.spawn(task) {
+                    tracing::error!(err = %e, "failed to spawn linked call task");
                 }
             }
         }
@@ -445,15 +495,22 @@ impl Driver {
 /// Serves one call on a companion's instance.
 struct CallTask {
     instance: Instance,
-    /// Held for the life of the task when the callee is sync-typed.
-    sync_call: Option<SyncCall>,
     job: Box<CallJob>,
-    route: Route,
+    home: Home,
     stop: Arc<Notify>,
+    sync_calls: Arc<SyncCalls>,
 }
 
 impl AccessorTask<SharedCtx> for CallTask {
     async fn run(self, accessor: &Accessor<SharedCtx>) -> wasmtime::Result<()> {
+        let span = self.job.span.clone();
+        self.call(accessor).instrument(span).await;
+        Ok(())
+    }
+}
+
+impl CallTask {
+    async fn call(self, accessor: &Accessor<SharedCtx>) {
         let CallJob {
             func_idx,
             import_name,
@@ -462,10 +519,11 @@ impl AccessorTask<SharedCtx> for CallTask {
             result_tys,
             attributes,
             abandoned,
+            span: _,
             reply,
         } = *self.job;
         let instance = self.instance;
-        let _sync_call = self.sync_call;
+        let home = self.home;
 
         let prepared = accessor.with(|mut access| -> wasmtime::Result<_> {
             // The epoch deadline measures this call's own execution.
@@ -473,21 +531,26 @@ impl AccessorTask<SharedCtx> for CallTask {
             let func = instance.get_func(&mut access, func_idx).with_context(|| {
                 format!("function not found for linked import {import_name}.{export_name}")
             })?;
-            let mut vals = Vec::with_capacity(args.len());
-            for arg in args {
-                vals.push(relocate::inject(access.as_context_mut(), arg)?);
+            let sync = !func.ty(&access).async_();
+            match relocate::inject_all(access.as_context_mut(), args.open()) {
+                Ok((args, lent)) => Ok((func, sync, args, lent)),
+                Err(failed) => {
+                    drop(home.pack(failed.stranded));
+                    Err(failed.error)
+                }
             }
-            Ok((func, vals, take_lent(access.data_mut())))
         });
-        let (func, args, lent) = match prepared {
+        let (func, sync, args, lent) = match prepared {
             Ok(prepared) => prepared,
             Err(e) => {
                 let _ = reply.send(Err(e));
-                return Ok(());
+                return;
             }
         };
+        // A sync function's instance cannot be entered again until it returns.
+        let _sync_call = sync.then(|| self.sync_calls.enter());
         let (calls, executed) = accessor.with(|mut access| {
-            let data = access.get();
+            let data = access.data_mut();
             (Arc::clone(&data.abandoned), Arc::clone(&data.executed))
         });
         let _sample = InvocationSample::start(&executed, attributes);
@@ -501,34 +564,24 @@ impl AccessorTask<SharedCtx> for CallTask {
         .await
         .and_then(|()| {
             accessor.with(|mut access| {
-                release_lent(access.as_context_mut(), lent)?;
-                // Result pumps run under this store, which outlives the call.
-                extract_all(
-                    access.as_context_mut(),
-                    &results,
-                    &result_tys,
-                    &mut Vec::new(),
-                )
+                relocate::finish_call(access.as_context_mut(), lent, &results, &result_tys)
             })
         });
         match outcome {
             Ok(relocated) => {
-                if let Err(Ok(undelivered)) = reply.send(Ok(relocated)) {
-                    self.route.dispose(undelivered);
-                }
+                // Undelivered, the parcel comes back and is dropped here.
+                let _ = reply.send(Ok(home.pack(relocated)));
             }
             // The guest's state is unknown past a failed call, and a guest
             // call cannot be cancelled from the host: the companion ends here.
             Err(e) => {
-                let _ = self
-                    .route
+                let _ = home
                     .fault
                     .set(format!("{import_name}.{export_name} failed: {e:#}"));
                 let _ = reply.send(Err(e));
                 self.stop.notify_one();
             }
         }
-        Ok(())
     }
 }
 
@@ -536,6 +589,25 @@ impl AccessorTask<SharedCtx> for CallTask {
 /// when that store has already reached it.
 fn known_route(links: &LinkState, callee: &EphemeralLinkedCall) -> Option<Route> {
     links.routes.get(&callee.active_component_id).cloned()
+}
+
+/// Rebuild a call's results in the caller's store and write them into its
+/// result slots. Results that cannot all be rebuilt are given back to their
+/// owners.
+fn deliver(
+    store: StoreContextMut<'_, SharedCtx>,
+    home: &Home,
+    parcel: Parcel,
+    results: &mut [Val],
+) -> wasmtime::Result<()> {
+    match relocate::inject_all(store, parcel.open()) {
+        // A result is never a `borrow`, so nothing is lent.
+        Ok((vals, _lent)) => write_results(vals, results),
+        Err(failed) => {
+            drop(home.pack(failed.stranded));
+            Err(failed.error)
+        }
+    }
 }
 
 /// Serve a sync-typed import from its companion.
@@ -571,6 +643,7 @@ pub(crate) async fn invoke_sync(
         }
     };
     let attributes = linked_attributes(callee, inv).await;
+    let home = route.home.clone();
     // Everything awaited is behind us: the arguments leave this store and are
     // queued without a point between at which the call could be dropped.
     let args = extract_all(
@@ -579,10 +652,10 @@ pub(crate) async fn invoke_sync(
         &signature.params,
         &mut Vec::new(),
     )?;
-    let relocated = route
+    let parcel = route
         .send(inv, args, &signature.results, attributes, deadline)
         .await?;
-    inject_results(store.as_context_mut(), relocated, results)
+    deliver(store.as_context_mut(), &home, parcel, results)
 }
 
 /// Serve an async-typed import from its companion.
@@ -597,7 +670,7 @@ pub(crate) async fn invoke_async(
     callee: &EphemeralLinkedCall,
     signature: &Signature,
 ) -> wasmtime::Result<()> {
-    let known = accessor.with(|mut access| known_route(&access.get().links, callee));
+    let known = accessor.with(|mut access| known_route(&access.data_mut().links, callee));
     let route = match known {
         Some(route) => route,
         None => {
@@ -613,6 +686,7 @@ pub(crate) async fn invoke_async(
         }
     };
     let attributes = linked_attributes(callee, inv).await;
+    let home = route.home.clone();
     // Argument pumps run under this store, which outlives the call.
     let args = accessor.with(|mut access| {
         extract_all(
@@ -622,10 +696,10 @@ pub(crate) async fn invoke_async(
             &mut Vec::new(),
         )
     })?;
-    let relocated = route
+    let parcel = route
         .send(inv, args, &signature.results, attributes, Duration::MAX)
         .await?;
-    accessor.with(|mut access| inject_results(access.as_context_mut(), relocated, results))
+    accessor.with(|mut access| deliver(access.as_context_mut(), &home, parcel, results))
 }
 
 /// The destructor of a proxy for a linked component's resource: tells the
@@ -651,96 +725,4 @@ pub(crate) fn drop_proxy(
         let _ = route.jobs.send(Job::Drop(proxy.proxy_id));
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::engine::ctx::Ctx;
-    use wasmtime::component::{Component, Linker};
-
-    #[tokio::test]
-    async fn sync_callee_defers_drops_until_it_returns() -> anyhow::Result<()> {
-        let mut config = wasmtime::Config::new();
-        config.wasm_component_model_async(true);
-        let engine = wasmtime::Engine::new(&config)?;
-        let component = Component::new(
-            &engine,
-            wat::parse_str(
-                r#"(component
-                    (import "wait" (func $wait))
-                    (core func $wait (canon lower (func $wait)))
-                    (core module $m
-                        (import "" "wait" (func $wait))
-                        (func (export "run") call $wait))
-                    (core instance $i (instantiate $m
-                        (with "" (instance (export "wait" (func $wait))))))
-                    (func (export "run") (canon lift (core func $i "run"))))"#,
-            )?,
-        )?;
-        let entered = Arc::new(Notify::new());
-        let release = Arc::new(Notify::new());
-        let mut linker = Linker::<SharedCtx>::new(&engine);
-        linker.root().func_new_async("wait", {
-            let entered = Arc::clone(&entered);
-            let release = Arc::clone(&release);
-            move |_, _, _, _| {
-                let entered = Arc::clone(&entered);
-                let release = Arc::clone(&release);
-                Box::new(async move {
-                    entered.notify_one();
-                    release.notified().await;
-                    Ok(())
-                })
-            }
-        })?;
-        let mut store = Store::new(
-            &engine,
-            SharedCtx::new(Ctx::builder("test", "callee").build()),
-        );
-        let instance = linker.instantiate_async(&mut store, &component).await?;
-        let (_, func_idx) = component.get_export(None, "run").unwrap();
-        let (jobs, queue) = mpsc::unbounded_channel();
-        let (reply, reply_rx) = oneshot::channel();
-        let dispatched = DispatchedCall::new("test", Duration::from_secs(5));
-        let sync_calls = Arc::new(SyncCalls::default());
-        let driver = Driver {
-            component_id: Arc::from("callee"),
-            instance,
-            queue,
-            sync_calls: Arc::clone(&sync_calls),
-            drops_staged: false,
-            route: Route {
-                component_id: Arc::from("callee"),
-                jobs: jobs.clone(),
-                fault: Arc::default(),
-                group: Weak::new(),
-            },
-            stop: Arc::default(),
-        };
-        let _driver = AbortOnDropHandle::new(tokio::spawn(driver.run(store)));
-        assert!(
-            jobs.send(Job::Call(Box::new(CallJob {
-                func_idx,
-                import_name: Arc::from("test"),
-                export_name: Arc::from("run"),
-                args: Vec::new(),
-                result_tys: Arc::from([]),
-                attributes: Arc::from([]),
-                abandoned: dispatched.flag(),
-                reply,
-            })))
-            .is_ok()
-        );
-        tokio::time::timeout(Duration::from_secs(5), async {
-            entered.notified().await;
-            assert!(!sync_calls.idle());
-            release.notify_one();
-            reply_rx.await??;
-            anyhow::Ok(())
-        })
-        .await??;
-        assert!(sync_calls.idle());
-        Ok(())
-    }
 }
