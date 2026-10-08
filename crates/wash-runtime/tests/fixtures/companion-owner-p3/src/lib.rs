@@ -1,6 +1,7 @@
 //! P3 fixture, owner of the `token` resource. It is reached by sync calls, so
 //! it runs in a companion store, and it counts its live tokens so a test can
-//! see whether one was dropped.
+//! see whether one was dropped. Its `files` interface reads a file however it
+//! is called, so a test can see which volumes it has.
 
 use std::cell::RefCell;
 use std::future::poll_fn;
@@ -15,10 +16,13 @@ mod bindings {
             "export:wasmcloud:companion-test/tokens@0.1.0#[method]token.wait",
             "export:wasmcloud:companion-test/tokens@0.1.0#[method]token.signal",
             "export:wasmcloud:companion-test/tokens@0.1.0#make-held",
+            "export:wasmcloud:companion-test/files@0.1.0#read-plain",
+            "export:wasmcloud:companion-test/files@0.1.0#read-stream",
         ],
     });
 }
 
+use bindings::exports::wasmcloud::companion_test::files::Guest as Files;
 use bindings::exports::wasmcloud::companion_test::tokens::{Guest, GuestToken, Token};
 use bindings::wasi::clocks::monotonic_clock;
 
@@ -110,6 +114,30 @@ impl Guest for Component {
     fn hold(ms: u32) {
         let until = monotonic_clock::now() + u64::from(ms) * 1_000_000;
         while monotonic_clock::now() < until {}
+    }
+}
+
+/// The file's contents, or `-` when this component cannot read it.
+fn read_file(path: &str) -> String {
+    std::fs::read_to_string(path).unwrap_or_else(|_| "-".to_string())
+}
+
+impl Files for Component {
+    fn read(path: String) -> String {
+        read_file(&path)
+    }
+
+    async fn read_plain(path: String) -> String {
+        read_file(&path)
+    }
+
+    async fn read_stream(path: String) -> wit_bindgen::StreamReader<u8> {
+        let contents = read_file(&path);
+        let (mut tx, rx) = bindings::wit_stream::new::<u8>();
+        wit_bindgen::spawn_local(async move {
+            tx.write_all(contents.into_bytes()).await;
+        });
+        rx
     }
 }
 

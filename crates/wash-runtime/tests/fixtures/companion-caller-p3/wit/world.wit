@@ -13,6 +13,12 @@ interface tokens {
     hold: func(ms: u32);
 }
 
+interface files {
+    read: func(path: string) -> string;
+    read-plain: async func(path: string) -> string;
+    read-stream: async func(path: string) -> stream<u8>;
+}
+
 interface adopter {
     use tokens.{token};
 
@@ -23,6 +29,7 @@ interface adopter {
 world caller {
     import tokens;
     import adopter;
+    import files;
     import wasi:http/types@0.3.0;
     import wasi:clocks/types@0.3.0;
     import wasi:clocks/monotonic-clock@0.3.0;
