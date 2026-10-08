@@ -409,6 +409,9 @@ pub struct WorkloadService {
 impl WorkloadService {
     /// Create a new [`WorkloadService`] with the given workload ID,
     /// wasmtime [`Component`], [`Linker`], volume mounts, and instance limits.
+    ///
+    /// `volume_mounts` are trusted: they are opened as given, refusing only
+    /// kernel filesystems, without the engine's `hostPath` policy.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         workload_id: impl Into<Arc<str>>,
@@ -512,6 +515,9 @@ pub struct WorkloadComponent {
 impl WorkloadComponent {
     /// Create a new [`WorkloadComponent`] with the given workload ID,
     /// wasmtime [`Component`], [`Linker`], volume mounts, and instance limits.
+    ///
+    /// `volume_mounts` are trusted: they are opened as given, refusing only
+    /// kernel filesystems, without the engine's `hostPath` policy.
     ///
     /// `instances` is what the component asked for by way of instance reuse.
     /// [`InstancePolicy::Ephemeral`] keeps the default behavior of a fresh

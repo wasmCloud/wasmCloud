@@ -503,7 +503,6 @@ pub struct PolicyMeters {
     denied: [AtomicU64; DENY_REASONS],
     would_deny: [AtomicU64; DENY_REASONS],
     host_path_denied: AtomicU64,
-    host_path_would_deny: AtomicU64,
 }
 
 const DENY_REASONS: usize = 6;
@@ -544,24 +543,16 @@ impl PolicyMeters {
             .map_or(0, |c| c.load(Ordering::Relaxed))
     }
 
-    /// Record a `hostPath` volume enforcement refuses: one outside the host's
-    /// allowed host paths, or one containing the `emptyDir` scratch root.
-    pub fn record_host_path(&self, mode: crate::engine::HostPathMode) {
-        let counter = match mode {
-            crate::engine::HostPathMode::Enforce => &self.host_path_denied,
-            crate::engine::HostPathMode::Count => &self.host_path_would_deny,
-        };
-        counter.fetch_add(1, Ordering::Relaxed);
+    /// Record a refused `hostPath` volume: one outside the host's allowed host
+    /// paths, or one exposing a reserved path, a kernel filesystem, or the
+    /// `emptyDir` scratch root.
+    pub fn record_host_path_denied(&self) {
+        self.host_path_denied.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// `hostPath` volumes refused by the allowlist or the scratch root.
+    /// `hostPath` volumes the host refused.
     pub fn host_path_denied(&self) -> u64 {
         self.host_path_denied.load(Ordering::Relaxed)
-    }
-
-    /// `hostPath` volumes mounted in count mode that enforcement would refuse.
-    pub fn host_path_would_deny(&self) -> u64 {
-        self.host_path_would_deny.load(Ordering::Relaxed)
     }
 
     /// Every reason with a non-zero count, for a status line or a metric sweep.
@@ -575,8 +566,8 @@ impl PolicyMeters {
 
     /// These counters, published as metrics on the process-wide meter: the
     /// would-deny figures are what an operator watches before switching the
-    /// socket policy or the `hostPath` gate to enforce. With no OTel exporter
-    /// configured the global meter is a no-op and nothing is ever read.
+    /// socket policy to enforce. With no OTel exporter configured the global
+    /// meter is a no-op and nothing is ever read.
     pub fn into_metered(self) -> Arc<Self> {
         let meters = Arc::new(self);
         meters.register_metrics(&opentelemetry::global::meter("wash-runtime"));
@@ -601,13 +592,9 @@ impl PolicyMeters {
         };
         observe(
             "host_path.denied",
-            "hostPath volumes refused by the allowlist or the emptyDir scratch root",
+            "hostPath volumes refused: outside the allowlist, or exposing a reserved path, a \
+             kernel filesystem, or the emptyDir scratch root",
             Self::host_path_denied,
-        );
-        observe(
-            "host_path.would_deny",
-            "hostPath volumes mounted in count mode that enforcement would refuse",
-            Self::host_path_would_deny,
         );
         let by_reason =
             |name: &'static str, doc: &'static str, read: fn(&Self, DenyReason) -> u64| {
@@ -665,9 +652,7 @@ mod policy_meter_tests {
         };
 
         let meters = Arc::new(PolicyMeters::default());
-        meters.record_host_path(crate::engine::HostPathMode::Count);
-        meters.record_host_path(crate::engine::HostPathMode::Count);
-        meters.record_host_path(crate::engine::HostPathMode::Enforce);
+        meters.record_host_path_denied();
         meters.record_would_deny(DenyReason::BlockedRange);
 
         let exporter = InMemoryMetricExporter::default();
@@ -694,7 +679,6 @@ mod policy_meter_tests {
                 }
             }
         }
-        assert_eq!(seen[&("host_path.would_deny".to_string(), None)], 2);
         assert_eq!(seen[&("host_path.denied".to_string(), None)], 1);
         assert_eq!(
             seen[&(
