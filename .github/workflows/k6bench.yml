@@ -72,12 +72,14 @@ jobs:
   matrix:
     name: build matrix
     runs-on: ubuntu-latest
-    timeout-minutes: 1
+    timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
       runs: ${{ steps.set.outputs.runs }}
       ref: ${{ steps.set.outputs.ref }}
-      checkout_ref: ${{ steps.set.outputs.checkout_ref }}
       release: ${{ steps.set.outputs.release }}
+      sha: ${{ steps.commit.outputs.sha }}
     env:
       # What every release publishes to the timeline, as
       # `scenario:profile[:routing]`. stress gives the headline
@@ -140,113 +142,36 @@ jobs:
             echo "release=${release}"
           } >> "$GITHUB_OUTPUT"
 
-  k6:
-    needs: matrix
-    name: ${{ matrix.run }}
-    runs-on: [self-hosted, bench, hetzner]
-    timeout-minutes: 90
-    permissions:
-      contents: read
-      id-token: write   # OIDC token for AWS role assumption
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        run: ${{ fromJSON(needs.matrix.outputs.runs) }}
-    env:
-      CARGO_TARGET_DIR: /var/lib/bench/target
-      CARGO_INCREMENTAL: "0"
-      WASMCLOUD_BENCH_REF: ${{ needs.matrix.outputs.ref }}
-      RUN: ${{ matrix.run }}
-      INPUT_RATE: ${{ inputs.rate || '1000' }}
-      INPUT_DURATION: ${{ inputs.duration || '3m' }}
-      INPUT_RAW: ${{ inputs.raw && '1' || '0' }}
-      RELEASE: ${{ needs.matrix.outputs.release }}
-    steps:
-      - name: checkout
+      - name: resolve commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.matrix.outputs.checkout_ref }}
-          fetch-depth: 0
-          # The job runs the checked-out ref's code; keep the token out of it.
+          ref: ${{ steps.set.outputs.checkout_ref }}
           persist-credentials: false
 
-      - name: pre-flight host checks
-        env:
-          WASMCLOUD_BENCH_HOSTNAME: ${{ vars.WASMCLOUD_BENCH_HOSTNAME }}
-          WASMCLOUD_BENCH_K6: "1"
-        run: node .github/scripts/bench-preflight.mjs
+      - id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: run k6 scenario
-        id: run
-        run: |
-          set -euo pipefail
-          # shellcheck disable=SC1091
-          . "$HOME/.cargo/env"
-          IFS=: read -r scenario profile routing <<<"$RUN"
-          routing="${routing:-local}"
-          name="${scenario}-${profile}"
-          [ "$routing" = local ] || name="${name}-${routing}"
-          out="${RUNNER_TEMP}/k6bench/${name}"
-          args=(--ci --scenario "$scenario" --profile "$profile" --routing "$routing"
-                --rate "$INPUT_RATE" --duration "$INPUT_DURATION" --out-dir "$out")
-          [ "$INPUT_RAW" = 1 ] && args+=(--raw)
-          if [ "$RELEASE" = true ]; then
-            args+=(--wasmcloud-version "${WASMCLOUD_BENCH_REF#v}")
-          else
-            args+=(--build-local)
-          fi
-          ./scripts/k6bench/run.sh "${args[@]}"
-          {
-            echo "dir=${out}"
-            echo "name=k6-${name}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: render markdown summary
-        env:
-          RESULTS_DIR: ${{ steps.run.outputs.dir }}
-        run: |
-          # shellcheck disable=SC1091
-          . "$HOME/.cargo/env"
-          cargo run -p bench-tools --quiet -- k6 report --markdown "$RESULTS_DIR" \
-            >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: upload k6bench artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ steps.run.outputs.name }}-${{ github.run_id }}
-          path: ${{ steps.run.outputs.dir }}
-          retention-days: 90
-          if-no-files-found: error
-
-      # A pull-request ref gets a summary and an artifact but never reaches S3,
-      # for the reasons spelled out in bench.yml.
-      - name: configure aws credentials
-        if: ${{ success() && !startsWith(needs.matrix.outputs.ref, 'pull/') }}
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          role-to-assume: ${{ secrets.WASMCLOUD_BENCH_AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.WASMCLOUD_BENCH_S3_REGION }}
-
-      - name: push results to s3 + invalidate CloudFront
-        if: ${{ success() && !startsWith(needs.matrix.outputs.ref, 'pull/') }}
-        env:
-          WASMCLOUD_BENCH_NAME: ${{ steps.run.outputs.name }}
-          WASMCLOUD_BENCH_K6_DIR: ${{ steps.run.outputs.dir }}
-          WASMCLOUD_BENCH_S3_BUCKET: ${{ secrets.WASMCLOUD_BENCH_S3_BUCKET }}
-          WASMCLOUD_BENCH_CF_DISTRIBUTION_ID: ${{ secrets.WASMCLOUD_BENCH_CF_DISTRIBUTION_ID }}
-        run: node .github/scripts/bench-push-results.mjs
-
-      # run.sh --ci deletes the cluster itself; this covers a job that failed
-      # or was cancelled before it got there, so the next job's pre-flight
-      # (and the criterion benches) find an idle host.
-      - name: delete kind cluster
-        if: ${{ always() }}
-        run: kind delete cluster --name k6bench || true
-
-      # Docker is socket-activated; stopping the daemon returns the host to
-      # how criterion and gungraun expect it (their pre-flight refuses a
-      # running daemon). The sudoers rule is installed by install-runner.sh.
-      - name: stop docker
-        if: ${{ always() }}
-        run: sudo -n systemctl stop docker.service
+  k6:
+    needs: matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        run: ${{ fromJSON(needs.matrix.outputs.runs) }}
+    uses: $/.github/workflows/k6bench-run.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      run: ${{ matrix.run }}
+      ref: ${{ needs.matrix.outputs.ref }}
+      commit_sha: ${{ needs.matrix.outputs.sha }}
+      artifact_id: ${{ format('{0}', strategy.job-index) }}
+      release: ${{ needs.matrix.outputs.release }}
+      rate: ${{ inputs.rate || '1000' }}
+      duration: ${{ inputs.duration || '3m' }}
+      raw: ${{ inputs.raw || false }}
+    secrets:
+      aws_role_arn: ${{ secrets.WASMCLOUD_BENCH_AWS_ROLE_ARN }}
+      aws_region: ${{ secrets.WASMCLOUD_BENCH_S3_REGION }}
+      s3_bucket: ${{ secrets.WASMCLOUD_BENCH_S3_BUCKET }}
+      cf_distribution_id: ${{ secrets.WASMCLOUD_BENCH_CF_DISTRIBUTION_ID }}

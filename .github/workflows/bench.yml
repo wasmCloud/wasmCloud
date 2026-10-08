@@ -32,14 +32,6 @@ defaults:
   run:
     shell: bash
 
-# Only one bench workflow can run on the host at a time. Queue rather than
-# cancel so an in-flight bench is never interrupted partway through criterion
-# sampling. Matrix jobs within a single run also serialize naturally because
-# the host has exactly one self-hosted runner.
-concurrency:
-  group: bench-host
-  cancel-in-progress: false
-
 permissions: {}
 
 jobs:
@@ -54,15 +46,15 @@ jobs:
   matrix:
     name: build matrix
     runs-on: ubuntu-latest
-    timeout-minutes: 1
+    timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
       benches: ${{ steps.set.outputs.benches }}
-      # `ref` is the label recorded on each data row; `checkout_ref` is what
-      # actions/checkout is given. They differ only for a pull-request ref,
-      # where the row says `pull/123` but the checkout needs the full
-      # refs/pull/123/head.
+      # `ref` labels each data row; the matrix checkout resolves the commit.
+      # Pull-request labels use `pull/123`, while checkout uses the full ref.
       ref: ${{ steps.set.outputs.ref }}
-      checkout_ref: ${{ steps.set.outputs.checkout_ref }}
+      sha: ${{ steps.commit.outputs.sha }}
     env:
       # Subset of inputs.bench.options to run automatically on `release:
       # published`. wasmtime_* are reference baselines for wasmtime itself
@@ -97,8 +89,7 @@ jobs:
                 # `#123` means the same thing in both bench workflows.
                 #
                 # GitHub publishes refs/pull/N/head on the base repo for fork
-                # PRs too, so actions/checkout fetches it directly — no API
-                # call, which keeps this job checkout-free at `permissions: {}`.
+                # PRs too, so actions/checkout fetches it directly.
                 num="${ref#\#}"; num="${num#pull/}"; num="${num#pr/}"
                 if ! [[ "$num" =~ ^[0-9]+$ ]]; then
                   echo "invalid pull-request ref '${ref}' (expected #N, pull/N, or pr/N)" >&2
@@ -118,100 +109,32 @@ jobs:
             echo "checkout_ref=${checkout_ref}"
           } >> "$GITHUB_OUTPUT"
 
-  bench:
-    needs: matrix
-    name: ${{ matrix.bench }}
-    runs-on: [self-hosted, bench, hetzner]
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      id-token: write   # OIDC token for AWS role assumption
-    strategy:
-      fail-fast: false
-      # Redundant with the single-runner serialization, but documents intent.
-      max-parallel: 1
-      matrix:
-        bench: ${{ fromJSON(needs.matrix.outputs.benches) }}
-    env:
-      WASMCLOUD_BENCH_NAME: ${{ matrix.bench }}
-      # Persist the cargo build cache outside $GITHUB_WORKSPACE so
-      # actions/checkout's clean step doesn't blow it away every run.
-      CARGO_TARGET_DIR: /var/lib/bench/target
-      CARGO_INCREMENTAL: "0"
-      # The ref recorded on each data row — bench-tools/meta.rs reads this as
-      # the single source of truth for what was benched. It's the resolved,
-      # normalized matrix ref (the tag for `release`, the checked-out ref for a
-      # dispatch). meta.rs deliberately ignores GITHUB_REF_NAME, which is the
-      # *dispatch* ref (e.g. `main` even when the `ref` input is v2.5.2) and
-      # would hide tag runs from the semver-filtered releases view.
-      WASMCLOUD_BENCH_REF: ${{ needs.matrix.outputs.ref }}
-    steps:
-      - name: checkout
+      - name: resolve commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.matrix.outputs.checkout_ref }}
-          fetch-depth: 0
-          # Don't leave the GITHUB_TOKEN in .git/config; the bench host
-          # then runs untrusted user code (the bench under test) and we
-          # don't want it to be able to read or use the token.
+          ref: ${{ steps.set.outputs.checkout_ref }}
           persist-credentials: false
 
-      - name: pre-flight host checks
-        env:
-          # Expected hostname of the dedicated bench host. Set as a repo
-          # variable (Settings → Secrets and variables → Actions → Variables).
-          # Kept out of the repo so the box's identity isn't broadcast.
-          WASMCLOUD_BENCH_HOSTNAME: ${{ vars.WASMCLOUD_BENCH_HOSTNAME }}
-        run: node .github/scripts/bench-preflight.mjs
+      - id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: run cargo bench
-        id: run
-        run: ./scripts/bench/run-bench.sh "${WASMCLOUD_BENCH_NAME}"
-
-      # Subsequent steps inherit the implicit `if: success()` — they only
-      # run when every preceding step succeeded.
-      - name: render markdown summary
-        run: |
-          # Each `run:` step gets a fresh shell — PATH from previous steps
-          # doesn't persist — so re-source rustup's env shim before cargo.
-          # shellcheck disable=SC1091
-          . "$HOME/.cargo/env"
-          cargo run -p bench-tools --quiet -- summary --bench "${WASMCLOUD_BENCH_NAME}" \
-            >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: upload bench artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: bench-${{ matrix.bench }}-${{ github.run_id }}
-          # criterion benches write to target/criterion/, gungraun benches
-          # (gungraun) write to target/gungraun/. A genuinely-empty run is
-          # a bug worth flagging loudly — fail rather than warn.
-          path: |
-            ${{ env.CARGO_TARGET_DIR }}/criterion/
-            ${{ env.CARGO_TARGET_DIR }}/gungraun/
-          retention-days: 90
-          if-no-files-found: error
-
-      # A pull-request ref is benched for its step summary and artifact only —
-      # it never reaches S3. Two reasons, both of which apply equally to the
-      # raw-head-sha spelling that has always been possible here:
-      #
-      #   - The trends timeline tracks merged history. A PR row would sit in
-      #     it labelled `pull/N` forever, describing code that may never land.
-      #   - `cargo bench` has by this point run the ref's build scripts and
-      #     proc macros on a persistent self-hosted host. Not assuming the AWS
-      #     role afterwards keeps that code and these credentials in disjoint
-      #     runs, rather than relying on it to have been well-behaved.
-      - name: configure aws credentials
-        if: ${{ success() && !startsWith(needs.matrix.outputs.ref, 'pull/') }}
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          role-to-assume: ${{ secrets.WASMCLOUD_BENCH_AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.WASMCLOUD_BENCH_S3_REGION }}
-
-      - name: push results to s3 + invalidate CloudFront
-        if: ${{ success() && !startsWith(needs.matrix.outputs.ref, 'pull/') }}
-        env:
-          WASMCLOUD_BENCH_S3_BUCKET: ${{ secrets.WASMCLOUD_BENCH_S3_BUCKET }}
-          WASMCLOUD_BENCH_CF_DISTRIBUTION_ID: ${{ secrets.WASMCLOUD_BENCH_CF_DISTRIBUTION_ID }}
-        run: node .github/scripts/bench-push-results.mjs
+  bench:
+    needs: matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        bench: ${{ fromJSON(needs.matrix.outputs.benches) }}
+    uses: $/.github/workflows/bench-run.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      bench: ${{ matrix.bench }}
+      ref: ${{ needs.matrix.outputs.ref }}
+      commit_sha: ${{ needs.matrix.outputs.sha }}
+      artifact_id: ${{ format('{0}', strategy.job-index) }}
+    secrets:
+      aws_role_arn: ${{ secrets.WASMCLOUD_BENCH_AWS_ROLE_ARN }}
+      aws_region: ${{ secrets.WASMCLOUD_BENCH_S3_REGION }}
+      s3_bucket: ${{ secrets.WASMCLOUD_BENCH_S3_BUCKET }}
+      cf_distribution_id: ${{ secrets.WASMCLOUD_BENCH_CF_DISTRIBUTION_ID }}
