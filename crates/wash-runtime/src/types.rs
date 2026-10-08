@@ -114,6 +114,9 @@ pub struct LocalResources {
     /// `wasi:cli/env` variables, copied to `WasiCtxBuilder` at component
     /// instantiation.
     pub environment: HashMap<String, String>,
+    /// The volumes this component can reach, and where. They are this
+    /// component's alone: one it is linked to sees only the mounts it declares
+    /// itself.
     pub volume_mounts: Vec<VolumeMount>,
     /// Parsed outbound allowlist.
     /// **Empty = deny all outgoing requests**. See
