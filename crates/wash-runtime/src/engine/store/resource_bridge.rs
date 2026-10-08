@@ -186,11 +186,6 @@ impl ResourceRegistry {
         Arc::clone(&self.late_drops)
     }
 
-    /// Whether `real` is one of the resources registered here.
-    pub(crate) fn holds(&self, real: &ResourceAny) -> bool {
-        self.reals.values().any(|held| held == real)
-    }
-
     /// Whether any drops are staged and waiting to be flushed.
     pub fn has_pending_drops(&self) -> bool {
         !self.pending_drops.is_empty()

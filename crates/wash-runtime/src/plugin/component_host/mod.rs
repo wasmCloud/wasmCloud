@@ -1781,10 +1781,12 @@ async fn route_capability_call(
 
     // Inject the relocated results into the caller store.
     accessor.with(|mut access| -> wasmtime::Result<()> {
-        // A result is never a `borrow`, so nothing is lent.
-        let mut lent = resource_bridge::Lent::default();
-        for (slot, relocated) in results.iter_mut().zip(produced) {
-            *slot = relocate::inject(access.as_context_mut(), relocated, &mut lent)?;
+        // A result is never a `borrow`, so nothing is lent. What a failure
+        // strands is the plugin's, and is released with the plugin's store.
+        let (vals, _lent) =
+            relocate::inject_all(access.as_context_mut(), produced).map_err(|e| e.error)?;
+        for (slot, val) in results.iter_mut().zip(vals) {
+            *slot = val;
         }
         Ok(())
     })
