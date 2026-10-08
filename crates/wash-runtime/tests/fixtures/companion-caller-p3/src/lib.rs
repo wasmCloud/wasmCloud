@@ -13,6 +13,8 @@ mod bindings {
             "import:wasmcloud:companion-test/tokens@0.1.0#[method]token.signal",
             "import:wasmcloud:companion-test/tokens@0.1.0#make-held",
             "import:wasmcloud:companion-test/adopter@0.1.0#adopt-after",
+            "import:wasmcloud:companion-test/files@0.1.0#read-plain",
+            "import:wasmcloud:companion-test/files@0.1.0#read-stream",
             "import:wasi:clocks/monotonic-clock@0.3.0#wait-for",
             "export:wasi:http/handler@0.3.0#handle",
         ],
@@ -23,6 +25,7 @@ use bindings::exports::wasi::http::handler::Guest as Handler;
 use bindings::wasi::clocks::monotonic_clock;
 use bindings::wasi::http::types::{ErrorCode, Fields, Request, Response};
 use bindings::wasmcloud::companion_test::adopter;
+use bindings::wasmcloud::companion_test::files;
 use bindings::wasmcloud::companion_test::tokens::{self, Token};
 
 struct Component;
@@ -33,6 +36,7 @@ impl Handler for Component {
             "/overlap" => overlap().await,
             "/cancel" => cancel().await,
             "/deferred-drop" => deferred_drop().await,
+            "/mounts" => mounts().await,
             other => format!("unknown route {other}"),
         };
         Ok(respond(body))
@@ -76,6 +80,33 @@ async fn deferred_drop() -> String {
         "ready={ready} pending={pending} dropped={dropped} live={}",
         tokens::live()
     )
+}
+
+/// The paths the mount test reads, from every component and over every route.
+const PROBES: [&str; 3] = ["/data/who", "/caller-only/who", "/owner-only/who"];
+
+/// What this component reads at each of [`PROBES`], then what the owner reads
+/// when asked over each kind of linked call.
+async fn mounts() -> String {
+    let mut seen = Vec::new();
+    let mut local = Vec::new();
+    let (mut sync, mut plain, mut stream) = (Vec::new(), Vec::new(), Vec::new());
+    for path in PROBES {
+        local.push(std::fs::read_to_string(path).unwrap_or_else(|_| "-".to_string()));
+        sync.push(files::read(path));
+        plain.push(files::read_plain(path.to_string()).await);
+        let bytes = files::read_stream(path.to_string()).await.collect().await;
+        stream.push(String::from_utf8(bytes).unwrap_or_default());
+    }
+    for (reader, read) in [
+        ("caller", local),
+        ("sync", sync),
+        ("plain", plain),
+        ("stream", stream),
+    ] {
+        seen.push(format!("{reader}: {}", read.join(" ")));
+    }
+    seen.join("\n")
 }
 
 /// Whether the owner's live-token count reaches `want` within two seconds.

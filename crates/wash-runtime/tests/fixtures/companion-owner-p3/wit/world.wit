@@ -21,10 +21,22 @@ interface tokens {
     hold: func(ms: u32);
 }
 
+/// Reads files through whatever volumes the owner has mounted. One function
+/// per way a linked call is served.
+interface files {
+    /// Sync, so served from the owner's companion store.
+    read: func(path: string) -> string;
+    /// Async and plain, so served from a store built for the call.
+    read-plain: async func(path: string) -> string;
+    /// Async and carrying a stream, so served from the caller's own store.
+    read-stream: async func(path: string) -> stream<u8>;
+}
+
 world owner {
     import wasi:cli/types@0.3.0;
     import wasi:clocks/types@0.3.0;
     import wasi:clocks/monotonic-clock@0.3.0;
 
     export tokens;
+    export files;
 }
