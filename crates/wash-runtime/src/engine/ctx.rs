@@ -74,9 +74,6 @@ pub struct SharedCtx {
     /// registry of the real resources behind the proxies those stores hold. See
     /// [`crate::engine::store::resource_bridge`].
     pub resource_registry: Option<crate::engine::store::resource_bridge::ResourceRegistry>,
-    /// Proxies made for `borrow` arguments, until the call they were made for
-    /// takes them; see [`crate::engine::store::resource_bridge::take_lent`].
-    pub(crate) lent_proxies: Vec<wasmtime::component::ResourceAny>,
     /// This store's linked companions and the resources shared with them. See
     /// [`crate::engine::companion`].
     pub(crate) links: crate::engine::companion::LinkState,
@@ -150,7 +147,6 @@ impl SharedCtx {
             contexts: Default::default(),
             exporter_instances: Default::default(),
             resource_registry: None,
-            lent_proxies: Vec::new(),
             links: Default::default(),
             abandoned: Arc::default(),
             executed: Arc::default(),

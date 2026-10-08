@@ -392,10 +392,23 @@ pub(crate) async fn new_store_from_templates(
         active,
         linked,
         linked_instances,
-        is_service,
+        StoreKind {
+            is_service,
+            // Services included: trapping one means a supervisor restart,
+            // which beats carrying a wedged call forever.
+            abandoned: AbandonedCallPolicy::Trap,
+        },
         |_| {},
     )
     .await
+}
+
+/// What kind of store [`new_store_from_templates_with`] builds.
+#[derive(Clone, Copy)]
+struct StoreKind {
+    is_service: bool,
+    /// What the store does about an abandoned call that has wedged it.
+    abandoned: AbandonedCallPolicy,
 }
 
 async fn new_store_from_templates_with(
@@ -404,9 +417,13 @@ async fn new_store_from_templates_with(
     active: &ComponentCtxTemplate,
     linked: &[ComponentCtxTemplate],
     linked_instances: &[(Arc<str>, InstancePre<SharedCtx>)],
-    is_service: bool,
+    kind: StoreKind,
     configure: impl FnOnce(&mut SharedCtx),
 ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
+    let StoreKind {
+        is_service,
+        abandoned,
+    } = kind;
     let store_id = uuid::Uuid::now_v7().to_string();
     let all_volume_mounts = std::iter::once(active)
         .chain(linked.iter())
@@ -440,9 +457,7 @@ async fn new_store_from_templates_with(
     // the maximum is what lets a guest run while its consumption is counted.
     // Errors when the engine is not metering fuel, which is the ordinary case.
     let _ = store.set_fuel(u64::MAX);
-    // Trap for every store built here, services included: trapping a service
-    // means a supervisor restart, which beats carrying a wedged call forever.
-    arm_epoch_deadline(&mut store, AbandonedCallPolicy::Trap);
+    arm_epoch_deadline(&mut store, abandoned);
     crate::engine::guest_memory::install_memory_limiter(&mut store);
 
     let active_id = active.component_id.clone();
@@ -508,13 +523,15 @@ pub(crate) async fn linked_attributes(
 pub(crate) async fn new_ephemeral_store(
     call: &EphemeralLinkedCall,
 ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
-    new_ephemeral_store_with(call, |_| {}).await
+    new_ephemeral_store_with(call, AbandonedCallPolicy::Trap, |_| {}).await
 }
 
-/// [`new_ephemeral_store`], with `configure` run on the store's data before
-/// anything is instantiated into it.
+/// [`new_ephemeral_store`], with a say in what the store does about an
+/// abandoned call that has wedged it, and with `configure` run on the store's
+/// data before anything is instantiated into it.
 pub(crate) async fn new_ephemeral_store_with(
     call: &EphemeralLinkedCall,
+    abandoned: AbandonedCallPolicy,
     configure: impl FnOnce(&mut SharedCtx),
 ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
     let mut component_ids = call.linked_component_ids.clone();
@@ -571,7 +588,10 @@ pub(crate) async fn new_ephemeral_store_with(
         &active,
         &linked,
         &linked_instances,
-        false,
+        StoreKind {
+            is_service: false,
+            abandoned,
+        },
         configure,
     )
     .await?;
@@ -786,10 +806,11 @@ async fn invoke_ephemeral_relocated(
                                     "function not found for linked import {import_name}.{export_name}"
                                 )
                                 })?;
-                            let mut arg_vals = Vec::with_capacity(args.len());
-                            for a in args {
-                                arg_vals.push(relocate::inject(access.as_context_mut(), a)?);
-                            }
+                            // Nothing lent is taken back: this store serves the
+                            // one call.
+                            let (arg_vals, _lent) =
+                                relocate::inject_all(access.as_context_mut(), args)
+                                    .map_err(|e| e.error)?;
                             let executed = Arc::clone(&access.get().executed);
                             Ok((func, arg_vals, executed))
                         })?;
@@ -1213,10 +1234,9 @@ impl crate::engine::dispatch::GuestCall for ServiceExportTask {
                 let func = instance.get_func(&mut access, func_idx).with_context(|| {
                     format!("function not found for service export {import_name}.{export_name}")
                 })?;
-                let mut arg_vals = Vec::with_capacity(args.len());
-                for arg in args {
-                    arg_vals.push(relocate::inject(access.as_context_mut(), arg)?);
-                }
+                // This path carries no resources, so nothing is lent.
+                let (arg_vals, _lent) =
+                    relocate::inject_all(access.as_context_mut(), args).map_err(|e| e.error)?;
                 Ok((func, arg_vals))
             });
             let (func, arg_vals) = match prepared {
@@ -1288,15 +1308,14 @@ pub(crate) fn inject_results(
     relocated: Vec<Relocated>,
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    for (i, r) in relocated.into_iter().enumerate() {
-        let v = relocate::inject(access.as_context_mut(), r)?;
-        *results.get_mut(i).context("result index out of bounds")? = v;
-    }
-    Ok(())
+    // A result is never a `borrow`, so nothing is lent.
+    let (vals, _lent) =
+        relocate::inject_all(access.as_context_mut(), relocated).map_err(|e| e.error)?;
+    write_results(vals, results)
 }
 
 /// Copy a call's returned values into the caller's result slots.
-fn write_results(vals: Vec<Val>, results: &mut [Val]) -> wasmtime::Result<()> {
+pub(crate) fn write_results(vals: Vec<Val>, results: &mut [Val]) -> wasmtime::Result<()> {
     for (i, v) in vals.into_iter().enumerate() {
         *results.get_mut(i).context("result index out of bounds")? = v;
     }

@@ -32,7 +32,7 @@ use wasmtime::component::{
 use wasmtime::{AsContextMut as _, StoreContextMut};
 
 use crate::engine::ctx::SharedCtx;
-use crate::engine::store::resource_bridge::{self, Owner, ProxyResource};
+use crate::engine::store::resource_bridge::{self, Lent, Owner, ProxyResource};
 use crate::engine::store::stream_pump::{self, Done};
 
 /// A value prepared to cross the store boundary: a copyable `Val`, or a
@@ -226,14 +226,15 @@ fn extract_resource(
 }
 
 /// Rebuild a relocated `resource` handle in `store`. In its owner's store that
-/// is the real resource (removed from the registry for an `own` transfer,
-/// borrowed otherwise); anywhere else it is a fresh proxy. A proxy made for a
-/// `borrow` is recorded for [`resource_bridge::release_lent`].
+/// is the real resource (removed from the registry for an `own` transfer, lent
+/// otherwise); anywhere else it is a fresh proxy. What a `borrow` lends is
+/// recorded in `lent`, for the call it is lent to.
 fn inject_resource(
     mut store: StoreContextMut<SharedCtx>,
     owner: Owner,
     proxy_id: u64,
     owned: bool,
+    lent: &mut Lent,
 ) -> wasmtime::Result<Val> {
     if let Some(registry) = store.data_mut().resource_registry.as_mut()
         && *registry.owner() == owner
@@ -241,7 +242,9 @@ fn inject_resource(
         let real = if owned {
             registry.take(proxy_id)
         } else {
-            registry.get(proxy_id)
+            let real = registry.lend(proxy_id);
+            lent.reals.extend(real.map(|_| proxy_id));
+            real
         };
         return real.map(Val::Resource).ok_or_else(|| {
             wasmtime::format_err!("cross-store bridge: unknown proxied resource {proxy_id}")
@@ -253,7 +256,7 @@ fn inject_resource(
         .push(ProxyResource { owner, proxy_id })?;
     let any = res.try_into_resource_any(store.as_context_mut())?;
     if !owned {
-        store.data_mut().lent_proxies.push(any);
+        lent.proxies.push(any);
     }
     Ok(Val::Resource(any))
 }
@@ -389,8 +392,22 @@ pub fn extract(
 }
 
 /// Inject a relocated value into `store` (its destination), creating a fresh
-/// `stream<T>` from each producer.
-pub fn inject(mut store: StoreContextMut<SharedCtx>, r: Relocated) -> wasmtime::Result<Val> {
+/// `stream<T>` from each producer and recording in `lent` what a `borrow`
+/// lends for the call.
+pub fn inject(
+    mut store: StoreContextMut<SharedCtx>,
+    r: Relocated,
+    lent: &mut Lent,
+) -> wasmtime::Result<Val> {
+    fn all(
+        store: &mut StoreContextMut<SharedCtx>,
+        rs: Vec<Relocated>,
+        lent: &mut Lent,
+    ) -> wasmtime::Result<Vec<Val>> {
+        rs.into_iter()
+            .map(|r| inject(store.as_context_mut(), r, lent))
+            .collect()
+    }
     match r {
         Relocated::Val(v) => Ok(v),
         Relocated::Stream(factory) | Relocated::Future(factory) => factory(store),
@@ -398,61 +415,146 @@ pub fn inject(mut store: StoreContextMut<SharedCtx>, r: Relocated) -> wasmtime::
             owner,
             proxy_id,
             owned,
-        } => inject_resource(store, owner, proxy_id, owned),
-        Relocated::List(rs) => {
-            let mut out = Vec::with_capacity(rs.len());
-            for r in rs {
-                out.push(inject(store.as_context_mut(), r)?);
-            }
-            Ok(Val::List(out))
-        }
-        Relocated::FixedLengthList(rs) => {
-            let mut out = Vec::with_capacity(rs.len());
-            for r in rs {
-                out.push(inject(store.as_context_mut(), r)?);
-            }
-            Ok(Val::FixedLengthList(out))
-        }
-        Relocated::Tuple(rs) => {
-            let mut out = Vec::with_capacity(rs.len());
-            for r in rs {
-                out.push(inject(store.as_context_mut(), r)?);
-            }
-            Ok(Val::Tuple(out))
-        }
+        } => inject_resource(store, owner, proxy_id, owned, lent),
+        Relocated::List(rs) => Ok(Val::List(all(&mut store, rs, lent)?)),
+        Relocated::FixedLengthList(rs) => Ok(Val::FixedLengthList(all(&mut store, rs, lent)?)),
+        Relocated::Tuple(rs) => Ok(Val::Tuple(all(&mut store, rs, lent)?)),
         Relocated::Record(fs) => {
             let mut out = Vec::with_capacity(fs.len());
             for (n, r) in fs {
-                out.push((n, inject(store.as_context_mut(), r)?));
+                out.push((n, inject(store.as_context_mut(), r, lent)?));
             }
             Ok(Val::Record(out))
         }
         Relocated::Variant(case, r) => Ok(Val::Variant(
             case,
-            Some(Box::new(inject(store.as_context_mut(), *r)?)),
+            Some(Box::new(inject(store.as_context_mut(), *r, lent)?)),
         )),
-        Relocated::Option(r) => Ok(Val::Option(Some(Box::new(inject(
-            store.as_context_mut(),
-            *r,
-        )?)))),
-        Relocated::Result(Ok(r)) => Ok(Val::Result(Ok(Some(Box::new(inject(
-            store.as_context_mut(),
-            *r,
-        )?))))),
-        Relocated::Result(Err(r)) => Ok(Val::Result(Err(Some(Box::new(inject(
-            store.as_context_mut(),
-            *r,
-        )?))))),
+        Relocated::Option(r) => Ok(Val::Option(Some(Box::new(inject(store, *r, lent)?)))),
+        Relocated::Result(Ok(r)) => Ok(Val::Result(Ok(Some(Box::new(inject(store, *r, lent)?))))),
+        Relocated::Result(Err(r)) => Ok(Val::Result(Err(Some(Box::new(inject(store, *r, lent)?))))),
         Relocated::Map(es) => {
             let mut out = Vec::with_capacity(es.len());
             for (k, v) in es {
-                let k = inject(store.as_context_mut(), k)?;
-                let v = inject(store.as_context_mut(), v)?;
+                let k = inject(store.as_context_mut(), k, lent)?;
+                let v = inject(store.as_context_mut(), v, lent)?;
                 out.push((k, v));
             }
             Ok(Val::Map(out))
         }
     }
+}
+
+/// Values that could not all be rebuilt in a store.
+pub(crate) struct InjectError {
+    pub(crate) error: wasmtime::Error,
+    /// What still owns a resource somewhere else: the values never reached, and
+    /// the proxies already made. Their owners have to be told to drop them.
+    pub(crate) stranded: Vec<Relocated>,
+}
+
+/// Rebuild every one of `values` in `store`, as the arguments of a call about
+/// to run there or the results of one that has.
+///
+/// On failure nothing is left behind: what was already rebuilt is given up
+/// again, and whatever it owned elsewhere is handed back as stranded.
+pub(crate) fn inject_all(
+    mut store: StoreContextMut<SharedCtx>,
+    values: Vec<Relocated>,
+) -> Result<(Vec<Val>, Lent), InjectError> {
+    let mut lent = Lent::default();
+    let mut vals = Vec::with_capacity(values.len());
+    let mut values = values.into_iter();
+    while let Some(value) = values.next() {
+        match inject(store.as_context_mut(), value, &mut lent) {
+            Ok(val) => vals.push(val),
+            Err(error) => {
+                let mut stranded: Vec<Relocated> = values.collect();
+                for val in &vals {
+                    give_up(store.as_context_mut(), val, &lent, &mut stranded);
+                }
+                let _ = lent.release(store.as_context_mut());
+                return Err(InjectError { error, stranded });
+            }
+        }
+    }
+    Ok((vals, lent))
+}
+
+/// Undo [`inject`] for the owned resources in `val`, which no guest received.
+/// A proxy is removed and pushed onto `stranded`; a resource taken out of this
+/// store's own registry is staged to be dropped. What `lent` covers is left
+/// for [`Lent::release`].
+fn give_up(
+    mut store: StoreContextMut<SharedCtx>,
+    val: &Val,
+    lent: &Lent,
+    stranded: &mut Vec<Relocated>,
+) {
+    match val {
+        Val::Resource(any) if any.ty() == resource_bridge::proxy_resource_type() => {
+            if lent.proxies.contains(any) {
+                return;
+            }
+            let removed = any
+                .try_into_resource::<ProxyResource>(store.as_context_mut())
+                .and_then(|proxy| Ok(store.data_mut().table.delete(proxy)?));
+            if let Ok(ProxyResource { owner, proxy_id }) = removed {
+                stranded.push(Relocated::Resource {
+                    owner,
+                    proxy_id,
+                    owned: true,
+                });
+            }
+        }
+        Val::Resource(any) => {
+            if let Some(registry) = store.data_mut().resource_registry.as_mut()
+                && !registry.holds(any)
+            {
+                registry.stage_taken(*any);
+            }
+        }
+        Val::List(vs) | Val::FixedLengthList(vs) | Val::Tuple(vs) => {
+            for v in vs {
+                give_up(store.as_context_mut(), v, lent, stranded);
+            }
+        }
+        Val::Record(fs) => {
+            for (_, v) in fs {
+                give_up(store.as_context_mut(), v, lent, stranded);
+            }
+        }
+        Val::Variant(_, Some(v))
+        | Val::Option(Some(v))
+        | Val::Result(Ok(Some(v)) | Err(Some(v))) => give_up(store, v, lent, stranded),
+        Val::Map(es) => {
+            for (k, v) in es {
+                give_up(store.as_context_mut(), k, lent, stranded);
+                give_up(store.as_context_mut(), v, lent, stranded);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Finish a call that ran in `store`: take back what its arguments were lent,
+/// and prepare its results to leave.
+///
+/// The result pumps keep running under `store`, which outlives the call, so
+/// their drain signals are dropped rather than awaited.
+pub(crate) fn finish_call(
+    mut store: StoreContextMut<SharedCtx>,
+    lent: Lent,
+    results: &[Val],
+    result_tys: &[Type],
+) -> wasmtime::Result<Vec<Relocated>> {
+    lent.release(store.as_context_mut())?;
+    let mut pumps = Vec::new();
+    let mut out = Vec::with_capacity(results.len());
+    for (val, ty) in results.iter().zip(result_tys) {
+        out.push(extract(store.as_context_mut(), val, ty, &mut pumps)?);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -552,7 +654,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            inject(store.as_context_mut(), relocated).unwrap(),
+            inject(store.as_context_mut(), relocated, &mut Default::default()).unwrap(),
             Val::FixedLengthList(vec![Val::U8(1), Val::U8(2)])
         );
     }

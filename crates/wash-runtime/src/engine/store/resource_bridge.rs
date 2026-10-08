@@ -33,9 +33,11 @@
 //!   that smuggles one kind's proxy into another kind's method is caught by the
 //!   owner-side `call_concurrent` type check (a trap, not memory corruption).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use tokio::sync::Notify;
 
 use wasmtime::component::{ResourceAny, ResourceType};
 use wasmtime::error::Context as _;
@@ -89,7 +91,15 @@ pub fn proxy_resource_type() -> ResourceType {
 pub struct ResourceRegistry {
     owner: Owner,
     reals: BTreeMap<u64, ResourceAny>,
+    /// How many calls in flight each resource is lent to as a `borrow`.
+    lent: BTreeMap<u64, usize>,
+    /// Resources whose last proxy was dropped while they were lent. They are
+    /// staged once the last call borrowing them returns.
+    drop_when_returned: BTreeSet<u64>,
     pending_drops: Vec<ResourceAny>,
+    /// Signalled when a drop is staged by a call ending rather than by
+    /// [`Self::stage_drop`], whose caller is the one that flushes.
+    late_drops: Arc<Notify>,
 }
 
 impl ResourceRegistry {
@@ -97,7 +107,10 @@ impl ResourceRegistry {
         Self {
             owner,
             reals: BTreeMap::new(),
+            lent: BTreeMap::new(),
+            drop_when_returned: BTreeSet::new(),
             pending_drops: Vec::new(),
+            late_drops: Arc::default(),
         }
     }
 
@@ -114,10 +127,27 @@ impl ResourceRegistry {
         id
     }
 
-    /// The real resource for `proxy_id`, if still registered (for a borrowing
-    /// method call — leaves ownership in the registry).
-    pub fn get(&self, proxy_id: u64) -> Option<ResourceAny> {
-        self.reals.get(&proxy_id).copied()
+    /// The real resource for `proxy_id`, if still registered, lent to a call as
+    /// a `borrow`: ownership stays here, and the resource cannot be dropped
+    /// until [`Self::returned`] says the call is over.
+    pub fn lend(&mut self, proxy_id: u64) -> Option<ResourceAny> {
+        let real = self.reals.get(&proxy_id).copied()?;
+        *self.lent.entry(proxy_id).or_default() += 1;
+        Some(real)
+    }
+
+    /// A call that borrowed `proxy_id` has returned, which stages the drop
+    /// its borrow had been holding back, if there was one.
+    pub fn returned(&mut self, proxy_id: u64) {
+        match self.lent.get_mut(&proxy_id) {
+            Some(calls) if *calls > 1 => *calls -= 1,
+            _ => {
+                self.lent.remove(&proxy_id);
+                if self.drop_when_returned.remove(&proxy_id) && self.stage_drop(proxy_id) {
+                    self.late_drops.notify_one();
+                }
+            }
+        }
     }
 
     /// Remove and return the real resource for `proxy_id` (for an ownership
@@ -127,15 +157,38 @@ impl ResourceRegistry {
     }
 
     /// Move `proxy_id`'s real resource to the pending-drop list (its last proxy
-    /// was dropped). Returns whether a resource was staged. A no-op for an
-    /// already-gone id (idempotent).
+    /// was dropped). Returns whether a resource was staged: not for an
+    /// already-gone id, and not yet for one a call still borrows, whose
+    /// destructor cannot run until that call returns.
     pub fn stage_drop(&mut self, proxy_id: u64) -> bool {
+        if self.lent.contains_key(&proxy_id) {
+            self.drop_when_returned.insert(proxy_id);
+            return false;
+        }
         if let Some(real) = self.reals.remove(&proxy_id) {
             self.pending_drops.push(real);
             true
         } else {
             false
         }
+    }
+
+    /// Stage a resource this registry no longer tracks: one taken out for a
+    /// call that then never ran.
+    pub(crate) fn stage_taken(&mut self, real: ResourceAny) {
+        self.pending_drops.push(real);
+        self.late_drops.notify_one();
+    }
+
+    /// Notified when a call ending has staged a drop, for the store's driver
+    /// to flush it.
+    pub(crate) fn late_drops(&self) -> Arc<Notify> {
+        Arc::clone(&self.late_drops)
+    }
+
+    /// Whether `real` is one of the resources registered here.
+    pub(crate) fn holds(&self, real: &ResourceAny) -> bool {
+        self.reals.values().any(|held| held == real)
     }
 
     /// Whether any drops are staged and waiting to be flushed.
@@ -178,22 +231,87 @@ pub(crate) async fn flush_drops(store: &mut Store<SharedCtx>) {
     }
 }
 
-/// The proxies made for `borrow` arguments since this last ran. The call they
-/// were made for gives them to [`release_lent`] once it returns.
-pub(crate) fn take_lent(store: &mut SharedCtx) -> Vec<ResourceAny> {
-    std::mem::take(&mut store.lent_proxies)
+/// What rebuilding a call's arguments in a store lent to the guest for that
+/// call, to be taken back when it returns.
+#[derive(Default)]
+pub(crate) struct Lent {
+    /// Proxies made for `borrow` arguments.
+    pub(crate) proxies: Vec<ResourceAny>,
+    /// This store's own resources passed as `borrow` arguments.
+    pub(crate) reals: Vec<u64>,
 }
 
-/// Take back the proxies lent to the guest for a call that has returned.
-pub(crate) fn release_lent(
-    mut store: StoreContextMut<'_, SharedCtx>,
-    lent: Vec<ResourceAny>,
-) -> wasmtime::Result<()> {
-    for any in lent {
-        let proxy = any
-            .try_into_resource::<ProxyResource>(store.as_context_mut())
-            .context("a lent proxied resource was not returned")?;
-        store.data_mut().table.delete(proxy)?;
+impl Lent {
+    /// Take back what a call that has returned was lent.
+    pub(crate) fn release(self, mut store: StoreContextMut<'_, SharedCtx>) -> wasmtime::Result<()> {
+        if let Some(registry) = store.data_mut().resource_registry.as_mut() {
+            for proxy_id in self.reals {
+                registry.returned(proxy_id);
+            }
+        }
+        for any in self.proxies {
+            let proxy = any
+                .try_into_resource::<ProxyResource>(store.as_context_mut())
+                .context("a lent proxied resource was not returned")?;
+            store.data_mut().table.delete(proxy)?;
+        }
+        Ok(())
     }
-    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use wasmtime::component::Resource;
+
+    use super::*;
+
+    fn registry_with_one() -> (ResourceRegistry, u64) {
+        let mut store = Store::new(&wasmtime::Engine::default(), ());
+        let real = Resource::<u32>::new_own(1)
+            .try_into_resource_any(&mut store)
+            .expect("a host resource converts");
+        let mut registry = ResourceRegistry::new(Owner::Plugin);
+        let id = registry.register(real);
+        (registry, id)
+    }
+
+    #[test]
+    fn a_drop_is_staged_at_once_when_nothing_borrows_the_resource() {
+        let (mut registry, id) = registry_with_one();
+        assert!(registry.stage_drop(id));
+        assert!(registry.has_pending_drops());
+        assert!(!registry.stage_drop(id), "a second drop finds nothing");
+    }
+
+    #[tokio::test]
+    async fn a_drop_waits_for_the_last_call_borrowing_the_resource() {
+        let (mut registry, id) = registry_with_one();
+        let late_drops = registry.late_drops();
+        assert!(registry.lend(id).is_some());
+        assert!(registry.lend(id).is_some());
+
+        assert!(!registry.stage_drop(id));
+        assert!(
+            registry.lend(id).is_some(),
+            "still there for a call in flight"
+        );
+        registry.returned(id);
+        registry.returned(id);
+        assert!(!registry.has_pending_drops());
+
+        registry.returned(id);
+        assert!(registry.has_pending_drops());
+        assert!(registry.lend(id).is_none());
+        // The driver is told, as nothing else would have it flush.
+        late_drops.notified().await;
+    }
+
+    #[test]
+    fn a_borrow_returned_without_a_drop_leaves_the_resource() {
+        let (mut registry, id) = registry_with_one();
+        assert!(registry.lend(id).is_some());
+        registry.returned(id);
+        assert!(!registry.has_pending_drops());
+        assert!(registry.lend(id).is_some());
+    }
 }
