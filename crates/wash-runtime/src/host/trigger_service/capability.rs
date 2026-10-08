@@ -318,8 +318,11 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
             return Ok(());
         }
 
+        // A result that cannot leave strands nothing: what this store sends
+        // is its own, and is dropped here.
         let extracted = accessor.with(|mut access| -> wasmtime::Result<Vec<Relocated>> {
             relocate::finish_call(access.as_context_mut(), lent, &results, &result_tys)
+                .map_err(|failed| failed.error)
         });
         let _ = reply.send(extracted);
         Ok(())

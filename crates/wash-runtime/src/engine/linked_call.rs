@@ -1322,23 +1322,15 @@ impl crate::engine::dispatch::GuestCall for ServiceExportTask {
     }
 }
 
-/// Prepare `vals` to cross a store boundary, appending the drain signal of any
-/// stream/future pump it sets up to `dones`.
-///
-/// Whether those signals are awaited or dropped is the caller's to decide, and
-/// it differs by path: a store about to be torn down has to wait for its result
-/// streams to drain, while one that goes on running does not.
-pub(crate) fn extract_all(
-    mut access: StoreContextMut<'_, SharedCtx>,
+/// [`relocate::extract_all`] for a route the linker gives only signatures
+/// without a `resource`, where a failure strands nothing in another store.
+fn extract_all(
+    access: StoreContextMut<'_, SharedCtx>,
     vals: &[Val],
     tys: &[Type],
     dones: &mut Vec<Done>,
 ) -> wasmtime::Result<Vec<Relocated>> {
-    let mut out = Vec::with_capacity(vals.len());
-    for (val, ty) in vals.iter().zip(tys.iter()) {
-        out.push(relocate::extract(access.as_context_mut(), val, ty, dones)?);
-    }
-    Ok(out)
+    relocate::extract_all(access, vals, tys, dones).map_err(|failed| failed.error)
 }
 
 /// Rebuild relocated values in this store and write them into the caller's

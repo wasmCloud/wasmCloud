@@ -188,6 +188,14 @@ fn contains_handle(val: &Val) -> bool {
     }
 }
 
+/// What taking a call's values out of a store has done so far, kept so that a
+/// failure part-way, at any depth, can be undone.
+struct Extraction<'a> {
+    dones: &'a mut Vec<Done>,
+    /// What had left an aggregate before a failure cut it short.
+    cut_short: Vec<Relocated>,
+}
+
 /// Relocate a `resource` handle across the boundary. A proxy has its owner and
 /// `proxy_id` read out (the proxy is removed for an `own` transfer, left for a
 /// `borrow`). Anything else is a real resource, which only the store of the
@@ -234,50 +242,140 @@ fn extract_resource(
     })
 }
 
+/// What rebuilding values in a store has done so far, kept so that a failure
+/// part-way, at any depth, can be undone.
+#[derive(Default)]
+struct Injection {
+    lent: Lent,
+    /// Proxies made for `own` handles.
+    proxies: Vec<ResourceAny>,
+    /// This store's own resources, taken out of its registry for an `own`.
+    taken: Vec<ResourceAny>,
+    /// The `stream`s and `future`s made.
+    channels: Vec<Val>,
+    /// Values a failure left unreached.
+    unreached: Vec<Relocated>,
+}
+
+impl Injection {
+    /// Undo everything recorded, leaving nothing behind in `store`, and return
+    /// what still owns a resource in another store.
+    fn undo(self, mut store: StoreContextMut<SharedCtx>) -> Vec<Relocated> {
+        let mut stranded = self.unreached;
+        for any in self.proxies {
+            let removed = any
+                .try_into_resource::<ProxyResource>(store.as_context_mut())
+                .and_then(|proxy| Ok(store.data_mut().table.delete(proxy)?));
+            if let Ok(ProxyResource { owner, proxy_id }) = removed {
+                stranded.push(Relocated::Resource {
+                    owner,
+                    proxy_id,
+                    owned: true,
+                });
+            }
+        }
+        if let Some(registry) = store.data_mut().resource_registry.as_mut() {
+            for real in self.taken {
+                registry.stage_taken(real);
+            }
+        }
+        // Closing the near end is what stops the pump feeding it.
+        for channel in self.channels {
+            let _ = match channel {
+                Val::Stream(mut stream) => stream.close(store.as_context_mut()),
+                Val::Future(mut future) => future.close(store.as_context_mut()),
+                _ => Ok(()),
+            };
+        }
+        let _ = self.lent.release(store);
+        stranded
+    }
+}
+
 /// Rebuild a relocated `resource` handle in `store`. In its owner's store that
 /// is the real resource (removed from the registry for an `own` transfer, lent
-/// otherwise); anywhere else it is a fresh proxy. What a `borrow` lends is
-/// recorded in `lent`, for the call it is lent to.
+/// otherwise); anywhere else it is a fresh proxy.
 fn inject_resource(
     mut store: StoreContextMut<SharedCtx>,
     owner: Owner,
     proxy_id: u64,
     owned: bool,
-    lent: &mut Lent,
+    done: &mut Injection,
 ) -> wasmtime::Result<Val> {
     if let Some(registry) = store.data_mut().resource_registry.as_mut()
         && *registry.owner() == owner
     {
         let real = if owned {
-            registry.take(proxy_id)
+            let real = registry.take(proxy_id);
+            done.taken.extend(real);
+            real
         } else {
             let real = registry.lend(proxy_id);
-            lent.reals.extend(real.map(|_| proxy_id));
+            done.lent.reals.extend(real.map(|_| proxy_id));
             real
         };
         return real.map(Val::Resource).ok_or_else(|| {
             wasmtime::format_err!("cross-store bridge: unknown proxied resource {proxy_id}")
         });
     }
-    let res = store
-        .data_mut()
-        .table
-        .push(ProxyResource { owner, proxy_id })?;
-    let any = res.try_into_resource_any(store.as_context_mut())?;
-    if !owned {
-        lent.proxies.push(any);
+    let proxy = ProxyResource {
+        owner: owner.clone(),
+        proxy_id,
+    };
+    let made = match store.data_mut().table.push(proxy) {
+        Ok(res) => res.try_into_resource_any(store.as_context_mut()),
+        Err(e) => Err(e.into()),
+    };
+    match made {
+        Ok(any) => {
+            if owned {
+                done.proxies.push(any);
+            } else {
+                done.lent.proxies.push(any);
+            }
+            Ok(Val::Resource(any))
+        }
+        Err(e) => {
+            if owned {
+                done.unreached.push(Relocated::Resource {
+                    owner,
+                    proxy_id,
+                    owned,
+                });
+            }
+            Err(e)
+        }
     }
-    Ok(Val::Resource(any))
+}
+
+/// Take each of `items` out of `store`. On failure the ones already out are
+/// recorded in `cx`.
+fn extract_each<'v, 't>(
+    store: &mut StoreContextMut<SharedCtx>,
+    items: impl Iterator<Item = (&'v Val, &'t Type)>,
+    cx: &mut Extraction,
+) -> wasmtime::Result<Vec<Relocated>> {
+    let mut out = Vec::with_capacity(items.size_hint().0);
+    for (val, ty) in items {
+        match extract(store.as_context_mut(), val, ty, cx) {
+            Ok(relocated) => out.push(relocated),
+            Err(e) => {
+                cx.cut_short.append(&mut out);
+                return Err(e);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Extract a value from `store` (its origin), setting up a live channel pump for
 /// each `stream<T>` (`reader.pipe` → no buffering) and pushing the pump's drain
-/// signal into `dones`. Handle-free values/subtrees are copied wholesale.
-pub fn extract(
+/// signal into `cx.dones`. Handle-free values/subtrees are copied wholesale.
+fn extract(
     mut store: StoreContextMut<SharedCtx>,
     val: &Val,
     ty: &Type,
-    dones: &mut Vec<Done>,
+    cx: &mut Extraction,
 ) -> wasmtime::Result<Relocated> {
     if !contains_handle(val) {
         return Ok(Relocated::Val(val.clone()));
@@ -288,7 +386,7 @@ pub fn extract(
                 .ty()
                 .ok_or_else(|| wasmtime::format_err!("stream is missing its element type"))?;
             let (factory, done) = stream_factory(store, any.clone(), &payload)?;
-            dones.push(done);
+            cx.dones.push(done);
             Ok(Relocated::Stream(factory))
         }
         (Val::Future(any), Type::Future(ft)) => {
@@ -296,7 +394,7 @@ pub fn extract(
                 Some(payload) => future_factory(store, any.clone(), &payload)?,
                 None => bridge_future::<()>(store, any.clone())?,
             };
-            dones.push(done);
+            cx.dones.push(done);
             Ok(Relocated::Future(factory))
         }
         (Val::Resource(any), Type::Own(_)) => extract_resource(store, *any, true),
@@ -313,62 +411,54 @@ pub fn extract(
         }
         (Val::List(vs), Type::List(lt)) => {
             let et = lt.ty();
-            let mut out = Vec::with_capacity(vs.len());
-            for v in vs {
-                out.push(extract(store.as_context_mut(), v, &et, dones)?);
-            }
-            Ok(Relocated::List(out))
+            let items = vs.iter().map(|v| (v, &et));
+            Ok(Relocated::List(extract_each(&mut store, items, cx)?))
         }
         (Val::FixedLengthList(vs), Type::FixedLengthList(lt)) => {
             let et = lt.ty();
-            let mut out = Vec::with_capacity(vs.len());
-            for v in vs {
-                out.push(extract(store.as_context_mut(), v, &et, dones)?);
-            }
-            Ok(Relocated::FixedLengthList(out))
+            let items = vs.iter().map(|v| (v, &et));
+            Ok(Relocated::FixedLengthList(extract_each(
+                &mut store, items, cx,
+            )?))
         }
         (Val::Tuple(vs), Type::Tuple(tt)) => {
             let tys: Vec<Type> = tt.types().collect();
-            let mut out = Vec::with_capacity(vs.len());
-            for (v, t) in vs.iter().zip(tys.iter()) {
-                out.push(extract(store.as_context_mut(), v, t, dones)?);
-            }
-            Ok(Relocated::Tuple(out))
+            let items = vs.iter().zip(&tys);
+            Ok(Relocated::Tuple(extract_each(&mut store, items, cx)?))
         }
         (Val::Record(vs), Type::Record(rt)) => {
             let ftys: Vec<Type> = rt.fields().map(|f| f.ty).collect();
-            let mut out = Vec::with_capacity(vs.len());
-            for ((n, v), t) in vs.iter().zip(ftys.iter()) {
-                out.push((n.clone(), extract(store.as_context_mut(), v, t, dones)?));
-            }
-            Ok(Relocated::Record(out))
+            let items = vs.iter().map(|(_, v)| v).zip(&ftys);
+            let out = extract_each(&mut store, items, cx)?;
+            let names = vs.iter().map(|(n, _)| n.clone());
+            Ok(Relocated::Record(names.zip(out).collect()))
         }
         (Val::Option(Some(v)), Type::Option(ot)) => Ok(Relocated::Option(Box::new(extract(
             store.as_context_mut(),
             v,
             &ot.ty(),
-            dones,
+            cx,
         )?))),
         (Val::Result(Ok(Some(v))), Type::Result(rt)) => {
-            let it = rt
-                .ok()
-                .ok_or_else(|| wasmtime::format_err!("result `ok` is missing its type"))?;
+            let it = rt.ok().ok_or_else(|| {
+                wasmtime::format_err!("cross-store bridge: result `ok` is missing its type")
+            })?;
             Ok(Relocated::Result(Ok(Box::new(extract(
                 store.as_context_mut(),
                 v,
                 &it,
-                dones,
+                cx,
             )?))))
         }
         (Val::Result(Err(Some(v))), Type::Result(rt)) => {
-            let it = rt
-                .err()
-                .ok_or_else(|| wasmtime::format_err!("result `err` is missing its type"))?;
+            let it = rt.err().ok_or_else(|| {
+                wasmtime::format_err!("cross-store bridge: result `err` is missing its type")
+            })?;
             Ok(Relocated::Result(Err(Box::new(extract(
                 store.as_context_mut(),
                 v,
                 &it,
-                dones,
+                cx,
             )?))))
         }
         (Val::Variant(case, Some(v)), Type::Variant(vt)) => {
@@ -381,16 +471,16 @@ pub fn extract(
                 })?;
             Ok(Relocated::Variant(
                 case.clone(),
-                Box::new(extract(store.as_context_mut(), v, &case_ty, dones)?),
+                Box::new(extract(store.as_context_mut(), v, &case_ty, cx)?),
             ))
         }
         (Val::Map(es), Type::Map(mt)) => {
             let kt = mt.key();
             let vt = mt.value();
+            let items = es.iter().flat_map(|(k, v)| [(k, &kt), (v, &vt)]);
+            let mut flat = extract_each(&mut store, items, cx)?.into_iter();
             let mut out = Vec::with_capacity(es.len());
-            for (k, v) in es {
-                let k = extract(store.as_context_mut(), k, &kt, dones)?;
-                let v = extract(store.as_context_mut(), v, &vt, dones)?;
+            while let (Some(k), Some(v)) = (flat.next(), flat.next()) {
                 out.push((k, v));
             }
             Ok(Relocated::Map(out))
@@ -400,53 +490,141 @@ pub fn extract(
     }
 }
 
+/// Undo taking `values` out of `store` for a call that will not be made, and
+/// return what still owns a resource in another store.
+fn give_back(mut store: StoreContextMut<SharedCtx>, mut values: Vec<Relocated>) -> Vec<Relocated> {
+    let mut stranded = Vec::new();
+    while let Some(value) = values.pop() {
+        match value {
+            Relocated::Resource {
+                owner,
+                proxy_id,
+                owned: true,
+            } => {
+                let registry = store.data_mut().resource_registry.as_mut();
+                match registry.filter(|registry| *registry.owner() == owner) {
+                    // This store's own, registered only to leave: dropped, as
+                    // the call it was bound for would have dropped it.
+                    Some(registry) => {
+                        if let Some(real) = registry.take(proxy_id) {
+                            registry.stage_taken(real);
+                        }
+                    }
+                    None => stranded.push(Relocated::Resource {
+                        owner,
+                        proxy_id,
+                        owned: true,
+                    }),
+                }
+            }
+            Relocated::List(inner)
+            | Relocated::FixedLengthList(inner)
+            | Relocated::Tuple(inner) => values.extend(inner),
+            Relocated::Record(fields) => values.extend(fields.into_iter().map(|(_, v)| v)),
+            Relocated::Variant(_, inner) | Relocated::Option(inner) => values.push(*inner),
+            Relocated::Result(Ok(inner) | Err(inner)) => values.push(*inner),
+            Relocated::Map(entries) => values.extend(entries.into_iter().flat_map(|(k, v)| [k, v])),
+            // A pump stops when its far end is dropped, and a `borrow` took
+            // nothing from the store.
+            Relocated::Val(_)
+            | Relocated::Stream(_)
+            | Relocated::Future(_)
+            | Relocated::Resource { owned: false, .. } => {}
+        }
+    }
+    stranded
+}
+
+/// Prepare every one of `vals` to leave `store`, as the arguments of a call
+/// about to be made from it or the results of one that ran in it. The drain
+/// signal of each stream/future pump set up is appended to `dones`.
+///
+/// Whether those signals are awaited or dropped is the caller's to decide: a
+/// store about to be torn down has to wait for its result pumps to drain, one
+/// that outlives the call does not.
+///
+/// On failure, at any depth, what had already left is dropped, and whatever it
+/// owned in another store is handed back as stranded.
+pub(crate) fn extract_all(
+    mut store: StoreContextMut<SharedCtx>,
+    vals: &[Val],
+    tys: &[Type],
+    dones: &mut Vec<Done>,
+) -> Result<Vec<Relocated>, RelocateError> {
+    let mut cx = Extraction {
+        dones,
+        cut_short: Vec::new(),
+    };
+    match extract_each(&mut store, vals.iter().zip(tys), &mut cx) {
+        Ok(out) => Ok(out),
+        Err(error) => Err(RelocateError {
+            error,
+            stranded: give_back(store, cx.cut_short),
+        }),
+    }
+}
+
+/// Rebuild each of `rs` in `store`. On failure the ones not reached are
+/// recorded in `done`.
+fn inject_each(
+    store: &mut StoreContextMut<SharedCtx>,
+    rs: Vec<Relocated>,
+    done: &mut Injection,
+) -> wasmtime::Result<Vec<Val>> {
+    let mut vals = Vec::with_capacity(rs.len());
+    let mut rs = rs.into_iter();
+    while let Some(r) = rs.next() {
+        match inject(store.as_context_mut(), r, done) {
+            Ok(val) => vals.push(val),
+            Err(e) => {
+                done.unreached.extend(rs);
+                return Err(e);
+            }
+        }
+    }
+    Ok(vals)
+}
+
 /// Inject a relocated value into `store` (its destination), creating a fresh
-/// `stream<T>` from each producer and recording in `lent` what a `borrow`
-/// lends for the call.
-pub fn inject(
+/// `stream<T>` from each producer and recording in `done` everything made.
+fn inject(
     mut store: StoreContextMut<SharedCtx>,
     r: Relocated,
-    lent: &mut Lent,
+    done: &mut Injection,
 ) -> wasmtime::Result<Val> {
-    fn all(
-        store: &mut StoreContextMut<SharedCtx>,
-        rs: Vec<Relocated>,
-        lent: &mut Lent,
-    ) -> wasmtime::Result<Vec<Val>> {
-        rs.into_iter()
-            .map(|r| inject(store.as_context_mut(), r, lent))
-            .collect()
-    }
     match r {
         Relocated::Val(v) => Ok(v),
-        Relocated::Stream(factory) | Relocated::Future(factory) => factory(store),
+        Relocated::Stream(factory) | Relocated::Future(factory) => {
+            let channel = factory(store)?;
+            done.channels.push(channel.clone());
+            Ok(channel)
+        }
         Relocated::Resource {
             owner,
             proxy_id,
             owned,
-        } => inject_resource(store, owner, proxy_id, owned, lent),
-        Relocated::List(rs) => Ok(Val::List(all(&mut store, rs, lent)?)),
-        Relocated::FixedLengthList(rs) => Ok(Val::FixedLengthList(all(&mut store, rs, lent)?)),
-        Relocated::Tuple(rs) => Ok(Val::Tuple(all(&mut store, rs, lent)?)),
-        Relocated::Record(fs) => {
-            let mut out = Vec::with_capacity(fs.len());
-            for (n, r) in fs {
-                out.push((n, inject(store.as_context_mut(), r, lent)?));
-            }
-            Ok(Val::Record(out))
+        } => inject_resource(store, owner, proxy_id, owned, done),
+        Relocated::List(rs) => Ok(Val::List(inject_each(&mut store, rs, done)?)),
+        Relocated::FixedLengthList(rs) => {
+            Ok(Val::FixedLengthList(inject_each(&mut store, rs, done)?))
         }
-        Relocated::Variant(case, r) => Ok(Val::Variant(
-            case,
-            Some(Box::new(inject(store.as_context_mut(), *r, lent)?)),
-        )),
-        Relocated::Option(r) => Ok(Val::Option(Some(Box::new(inject(store, *r, lent)?)))),
-        Relocated::Result(Ok(r)) => Ok(Val::Result(Ok(Some(Box::new(inject(store, *r, lent)?))))),
-        Relocated::Result(Err(r)) => Ok(Val::Result(Err(Some(Box::new(inject(store, *r, lent)?))))),
+        Relocated::Tuple(rs) => Ok(Val::Tuple(inject_each(&mut store, rs, done)?)),
+        Relocated::Record(fs) => {
+            let (names, rs): (Vec<_>, Vec<_>) = fs.into_iter().unzip();
+            let vals = inject_each(&mut store, rs, done)?;
+            Ok(Val::Record(names.into_iter().zip(vals).collect()))
+        }
+        Relocated::Variant(case, r) => {
+            Ok(Val::Variant(case, Some(Box::new(inject(store, *r, done)?))))
+        }
+        Relocated::Option(r) => Ok(Val::Option(Some(Box::new(inject(store, *r, done)?)))),
+        Relocated::Result(Ok(r)) => Ok(Val::Result(Ok(Some(Box::new(inject(store, *r, done)?))))),
+        Relocated::Result(Err(r)) => Ok(Val::Result(Err(Some(Box::new(inject(store, *r, done)?))))),
         Relocated::Map(es) => {
-            let mut out = Vec::with_capacity(es.len());
-            for (k, v) in es {
-                let k = inject(store.as_context_mut(), k, lent)?;
-                let v = inject(store.as_context_mut(), v, lent)?;
+            let flat = es.into_iter().flat_map(|(k, v)| [k, v]).collect();
+            let mut vals = inject_each(&mut store, flat, done)?.into_iter();
+            let mut out = Vec::with_capacity(vals.len() / 2);
+            while let (Some(k), Some(v)) = (vals.next(), vals.next()) {
                 out.push((k, v));
             }
             Ok(Val::Map(out))
@@ -454,95 +632,32 @@ pub fn inject(
     }
 }
 
-/// Values that could not all be rebuilt in a store.
-pub(crate) struct InjectError {
+/// Values that could not all be taken out of a store, or rebuilt in one.
+pub(crate) struct RelocateError {
     pub(crate) error: wasmtime::Error,
-    /// What still owns a resource somewhere else: the values never reached, and
-    /// the proxies already made. Their owners have to be told to drop them.
+    /// What still owns a resource somewhere else: the proxies already consumed
+    /// or made, and the values never reached. Their owners have to be told to
+    /// drop them.
     pub(crate) stranded: Vec<Relocated>,
 }
 
 /// Rebuild every one of `values` in `store`, as the arguments of a call about
 /// to run there or the results of one that has.
 ///
-/// On failure nothing is left behind: what was already rebuilt is given up
-/// again, and whatever it owned elsewhere is handed back as stranded.
+/// On failure, at any depth, nothing is left behind: what was already rebuilt
+/// is given up again, and whatever it owned elsewhere is handed back as
+/// stranded.
 pub(crate) fn inject_all(
     mut store: StoreContextMut<SharedCtx>,
     values: Vec<Relocated>,
-) -> Result<(Vec<Val>, Lent), InjectError> {
-    let mut lent = Lent::default();
-    let mut vals = Vec::with_capacity(values.len());
-    let mut values = values.into_iter();
-    while let Some(value) = values.next() {
-        match inject(store.as_context_mut(), value, &mut lent) {
-            Ok(val) => vals.push(val),
-            Err(error) => {
-                let mut stranded: Vec<Relocated> = values.collect();
-                for val in &vals {
-                    give_up(store.as_context_mut(), val, &lent, &mut stranded);
-                }
-                let _ = lent.release(store.as_context_mut());
-                return Err(InjectError { error, stranded });
-            }
-        }
-    }
-    Ok((vals, lent))
-}
-
-/// Undo [`inject`] for the owned resources in `val`, which no guest received.
-/// A proxy is removed and pushed onto `stranded`; a resource taken out of this
-/// store's own registry is staged to be dropped. What `lent` covers is left
-/// for [`Lent::release`].
-fn give_up(
-    mut store: StoreContextMut<SharedCtx>,
-    val: &Val,
-    lent: &Lent,
-    stranded: &mut Vec<Relocated>,
-) {
-    match val {
-        Val::Resource(any) if any.ty() == resource_bridge::proxy_resource_type() => {
-            if lent.proxies.contains(any) {
-                return;
-            }
-            let removed = any
-                .try_into_resource::<ProxyResource>(store.as_context_mut())
-                .and_then(|proxy| Ok(store.data_mut().table.delete(proxy)?));
-            if let Ok(ProxyResource { owner, proxy_id }) = removed {
-                stranded.push(Relocated::Resource {
-                    owner,
-                    proxy_id,
-                    owned: true,
-                });
-            }
-        }
-        Val::Resource(any) => {
-            if let Some(registry) = store.data_mut().resource_registry.as_mut()
-                && !registry.holds(any)
-            {
-                registry.stage_taken(*any);
-            }
-        }
-        Val::List(vs) | Val::FixedLengthList(vs) | Val::Tuple(vs) => {
-            for v in vs {
-                give_up(store.as_context_mut(), v, lent, stranded);
-            }
-        }
-        Val::Record(fs) => {
-            for (_, v) in fs {
-                give_up(store.as_context_mut(), v, lent, stranded);
-            }
-        }
-        Val::Variant(_, Some(v))
-        | Val::Option(Some(v))
-        | Val::Result(Ok(Some(v)) | Err(Some(v))) => give_up(store, v, lent, stranded),
-        Val::Map(es) => {
-            for (k, v) in es {
-                give_up(store.as_context_mut(), k, lent, stranded);
-                give_up(store.as_context_mut(), v, lent, stranded);
-            }
-        }
-        _ => {}
+) -> Result<(Vec<Val>, Lent), RelocateError> {
+    let mut done = Injection::default();
+    match inject_each(&mut store, values, &mut done) {
+        Ok(vals) => Ok((vals, done.lent)),
+        Err(error) => Err(RelocateError {
+            error,
+            stranded: done.undo(store),
+        }),
     }
 }
 
@@ -556,22 +671,23 @@ pub(crate) fn finish_call(
     lent: Lent,
     results: &[Val],
     result_tys: &[Type],
-) -> wasmtime::Result<Vec<Relocated>> {
-    lent.release(store.as_context_mut())?;
-    let mut pumps = Vec::new();
-    let mut out = Vec::with_capacity(results.len());
-    for (val, ty) in results.iter().zip(result_tys) {
-        out.push(extract(store.as_context_mut(), val, ty, &mut pumps)?);
+) -> Result<Vec<Relocated>, RelocateError> {
+    if let Err(error) = lent.release(store.as_context_mut()) {
+        return Err(RelocateError {
+            error,
+            stranded: Vec::new(),
+        });
     }
-    Ok(out)
+    extract_all(store, results, result_tys, &mut Vec::new())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Relocated, contains_handle, extract, inject, stream_pump};
+    use super::{Relocated, contains_handle, extract_all, inject, inject_all, stream_pump};
     use crate::engine::ctx::{Ctx, SharedCtx};
+    use crate::engine::store::resource_bridge::{Owner, ProxyResource, ResourceRegistry};
     use wasmtime::AsContextMut as _;
-    use wasmtime::component::{Component, StreamReader, Val, types::ComponentItem};
+    use wasmtime::component::{Component, Resource, StreamReader, Type, Val, types::ComponentItem};
 
     fn make_store() -> wasmtime::Store<SharedCtx> {
         #[cfg(feature = "wasi-tls")]
@@ -668,6 +784,127 @@ mod tests {
         );
     }
 
+    const ME: &str = "me";
+    const OTHER: &str = "other";
+
+    /// A store owning one registered resource, and that resource's id.
+    fn make_owner_store() -> (wasmtime::Store<SharedCtx>, u64) {
+        let mut store = make_store();
+        let real = Resource::<u32>::new_own(1)
+            .try_into_resource_any(&mut store)
+            .unwrap();
+        let mut registry = ResourceRegistry::new(Owner::Component(ME.into()));
+        let id = registry.register(real);
+        store.data_mut().resource_registry = Some(registry);
+        (store, id)
+    }
+
+    fn resource(owner: &str, proxy_id: u64, owned: bool) -> Relocated {
+        Relocated::Resource {
+            owner: Owner::Component(owner.into()),
+            proxy_id,
+            owned,
+        }
+    }
+
+    /// An `own` of a resource the store's own registry has never heard of,
+    /// which cannot be rebuilt.
+    fn unknown() -> Relocated {
+        resource(ME, u64::MAX, true)
+    }
+
+    /// The ids of the owned resources handed back as stranded, in order.
+    fn stranded_ids(values: Vec<Relocated>) -> Vec<u64> {
+        let failed = {
+            let (mut store, _) = make_owner_store();
+            let failed = inject_all(store.as_context_mut(), values).err().unwrap();
+            assert!(
+                store.data().table.is_empty(),
+                "a failed injection left a proxy in the store's table"
+            );
+            failed
+        };
+        let mut ids = Vec::new();
+        for value in failed.stranded {
+            match value {
+                Relocated::Resource {
+                    proxy_id,
+                    owned: true,
+                    ..
+                } => ids.push(proxy_id),
+                // An unreached map key.
+                Relocated::Val(_) => {}
+                _ => panic!("only owned resources are stranded here"),
+            }
+        }
+        ids.sort_unstable();
+        ids
+    }
+
+    #[test]
+    fn a_failed_injection_gives_back_what_it_reached_and_what_it_did_not() {
+        let values = vec![
+            resource(OTHER, 1, true),
+            unknown(),
+            resource(OTHER, 2, true),
+        ];
+        assert_eq!(stranded_ids(values), [1, 2]);
+    }
+
+    #[test]
+    fn a_failed_nested_injection_gives_back_every_level() {
+        let values = vec![
+            resource(OTHER, 1, true),
+            Relocated::Tuple(vec![
+                resource(OTHER, 2, true),
+                Relocated::List(vec![resource(OTHER, 3, true), unknown()]),
+                resource(OTHER, 4, true),
+            ]),
+            resource(OTHER, 5, true),
+        ];
+        assert_eq!(stranded_ids(values), [1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn a_failed_injection_gives_back_the_rest_of_a_record_and_a_map() {
+        let record = Relocated::Record(vec![
+            ("a".into(), resource(OTHER, 1, true)),
+            ("b".into(), unknown()),
+            ("c".into(), resource(OTHER, 2, true)),
+        ]);
+        assert_eq!(stranded_ids(vec![record]), [1, 2]);
+
+        let map = Relocated::Map(vec![
+            (Relocated::Val(Val::U8(0)), resource(OTHER, 1, true)),
+            (unknown(), resource(OTHER, 2, true)),
+            (Relocated::Val(Val::U8(1)), resource(OTHER, 3, true)),
+        ]);
+        assert_eq!(stranded_ids(vec![map]), [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_failed_injection_does_not_strand_a_borrow() {
+        let values = vec![Relocated::Tuple(vec![resource(OTHER, 1, false), unknown()])];
+        assert_eq!(stranded_ids(values), [0u64; 0]);
+    }
+
+    #[test]
+    fn a_failed_injection_drops_the_resource_it_took_and_returns_the_one_it_borrowed() {
+        let (mut store, id) = make_owner_store();
+        let lent = Relocated::Tuple(vec![resource(ME, id, false), unknown()]);
+        assert!(inject_all(store.as_context_mut(), vec![lent]).is_err());
+        let registry = store.data_mut().resource_registry.as_mut().unwrap();
+        assert!(!registry.has_pending_drops());
+        assert!(registry.lend(id).is_some(), "the borrowed resource is kept");
+        registry.returned(id);
+
+        let taken = Relocated::Tuple(vec![resource(ME, id, true), unknown()]);
+        assert!(inject_all(store.as_context_mut(), vec![taken]).is_err());
+        let registry = store.data_mut().resource_registry.as_mut().unwrap();
+        assert!(registry.has_pending_drops(), "nobody else holds it");
+        assert!(registry.lend(id).is_none());
+    }
+
     #[test]
     fn extract_preserves_fixed_length_list() {
         let mut config = wasmtime::Config::new();
@@ -707,11 +944,124 @@ mod tests {
         let stream = reader.try_into_stream_any(store.as_context_mut()).unwrap();
         let value = Val::FixedLengthList(vec![Val::Stream(stream)]);
 
-        let relocated = extract(store.as_context_mut(), &value, &ty, &mut Vec::new()).unwrap();
+        let relocated = extract_all(store.as_context_mut(), &[value], &[ty], &mut Vec::new())
+            .map_err(|failed| failed.error)
+            .unwrap();
         assert!(matches!(
-            relocated,
-            Relocated::FixedLengthList(values)
+            relocated.as_slice(),
+            [Relocated::FixedLengthList(values)]
                 if matches!(values.as_slice(), [Relocated::Stream(_)])
         ));
+    }
+
+    /// The parameter types of the one function `signature` imports, over a
+    /// resource `$r`.
+    fn param_types(signature: &str) -> Vec<Type> {
+        let engine = wasmtime::Engine::default();
+        let wasm = wat::parse_str(format!(
+            r#"(component
+                (import "r" (type $r (sub resource)))
+                (import "f" (func {signature})))"#
+        ))
+        .unwrap();
+        let component = Component::new(&engine, wasm).unwrap();
+        let func_ty = component
+            .component_type()
+            .imports(&engine)
+            .find_map(|(_, import)| match import.ty {
+                ComponentItem::ComponentFunc(func_ty) => Some(func_ty),
+                _ => None,
+            })
+            .unwrap();
+        func_ty.params().map(|(_, ty)| ty).collect()
+    }
+
+    /// An `own` of a proxy for a resource another store owns.
+    fn proxy(store: &mut wasmtime::Store<SharedCtx>, proxy_id: u64) -> Val {
+        let proxy = ProxyResource {
+            owner: Owner::Component(OTHER.into()),
+            proxy_id,
+        };
+        let pushed = store.data_mut().table.push(proxy).unwrap();
+        Val::Resource(pushed.try_into_resource_any(store).unwrap())
+    }
+
+    /// A handle to a resource of the store's own, which cannot leave a store
+    /// without a registry, and cannot be lent from one that is a component's.
+    fn local(store: &mut wasmtime::Store<SharedCtx>) -> Val {
+        let local = Resource::<u32>::new_own(1);
+        Val::Resource(local.try_into_resource_any(store).unwrap())
+    }
+
+    fn stranded_by_extraction(
+        store: &mut wasmtime::Store<SharedCtx>,
+        vals: &[Val],
+        tys: &[Type],
+    ) -> Vec<u64> {
+        let failed = extract_all(store.as_context_mut(), vals, tys, &mut Vec::new())
+            .err()
+            .expect("the extraction fails");
+        let mut ids = Vec::new();
+        for value in failed.stranded {
+            match value {
+                Relocated::Resource {
+                    proxy_id,
+                    owned: true,
+                    ..
+                } => ids.push(proxy_id),
+                _ => panic!("only owned resources are stranded"),
+            }
+        }
+        ids.sort_unstable();
+        ids
+    }
+
+    #[test]
+    fn a_failed_extraction_gives_back_the_proxies_it_consumed_at_every_level() {
+        let tys = param_types(
+            r#"(param "a" (own $r))
+               (param "b" (tuple (own $r) (list (own $r))))
+               (param "c" (own $r))"#,
+        );
+        let mut store = make_store();
+        let vals = [
+            proxy(&mut store, 1),
+            Val::Tuple(vec![
+                proxy(&mut store, 2),
+                Val::List(vec![proxy(&mut store, 3), local(&mut store)]),
+            ]),
+            proxy(&mut store, 4),
+        ];
+        let stranded = stranded_by_extraction(&mut store, &vals, &tys);
+        // The one never reached is still in the store's table.
+        assert_eq!(stranded, [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_failed_extraction_gives_back_what_a_lone_argument_nested() {
+        let tys = param_types(r#"(param "a" (option (tuple (own $r) (own $r))))"#);
+        let mut store = make_store();
+        let pair = Val::Tuple(vec![proxy(&mut store, 1), local(&mut store)]);
+        let vals = [Val::Option(Some(Box::new(pair)))];
+        let stranded = stranded_by_extraction(&mut store, &vals, &tys);
+        assert_eq!(stranded, [1]);
+    }
+
+    #[test]
+    fn a_failed_extraction_drops_the_resource_its_store_registered() {
+        let tys = param_types(r#"(param "a" (own $r)) (param "b" (borrow $r))"#);
+        let mut store = make_store();
+        store.data_mut().resource_registry =
+            Some(ResourceRegistry::new(Owner::Component(ME.into())));
+        let vals = [local(&mut store), local(&mut store)];
+
+        let stranded = stranded_by_extraction(&mut store, &vals, &tys);
+        assert_eq!(stranded, [0u64; 0], "nothing of another store's was held");
+        let registry = store.data_mut().resource_registry.as_mut().unwrap();
+        assert!(registry.has_pending_drops());
+        assert!(
+            registry.drain_all().len() == 1,
+            "and nothing stays registered"
+        );
     }
 }

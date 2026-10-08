@@ -38,10 +38,10 @@ use crate::engine::abandon::{
 use crate::engine::ctx::SharedCtx;
 use crate::engine::instance_driver::InvocationSample;
 use crate::engine::linked_call::{
-    EphemeralLinkedCall, LinkedExportInvocation, Signature, extract_all, linked_attributes,
+    EphemeralLinkedCall, LinkedExportInvocation, Signature, linked_attributes,
     new_ephemeral_store_with, write_results,
 };
-use crate::engine::store::relocate::{self, Relocated};
+use crate::engine::store::relocate::{self, RelocateError, Relocated};
 use crate::engine::store::resource_bridge::{Owner, ProxyResource, ResourceRegistry, flush_drops};
 
 /// A store's place in its [`LinkGroup`].
@@ -140,6 +140,15 @@ impl Home {
             values,
             group: Weak::clone(&self.group),
         }
+    }
+
+    /// The error of values that could not all cross, once the owner of each
+    /// resource they stranded has been told to drop it.
+    fn settle<T>(&self, crossed: Result<T, RelocateError>) -> wasmtime::Result<T> {
+        crossed.map_err(|failed| {
+            drop(self.pack(failed.stranded));
+            failed.error
+        })
     }
 }
 
@@ -532,13 +541,9 @@ impl CallTask {
                 format!("function not found for linked import {import_name}.{export_name}")
             })?;
             let sync = !func.ty(&access).async_();
-            match relocate::inject_all(access.as_context_mut(), args.open()) {
-                Ok((args, lent)) => Ok((func, sync, args, lent)),
-                Err(failed) => {
-                    drop(home.pack(failed.stranded));
-                    Err(failed.error)
-                }
-            }
+            let injected = relocate::inject_all(access.as_context_mut(), args.open());
+            let (args, lent) = home.settle(injected)?;
+            Ok((func, sync, args, lent))
         });
         let (func, sync, args, lent) = match prepared {
             Ok(prepared) => prepared,
@@ -564,7 +569,12 @@ impl CallTask {
         .await
         .and_then(|()| {
             accessor.with(|mut access| {
-                relocate::finish_call(access.as_context_mut(), lent, &results, &result_tys)
+                home.settle(relocate::finish_call(
+                    access.as_context_mut(),
+                    lent,
+                    &results,
+                    &result_tys,
+                ))
             })
         });
         match outcome {
@@ -600,14 +610,9 @@ fn deliver(
     parcel: Parcel,
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    match relocate::inject_all(store, parcel.open()) {
-        // A result is never a `borrow`, so nothing is lent.
-        Ok((vals, _lent)) => write_results(vals, results),
-        Err(failed) => {
-            drop(home.pack(failed.stranded));
-            Err(failed.error)
-        }
-    }
+    // A result is never a `borrow`, so nothing is lent.
+    let (vals, _lent) = home.settle(relocate::inject_all(store, parcel.open()))?;
+    write_results(vals, results)
 }
 
 /// Serve a sync-typed import from its companion.
@@ -646,12 +651,12 @@ pub(crate) async fn invoke_sync(
     let home = route.home.clone();
     // Everything awaited is behind us: the arguments leave this store and are
     // queued without a point between at which the call could be dropped.
-    let args = extract_all(
+    let args = home.settle(relocate::extract_all(
         store.as_context_mut(),
         params,
         &signature.params,
         &mut Vec::new(),
-    )?;
+    ))?;
     let parcel = route
         .send(inv, args, &signature.results, attributes, deadline)
         .await?;
@@ -689,12 +694,12 @@ pub(crate) async fn invoke_async(
     let home = route.home.clone();
     // Argument pumps run under this store, which outlives the call.
     let args = accessor.with(|mut access| {
-        extract_all(
+        home.settle(relocate::extract_all(
             access.as_context_mut(),
             params,
             &signature.params,
             &mut Vec::new(),
-        )
+        ))
     })?;
     let parcel = route
         .send(inv, args, &signature.results, attributes, Duration::MAX)
