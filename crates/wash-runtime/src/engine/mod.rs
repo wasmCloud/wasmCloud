@@ -237,7 +237,6 @@ mod scratch;
 pub(crate) mod store;
 mod value;
 mod volumes;
-pub use volumes::HostPathMode;
 pub mod workload;
 
 /// How often the engine's epoch advances.
@@ -1027,7 +1026,6 @@ pub struct EngineBuilder {
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     reserved_host_paths: Vec<PathBuf>,
     allowed_host_paths: Vec<PathBuf>,
-    host_path_mode: HostPathMode,
     scratch_root: Option<PathBuf>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
     guest_memory_mode: guest_memory::GuestMemoryMode,
@@ -1037,7 +1035,9 @@ pub struct EngineBuilder {
 }
 
 impl EngineBuilder {
-    /// Reserve paths that no workload volume may contain or lie inside.
+    /// Reserve paths that no workload volume may equal, contain, or lie
+    /// inside. The scratch root (see [`Self::with_scratch_root`]) is always
+    /// reserved.
     #[must_use]
     pub fn with_reserved_host_paths(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
         self.reserved_host_paths.extend(paths);
@@ -1047,8 +1047,12 @@ impl EngineBuilder {
     /// Permit `hostPath` volumes within these directories. Adds to any
     /// permitted before; with none, no `hostPath` volume is permitted.
     ///
-    /// Whether a volume outside them is refused or only counted is
-    /// [`Self::with_host_path_mode`]. Reserved paths are refused either way.
+    /// This is a host-wide guardrail for a trusted embedder, and for migrating
+    /// hosts whose workloads already mount host directories. It is not a
+    /// multi-tenant storage policy: any workload on the engine may mount any
+    /// directory permitted here. Where tenants author workloads, disable their
+    /// raw `hostPath` volumes in the control plane, and have it give each
+    /// workload a directory of its own instead.
     #[must_use]
     pub fn with_allowed_host_paths(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
         self.allowed_host_paths.extend(paths);
@@ -1059,23 +1063,12 @@ impl EngineBuilder {
     /// system temporary directory.
     ///
     /// The engine claims a directory of its own here, and removes what hosts
-    /// that are no longer running left behind. The root is reserved, so no
-    /// `hostPath` volume may expose it.
+    /// that are no longer running left behind. The root is reserved: no
+    /// `hostPath` volume may equal it, contain it, or lie inside it, whatever
+    /// [`Self::with_allowed_host_paths`] permits.
     #[must_use]
     pub fn with_scratch_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.scratch_root = Some(root.into());
-        self
-    }
-
-    /// Whether the `hostPath` allowlist is enforced or only counted.
-    ///
-    /// Unset, it is [`HostPathMode::Count`]: `hostPath` volumes were never
-    /// gated, so enforcing by default would stop every workload using one on
-    /// upgrade. Count mode records each volume enforcement would refuse in the
-    /// socket policy's [`PolicyMeters`](crate::host::quota::PolicyMeters).
-    #[must_use]
-    pub fn with_host_path_mode(mut self, mode: HostPathMode) -> Self {
-        self.host_path_mode = mode;
         self
     }
 
@@ -1426,9 +1419,8 @@ impl EngineBuilder {
                 self.reserved_host_paths,
                 self.allowed_host_paths,
                 Some(scratch_root.clone()),
-                self.host_path_mode,
                 // The socket policy's counters, so an operator reads every
-                // would-deny figure in one place.
+                // policy figure in one place.
                 socket_policy.meters.clone(),
             ),
             socket_policy,
@@ -1744,7 +1736,7 @@ mod tests {
     }
 
     #[test]
-    fn an_enforcing_engine_refuses_a_host_path_outside_its_allowlist() {
+    fn an_engine_refuses_a_host_path_outside_its_allowlist() {
         let root = tempfile::tempdir().unwrap();
         let allowed = root.path().join("allowed");
         let other = root.path().join("other");
@@ -1757,7 +1749,6 @@ mod tests {
                 ..Default::default()
             }))
             .with_allowed_host_paths([allowed.clone()])
-            .with_host_path_mode(HostPathMode::Enforce)
             .build()
             .unwrap();
 
@@ -1822,44 +1813,43 @@ mod tests {
     }
 
     /// A volume around the scratch root, as `/tmp` is around the default one,
-    /// is what an existing host may already mount: count mode mounts and counts
-    /// it, and only enforcement refuses it. A volume inside the scratch root is
-    /// refused in either mode, since nothing mounted before the gate names it.
+    /// the root itself, or a workload's scratch inside it would expose other
+    /// workloads' scratch, so each is refused even when the allowlist names it.
     #[test]
-    fn a_host_path_around_scratch_is_counted_and_one_inside_is_refused() {
-        for mode in [HostPathMode::Count, HostPathMode::Enforce] {
-            let root = tempfile::tempdir().unwrap();
-            let scratch = root.path().join("scratch");
-            let meters = Arc::new(crate::host::quota::PolicyMeters::default());
-            let engine = Engine::builder()
-                .with_socket_policy(Arc::new(crate::sockets::policy::SocketPolicy {
-                    meters: Some(Arc::clone(&meters)),
-                    ..Default::default()
-                }))
-                .with_scratch_root(&scratch)
-                .with_allowed_host_paths([root.path().to_path_buf()])
-                .with_host_path_mode(mode)
-                .build()
-                .unwrap();
-            let around =
-                engine.initialize_workload("w", volume_only_workload(vec![host_path(root.path())]));
-            match mode {
-                HostPathMode::Count => {
-                    around.unwrap();
-                    assert_eq!(meters.host_path_would_deny(), 1);
-                }
-                HostPathMode::Enforce => {
-                    assert!(around.is_err());
-                    assert_eq!(meters.host_path_denied(), 1);
-                }
-            }
+    fn a_host_path_exposing_scratch_is_refused_even_when_allowed() {
+        let root = tempfile::tempdir().unwrap();
+        let scratch = root.path().join("scratch");
+        let meters = Arc::new(crate::host::quota::PolicyMeters::default());
+        let engine = Engine::builder()
+            .with_socket_policy(Arc::new(crate::sockets::policy::SocketPolicy {
+                meters: Some(Arc::clone(&meters)),
+                ..Default::default()
+            }))
+            .with_scratch_root(&scratch)
+            .with_allowed_host_paths([root.path().to_path_buf(), scratch.clone()])
+            .build()
+            .unwrap();
+        let workload = engine
+            .initialize_workload("w", volume_only_workload(vec![empty_dir("a")]))
+            .unwrap();
+        let inside = walkdir(&scratch)
+            .into_iter()
+            .find(|p| p.is_dir())
+            .expect("the workload's scratch directory");
+        for (what, path) in [
+            ("around", root.path()),
+            ("equal to", scratch.as_path()),
+            ("inside", inside.as_path()),
+        ] {
             assert!(
                 engine
-                    .initialize_workload("w2", volume_only_workload(vec![host_path(&scratch)]))
+                    .initialize_workload("w2", volume_only_workload(vec![host_path(path)]))
                     .is_err(),
-                "{mode:?}: inside the scratch root"
+                "{what} the scratch root"
             );
         }
+        assert_eq!(meters.host_path_denied(), 3);
+        drop(workload);
     }
 
     fn walkdir(dir: &std::path::Path) -> Vec<PathBuf> {
@@ -1874,10 +1864,9 @@ mod tests {
         found
     }
 
-    /// Nothing configured is what every host upgrading to this has: the volume
-    /// still mounts, and the would-deny counter shows it.
+    /// With no allowed host paths configured, no `hostPath` volume is permitted.
     #[test]
-    fn a_default_engine_mounts_a_host_path_and_counts_it() {
+    fn a_default_engine_refuses_every_host_path() {
         let root = tempfile::tempdir().unwrap();
         let meters = Arc::new(crate::host::quota::PolicyMeters::default());
         let engine = Engine::builder()
@@ -1887,10 +1876,12 @@ mod tests {
             }))
             .build()
             .unwrap();
-        engine
-            .initialize_workload("w", volume_only_workload(vec![host_path(root.path())]))
-            .unwrap();
-        assert_eq!(meters.host_path_would_deny(), 1);
+        assert!(
+            engine
+                .initialize_workload("w", volume_only_workload(vec![host_path(root.path())]))
+                .is_err()
+        );
+        assert_eq!(meters.host_path_denied(), 1);
     }
 
     // Compiling is parallel unless a host says otherwise, and saying so

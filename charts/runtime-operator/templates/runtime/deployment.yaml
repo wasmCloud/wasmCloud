@@ -357,9 +357,6 @@ spec:
             {{- range .allowed }}
             - "--allowed-host-path={{ . }}"
             {{- end }}
-            {{- with .mode }}
-            - "--host-path-volumes={{ . }}"
-            {{- end }}
             {{- end }}
             {{- with .scratchRoot }}
             - "--scratch-root={{ . }}"
