@@ -89,7 +89,7 @@ use wasmtime::{Store, StoreContextMut};
 use crate::engine::Engine;
 use crate::engine::ctx::{CallerIdentity, Ctx, SharedCtx, WorkloadCaller};
 use crate::engine::instance_pool::InstancePolicy;
-use crate::engine::store::relocate::{self, Relocated};
+use crate::engine::store::relocate::{self, HostHandles, Relocated};
 use crate::engine::store::resource_bridge::{self, Owner, ProxyResource};
 use crate::engine::workload::{
     ResolvedWorkload, UnresolvedWorkload, WorkloadComponent, WorkloadItem,
@@ -1939,8 +1939,13 @@ async fn route_capability_call(
                 binding,
             })
         };
-        let extracted =
-            relocate::extract_all(access.as_context_mut(), params, param_tys, &mut Vec::new());
+        let extracted = relocate::extract_all(
+            access.as_context_mut(),
+            params,
+            param_tys,
+            HostHandles::Kept,
+            &mut Vec::new(),
+        );
         (caller, extracted)
     });
     let args = match extracted {

@@ -31,6 +31,8 @@ pub(crate) const P2_FIXTURES: &[&str] = &[
     "feeds-callee-b",
     "feeds-caller",
     "http-relay",
+    "lend-caller-p2",
+    "lend-callee-p2",
 ];
 
 pub(crate) const P3_FIXTURES: &[&str] = &[

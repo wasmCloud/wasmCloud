@@ -1,0 +1,20 @@
+package wasmcloud:lend-test@0.1.0;
+
+interface relay {
+    use wasi:io/streams@0.2.2.{input-stream, output-stream};
+    use wasi:http/types@0.2.2.{fields, incoming-request};
+
+    peek: func(data: borrow<input-stream>, len: u64) -> string;
+    drain: func(data: input-stream) -> string;
+    pass: func(data: input-stream) -> input-stream;
+    write: func(out: borrow<output-stream>, text: string);
+    finish: func(out: output-stream, text: string);
+    header: func(headers: borrow<fields>, name: string) -> string;
+    both: func(first: borrow<fields>, second: borrow<fields>, name: string) -> string;
+    describe: func(request: incoming-request) -> string;
+}
+
+world caller {
+    import relay;
+    export wasi:http/incoming-handler@0.2.2;
+}
