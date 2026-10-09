@@ -555,10 +555,13 @@ impl<'a> bindings::wasi::blobstore::types::Host for ActiveCtx<'a> {}
 mod filesystem;
 mod in_memory;
 mod nats;
+mod s3;
 
 pub use filesystem::{FilesystemBackend, FilesystemProvider};
 pub use in_memory::{InMemoryBackend, InMemoryProvider};
 pub use nats::{NatsBlobBackend, NatsBlobProvider};
+pub(crate) use s3::USE_HOST_IDENTITY_KEY;
+pub use s3::{S3BlobBackend, S3BlobProvider};
 
 /// A blobstore backend provider: a [`BackendProvider`] producing [`BlobId`]s.
 pub type BlobProvider = dyn BackendProvider<BlobId>;
@@ -616,6 +619,13 @@ impl HostPlugin for MultiplexedBlobstore {
 
     fn supports_named_instances(&self) -> bool {
         true
+    }
+
+    /// Only the S3 backend's opt-in to the host's AWS identity is the host's
+    /// to grant. The schema stays open: the other backends' keys (`root`,
+    /// `url`) are still the workload's, and unknown keys still pass through.
+    fn binding_schema(&self) -> crate::plugin::BindingSchema {
+        crate::plugin::BindingSchema::with_host_owned_keys([s3::USE_HOST_IDENTITY_KEY])
     }
 
     async fn on_workload_item_bind<'a>(
@@ -846,5 +856,17 @@ mod tests {
             backend.create_container("dup").await,
             Err(BlobBackendError::ContainerAlreadyExists(_))
         ));
+    }
+
+    #[test]
+    fn schema_owns_only_the_s3_host_identity_opt_in() {
+        let schema = MultiplexedBlobstore::new().binding_schema();
+        assert!(schema.owns("use_host_identity"));
+        assert!(schema.owns("use-host-identity"), "spellings fold");
+        // Open schema: the other backends' keys stay the workload's and
+        // unknown keys are not refused.
+        assert!(!schema.owns("root"));
+        assert!(!schema.owns("url"));
+        assert!(!schema.is_closed());
     }
 }

@@ -463,6 +463,14 @@ impl HostPlugin for MultiplexedAsyncBlobstore {
         true
     }
 
+    /// Same schema as the sync plugin: the S3 host-identity opt-in is
+    /// host-owned, everything else stays the workload's.
+    fn binding_schema(&self) -> crate::plugin::BindingSchema {
+        crate::plugin::BindingSchema::with_host_owned_keys([
+            super::multiplexed::USE_HOST_IDENTITY_KEY,
+        ])
+    }
+
     async fn on_workload_item_bind<'a>(
         &self,
         item: &mut WorkloadItem<'a>,
@@ -622,5 +630,17 @@ mod tests {
             "workload-a's backend outlived it"
         );
         assert!(plugin.mux.default_for("workload-b").is_some());
+    }
+
+    #[test]
+    fn schema_owns_only_the_s3_host_identity_opt_in() {
+        let schema = MultiplexedAsyncBlobstore::new().binding_schema();
+        assert!(schema.owns("use_host_identity"));
+        assert!(schema.owns("use-host-identity"), "spellings fold");
+        // Open schema: the other backends' keys stay the workload's and
+        // unknown keys are not refused.
+        assert!(!schema.owns("root"));
+        assert!(!schema.owns("url"));
+        assert!(!schema.is_closed());
     }
 }
