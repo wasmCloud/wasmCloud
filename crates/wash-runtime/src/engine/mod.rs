@@ -1008,7 +1008,9 @@ impl EngineBuilder {
     }
 
     /// Set the host's memory budget, per-memory ceiling and instance count.
-    /// Unset, the engine uses wasmtime's default memory limits.
+    /// Unset, the pool knobs are wasmtime's defaults and the budget is derived
+    /// from this process's memory limit — and enforced, unless
+    /// [`Self::with_guest_memory_mode`] says otherwise.
     pub fn with_host_memory(mut self, host_memory: host_memory::HostMemoryBudgets) -> Self {
         self.host_memory = Some(host_memory);
         self
@@ -1016,11 +1018,10 @@ impl EngineBuilder {
 
     /// Whether `max_guest_memory` is enforced or only accounted.
     ///
-    /// Unset, it is [`guest_memory::GuestMemoryMode::Count`]: the budget is
-    /// charged and reported but never refuses a growth. That is deliberate —
-    /// `max_guest_memory` is derived when an operator sets nothing, so
-    /// enforcing by default would give every host a ceiling on upgrade that
-    /// nobody chose.
+    /// Unset, it is [`guest_memory::GuestMemoryMode::Enforce`]: growth past
+    /// the budget is refused. `max_guest_memory` is derived when an operator
+    /// sets nothing, so every engine has a ceiling unless it opts into
+    /// [`guest_memory::GuestMemoryMode::Count`].
     #[must_use]
     pub fn with_guest_memory_mode(mut self, mode: guest_memory::GuestMemoryMode) -> Self {
         self.guest_memory_mode = mode;

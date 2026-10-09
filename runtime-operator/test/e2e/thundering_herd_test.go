@@ -418,7 +418,7 @@ spec:
 			hostName)
 
 		// Compilation is the memory peak of a start, and the pod is capped at
-		// 512Mi. A herd that walks the pod into an OOMKill restarts the host,
+		// 768Mi. A herd that walks the pod into an OOMKill restarts the host,
 		// which takes every workload on it — and the deployment then converges
 		// anyway on the way back up, so readiness alone would not notice.
 		By("verifying the herd did not restart the host pod")

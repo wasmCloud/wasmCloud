@@ -3502,10 +3502,9 @@ fn host_header<B>(req: &hyper::Request<B>) -> &str {
 /// `example.com`.
 /// The port a scheme implies when a URI does not spell one out.
 fn default_port_for_scheme(scheme: Option<&str>) -> u16 {
-    match scheme {
-        Some("https") => 443,
-        _ => 80,
-    }
+    scheme
+        .and_then(crate::host::allowed_hosts::default_port)
+        .unwrap_or(80)
 }
 
 fn split_host_port(host: &str) -> (&str, Option<u16>) {

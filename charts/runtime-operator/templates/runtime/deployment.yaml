@@ -215,15 +215,20 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            {{- /* Host memory budgets, from the effective `resources`:
-                   `limits.memory` is the host's total guest memory budget,
-                   guestMemoryMode says whether that budget is enforced or only
-                   counted, and defaultHeapMemory/coreInstances are wasmtime
-                   knobs parked alongside them (all three stripped back out of
-                   the `resources:` block below). Unset means unset — the host
-                   then derives its budget from its cgroup, counts against it
-                   rather than enforcing it, and leaves the pool knobs at
-                   wasmtime's defaults.
+            {{- /* Host memory knobs, from the effective `resources`:
+                   guestMemoryMode says whether the guest memory budget is
+                   enforced or only counted, and defaultHeapMemory/coreInstances
+                   are wasmtime knobs parked alongside it (all three stripped
+                   back out of the `resources:` block below). An unset pool
+                   knob stays at wasmtime's default. The mode is always
+                   rendered, `enforce` unless named, so the budget is enforced
+                   whatever the paired host image defaults to.
+
+                   The budget itself is not rendered: the host derives it from
+                   its cgroup, which is `limits.memory`, and keeps a quarter
+                   back for everything in the pod that is not a guest. Passing
+                   `limits.memory` through would enforce a budget of the whole
+                   pod, which the kernel OOM-kills before it refuses a guest.
 
                    These go through the flags' `WASH_*` env fallbacks rather
                    than `args` on purpose. The chart is routinely paired with a
@@ -231,12 +236,6 @@ spec:
                    older host aborts on an argument it does not recognise —
                    whereas it simply ignores an env var it has never heard of.
                    Keep any new host knob on this side of that line. */}}
-            {{- with $resources.limits }}
-            {{- with .memory }}
-            - name: WASH_HOST_MAX_GUEST_MEMORY
-              value: "{{ . }}"
-            {{- end }}
-            {{- end }}
             {{- with $resources.defaultHeapMemory }}
             - name: WASH_DEFAULT_HEAP_MEMORY
               value: "{{ . }}"
@@ -245,8 +244,10 @@ spec:
             - name: WASH_CORE_INSTANCES
               value: "{{ . }}"
             {{- end }}
-            {{- with $resources.guestMemoryMode }}
             - name: WASH_GUEST_MEMORY_MODE
+              value: "{{ $resources.guestMemoryMode | default "enforce" }}"
+            {{- with (.networking | default dict).ipNameLookupGrantLifetime }}
+            - name: WASH_IP_NAME_LOOKUP_GRANT_LIFETIME
               value: "{{ . }}"
             {{- end }}
             {{- /* Not `with`: Go templates treat the integer 0 as empty, and

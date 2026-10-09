@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{Context as _, anyhow, bail};
 
 use crate::host::allowed_hosts::{AllowedHost, check_allowed_addr};
-use crate::host::allowed_ip_name::{AllowedIpName, check_allowed_ip_name};
+use crate::host::allowed_ip_name::{AllowedIpName, check_allowed_lookup, lookup_denial};
 use crate::host::allowed_loopback::{AllowedLoopbackPort, check_allowed_loopback};
 use crate::host::declared_port::Protocol;
 use crate::host::egress_policy::EgressAddressPolicy;
@@ -25,6 +25,8 @@ use crate::sockets::policy::{EgressMode, SocketPolicy};
 /// the same declaration means the same thing on both sides: the loopback and
 /// host-owned-port refusals hold whatever the mode, while an `allowedHosts` or
 /// range refusal is counted rather than enforced under [`EgressMode::Count`].
+/// An entry's port is [`AllowedHost::socket_port`] here too, for an endpoint
+/// naming an address and one naming a host alike.
 #[derive(Debug, Clone)]
 pub struct PluginEgressPolicy {
     allowed_hosts: Arc<[AllowedHost]>,
@@ -82,9 +84,10 @@ impl PluginEgressPolicy {
 
     /// Checks a URL before a native client connects.
     ///
-    /// `default_port` is used when the URL omits one. Domain endpoints must
-    /// satisfy both the host and name-lookup lists. Loopback endpoints use the
-    /// separate host-loopback grant and the host-wide enable switch.
+    /// `default_port` is used when the URL omits one. A domain endpoint must
+    /// be permitted by the host list, which also lets it be resolved.
+    /// Loopback endpoints use the separate host-loopback grant and the
+    /// host-wide enable switch.
     pub fn check_url(
         &self,
         target: &str,
@@ -151,38 +154,55 @@ impl PluginEgressPolicy {
         // outside anything this policy sees.
         if let Some(ip) = literal_ip {
             let addr = core::net::SocketAddr::new(ip, port);
+            // Both judged, as `SocketPolicy::resolve_connect` does: counting
+            // records every refusal, enforcing returns the first.
             if !check_allowed_addr(&self.allowed_hosts, addr) {
-                return self.gate(
+                self.gate(
                     DenyReason::NotPermitted,
                     format!("native plugin endpoint {target:?} is not permitted by allowedHosts"),
-                );
+                )?;
             }
             if !self.egress_addrs.permits(ip) {
-                return self.gate(
+                self.gate(
                     DenyReason::BlockedRange,
                     format!(
                         "native plugin endpoint {target:?} is in an address range the egress \
                          policy denies"
                     ),
-                );
+                )?;
             }
             return Ok(());
         }
 
-        if !check_allowed_ip_name(&self.allowed_ip_name_lookups, &parsed_host) {
+        // As for a workload: a name `allowedHosts` permits connecting to may
+        // be resolved, and `allowedIpNameLookups` adds names beyond those.
+        if !check_allowed_lookup(
+            &self.allowed_ip_name_lookups,
+            &self.allowed_hosts,
+            &parsed_host,
+        ) {
             bail!(
-                "native plugin endpoint {target:?} uses a name which \
-                 allowedIpNameLookups does not permit"
+                "native plugin endpoint {target:?}: {}",
+                lookup_denial(&self.allowed_hosts, &parsed_host)
             );
         }
         let uri: http::Uri = format!("{}://{host}:{port}", url.scheme())
             .parse()
             .with_context(|| format!("native plugin endpoint {target:?} is not a valid URI"))?;
-        if !self
-            .allowed_hosts
-            .iter()
-            .any(|allowed| allowed.matches(&uri))
-        {
+        // A plugin has a scheme, so an entry carrying one must agree with it —
+        // which `matches` checks — and the port is the one a workload's socket
+        // to the same name would be held to.
+        let name = crate::sockets::resolved_names::normalize_name(&parsed_host);
+        let permitted = |allowed: &AllowedHost| match allowed {
+            AllowedHost::Any => true,
+            _ => {
+                allowed.matches(&uri)
+                    && name
+                        .as_deref()
+                        .is_some_and(|name| allowed.permits_name(name, port))
+            }
+        };
+        if !self.allowed_hosts.iter().any(permitted) {
             return self.gate(
                 DenyReason::NotPermitted,
                 format!("native plugin endpoint {target:?} is not permitted by allowedHosts"),
@@ -193,7 +213,7 @@ impl PluginEgressPolicy {
 
     /// Apply a refusal under the host's [`EgressMode`], the counterpart of
     /// [`SocketPolicy::gate`]: refuse it, or count it and allow it so an
-    /// operator sees the blast radius before enforcement severs live traffic.
+    /// operator sees the blast radius without severing live traffic.
     fn gate(&self, reason: DenyReason, message: String) -> anyhow::Result<()> {
         match self.egress_mode {
             EgressMode::Enforce => Err(anyhow!(message)),
@@ -355,7 +375,7 @@ mod tests {
         );
     }
 
-    /// Count mode is how an operator sees the blast radius before enforcing,
+    /// Count mode is how an operator sees the blast radius without enforcing,
     /// so a native plugin measures it the same way a workload's sockets do.
     #[test]
     fn count_mode_counts_an_undeclared_endpoint_instead_of_refusing_it() {
@@ -382,5 +402,92 @@ mod tests {
                 .check_url("nats://127.0.0.1:4222", Protocol::Tcp, 4222)
                 .is_err()
         );
+    }
+
+    /// A native plugin's endpoint is held to the port a workload's socket to
+    /// the same destination would be: a scheme with no port means that
+    /// scheme's default, whether the entry names an address or a host.
+    #[test]
+    fn an_entry_with_a_scheme_and_no_port_permits_only_the_default_port() {
+        let egress = PluginEgressPolicy::new(
+            [
+                "https://vault.internal",
+                "https://10.0.0.5",
+                "nats://nats.internal",
+            ]
+            .iter()
+            .map(|entry| entry.parse().unwrap())
+            .collect(),
+            Arc::from(["*".parse().unwrap()]),
+            Arc::from([]),
+            &enforcing(false),
+        );
+        let check = |target| egress.check_url(target, Protocol::Tcp, 4222);
+
+        for target in ["https://vault.internal", "https://10.0.0.5"] {
+            check(target).unwrap();
+        }
+        for target in ["https://vault.internal:8200", "https://10.0.0.5:8200"] {
+            assert!(check(target).is_err(), "{target}");
+        }
+        // The scheme still has to agree, and one with no known default leaves
+        // the port open.
+        assert!(check("http://vault.internal:443").is_err());
+        check("nats://nats.internal:4222").unwrap();
+        check("nats://nats.internal:6222").unwrap();
+    }
+
+    /// A native plugin's endpoint named in `allowedHosts` needs no second
+    /// entry to be resolved, exactly as for a workload's socket.
+    #[test]
+    fn a_named_endpoint_needs_no_separate_lookup_grant() {
+        let egress = PluginEgressPolicy::new(
+            Arc::from(["nats://nats.internal:4222".parse().unwrap()]),
+            Arc::from([]),
+            Arc::from([]),
+            &enforcing(false),
+        );
+        egress
+            .check_url("nats://nats.internal:4222", Protocol::Tcp, 4222)
+            .unwrap();
+        assert!(
+            egress
+                .check_url("nats://other.internal:4222", Protocol::Tcp, 4222)
+                .is_err()
+        );
+
+        // `*` permits the connection but names nothing to resolve.
+        let any = PluginEgressPolicy::new(
+            Arc::from(["*".parse().unwrap()]),
+            Arc::from([]),
+            Arc::from([]),
+            &enforcing(false),
+        );
+        assert!(
+            any.check_url("nats://nats.internal:4222", Protocol::Tcp, 4222)
+                .is_err()
+        );
+    }
+
+    /// The native counterpart of the socket policy's count-mode test: an
+    /// endpoint that fails both layers is counted under both.
+    #[test]
+    fn count_mode_records_every_reason_an_endpoint_would_be_refused() {
+        let meters = Arc::new(PolicyMeters::default());
+        let policy = PluginEgressPolicy::new(
+            Arc::from([]),
+            Arc::from([]),
+            Arc::from([]),
+            &SocketPolicy {
+                egress_mode: EgressMode::Count,
+                meters: Some(Arc::clone(&meters)),
+                ..Default::default()
+            },
+        );
+        policy
+            .check_url("http://169.254.169.254", Protocol::Tcp, 80)
+            .unwrap();
+        assert_eq!(meters.would_deny(DenyReason::NotPermitted), 1);
+        assert_eq!(meters.would_deny(DenyReason::BlockedRange), 1);
     }
 }

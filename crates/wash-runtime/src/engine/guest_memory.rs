@@ -15,19 +15,18 @@
 //! `memory.grow` before it happens, charges the growth to the shared counter,
 //! and can refuse it.
 //!
-//! # Count before Enforce
+//! # Enforce by default, Count to size
 //!
-//! [`GuestMemoryMode::Count`] is the default and is a no-op by construction: it
-//! charges and reports, and allows the growth regardless. This matters because
-//! `max_guest_memory` is always *derived* when unset — never absent — so a host
-//! that switched straight to enforcement would gain a ceiling it has never had,
-//! on upgrade, with nobody having asked for one. Count preserves
-//! [`crate::engine::host_memory`]'s property that nothing changes when the
-//! flags are unset, while still producing the number no host has today: a
+//! [`GuestMemoryMode::Enforce`] is the default: growth past the budget is
+//! refused. `max_guest_memory` is always *derived* when unset — never absent —
+//! so every host has a ceiling whether or not an operator named one.
+//!
+//! [`GuestMemoryMode::Count`] is the opt-out for sizing a budget: it charges
+//! and reports, and allows the growth regardless. What it produces is a
 //! high-water mark for aggregate guest memory, which is what answers "one
 //! runaway component, or aggregate creep?".
 //!
-//! Same shape as [`crate::sockets::policy::EgressMode`], for the same reason.
+//! Same shape as [`crate::sockets::policy::EgressMode`].
 //!
 //! # What a refusal looks like to a guest
 //!
@@ -96,11 +95,10 @@ const PRESSURE_DENOMINATOR: u64 = 4;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum GuestMemoryMode {
     /// Charge the growth, record that the budget would have refused it, and
-    /// allow it anyway. The default, so upgrading a host does not hand every
-    /// guest a ceiling nobody asked for.
-    #[default]
+    /// allow it anyway. For sizing a budget before it is relied on.
     Count,
-    /// Refuse growth past the budget.
+    /// Refuse growth past the budget. The default.
+    #[default]
     Enforce,
 }
 
@@ -150,7 +148,7 @@ impl Default for GuestMemoryBudget {
     /// An unmetered budget: accounted but never crossed. What a store built
     /// without an engine's budget gets, so a limiter is always installable.
     fn default() -> Self {
-        Self::new(u64::MAX, GuestMemoryMode::Count)
+        Self::new(u64::MAX, GuestMemoryMode::default())
     }
 }
 
@@ -234,9 +232,9 @@ impl GuestMemoryBudget {
     /// Not gated behind `--meters`, unlike
     /// [`crate::observability::FuelConsumptionMeter`]. That flag exists because
     /// fuel metering makes the guest measurably slower; this does not, and the
-    /// high-water figure is the one an operator is told to watch before turning
-    /// enforcement on — putting it behind an opt-in would hide the number the
-    /// rollout depends on. With no OTel exporter configured the global meter is
+    /// high-water figure is the one an operator sizes the budget from — putting
+    /// it behind an opt-in would hide the number that says how close a host is
+    /// to refusing growth. With no OTel exporter configured the global meter is
     /// a no-op and none of these callbacks are ever invoked.
     fn register_metrics(self: &Arc<Self>, meter: &opentelemetry::metrics::Meter) {
         let mode = [opentelemetry::KeyValue::new("mode", self.mode.as_str())];
@@ -323,8 +321,7 @@ impl GuestMemoryBudget {
     ///
     /// At `info` while the host is *currently* under memory pressure, or when
     /// growth has been refused since the last report. That is the figure an
-    /// operator is told to watch before turning enforcement on, and a host
-    /// does not run at `debug`.
+    /// operator sizes the budget from, and a host does not run at `debug`.
     ///
     /// Keyed on live pressure rather than on the high-water mark, which only
     /// ever rises: a host that crossed its budget once during a burst at
