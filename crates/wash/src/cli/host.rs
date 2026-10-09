@@ -434,6 +434,50 @@ pub struct HostCommand {
     #[arg(long = "oci-ca-path", env = "WASH_OCI_CA_PATHS", value_delimiter = ',')]
     pub oci_ca_paths: Vec<PathBuf>,
 
+    /// Host paths no workload's `hostPath` volume may lie inside or contain,
+    /// on top of the ones this host reserves itself: every credential and CA
+    /// file its flags name, its OCI cache, the `configs:`/`secrets:` catalog
+    /// sources, and the configuration files it read. Name anything else that holds a
+    /// credential, such as a file a plugin's config points at.
+    ///
+    /// Accepts a comma-separated list and/or repeated flags. Paths must not
+    /// contain commas.
+    #[arg(
+        long = "reserved-host-path",
+        env = "WASH_RESERVED_HOST_PATHS",
+        value_delimiter = ','
+    )]
+    pub reserved_host_paths: Vec<PathBuf>,
+
+    /// Directories a workload's `hostPath` volume may lie within. A volume is
+    /// judged by its canonical path, so `..` and symlinks cannot step outside
+    /// one. With none, no `hostPath` volume is permitted.
+    ///
+    /// Even inside one, a volume is refused if it exposes a reserved host
+    /// path, a kernel filesystem such as `/proc`, `/sys` or `/dev`, or the
+    /// `emptyDir` scratch root.
+    ///
+    /// This is a host-wide guardrail, not a multi-tenant storage policy: every
+    /// workload on the host may mount any directory listed here. Accepts a
+    /// comma-separated list and/or repeated flags. Paths must not contain
+    /// commas.
+    #[arg(
+        long = "allowed-host-path",
+        env = "WASH_ALLOWED_HOST_PATHS",
+        value_delimiter = ','
+    )]
+    pub allowed_host_paths: Vec<PathBuf>,
+
+    /// Where `emptyDir` volumes live. Defaults to `wasmcloud-scratch` under
+    /// the system temporary directory.
+    ///
+    /// The host claims a directory of its own here, removes each workload's
+    /// scratch when the workload stops, and at startup removes what hosts that
+    /// are no longer running left behind. No `hostPath` volume may lie inside
+    /// it or contain it.
+    #[arg(long = "scratch-root", env = "WASH_SCRATCH_ROOT")]
+    pub scratch_root: Option<PathBuf>,
+
     /// How long to keep serving after a shutdown signal, before stopping.
     ///
     /// A pod leaves its Service when Kubernetes marks it Terminating, but that
@@ -687,6 +731,65 @@ fn host_plugin_registry_credentials(
 }
 
 impl HostCommand {
+    /// Every path this host reads credentials or configuration from, which no
+    /// workload volume may expose.
+    fn reserved_paths(&self, config: &crate::config::Config, ctx: &CliContext) -> Vec<PathBuf> {
+        let project_dir = ctx.project_dir();
+        let mut paths: Vec<PathBuf> = [
+            &self.scheduler_nats_tls_ca,
+            &self.scheduler_nats_tls_cert,
+            &self.scheduler_nats_tls_key,
+            &self.data_nats_tls_ca,
+            &self.data_nats_tls_cert,
+            &self.data_nats_tls_key,
+            &self.tls_cert_path,
+            &self.tls_key_path,
+            &self.tls_ca_path,
+            &self.http_client_cert_path,
+            &self.http_client_key_path,
+            // Writable, and what it caches is loaded as plugin code.
+            &self.oci_cache_dir,
+        ]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .chain(self.http_client_ca_paths.iter().cloned())
+        .chain(self.oci_ca_paths.iter().cloned())
+        .chain(self.reserved_host_paths.iter().cloned())
+        .collect();
+        paths.push(ctx.user_config_path());
+        paths.push(crate::config::locate_project_config(project_dir));
+        paths.extend(config.reserved_host_paths(project_dir));
+        // A component plugin's wasm is code the host runs with a plugin's
+        // grants; a workload able to write it could replace the plugin.
+        paths.extend(
+            config
+                .host()
+                .all_plugins()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|plugin| plugin.source.file.as_ref())
+                .map(|file| {
+                    if file.is_relative() {
+                        project_dir.join(file)
+                    } else {
+                        file.clone()
+                    }
+                }),
+        );
+        paths.extend(
+            self.host_plugins
+                .iter()
+                .filter_map(|spec| match &spec.source {
+                    wash_runtime::component_source::ComponentSource::File(file) => {
+                        Some(file.clone())
+                    }
+                    _ => None,
+                }),
+        );
+        paths
+    }
+
     /// Build outbound TLS and start identity refresh when configured.
     fn egress_handler(&self) -> anyhow::Result<wash_runtime::host::http::DefaultOutgoingHandler> {
         use wash_runtime::host::client_identity::{RotatingClientIdentity, spawn_refresh};
@@ -904,7 +1007,12 @@ impl CliCommand for HostCommand {
 
         let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)
-            .with_fuel_consumption(ctx.meters().consumes_fuel());
+            .with_fuel_consumption(ctx.meters().consumes_fuel())
+            .with_reserved_host_paths(self.reserved_paths(&config, ctx))
+            .with_allowed_host_paths(self.allowed_host_paths.iter().cloned());
+        if let Some(root) = &self.scratch_root {
+            engine_builder = engine_builder.with_scratch_root(root);
+        }
         for proposal in &self.wasm_proposals {
             engine_builder = engine_builder.with_wasm_proposal(*proposal);
         }
@@ -928,7 +1036,9 @@ impl CliCommand for HostCommand {
                 allow_private: !self.deny_private_ranges,
             },
             quotas: Some(Arc::clone(&quotas)),
-            meters: Some(Arc::new(wash_runtime::host::quota::PolicyMeters::default())),
+            // Published as metrics, so the socket policy's would-deny counters
+            // can be watched before switching to enforce, and refusals seen.
+            meters: Some(wash_runtime::host::quota::PolicyMeters::default().into_metered()),
             // The host's one record of which real ports are spoken for. Every
             // guest policy is derived from this one, so they all read the same
             // table and a port reserved here is seen by all of them.
@@ -1481,6 +1591,7 @@ host:
 
 #[cfg(test)]
 mod shutdown_tests {
+    use std::path::PathBuf;
     use std::time::Duration;
 
     use clap::Parser;
@@ -1523,6 +1634,23 @@ mod shutdown_tests {
         assert_eq!(
             parse(&["--drain-delay=30s"]).drain_delay,
             Duration::from_secs(30)
+        );
+    }
+
+    /// With no flag, no directory is allowed.
+    #[test]
+    fn allowed_host_paths_are_empty_until_listed() {
+        let host = parse(&[]);
+        assert!(host.allowed_host_paths.is_empty());
+
+        // The chart's spelling: one flag per directory.
+        let host = parse(&[
+            "--allowed-host-path=/data",
+            "--allowed-host-path=/srv/shared",
+        ]);
+        assert_eq!(
+            host.allowed_host_paths,
+            [PathBuf::from("/data"), PathBuf::from("/srv/shared")]
         );
     }
 }

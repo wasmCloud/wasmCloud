@@ -73,10 +73,7 @@ fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
         linker,
         <SharedCtx as wasmtime_wasi::filesystem::WasiFilesystemView>::filesystem,
     )?;
-    filesystem::preopens::add_to_linker::<SharedCtx, wasmtime_wasi::filesystem::WasiFilesystem>(
-        linker,
-        <SharedCtx as wasmtime_wasi::filesystem::WasiFilesystemView>::filesystem,
-    )?;
+    filesystem::preopens::add_to_linker::<SharedCtx, SharedCtx>(linker, ctx::extract_active_ctx)?;
 
     // Clocks
     clocks::wall_clock::add_to_linker::<SharedCtx, wasmtime_wasi::clocks::WasiClocks>(
@@ -177,7 +174,17 @@ fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
     // CLI, clocks, filesystem, random — upstream P3 add_to_linker
     wasmtime_wasi::p3::cli::add_to_linker(linker)?;
     wasmtime_wasi::p3::clocks::add_to_linker(linker)?;
-    wasmtime_wasi::p3::filesystem::add_to_linker(linker)?;
+    wasmtime_wasi::p3::bindings::filesystem::types::add_to_linker::<
+        SharedCtx,
+        wasmtime_wasi::filesystem::WasiFilesystem,
+    >(
+        linker,
+        <SharedCtx as wasmtime_wasi::filesystem::WasiFilesystemView>::filesystem,
+    )?;
+    wasmtime_wasi::p3::bindings::filesystem::preopens::add_to_linker::<SharedCtx, SharedCtx>(
+        linker,
+        ctx::extract_active_ctx,
+    )?;
     wasmtime_wasi::p3::random::add_to_linker(linker)?;
 
     // Sockets with our custom P3 implementation (with loopback)
@@ -226,6 +233,7 @@ pub(crate) mod instance_pool;
 pub use instance_pool::{InstancePolicy, ReclaimPolicy};
 pub mod host_memory;
 pub(crate) mod linked_call;
+mod scratch;
 pub(crate) mod store;
 mod value;
 mod volumes;
@@ -308,6 +316,11 @@ pub struct Engine {
     /// the host's port table, and the connection budget. The workload-level half
     /// (`allowedHosts`, `allowedHostLoopbackPorts`) is layered over it per component.
     pub(crate) socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
+    /// Which host paths a workload's `hostPath` volume may name.
+    host_paths: volumes::HostPathPolicy,
+    /// Where `emptyDir` volumes live. An error when the root could not be
+    /// claimed, reported to the first workload that asks for one.
+    scratch: Result<Arc<scratch::ScratchRoot>, Arc<str>>,
     pub(crate) host_memory: host_memory::HostMemoryBudgets,
     /// The host-wide counter of guest linear-memory bytes that
     /// [`host_memory::HostMemoryBudgets::max_guest_memory`] is the cap on.
@@ -529,6 +542,9 @@ impl Engine {
 
         // Process and validate volumes - create a lookup map from volume name to validated host path
         let mut validated_volumes = std::collections::HashMap::new();
+        // Created on the first `emptyDir`, and removed when the workload is
+        // released or, for a start that fails before then, when this drops.
+        let mut workload_scratch: Option<Arc<scratch::ScratchDir>> = None;
 
         for v in volumes {
             let host_path = match v.volume_type {
@@ -539,14 +555,26 @@ impl Engine {
                             "HostPath volume '{local_path}' does not exist or is not a directory",
                         );
                     }
-                    path
+                    self.host_paths.open(&path)?
                 }
                 VolumeType::EmptyDir(EmptyDirVolume {}) => {
-                    // Create a temporary directory for the empty dir volume
-                    let temp_dir = tempfile::tempdir()
-                        .context("failed to create temp dir for empty dir volume")?;
-                    tracing::debug!(path = ?temp_dir.path(), "created temp dir for empty dir volume");
-                    temp_dir.keep()
+                    let workload_scratch = match &mut workload_scratch {
+                        Some(dir) => dir,
+                        None => {
+                            let root = self.scratch.as_ref().map_err(|e| {
+                                anyhow::anyhow!("emptyDir volumes are unavailable: {e}")
+                            })?;
+                            workload_scratch.insert(root.workload_dir()?)
+                        }
+                    };
+                    // Kept on disk: the workload's scratch directory owns it.
+                    let volume_dir = tempfile::Builder::new()
+                        .prefix("volume-")
+                        .tempdir_in(workload_scratch.path())
+                        .context("failed to create an emptyDir volume")?
+                        .keep();
+                    tracing::debug!(path = ?volume_dir, "created emptyDir volume");
+                    volumes::ReservedHostPaths::default().open(&volume_dir)?
                 }
             };
 
@@ -608,7 +636,8 @@ impl Engine {
             service,
             workload_components,
             host_interfaces,
-        );
+        )
+        .with_scratch(workload_scratch);
 
         #[cfg(feature = "wasi-tls")]
         let workload = workload.maybe_with_tls_provider(self.tls_provider.clone());
@@ -623,7 +652,7 @@ impl Engine {
         workload_name: impl AsRef<str>,
         workload_namespace: impl AsRef<str>,
         service: crate::types::Service,
-        validated_volumes: &std::collections::HashMap<String, PathBuf>,
+        validated_volumes: &std::collections::HashMap<String, volumes::OpenedVolume>,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
     ) -> anyhow::Result<WorkloadService> {
         // Create a wasmtime component from the bytes
@@ -648,9 +677,12 @@ impl Engine {
 
         // Build volume mounts for this component by looking up validated volumes
         let mut component_volume_mounts = Vec::new();
+        let mut resolved_volume_mounts = Vec::new();
         for vm in &service.local_resources.volume_mounts {
             if let Some(host_path) = validated_volumes.get(&vm.name) {
-                component_volume_mounts.push((host_path.clone(), vm.clone()));
+                component_volume_mounts.push((host_path.path.clone(), vm.clone()));
+                resolved_volume_mounts
+                    .push(volumes::ResolvedVolumeMount::from_opened(host_path, vm)?);
             } else {
                 tracing::warn!(
                     volume = %vm.name,
@@ -670,6 +702,7 @@ impl Engine {
             service.max_restarts,
             loopback,
         );
+        service.metadata.resolved_volume_mounts = resolved_volume_mounts;
         service.metadata.socket_policy = Arc::clone(&self.socket_policy);
         service.metadata.guest_memory = Arc::clone(&self.guest_memory);
 
@@ -748,7 +781,7 @@ impl Engine {
         workload_name: impl AsRef<str>,
         workload_namespace: impl AsRef<str>,
         component: crate::types::Component,
-        validated_volumes: &std::collections::HashMap<String, PathBuf>,
+        validated_volumes: &std::collections::HashMap<String, volumes::OpenedVolume>,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
     ) -> anyhow::Result<WorkloadComponent> {
         // Read before the component's fields are moved out below.
@@ -776,9 +809,12 @@ impl Engine {
 
         // Build volume mounts for this component by looking up validated volumes
         let mut component_volume_mounts = Vec::new();
+        let mut resolved_volume_mounts = Vec::new();
         for vm in &component.local_resources.volume_mounts {
             if let Some(host_path) = validated_volumes.get(&vm.name) {
-                component_volume_mounts.push((host_path.clone(), vm.clone()));
+                component_volume_mounts.push((host_path.path.clone(), vm.clone()));
+                resolved_volume_mounts
+                    .push(volumes::ResolvedVolumeMount::from_opened(host_path, vm)?);
             } else {
                 tracing::warn!(
                     volume = %vm.name,
@@ -800,6 +836,7 @@ impl Engine {
             loopback,
             instances,
         );
+        workload_component.metadata.resolved_volume_mounts = resolved_volume_mounts;
         workload_component.metadata.socket_policy = Arc::clone(&self.socket_policy);
         workload_component.metadata.guest_memory = Arc::clone(&self.guest_memory);
         Ok(workload_component)
@@ -987,6 +1024,9 @@ pub struct EngineBuilder {
     parallel_compilation: Option<bool>,
     native_unwind_info: Option<bool>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
+    reserved_host_paths: Vec<PathBuf>,
+    allowed_host_paths: Vec<PathBuf>,
+    scratch_root: Option<PathBuf>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
     guest_memory_mode: guest_memory::GuestMemoryMode,
     /// Optional TLS provider override for wasi:tls client connections.
@@ -995,6 +1035,43 @@ pub struct EngineBuilder {
 }
 
 impl EngineBuilder {
+    /// Reserve paths that no workload volume may equal, contain, or lie
+    /// inside. The scratch root (see [`Self::with_scratch_root`]) is always
+    /// reserved.
+    #[must_use]
+    pub fn with_reserved_host_paths(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.reserved_host_paths.extend(paths);
+        self
+    }
+
+    /// Permit `hostPath` volumes within these directories. Adds to any
+    /// permitted before; with none, no `hostPath` volume is permitted.
+    ///
+    /// This is a host-wide guardrail for a trusted embedder, and for migrating
+    /// hosts whose workloads already mount host directories. It is not a
+    /// multi-tenant storage policy: any workload on the engine may mount any
+    /// directory permitted here. Where tenants author workloads, disable their
+    /// raw `hostPath` volumes in the control plane, and have it give each
+    /// workload a directory of its own instead.
+    #[must_use]
+    pub fn with_allowed_host_paths(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.allowed_host_paths.extend(paths);
+        self
+    }
+
+    /// Where `emptyDir` volumes live. Unset, `wasmcloud-scratch` under the
+    /// system temporary directory.
+    ///
+    /// The engine claims a directory of its own here, and removes what hosts
+    /// that are no longer running left behind. The root is reserved: no
+    /// `hostPath` volume may equal it, contain it, or lie inside it, whatever
+    /// [`Self::with_allowed_host_paths`] permits.
+    #[must_use]
+    pub fn with_scratch_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.scratch_root = Some(root.into());
+        self
+    }
+
     /// Install the host-level socket policy every workload on this engine
     /// inherits.
     ///
@@ -1325,12 +1402,29 @@ impl EngineBuilder {
                     .unwrap_or(Duration::from_secs(600)),
             )
             .build();
+        let socket_policy = self.socket_policy.unwrap_or_default();
+        let scratch_root = self
+            .scratch_root
+            .unwrap_or_else(|| std::env::temp_dir().join("wasmcloud-scratch"));
+        let scratch = scratch::ScratchRoot::open(&scratch_root).map_err(|e| {
+            tracing::warn!(root = %scratch_root.display(), err = %e, "cannot claim the scratch root; emptyDir volumes will be refused");
+            Arc::from(format!("{e:#}"))
+        });
         Ok(Engine {
             inner,
             cache,
             #[cfg(test)]
             compiles: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            socket_policy: self.socket_policy.unwrap_or_default(),
+            host_paths: volumes::HostPathPolicy::new(
+                self.reserved_host_paths,
+                self.allowed_host_paths,
+                Some(scratch_root.clone()),
+                // The socket policy's counters, so an operator reads every
+                // policy figure in one place.
+                socket_policy.meters.clone(),
+            ),
+            socket_policy,
+            scratch,
             host_memory,
             guest_memory: {
                 let budget = guest_memory::GuestMemoryBudget::from_budgets(
@@ -1618,6 +1712,176 @@ mod tests {
         let raw = wasmtime::Error::msg("expected a WebAssembly component");
         let explained = format!("{:#}", explain_compile_failure(raw, 1024 * 1024));
         assert_eq!(explained, "expected a WebAssembly component");
+    }
+
+    fn volume_only_workload(volumes: Vec<crate::types::Volume>) -> Workload {
+        Workload {
+            namespace: "ns".into(),
+            name: "volumes".into(),
+            annotations: Default::default(),
+            service: None,
+            components: vec![],
+            host_interfaces: vec![],
+            volumes,
+        }
+    }
+
+    fn host_path(path: &std::path::Path) -> crate::types::Volume {
+        crate::types::Volume {
+            name: "data".into(),
+            volume_type: VolumeType::HostPath(HostPathVolume {
+                local_path: path.to_string_lossy().into_owned(),
+            }),
+        }
+    }
+
+    #[test]
+    fn an_engine_refuses_a_host_path_outside_its_allowlist() {
+        let root = tempfile::tempdir().unwrap();
+        let allowed = root.path().join("allowed");
+        let other = root.path().join("other");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let meters = Arc::new(crate::host::quota::PolicyMeters::default());
+        let engine = Engine::builder()
+            .with_socket_policy(Arc::new(crate::sockets::policy::SocketPolicy {
+                meters: Some(Arc::clone(&meters)),
+                ..Default::default()
+            }))
+            .with_allowed_host_paths([allowed.clone()])
+            .build()
+            .unwrap();
+
+        let Err(err) =
+            engine.initialize_workload("w", volume_only_workload(vec![host_path(&other)]))
+        else {
+            panic!("a host path outside the allowlist should be refused");
+        };
+        assert!(
+            format!("{err:#}").contains("--allowed-host-path"),
+            "{err:#}"
+        );
+        assert_eq!(meters.host_path_denied(), 1);
+        engine
+            .initialize_workload("w", volume_only_workload(vec![host_path(&allowed)]))
+            .unwrap();
+        // An empty directory is the host's own, never a path a workload named.
+        engine
+            .initialize_workload(
+                "w",
+                volume_only_workload(vec![crate::types::Volume {
+                    name: "scratch".into(),
+                    volume_type: VolumeType::EmptyDir(EmptyDirVolume {}),
+                }]),
+            )
+            .unwrap();
+    }
+
+    fn empty_dir(name: &str) -> crate::types::Volume {
+        crate::types::Volume {
+            name: name.into(),
+            volume_type: VolumeType::EmptyDir(EmptyDirVolume {}),
+        }
+    }
+
+    /// Scratch lives under the root the engine owns, and a workload that goes
+    /// away takes its scratch with it.
+    #[test]
+    fn empty_dir_scratch_lives_under_the_root_and_leaves_with_its_workload() {
+        let root = tempfile::tempdir().unwrap();
+        let engine = Engine::builder()
+            .with_scratch_root(root.path())
+            .build()
+            .unwrap();
+        let scratch_files = || {
+            walkdir(root.path())
+                .into_iter()
+                .filter(|p| !p.ends_with(".lock"))
+                .count()
+        };
+        let before = scratch_files();
+        let Ok(workload) = engine.initialize_workload(
+            "w",
+            volume_only_workload(vec![empty_dir("a"), empty_dir("b")]),
+        ) else {
+            panic!("a workload with emptyDir volumes should initialize");
+        };
+        // One workload directory holding a directory per volume.
+        assert_eq!(scratch_files(), before + 3);
+        drop(workload);
+        assert_eq!(scratch_files(), before);
+    }
+
+    /// A volume around the scratch root, as `/tmp` is around the default one,
+    /// the root itself, or a workload's scratch inside it would expose other
+    /// workloads' scratch, so each is refused even when the allowlist names it.
+    #[test]
+    fn a_host_path_exposing_scratch_is_refused_even_when_allowed() {
+        let root = tempfile::tempdir().unwrap();
+        let scratch = root.path().join("scratch");
+        let meters = Arc::new(crate::host::quota::PolicyMeters::default());
+        let engine = Engine::builder()
+            .with_socket_policy(Arc::new(crate::sockets::policy::SocketPolicy {
+                meters: Some(Arc::clone(&meters)),
+                ..Default::default()
+            }))
+            .with_scratch_root(&scratch)
+            .with_allowed_host_paths([root.path().to_path_buf(), scratch.clone()])
+            .build()
+            .unwrap();
+        let workload = engine
+            .initialize_workload("w", volume_only_workload(vec![empty_dir("a")]))
+            .unwrap();
+        let inside = walkdir(&scratch)
+            .into_iter()
+            .find(|p| p.is_dir())
+            .expect("the workload's scratch directory");
+        for (what, path) in [
+            ("around", root.path()),
+            ("equal to", scratch.as_path()),
+            ("inside", inside.as_path()),
+        ] {
+            assert!(
+                engine
+                    .initialize_workload("w2", volume_only_workload(vec![host_path(path)]))
+                    .is_err(),
+                "{what} the scratch root"
+            );
+        }
+        assert_eq!(meters.host_path_denied(), 3);
+        drop(workload);
+    }
+
+    fn walkdir(dir: &std::path::Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                found.extend(walkdir(&path));
+            }
+            found.push(path);
+        }
+        found
+    }
+
+    /// With no allowed host paths configured, no `hostPath` volume is permitted.
+    #[test]
+    fn a_default_engine_refuses_every_host_path() {
+        let root = tempfile::tempdir().unwrap();
+        let meters = Arc::new(crate::host::quota::PolicyMeters::default());
+        let engine = Engine::builder()
+            .with_socket_policy(Arc::new(crate::sockets::policy::SocketPolicy {
+                meters: Some(Arc::clone(&meters)),
+                ..Default::default()
+            }))
+            .build()
+            .unwrap();
+        assert!(
+            engine
+                .initialize_workload("w", volume_only_workload(vec![host_path(root.path())]))
+                .is_err()
+        );
+        assert_eq!(meters.host_path_denied(), 1);
     }
 
     // Compiling is parallel unless a host says otherwise, and saying so

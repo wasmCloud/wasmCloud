@@ -906,6 +906,26 @@ runtime:
         # allows any port the OS will grant.
         # NOTE: not yet wired to the host, as with `publishPorts` above.
         publishPortRange: ""
+      # -- Which host directories a workload's `hostPath` volume may name. A
+      # volume is judged by its canonical path, so `..` and symlinks cannot
+      # step outside an allowed directory. The host's own credential paths,
+      # kernel filesystems (`/proc`, `/sys`, `/dev`), and any volume inside or
+      # containing `scratchRoot` (such as `/tmp` with the default root) are
+      # refused whatever is set here.
+      # This is a host-wide guardrail, not a multi-tenant storage policy:
+      # every workload on the host may mount any directory listed. Where
+      # tenants author workloads, refuse their raw `hostPath` volumes before
+      # they reach a host.
+      hostPaths:
+        # -- Directories a `hostPath` volume may lie within. Empty permits none.
+        allowed: []
+      # -- Where `emptyDir` volumes live. Empty uses `wasmcloud-scratch` under
+      # the container's temporary directory. Point it at a mounted volume to
+      # keep scratch off the container filesystem, or at a memory-backed one
+      # knowing scratch then counts against the pod's memory. Each workload's
+      # scratch is removed when it stops, and a restarted host removes what
+      # its predecessor left.
+      scratchRoot: ""
       http:
         enabled: true
         port: 9191

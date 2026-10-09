@@ -351,6 +351,16 @@ spec:
             - "--max-inbound-socket-connections-per-workload={{ . }}"
             {{- end }}
             {{- end }}
+            {{- /* Which host directories a workload's hostPath volume may
+                   name. Rendered only when set, like `networking`. */}}
+            {{- with .hostPaths }}
+            {{- range .allowed }}
+            - "--allowed-host-path={{ . }}"
+            {{- end }}
+            {{- end }}
+            {{- with .scratchRoot }}
+            - "--scratch-root={{ . }}"
+            {{- end }}
             {{- if and (.http) (.http.enabled) }}
             - "--http-addr=0.0.0.0:{{ .http.port }}"
             {{- if and ($top.Values.global.tls.enabled) (.http.tls) (.http.tls.enabled) }}

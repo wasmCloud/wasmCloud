@@ -149,7 +149,7 @@ pub struct WorkloadMetadata {
     linker: Linker<SharedCtx>,
     /// The volume mounts requested by this component
     pub(crate) volume_mounts: Vec<(PathBuf, VolumeMount)>,
-    /// Canonicalized volume mounts, resolved once during workload resolution.
+    /// Pinned directory handles with guest mount names and permissions.
     pub(crate) resolved_volume_mounts: Vec<ResolvedVolumeMount>,
     /// The local resources requested by this component
     pub(crate) local_resources: LocalResources,
@@ -409,6 +409,9 @@ pub struct WorkloadService {
 impl WorkloadService {
     /// Create a new [`WorkloadService`] with the given workload ID,
     /// wasmtime [`Component`], [`Linker`], volume mounts, and instance limits.
+    ///
+    /// `volume_mounts` are trusted: they are opened as given, refusing only
+    /// kernel filesystems, without the engine's `hostPath` policy.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         workload_id: impl Into<Arc<str>>,
@@ -512,6 +515,9 @@ pub struct WorkloadComponent {
 impl WorkloadComponent {
     /// Create a new [`WorkloadComponent`] with the given workload ID,
     /// wasmtime [`Component`], [`Linker`], volume mounts, and instance limits.
+    ///
+    /// `volume_mounts` are trusted: they are opened as given, refusing only
+    /// kernel filesystems, without the engine's `hostPath` policy.
     ///
     /// `instances` is what the component asked for by way of instance reuse.
     /// [`InstancePolicy::Ephemeral`] keeps the default behavior of a fresh
@@ -729,6 +735,8 @@ pub struct ResolvedWorkload {
     /// TLS provider override for `wasi:tls` client connections in this workload.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
+    /// Where this workload's `emptyDir` volumes live; removed on release.
+    scratch: Option<Arc<crate::engine::scratch::ScratchDir>>,
 }
 
 impl std::fmt::Debug for ResolvedWorkload {
@@ -1161,6 +1169,14 @@ impl ResolvedWorkload {
             s.handle = Some(Arc::clone(&handle));
         }
         Ok(Some(handle))
+    }
+
+    /// Remove this workload's `emptyDir` volumes. Called on release, not left
+    /// to whichever clone of this workload happens to drop last.
+    pub(crate) fn remove_scratch(&self) {
+        if let Some(scratch) = &self.scratch {
+            scratch.remove();
+        }
     }
 
     /// Let go of everything this workload is running, as the first step of
@@ -2624,6 +2640,8 @@ pub struct UnresolvedWorkload {
     /// TLS provider override for `wasi:tls` client connections in this workload.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
+    /// Where this workload's `emptyDir` volumes live, if it has any.
+    scratch: Option<Arc<crate::engine::scratch::ScratchDir>>,
 }
 
 type PendingBinding = (Arc<dyn HostPlugin>, HashSet<WitInterface>);
@@ -2824,7 +2842,16 @@ impl UnresolvedWorkload {
             host_interfaces,
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
+            scratch: None,
         }
+    }
+
+    pub(crate) fn with_scratch(
+        mut self,
+        scratch: Option<Arc<crate::engine::scratch::ScratchDir>>,
+    ) -> Self {
+        self.scratch = scratch;
+        self
     }
 
     /// Iterates the workload's components in manifest order.
@@ -3463,6 +3490,7 @@ impl UnresolvedWorkload {
             invocation: meters.invocation.clone(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
+            scratch: self.scratch,
         };
 
         // Link components before plugin resolution
