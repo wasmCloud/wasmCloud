@@ -103,6 +103,8 @@ const P2_FIXTURES: &[&str] = &[
     "borrow-consumer-p2",
     "borrow-middleware-p2",
     "borrow-caller-p2",
+    "lend-caller-p2",
+    "lend-callee-p2",
     "config-caller",
     "config-callee",
     "http-allowed-hosts",

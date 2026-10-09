@@ -48,7 +48,8 @@ use crate::engine::ctx::SharedTlsProvider;
 use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx};
 use crate::engine::instance_driver::{InstanceJob, LinkedJob};
 use crate::engine::instance_pool::{self, ComponentInstance, InstancePool};
-use crate::engine::store::relocate::{self, Relocated};
+use crate::engine::store::host_move::Reach;
+use crate::engine::store::relocate::{self, HostHandles, Relocated};
 use crate::engine::store::stream_pump::Done;
 use crate::engine::value::{any_leaf, carries_cross_store_handle, lift_results, lower_params};
 use crate::engine::volumes::{ResolvedVolumeMount, resolve_component_volume_mounts_in_map};
@@ -252,17 +253,46 @@ fn type_is_bridge_safe(ty: &Type, payloads: &super::stream_payload::StreamPayloa
     })
 }
 
+/// The resource types that live in a component's own store, each with how far
+/// it can go to another (see [`crate::engine::store::host_move`]).
+#[derive(Default)]
+pub(crate) struct HostResources(Vec<(ResourceType, Option<Reach>)>);
+
+impl HostResources {
+    pub(crate) fn add(&mut self, ty: ResourceType, reach: Option<Reach>) {
+        self.0.push((ty, reach));
+    }
+
+    pub(crate) fn contains(&self, ty: &ResourceType) -> bool {
+        self.0.iter().any(|(known, _)| known == ty)
+    }
+
+    /// Whether a handle to `ty` has to stay in this store when crossing would
+    /// take the reach `needs`.
+    fn keeps(&self, ty: &ResourceType, needs: Reach) -> bool {
+        let reaches = |(known, reach): &(ResourceType, Option<Reach>)| {
+            known == ty && reach.is_some_and(|reach| reach >= needs)
+        };
+        self.contains(ty) && !self.0.iter().any(reaches)
+    }
+}
+
 /// Whether a value of this type can cross to a companion store (see
-/// [`companion`]): what [`type_is_bridge_safe`] allows, and a resource a linked
-/// component defines. `host_resources` are the resource types that live in the
-/// caller's own store, which cannot.
+/// [`companion`]): what [`type_is_bridge_safe`] allows, a resource a linked
+/// component defines, and a host resource that can be moved there. `lends` says
+/// a `borrow` of one would be lent, which only a sync call's arguments are.
 fn type_crosses_to_companion(
     ty: &Type,
-    host_resources: &[ResourceType],
+    host: &HostResources,
     payloads: &super::stream_payload::StreamPayloads,
+    lends: bool,
 ) -> bool {
     !any_leaf(ty, &|leaf| match leaf {
-        Type::Own(resource) | Type::Borrow(resource) => host_resources.contains(resource),
+        Type::Own(resource) => host.keeps(resource, Reach::Own),
+        Type::Borrow(resource) => match lends {
+            true => host.keeps(resource, Reach::OwnOrBorrow),
+            false => host.contains(resource),
+        },
         Type::ErrorContext => true,
         other => is_unbridgeable_pump(other, payloads),
     })
@@ -270,11 +300,12 @@ fn type_crosses_to_companion(
 
 /// Whether a call to `func_ty` can be served from a companion store.
 ///
-/// A sync call blocks its caller's store until it returns, so nothing there can
-/// feed a `stream` or `future` argument: `sync` rules those out of the params.
+/// A sync call blocks its caller's store until it returns. Nothing there can
+/// feed a `stream` or `future` argument, so `sync` rules those out of the
+/// params, and nothing there can miss a host resource lent to the call.
 pub(crate) fn func_crosses_to_companion(
     func_ty: &ComponentFunc,
-    host_resources: &[ResourceType],
+    host: &HostResources,
     payloads: &super::stream_payload::StreamPayloads,
     sync: bool,
 ) -> bool {
@@ -284,10 +315,10 @@ pub(crate) fn func_crosses_to_companion(
         })
     };
     func_ty.params().all(|(_, ty)| {
-        type_crosses_to_companion(&ty, host_resources, payloads) && !(sync && carries_pump(&ty))
+        type_crosses_to_companion(&ty, host, payloads, sync) && !(sync && carries_pump(&ty))
     }) && func_ty
         .results()
-        .all(|ty| type_crosses_to_companion(&ty, host_resources, payloads))
+        .all(|ty| type_crosses_to_companion(&ty, host, payloads, false))
 }
 
 /// Whether a value of this type carries a resource `is_one` picks out, as a
@@ -1310,14 +1341,16 @@ impl crate::engine::dispatch::GuestCall for ServiceExportTask {
 }
 
 /// [`relocate::extract_all`] for a route the linker gives only signatures
-/// without a `resource`, where a failure strands nothing in another store.
+/// without a `resource`, where a failure strands nothing in another store and
+/// no host resource leaves.
 fn extract_all(
     access: StoreContextMut<'_, SharedCtx>,
     vals: &[Val],
     tys: &[Type],
     dones: &mut Vec<Done>,
 ) -> wasmtime::Result<Vec<Relocated>> {
-    relocate::extract_all(access, vals, tys, dones).map_err(|failed| failed.error)
+    relocate::extract_all(access, vals, tys, HostHandles::Kept, dones)
+        .map_err(|failed| failed.error)
 }
 
 /// Rebuild relocated values in this store and write them into the caller's
@@ -1404,11 +1437,17 @@ mod tests {
     use super::*;
     use wasmtime::component::types::ComponentItem;
 
-    /// One host-served resource, one a linked component defines, and a function
-    /// import per shape of signature the linker has to place.
+    /// Host-served resources that stay put, move, and move or are lent; one a
+    /// linked component defines; and a function import per shape of signature
+    /// the linker has to place.
     const SIGNATURES: &str = r#"(component
-        (import "host" (instance $host (export "handle" (type (sub resource)))))
+        (import "host" (instance $host
+            (export "handle" (type (sub resource)))
+            (export "body" (type (sub resource)))
+            (export "bytes" (type (sub resource)))))
         (alias export $host "handle" (type $handle))
+        (alias export $host "body" (type $body))
+        (alias export $host "bytes" (type $bytes))
         (import "linked" (instance $linked (export "token" (type (sub resource)))))
         (alias export $linked "token" (type $token))
         (import "plain" (func (param "x" u32) (result string)))
@@ -1422,11 +1461,16 @@ mod tests {
         (import "takes-error" (func (param "e" error-context)))
         (import "streams-token" (func (result (stream (own $token)))))
         (import "awaits-token" (func (param "t" (list (future (option (own $token)))))))
+        (import "takes-body" (func (param "b" (own $body))))
+        (import "returns-body" (func (result (list (own $body)))))
+        (import "borrows-body" (func (param "b" (borrow $body))))
+        (import "takes-bytes" (func (param "b" (own $bytes))))
+        (import "borrows-bytes" (func (param "b" (option (borrow $bytes)))))
     )"#;
 
     struct Signatures {
         funcs: BTreeMap<String, ComponentFunc>,
-        host_resources: Vec<ResourceType>,
+        host_resources: HostResources,
     }
 
     fn signatures() -> Signatures {
@@ -1438,19 +1482,24 @@ mod tests {
         let component = wasmtime::component::Component::new(&engine, bytes).unwrap();
 
         let mut funcs = BTreeMap::new();
-        let mut host_resources = Vec::new();
+        let mut host_resources = HostResources::default();
         for (name, import) in component.component_type().imports(&engine) {
             match import.ty {
                 ComponentItem::ComponentFunc(func) => {
                     funcs.insert(name.to_string(), func);
                 }
                 ComponentItem::ComponentInstance(instance) if name == "host" => {
-                    host_resources.extend(instance.exports(&engine).filter_map(|(_, export)| {
-                        match export.ty {
-                            ComponentItem::Resource(ty) => Some(ty),
+                    for (name, export) in instance.exports(&engine) {
+                        let ComponentItem::Resource(ty) = export.ty else {
+                            continue;
+                        };
+                        let reach = match name {
+                            "body" => Some(Reach::Own),
+                            "bytes" => Some(Reach::OwnOrBorrow),
                             _ => None,
-                        }
-                    }));
+                        };
+                        host_resources.add(ty, reach);
+                    }
                 }
                 _ => {}
             }
@@ -1491,6 +1540,25 @@ mod tests {
     }
 
     #[test]
+    fn a_host_resource_that_moves_crosses_as_an_own() {
+        let signatures = signatures();
+        for name in ["takes-body", "returns-body", "takes-bytes"] {
+            assert!(signatures.crosses(name, true), "{name} (sync)");
+            assert!(signatures.crosses(name, false), "{name} (async)");
+        }
+    }
+
+    #[test]
+    fn a_host_resource_is_lent_only_to_a_sync_call_and_only_if_it_can_be() {
+        let signatures = signatures();
+        assert!(signatures.crosses("borrows-bytes", true));
+        // An async caller's store keeps running, and could use what it lent.
+        assert!(!signatures.crosses("borrows-bytes", false));
+        assert!(!signatures.crosses("borrows-body", true));
+        assert!(!signatures.crosses("borrows-body", false));
+    }
+
+    #[test]
     fn a_blocked_sync_caller_cannot_feed_a_stream_argument() {
         let signatures = signatures();
         assert!(!signatures.crosses("takes-stream", true));
@@ -1518,7 +1586,13 @@ mod tests {
             assert!(!signatures.crosses(name, false), "{name}");
         }
         // A host resource is not a linked one, and a pump is not a resource.
-        for name in ["plain", "takes-handle", "returns-handle", "returns-stream"] {
+        for name in [
+            "plain",
+            "takes-handle",
+            "returns-handle",
+            "returns-stream",
+            "takes-body",
+        ] {
             assert!(!linked(name), "{name}");
         }
     }

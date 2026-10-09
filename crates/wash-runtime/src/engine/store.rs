@@ -8,6 +8,7 @@
 //! - [`resource_bridge`] proxies a `resource` handle so its real lives in one
 //!   store while callers hold an opaque proxy.
 
+pub(crate) mod host_move;
 pub(crate) mod relocate;
 pub(crate) mod resource_bridge;
 pub(crate) mod stream_pump;

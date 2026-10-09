@@ -44,6 +44,7 @@ use wasmtime::error::Context as _;
 use wasmtime::{AsContextMut, Store, StoreContextMut};
 
 use crate::engine::ctx::SharedCtx;
+use crate::engine::store::host_move::{Carried, Landed};
 
 /// Process-global source of `proxy_id`s. Ids are never reused — not even across a
 /// plugin restart, which builds a fresh registry — so a proxy a workload still
@@ -234,11 +235,17 @@ pub(crate) struct Lent {
     pub(crate) proxies: Vec<ResourceAny>,
     /// This store's own resources passed as `borrow` arguments.
     pub(crate) reals: Vec<u64>,
+    /// Host resources another store lent for `borrow` arguments.
+    pub(crate) hosts: Vec<Landed>,
 }
 
 impl Lent {
-    /// Take back what a call that has returned was lent.
-    pub(crate) fn release(self, mut store: StoreContextMut<'_, SharedCtx>) -> wasmtime::Result<()> {
+    /// Take back what a call that has returned was lent, and return the host
+    /// resources that go back to the store that lent them.
+    pub(crate) fn release(
+        self,
+        mut store: StoreContextMut<'_, SharedCtx>,
+    ) -> wasmtime::Result<Vec<Carried>> {
         if let Some(registry) = store.data_mut().resource_registry.as_mut() {
             for proxy_id in self.reals {
                 registry.returned(proxy_id);
@@ -250,7 +257,10 @@ impl Lent {
                 .context("a lent proxied resource was not returned")?;
             store.data_mut().table.delete(proxy)?;
         }
-        Ok(())
+        self.hosts
+            .into_iter()
+            .map(|landed| landed.take_back(store.as_context_mut()))
+            .collect()
     }
 }
 

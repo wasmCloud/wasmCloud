@@ -15,7 +15,7 @@ use wasmtime::error::Context as _;
 
 use super::InFlightGuard;
 use crate::engine::ctx::{CallerIdentity, SharedCtx};
-use crate::engine::store::relocate::{self, Relocated};
+use crate::engine::store::relocate::{self, HostHandles, Relocated};
 use crate::host::job_registry::{JobGuard, JobRegistry};
 
 /// One exported capability function the TriggerService should be ready to serve,
@@ -321,8 +321,15 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
         // A result that cannot leave strands nothing: what this store sends
         // is its own, and is dropped here.
         let extracted = accessor.with(|mut access| -> wasmtime::Result<Vec<Relocated>> {
-            relocate::finish_call(access.as_context_mut(), lent, &results, &result_tys)
-                .map_err(|failed| failed.error)
+            relocate::finish_call(
+                access.as_context_mut(),
+                lent,
+                &results,
+                &result_tys,
+                HostHandles::Kept,
+            )
+            .map(|finished| finished.results)
+            .map_err(|failed| failed.error)
         });
         let _ = reply.send(extracted);
         Ok(())

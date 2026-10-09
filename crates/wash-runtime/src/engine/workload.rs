@@ -30,12 +30,15 @@ use crate::{
         dispatch::{DispatchTarget, INGRESS_BACKLOG, ServiceCalls, ServiceClaim},
         instance_pool::{self, InstancePolicy, InstancePool},
         linked_call::{
-            ComponentCtxTemplate, EphemeralCallMode, EphemeralLinkedCall, LinkedExportInvocation,
-            LinkedTarget, Signature, func_carries_resource, func_crosses_to_companion,
-            func_is_bridge_safe, func_is_ephemeral_safe, invoke_linked_async_export,
-            new_store_from_templates,
+            ComponentCtxTemplate, EphemeralCallMode, EphemeralLinkedCall, HostResources,
+            LinkedExportInvocation, LinkedTarget, Signature, func_carries_resource,
+            func_crosses_to_companion, func_is_bridge_safe, func_is_ephemeral_safe,
+            invoke_linked_async_export, new_store_from_templates,
         },
-        store::resource_bridge,
+        store::{
+            host_move::{self, Reach},
+            resource_bridge,
+        },
         volumes::{ResolvedVolumeMount, resolve_component_volume_mounts_in_map},
     },
     plugin::HostPlugin,
@@ -1573,7 +1576,7 @@ impl ResolvedWorkload {
         let imports: Vec<_> = ty.imports(component.engine()).collect();
         // The resource types that live in this component's own store: those of
         // every import the host serves rather than another component.
-        let mut host_resources = Vec::new();
+        let mut host_resources = HostResources::default();
         // The resource types each companioned component defines itself, and so
         // keeps in its companion, as this importer names them.
         let mut own_resources: BTreeMap<Arc<str>, Vec<ResourceType>> = BTreeMap::new();
@@ -1597,14 +1600,16 @@ impl ResolvedWorkload {
                         false => None,
                     };
                 let Some((exporter_id, export_name)) = exporter else {
-                    host_resources.extend(resources.into_iter().map(|(_, ty)| ty));
+                    for (name, ty) in resources {
+                        host_resources.add(ty, host_move::reach(interface, name));
+                    }
                     continue;
                 };
-                host_resources.extend(
-                    resources.iter().filter_map(|(name, ty)| {
-                        HOST_RESOURCE_ALIASES.contains(name).then_some(*ty)
-                    }),
-                );
+                for (name, ty) in &resources {
+                    if is_host_alias(name) {
+                        host_resources.add(*ty, host_alias_reach(name));
+                    }
+                }
                 let Some(exporter) = components
                     .get(&exporter_id)
                     .filter(|_| companioned_exporters.contains(&exporter_id))
@@ -1620,7 +1625,8 @@ impl ResolvedWorkload {
                 for (name, ty) in resources {
                     if let Some((ComponentItem::Resource(exported_ty), _)) =
                         exported.get_export(Some(&instance_idx), name)
-                        && !HOST_RESOURCE_ALIASES.contains(&name)
+                        && !is_host_alias(name)
+                        && !host_resources.contains(&ty)
                         && !exporter.metadata.proxied_imports.contains(&exported_ty)
                     {
                         own_resources
@@ -1949,13 +1955,15 @@ impl ResolvedWorkload {
                                     continue;
                                 };
 
-                                // TODO: This should be a comparison of the ComponentItem to the
-                                // host resource type, but for some reason the comparison fails.
-                                if HOST_RESOURCE_ALIASES.contains(&export_name) {
+                                // One the interface re-exports from the host is
+                                // already defined, by the import it comes from.
+                                if is_host_alias(export_name)
+                                    || host_resources.contains(&resource_ty)
+                                {
                                     trace!(
                                         name = import_name,
                                         resource = export_name,
-                                        "skipping stream link as it is a host resource type"
+                                        "skipping resource link as it is a host resource type"
                                     );
                                     continue;
                                 }
@@ -4352,15 +4360,31 @@ fn imports_sync_function(
     })
 }
 
-/// The resources a linked interface re-exports from the host under these
-/// names, which stay the host's own type.
-const HOST_RESOURCE_ALIASES: [&str; 5] = [
-    "output-stream",
-    "input-stream",
-    "pollable",
-    "tcp-socket",
-    "incoming-value-async-body",
+/// The names a linked interface re-exports a host resource under, which stay
+/// the host's own type, each with the `wasi:io/streams` resource it is when it
+/// is one.
+const HOST_RESOURCE_ALIASES: [(&str, Option<&str>); 5] = [
+    ("output-stream", Some("output-stream")),
+    ("input-stream", Some("input-stream")),
+    ("pollable", None),
+    ("tcp-socket", None),
+    ("incoming-value-async-body", Some("input-stream")),
 ];
+
+fn is_host_alias(name: &str) -> bool {
+    HOST_RESOURCE_ALIASES
+        .iter()
+        .any(|(alias, _)| *alias == name)
+}
+
+/// How far the host resource a linked interface re-exports as `name` can go to
+/// another store.
+fn host_alias_reach(name: &str) -> Option<Reach> {
+    let (_, stream) = HOST_RESOURCE_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == name)?;
+    host_move::stream_reach((*stream)?)
+}
 
 /// Expand `direct_links` into the full transitive closure. One hop suffices
 /// because components are processed in topological order, so each
@@ -4904,29 +4928,34 @@ mod tests {
         HashMap::from([(plugin.id(), plugin as Arc<dyn HostPlugin>)])
     }
 
-    #[tokio::test]
-    async fn sync_link_rejects_reexported_host_resources() {
-        let interface = r#"(instance
-            (export "input-stream" (type $r (sub resource)))
-            (export "consume" (func (param "value" (borrow $r)))))"#;
+    /// Link an importer to an exporter over a sync function that borrows the
+    /// host resource their interface re-exports as `alias`.
+    async fn link_over_host_alias(alias: &str) -> anyhow::Result<()> {
+        let interface = format!(
+            r#"(instance
+                (export "{alias}" (type $r (sub resource)))
+                (export "consume" (func (param "value" (borrow $r)))))"#
+        );
         let mut exporter = component_from_wat(
             "exporter",
-            r#"(component
-                (import "host" (instance $host
-                    (export "input-stream" (type (sub resource)))))
-                (alias export $host "input-stream" (type $r))
-                (core module $m (func (export "consume") (param i32)))
-                (core instance $i (instantiate $m))
-                (func $consume (param "value" (borrow $r))
-                    (canon lift (core func $i "consume")))
-                (instance $api
-                    (export "input-stream" (type $r))
-                    (export "consume" (func $consume)))
-                (export "test:probe/alias" (instance $api)))"#,
+            &format!(
+                r#"(component
+                    (import "host" (instance $host
+                        (export "{alias}" (type (sub resource)))))
+                    (alias export $host "{alias}" (type $r))
+                    (core module $m (func (export "consume") (param i32)))
+                    (core instance $i (instantiate $m))
+                    (func $consume (param "value" (borrow $r))
+                        (canon lift (core func $i "consume")))
+                    (instance $api
+                        (export "{alias}" (type $r))
+                        (export "consume" (func $consume)))
+                    (export "test:probe/alias" (instance $api)))"#
+            ),
         );
         {
             let mut host = exporter.metadata.linker.instance("host").unwrap();
-            host.resource("input-stream", ResourceType::host::<u32>(), |_, _| Ok(()))
+            host.resource(alias, ResourceType::host::<u32>(), |_, _| Ok(()))
                 .unwrap();
         }
         let importer = component_from_wat(
@@ -4935,7 +4964,7 @@ mod tests {
         );
         let handler: Arc<dyn crate::host::http::HostHandler> =
             Arc::new(crate::host::http::NullServer::default());
-        let err = marker_workload(vec![exporter, importer])
+        marker_workload(vec![exporter, importer])
             .resolve(
                 None,
                 &crate::plugin::PluginBindings::new(),
@@ -4943,12 +4972,26 @@ mod tests {
                 &crate::observability::Meters::default(),
             )
             .await
-            .expect_err("host resources cannot enter a companion store");
+            .map(|_| ())
+    }
+
+    #[tokio::test]
+    async fn sync_link_rejects_a_reexported_host_resource_that_cannot_move() {
+        let err = link_over_host_alias("pollable")
+            .await
+            .expect_err("a pollable cannot enter a companion store");
         assert!(
             err.to_string()
                 .contains("signature carries a host resource"),
             "{err:#}"
         );
+    }
+
+    #[tokio::test]
+    async fn sync_link_lends_a_reexported_stream() {
+        link_over_host_alias("input-stream")
+            .await
+            .expect("a stream is lent to the companion store");
     }
 
     /// Every component id `bind_plugins` reported as bound. Ids are fresh

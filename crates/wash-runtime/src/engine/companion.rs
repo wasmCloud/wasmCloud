@@ -13,10 +13,12 @@
 //! calls and drops are routed to the owner (see
 //! [`crate::engine::store::resource_bridge`]).
 //!
-//! What cannot cross to a companion is a handle into the caller's own store: a
-//! host resource such as a WASI stream, or an `error-context`. And a component
-//! that calls back into one already blocked in a sync call to it waits until
-//! that call's deadline.
+//! A host resource such as a WASI stream crosses as the object itself, moved
+//! from one store's table to the other's (see
+//! [`crate::engine::store::host_move`]). What cannot cross is one that cannot
+//! be moved, such as a `pollable`, or an `error-context`. And a component that
+//! calls back into one already blocked in a sync call to it waits until that
+//! call's deadline.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -41,7 +43,8 @@ use crate::engine::linked_call::{
     EphemeralLinkedCall, LinkedExportInvocation, Signature, linked_attributes,
     new_ephemeral_store_with, write_results,
 };
-use crate::engine::store::relocate::{self, RelocateError, Relocated};
+use crate::engine::store::host_move::{self, Carried};
+use crate::engine::store::relocate::{self, HostHandles, RelocateError, Relocated};
 use crate::engine::store::resource_bridge::{Owner, ProxyResource, ResourceRegistry, flush_drops};
 
 /// A store's place in its [`LinkGroup`].
@@ -178,6 +181,13 @@ impl Drop for Parcel {
     }
 }
 
+/// What a call that has run sends back.
+struct Reply {
+    results: Parcel,
+    /// The host resources its caller lent it, to go back where they were.
+    returned: Vec<Carried>,
+}
+
 /// How to reach one companion.
 #[derive(Clone)]
 struct Route {
@@ -194,7 +204,7 @@ impl Route {
         result_tys: &Arc<[Type]>,
         attributes: Arc<[opentelemetry::KeyValue]>,
         deadline: Duration,
-    ) -> impl Future<Output = wasmtime::Result<Parcel>> + use<> {
+    ) -> impl Future<Output = wasmtime::Result<Reply>> + use<> {
         let dispatched = DispatchedCall::new("linked (companion store)", deadline);
         let (reply, reply_rx) = oneshot::channel();
         let job = Job::Call(Box::new(CallJob {
@@ -244,7 +254,7 @@ struct CallJob {
     abandoned: Arc<AbandonFlag>,
     /// The caller's span, which the call runs under in the companion's task.
     span: Span,
-    reply: oneshot::Sender<wasmtime::Result<Parcel>>,
+    reply: oneshot::Sender<wasmtime::Result<Reply>>,
 }
 
 /// The sync calls in flight on one companion. A resource destructor has to
@@ -382,10 +392,13 @@ impl LinkGroup {
                     self.dispose_one(value);
                 }
             }
-            // Dropping a pump's far end is what stops it.
+            // Dropping a pump's far end is what stops it, and dropping a host
+            // resource is all its own drop would do.
             Relocated::Val(_)
             | Relocated::Stream(_)
             | Relocated::Future(_)
+            | Relocated::Host(_)
+            | Relocated::HostAgain(_)
             | Relocated::Resource { .. } => {}
         }
     }
@@ -574,13 +587,17 @@ impl CallTask {
                     lent,
                     &results,
                     &result_tys,
+                    HostHandles::Moved,
                 ))
             })
         });
         match outcome {
-            Ok(relocated) => {
-                // Undelivered, the parcel comes back and is dropped here.
-                let _ = reply.send(Ok(home.pack(relocated)));
+            Ok(finished) => {
+                // Undelivered, the reply comes back and is dropped here.
+                let _ = reply.send(Ok(Reply {
+                    results: home.pack(finished.results),
+                    returned: finished.returned,
+                }));
             }
             // The guest's state is unknown past a failed call, and a guest
             // call cannot be cancelled from the host: the companion ends here.
@@ -618,7 +635,8 @@ fn deliver(
 /// Serve a sync-typed import from its companion.
 ///
 /// The caller's store is blocked for the whole call, so nothing in it can feed
-/// a `stream` or `future` argument; the linker refuses such a signature.
+/// a `stream` or `future` argument; the linker refuses such a signature. For
+/// the same reason nothing in it misses a host resource lent to the call.
 pub(crate) async fn invoke_sync(
     mut store: StoreContextMut<'_, SharedCtx>,
     params: &[Val],
@@ -655,12 +673,14 @@ pub(crate) async fn invoke_sync(
         store.as_context_mut(),
         params,
         &signature.params,
+        HostHandles::MovedOrLent,
         &mut Vec::new(),
     ))?;
-    let parcel = route
+    let reply = route
         .send(inv, args, &signature.results, attributes, deadline)
         .await?;
-    deliver(store.as_context_mut(), &home, parcel, results)
+    host_move::restore(store.as_context_mut(), reply.returned)?;
+    deliver(store.as_context_mut(), &home, reply.results, results)
 }
 
 /// Serve an async-typed import from its companion.
@@ -698,13 +718,15 @@ pub(crate) async fn invoke_async(
             access.as_context_mut(),
             params,
             &signature.params,
+            HostHandles::Moved,
             &mut Vec::new(),
         ))
     })?;
-    let parcel = route
+    // Nothing is lent to an async call, so nothing comes back but results.
+    let reply = route
         .send(inv, args, &signature.results, attributes, Duration::MAX)
         .await?;
-    accessor.with(|mut access| deliver(access.as_context_mut(), &home, parcel, results))
+    accessor.with(|mut access| deliver(access.as_context_mut(), &home, reply.results, results))
 }
 
 /// The destructor of a proxy for a linked component's resource: tells the

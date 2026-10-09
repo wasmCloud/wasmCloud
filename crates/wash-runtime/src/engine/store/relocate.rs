@@ -15,7 +15,8 @@
 //! `resource` handle relocates as a cross-store **proxy** (see
 //! [`resource_bridge`]): the store of the component that defines it keeps the
 //! real resource, every other holds an opaque proxy, and method calls and drops
-//! route back.
+//! route back. A handle to a host resource relocates as the object itself (see
+//! [`host_move`]), where the call's route lets it.
 //!
 //! `error-context` is rejected here, and cannot be relocated with wasmtime's
 //! current public API: its `Val` carries a store-scoped table index (a `rep`
@@ -27,11 +28,14 @@
 //! the boundary as a plain `result<_, string>` instead.
 
 use wasmtime::component::{
-    FutureAny, FutureReader, Lift, Lower, ResourceAny, StreamAny, StreamReader, Type, Val,
+    FutureAny, FutureReader, Lift, Lower, ResourceAny, ResourceType, StreamAny, StreamReader, Type,
+    Val,
 };
+use wasmtime::error::Context as _;
 use wasmtime::{AsContextMut as _, StoreContextMut};
 
 use crate::engine::ctx::SharedCtx;
+use crate::engine::store::host_move::{self, Carried, Landed};
 use crate::engine::store::resource_bridge::{self, Lent, Owner, ProxyResource};
 use crate::engine::store::stream_pump::{self, Done};
 
@@ -54,6 +58,11 @@ pub enum Relocated {
         proxy_id: u64,
         owned: bool,
     },
+    /// A handle to a host resource, carried as the object behind it.
+    Host(Carried),
+    /// Another `borrow` of a host resource already lent to the same call, by
+    /// that resource's place among the ones lent.
+    HostAgain(usize),
     List(Vec<Relocated>),
     FixedLengthList(Vec<Relocated>),
     Tuple(Vec<Relocated>),
@@ -62,6 +71,19 @@ pub enum Relocated {
     Option(Box<Relocated>),
     Result(Result<Box<Relocated>, Box<Relocated>>),
     Map(Vec<(Relocated, Relocated)>),
+}
+
+/// What a store does with a handle to one of its host resources when the value
+/// holding it leaves for another store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HostHandles {
+    /// None may leave.
+    Kept,
+    /// An `own` hands its resource over.
+    Moved,
+    /// An `own` hands its resource over, and a `borrow` lends it until the
+    /// call returns. Only for a sync call, which stops the store meanwhile.
+    MovedOrLent,
 }
 
 /// Builds a `stream<T>`/`future<T>` value in the destination store from a
@@ -191,22 +213,28 @@ fn contains_handle(val: &Val) -> bool {
 /// What taking a call's values out of a store has done so far, kept so that a
 /// failure part-way, at any depth, can be undone.
 struct Extraction<'a> {
+    host: HostHandles,
     dones: &'a mut Vec<Done>,
+    /// The host resources lent so far, by handle type and slot.
+    lent: Vec<(ResourceType, u32)>,
     /// What had left an aggregate before a failure cut it short.
     cut_short: Vec<Relocated>,
 }
 
 /// Relocate a `resource` handle across the boundary. A proxy has its owner and
 /// `proxy_id` read out (the proxy is removed for an `own` transfer, left for a
-/// `borrow`). Anything else is a real resource, which only the store of the
-/// component that defines it may send: it is registered there — kept alive and
-/// reachable by later method calls and the eventual drop.
+/// `borrow`). A host resource goes as `cx.host` says. Anything else is a real
+/// resource, which only the store of the component that defines it may send: it
+/// is registered there — kept alive and reachable by later method calls and the
+/// eventual drop.
 fn extract_resource(
     mut store: StoreContextMut<SharedCtx>,
     any: ResourceAny,
     owned: bool,
+    cx: &mut Extraction,
 ) -> wasmtime::Result<Relocated> {
-    if any.ty() == resource_bridge::proxy_resource_type() {
+    let ty = any.ty();
+    if ty == resource_bridge::proxy_resource_type() {
         let res = any.try_into_resource::<ProxyResource>(store.as_context_mut())?;
         let table = &mut store.data_mut().table;
         let ProxyResource { owner, proxy_id } = if owned {
@@ -222,6 +250,30 @@ fn extract_resource(
             proxy_id,
             owned,
         });
+    }
+    if let Some(kind) = host_move::kind_of(&ty) {
+        return match (cx.host, owned) {
+            (HostHandles::Moved | HostHandles::MovedOrLent, true) => {
+                kind.take(store, any).map(Relocated::Host)
+            }
+            (HostHandles::MovedOrLent, false) => {
+                let slot = kind.slot(store.as_context_mut(), any)?;
+                match cx.lent.iter().position(|lent| *lent == (ty, slot)) {
+                    Some(nth) => Ok(Relocated::HostAgain(nth)),
+                    None => {
+                        let carried = kind.lend(store, slot)?;
+                        cx.lent.push((ty, slot));
+                        Ok(Relocated::Host(carried))
+                    }
+                }
+            }
+            (HostHandles::Moved, false) => wasmtime::bail!(
+                "cross-store bridge: a host resource can be lent only for a sync call"
+            ),
+            (HostHandles::Kept, _) => wasmtime::bail!(
+                "cross-store bridge: a host resource cannot leave its store on this call"
+            ),
+        };
     }
     let Some(registry) = store.data_mut().resource_registry.as_mut() else {
         wasmtime::bail!(
@@ -251,6 +303,8 @@ struct Injection {
     proxies: Vec<ResourceAny>,
     /// This store's own resources, taken out of its registry for an `own`.
     taken: Vec<ResourceAny>,
+    /// Host resources put into this store's table for `own` handles.
+    landed: Vec<Landed>,
     /// The `stream`s and `future`s made.
     channels: Vec<Val>,
     /// Values a failure left unreached.
@@ -278,6 +332,10 @@ impl Injection {
             for real in self.taken {
                 registry.stage_taken(real);
             }
+        }
+        // Out of the table again and dropped, as its owner dropping it would.
+        for landed in self.landed {
+            let _ = landed.take_back(store.as_context_mut());
         }
         // Closing the near end is what stops the pump feeding it.
         for channel in self.channels {
@@ -348,6 +406,24 @@ fn inject_resource(
     }
 }
 
+/// Rebuild a relocated handle to a host resource in `store`, whose table the
+/// resource goes into.
+fn inject_host(
+    store: StoreContextMut<SharedCtx>,
+    carried: Carried,
+    done: &mut Injection,
+) -> wasmtime::Result<Val> {
+    let lent = carried.lent();
+    let landed = carried.land(store)?;
+    let handle = landed.handle();
+    if lent {
+        done.lent.hosts.push(landed);
+    } else {
+        done.landed.push(landed);
+    }
+    Ok(Val::Resource(handle))
+}
+
 /// Take each of `items` out of `store`. On failure the ones already out are
 /// recorded in `cx`.
 fn extract_each<'v, 't>(
@@ -397,8 +473,8 @@ fn extract(
             cx.dones.push(done);
             Ok(Relocated::Future(factory))
         }
-        (Val::Resource(any), Type::Own(_)) => extract_resource(store, *any, true),
-        (Val::Resource(any), Type::Borrow(_)) => extract_resource(store, *any, false),
+        (Val::Resource(any), Type::Own(_)) => extract_resource(store, *any, true, cx),
+        (Val::Resource(any), Type::Borrow(_)) => extract_resource(store, *any, false, cx),
         // An error-context's `Val` is a store-scoped table index with no
         // host-side API to read its message or rebuild it in another store, so it
         // cannot cross the boundary; steer callers to a plain error type carrying
@@ -494,6 +570,7 @@ fn extract(
 /// return what still owns a resource in another store.
 fn give_back(mut store: StoreContextMut<SharedCtx>, mut values: Vec<Relocated>) -> Vec<Relocated> {
     let mut stranded = Vec::new();
+    let mut lent = Vec::new();
     while let Some(value) = values.pop() {
         match value {
             Relocated::Resource {
@@ -517,6 +594,7 @@ fn give_back(mut store: StoreContextMut<SharedCtx>, mut values: Vec<Relocated>) 
                     }),
                 }
             }
+            Relocated::Host(carried) if carried.lent() => lent.push(carried),
             Relocated::List(inner)
             | Relocated::FixedLengthList(inner)
             | Relocated::Tuple(inner) => values.extend(inner),
@@ -524,35 +602,43 @@ fn give_back(mut store: StoreContextMut<SharedCtx>, mut values: Vec<Relocated>) 
             Relocated::Variant(_, inner) | Relocated::Option(inner) => values.push(*inner),
             Relocated::Result(Ok(inner) | Err(inner)) => values.push(*inner),
             Relocated::Map(entries) => values.extend(entries.into_iter().flat_map(|(k, v)| [k, v])),
-            // A pump stops when its far end is dropped, and a `borrow` took
-            // nothing from the store.
+            // A pump stops when its far end is dropped, a host resource given
+            // away is dropped as its new store would have dropped it, and a
+            // `borrow` took nothing from the store.
             Relocated::Val(_)
             | Relocated::Stream(_)
             | Relocated::Future(_)
+            | Relocated::Host(_)
+            | Relocated::HostAgain(_)
             | Relocated::Resource { owned: false, .. } => {}
         }
     }
+    let _ = host_move::restore(store, lent);
     stranded
 }
 
 /// Prepare every one of `vals` to leave `store`, as the arguments of a call
-/// about to be made from it or the results of one that ran in it. The drain
-/// signal of each stream/future pump set up is appended to `dones`.
+/// about to be made from it or the results of one that ran in it. `host` says
+/// what becomes of a handle to a host resource, and the drain signal of each
+/// stream/future pump set up is appended to `dones`.
 ///
 /// Whether those signals are awaited or dropped is the caller's to decide: a
 /// store about to be torn down has to wait for its result pumps to drain, one
 /// that outlives the call does not.
 ///
-/// On failure, at any depth, what had already left is dropped, and whatever it
-/// owned in another store is handed back as stranded.
+/// On failure, at any depth, what had already left is put back or dropped, and
+/// whatever it owned in another store is handed back as stranded.
 pub(crate) fn extract_all(
     mut store: StoreContextMut<SharedCtx>,
     vals: &[Val],
     tys: &[Type],
+    host: HostHandles,
     dones: &mut Vec<Done>,
 ) -> Result<Vec<Relocated>, RelocateError> {
     let mut cx = Extraction {
+        host,
         dones,
+        lent: Vec::new(),
         cut_short: Vec::new(),
     };
     match extract_each(&mut store, vals.iter().zip(tys), &mut cx) {
@@ -604,6 +690,12 @@ fn inject(
             proxy_id,
             owned,
         } => inject_resource(store, owner, proxy_id, owned, done),
+        Relocated::Host(carried) => inject_host(store, carried, done),
+        Relocated::HostAgain(nth) => {
+            let landed = done.lent.hosts.get(nth);
+            let landed = landed.context("cross-store bridge: unknown lent host resource")?;
+            Ok(Val::Resource(landed.handle()))
+        }
         Relocated::List(rs) => Ok(Val::List(inject_each(&mut store, rs, done)?)),
         Relocated::FixedLengthList(rs) => {
             Ok(Val::FixedLengthList(inject_each(&mut store, rs, done)?))
@@ -661,6 +753,13 @@ pub(crate) fn inject_all(
     }
 }
 
+/// What a call that has run sends back to its caller's store.
+pub(crate) struct Finished {
+    pub(crate) results: Vec<Relocated>,
+    /// The host resources the caller lent, to go back where they were.
+    pub(crate) returned: Vec<Carried>,
+}
+
 /// Finish a call that ran in `store`: take back what its arguments were lent,
 /// and prepare its results to leave.
 ///
@@ -671,23 +770,34 @@ pub(crate) fn finish_call(
     lent: Lent,
     results: &[Val],
     result_tys: &[Type],
-) -> Result<Vec<Relocated>, RelocateError> {
-    if let Err(error) = lent.release(store.as_context_mut()) {
-        return Err(RelocateError {
-            error,
-            stranded: Vec::new(),
-        });
-    }
-    extract_all(store, results, result_tys, &mut Vec::new())
+    host: HostHandles,
+) -> Result<Finished, RelocateError> {
+    let returned = match lent.release(store.as_context_mut()) {
+        Ok(returned) => returned,
+        Err(error) => {
+            return Err(RelocateError {
+                error,
+                stranded: Vec::new(),
+            });
+        }
+    };
+    let results = extract_all(store, results, result_tys, host, &mut Vec::new())?;
+    Ok(Finished { results, returned })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Relocated, contains_handle, extract_all, inject, inject_all, stream_pump};
+    use super::{
+        HostHandles, Relocated, contains_handle, extract_all, inject, inject_all, stream_pump,
+    };
     use crate::engine::ctx::{Ctx, SharedCtx};
+    use crate::engine::store::host_move;
     use crate::engine::store::resource_bridge::{Owner, ProxyResource, ResourceRegistry};
+    use bytes::Bytes;
     use wasmtime::AsContextMut as _;
     use wasmtime::component::{Component, Resource, StreamReader, Type, Val, types::ComponentItem};
+    use wasmtime_wasi::p2::pipe::MemoryInputPipe;
+    use wasmtime_wasi_io::streams::DynInputStream;
 
     fn make_store() -> wasmtime::Store<SharedCtx> {
         #[cfg(feature = "wasi-tls")]
@@ -944,9 +1054,15 @@ mod tests {
         let stream = reader.try_into_stream_any(store.as_context_mut()).unwrap();
         let value = Val::FixedLengthList(vec![Val::Stream(stream)]);
 
-        let relocated = extract_all(store.as_context_mut(), &[value], &[ty], &mut Vec::new())
-            .map_err(|failed| failed.error)
-            .unwrap();
+        let relocated = extract_all(
+            store.as_context_mut(),
+            &[value],
+            &[ty],
+            HostHandles::Kept,
+            &mut Vec::new(),
+        )
+        .map_err(|failed| failed.error)
+        .unwrap();
         assert!(matches!(
             relocated.as_slice(),
             [Relocated::FixedLengthList(values)]
@@ -997,8 +1113,9 @@ mod tests {
         store: &mut wasmtime::Store<SharedCtx>,
         vals: &[Val],
         tys: &[Type],
+        host: HostHandles,
     ) -> Vec<u64> {
-        let failed = extract_all(store.as_context_mut(), vals, tys, &mut Vec::new())
+        let failed = extract_all(store.as_context_mut(), vals, tys, host, &mut Vec::new())
             .err()
             .expect("the extraction fails");
         let mut ids = Vec::new();
@@ -1032,7 +1149,7 @@ mod tests {
             ]),
             proxy(&mut store, 4),
         ];
-        let stranded = stranded_by_extraction(&mut store, &vals, &tys);
+        let stranded = stranded_by_extraction(&mut store, &vals, &tys, HostHandles::Kept);
         // The one never reached is still in the store's table.
         assert_eq!(stranded, [1, 2, 3]);
     }
@@ -1043,7 +1160,7 @@ mod tests {
         let mut store = make_store();
         let pair = Val::Tuple(vec![proxy(&mut store, 1), local(&mut store)]);
         let vals = [Val::Option(Some(Box::new(pair)))];
-        let stranded = stranded_by_extraction(&mut store, &vals, &tys);
+        let stranded = stranded_by_extraction(&mut store, &vals, &tys, HostHandles::Kept);
         assert_eq!(stranded, [1]);
     }
 
@@ -1055,7 +1172,7 @@ mod tests {
             Some(ResourceRegistry::new(Owner::Component(ME.into())));
         let vals = [local(&mut store), local(&mut store)];
 
-        let stranded = stranded_by_extraction(&mut store, &vals, &tys);
+        let stranded = stranded_by_extraction(&mut store, &vals, &tys, HostHandles::Kept);
         assert_eq!(stranded, [0u64; 0], "nothing of another store's was held");
         let registry = store.data_mut().resource_registry.as_mut().unwrap();
         assert!(registry.has_pending_drops());
@@ -1063,5 +1180,73 @@ mod tests {
             registry.drain_all().len() == 1,
             "and nothing stays registered"
         );
+    }
+
+    fn stream_of(store: &mut wasmtime::Store<SharedCtx>, contents: &'static str) -> u32 {
+        let stream: DynInputStream = Box::new(MemoryInputPipe::new(Bytes::from(contents)));
+        store.data_mut().table.push(stream).unwrap().rep()
+    }
+
+    /// A handle to the stream in `slot`. Owned, as wasmtime mints a borrowed
+    /// one only inside a call; lending reads no more from it than the slot.
+    fn stream_handle(store: &mut wasmtime::Store<SharedCtx>, slot: u32) -> Val {
+        let stream = Resource::<DynInputStream>::new_own(slot);
+        Val::Resource(stream.try_into_resource_any(store).unwrap())
+    }
+
+    fn read(store: &mut wasmtime::Store<SharedCtx>, slot: u32) -> Option<Bytes> {
+        let stream = Resource::<DynInputStream>::new_borrow(slot);
+        let stream = store.data_mut().table.get_mut(&stream).unwrap();
+        stream.read(16).ok()
+    }
+
+    #[test]
+    fn a_failed_extraction_puts_back_the_host_resource_it_lent() {
+        let tys = param_types(r#"(param "a" (borrow $r)) (param "b" (own $r))"#);
+        let mut store = make_store();
+        let slot = stream_of(&mut store, "hello");
+        let vals = [stream_handle(&mut store, slot), local(&mut store)];
+
+        let stranded = stranded_by_extraction(&mut store, &vals, &tys, HostHandles::MovedOrLent);
+        assert_eq!(stranded, [0u64; 0]);
+        assert_eq!(read(&mut store, slot).as_deref(), Some(&b"hello"[..]));
+    }
+
+    #[test]
+    fn a_host_resource_borrowed_twice_by_one_call_is_lent_once() {
+        let tys = param_types(r#"(param "a" (borrow $r)) (param "b" (list (borrow $r)))"#);
+        let (mut lender, mut borrower) = (make_store(), make_store());
+        let slot = stream_of(&mut lender, "hello");
+        let vals = [
+            stream_handle(&mut lender, slot),
+            Val::List(vec![stream_handle(&mut lender, slot)]),
+        ];
+
+        let relocated = extract_all(
+            lender.as_context_mut(),
+            &vals,
+            &tys,
+            HostHandles::MovedOrLent,
+            &mut Vec::new(),
+        )
+        .map_err(|failed| failed.error)
+        .unwrap();
+        assert!(
+            read(&mut lender, slot).is_none(),
+            "a stand-in keeps the slot"
+        );
+
+        let (landed, lent) = inject_all(borrower.as_context_mut(), relocated)
+            .map_err(|failed| failed.error)
+            .unwrap();
+        let [Val::Resource(first), Val::List(again)] = landed.as_slice() else {
+            panic!("a handle and a list of one");
+        };
+        assert_eq!(again.as_slice(), [Val::Resource(*first)]);
+
+        let returned = lent.release(borrower.as_context_mut()).unwrap();
+        assert_eq!(returned.len(), 1);
+        host_move::restore(lender.as_context_mut(), returned).unwrap();
+        assert_eq!(read(&mut lender, slot).as_deref(), Some(&b"hello"[..]));
     }
 }
