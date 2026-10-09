@@ -7,48 +7,37 @@ use wasmtime::error::Context as _;
 use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::engine::ctx::SharedCtx;
+use crate::engine::store::resource_bridge::{self, ProxyResource};
 
-pub(crate) fn carries_cross_store_handle(ty: &Type) -> bool {
+/// Whether `pred` holds for any leaf of `ty`: each type reached by walking into
+/// lists, maps, records, tuples, variants, options and results. A `stream` or
+/// `future` is itself a leaf; its element type is not visited.
+pub(crate) fn any_leaf(ty: &Type, pred: &impl Fn(&Type) -> bool) -> bool {
     match ty {
-        Type::Bool
-        | Type::S8
-        | Type::U8
-        | Type::S16
-        | Type::U16
-        | Type::S32
-        | Type::U32
-        | Type::S64
-        | Type::U64
-        | Type::Float32
-        | Type::Float64
-        | Type::Char
-        | Type::String
-        | Type::Enum(_)
-        | Type::Flags(_) => false,
-        Type::List(list) => carries_cross_store_handle(&list.ty()),
-        Type::FixedLengthList(list) => carries_cross_store_handle(&list.ty()),
-        Type::Map(map) => {
-            carries_cross_store_handle(&map.key()) || carries_cross_store_handle(&map.value())
-        }
-        Type::Record(record) => record
-            .fields()
-            .any(|field| carries_cross_store_handle(&field.ty)),
-        Type::Tuple(tuple) => tuple.types().any(|ty| carries_cross_store_handle(&ty)),
+        Type::List(list) => any_leaf(&list.ty(), pred),
+        Type::FixedLengthList(list) => any_leaf(&list.ty(), pred),
+        Type::Map(map) => any_leaf(&map.key(), pred) || any_leaf(&map.value(), pred),
+        Type::Record(record) => record.fields().any(|field| any_leaf(&field.ty, pred)),
+        Type::Tuple(tuple) => tuple.types().any(|ty| any_leaf(&ty, pred)),
         Type::Variant(variant) => variant
             .cases()
-            .any(|case| case.ty.as_ref().is_some_and(carries_cross_store_handle)),
-        Type::Option(option) => carries_cross_store_handle(&option.ty()),
+            .any(|case| case.ty.as_ref().is_some_and(|ty| any_leaf(ty, pred))),
+        Type::Option(option) => any_leaf(&option.ty(), pred),
         Type::Result(result) => {
-            result.ok().as_ref().is_some_and(carries_cross_store_handle)
-                || result
-                    .err()
-                    .as_ref()
-                    .is_some_and(carries_cross_store_handle)
+            result.ok().as_ref().is_some_and(|ty| any_leaf(ty, pred))
+                || result.err().as_ref().is_some_and(|ty| any_leaf(ty, pred))
         }
-        Type::Own(_) | Type::Borrow(_) | Type::Future(_) | Type::Stream(_) | Type::ErrorContext => {
-            true
-        }
+        leaf => pred(leaf),
     }
+}
+
+pub(crate) fn carries_cross_store_handle(ty: &Type) -> bool {
+    any_leaf(ty, &|leaf| {
+        matches!(
+            leaf,
+            Type::Own(_) | Type::Borrow(_) | Type::Future(_) | Type::Stream(_) | Type::ErrorContext
+        )
+    })
 }
 
 pub(crate) fn lower(store: &mut StoreContextMut<SharedCtx>, v: &Val) -> wasmtime::Result<Val> {
@@ -210,8 +199,14 @@ impl LoweredParams {
     ) -> wasmtime::Result<()> {
         for any in &self.identity_borrows {
             trace!(resource = ?any, "releasing identity-lowered borrow after linked call");
-            any.try_into_resource::<ResourceAny>(store.as_context_mut())
-                .context("failed to release identity-lowered borrow")?;
+            if any.ty() == resource_bridge::proxy_resource_type() {
+                any.try_into_resource::<ProxyResource>(store.as_context_mut())
+                    .map(|_| ())
+            } else {
+                any.try_into_resource::<ResourceAny>(store.as_context_mut())
+                    .map(|_| ())
+            }
+            .context("failed to release identity-lowered borrow")?;
         }
         Ok(())
     }
@@ -269,8 +264,7 @@ fn lower_with_type(
     }
     match (ty, v) {
         (Type::Own(resource_ty) | Type::Borrow(resource_ty), &Val::Resource(any))
-            if *resource_ty == ResourceType::host::<ResourceAny>()
-                && any.ty() == ResourceType::host::<ResourceAny>() =>
+            if *resource_ty == any.ty() && crosses_by_identity(&any.ty()) =>
         {
             trace!(resource = ?any, "lowering host resource by identity");
             if matches!(ty, Type::Borrow(_)) && !any.owned() {
@@ -347,6 +341,13 @@ fn lower_with_type(
         }
         _ => lower(store, v),
     }
+}
+
+/// Whether a handle of this host type is passed between components of one
+/// store as it is: a linked component's own resource, or a proxy for one that
+/// lives in a companion store.
+fn crosses_by_identity(ty: &ResourceType) -> bool {
+    *ty == ResourceType::host::<ResourceAny>() || *ty == resource_bridge::proxy_resource_type()
 }
 
 /// Error when a compound value's arity differs from its declared type's, so a
@@ -453,6 +454,9 @@ pub(crate) fn lift(store: &mut StoreContextMut<SharedCtx>, v: Val) -> wasmtime::
             }
         },
         Val::Flags(v) => Ok(Val::Flags(v)),
+        Val::Resource(any) if any.ty() == resource_bridge::proxy_resource_type() => {
+            Ok(Val::Resource(any))
+        }
         Val::Resource(any) => {
             if let Ok(res) = any
                 .try_into_resource::<wasmtime_wasi_io::bindings::wasi::io::streams::OutputStream>(

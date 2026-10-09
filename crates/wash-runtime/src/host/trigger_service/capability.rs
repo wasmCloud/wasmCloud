@@ -213,23 +213,6 @@ pub(super) struct CapabilityTask {
     pub(super) job_guard: JobGuard,
 }
 
-/// Free every resource whose proxy a caller has dropped since the last flush,
-/// using the top-level store access `resource_drop_async` requires (unavailable
-/// inside `run_concurrent`). Runs each guest resource destructor.
-pub(super) async fn flush_pending_resource_drops(store: &mut Store<SharedCtx>) {
-    let pending = store
-        .data_mut()
-        .resource_registry
-        .as_mut()
-        .map(crate::engine::store::resource_bridge::ResourceRegistry::take_pending_drops)
-        .unwrap_or_default();
-    for real in pending {
-        if let Err(e) = real.resource_drop_async(&mut *store).await {
-            tracing::warn!(err = %e, "failed to drop a proxied resource");
-        }
-    }
-}
-
 /// Drop every resource the plugin still owns, on store teardown, so nothing
 /// leaks when the plugin stops or restarts.
 pub(super) async fn drain_plugin_resources(store: &mut Store<SharedCtx>) {
@@ -278,13 +261,11 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
             let func_handle = instance
                 .get_func(&mut access, func_idx)
                 .with_context(|| format!("capability function {interface}/{func} not found"))?;
-            let mut arg_vals = Vec::with_capacity(args.len());
-            for arg in args {
-                arg_vals.push(relocate::inject(access.as_context_mut(), arg)?);
-            }
-            Ok((func_handle, arg_vals))
+            let (arg_vals, lent) =
+                relocate::inject_all(access.as_context_mut(), args).map_err(|e| e.error)?;
+            Ok((func_handle, arg_vals, lent))
         });
-        let (func_handle, arg_vals) = match prepared {
+        let (func_handle, arg_vals, lent) = match prepared {
             Ok(prepared) => prepared,
             Err(e) => {
                 let _ = reply.send(Err(e));
@@ -330,27 +311,15 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
         )
         .await;
         if let Err(e) = call_result {
+            let _ = accessor.with(|mut access| lent.release(access.as_context_mut()));
             let _ = reply.send(Err(
                 e.context(format!("capability call {interface}/{func} trapped"))
             ));
             return Ok(());
         }
 
-        // Extract the results in the plugin store. Any result `stream`/`future`
-        // pumps keep running under this persistent store's `run_concurrent`, so
-        // their drain signals (`dones`) are dropped here rather than awaited.
         let extracted = accessor.with(|mut access| -> wasmtime::Result<Vec<Relocated>> {
-            let mut dones = Vec::new();
-            let mut out = Vec::with_capacity(results.len());
-            for (val, ty) in results.iter().zip(result_tys.iter()) {
-                out.push(relocate::extract(
-                    access.as_context_mut(),
-                    val,
-                    ty,
-                    &mut dones,
-                )?);
-            }
-            Ok(out)
+            relocate::finish_call(access.as_context_mut(), lent, &results, &result_tys)
         });
         let _ = reply.send(extracted);
         Ok(())

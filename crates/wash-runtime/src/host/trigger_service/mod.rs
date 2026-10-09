@@ -69,7 +69,7 @@ pub(crate) use messaging::{AsyncMessaging, MessagingTask};
 pub(crate) use capability::decode_bind_reply;
 
 #[cfg(feature = "host-component-plugins")]
-use capability::{admit_and_spawn_call, drain_plugin_resources, flush_pending_resource_drops};
+use capability::{admit_and_spawn_call, drain_plugin_resources};
 pub(crate) use http::HttpTask;
 
 /// A host-invoked handler export the TriggerService serves, carrying the receiver end
@@ -376,7 +376,23 @@ impl PreparedIngress {
                 }
                 registry.replay_complete();
 
-                while let Some(job) = rx.recv().await {
+                let late_drops = accessor.with(|mut access| {
+                    let registry = access.data_mut().resource_registry.as_ref();
+                    registry.map(|registry| registry.late_drops())
+                });
+                loop {
+                    let job = tokio::select! {
+                        biased;
+                        // A call ending staged a drop its borrow had held back.
+                        () = async {
+                            match &late_drops {
+                                Some(late_drops) => late_drops.notified().await,
+                                None => std::future::pending().await,
+                            }
+                        } => return ServeOutcome::FlushDrops,
+                        job = rx.recv() => job,
+                    };
+                    let Some(job) = job else { break };
                     match job {
                         CapabilityJob::DropResource { proxy_id, reply } => {
                             // Stage the real resource and step out of
@@ -550,7 +566,7 @@ pub(crate) async fn run_trigger_driver(
         // case free it and re-serve to resume the preserved in-flight tasks.
         #[cfg(feature = "host-component-plugins")]
         {
-            flush_pending_resource_drops(&mut *store).await;
+            crate::engine::store::resource_bridge::flush_drops(&mut *store).await;
             serve_again = outcomes.contains(&ServeOutcome::FlushDrops);
         }
         #[cfg(not(feature = "host-component-plugins"))]
