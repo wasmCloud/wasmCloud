@@ -7,10 +7,10 @@ toolchain go1.27.1
 tool github.com/air-verse/air
 
 require (
-	go.wasmcloud.dev/runtime-operator/v2 v2.10.1
+	go.wasmcloud.dev/runtime-operator/v2 v2.10.3
 	k8s.io/api v0.37.1
 	k8s.io/apimachinery v0.37.1
-	sigs.k8s.io/controller-runtime v0.25.1
+	sigs.k8s.io/controller-runtime v0.25.2
 )
 
 require (
@@ -72,7 +72,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
-	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
