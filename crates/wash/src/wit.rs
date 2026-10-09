@@ -431,6 +431,17 @@ impl CommonPackageArgs {
                 ),
             );
         }
+        // And cosmonic, which is published under the cosmonic-labs GHCR org
+        let cosmonic_label = "cosmonic"
+            .parse()
+            .context("failed to parse cosmonic label")?;
+        if conf.namespace_registry(&cosmonic_label).is_none() {
+            conf.set_namespace_registry(
+                cosmonic_label,
+                oci_registry_mapping("ghcr.io/cosmonic-labs/cosmonic", "cosmonic", None)
+                    .context("failed to build cosmonic registry mapping")?,
+            );
+        }
         Ok(conf)
     }
 
