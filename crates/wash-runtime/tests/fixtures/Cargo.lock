@@ -401,6 +401,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-server-p3"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "http-sleeper"
 version = "0.0.0"
 dependencies = [

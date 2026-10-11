@@ -202,6 +202,7 @@ fn start_service(backend: Option<Flavor>) -> WarmService {
             service.addr,
             backend.as_ref().map(|b| b.addr),
             expected_body,
+            None,
         )
         .await
         .unwrap();
@@ -225,7 +226,7 @@ fn setup_service(backend: Option<Flavor>) -> WarmService {
     warm.rt.block_on(async {
         let backend_addr = warm.backend.as_ref().map(|b| b.addr);
         for _ in 0..2 {
-            let _ = service_request(&warm.client, warm.service.addr, backend_addr)
+            let _ = service_request(&warm.client, warm.service.addr, backend_addr, None)
                 .await
                 .unwrap();
         }
@@ -256,7 +257,7 @@ fn shutdown_service(warm: WarmService) {
 #[bench::direct(args = (None), setup = setup_service, teardown = shutdown_service)]
 fn hot_service(warm: WarmService) -> WarmService {
     warm.rt.block_on(async {
-        let body = service_request(&warm.client, warm.service.addr, None)
+        let body = service_request(&warm.client, warm.service.addr, None, None)
             .await
             .unwrap();
         let _ = black_box(body);
@@ -272,7 +273,7 @@ fn hot_service(warm: WarmService) -> WarmService {
 fn service_to_component(warm: WarmService) -> WarmService {
     let backend_addr = warm.backend.as_ref().map(|b| b.addr);
     warm.rt.block_on(async {
-        let body = service_request(&warm.client, warm.service.addr, backend_addr)
+        let body = service_request(&warm.client, warm.service.addr, backend_addr, None)
             .await
             .unwrap();
         let _ = black_box(body);

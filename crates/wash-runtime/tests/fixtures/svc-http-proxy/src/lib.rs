@@ -48,7 +48,8 @@ impl HttpGuest for Component {
         }
         let authority = String::from_utf8(values.swap_remove(0))
             .map_err(|_| internal_err("x-backend header is not UTF-8"))?;
-        proxy(&authority).await
+        let path = request.get_path_with_query().unwrap_or_else(|| "/".to_string());
+        proxy(&authority, &path).await
     }
 }
 
@@ -56,9 +57,9 @@ fn internal_err(msg: &str) -> ErrorCode {
     ErrorCode::InternalError(Some(msg.to_string()))
 }
 
-/// Forward a `GET /` to `authority` over the imported client and return the
+/// Forward request to `authority` over the imported client and return the
 /// backend's response as-is.
-async fn proxy(authority: &str) -> Result<Response, ErrorCode> {
+async fn proxy(authority: &str, path: &str) -> Result<Response, ErrorCode> {
     let headers = Fields::new();
     // No request body: dropping the unwritten trailers writer resolves the
     // future with the default `Ok(None)` as soon as the host polls it.
@@ -75,8 +76,8 @@ async fn proxy(authority: &str) -> Result<Response, ErrorCode> {
         .set_authority(Some(authority))
         .map_err(|()| internal_err("set_authority rejected the x-backend value"))?;
     request
-        .set_path_with_query(Some("/"))
-        .map_err(|()| internal_err("set_path_with_query rejected /"))?;
+        .set_path_with_query(Some(path))
+        .map_err(|()| internal_err("set_path_with_query rejected path"))?;
     outbound::send(request).await
 }
 

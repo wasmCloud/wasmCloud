@@ -21,6 +21,15 @@
 //!    client span, stock p3 send) -> TCP -> second host's HTTP server ->
 //!    router -> per-request component instance -> response streamed back
 //!    through the service. Benched against both P2 and P3 backends.
+//! 5. **Splice vs direct** - the service forwards each request to a P3
+//!    backend either through ingress (`direct`, the `http-handler-p3`
+//!    component) or through a published port spliced into a virtual loopback
+//!    listener (`splice`, the `http-server-p3` service). Two groups:
+//!    `splice_vs_direct_small` (`/stream`, many small guest writes) and
+//!    `splice_vs_direct_bulk` (`/bulk`, 1 MiB as sixteen 64 KiB writes).
+//!    Requests are sequential. After each group's Criterion run, a separate
+//!    latency phase ([`common::measure_latency`]) prints per-request
+//!    p50/p90/p99 for each target.
 //!
 //! The routed leg opens a fresh TCP connection per request (the stock p3
 //! egress has no connection pooling), and each connection's client-side
@@ -42,7 +51,7 @@ mod common;
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -51,8 +60,8 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use tokio::runtime::Runtime;
 
 use common::{
-    DIRECT_BODY, Flavor, REQUEST_TIMEOUT, bench_client, checked_request, service_request,
-    start_backend_host, start_service_host,
+    DIRECT_BODY, Flavor, Pacing, REQUEST_TIMEOUT, bench_client, checked_request, measure_latency,
+    service_request, start_backend_host, start_service_host, start_spliced_backend_host,
 };
 
 /// Cold start: build the host, start the service workload, serve + validate
@@ -73,7 +82,7 @@ fn bench_cold(c: &mut Criterion) {
                 let start = Instant::now();
                 let service = start_service_host().await.expect("service host");
                 let client = bench_client();
-                checked_request(&client, service.addr, None, DIRECT_BODY)
+                checked_request(&client, service.addr, None, DIRECT_BODY, None)
                     .await
                     .expect("first request");
                 total += start.elapsed();
@@ -96,7 +105,7 @@ fn bench_hot_direct(c: &mut Criterion) {
     let (service, client) = rt.block_on(async {
         let service = start_service_host().await.expect("service host");
         let client = bench_client();
-        checked_request(&client, service.addr, None, DIRECT_BODY)
+        checked_request(&client, service.addr, None, DIRECT_BODY, None)
             .await
             .expect("warmup");
         (service, client)
@@ -104,7 +113,9 @@ fn bench_hot_direct(c: &mut Criterion) {
 
     group.bench_function("direct", |b| {
         b.to_async(&rt).iter(|| async {
-            service_request(&client, service.addr, None).await.unwrap();
+            service_request(&client, service.addr, None, None)
+                .await
+                .unwrap();
         });
     });
     group.finish();
@@ -130,7 +141,7 @@ fn bench_throughput_direct(c: &mut Criterion) {
     let (service, client) = rt.block_on(async {
         let service = start_service_host().await.expect("service host");
         let client = bench_client();
-        checked_request(&client, service.addr, None, DIRECT_BODY)
+        checked_request(&client, service.addr, None, DIRECT_BODY, None)
             .await
             .expect("warmup");
         (service, client)
@@ -233,34 +244,43 @@ fn bench_service_to_component(c: &mut Criterion) {
                 service.addr,
                 Some(backend.addr),
                 flavor.expected_body(),
+                None,
             )
             .await
             .expect("routed warmup");
             (service, backend, client)
         });
         let (service_addr, backend_addr) = (service.addr, backend.addr);
+        // Shared across `iter_custom` batches so burst pacing stays aligned
+        // instead of restarting every Criterion batch.
+        let in_burst = Arc::new(AtomicU64::new(0));
 
         group.bench_function(BenchmarkId::from_parameter(flavor.name()), |b| {
             b.to_async(&rt).iter_custom(|iters| {
                 let client = client.clone();
+                let in_burst = Arc::clone(&in_burst);
                 async move {
                     let mut total = Duration::ZERO;
-                    let mut in_burst = 0u64;
                     for _ in 0..iters {
-                        if in_burst == BURST {
-                            in_burst = 0;
+                        if in_burst.load(Ordering::Relaxed) >= BURST {
+                            in_burst.store(0, Ordering::Relaxed);
                             tokio::time::sleep(PAUSE).await;
                             for _ in 0..WARMERS {
-                                let _ = service_request(&client, service_addr, Some(backend_addr))
-                                    .await;
+                                let _ = service_request(
+                                    &client,
+                                    service_addr,
+                                    Some(backend_addr),
+                                    None,
+                                )
+                                .await;
                             }
                         }
                         let start = Instant::now();
-                        service_request(&client, service_addr, Some(backend_addr))
+                        service_request(&client, service_addr, Some(backend_addr), None)
                             .await
                             .unwrap();
                         total += start.elapsed();
-                        in_burst += 1;
+                        in_burst.fetch_add(1, Ordering::Relaxed);
                     }
                     total
                 }
@@ -274,11 +294,287 @@ fn bench_service_to_component(c: &mut Criterion) {
     group.finish();
 }
 
+/// Direct vs spliced backend, small-message streaming: `/stream` forwarded via
+/// ingress (direct) or published port (splice). The backend emits `CHUNKS`
+/// small writes back to back; requests are issued sequentially.
+fn bench_splice_vs_direct_small(c: &mut Criterion) {
+    /// Timed requests per pacing cycle.
+    const BURST: u64 = 64;
+    const PAUSE: Duration = Duration::from_millis(200);
+    /// Untimed requests absorbing the post-pause wake-up cost.
+    const WARMERS: usize = 2;
+    const CHUNKS: usize = 500;
+    let expected_len = CHUNKS * Flavor::P3.expected_body().len();
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("splice vs direct small runtime");
+    let mut group = c.benchmark_group("splice_vs_direct_small");
+    group.throughput(Throughput::Elements(CHUNKS as u64));
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(1));
+    group.measurement_time(Duration::from_secs(15));
+
+    let (service, backend, spliced_backend, client) = rt.block_on(async {
+        let service = start_service_host().await.expect("service host");
+        let backend = start_backend_host(Flavor::P3).await.expect("backend host");
+        let spliced_backend = start_spliced_backend_host()
+            .await
+            .expect("spliced backend host");
+        let client = bench_client();
+        let stream_body = Flavor::P3.expected_body().repeat(CHUNKS);
+        checked_request(
+            &client,
+            service.addr,
+            Some(backend.addr),
+            &stream_body,
+            Some("/stream"),
+        )
+        .await
+        .expect("direct warmup");
+        checked_request(
+            &client,
+            service.addr,
+            Some(spliced_backend.addr),
+            &stream_body,
+            Some("/stream"),
+        )
+        .await
+        .expect("splice warmup");
+
+        (service, backend, spliced_backend, client)
+    });
+
+    let service_addr = service.addr;
+    let targets = [("direct", backend.addr), ("splice", spliced_backend.addr)];
+    // Targets Criterion actually ran (not filtered out); the latency phase
+    // below covers only these.
+    let mut measured = Vec::new();
+    for (name, target_addr) in targets {
+        let failures = Arc::new(AtomicUsize::new(0));
+        let in_burst = Arc::new(AtomicU64::new(0));
+        let ran = AtomicBool::new(false);
+
+        group.bench_function(name, |b| {
+            b.to_async(&rt).iter_custom(|iters| {
+                let client = client.clone();
+                let failures = Arc::clone(&failures);
+                let in_burst = Arc::clone(&in_burst);
+                ran.store(true, Ordering::Relaxed);
+                async move {
+                    let mut total = Duration::ZERO;
+                    for _ in 0..iters {
+                        if in_burst.load(Ordering::Relaxed) >= BURST {
+                            in_burst.store(0, Ordering::Relaxed);
+                            tokio::time::sleep(PAUSE).await;
+                            for _ in 0..WARMERS {
+                                let _ = service_request(
+                                    &client,
+                                    service_addr,
+                                    Some(target_addr),
+                                    Some("/stream"),
+                                )
+                                .await;
+                            }
+                        }
+                        let start = Instant::now();
+                        let ok = match service_request(
+                            &client,
+                            service_addr,
+                            Some(target_addr),
+                            Some("/stream"),
+                        )
+                        .await
+                        {
+                            Ok(bytes) => bytes.len() == expected_len,
+                            Err(_) => false,
+                        };
+                        total += start.elapsed();
+                        if !ok {
+                            failures.fetch_add(1, Ordering::Relaxed);
+                        }
+                        in_burst.fetch_add(1, Ordering::Relaxed);
+                    }
+                    total
+                }
+            });
+        });
+        let failed = failures.load(Ordering::Relaxed);
+        assert_eq!(
+            failed, 0,
+            "[splice_vs_direct_small/{name}] {failed} requests failed during bench run"
+        );
+        if ran.load(Ordering::Relaxed) {
+            measured.push((name, target_addr));
+        }
+    }
+
+    group.finish();
+
+    // Explicit latency phase, outside Criterion's warmup/calibration loop.
+    let pacing = Pacing {
+        burst: BURST,
+        pause: PAUSE,
+        warmers: WARMERS,
+    };
+    for (name, target_addr) in measured {
+        let mut stats = rt.block_on(measure_latency(
+            &client,
+            service_addr,
+            target_addr,
+            "/stream",
+            expected_len,
+            Some(pacing),
+        ));
+        assert_eq!(
+            stats.errors, 0,
+            "[splice_vs_direct_small/{name}] {} requests failed during latency phase",
+            stats.errors
+        );
+        stats.print_summary(&format!("splice_vs_direct_small/{name}"));
+    }
+
+    rt.block_on(async {
+        service.shutdown().await;
+        backend.shutdown().await;
+        spliced_backend.shutdown().await;
+    });
+}
+
+/// Direct vs spliced backend, bulk transfer: `/bulk` returns 1 MiB as sixteen
+/// 64 KiB writes. Control case, where small-write coalescing should show
+/// little or no benefit; requests are issued sequentially.
+fn bench_splice_vs_direct_bulk(c: &mut Criterion) {
+    const BULK_BYTES: usize = 1024 * 1024;
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("splice vs direct bulk runtime");
+
+    let mut group = c.benchmark_group("splice_vs_direct_bulk");
+    group.throughput(Throughput::Bytes(BULK_BYTES as u64));
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(1));
+    group.measurement_time(Duration::from_secs(10));
+
+    let (service, backend, spliced_backend, client) = rt.block_on(async {
+        let service = start_service_host().await.expect("service host");
+        let backend = start_backend_host(Flavor::P3).await.expect("backend host");
+        let spliced_backend = start_spliced_backend_host()
+            .await
+            .expect("spliced backend host");
+        let client = bench_client();
+        let bulk_body = vec![b'x'; BULK_BYTES];
+        checked_request(
+            &client,
+            service.addr,
+            Some(backend.addr),
+            &bulk_body,
+            Some("/bulk"),
+        )
+        .await
+        .expect("direct warmup");
+        checked_request(
+            &client,
+            service.addr,
+            Some(spliced_backend.addr),
+            &bulk_body,
+            Some("/bulk"),
+        )
+        .await
+        .expect("splice warmup");
+
+        (service, backend, spliced_backend, client)
+    });
+
+    let service_addr = service.addr;
+    let targets = [("direct", backend.addr), ("splice", spliced_backend.addr)];
+    // Targets Criterion actually ran (not filtered out); the latency phase
+    // below covers only these.
+    let mut measured = Vec::new();
+    for (name, target_addr) in targets {
+        let failures = Arc::new(AtomicUsize::new(0));
+        let ran = AtomicBool::new(false);
+
+        group.bench_function(name, |b| {
+            b.to_async(&rt).iter_custom(|iters| {
+                let client = client.clone();
+                let failures = Arc::clone(&failures);
+                ran.store(true, Ordering::Relaxed);
+                async move {
+                    let mut total = Duration::ZERO;
+                    for _ in 0..iters {
+                        let start = Instant::now();
+                        let ok = match service_request(
+                            &client,
+                            service_addr,
+                            Some(target_addr),
+                            Some("/bulk"),
+                        )
+                        .await
+                        {
+                            Ok(bytes) => bytes.len() == BULK_BYTES,
+                            Err(_) => false,
+                        };
+                        total += start.elapsed();
+                        if !ok {
+                            failures.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    total
+                }
+            });
+        });
+        let failed = failures.load(Ordering::Relaxed);
+        assert_eq!(
+            failed, 0,
+            "[splice_vs_direct_bulk/{name}] {failed} requests failed during bench run"
+        );
+        if ran.load(Ordering::Relaxed) {
+            measured.push((name, target_addr));
+        }
+    }
+
+    group.finish();
+
+    // Explicit latency phase, outside Criterion's warmup/calibration loop.
+    for (name, target_addr) in measured {
+        let mut stats = rt.block_on(measure_latency(
+            &client,
+            service_addr,
+            target_addr,
+            "/bulk",
+            BULK_BYTES,
+            None,
+        ));
+        assert_eq!(
+            stats.errors, 0,
+            "[splice_vs_direct_bulk/{name}] {} requests failed during latency phase",
+            stats.errors
+        );
+        stats.print_summary(&format!("splice_vs_direct_bulk/{name}"));
+    }
+
+    rt.block_on(async {
+        service.shutdown().await;
+        backend.shutdown().await;
+        spliced_backend.shutdown().await;
+    });
+}
+
+fn bench_splice_vs_direct(c: &mut Criterion) {
+    bench_splice_vs_direct_small(c);
+    bench_splice_vs_direct_bulk(c);
+}
+
 criterion_group!(
     benches,
     bench_cold,
     bench_hot_direct,
     bench_throughput_direct,
-    bench_service_to_component
+    bench_service_to_component,
+    bench_splice_vs_direct
 );
 criterion_main!(benches);
