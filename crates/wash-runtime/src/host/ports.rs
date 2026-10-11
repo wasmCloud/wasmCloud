@@ -28,7 +28,7 @@ use core::net::{IpAddr, SocketAddr};
 use core::time::Duration;
 use std::collections::{BTreeMap, VecDeque};
 use std::io::IoSlice;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use bytes::{Buf as _, BufMut as _, Bytes, BytesMut};
@@ -680,6 +680,29 @@ async fn wait_for_listener(
     }
 }
 
+const SPLICE_BATCH_WRITES_ENV: &str = "WASH_SPLICE_BATCH_WRITES";
+
+fn splice_batch_writes() -> bool {
+    static VALUE: LazyLock<bool> = LazyLock::new(|| {
+        match std::env::var(SPLICE_BATCH_WRITES_ENV) {
+            Ok(v) => match v.as_str() {
+                "0" => false,
+                "1" => true,
+                _ => {
+                    warn!(
+                        var = SPLICE_BATCH_WRITES_ENV,
+                        value = %v,
+                        "ignoring unrecognized splice write-path override (want 0 or 1)"
+                    );
+                    true
+                }
+            },
+            Err(_) => true,
+        }
+    });
+    *VALUE
+}
+
 /// Pump bytes between the real socket and the virtual connection until either
 /// direction ends.
 ///
@@ -695,6 +718,9 @@ async fn wait_for_listener(
 ///   carrying a permit that is released only when this side drops it, which
 ///   happens after the write to the real socket completes. A slow external peer
 ///   therefore blocks the guest's writes rather than queueing without limit.
+///   Chunks already queued on the channel are coalesced into one
+///   `write_vectored`; it never waits for more to arrive, and each permit is
+///   still released only once its own chunk is fully written.
 async fn splice(stream: TcpStream, conn: loopback::TcpConn) -> Result<()> {
     let loopback::TcpConn { rx, tx, .. } = conn;
     let mut from_guest = rx.context("virtual connection was created without a receiver")?;
@@ -739,6 +765,20 @@ async fn splice(stream: TcpStream, conn: loopback::TcpConn) -> Result<()> {
     };
 
     let outbound = async move {
+        if !splice_batch_writes() {
+            // Unbatched path: one `write_all` per guest chunk.
+            while let Some((chunk, permit)) = from_guest.recv().await {
+                let result = write_half.write_all(&chunk).await;
+                // Release the guest's permit only once the bytes are actually
+                // gone, so its next send waits on the external peer.
+                drop::<OwnedSemaphorePermit>(permit);
+                result?;
+            }
+            // Guest closed its side: half-close ours so the peer sees EOF.
+            let _ = write_half.shutdown().await;
+            return Ok::<(), anyhow::Error>(());
+        }
+
         let mut queue: VecDeque<(Bytes, OwnedSemaphorePermit)> = VecDeque::new();
 
         while let Some((first_chunk, first_permit)) = from_guest.recv().await {

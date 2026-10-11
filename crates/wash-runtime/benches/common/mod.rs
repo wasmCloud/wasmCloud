@@ -110,10 +110,11 @@ impl BenchHost {
     }
 }
 
-/// Per-request latency summary for `iter_custom` benches.
+/// Per-request latency summary for the explicit latency phase
+/// ([`measure_latency`]).
 ///
-/// Accumulates individual request latencies so a run can report RPS and
-/// p50/p90/p99 in addition to Criterion's aggregate batch timing.
+/// Holds individual request latencies so a run can report p50/p90/p99 and a
+/// sequential request rate alongside Criterion's aggregate timing.
 #[derive(Debug, Default)]
 pub struct BenchStats {
     /// Sum of timed per-request durations, excluding untimed pacing pauses
@@ -127,7 +128,7 @@ pub struct BenchStats {
 }
 
 impl BenchStats {
-    /// Merge one `iter_custom` batch into this accumulator.
+    /// Merge one batch of measured requests into this accumulator.
     pub fn extend(&mut self, latencies: Vec<f64>, total_timed: Duration, errors: u64) {
         self.latencies.extend(latencies);
         self.total_timed += total_timed;
@@ -145,7 +146,8 @@ impl BenchStats {
         })
     }
 
-    /// Nearest-rank percentile in `[0.0, 1.0]`. Requires sorted latencies;
+    /// Percentile for `p` in `[0.0, 1.0]`, taken at the rounded linear index
+    /// `round((len - 1) * p)` with no interpolation. Requires sorted latencies;
     /// call [`BenchStats::sort_latencies`] (or `print_summary`, which sorts
     /// internally) first.
     pub fn pct(&self, p: f64) -> f64 {
@@ -165,7 +167,8 @@ impl BenchStats {
     }
 
     /// Mean timed-request rate: `(successes + errors) / total_timed`,
-    /// excluding pacing pauses from the denominator.
+    /// excluding pacing pauses from the denominator. Requests are sequential,
+    /// so this is the reciprocal of mean latency, not throughput under load.
     pub fn rps(&self) -> f64 {
         let secs = self.total_timed.as_secs_f64();
         if secs > 0.0 {
@@ -337,6 +340,70 @@ pub async fn checked_request(
         expected.len()
     );
     Ok(())
+}
+
+/// Untimed requests issued before the latency phase starts recording.
+pub const LATENCY_WARMUP: usize = 50;
+/// Requests recorded by the latency phase.
+pub const LATENCY_SAMPLES: usize = 1000;
+
+/// Untimed burst pacing for [`measure_latency`]: after `burst` requests, pause
+/// and issue `warmers` untimed requests to absorb the post-pause wake-up cost.
+#[derive(Copy, Clone, Debug)]
+pub struct Pacing {
+    pub burst: u64,
+    pub pause: Duration,
+    pub warmers: usize,
+}
+
+/// Explicit latency phase, separate from Criterion: issue [`LATENCY_WARMUP`]
+/// discarded requests followed by exactly [`LATENCY_SAMPLES`] recorded ones,
+/// sequentially, and collect the recorded round-trip times into a
+/// [`BenchStats`].
+///
+/// Criterion calls an `iter_custom` closure during warmup and calibration as
+/// well as measurement, so latencies collected inside one cannot be attributed
+/// to the measured sample. This phase has fixed boundaries instead. Failed or
+/// short responses are counted in [`BenchStats::errors`].
+pub async fn measure_latency(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    backend: std::net::SocketAddr,
+    endpoint: &str,
+    expected_len: usize,
+    pacing: Option<Pacing>,
+) -> BenchStats {
+    let mut latencies = Vec::with_capacity(LATENCY_SAMPLES);
+    let mut total_timed = Duration::ZERO;
+    let mut errors = 0u64;
+    let mut in_burst = 0u64;
+    for i in 0..LATENCY_WARMUP + LATENCY_SAMPLES {
+        if let Some(pacing) = pacing.filter(|p| in_burst >= p.burst) {
+            in_burst = 0;
+            tokio::time::sleep(pacing.pause).await;
+            for _ in 0..pacing.warmers {
+                let _ = service_request(client, addr, Some(backend), Some(endpoint)).await;
+            }
+        }
+        let start = std::time::Instant::now();
+        let ok = match service_request(client, addr, Some(backend), Some(endpoint)).await {
+            Ok(body) => body.len() == expected_len,
+            Err(_) => false,
+        };
+        let elapsed = start.elapsed();
+        in_burst += 1;
+        if i >= LATENCY_WARMUP {
+            if ok {
+                latencies.push(elapsed.as_secs_f64() * 1000.0);
+            } else {
+                errors += 1;
+            }
+            total_timed += elapsed;
+        }
+    }
+    let mut stats = BenchStats::default();
+    stats.extend(latencies, total_timed, errors);
+    stats
 }
 
 /// Start a backend host running `http_server_p3.wasm` on a published port.

@@ -2,8 +2,16 @@
 //!
 //! `cli/run` binds `127.0.0.1:8080` inside the workload's virtual loopback and
 //! accepts incoming TCP connections. For each connection, it parses the HTTP/1.1
-//! request and replies with "hello from p3". External traffic reaches this
-//! listener when the host publishes a real port that splices into it.
+//! request line and replies according to the path:
+//!
+//! - `/bulk`: 1 MiB with `Content-Length`, as sixteen 64 KiB writes (the
+//!   response header rides on the first).
+//! - `/stream`: 500 chunked-encoded "hello from p3" chunks, one small write
+//!   each, back to back.
+//! - anything else: "hello from p3".
+//!
+//! External traffic reaches this listener when the host publishes a real port
+//! that splices into it.
 
 mod bindings {
     wit_bindgen::generate!({
@@ -55,21 +63,26 @@ async fn handle_http(sock: TcpSocket) {
             let is_stream = path.starts_with(b"/stream");
 
             if is_bulk {
-                let header = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
-                outgoing_tx.write_all(header.as_bytes().to_vec()).await;
-                let chunk_data = vec![b'x'; 65536];
-                let chunk_hdr = format!("{:x}\r\n", chunk_data.len()).into_bytes();
-                for _ in 0..16 {
-                    outgoing_tx.write_all(chunk_hdr.clone()).await;
+                const CHUNK_SIZE: usize = 65536;
+                const CHUNK_COUNT: usize = 16;
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    CHUNK_SIZE * CHUNK_COUNT
+                );
+                let mut first = header.into_bytes();
+                first.extend(std::iter::repeat(b'x').take(CHUNK_SIZE));
+                outgoing_tx.write_all(first).await;
+                let chunk_data = vec![b'x'; CHUNK_SIZE];
+                for _ in 1..CHUNK_COUNT {
                     outgoing_tx.write_all(chunk_data.clone()).await;
-                    outgoing_tx.write_all(b"\r\n".to_vec()).await;
                 }
-                outgoing_tx.write_all(b"0\r\n\r\n".to_vec()).await;
                 drop(outgoing_tx);
             } else if is_stream {
                 let header = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
                 outgoing_tx.write_all(header.as_bytes().to_vec()).await;
-                let chunk = format!("{:x}\r\nhello from p3\r\n", BODY.len()).into_bytes();
+                let mut chunk = format!("{:x}\r\n", BODY.len()).into_bytes();
+                chunk.extend_from_slice(BODY);
+                chunk.extend_from_slice(b"\r\n");
                 for _ in 0..500 {
                     outgoing_tx.write_all(chunk.clone()).await;
                 }
