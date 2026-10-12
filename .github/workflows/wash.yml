@@ -128,6 +128,20 @@ jobs:
           RUST_BACKTRACE: "1"
         run: |
           cargo test --workspace --features "${OPTIONAL_FEATURES}"
+      # Authenticated Docker Hub pulls get a far higher rate limit than
+      # anonymous ones. Fork PRs get no org secrets and pull anonymously.
+      - name: Log in to Docker Hub
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        env:
+          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_WASMCLOUD_CI_PULL_USER }}
+          DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_WASMCLOUD_CI_PULL }}
+        run: |
+          if [ -z "${DOCKERHUB_PASSWORD}" ]; then
+            echo "no Docker Hub credentials; pulling anonymously"
+            exit 0
+          fi
+          echo "${DOCKERHUB_PASSWORD}" | docker login --username "${DOCKERHUB_USER}" --password-stdin
       # Linux only: the hosted macOS/Windows runners have no Docker. `#[ignore]`
       # is what opts a suite INTO this step. Not all are containers --
       # `test_pull_and_validate_ghcr_component` pulls from ghcr.io.
