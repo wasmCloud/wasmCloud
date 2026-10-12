@@ -1,0 +1,11 @@
+[package]
+name = "ctx-race-nest-caller-p3"
+edition = "2021"
+version = "0.0.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+futures = { workspace = true, features = ["async-await", "std"] }
+wit-bindgen = { workspace = true, features = ["async-spawn", "inter-task-wakeup"] }

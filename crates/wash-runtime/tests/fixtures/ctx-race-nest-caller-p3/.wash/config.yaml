@@ -1,0 +1,3 @@
+build:
+  command: cargo build --target wasm32-wasip1 --release
+  component_path: ../target/wasm32-wasip1/release/ctx_race_nest_caller_p3.wasm

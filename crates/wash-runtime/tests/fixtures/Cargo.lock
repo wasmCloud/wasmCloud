@@ -224,6 +224,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctx-race-middle-p3"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "ctx-race-nest-caller-p3"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "dispatch-target"
 version = "0.0.0"
 dependencies = [
