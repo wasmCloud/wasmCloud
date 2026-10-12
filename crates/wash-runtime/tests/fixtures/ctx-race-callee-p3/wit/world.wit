@@ -1,0 +1,14 @@
+package wasmcloud:ctx-race@0.1.0;
+
+interface gate {
+    /// Waits for `release`, then reports which component's environment this
+    /// call observed before and after the wait. Carrying a `future` keeps the
+    /// call on the shared-store path (not ephemeral) in a plain workload.
+    hold: async func(release: future<u32>) -> string;
+}
+
+world ctx-race-callee {
+    import wasi:cli/environment@0.3.0;
+
+    export gate;
+}

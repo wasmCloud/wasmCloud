@@ -1,0 +1,15 @@
+package wasmcloud:ctx-race@0.1.0;
+
+interface gate {
+    hold: async func(release: future<u32>) -> string;
+}
+
+world ctx-race-caller {
+    import gate;
+    import wasi:cli/environment@0.3.0;
+    import wasi:filesystem/preopens@0.3.0;
+    import wasi:http/types@0.3.0;
+    import wasi:http/client@0.3.0;
+
+    export wasi:http/handler@0.3.0;
+}
