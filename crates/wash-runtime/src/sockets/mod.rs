@@ -326,12 +326,33 @@ pub(crate) fn p3_socket_error_from_util(
 }
 
 /// Register P3 socket interfaces with the linker using our custom socket implementation.
+/// Add the P3 sockets interfaces to `linker`, served through the store-wide
+/// sockets view.
+#[deprecated(
+    since = "2.11.0",
+    note = "serves sockets from a store-wide slot that concurrent linked calls can point \
+            at the wrong component; use `add_p3_to_linker_for(linker, item.ctx_getters())`"
+)]
+#[cfg(feature = "insecure-store-wide-ctx")]
+#[allow(deprecated)]
 pub fn add_p3_to_linker(
     linker: &mut wasmtime::component::Linker<crate::engine::ctx::SharedCtx>,
 ) -> anyhow::Result<()> {
     use wasmtime_wasi::p3::bindings::sockets::{ip_name_lookup, types};
     ip_name_lookup::add_to_linker::<_, WasiSockets>(linker, crate::engine::ctx::extract_sockets)?;
     types::add_to_linker::<_, WasiSockets>(linker, crate::engine::ctx::extract_sockets)?;
+    Ok(())
+}
+
+/// Add the P3 sockets interfaces to `linker`, served with the context of the
+/// component whose getters these are.
+pub fn add_p3_to_linker_for(
+    linker: &mut wasmtime::component::Linker<crate::engine::ctx::SharedCtx>,
+    getters: crate::engine::ctx::CtxGetters,
+) -> anyhow::Result<()> {
+    use wasmtime_wasi::p3::bindings::sockets::{ip_name_lookup, types};
+    ip_name_lookup::add_to_linker::<_, WasiSockets>(linker, getters.sockets)?;
+    types::add_to_linker::<_, WasiSockets>(linker, getters.sockets)?;
     Ok(())
 }
 

@@ -40,6 +40,13 @@ wasi-config = []
 wasi-logging = []
 wasi-blobstore = []
 wasi-keyvalue = []
+# The store-wide context getters from before per-component contexts
+# (`engine::ctx::extract_active_ctx`, `extract_sockets`, `SharedCtx::set_active_ctx`,
+# `sockets::add_p3_to_linker`). Insecure: under concurrent linked calls they
+# can serve one component's imports with another component's context. Off by
+# default; a plugin that has not moved to the item's getters can turn it on
+# while it migrates. It will be removed in a later release.
+insecure-store-wide-ctx = []
 # Component-model `(implements ..)` / `named_imports` multiplexing. On by
 # default; disable with `--no-default-features` for a build that neither
 # accepts nor routes named imports.

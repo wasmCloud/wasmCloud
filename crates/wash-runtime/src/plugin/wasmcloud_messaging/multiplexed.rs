@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use tracing::instrument;
 
-use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
+use crate::engine::ctx::{ActiveCtx, SharedCtx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::multiplex::{BackendProvider, Multiplexer};
 use crate::plugin::{HostPlugin, WitInterfaces};
@@ -160,6 +160,9 @@ impl HostPlugin for MultiplexedMessaging {
         item: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = item.ctx_getter();
         if !interfaces.contains("wasmcloud", "messaging", &[]) {
             return Ok(());
         }
@@ -170,15 +173,12 @@ impl HostPlugin for MultiplexedMessaging {
 
         // `types` carries only record definitions; bind it via the regular
         // path (no per-import routing needed).
-        bindings::wasmcloud::messaging0_2_0::types::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
+        bindings::wasmcloud::messaging0_2_0::types::add_to_linker::<_, SharedCtx>(linker, getter)?;
         bindings::named_imports::wasmcloud::messaging0_2_0::consumer::add_to_linker::<_, SharedCtx>(
             linker,
             &component,
             |name| self.mux.resolve(&registry, name),
-            extract_active_ctx,
+            getter,
         )?;
         Ok(())
     }

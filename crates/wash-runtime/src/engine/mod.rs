@@ -45,8 +45,10 @@ use std::time::Duration;
 use crate::sockets::loopback;
 use anyhow::{Context, bail};
 use moka::sync::Cache;
+use std::collections::HashMap;
 use tracing::{instrument, warn};
 use wasmtime::PoolingAllocationConfig;
+use wasmtime::component::types::ComponentItem;
 use wasmtime::component::{Component, Linker};
 
 use crate::engine::ctx::SharedCtx;
@@ -57,137 +59,227 @@ use crate::types::{EmptyDirVolume, HostPathVolume, VolumeType, Workload};
 use std::env;
 use std::str::FromStr;
 use std::{path::PathBuf, sync::Arc};
-use wasmtime_wasi::WasiView;
 
 /// Add all WASI interfaces to the linker, using upstream for non-socket interfaces
 /// and our custom socket implementation (with loopback support) for socket interfaces.
 /// Both P2 and P3 bindings are registered.
-fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
+///
+/// Every interface is wired with `g`, the getters for the one component this
+/// linker belongs to, never with a store-wide view: a component instantiated
+/// into another component's store (a linked callee) is still served its own
+/// environment, preopens, sockets policy and random source, whatever else that
+/// store is running at the time.
+fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>, g: ctx::CtxGetters) -> anyhow::Result<()> {
+    use wasmtime_wasi::cli::WasiCli;
+    use wasmtime_wasi::clocks::WasiClocks;
+    use wasmtime_wasi::filesystem::WasiFilesystem;
     use wasmtime_wasi::p2::bindings::{cli, clocks, filesystem, random, sockets};
+    use wasmtime_wasi::random::WasiRandom;
 
-    // IO interfaces (error, poll, streams)
+    // IO interfaces (error, poll, streams): the resource table only, which is
+    // shared by every component in a store.
     wasmtime_wasi_io::add_to_linker_async(linker)?;
 
-    // Filesystem (async version)
-    filesystem::types::add_to_linker::<SharedCtx, wasmtime_wasi::filesystem::WasiFilesystem>(
-        linker,
-        <SharedCtx as wasmtime_wasi::filesystem::WasiFilesystemView>::filesystem,
-    )?;
-    filesystem::preopens::add_to_linker::<SharedCtx, wasmtime_wasi::filesystem::WasiFilesystem>(
-        linker,
-        <SharedCtx as wasmtime_wasi::filesystem::WasiFilesystemView>::filesystem,
-    )?;
+    filesystem::types::add_to_linker::<SharedCtx, WasiFilesystem>(linker, g.filesystem)?;
+    filesystem::preopens::add_to_linker::<SharedCtx, WasiFilesystem>(linker, g.filesystem)?;
 
-    // Clocks
-    clocks::wall_clock::add_to_linker::<SharedCtx, wasmtime_wasi::clocks::WasiClocks>(
-        linker,
-        <SharedCtx as wasmtime_wasi::clocks::WasiClocksView>::clocks,
-    )?;
-    clocks::monotonic_clock::add_to_linker::<SharedCtx, wasmtime_wasi::clocks::WasiClocks>(
-        linker,
-        <SharedCtx as wasmtime_wasi::clocks::WasiClocksView>::clocks,
-    )?;
+    clocks::wall_clock::add_to_linker::<SharedCtx, WasiClocks>(linker, g.clocks)?;
+    clocks::monotonic_clock::add_to_linker::<SharedCtx, WasiClocks>(linker, g.clocks)?;
 
-    // Random
-    random::random::add_to_linker::<SharedCtx, wasmtime_wasi::random::WasiRandom>(linker, |t| {
-        t.ctx().ctx.random()
-    })?;
-    random::insecure::add_to_linker::<SharedCtx, wasmtime_wasi::random::WasiRandom>(linker, |t| {
-        t.ctx().ctx.random()
-    })?;
-    random::insecure_seed::add_to_linker::<SharedCtx, wasmtime_wasi::random::WasiRandom>(
-        linker,
-        |t| t.ctx().ctx.random(),
-    )?;
+    random::random::add_to_linker::<SharedCtx, WasiRandom>(linker, g.random)?;
+    random::insecure::add_to_linker::<SharedCtx, WasiRandom>(linker, g.random)?;
+    random::insecure_seed::add_to_linker::<SharedCtx, WasiRandom>(linker, g.random)?;
 
-    // CLI
-    cli::exit::add_to_linker::<SharedCtx, wasmtime_wasi::cli::WasiCli>(
-        linker,
-        <SharedCtx as wasmtime_wasi::cli::WasiCliView>::cli,
-    )?;
-    cli::environment::add_to_linker::<SharedCtx, wasmtime_wasi::cli::WasiCli>(
-        linker,
-        <SharedCtx as wasmtime_wasi::cli::WasiCliView>::cli,
-    )?;
-    cli::stdin::add_to_linker::<SharedCtx, wasmtime_wasi::cli::WasiCli>(
-        linker,
-        <SharedCtx as wasmtime_wasi::cli::WasiCliView>::cli,
-    )?;
-    cli::stdout::add_to_linker::<SharedCtx, wasmtime_wasi::cli::WasiCli>(
-        linker,
-        <SharedCtx as wasmtime_wasi::cli::WasiCliView>::cli,
-    )?;
-    cli::stderr::add_to_linker::<SharedCtx, wasmtime_wasi::cli::WasiCli>(
-        linker,
-        <SharedCtx as wasmtime_wasi::cli::WasiCliView>::cli,
-    )?;
-    cli::terminal_input::add_to_linker::<SharedCtx, wasmtime_wasi::cli::WasiCli>(
-        linker,
-        <SharedCtx as wasmtime_wasi::cli::WasiCliView>::cli,
-    )?;
-    cli::terminal_output::add_to_linker::<SharedCtx, wasmtime_wasi::cli::WasiCli>(
-        linker,
-        <SharedCtx as wasmtime_wasi::cli::WasiCliView>::cli,
-    )?;
-    cli::terminal_stdin::add_to_linker::<SharedCtx, wasmtime_wasi::cli::WasiCli>(
-        linker,
-        <SharedCtx as wasmtime_wasi::cli::WasiCliView>::cli,
-    )?;
-    cli::terminal_stdout::add_to_linker::<SharedCtx, wasmtime_wasi::cli::WasiCli>(
-        linker,
-        <SharedCtx as wasmtime_wasi::cli::WasiCliView>::cli,
-    )?;
-    cli::terminal_stderr::add_to_linker::<SharedCtx, wasmtime_wasi::cli::WasiCli>(
-        linker,
-        <SharedCtx as wasmtime_wasi::cli::WasiCliView>::cli,
-    )?;
+    cli::exit::add_to_linker::<SharedCtx, WasiCli>(linker, g.cli)?;
+    cli::environment::add_to_linker::<SharedCtx, WasiCli>(linker, g.cli)?;
+    cli::stdin::add_to_linker::<SharedCtx, WasiCli>(linker, g.cli)?;
+    cli::stdout::add_to_linker::<SharedCtx, WasiCli>(linker, g.cli)?;
+    cli::stderr::add_to_linker::<SharedCtx, WasiCli>(linker, g.cli)?;
+    cli::terminal_input::add_to_linker::<SharedCtx, WasiCli>(linker, g.cli)?;
+    cli::terminal_output::add_to_linker::<SharedCtx, WasiCli>(linker, g.cli)?;
+    cli::terminal_stdin::add_to_linker::<SharedCtx, WasiCli>(linker, g.cli)?;
+    cli::terminal_stdout::add_to_linker::<SharedCtx, WasiCli>(linker, g.cli)?;
+    cli::terminal_stderr::add_to_linker::<SharedCtx, WasiCli>(linker, g.cli)?;
 
     // Socket interfaces — use OUR implementation with loopback support
-    sockets::tcp::add_to_linker::<SharedCtx, crate::sockets::WasiSockets>(
-        linker,
-        ctx::extract_sockets,
-    )?;
-    sockets::udp::add_to_linker::<SharedCtx, crate::sockets::WasiSockets>(
-        linker,
-        ctx::extract_sockets,
-    )?;
-    sockets::tcp_create_socket::add_to_linker::<SharedCtx, crate::sockets::WasiSockets>(
-        linker,
-        ctx::extract_sockets,
-    )?;
-    sockets::udp_create_socket::add_to_linker::<SharedCtx, crate::sockets::WasiSockets>(
-        linker,
-        ctx::extract_sockets,
-    )?;
-    sockets::instance_network::add_to_linker::<SharedCtx, crate::sockets::WasiSockets>(
-        linker,
-        ctx::extract_sockets,
-    )?;
+    use crate::sockets::WasiSockets;
+    sockets::tcp::add_to_linker::<SharedCtx, WasiSockets>(linker, g.sockets)?;
+    sockets::udp::add_to_linker::<SharedCtx, WasiSockets>(linker, g.sockets)?;
+    sockets::tcp_create_socket::add_to_linker::<SharedCtx, WasiSockets>(linker, g.sockets)?;
+    sockets::udp_create_socket::add_to_linker::<SharedCtx, WasiSockets>(linker, g.sockets)?;
+    sockets::instance_network::add_to_linker::<SharedCtx, WasiSockets>(linker, g.sockets)?;
     let net_options = sockets::network::LinkOptions::default();
-    sockets::network::add_to_linker::<SharedCtx, crate::sockets::WasiSockets>(
-        linker,
-        &net_options,
-        ctx::extract_sockets,
-    )?;
-    sockets::ip_name_lookup::add_to_linker::<SharedCtx, crate::sockets::WasiSockets>(
-        linker,
-        ctx::extract_sockets,
-    )?;
+    sockets::network::add_to_linker::<SharedCtx, WasiSockets>(linker, &net_options, g.sockets)?;
+    sockets::ip_name_lookup::add_to_linker::<SharedCtx, WasiSockets>(linker, g.sockets)?;
 
-    // CLI, clocks, filesystem, random — upstream P3 add_to_linker
-    wasmtime_wasi::p3::cli::add_to_linker(linker)?;
-    wasmtime_wasi::p3::clocks::add_to_linker(linker)?;
-    wasmtime_wasi::p3::filesystem::add_to_linker(linker)?;
-    wasmtime_wasi::p3::random::add_to_linker(linker)?;
+    // P3 CLI, clocks, filesystem, random: the same lists upstream's
+    // `p3::*::add_to_linker` register, with this component's getters in place
+    // of the store-wide `WasiView` ones.
+    {
+        use wasmtime_wasi::p3::bindings::{cli, clocks, filesystem, random};
+        cli::exit::add_to_linker::<_, WasiCli>(linker, g.cli)?;
+        cli::environment::add_to_linker::<_, WasiCli>(linker, g.cli)?;
+        cli::stdin::add_to_linker::<_, WasiCli>(linker, g.cli)?;
+        cli::stdout::add_to_linker::<_, WasiCli>(linker, g.cli)?;
+        cli::stderr::add_to_linker::<_, WasiCli>(linker, g.cli)?;
+        cli::terminal_input::add_to_linker::<_, WasiCli>(linker, g.cli)?;
+        cli::terminal_output::add_to_linker::<_, WasiCli>(linker, g.cli)?;
+        cli::terminal_stdin::add_to_linker::<_, WasiCli>(linker, g.cli)?;
+        cli::terminal_stdout::add_to_linker::<_, WasiCli>(linker, g.cli)?;
+        cli::terminal_stderr::add_to_linker::<_, WasiCli>(linker, g.cli)?;
+        clocks::types::add_to_linker::<_, WasiClocks>(linker, g.clocks)?;
+        clocks::monotonic_clock::add_to_linker::<_, WasiClocks>(linker, g.clocks)?;
+        clocks::system_clock::add_to_linker::<_, WasiClocks>(linker, g.clocks)?;
+        filesystem::types::add_to_linker::<_, WasiFilesystem>(linker, g.filesystem)?;
+        filesystem::preopens::add_to_linker::<_, WasiFilesystem>(linker, g.filesystem)?;
+        random::random::add_to_linker::<_, WasiRandom>(linker, g.random)?;
+        random::insecure::add_to_linker::<_, WasiRandom>(linker, g.random)?;
+        random::insecure_seed::add_to_linker::<_, WasiRandom>(linker, g.random)?;
+    }
 
     // Sockets with our custom P3 implementation (with loopback)
-    crate::sockets::add_p3_to_linker(linker)?;
+    crate::sockets::add_p3_to_linker_for(linker, g)?;
 
     // wasi:tls@0.3.0-draft (p3).
+    //
+    // The one interface still wired through the store-wide view: upstream keeps
+    // its `HasData` type crate-private, so it cannot take a per-slot getter.
+    // That view is the store's root context, and what it reaches is only the
+    // TLS provider, which the engine installs identically on every component's
+    // context. Where a TLS connection may go is decided by the socket it runs
+    // over, and sockets are per slot.
     #[cfg(feature = "wasi-tls")]
     wasmtime_wasi_tls::p3::add_to_linker(linker)?;
 
     Ok(())
+}
+
+/// Add `wasi:http` (p2 `types` + `outgoing-handler`, p3 `types` + `client`)
+/// to a component's linker with that component's getter, so its outbound
+/// requests are judged against its own `allowedHosts` even when it runs as a
+/// linked callee in another component's store.
+fn add_http_to_linker(linker: &mut Linker<SharedCtx>, g: ctx::CtxGetters) -> anyhow::Result<()> {
+    use wasmtime_wasi_http::WasiHttp;
+    {
+        use wasmtime_wasi_http::p2::bindings;
+        let options = bindings::LinkOptions::default();
+        bindings::http::outgoing_handler::add_to_linker::<_, WasiHttp>(linker, g.http)
+            .map_err(anyhow::Error::from)
+            .context("failed to add wasi:http/outgoing-handler to linker")?;
+        bindings::http::types::add_to_linker::<_, WasiHttp>(linker, &options.into(), g.http)
+            .map_err(anyhow::Error::from)
+            .context("failed to add wasi:http/types to linker")?;
+    }
+    {
+        use wasmtime_wasi_http::p3::bindings::http::{client, types};
+        client::add_to_linker::<_, WasiHttp>(linker, g.http)
+            .map_err(anyhow::Error::from)
+            .context("failed to add wasi:http p3 client to linker")?;
+        types::add_to_linker::<_, WasiHttp>(linker, g.http)
+            .map_err(anyhow::Error::from)
+            .context("failed to add wasi:http p3 types to linker")?;
+    }
+    Ok(())
+}
+
+/// The context slot of a workload's service. Its components follow it.
+const SERVICE_SLOT: usize = 0;
+
+/// The interfaces a component imports and exports, as link keys: the
+/// interface without its version, read through an `(implements ..)` label to
+/// the interface it names. Wider than the runtime's own matching (which is by
+/// exact version, and lets a host binding win), so two components it does not
+/// connect can never be linked into one store.
+#[derive(Clone)]
+struct LinkKeys {
+    imports: Vec<String>,
+    exports: Vec<String>,
+}
+
+fn link_key(interface: &str) -> String {
+    interface
+        .split_once('@')
+        .map_or(interface, |(unversioned, _)| unversioned)
+        .to_string()
+}
+
+fn component_link_keys(component: &Component) -> LinkKeys {
+    let ty = component.component_type();
+    let engine = component.engine();
+    let imports = ty
+        .imports(engine)
+        .filter(|(_, item)| matches!(item.ty, ComponentItem::ComponentInstance(_)))
+        .flat_map(|(name, item)| {
+            std::iter::once(link_key(name)).chain(item.implements.map(link_key))
+        })
+        .collect();
+    let exports = ty
+        .exports(engine)
+        .filter(|(_, item)| matches!(item.ty, ComponentItem::ComponentInstance(_)))
+        .map(|(name, _)| link_key(name))
+        .collect();
+    LinkKeys { imports, exports }
+}
+
+/// Assigns each component a context slot. Two components need different
+/// slots only if some store can hold both, and a store only ever holds a
+/// component and what it links to, transitively. So components are grouped by
+/// "one imports what another exports", and slots are numbered within each
+/// group, after the service's. The limit is per group: a workload of many
+/// components that never link to each other fits however many it has.
+fn assign_component_slots(components: &[LinkKeys]) -> anyhow::Result<Vec<usize>> {
+    let mut exporters: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, keys) in components.iter().enumerate() {
+        for key in &keys.exports {
+            exporters.entry(key.as_str()).or_default().push(i);
+        }
+    }
+    // Undirected: a store holding either end may hold the other.
+    let mut neighbours: Vec<Vec<usize>> = vec![Vec::new(); components.len()];
+    for (i, keys) in components.iter().enumerate() {
+        for &j in keys
+            .imports
+            .iter()
+            .filter_map(|key| exporters.get(key.as_str()))
+            .flatten()
+        {
+            if let Some(n) = neighbours.get_mut(i) {
+                n.push(j);
+            }
+            if let Some(n) = neighbours.get_mut(j) {
+                n.push(i);
+            }
+        }
+    }
+
+    // Walk each linked group, numbering its members after the service slot.
+    let mut slots: Vec<Option<usize>> = vec![None; components.len()];
+    let mut largest = 0;
+    for start in 0..components.len() {
+        if slots.get(start).copied().flatten().is_some() {
+            continue;
+        }
+        let mut size = 0;
+        let mut pending = vec![start];
+        while let Some(i) = pending.pop() {
+            match slots.get_mut(i) {
+                Some(slot @ None) => {
+                    size += 1;
+                    *slot = Some(SERVICE_SLOT + size);
+                }
+                _ => continue,
+            }
+            pending.extend(neighbours.get(i).into_iter().flatten().copied());
+        }
+        largest = largest.max(size);
+    }
+    anyhow::ensure!(
+        largest <= ctx::MAX_WORKLOAD_COMPONENTS,
+        "a workload holds at most {} components that link to one another, this one links {}",
+        ctx::MAX_WORKLOAD_COMPONENTS,
+        largest
+    );
+    Ok(slots.into_iter().flatten().collect())
 }
 
 /// Detect whether a component targets WASIP3 by checking for `@0.3` in WASI imports/exports.
@@ -528,6 +620,25 @@ impl Engine {
         } = workload;
         let annotations_arc = Arc::new(annotations);
 
+        // Compile every component first: slots come from what the components
+        // import and export, and a workload that cannot be given slots is
+        // refused before any volume or scratch directory is set up.
+        let components = components
+            .into_iter()
+            .map(|component| {
+                let compiled = self
+                    .load_component_bytes(&component.bytes, component.digest.as_deref())
+                    .context("failed to create component from bytes")?;
+                Ok((component, compiled))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let slots = assign_component_slots(
+            &components
+                .iter()
+                .map(|(_, compiled)| component_link_keys(compiled))
+                .collect::<Vec<_>>(),
+        )?;
+
         // Process and validate volumes - create a lookup map from volume name to validated host path
         let mut validated_volumes = std::collections::HashMap::new();
 
@@ -566,6 +677,7 @@ impl Engine {
                 svc,
                 &validated_volumes,
                 Arc::clone(&loopback),
+                SERVICE_SLOT,
             ) {
                 Ok(handle) => {
                     tracing::debug!("successfully initialized service component");
@@ -580,16 +692,18 @@ impl Engine {
             None
         };
 
-        // Initialize all components
+        // Initialize all components, each wired with the slot assigned above.
         let mut workload_components = Vec::new();
-        for component in components.into_iter() {
+        for ((component, compiled), slot) in components.into_iter().zip(slots) {
             match self.initialize_workload_component(
                 id.as_ref(),
                 &name,
                 &namespace,
                 component,
+                compiled,
                 &validated_volumes,
                 Arc::clone(&loopback),
+                slot,
             ) {
                 Ok(handle) => {
                     tracing::debug!("successfully initialized workload component");
@@ -618,6 +732,7 @@ impl Engine {
     }
 
     #[instrument(name = "initialize_service", skip_all)]
+    #[allow(clippy::too_many_arguments)]
     fn initialize_service(
         &self,
         workload_id: impl AsRef<str>,
@@ -626,6 +741,7 @@ impl Engine {
         service: crate::types::Service,
         validated_volumes: &std::collections::HashMap<String, PathBuf>,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
+        slot: usize,
     ) -> anyhow::Result<WorkloadService> {
         // Create a wasmtime component from the bytes
         let wasmtime_component = self
@@ -636,15 +752,12 @@ impl Engine {
         let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
 
         // Add WASI interfaces to the linker (with custom socket implementation)
-        add_wasi_to_linker(&mut linker).context("failed to add WASI to linker")?;
+        let getters = ctx::CtxGetters::for_slot(slot)?;
+        add_wasi_to_linker(&mut linker, getters).context("failed to add WASI to linker")?;
 
         // Add HTTP interfaces to the linker if the component uses them
         if uses_wasi_http(&wasmtime_component) {
-            wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
-                .map_err(anyhow::Error::from)
-                .context("failed to add wasi:http/types to linker")?;
-            wasmtime_wasi_http::p3::add_to_linker(&mut linker)
-                .map_err(|e| anyhow::anyhow!(e).context("failed to add wasi:http p3 to linker"))?;
+            add_http_to_linker(&mut linker, getters)?;
         }
 
         // Build volume mounts for this component by looking up validated volumes
@@ -671,6 +784,7 @@ impl Engine {
             service.max_restarts,
             loopback,
         );
+        service.metadata.slot = slot;
         service.metadata.socket_policy = Arc::clone(&self.socket_policy);
         service.metadata.guest_memory = Arc::clone(&self.guest_memory);
 
@@ -743,36 +857,31 @@ impl Engine {
     /// Initialize a component that is a part of a workload, add wasi@0.2 interfaces (and
     /// wasi:http if the `http` feature is enabled) to the linker.
     #[instrument(name = "initialize_workload_component", skip_all, fields(component.name = %component.name))]
+    #[allow(clippy::too_many_arguments)]
     fn initialize_workload_component(
         &self,
         workload_id: impl AsRef<str>,
         workload_name: impl AsRef<str>,
         workload_namespace: impl AsRef<str>,
         component: crate::types::Component,
+        wasmtime_component: Component,
         validated_volumes: &std::collections::HashMap<String, PathBuf>,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
+        slot: usize,
     ) -> anyhow::Result<WorkloadComponent> {
         // Read before the component's fields are moved out below.
         let instances = InstancePolicy::from_component(&component);
-
-        // Create a wasmtime component from the bytes
-        let wasmtime_component = self
-            .load_component_bytes(component.bytes, component.digest)
-            .context("failed to create component from bytes")?;
 
         // Create a linker for this component
         let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
 
         // Add WASI interfaces to the linker (with custom socket implementation)
-        add_wasi_to_linker(&mut linker).context("failed to add WASI to linker")?;
+        let getters = ctx::CtxGetters::for_slot(slot)?;
+        add_wasi_to_linker(&mut linker, getters).context("failed to add WASI to linker")?;
 
         // Add HTTP interfaces to the linker
         if uses_wasi_http(&wasmtime_component) {
-            wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
-                .map_err(anyhow::Error::from)
-                .context("failed to add wasi:http/types to linker")?;
-            wasmtime_wasi_http::p3::add_to_linker(&mut linker)
-                .map_err(|e| anyhow::anyhow!(e).context("failed to add wasi:http p3 to linker"))?;
+            add_http_to_linker(&mut linker, getters)?;
         }
 
         // Build volume mounts for this component by looking up validated volumes
@@ -801,6 +910,7 @@ impl Engine {
             loopback,
             instances,
         );
+        workload_component.metadata.slot = slot;
         workload_component.metadata.socket_policy = Arc::clone(&self.socket_policy);
         workload_component.metadata.guest_memory = Arc::clone(&self.guest_memory);
         Ok(workload_component)
@@ -824,14 +934,11 @@ impl Engine {
             .context("failed to compile host component plugin")?;
 
         let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
-        add_wasi_to_linker(&mut linker).context("failed to add WASI to plugin linker")?;
+        // A host component plugin is the only component in its store.
+        let getters = ctx::CtxGetters::for_slot(0)?;
+        add_wasi_to_linker(&mut linker, getters).context("failed to add WASI to plugin linker")?;
         if uses_wasi_http(&component) {
-            wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
-                .map_err(anyhow::Error::from)
-                .context("failed to add wasi:http/types to plugin linker")?;
-            wasmtime_wasi_http::p3::add_to_linker(&mut linker).map_err(|e| {
-                anyhow::anyhow!(e).context("failed to add wasi:http p3 to plugin linker")
-            })?;
+            add_http_to_linker(&mut linker, getters)?;
         }
 
         Ok((component, linker))
@@ -1558,6 +1665,44 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
 
 #[cfg(test)]
 mod tests {
+    fn keys(imports: &[&str], exports: &[&str]) -> super::LinkKeys {
+        super::LinkKeys {
+            imports: imports.iter().map(|s| super::link_key(s)).collect(),
+            exports: exports.iter().map(|s| super::link_key(s)).collect(),
+        }
+    }
+
+    /// Components that never link share slots; components that do never do.
+    #[test]
+    fn slots_are_unique_within_a_linked_group_only() {
+        let slots = super::assign_component_slots(&[
+            keys(&["a:b/tools@0.3.0"], &[]),         // 0 imports tools
+            keys(&[], &["a:b/tools@0.3.1"]),         // 1 exports tools (other patch)
+            keys(&[], &["wasi:http/handler@0.3.0"]), // 2 links to nothing
+            keys(&[], &["wasi:http/handler@0.3.0"]), // 3 links to nothing
+            keys(&["x:y/z"], &[]),                   // 4 imports what 5 exports
+            keys(&[], &["x:y/z"]),                   // 5
+        ])
+        .unwrap();
+        assert_ne!(slots[0], slots[1]);
+        assert_ne!(slots[4], slots[5]);
+        assert_eq!(slots[2], slots[3]);
+        assert!(slots.iter().all(|&s| s > super::SERVICE_SLOT));
+    }
+
+    /// The limit applies to the largest linked group, not the workload.
+    #[test]
+    fn the_cap_counts_the_largest_linked_group() {
+        let max = super::ctx::MAX_WORKLOAD_COMPONENTS;
+        let independent = vec![keys(&[], &["wasi:http/handler@0.3.0"]); max + 10];
+        assert!(super::assign_component_slots(&independent).is_ok());
+
+        let mut linked = vec![keys(&[], &["a:b/gate@0.1.0"]); max];
+        linked.push(keys(&["a:b/gate@0.1.0"], &[]));
+        let err = super::assign_component_slots(&linked).unwrap_err();
+        assert!(err.to_string().contains(&format!("at most {max}")), "{err}");
+    }
+
     use super::*;
 
     /// The refusal is correct and its text is the only place the number
@@ -1733,7 +1878,8 @@ mod tests {
     fn a_newer_compatible_wasi_import_links_against_the_host() {
         let engine = Engine::builder().build().expect("engine should build");
         let mut linker: Linker<SharedCtx> = Linker::new(&engine.inner);
-        add_wasi_to_linker(&mut linker).expect("WASI should link");
+        add_wasi_to_linker(&mut linker, ctx::CtxGetters::for_slot(0).unwrap())
+            .expect("WASI should link");
         let importing = |version: &str| {
             let wat = format!(
                 r#"(component (import "wasi:random/random@{version}"

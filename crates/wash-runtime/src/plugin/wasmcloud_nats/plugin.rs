@@ -812,6 +812,9 @@ impl HostPlugin for WasmcloudNats {
         item: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = item.ctx_getter();
         let bound = nats_interfaces(&interfaces);
         if bound.is_empty() {
             return Ok(());
@@ -839,23 +842,13 @@ impl HostPlugin for WasmcloudNats {
             use interfaces::bindings::wasmcloud::nats as nats_wit;
             // `types` carries record and error definitions only: nothing to
             // route, so it is bound once either way.
-            nats_wit::types::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-                linker,
-                crate::engine::ctx::extract_active_ctx,
-            )?;
+            nats_wit::types::add_to_linker::<_, crate::engine::ctx::SharedCtx>(linker, getter)?;
             if has_plain {
-                nats_wit::core::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-                    linker,
-                    crate::engine::ctx::extract_active_ctx,
-                )?;
+                nats_wit::core::add_to_linker::<_, crate::engine::ctx::SharedCtx>(linker, getter)?;
                 nats_wit::jetstream::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-                    linker,
-                    crate::engine::ctx::extract_active_ctx,
+                    linker, getter,
                 )?;
-                nats_wit::kv::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-                    linker,
-                    crate::engine::ctx::extract_active_ctx,
-                )?;
+                nats_wit::kv::add_to_linker::<_, crate::engine::ctx::SharedCtx>(linker, getter)?;
             }
             if has_labeled {
                 use interfaces::bindings::named_imports::wasmcloud::nats as labeled_nats_wit;
@@ -868,22 +861,13 @@ impl HostPlugin for WasmcloudNats {
                     })
                 };
                 labeled_nats_wit::core::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-                    linker,
-                    &component,
-                    route,
-                    crate::engine::ctx::extract_active_ctx,
+                    linker, &component, route, getter,
                 )?;
                 labeled_nats_wit::jetstream::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-                    linker,
-                    &component,
-                    route,
-                    crate::engine::ctx::extract_active_ctx,
+                    linker, &component, route, getter,
                 )?;
                 labeled_nats_wit::kv::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
-                    linker,
-                    &component,
-                    route,
-                    crate::engine::ctx::extract_active_ctx,
+                    linker, &component, route, getter,
                 )?;
             }
         }

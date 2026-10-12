@@ -674,8 +674,8 @@ pub(crate) fn arm_epoch_deadline(
 ) {
     let abandoned = Arc::clone(&store.data().abandoned);
     let executed = Arc::clone(&store.data().executed);
-    let store_id = Arc::clone(&store.data().active_ctx.store_id);
-    let host = store.data().active_ctx.host_link();
+    let store_id = Arc::clone(&store.data().root_ctx.store_id);
+    let host = store.data().root_ctx.host_link();
     let grace = crate::timeouts::abandoned_call_grace();
     let escalation = crate::timeouts::abandoned_call_escalation();
     let grace_millis = u64::try_from(grace.as_millis()).unwrap_or(u64::MAX);

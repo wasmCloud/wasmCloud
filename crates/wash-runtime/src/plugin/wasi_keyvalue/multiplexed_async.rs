@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use wasmtime::component::{Accessor, Resource};
 
-use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
+use crate::engine::ctx::{ActiveCtx, SharedCtx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::multiplex::Multiplexer;
 use crate::plugin::{HostPlugin, WitInterfaces};
@@ -415,6 +415,9 @@ impl HostPlugin for MultiplexedAsyncKeyValue {
         item: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = item.ctx_getter();
         if !interfaces.contains("wasmcloud", "keyvalue", &[]) {
             return Ok(());
         }
@@ -452,33 +455,18 @@ impl HostPlugin for MultiplexedAsyncKeyValue {
                 linker,
                 &component,
                 |name| self.mux.resolve(&registry, name),
-                extract_active_ctx,
+                getter,
             )?;
         }
         // A plain (unlabeled) `store` import: bind the standard interface to the
         // workload's default backend — no label required.
         if has_plain {
-            bindings::wasmcloud::keyvalue::store::add_to_linker::<_, SharedCtx>(
-                linker,
-                extract_active_ctx,
-            )?;
+            bindings::wasmcloud::keyvalue::store::add_to_linker::<_, SharedCtx>(linker, getter)?;
         }
-        bindings::wasmcloud::keyvalue::types::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
-        bindings::wasmcloud::keyvalue::atomics::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
-        bindings::wasmcloud::keyvalue::cas::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
-        bindings::wasmcloud::keyvalue::batch::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
+        bindings::wasmcloud::keyvalue::types::add_to_linker::<_, SharedCtx>(linker, getter)?;
+        bindings::wasmcloud::keyvalue::atomics::add_to_linker::<_, SharedCtx>(linker, getter)?;
+        bindings::wasmcloud::keyvalue::cas::add_to_linker::<_, SharedCtx>(linker, getter)?;
+        bindings::wasmcloud::keyvalue::batch::add_to_linker::<_, SharedCtx>(linker, getter)?;
         Ok(())
     }
 

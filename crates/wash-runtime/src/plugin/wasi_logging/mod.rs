@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
+use crate::engine::ctx::{ActiveCtx, SharedCtx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::wit::{WitInterface, WitWorld};
@@ -135,6 +135,9 @@ impl HostPlugin for TracingLogger {
         component_handle: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = component_handle.ctx_getter();
         // Ensure exactly one interface: "wasi:logging/logging"
         if !interfaces.contains("wasi", "logging", &[]) {
             tracing::warn!(
@@ -147,7 +150,7 @@ impl HostPlugin for TracingLogger {
         // Add `wasi:logging/logging` to the workload's linker
         bindings::wasi::logging::logging::add_to_linker::<_, SharedCtx>(
             component_handle.linker(),
-            extract_active_ctx,
+            getter,
         )?;
 
         self.components.write().await.insert(

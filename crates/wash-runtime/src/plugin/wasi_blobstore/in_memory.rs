@@ -20,7 +20,7 @@ use wasmtime_wasi::p2::{
 
 use crate::{
     engine::{
-        ctx::{ActiveCtx, SharedCtx, extract_active_ctx},
+        ctx::{ActiveCtx, SharedCtx},
         workload::WorkloadItem,
     },
     plugin::{HostPlugin, WitInterfaces},
@@ -953,6 +953,9 @@ impl HostPlugin for InMemoryBlobstore {
         component_handle: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = component_handle.ctx_getter();
         // Check if any of the interfaces are wasi:blobstore related
         if !interfaces.contains("wasi", "blobstore", &[]) {
             tracing::warn!(
@@ -971,18 +974,9 @@ impl HostPlugin for InMemoryBlobstore {
         );
         let linker = component_handle.linker();
 
-        bindings::wasi::blobstore::blobstore::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
-        bindings::wasi::blobstore::container::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
-        bindings::wasi::blobstore::types::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
+        bindings::wasi::blobstore::blobstore::add_to_linker::<_, SharedCtx>(linker, getter)?;
+        bindings::wasi::blobstore::container::add_to_linker::<_, SharedCtx>(linker, getter)?;
+        bindings::wasi::blobstore::types::add_to_linker::<_, SharedCtx>(linker, getter)?;
 
         let id = component_handle.workload_id();
 
@@ -1161,7 +1155,7 @@ mod tests {
             .with_plugins(HashMap::from([(WASI_BLOBSTORE_ID, plugin)]))
             .build();
         let mut shared = SharedCtx::new(ctx);
-        let mut active = extract_active_ctx(&mut shared);
+        let mut active = (crate::engine::ctx::CtxGetters::for_slot(0).unwrap().active)(&mut shared);
 
         let empty = HashSet::new();
         blobstore

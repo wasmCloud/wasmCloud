@@ -15,7 +15,7 @@ use wasmtime::component::Resource;
 
 use crate::{
     engine::{
-        ctx::{ActiveCtx, SharedCtx, extract_active_ctx},
+        ctx::{ActiveCtx, SharedCtx},
         workload::WorkloadItem,
     },
     plugin::{HostPlugin, WitInterfaces},
@@ -426,6 +426,9 @@ impl HostPlugin for InMemoryKeyValue {
         component_handle: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = component_handle.ctx_getter();
         // Check if any of the interfaces are wasi:keyvalue related
         if !interfaces.contains("wasi", "keyvalue", &[]) {
             tracing::warn!(
@@ -441,12 +444,9 @@ impl HostPlugin for InMemoryKeyValue {
         );
         let linker = component_handle.linker();
 
-        bindings::wasi::keyvalue::store::add_to_linker::<_, SharedCtx>(linker, extract_active_ctx)?;
-        bindings::wasi::keyvalue::atomics::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
-        bindings::wasi::keyvalue::batch::add_to_linker::<_, SharedCtx>(linker, extract_active_ctx)?;
+        bindings::wasi::keyvalue::store::add_to_linker::<_, SharedCtx>(linker, getter)?;
+        bindings::wasi::keyvalue::atomics::add_to_linker::<_, SharedCtx>(linker, getter)?;
+        bindings::wasi::keyvalue::batch::add_to_linker::<_, SharedCtx>(linker, getter)?;
 
         let id = component_handle.workload_id();
         tracing::debug!(
@@ -601,7 +601,7 @@ mod tests {
             .with_plugins(HashMap::from([(WASI_KEYVALUE_ID, plugin)]))
             .build();
         let mut shared = SharedCtx::new(ctx);
-        let mut active = extract_active_ctx(&mut shared);
+        let mut active = (crate::engine::ctx::CtxGetters::for_slot(0).unwrap().active)(&mut shared);
         let bucket = Host::open(&mut active, "bucket".to_string())
             .await
             .unwrap()

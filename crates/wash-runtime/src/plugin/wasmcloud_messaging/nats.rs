@@ -55,7 +55,7 @@ super::messaging_handler_dispatch! {
     async: async_bindings,
 }
 
-use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
+use crate::engine::ctx::{ActiveCtx, SharedCtx};
 use crate::engine::workload::{ResolvedWorkload, WorkloadItem};
 use crate::observability::{MeterKind, Meters};
 use crate::plugin::wasmcloud_messaging::Admitted;
@@ -349,6 +349,9 @@ impl HostPlugin for NatsMessaging {
         component_handle: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = component_handle.ctx_getter();
         let Some(interface) = interfaces.get("wasmcloud", "messaging", &[]) else {
             return Ok(());
         };
@@ -368,17 +371,11 @@ impl HostPlugin for NatsMessaging {
         // surfaces are separate linker instances, and binding one a component
         // never imports is harmless but binding the wrong one is not.
         if super::declares_async_messaging(&interfaces) {
-            types_p3::add_to_linker::<_, SharedCtx>(component_handle.linker(), extract_active_ctx)?;
-            consumer_p3::add_to_linker::<_, SharedCtx>(
-                component_handle.linker(),
-                extract_active_ctx,
-            )?;
+            types_p3::add_to_linker::<_, SharedCtx>(component_handle.linker(), getter)?;
+            consumer_p3::add_to_linker::<_, SharedCtx>(component_handle.linker(), getter)?;
         } else {
-            types_p2::add_to_linker::<_, SharedCtx>(component_handle.linker(), extract_active_ctx)?;
-            consumer_p2::add_to_linker::<_, SharedCtx>(
-                component_handle.linker(),
-                extract_active_ctx,
-            )?;
+            types_p2::add_to_linker::<_, SharedCtx>(component_handle.linker(), getter)?;
+            consumer_p2::add_to_linker::<_, SharedCtx>(component_handle.linker(), getter)?;
         }
 
         let local_subscriptions = component_handle

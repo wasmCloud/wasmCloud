@@ -25,7 +25,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
+use crate::engine::ctx::{ActiveCtx, SharedCtx};
 use crate::plugin::{HostPlugin, WitInterfaces, WorkloadItem, WorkloadTracker};
 use crate::wit::{WitInterface, WitWorld};
 
@@ -198,22 +198,25 @@ impl HostPlugin for WasiOtel {
         component_handle: &mut WorkloadItem<'a>,
         _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = component_handle.ctx_getter();
         // Add all wasi:otel interfaces to linker
         bindings::wasi::otel::types::add_to_linker::<_, SharedCtx>(
             component_handle.linker(),
-            extract_active_ctx,
+            getter,
         )?;
         bindings::wasi::otel::tracing::add_to_linker::<_, SharedCtx>(
             component_handle.linker(),
-            extract_active_ctx,
+            getter,
         )?;
         bindings::wasi::otel::metrics::add_to_linker::<_, SharedCtx>(
             component_handle.linker(),
-            extract_active_ctx,
+            getter,
         )?;
         bindings::wasi::otel::logs::add_to_linker::<_, SharedCtx>(
             component_handle.linker(),
-            extract_active_ctx,
+            getter,
         )?;
 
         // Register component context for tracking

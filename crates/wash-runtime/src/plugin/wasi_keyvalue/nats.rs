@@ -10,7 +10,7 @@ use std::sync::Arc;
 use bytes::{Buf, Bytes};
 
 pub(crate) const PLUGIN_KEYVALUE_ID: &str = "wasi-keyvalue";
-use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
+use crate::engine::ctx::{ActiveCtx, SharedCtx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::wit::{WitInterface, WitWorld};
@@ -510,6 +510,9 @@ impl HostPlugin for NatsKeyValue {
         component_handle: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = component_handle.ctx_getter();
         // Check if any of the interfaces are wasi:keyvalue related
         if !interfaces.contains("wasi", "keyvalue", &[]) {
             tracing::warn!(
@@ -525,12 +528,9 @@ impl HostPlugin for NatsKeyValue {
         );
         let linker = component_handle.linker();
 
-        bindings::wasi::keyvalue::store::add_to_linker::<_, SharedCtx>(linker, extract_active_ctx)?;
-        bindings::wasi::keyvalue::atomics::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
-        bindings::wasi::keyvalue::batch::add_to_linker::<_, SharedCtx>(linker, extract_active_ctx)?;
+        bindings::wasi::keyvalue::store::add_to_linker::<_, SharedCtx>(linker, getter)?;
+        bindings::wasi::keyvalue::atomics::add_to_linker::<_, SharedCtx>(linker, getter)?;
+        bindings::wasi::keyvalue::batch::add_to_linker::<_, SharedCtx>(linker, getter)?;
 
         let id = component_handle.id();
         tracing::debug!(

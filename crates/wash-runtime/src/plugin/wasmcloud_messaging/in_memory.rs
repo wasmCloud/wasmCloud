@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
+use crate::engine::ctx::{ActiveCtx, SharedCtx};
 use crate::engine::workload::{ResolvedWorkload, UnresolvedWorkload, WorkloadItem};
 use crate::observability::{MeterKind, Meters};
 use crate::plugin::{HostPlugin, WitInterfaces};
@@ -503,6 +503,9 @@ impl HostPlugin for InMemoryMessaging {
         component_handle: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = component_handle.ctx_getter();
         if !interfaces.contains("wasmcloud", "messaging", &[]) {
             return Ok(());
         }
@@ -511,17 +514,11 @@ impl HostPlugin for InMemoryMessaging {
         // surfaces are separate linker instances, and binding one a component
         // never imports is harmless but binding the wrong one is not.
         if super::declares_async_messaging(&interfaces) {
-            types_p3::add_to_linker::<_, SharedCtx>(component_handle.linker(), extract_active_ctx)?;
-            consumer_p3::add_to_linker::<_, SharedCtx>(
-                component_handle.linker(),
-                extract_active_ctx,
-            )?;
+            types_p3::add_to_linker::<_, SharedCtx>(component_handle.linker(), getter)?;
+            consumer_p3::add_to_linker::<_, SharedCtx>(component_handle.linker(), getter)?;
         } else {
-            types_p2::add_to_linker::<_, SharedCtx>(component_handle.linker(), extract_active_ctx)?;
-            consumer_p2::add_to_linker::<_, SharedCtx>(
-                component_handle.linker(),
-                extract_active_ctx,
-            )?;
+            types_p2::add_to_linker::<_, SharedCtx>(component_handle.linker(), getter)?;
+            consumer_p2::add_to_linker::<_, SharedCtx>(component_handle.linker(), getter)?;
         }
 
         // Per-component subscriptions come from this component's

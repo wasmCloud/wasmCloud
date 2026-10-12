@@ -28,7 +28,7 @@ use wasmtime_wasi::p2::{
     pipe::{MemoryInputPipe, MemoryOutputPipe},
 };
 
-use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
+use crate::engine::ctx::{ActiveCtx, SharedCtx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::multiplex::{BackendProvider, Multiplexer};
 use crate::plugin::{HostPlugin, WitInterfaces};
@@ -623,6 +623,9 @@ impl HostPlugin for MultiplexedBlobstore {
         item: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = item.ctx_getter();
         if !interfaces.contains("wasi", "blobstore", &[]) {
             return Ok(());
         }
@@ -643,16 +646,10 @@ impl HostPlugin for MultiplexedBlobstore {
             linker,
             &component,
             |name| self.mux.resolve(&registry, name),
-            extract_active_ctx,
+            getter,
         )?;
-        bindings::wasi::blobstore::container::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
-        bindings::wasi::blobstore::types::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
+        bindings::wasi::blobstore::container::add_to_linker::<_, SharedCtx>(linker, getter)?;
+        bindings::wasi::blobstore::types::add_to_linker::<_, SharedCtx>(linker, getter)?;
         Ok(())
     }
 }

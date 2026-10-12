@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
+use crate::engine::ctx::{ActiveCtx, SharedCtx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::{HostPlugin, lock_root};
 use crate::plugin::{WitInterfaces, WorkloadTracker};
@@ -732,6 +732,9 @@ impl HostPlugin for FilesystemBlobstore {
         component_handle: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = component_handle.ctx_getter();
         if !interfaces.contains("wasi", "blobstore", &[]) {
             return Ok(());
         }
@@ -743,18 +746,9 @@ impl HostPlugin for FilesystemBlobstore {
         );
         let linker = component_handle.linker();
 
-        bindings::wasi::blobstore::blobstore::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
-        bindings::wasi::blobstore::container::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
-        bindings::wasi::blobstore::types::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
+        bindings::wasi::blobstore::blobstore::add_to_linker::<_, SharedCtx>(linker, getter)?;
+        bindings::wasi::blobstore::container::add_to_linker::<_, SharedCtx>(linker, getter)?;
+        bindings::wasi::blobstore::types::add_to_linker::<_, SharedCtx>(linker, getter)?;
 
         Ok(())
     }

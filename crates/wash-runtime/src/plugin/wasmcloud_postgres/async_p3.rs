@@ -26,7 +26,7 @@ use wasmtime::component::{
     Accessor, Destination, FutureReader, Linker, StreamProducer, StreamReader, StreamResult,
 };
 
-use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
+use crate::engine::ctx::{ActiveCtx, CtxGetter, SharedCtx};
 
 use super::{PLUGIN_POSTGRES_ID, PreparedEntry, WasmcloudPostgres};
 
@@ -479,14 +479,20 @@ impl<U> bindings::named_imports::wasmcloud::postgres0_2_0::prepared::HostWithSto
 
 /// Link the `types` instance. It carries no functions but its import must be
 /// satisfied; link it exactly once regardless of default/named routing.
-pub(super) fn add_types_to_linker(linker: &mut Linker<SharedCtx>) -> wasmtime::Result<()> {
-    types::add_to_linker::<_, SharedCtx>(linker, extract_active_ctx)
+pub(super) fn add_types_to_linker(
+    linker: &mut Linker<SharedCtx>,
+    getter: CtxGetter,
+) -> wasmtime::Result<()> {
+    types::add_to_linker::<_, SharedCtx>(linker, getter)
 }
 
 /// Link the default (unnamed) `query`/`prepared` interfaces.
-pub(super) fn add_default_to_linker(linker: &mut Linker<SharedCtx>) -> wasmtime::Result<()> {
-    query::add_to_linker::<_, SharedCtx>(linker, extract_active_ctx)?;
-    prepared::add_to_linker::<_, SharedCtx>(linker, extract_active_ctx)?;
+pub(super) fn add_default_to_linker(
+    linker: &mut Linker<SharedCtx>,
+    getter: CtxGetter,
+) -> wasmtime::Result<()> {
+    query::add_to_linker::<_, SharedCtx>(linker, getter)?;
+    prepared::add_to_linker::<_, SharedCtx>(linker, getter)?;
     Ok(())
 }
 
@@ -498,18 +504,19 @@ pub(super) fn add_named_to_linker(
     component: &Component,
     registry: &HashMap<String, PgId>,
     mux: &Multiplexer<PgId>,
+    getter: CtxGetter,
 ) -> wasmtime::Result<()> {
     bindings::named_imports::wasmcloud::postgres0_2_0::query::add_to_linker::<_, SharedCtx>(
         linker,
         component,
         |name| mux.resolve(registry, name),
-        extract_active_ctx,
+        getter,
     )?;
     bindings::named_imports::wasmcloud::postgres0_2_0::prepared::add_to_linker::<_, SharedCtx>(
         linker,
         component,
         |name| mux.resolve(registry, name),
-        extract_active_ctx,
+        getter,
     )?;
     Ok(())
 }

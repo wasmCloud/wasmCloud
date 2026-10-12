@@ -39,7 +39,7 @@ use tokio_postgres::types::Type as PgType;
 use tracing::instrument;
 use url::Url;
 
-use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
+use crate::engine::ctx::{ActiveCtx, SharedCtx};
 use crate::engine::workload::WorkloadItem;
 #[cfg(feature = "wasm_component_model_implements")]
 use crate::plugin::multiplex::Multiplexer;
@@ -567,6 +567,9 @@ impl HostPlugin for WasmcloudPostgres {
         component_handle: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = component_handle.ctx_getter();
         let pg: Vec<&WitInterface> = interfaces
             .iter()
             .filter(|i| i.namespace == "wasmcloud" && i.package == "postgres")
@@ -602,8 +605,7 @@ impl HostPlugin for WasmcloudPostgres {
             // `types` carries no functions and is shared by query/prepared; link
             // the instance once regardless of named/unnamed routing.
             bindings::wasmcloud::postgres0_1_1_draft::types::add_to_linker::<_, SharedCtx>(
-                linker,
-                extract_active_ctx,
+                linker, getter,
             )?;
 
             if let Some(i) = unnamed {
@@ -623,12 +625,10 @@ impl HostPlugin for WasmcloudPostgres {
                     },
                 );
                 bindings::wasmcloud::postgres0_1_1_draft::query::add_to_linker::<_, SharedCtx>(
-                    linker,
-                    extract_active_ctx,
+                    linker, getter,
                 )?;
                 bindings::wasmcloud::postgres0_1_1_draft::prepared::add_to_linker::<_, SharedCtx>(
-                    linker,
-                    extract_active_ctx,
+                    linker, getter,
                 )?;
             }
 
@@ -646,7 +646,7 @@ impl HostPlugin for WasmcloudPostgres {
                     linker,
                     &component,
                     |name| self.mux.resolve(&registry, name),
-                    extract_active_ctx,
+                    getter,
                 )?;
                 bindings::named_imports::wasmcloud::postgres0_1_1_draft::prepared::add_to_linker::<
                     _,
@@ -655,7 +655,7 @@ impl HostPlugin for WasmcloudPostgres {
                     linker,
                     &component,
                     |name| self.mux.resolve(&registry, name),
-                    extract_active_ctx,
+                    getter,
                 )?;
             }
         }
@@ -664,7 +664,7 @@ impl HostPlugin for WasmcloudPostgres {
         if !pg_async.is_empty() {
             // `types` carries no functions and is shared by query/prepared; link
             // it once regardless of default/named routing.
-            async_p3::add_types_to_linker(linker)?;
+            async_p3::add_types_to_linker(linker, getter)?;
 
             // An unnamed import is the default, per-component-database path; a
             // `(implements ..)` import is a named one routed to its own pool.
@@ -684,7 +684,7 @@ impl HostPlugin for WasmcloudPostgres {
                         database,
                     },
                 );
-                async_p3::add_default_to_linker(linker)?;
+                async_p3::add_default_to_linker(linker, getter)?;
             }
 
             #[cfg(feature = "wasm_component_model_implements")]
@@ -694,7 +694,7 @@ impl HostPlugin for WasmcloudPostgres {
                     imports = ?registry.keys().collect::<Vec<_>>(),
                     "Binding async postgres plugin to component (per-credential named imports)"
                 );
-                async_p3::add_named_to_linker(linker, &component, &registry, &self.mux)?;
+                async_p3::add_named_to_linker(linker, &component, &registry, &self.mux, getter)?;
             }
         }
 

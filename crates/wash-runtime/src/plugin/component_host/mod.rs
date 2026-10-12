@@ -82,7 +82,7 @@ use wasmtime::component::{
 use wasmtime::{Store, StoreContextMut};
 
 use crate::engine::Engine;
-use crate::engine::ctx::{CallerIdentity, Ctx, SharedCtx};
+use crate::engine::ctx::{CallerIdentity, Ctx, CtxGetter, SharedCtx};
 use crate::engine::instance_pool::InstancePolicy;
 use crate::engine::store::relocate::{self, Relocated};
 use crate::engine::store::resource_bridge::{self, ProxyResource};
@@ -590,6 +590,9 @@ impl ComponentHostPlugin {
             );
         }
 
+        // The caller identity each routed call carries is read through this
+        // item's own getter, so it names the component that made the call.
+        let caller_ctx = item.ctx_getter();
         let linker = item.linker();
         for exported in self.exports.iter() {
             let iface_names: Vec<&str> =
@@ -651,6 +654,7 @@ impl ComponentHostPlugin {
                     exported,
                     label.as_deref(),
                     binding.clone(),
+                    caller_ctx,
                 )?;
                 debug!(
                     id = self.id,
@@ -1362,13 +1366,21 @@ async fn build_plugin_linker(
                     .any(|i| imported.wit.interfaces.contains(i))
         });
         if let Some(own) = own {
-            add_capabilities_to_linker(&mut linker, state, own, imported.wit.name.as_deref(), None)
-                .with_context(|| {
-                    format!(
-                        "failed to wire self-import {} on plugin '{id}'",
-                        imported.name
-                    )
-                })?;
+            add_capabilities_to_linker(
+                &mut linker,
+                state,
+                own,
+                imported.wit.name.as_deref(),
+                None,
+                // The plugin is the only component in its own store.
+                crate::engine::ctx::CtxGetters::for_slot(0)?.active,
+            )
+            .with_context(|| {
+                format!(
+                    "failed to wire self-import {} on plugin '{id}'",
+                    imported.name
+                )
+            })?;
             linked.insert(Arc::clone(&imported.name));
         }
     }
@@ -1590,6 +1602,7 @@ fn add_capabilities_to_linker(
     iface: &ExportedInterface,
     label: Option<&str>,
     binding: Option<Arc<str>>,
+    caller_ctx: CtxGetter,
 ) -> anyhow::Result<()> {
     let instance_name = label.unwrap_or(&iface.name);
     let mut linker_instance = linker
@@ -1638,8 +1651,8 @@ fn add_capabilities_to_linker(
                     let result_tys = Arc::clone(&result_tys);
                     Box::pin(async move {
                         route_capability_call(
-                            accessor, &state, interface, binding, func, params, &param_tys,
-                            result_tys, results,
+                            accessor, &state, caller_ctx, interface, binding, func, params,
+                            &param_tys, result_tys, results,
                         )
                         .await
                     })
@@ -1698,6 +1711,7 @@ async fn drop_proxy_resource(
 async fn route_capability_call(
     accessor: &Accessor<SharedCtx>,
     state: &ComponentHostPluginState,
+    caller_ctx: CtxGetter,
     interface: Arc<str>,
     binding: Option<Arc<str>>,
     func: Arc<str>,
@@ -1715,7 +1729,7 @@ async fn route_capability_call(
     let (caller, args) = accessor.with(
         |mut access| -> wasmtime::Result<(CallerIdentity, Vec<Relocated>)> {
             let caller = {
-                let ctx = &access.data_mut().active_ctx;
+                let ctx = caller_ctx(access.data_mut());
                 CallerIdentity {
                     workload_id: Arc::clone(&ctx.workload_id),
                     component_id: Some(Arc::clone(&ctx.component_id)),
@@ -2218,12 +2232,7 @@ mod tests {
             &HashMap::new(),
             &store_context,
         );
-        let check = store
-            .data_mut()
-            .active_ctx
-            .sockets
-            .socket_addr_check
-            .clone();
+        let check = store.data_mut().root_ctx.sockets.socket_addr_check.clone();
 
         check
             .check("0.0.0.0:0".parse().unwrap(), SocketAddrUse::UdpBind)
@@ -2324,12 +2333,7 @@ mod tests {
             &plugin.state.native_plugins,
             &plugin.runtime.store,
         );
-        let check = store
-            .data_mut()
-            .active_ctx
-            .sockets
-            .socket_addr_check
-            .clone();
+        let check = store.data_mut().root_ctx.sockets.socket_addr_check.clone();
 
         check
             .check("192.0.2.10:9100".parse().unwrap(), SocketAddrUse::TcpBind)
@@ -2337,7 +2341,8 @@ mod tests {
 
         use wasmtime::component::Resource;
         use wasmtime_wasi::p3::bindings::sockets::types::{HostUdpSocket, IpAddressFamily};
-        let mut sockets = crate::engine::ctx::extract_sockets(store.data_mut());
+        let mut sockets =
+            (crate::engine::ctx::CtxGetters::for_slot(0).unwrap().sockets)(store.data_mut());
         let socket = HostUdpSocket::create(&mut sockets, IpAddressFamily::Ipv4)
             .await
             .expect("create plugin UDP socket");

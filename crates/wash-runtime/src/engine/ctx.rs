@@ -11,8 +11,8 @@ use std::{
     sync::Arc,
 };
 
-use wasmtime::component::{Accessor, Instance, ResourceTable};
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime::component::{Instance, ResourceTable};
+use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpHooks, WasiHttpView};
 #[cfg(feature = "wasi-tls")]
 use wasmtime_wasi_tls::{WasiTlsCtx, WasiTlsCtxBuilder, WasiTlsCtxView, WasiTlsView};
@@ -60,12 +60,30 @@ impl wasmtime_wasi_tls::TlsProvider for SharedTlsProvider {
 
 /// Shared context for linked components
 pub struct SharedCtx {
-    /// Current active context
-    pub active_ctx: Ctx,
+    /// The context of the component this store was built for (its root).
+    ///
+    /// It is never swapped. A host import is served with the context of the
+    /// component whose instance made the import, and that is decided when the
+    /// import is linked, not by store state: every component's linker carries
+    /// getters bound to its own slot ([`CtxGetters`]). This field is what
+    /// host-initiated paths read (the store id, the host link, an incoming
+    /// request delivered to the root's export) and is that root's slot.
+    pub root_ctx: Ctx,
     /// The resource table used to manage resources in the Wasmtime store.
     pub table: wasmtime::component::ResourceTable,
-    /// Contexts for linked components
-    pub contexts: HashMap<Arc<str>, Ctx>,
+    /// Contexts of the linked components instantiated into this store, by
+    /// component slot ([`Ctx::slot`]). The root's slot is always `None` here;
+    /// its context is [`Self::root_ctx`].
+    linked: Vec<Option<Ctx>>,
+    /// Which context the deprecated store-wide getters serve
+    /// ([`extract_active_ctx`], [`extract_sockets`]). Nothing else reads it,
+    /// and it goes away with them. See [`LegacySlot`].
+    #[cfg(feature = "insecure-store-wide-ctx")]
+    legacy: LegacySlot,
+    /// Every plugin any context in this store carries, by id. For host-wide
+    /// plugins reached through a store-level view rather than a slot getter
+    /// (`wasi:webgpu`), which must be found whichever component bound them.
+    pub(crate) store_plugins: HashMap<&'static str, Arc<dyn Any + Send + Sync>>,
     /// Store-owned linked-component instances, keyed by component id.
     /// Dropping the store reclaims the instances without external cleanup.
     pub exporter_instances: HashMap<Arc<str>, Instance>,
@@ -142,9 +160,12 @@ pub struct CallerIdentity {
 impl SharedCtx {
     pub fn new(context: Ctx) -> Self {
         Self {
-            active_ctx: context,
+            store_plugins: context.plugins.clone(),
+            #[cfg(feature = "insecure-store-wide-ctx")]
+            legacy: LegacySlot::new(context.slot),
+            root_ctx: context,
             table: ResourceTable::new(),
-            contexts: Default::default(),
+            linked: Vec::new(),
             exporter_instances: Default::default(),
             resource_registry: None,
             links: Default::default(),
@@ -176,81 +197,349 @@ impl SharedCtx {
         self
     }
 
-    pub fn set_active_ctx(&mut self, id: &Arc<str>) -> wasmtime::Result<()> {
-        if id == &self.active_ctx.component_id {
-            return Ok(());
+    /// Adds the context of a linked component instantiated into this store,
+    /// at its slot. A slot can hold one context: two components of one store
+    /// sharing a slot would make their imports indistinguishable.
+    pub fn insert_linked_ctx(&mut self, ctx: Ctx) -> anyhow::Result<()> {
+        let slot = ctx.slot;
+        anyhow::ensure!(
+            slot < MAX_COMPONENT_SLOTS,
+            "component slot {slot} is out of range (a workload holds at most \
+             {MAX_WORKLOAD_COMPONENTS} components)"
+        );
+        anyhow::ensure!(
+            slot != self.root_ctx.slot,
+            "linked component '{}' has the root component's slot {slot}",
+            ctx.component_id
+        );
+        if self.linked.len() <= slot {
+            self.linked.resize_with(slot + 1, || None);
         }
+        match self.linked.get_mut(slot) {
+            Some(entry @ None) => {
+                for (id, plugin) in &ctx.plugins {
+                    self.store_plugins
+                        .entry(id)
+                        .or_insert_with(|| Arc::clone(plugin));
+                }
+                *entry = Some(ctx);
+                Ok(())
+            }
+            _ => anyhow::bail!("component slot {slot} is already taken in this store"),
+        }
+    }
 
-        if let Some(ctx) = self.contexts.remove(id) {
-            let old_ctx = std::mem::replace(&mut self.active_ctx, ctx);
-            self.contexts.insert(old_ctx.component_id.clone(), old_ctx);
-            Ok(())
-        } else {
-            Err(wasmtime::format_err!(
-                "Context for component {id} not found"
-            ))
+    /// The slot of the component `component_id` in this store, if it is here.
+    #[cfg(feature = "insecure-store-wide-ctx")]
+    fn slot_of(&self, component_id: &str) -> Option<usize> {
+        if self.root_ctx.component_id.as_ref() == component_id {
+            return Some(self.root_ctx.slot);
         }
+        self.linked
+            .iter()
+            .flatten()
+            .find(|ctx| ctx.component_id.as_ref() == component_id)
+            .map(|ctx| ctx.slot)
+    }
+
+    /// Points the deprecated store-wide getters at `component_id` for the
+    /// duration of one linked call and returns a token for
+    /// [`Self::restore_legacy_slot`]. A component not in this store is an
+    /// error, as it was for the old `set_active_ctx`.
+    #[cfg(feature = "insecure-store-wide-ctx")]
+    pub(crate) fn swap_legacy_slot(&mut self, component_id: &str) -> wasmtime::Result<u64> {
+        let slot = self.slot_of(component_id).ok_or_else(|| {
+            wasmtime::format_err!("Context for component {component_id} not found")
+        })?;
+        Ok(self.legacy.push(slot))
+    }
+
+    /// Ends the linked call `token` started.
+    #[cfg(feature = "insecure-store-wide-ctx")]
+    pub(crate) fn restore_legacy_slot(&mut self, token: u64) {
+        self.legacy.remove(token);
+    }
+
+    /// Points the deprecated store-wide getters at `component_id` until it is
+    /// called again, as the old `set_active_ctx` did. Linked calls in flight
+    /// still take precedence while they last.
+    ///
+    /// Affects only plugins wired with [`extract_active_ctx`] or
+    /// [`extract_sockets`]; the engine and migrated plugins never read it.
+    #[cfg(feature = "insecure-store-wide-ctx")]
+    #[deprecated(
+        since = "2.11.0",
+        note = "only the deprecated store-wide getters read this; plugins wired with \
+                `item.ctx_getter()` are always served with their own component's context"
+    )]
+    pub fn set_active_ctx(&mut self, component_id: &Arc<str>) -> wasmtime::Result<()> {
+        let slot = self.slot_of(component_id).ok_or_else(|| {
+            wasmtime::format_err!("Context for component {component_id} not found")
+        })?;
+        self.legacy.base = slot;
+        Ok(())
+    }
+
+    /// The table and the context the deprecated store-wide getters serve.
+    #[cfg(feature = "insecure-store-wide-ctx")]
+    fn split_legacy(&mut self) -> (&mut ResourceTable, &mut Ctx) {
+        let slot = self.legacy.current();
+        self.split_at(slot)
+    }
+
+    /// The context of the component at `slot` in this store, if one is here.
+    #[cfg(test)]
+    pub(crate) fn ctx_at(&mut self, slot: usize) -> Option<&mut Ctx> {
+        if slot == self.root_ctx.slot {
+            Some(&mut self.root_ctx)
+        } else {
+            self.linked.get_mut(slot).and_then(Option::as_mut)
+        }
+    }
+
+    /// The resource table (shared by every component in the store, so handles
+    /// keep their identity across a linked call) and the context of the
+    /// component at `slot`, borrowed together.
+    ///
+    /// # Panics
+    ///
+    /// If no component at `slot` was instantiated into this store. That cannot
+    /// happen through the engine: a getter for a slot is only ever wired into
+    /// that component's own linker, and a store only instantiates components
+    /// whose contexts it holds. An embedder that builds its own store
+    /// ([`SharedCtx::new`]) and instantiates a component the engine linked
+    /// must give the store that component's context: a component linked for
+    /// slot N, instantiated into a store whose only context is slot 0, panics
+    /// on its first host call. The getter is a plain `fn` with no way to
+    /// return an error, and serving the call with some other component's
+    /// context instead would be the very misattribution slots exist to rule
+    /// out.
+    #[allow(clippy::panic)]
+    fn split_at(&mut self, slot: usize) -> (&mut ResourceTable, &mut Ctx) {
+        let ctx = if slot == self.root_ctx.slot {
+            &mut self.root_ctx
+        } else {
+            match self.linked.get_mut(slot).and_then(Option::as_mut) {
+                Some(ctx) => ctx,
+                None => panic!("no component context for slot {slot} in this store"),
+            }
+        };
+        (&mut self.table, ctx)
     }
 }
 
-/// RAII guard that points [`SharedCtx::active_ctx`] at a linked component for
-/// the duration of a cross-component call, restoring the previous component on
-/// drop.
+/// Which context the deprecated store-wide getters serve: the callee of the
+/// newest linked call still in flight, or `base` (the root, unless the
+/// deprecated `set_active_ctx` moved it) when none is.
 ///
-/// TODO(concurrency): the single `active_ctx` slot with LIFO save/restore is
-/// only correct for *sequential* linked calls. `func_new_concurrent` allows
-/// several in flight on one shared store, and their save/restore interleaves —
-/// A sets B; C (concurrent) saves B, sets D; A restores B; C restores B — so
-/// the original ctx is lost and `active_ctx` is wrong even after both finish
-/// (and mid-flight, across awaits, it need not match the running call). The
-/// single-call fixtures issue one at a time so they don't exercise this; a real
-/// fix needs per-call ctx scoping rather than a shared slot. Tracked follow-up.
-pub(crate) struct AccessorActiveCtxGuard<'a> {
-    accessor: &'a Accessor<SharedCtx>,
-    previous_component_id: Arc<str>,
+/// This reproduces the old swap for sequential calls. Under overlapping calls
+/// it is still wrong mid-flight, which is why those getters are deprecated,
+/// but it cannot be left stuck: each call removes its own entry, so once no
+/// linked call is in flight the getters are back on `base`, where the old
+/// last-in, first-out restore could leave a pooled store on a callee for good.
+#[cfg(feature = "insecure-store-wide-ctx")]
+struct LegacySlot {
+    base: usize,
+    in_flight: Vec<(u64, usize)>,
+    next_token: u64,
 }
 
-impl<'a> AccessorActiveCtxGuard<'a> {
-    pub(crate) fn new(accessor: &'a Accessor<SharedCtx>, id: &Arc<str>) -> wasmtime::Result<Self> {
-        let previous_component_id = accessor.with(|mut access| -> wasmtime::Result<_> {
-            let previous_component_id = access.data_mut().active_ctx.component_id.clone();
-            access.data_mut().set_active_ctx(id)?;
-            Ok(previous_component_id)
-        })?;
+#[cfg(feature = "insecure-store-wide-ctx")]
+impl LegacySlot {
+    fn new(base: usize) -> Self {
+        Self {
+            base,
+            in_flight: Vec::new(),
+            next_token: 0,
+        }
+    }
 
-        Ok(Self {
-            accessor,
-            previous_component_id,
+    fn push(&mut self, slot: usize) -> u64 {
+        let token = self.next_token;
+        self.next_token = self.next_token.wrapping_add(1);
+        self.in_flight.push((token, slot));
+        token
+    }
+
+    fn remove(&mut self, token: u64) {
+        if let Some(i) = self.in_flight.iter().rposition(|(t, _)| *t == token) {
+            self.in_flight.remove(i);
+        }
+    }
+
+    fn current(&self) -> usize {
+        self.in_flight.last().map_or(self.base, |(_, slot)| *slot)
+    }
+}
+
+/// How many distinct context slots a store can address: slot 0 for a
+/// workload's service and one for each component after it, so a workload
+/// holds at most `MAX_COMPONENT_SLOTS - 1` (255) components. Each slot has its
+/// own monomorphized getters ([`CtxGetters`]), because Wasmtime's
+/// `add_to_linker` takes a plain `fn` pointer, which cannot capture which
+/// component it serves.
+pub const MAX_COMPONENT_SLOTS: usize = 256;
+
+/// The most components one workload may hold: every slot but the service's.
+pub const MAX_WORKLOAD_COMPONENTS: usize = MAX_COMPONENT_SLOTS - 1;
+
+/// The getter a host plugin passes to a generated `add_to_linker`, bound to the
+/// component whose linker it is wired into. Obtain it from
+/// [`crate::engine::workload::WorkloadItem::ctx_getter`].
+pub type CtxGetter = for<'a> fn(&'a mut SharedCtx) -> ActiveCtx<'a>;
+
+fn active_at<const N: usize>(ctx: &mut SharedCtx) -> ActiveCtx<'_> {
+    let (table, ctx) = ctx.split_at(N);
+    ActiveCtx { table, ctx }
+}
+
+fn sockets_at<const N: usize>(ctx: &mut SharedCtx) -> crate::sockets::WasiSocketsCtxView<'_> {
+    let (table, ctx) = ctx.split_at(N);
+    crate::sockets::WasiSocketsCtxView {
+        ctx: &mut ctx.sockets,
+        table,
+    }
+}
+
+fn wasi_at<const N: usize>(ctx: &mut SharedCtx) -> WasiCtxView<'_> {
+    let (table, ctx) = ctx.split_at(N);
+    WasiCtxView {
+        ctx: &mut ctx.ctx,
+        table,
+    }
+}
+
+fn cli_at<const N: usize>(ctx: &mut SharedCtx) -> wasmtime_wasi::cli::WasiCliCtxView<'_> {
+    let WasiCtxView { ctx, table } = wasi_at::<N>(ctx);
+    wasmtime_wasi::cli::WasiCliCtxView {
+        ctx: ctx.cli(),
+        table,
+    }
+}
+
+fn clocks_at<const N: usize>(ctx: &mut SharedCtx) -> wasmtime_wasi::clocks::WasiClocksCtxView<'_> {
+    let WasiCtxView { ctx, table } = wasi_at::<N>(ctx);
+    wasmtime_wasi::clocks::WasiClocksCtxView {
+        ctx: ctx.clocks(),
+        table,
+    }
+}
+
+fn filesystem_at<const N: usize>(
+    ctx: &mut SharedCtx,
+) -> wasmtime_wasi::filesystem::WasiFilesystemCtxView<'_> {
+    let WasiCtxView { ctx, table } = wasi_at::<N>(ctx);
+    wasmtime_wasi::filesystem::WasiFilesystemCtxView {
+        ctx: ctx.filesystem(),
+        table,
+    }
+}
+
+fn random_at<const N: usize>(ctx: &mut SharedCtx) -> &mut wasmtime_wasi::random::WasiRandomCtx {
+    ctx.split_at(N).1.ctx.random()
+}
+
+fn http_at<const N: usize>(ctx: &mut SharedCtx) -> WasiHttpCtxView<'_> {
+    let (table, ctx) = ctx.split_at(N);
+    WasiHttpCtxView {
+        ctx: &mut ctx.http,
+        table,
+        hooks: &mut ctx.http_hooks,
+    }
+}
+
+/// Every context getter the engine wires into one component's linker, all
+/// bound to that component's slot. Copy, so a linker-building function can
+/// take it by value.
+#[derive(Clone, Copy)]
+pub struct CtxGetters {
+    pub active: CtxGetter,
+    pub sockets: for<'a> fn(&'a mut SharedCtx) -> crate::sockets::WasiSocketsCtxView<'a>,
+    pub cli: for<'a> fn(&'a mut SharedCtx) -> wasmtime_wasi::cli::WasiCliCtxView<'a>,
+    pub clocks: for<'a> fn(&'a mut SharedCtx) -> wasmtime_wasi::clocks::WasiClocksCtxView<'a>,
+    pub filesystem:
+        for<'a> fn(&'a mut SharedCtx) -> wasmtime_wasi::filesystem::WasiFilesystemCtxView<'a>,
+    pub random: for<'a> fn(&'a mut SharedCtx) -> &'a mut wasmtime_wasi::random::WasiRandomCtx,
+    pub http: for<'a> fn(&'a mut SharedCtx) -> WasiHttpCtxView<'a>,
+}
+
+macro_rules! slot_getters {
+    ($($n:literal)*) => {
+        const ALL_SLOTS: [CtxGetters; MAX_COMPONENT_SLOTS] = [$(CtxGetters {
+            active: active_at::<$n>,
+            sockets: sockets_at::<$n>,
+            cli: cli_at::<$n>,
+            clocks: clocks_at::<$n>,
+            filesystem: filesystem_at::<$n>,
+            random: random_at::<$n>,
+            http: http_at::<$n>,
+        }),*];
+    };
+}
+
+slot_getters!(
+    0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
+    32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63
+    64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95
+    96 97 98 99 100 101 102 103 104 105 106 107 108 109 110 111 112 113 114 115 116 117 118 119 120 121 122 123 124 125 126 127
+    128 129 130 131 132 133 134 135 136 137 138 139 140 141 142 143 144 145 146 147 148 149 150 151 152 153 154 155 156 157 158 159
+    160 161 162 163 164 165 166 167 168 169 170 171 172 173 174 175 176 177 178 179 180 181 182 183 184 185 186 187 188 189 190 191
+    192 193 194 195 196 197 198 199 200 201 202 203 204 205 206 207 208 209 210 211 212 213 214 215 216 217 218 219 220 221 222 223
+    224 225 226 227 228 229 230 231 232 233 234 235 236 237 238 239 240 241 242 243 244 245 246 247 248 249 250 251 252 253 254 255
+);
+
+impl CtxGetters {
+    /// The getters for the component at `slot`.
+    pub fn for_slot(slot: usize) -> anyhow::Result<Self> {
+        ALL_SLOTS.get(slot).copied().ok_or_else(|| {
+            anyhow::anyhow!(
+                "component slot {slot} is out of range (a workload holds at most \
+                 {MAX_WORKLOAD_COMPONENTS} components)"
+            )
         })
     }
 }
 
-impl Drop for AccessorActiveCtxGuard<'_> {
-    fn drop(&mut self) {
-        let _ = self.accessor.with(|mut access| {
-            access
-                .data_mut()
-                .set_active_ctx(&self.previous_component_id)
-        });
+/// The store-wide context getter from before per-component contexts.
+///
+/// It serves the root's context, or a linked callee's for the duration of a
+/// linked call, through a single slot every call in the store shares. Under
+/// concurrent linked calls that slot can name the wrong component, so a
+/// plugin wired with this can serve one component's imports with another's
+/// identity, config and grants. Insecure: available only with the
+/// `insecure-store-wide-ctx` feature, for plugins that have not moved to the
+/// item's getters yet.
+#[deprecated(
+    since = "2.11.0",
+    note = "serves imports from a store-wide slot that concurrent linked calls can \
+            point at the wrong component; pass the item's getter instead: \
+            `let (linker, getter) = item.linker_and_getter();`"
+)]
+#[cfg(feature = "insecure-store-wide-ctx")]
+pub fn extract_active_ctx(ctx: &mut SharedCtx) -> ActiveCtx<'_> {
+    let (table, ctx) = ctx.split_legacy();
+    ActiveCtx { table, ctx }
+}
+
+/// The store-wide sockets view from before per-component contexts. See
+/// [`extract_active_ctx`] for why it is deprecated.
+#[deprecated(
+    since = "2.11.0",
+    note = "reads a store-wide slot that concurrent linked calls can point at the \
+            wrong component; use the item's own sockets getter instead: \
+            `item.ctx_getters().sockets`"
+)]
+#[cfg(feature = "insecure-store-wide-ctx")]
+pub fn extract_sockets(ctx: &mut SharedCtx) -> crate::sockets::WasiSocketsCtxView<'_> {
+    let (table, ctx) = ctx.split_legacy();
+    crate::sockets::WasiSocketsCtxView {
+        ctx: &mut ctx.sockets,
+        table,
     }
 }
 
 impl wasmtime::component::HasData for SharedCtx {
     type Data<'a> = ActiveCtx<'a>;
-}
-
-pub fn extract_active_ctx(ctx: &mut SharedCtx) -> ActiveCtx<'_> {
-    ActiveCtx {
-        table: &mut ctx.table,
-        ctx: &mut ctx.active_ctx,
-    }
-}
-
-pub fn extract_sockets(ctx: &mut SharedCtx) -> crate::sockets::WasiSocketsCtxView<'_> {
-    crate::sockets::WasiSocketsCtxView {
-        ctx: &mut ctx.active_ctx.sockets,
-        table: &mut ctx.table,
-    }
 }
 
 pub struct ActiveCtx<'a> {
@@ -284,6 +573,9 @@ pub struct Ctx {
     pub component_id: Arc<str>,
     /// The unique identifier for the workload this component belongs to
     pub workload_id: Arc<str>,
+    /// This component's slot in its workload: which [`CtxGetters`] its linker
+    /// was wired with, and so which context in a store serves its imports.
+    pub(crate) slot: usize,
     /// The WASI context used to provide WASI functionality to the components using this context.
     pub ctx: WasiCtx,
     /// The HTTP context used to provide HTTP functionality to the component.
@@ -368,37 +660,43 @@ impl std::fmt::Debug for Ctx {
     }
 }
 
-// TODO(#103): Do some cleverness to pull up the WasiCtx based on what component is actively executing
-impl WasiView for SharedCtx {
-    fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView {
-            ctx: &mut self.active_ctx.ctx,
-            table: &mut self.table,
-        }
-    }
-}
-
 impl wasmtime_wasi_io::IoView for SharedCtx {
     fn table(&mut self) -> &mut wasmtime_wasi::ResourceTable {
         &mut self.table
     }
 }
 
+/// The ROOT component's `wasi:http` view. Used only by host-initiated paths
+/// that serve the store's own root (delivering an incoming request to its
+/// handler export). Never wire it into a linker: a guest's own `wasi:http`
+/// imports use its slot getter ([`CtxGetters::http`]), or a linked callee's
+/// outbound requests would be judged against the root's `allowedHosts`.
+///
+/// Changed meaning: this used to follow the store-wide swap. A plugin that
+/// sends outbound requests on a component's behalf through `SharedCtx::http()`
+/// now always gets the root's policy, even when a linked callee called it.
+/// Such a plugin must take `item.ctx_getters().http` instead. It stays a trait
+/// impl because wasmtime-wasi-http's incoming path requires one.
 impl WasiHttpView for SharedCtx {
     fn http(&mut self) -> WasiHttpCtxView<'_> {
         WasiHttpCtxView {
-            ctx: &mut self.active_ctx.http,
+            ctx: &mut self.root_ctx.http,
             table: &mut self.table,
-            hooks: &mut self.active_ctx.http_hooks,
+            hooks: &mut self.root_ctx.http_hooks,
         }
     }
 }
 
+/// The ROOT component's `wasi:tls` view, the one interface still linked
+/// through a store-wide view (upstream keeps its `HasData` type private). It
+/// reaches only the TLS provider, which the engine installs identically on
+/// every context; where a connection may go is the per-slot socket check's
+/// decision.
 #[cfg(feature = "wasi-tls")]
 impl WasiTlsView for SharedCtx {
     fn tls(&mut self) -> WasiTlsCtxView<'_> {
         WasiTlsCtxView {
-            ctx: &mut self.active_ctx.tls,
+            ctx: &mut self.root_ctx.tls,
             table: &mut self.table,
         }
     }
@@ -488,6 +786,7 @@ pub struct CtxBuilder {
     store_id: Arc<str>,
     workload_id: Arc<str>,
     component_id: Arc<str>,
+    slot: usize,
     ctx: Option<WasiCtx>,
     sockets: Option<crate::sockets::WasiSocketsCtx>,
     plugins: HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>,
@@ -505,6 +804,7 @@ impl CtxBuilder {
             store_id: uuid::Uuid::now_v7().to_string().into(),
             component_id: component_id.into(),
             workload_id: workload_id.into(),
+            slot: 0,
             ctx: None,
             sockets: None,
             http_handler: None,
@@ -523,6 +823,13 @@ impl CtxBuilder {
     #[cfg(feature = "wasi-tls")]
     pub fn with_tls_provider(mut self, provider: SharedTlsProvider) -> Self {
         self.tls_provider = Some(provider);
+        self
+    }
+
+    /// The component's slot in its workload ([`Ctx::slot`]). Defaults to 0,
+    /// which is right for a store holding a single component.
+    pub fn with_slot(mut self, slot: usize) -> Self {
+        self.slot = slot;
         self
     }
 
@@ -582,6 +889,7 @@ impl CtxBuilder {
         Ctx {
             id: self.id,
             store_id: self.store_id,
+            slot: self.slot,
             ctx: self.ctx.unwrap_or_else(|| {
                 WasiCtxBuilder::new()
                     .args(&["main.wasm"])
@@ -649,51 +957,140 @@ mod tests {
         setup();
         let ctx = Ctx::builder("wk", "comp-a").build();
         let shared = SharedCtx::new(ctx);
-        assert_eq!(shared.active_ctx.component_id.as_ref(), "comp-a");
-        assert!(shared.contexts.is_empty());
+        assert_eq!(shared.root_ctx.component_id.as_ref(), "comp-a");
+        assert!(shared.linked.is_empty());
     }
 
-    #[test]
-    fn set_active_ctx_swaps_context() {
-        setup();
-        let ctx_a = Ctx::builder("wk", "comp-a").build();
-        let ctx_b = Ctx::builder("wk", "comp-b").build();
-        let comp_b_id: Arc<str> = Arc::from("comp-b");
-
+    fn two_slot_store() -> SharedCtx {
+        let ctx_a = Ctx::builder("wk", "comp-a").with_slot(1).build();
+        let ctx_b = Ctx::builder("wk", "comp-b").with_slot(3).build();
         let mut shared = SharedCtx::new(ctx_a);
-        shared.contexts.insert(comp_b_id.clone(), ctx_b);
+        shared.insert_linked_ctx(ctx_b).unwrap();
+        shared
+    }
 
-        shared.set_active_ctx(&comp_b_id).unwrap();
-        assert_eq!(shared.active_ctx.component_id.as_ref(), "comp-b");
-        // The old context should now be in the map
-        assert!(
-            shared
-                .contexts
-                .contains_key(&Arc::from("comp-a") as &Arc<str>)
+    /// Each slot's getter reaches that slot's context, however often and in
+    /// whatever order the others are used: there is no shared "current" slot
+    /// to leave behind.
+    #[test]
+    fn slot_getters_resolve_by_slot_not_by_history() {
+        setup();
+        let mut shared = two_slot_store();
+        let a = CtxGetters::for_slot(1).unwrap();
+        let b = CtxGetters::for_slot(3).unwrap();
+        for _ in 0..3 {
+            assert_eq!((b.active)(&mut shared).component_id.as_ref(), "comp-b");
+            assert_eq!((a.active)(&mut shared).component_id.as_ref(), "comp-a");
+            assert_eq!((b.active)(&mut shared).component_id.as_ref(), "comp-b");
+        }
+        assert_eq!(shared.root_ctx.component_id.as_ref(), "comp-a");
+    }
+
+    /// The deprecated store-wide getters keep their old behavior for
+    /// sequential calls: the root's context, a linked callee's while a call
+    /// is in flight, the root's again after. Unknown ids are an error.
+    #[test]
+    #[allow(deprecated)]
+    #[cfg(feature = "insecure-store-wide-ctx")]
+    fn deprecated_getters_follow_the_legacy_swap() {
+        setup();
+        let mut shared = two_slot_store();
+        assert_eq!(
+            extract_active_ctx(&mut shared).component_id.as_ref(),
+            "comp-a"
+        );
+
+        let call = shared.swap_legacy_slot("comp-b").unwrap();
+        assert_eq!(
+            extract_active_ctx(&mut shared).component_id.as_ref(),
+            "comp-b"
+        );
+        let _ = extract_sockets(&mut shared);
+        // Per-slot getters ignore the swap.
+        let a = CtxGetters::for_slot(1).unwrap();
+        assert_eq!((a.active)(&mut shared).component_id.as_ref(), "comp-a");
+
+        assert!(shared.swap_legacy_slot("not-here").is_err());
+        assert_eq!(
+            extract_active_ctx(&mut shared).component_id.as_ref(),
+            "comp-b"
+        );
+
+        shared.restore_legacy_slot(call);
+        assert_eq!(
+            extract_active_ctx(&mut shared).component_id.as_ref(),
+            "comp-a"
+        );
+        assert_eq!(shared.root_ctx.component_id.as_ref(), "comp-a");
+
+        // `set_active_ctx` moves the base; in-flight calls still win.
+        shared.set_active_ctx(&Arc::from("comp-b")).unwrap();
+        assert_eq!(
+            extract_active_ctx(&mut shared).component_id.as_ref(),
+            "comp-b"
+        );
+        let call = shared.swap_legacy_slot("comp-a").unwrap();
+        assert_eq!(
+            extract_active_ctx(&mut shared).component_id.as_ref(),
+            "comp-a"
+        );
+        shared.restore_legacy_slot(call);
+        assert_eq!(
+            extract_active_ctx(&mut shared).component_id.as_ref(),
+            "comp-b"
+        );
+        assert!(shared.set_active_ctx(&Arc::from("not-here")).is_err());
+
+        // Still fits wherever a plugin passes a getter, so existing
+        // `add_to_linker(linker, extract_active_ctx)` calls build unchanged.
+        let _: CtxGetter = extract_active_ctx;
+    }
+
+    /// Two overlapping calls finished first-in, first-out left the old
+    /// last-in, first-out restore on the callee for good. Each call now
+    /// removes its own entry, so the getters return to the root.
+    #[test]
+    #[allow(deprecated)]
+    #[cfg(feature = "insecure-store-wide-ctx")]
+    fn overlapping_calls_cannot_leave_the_legacy_slot_stuck() {
+        setup();
+        let mut shared = two_slot_store();
+        let first = shared.swap_legacy_slot("comp-b").unwrap();
+        let second = shared.swap_legacy_slot("comp-b").unwrap();
+        shared.restore_legacy_slot(first);
+        assert_eq!(
+            extract_active_ctx(&mut shared).component_id.as_ref(),
+            "comp-b"
+        );
+        shared.restore_legacy_slot(second);
+        assert_eq!(
+            extract_active_ctx(&mut shared).component_id.as_ref(),
+            "comp-a"
         );
     }
 
     #[test]
-    fn set_active_ctx_returns_error_for_unknown_id() {
+    fn insert_linked_ctx_refuses_a_taken_or_root_slot() {
         setup();
-        let ctx = Ctx::builder("wk", "comp-a").build();
-        let mut shared = SharedCtx::new(ctx);
-        let unknown: Arc<str> = Arc::from("nonexistent");
-        let result = shared.set_active_ctx(&unknown);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not found"));
+        let mut shared = two_slot_store();
+        let dup = Ctx::builder("wk", "comp-c").with_slot(3).build();
+        assert!(shared.insert_linked_ctx(dup).is_err());
+        let root = Ctx::builder("wk", "comp-d").with_slot(1).build();
+        assert!(shared.insert_linked_ctx(root).is_err());
+        let far = Ctx::builder("wk", "comp-e")
+            .with_slot(MAX_COMPONENT_SLOTS)
+            .build();
+        assert!(shared.insert_linked_ctx(far).is_err());
     }
 
     #[test]
-    fn set_active_ctx_is_noop_when_already_active() {
+    fn ctx_at_and_for_slot_bounds() {
         setup();
-        let ctx = Ctx::builder("wk", "comp-a").build();
-        let mut shared = SharedCtx::new(ctx);
-        let comp_a: Arc<str> = Arc::from("comp-a");
-        // Should succeed and be a no-op
-        shared.set_active_ctx(&comp_a).unwrap();
-        assert_eq!(shared.active_ctx.component_id.as_ref(), "comp-a");
-        assert!(shared.contexts.is_empty());
+        let mut shared = two_slot_store();
+        assert!(shared.ctx_at(2).is_none());
+        assert_eq!(shared.ctx_at(3).unwrap().component_id.as_ref(), "comp-b");
+        assert!(CtxGetters::for_slot(MAX_COMPONENT_SLOTS).is_err());
+        assert!(CtxGetters::for_slot(MAX_COMPONENT_SLOTS - 1).is_ok());
     }
 
     /// A store an embedder built for itself must never be ended by

@@ -45,7 +45,7 @@ use crate::engine::abandon::{AbandonedCallPolicy, arm_epoch_deadline};
 use crate::engine::companion;
 #[cfg(feature = "wasi-tls")]
 use crate::engine::ctx::SharedTlsProvider;
-use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx};
+use crate::engine::ctx::{Ctx, SharedCtx};
 use crate::engine::instance_driver::{InstanceJob, LinkedJob};
 use crate::engine::instance_pool::{self, ComponentInstance, InstancePool};
 use crate::engine::store::relocate::{self, Relocated, bridgeable_element_type};
@@ -77,6 +77,8 @@ use crate::sockets::{self, loopback};
 #[derive(Clone)]
 pub(crate) struct ComponentCtxTemplate {
     component_id: Arc<str>,
+    /// The component's context slot; see [`crate::engine::ctx::Ctx::slot`].
+    slot: usize,
     workload_id: Arc<str>,
     local_resources: crate::types::LocalResources,
     volume_mounts: Vec<ResolvedVolumeMount>,
@@ -98,6 +100,7 @@ impl ComponentCtxTemplate {
     fn from_metadata(metadata: &WorkloadMetadata) -> Self {
         Self {
             component_id: metadata.id.clone(),
+            slot: metadata.slot,
             workload_id: metadata.workload_id.clone(),
             local_resources: metadata.local_resources.clone(),
             volume_mounts: metadata.resolved_volume_mounts.clone(),
@@ -359,6 +362,7 @@ async fn build_ctx_from_template(
     }
 
     let mut ctx_builder = Ctx::builder(template.workload_id.clone(), template.component_id.clone())
+        .with_slot(template.slot)
         .with_host(http_handler)
         .with_wasi_ctx(wasi_ctx_builder.build())
         .with_sockets(sockets_ctx)
@@ -425,14 +429,13 @@ async fn new_store_from_templates_with(
         abandoned,
     } = kind;
     let store_id = uuid::Uuid::now_v7().to_string();
-    let active_ctx = build_ctx_from_template(active, http_handler, &store_id, is_service).await?;
-    let mut shared_ctx = SharedCtx::new(active_ctx).with_guest_memory(&active.guest_memory);
+
+    let root_ctx = build_ctx_from_template(active, http_handler, &store_id, is_service).await?;
+    let mut shared_ctx = SharedCtx::new(root_ctx).with_guest_memory(&active.guest_memory);
 
     for linked in linked {
         let linked_ctx = build_ctx_from_template(linked, http_handler, &store_id, false).await?;
-        shared_ctx
-            .contexts
-            .insert(linked.component_id.clone(), linked_ctx);
+        shared_ctx.insert_linked_ctx(linked_ctx)?;
     }
 
     configure(&mut shared_ctx);
@@ -447,11 +450,14 @@ async fn new_store_from_templates_with(
     arm_epoch_deadline(&mut store, abandoned);
     crate::engine::guest_memory::install_memory_limiter(&mut store);
 
-    let active_id = active.component_id.clone();
+    // Instantiating a linked component runs its start-up code, whose imports
+    // resolve to its own slot through its own linker: no store state to set.
     for (linked_id, linked_pre) in linked_instances {
-        store.data_mut().set_active_ctx(linked_id)?;
+        #[cfg(feature = "insecure-store-wide-ctx")]
+        let legacy = store.data_mut().swap_legacy_slot(linked_id)?;
         let instantiate_result = linked_pre.instantiate_async(&mut store).await;
-        store.data_mut().set_active_ctx(&active_id)?;
+        #[cfg(feature = "insecure-store-wide-ctx")]
+        store.data_mut().restore_legacy_slot(legacy);
         let instance = instantiate_result.map_err(|e| {
             anyhow::anyhow!(
                 "failed to instantiate linked component '{linked_id}' in ephemeral store: {e}"
@@ -1315,8 +1321,14 @@ async fn invoke_shared_store_linked_export(
     results: &mut [Val],
     inv: &LinkedExportInvocation,
 ) -> wasmtime::Result<()> {
-    let _active_ctx = AccessorActiveCtxGuard::new(accessor, &inv.plugin_component_id)?;
-
+    // No context to switch: the callee's own imports go through the callee's
+    // linker, whose getters are bound to the callee's slot, so they are served
+    // with its context while the caller and any other call in this store keep
+    // theirs, however the calls interleave. With the `insecure-store-wide-ctx`
+    // feature, plugins still wired with the deprecated `extract_active_ctx` read
+    // a store-wide slot, which keeps its old swap for them.
+    #[cfg(feature = "insecure-store-wide-ctx")]
+    let _legacy = LegacySlotGuard::new(accessor, &inv.plugin_component_id)?;
     let call: wasmtime::Result<()> = async {
         let (func, lowered) = accessor.with(|mut access| -> wasmtime::Result<_> {
             let instance = access
@@ -1364,6 +1376,33 @@ async fn invoke_shared_store_linked_export(
     trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoked dynamic export");
 
     Ok(())
+}
+
+/// Points the deprecated store-wide views at a linked callee for the duration
+/// of a shared-store call and restores them on drop, as the old
+/// `active_ctx` guard did. Correct only for sequential calls, which is why
+/// those views are deprecated.
+#[cfg(feature = "insecure-store-wide-ctx")]
+struct LegacySlotGuard<'a> {
+    accessor: &'a Accessor<SharedCtx>,
+    token: u64,
+}
+
+#[cfg(feature = "insecure-store-wide-ctx")]
+impl<'a> LegacySlotGuard<'a> {
+    fn new(accessor: &'a Accessor<SharedCtx>, component_id: &str) -> wasmtime::Result<Self> {
+        let token = accessor.with(|mut access| access.data_mut().swap_legacy_slot(component_id))?;
+        Ok(Self { accessor, token })
+    }
+}
+
+#[cfg(feature = "insecure-store-wide-ctx")]
+impl Drop for LegacySlotGuard<'_> {
+    fn drop(&mut self) {
+        let token = self.token;
+        self.accessor
+            .with(|mut access| access.data_mut().restore_legacy_slot(token));
+    }
 }
 
 #[cfg(test)]

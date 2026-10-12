@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use wasmtime::component::{Accessor, Resource, StreamReader};
 
-use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
+use crate::engine::ctx::{ActiveCtx, SharedCtx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::multiplex::Multiplexer;
 use crate::plugin::{HostPlugin, WitInterfaces};
@@ -468,6 +468,9 @@ impl HostPlugin for MultiplexedAsyncBlobstore {
         item: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = item.ctx_getter();
         if !interfaces.contains("wasmcloud", "blobstore", &[]) {
             return Ok(());
         }
@@ -501,24 +504,20 @@ impl HostPlugin for MultiplexedAsyncBlobstore {
                 linker,
                 &component,
                 |name| self.mux.resolve(&registry, name),
-                extract_active_ctx,
+                getter,
             )?;
         }
         // A plain (unlabeled) `blobstore` import: bind the standard interface to
         // the workload's default backend — no label required.
         if has_plain {
             bindings::wasmcloud::blobstore::blobstore::add_to_linker::<_, SharedCtx>(
-                linker,
-                extract_active_ctx,
+                linker, getter,
             )?;
         }
         // `container` is bound standalone regardless: a guest imports it
         // *unlabeled* via `blobstore`'s `use container`, and its methods route
         // through the resource's stored backend, not a label.
-        bindings::wasmcloud::blobstore::container::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
+        bindings::wasmcloud::blobstore::container::add_to_linker::<_, SharedCtx>(linker, getter)?;
         Ok(())
     }
 

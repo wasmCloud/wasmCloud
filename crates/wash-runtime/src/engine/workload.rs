@@ -184,6 +184,10 @@ pub struct WorkloadMetadata {
     pub(crate) annotations: Arc<HashMap<String, String>>,
     /// Top-level imports already supplied by host plugins.
     plugin_bound_instances: HashSet<String>,
+    /// This item's context slot in its workload ([`crate::engine::ctx::Ctx::slot`]):
+    /// its linker is wired with the getters for this slot, and every store
+    /// that instantiates it holds its context there.
+    pub(crate) slot: usize,
 }
 
 /// Kubernetes annotation set by the runtime-operator for the parent WorkloadDeployment.
@@ -263,6 +267,49 @@ impl WorkloadMetadata {
     /// Returns a mutable reference to the component's linker.
     pub fn linker(&mut self) -> &mut Linker<SharedCtx> {
         &mut self.linker
+    }
+
+    /// This item's context slot ([`crate::engine::ctx::Ctx::slot`]).
+    pub fn slot(&self) -> usize {
+        self.slot
+    }
+
+    /// The context getter to pass to a generated `add_to_linker` when wiring an
+    /// interface into THIS item's linker. It resolves to this item's own
+    /// context in whatever store the item is instantiated into, so a call is
+    /// always served with the identity, grants and config of the component
+    /// that made it, including when that component is a linked callee running
+    /// in another component's store.
+    ///
+    /// Fetch it in each `on_workload_item_bind` from the item being bound, and
+    /// never cache it across items: a getter is bound to a slot, not to a
+    /// linker, and wired into another item's linker it would serve that item's
+    /// imports with this item's context. Prefer [`Self::linker_and_getter`],
+    /// which hands out the two together.
+    #[allow(clippy::expect_used)] // the engine never assigns an out-of-range slot
+    pub fn ctx_getter(&self) -> crate::engine::ctx::CtxGetter {
+        crate::engine::ctx::CtxGetters::for_slot(self.slot)
+            .expect("an item's slot is assigned in range")
+            .active
+    }
+
+    /// Every getter bound to this item's slot: the [`Self::ctx_getter`]
+    /// context, and the sockets, CLI, clocks, filesystem, random and HTTP
+    /// views, for plugins that wire those interfaces themselves. The same
+    /// rule applies: fetch them from the item being bound, never reuse them
+    /// for another item.
+    #[allow(clippy::expect_used)] // the engine never assigns an out-of-range slot
+    pub fn ctx_getters(&self) -> crate::engine::ctx::CtxGetters {
+        crate::engine::ctx::CtxGetters::for_slot(self.slot)
+            .expect("an item's slot is assigned in range")
+    }
+
+    /// This item's linker together with its [`Self::ctx_getter`], so a plugin
+    /// can wire an interface without juggling the two borrows (fetching the
+    /// linker first leaves the item mutably borrowed).
+    pub fn linker_and_getter(&mut self) -> (&mut Linker<SharedCtx>, crate::engine::ctx::CtxGetter) {
+        let getter = self.ctx_getter();
+        (&mut self.linker, getter)
     }
 
     /// Returns a reference to the wasmtime [`Component`].
@@ -451,6 +498,7 @@ impl WorkloadService {
                 proxied_imports: Vec::new(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
+                slot: 0,
             },
             handle: None,
             max_restarts,
@@ -562,6 +610,7 @@ impl WorkloadComponent {
                 proxied_imports: Vec::new(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
+                slot: 0,
             },
             name: component_name.into(),
             instances: Arc::new(InstancePool::new(instances)),

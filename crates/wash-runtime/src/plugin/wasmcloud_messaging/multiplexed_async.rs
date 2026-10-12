@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use wasmtime::component::Accessor;
 
-use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
+use crate::engine::ctx::{ActiveCtx, SharedCtx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::multiplex::Multiplexer;
 use crate::plugin::{HostPlugin, WitInterfaces};
@@ -270,6 +270,9 @@ impl HostPlugin for MultiplexedAsyncMessaging {
         item: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = item.ctx_getter();
         // `claims` already refused everything that is not an async messaging
         // interface, so this only narrows to the package (a workload item binds
         // one plugin for one package, but filtering keeps the registry honest).
@@ -310,19 +313,15 @@ impl HostPlugin for MultiplexedAsyncMessaging {
                 linker,
                 &component,
                 |name| self.mux.resolve(&registry, name),
-                extract_active_ctx,
+                getter,
             )?;
         }
         if has_plain {
             bindings::wasmcloud::messaging0_3_0::consumer::add_to_linker::<_, SharedCtx>(
-                linker,
-                extract_active_ctx,
+                linker, getter,
             )?;
         }
-        bindings::wasmcloud::messaging0_3_0::types::add_to_linker::<_, SharedCtx>(
-            linker,
-            extract_active_ctx,
-        )?;
+        bindings::wasmcloud::messaging0_3_0::types::add_to_linker::<_, SharedCtx>(linker, getter)?;
         Ok(())
     }
 

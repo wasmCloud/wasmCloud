@@ -26,7 +26,7 @@ use tracing::instrument;
 
 use crate::{
     engine::{
-        ctx::{ActiveCtx, SharedCtx, extract_active_ctx},
+        ctx::{ActiveCtx, SharedCtx},
         workload::WorkloadItem,
     },
     plugin::{HostPlugin, WitInterfaces},
@@ -133,6 +133,9 @@ impl HostPlugin for DynamicConfig {
         component_handle: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = component_handle.ctx_getter();
         // This plugin serves one store per component
         // (`supports_named_instances` is false), so every `wasi:config` entry
         // the workload declared feeds that one store.
@@ -149,7 +152,7 @@ impl HostPlugin for DynamicConfig {
         // Add `wasi:config/store` to the workload's linker
         bindings::wasi::config::store::add_to_linker::<_, SharedCtx>(
             component_handle.linker(),
-            extract_active_ctx,
+            getter,
         )?;
 
         // Per-component view, later wins on key conflicts: the workload's

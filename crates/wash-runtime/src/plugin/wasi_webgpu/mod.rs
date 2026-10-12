@@ -72,7 +72,15 @@ impl Default for WebGpu {
 
 impl wasi_webgpu_wasmtime::WasiWebGpuCtxView for SharedCtx {
     fn webgpu_ctx(&mut self) -> wasi_webgpu_wasmtime::WasiWebGpuCtx<'_> {
-        let plugin = self.active_ctx.get_plugin_ref::<WebGpu>(WASI_WEBGPU_ID);
+        // Host-wide, and bound to whichever component imports it: in a store
+        // where only a linked callee binds wasi:webgpu, the root's context does
+        // not carry the plugin, so look it up across the store.
+        #[allow(clippy::expect_used)] // linked only for items the plugin bound
+        let plugin = self
+            .store_plugins
+            .get(WASI_WEBGPU_ID)
+            .and_then(|p| p.downcast_ref::<WebGpu>())
+            .expect("wasi:webgpu is linked only where the plugin is bound");
         wasi_webgpu_wasmtime::WasiWebGpuCtx {
             instance: &plugin.gpu,
             table: &mut self.table,
@@ -123,5 +131,28 @@ impl HostPlugin for WebGpu {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::ctx::Ctx;
+    use std::collections::HashMap;
+    use wasi_webgpu_wasmtime::WasiWebGpuCtxView;
+
+    /// Only a linked callee binds wasi:webgpu: the root's context does not
+    /// carry the plugin, and the view must still find it.
+    #[test]
+    fn webgpu_view_finds_a_plugin_only_a_linked_callee_carries() {
+        let gpu: Arc<dyn HostPlugin + Send + Sync> = Arc::new(WebGpu::default());
+        let root = Ctx::builder("wk", "caller").with_slot(1).build();
+        let callee = Ctx::builder("wk", "callee")
+            .with_slot(2)
+            .with_plugins(HashMap::from([(WASI_WEBGPU_ID, gpu)]))
+            .build();
+        let mut shared = SharedCtx::new(root);
+        shared.insert_linked_ctx(callee).unwrap();
+        let _ = shared.webgpu_ctx();
     }
 }

@@ -33,7 +33,7 @@ use tracing::instrument;
 use wasmtime::component::{Accessor, Resource};
 use zeroize::Zeroize;
 
-use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
+use crate::engine::ctx::{ActiveCtx, SharedCtx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::wit::{WitInterface, WitWorld};
@@ -252,6 +252,9 @@ impl HostPlugin for WasmcloudSecrets {
         item: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
+        // Bound to this item's own context slot, so its calls are served with
+        // its own identity and config wherever it is instantiated.
+        let getter = item.ctx_getter();
         let has_dynamic = interfaces.contains("wasmcloud", "secrets", &["store", "reveal"]);
 
         // Every labeled `wasmcloud:secrets/secret` import: label -> the value
@@ -281,10 +284,7 @@ impl HostPlugin for WasmcloudSecrets {
         // labeled-secret-only component that never imports plain `store`
         // itself — `secret` and `reveal` only `use` the type, they don't
         // define it.
-        bindings::wasmcloud::secrets::store::add_to_linker::<_, SharedCtx>(
-            item.linker(),
-            extract_active_ctx,
-        )?;
+        bindings::wasmcloud::secrets::store::add_to_linker::<_, SharedCtx>(item.linker(), getter)?;
 
         if has_dynamic {
             // The unlabeled `store`/`reveal` entries all carry the *same*
@@ -311,7 +311,7 @@ impl HostPlugin for WasmcloudSecrets {
 
             bindings::wasmcloud::secrets::reveal::add_to_linker::<_, SharedCtx>(
                 item.linker(),
-                extract_active_ctx,
+                getter,
             )?;
 
             // A rebind (e.g. the host replaying binds after a plugin restart)
@@ -330,7 +330,7 @@ impl HostPlugin for WasmcloudSecrets {
             if !has_dynamic {
                 bindings::wasmcloud::secrets::reveal::add_to_linker::<_, SharedCtx>(
                     item.linker(),
-                    extract_active_ctx,
+                    getter,
                 )?;
             }
 
@@ -357,7 +357,7 @@ impl HostPlugin for WasmcloudSecrets {
                          its resolved bind-time config"
                     ))),
                 },
-                extract_active_ctx,
+                getter,
             )?;
             for value in labeled.values_mut().flatten() {
                 value.zeroize();

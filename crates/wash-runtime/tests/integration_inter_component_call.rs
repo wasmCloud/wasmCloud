@@ -22,7 +22,7 @@ use tokio::{sync::Mutex, time::timeout};
 use wash_runtime::{
     engine::{
         Engine,
-        ctx::{ActiveCtx, SharedCtx, extract_active_ctx},
+        ctx::{ActiveCtx, SharedCtx},
         workload::{ResolvedWorkload, WorkloadItem},
     },
     host::{
@@ -130,10 +130,12 @@ impl HostPlugin for CustomLogging {
             );
         }
 
-        // Add `wasi:logging/logging` to the workload's linker
+        // Add `wasi:logging/logging` to the workload's linker, served with
+        // this item's own context.
+        let getter = workload_handle.ctx_getter();
         bindings::wasi::logging::logging::add_to_linker::<_, SharedCtx>(
             workload_handle.linker(),
-            extract_active_ctx,
+            getter,
         )?;
 
         Ok(())
