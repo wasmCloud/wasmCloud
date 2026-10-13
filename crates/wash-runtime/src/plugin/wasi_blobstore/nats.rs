@@ -109,6 +109,25 @@ pub struct StreamObjectNamesHandle {
     pub objects: List,
 }
 
+/// Whether `name` is an object of `store` now. NATS's object store keeps a
+/// deleted object's metadata, its tombstone, which `info` still returns with
+/// `deleted: true`, so presence checks that flag, as the multiplexed NATS
+/// backend does.
+async fn present(store: &ObjectStore, name: &str) -> bool {
+    matches!(store.info(name).await, Ok(info) if !info.deleted)
+}
+
+/// The next entry of a listing that is an object now: a listing returns
+/// deleted objects' tombstones too.
+async fn next_present(objects: &mut List) -> Option<<List as futures::Stream>::Item> {
+    loop {
+        match objects.next().await {
+            Some(Ok(info)) if info.deleted => continue,
+            next => return next,
+        }
+    }
+}
+
 /// NATS blobstore plugin
 #[derive(Clone)]
 pub struct NatsBlobstore {
@@ -512,10 +531,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         name: ObjectName,
     ) -> wasmtime::Result<Result<bool, ContainerError>> {
         let container_data = self.table.get(&container)?;
-        match container_data.store.info(name.as_str()).await {
-            Ok(_) => Ok(Ok(true)),
-            Err(_) => Ok(Ok(false)),
-        }
+        Ok(Ok(present(&container_data.store, name.as_str()).await))
     }
 
     #[instrument(name = "wasi.blobstore.object_info", skip(self, container))]
@@ -526,13 +542,13 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<ObjectMetadata, ContainerError>> {
         let container_data = self.table.get(&container)?;
         match container_data.store.info(name.as_str()).await {
-            Ok(info) => Ok(Ok(ObjectMetadata {
+            Ok(info) if !info.deleted => Ok(Ok(ObjectMetadata {
                 name: info.name,
                 container: container_data.name.clone(),
                 created_at: 0,
                 size: info.size as u64,
             })),
-            Err(_) => Ok(Err(format!("object '{name}' does not exist"))),
+            _ => Ok(Err(format!("object '{name}' does not exist"))),
         }
     }
 
@@ -564,7 +580,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
             }
         };
 
-        while let Some(object) = object_list.next().await {
+        while let Some(object) = next_present(&mut object_list).await {
             match object {
                 Ok(obj) => {
                     if let Err(e) = container_data.store.delete(&obj.name).await {
@@ -609,7 +625,7 @@ impl<'a> bindings::wasi::blobstore::container::HostStreamObjectNames for ActiveC
 
         let mut objects = Vec::<ObjectName>::new();
         for _ in 0..len {
-            match stream_handle.objects.next().await {
+            match next_present(&mut stream_handle.objects).await {
                 Some(Ok(obj)) => {
                     objects.push(obj.name);
                 }
@@ -633,7 +649,7 @@ impl<'a> bindings::wasi::blobstore::container::HostStreamObjectNames for ActiveC
         let stream_handle = self.table.get_mut(&stream)?;
 
         for i in 0..num {
-            match stream_handle.objects.next().await {
+            match next_present(&mut stream_handle.objects).await {
                 Some(Ok(_)) => {}
                 Some(Err(e)) => {
                     return Ok(Err(format!("failed to read object name from stream: {e}")));
@@ -894,5 +910,66 @@ impl HostPlugin for NatsBlobstore {
             .await;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use testcontainers::{
+        GenericImage, ImageExt,
+        core::{IntoContainerPort, WaitFor},
+        runners::AsyncRunner,
+    };
+
+    /// A deleted object is absent, although NATS keeps its tombstone, which
+    /// `info` and a listing still return.
+    #[tokio::test]
+    #[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+    async fn a_deleted_object_is_absent() {
+        let nats = GenericImage::new("nats", "2.12.8-alpine")
+            .with_exposed_port(4222.tcp())
+            .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+            .with_cmd(["-js"])
+            .start()
+            .await
+            .expect("NATS starts");
+        let port = nats
+            .get_host_port_ipv4(4222)
+            .await
+            .expect("NATS has a port");
+        let client = async_nats::connect(format!("nats://127.0.0.1:{port}"))
+            .await
+            .expect("NATS answers");
+        let store = async_nats::jetstream::new(client)
+            .create_object_store(object_store::Config {
+                bucket: "tombstones".to_string(),
+                ..Default::default()
+            })
+            .await
+            .expect("the store is made");
+        store
+            .put("kept", &mut "kept".as_bytes())
+            .await
+            .expect("put");
+        store
+            .put("deleted", &mut "deleted".as_bytes())
+            .await
+            .expect("put");
+        store.delete("deleted").await.expect("delete");
+
+        // `info` still returns the tombstone: presence checks its flag.
+        assert!(store.info("deleted").await.expect("a tombstone").deleted);
+        assert!(present(&store, "kept").await);
+        assert!(!present(&store, "deleted").await);
+        assert!(!present(&store, "never").await);
+
+        // A listing returns the tombstone too: its walk skips it.
+        let mut listing = store.list().await.expect("a listing");
+        let mut names = Vec::new();
+        while let Some(info) = next_present(&mut listing).await {
+            names.push(info.expect("an entry").name);
+        }
+        assert_eq!(names, ["kept"]);
     }
 }
