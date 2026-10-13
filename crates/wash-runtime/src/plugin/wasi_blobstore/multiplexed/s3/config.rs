@@ -13,6 +13,17 @@ use crate::plugin::multiplex::BACKEND_CONFIG_KEY;
 /// Host-owned: see the plugins' `binding_schema`.
 pub(crate) const USE_HOST_IDENTITY_KEY: &str = "use_host_identity";
 
+/// Every spelling the host owns: the whole table, since each key decides where
+/// a binding connects or as whom, plus the host-identity opt-in. Listed by
+/// spelling because the host folds only case and `_`/`-`, so
+/// `aws_secret_access_key` is not `secret_access_key` to it.
+pub(crate) fn host_owned_spellings() -> impl Iterator<Item = &'static str> {
+    CONFIG_KEYS
+        .iter()
+        .flat_map(|spec| spec.aliases.iter().copied())
+        .chain(std::iter::once(USE_HOST_IDENTITY_KEY))
+}
+
 /// One manifest config key the s3 backend forwards to `object_store`.
 pub(super) struct ConfigKeySpec {
     /// Canonical name, used in `pool_key` and in error messages.
@@ -248,6 +259,22 @@ mod tests {
                 assert_eq!(parsed, spec.key, "'{alias}' resolves to the wrong key");
             }
         }
+    }
+
+    #[test]
+    fn every_accepted_key_is_host_owned() {
+        // Whatever `builder_from_config` accepts, the host must own, so a key
+        // added to the table cannot become workload-writable by omission.
+        let owned: Vec<&str> = host_owned_spellings().collect();
+        for spec in CONFIG_KEYS {
+            for alias in spec.aliases {
+                assert!(
+                    owned.contains(alias),
+                    "'{alias}' accepted but not host-owned"
+                );
+            }
+        }
+        assert!(owned.contains(&USE_HOST_IDENTITY_KEY));
     }
 
     #[test]

@@ -1,27 +1,41 @@
 //! S3 [`BlobBackend`] for the multiplexed blobstore plugin, on `object_store`.
 //!
-//! Selected per host interface with `backend: s3`; the other keys are the
-//! ones in [`CONFIG_KEYS`], under the names AWS uses:
+//! Selected with `backend: s3`. Every other key is one of
+//! [`CONFIG_KEYS`](config::CONFIG_KEYS), under the names AWS uses, and all of
+//! them are host-owned: each decides where a binding connects or as whom. On
+//! `wash host` (`workloadConfig: deny`) an operator declares the binding, with
+//! credentials from a secret source, and a workload asks for it by name:
 //!
 //! ```yaml
+//! # host config
+//! secrets:
+//!   s3-assets:
+//!     fromEnv: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+//! host:
+//!   plugins:
+//!     - id: wasi-blobstore-multiplexed
+//!       bindings:
+//!         assets:
+//!           config:
+//!             backend: s3
+//!             region: eu-central-1
+//!           secretFrom: [s3-assets]
+//!
+//! # workload manifest
 //! host_interfaces:
 //!   - namespace: wasi
 //!     package: blobstore
 //!     interfaces: [blobstore, container]
-//!     config:
-//!       backend: s3
-//!       endpoint: https://s3.eu-central-1.amazonaws.com
-//!       region: eu-central-1
-//!       access_key_id: AKIA...
-//!       secret_access_key: ...
+//!     name: assets
 //! ```
 //!
-//! Every binding names exactly one credential source: static keys, `skip_signature:
-//! true` for anonymous access, or `use_host_identity: true` to run as the
-//! host (its `AWS_*` environment, then the instance role). The last one is a
-//! host-owned key, so under `workloadConfig: deny` only an operator's
-//! `host.plugins` binding can grant it; a workload that names no source fails
-//! to bind rather than inheriting the host's identity.
+//! A workload that writes any of these keys itself is refused. On `wash dev`
+//! (`allow`) they may sit in the manifest's own `config` instead.
+//!
+//! Every binding names exactly one credential source: static keys,
+//! `skip_signature: true` for anonymous access, or `use_host_identity: true`
+//! to run as the host (its `AWS_*` environment, then the instance role). One
+//! that names none fails to bind rather than inheriting the host's identity.
 //!
 //! Each container is one bucket, provisioned outside wasmCloud:
 //! `create_container` and `delete_container` return an error until
@@ -56,7 +70,7 @@ use super::{
 
 mod config;
 
-pub(crate) use config::USE_HOST_IDENTITY_KEY;
+pub(crate) use config::host_owned_spellings;
 use config::{builder_from_config, lookup, normalize_key};
 
 /// Ceiling on bucket clients kept per backend, and how long an unused one

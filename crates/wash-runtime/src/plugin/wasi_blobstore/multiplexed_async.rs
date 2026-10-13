@@ -463,12 +463,12 @@ impl HostPlugin for MultiplexedAsyncBlobstore {
         true
     }
 
-    /// Same schema as the sync plugin: the S3 host-identity opt-in is
-    /// host-owned, everything else stays the workload's.
+    /// Same schema as the sync plugin: every S3 key is host-owned, the other
+    /// backends' keys stay the workload's.
     fn binding_schema(&self) -> crate::plugin::BindingSchema {
-        crate::plugin::BindingSchema::with_host_owned_keys([
-            super::multiplexed::USE_HOST_IDENTITY_KEY,
-        ])
+        crate::plugin::BindingSchema::with_host_owned_keys(
+            super::multiplexed::host_owned_spellings(),
+        )
     }
 
     async fn on_workload_item_bind<'a>(
@@ -633,14 +633,12 @@ mod tests {
     }
 
     #[test]
-    fn schema_owns_only_the_s3_host_identity_opt_in() {
-        let schema = MultiplexedAsyncBlobstore::new().binding_schema();
-        assert!(schema.owns("use_host_identity"));
-        assert!(schema.owns("use-host-identity"), "spellings fold");
-        // Open schema: the other backends' keys stay the workload's and
-        // unknown keys are not refused.
-        assert!(!schema.owns("root"));
-        assert!(!schema.owns("url"));
-        assert!(!schema.is_closed());
+    fn schema_matches_the_sync_plugin() {
+        // The two surfaces route to the same backends, so a key the operator
+        // owns on one must be owned on the other.
+        assert_eq!(
+            MultiplexedAsyncBlobstore::new().binding_schema(),
+            crate::plugin::wasi_blobstore::MultiplexedBlobstore::new().binding_schema()
+        );
     }
 }
