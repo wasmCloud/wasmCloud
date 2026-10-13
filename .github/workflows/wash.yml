@@ -182,7 +182,7 @@ jobs:
           rust-toolchain: nightly
           rust-components: rustfmt
       - name: Install cargo-machete
-        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         env:
           # Authenticate the action's GitHub API calls so they aren't throttled
           # by the 60/hr anonymous per-IP limit shared across hosted runners.
@@ -677,7 +677,7 @@ jobs:
             echo "runtime-gateway image build failed (attempt ${attempt}/3); retrying in 10 seconds"
             sleep 10
           done
-      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           cluster_name: wasmcloud-e2e
           config: deploy/kind/kind-config.yaml
