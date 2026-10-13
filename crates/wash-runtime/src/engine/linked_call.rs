@@ -262,7 +262,6 @@ pub(crate) fn func_is_bridge_safe(func_ty: &ComponentFunc) -> bool {
 async fn build_ctx_from_template(
     template: &ComponentCtxTemplate,
     http_handler: &crate::host::HostRef,
-    all_volume_mounts: &[ResolvedVolumeMount],
     store_id: &str,
     is_service: bool,
 ) -> anyhow::Result<Ctx> {
@@ -315,7 +314,10 @@ async fn build_ctx_from_template(
     }
 
     let mut ctx = ctx_builder.build();
-    ctx.volume_mounts = all_volume_mounts.to_vec();
+    // Only this component's own mounts. Preopening every mount of every
+    // component in the store handed a linked component (and the component it
+    // is linked into) directories it was never granted.
+    ctx.volume_mounts = template.volume_mounts.clone();
     ctx.store_id = store_id.to_string().into();
     Ok(ctx)
 }
@@ -329,24 +331,11 @@ pub(crate) async fn new_store_from_templates(
     is_service: bool,
 ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
     let store_id = uuid::Uuid::now_v7().to_string();
-    let all_volume_mounts = std::iter::once(active)
-        .chain(linked.iter())
-        .flat_map(|template| template.volume_mounts.clone())
-        .collect::<Vec<_>>();
-    let active_ctx = build_ctx_from_template(
-        active,
-        http_handler,
-        &all_volume_mounts,
-        &store_id,
-        is_service,
-    )
-    .await?;
+    let active_ctx = build_ctx_from_template(active, http_handler, &store_id, is_service).await?;
     let mut shared_ctx = SharedCtx::new(active_ctx).with_guest_memory(&active.guest_memory);
 
     for linked in linked {
-        let linked_ctx =
-            build_ctx_from_template(linked, http_handler, &all_volume_mounts, &store_id, false)
-                .await?;
+        let linked_ctx = build_ctx_from_template(linked, http_handler, &store_id, false).await?;
         shared_ctx
             .contexts
             .insert(linked.component_id.clone(), linked_ctx);
