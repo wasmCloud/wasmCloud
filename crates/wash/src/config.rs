@@ -2671,6 +2671,75 @@ host:
         );
     }
 
+    /// The S3 blobstore backend takes its credentials the same way: from the
+    /// secrets catalog through `secretFrom`, never from a workload's own
+    /// config, since every S3 key is host-owned under `deny`.
+    #[cfg(feature = "wasm_component_model_implements")]
+    #[tokio::test]
+    async fn s3_blobstore_credentials_arrive_through_secret_from() {
+        use wash_runtime::plugin::HostPlugin;
+        use wash_runtime::plugin::multiplex::BackendProvider;
+        use wash_runtime::plugin::wasi_blobstore::{MultiplexedBlobstore, S3BlobProvider};
+
+        let yaml = r#"
+secrets:
+  s3-assets:
+    inline:
+      AWS_ACCESS_KEY_ID: AKIA-FROM-THE-CATALOG
+      AWS_SECRET_ACCESS_KEY: secret-from-the-catalog
+host:
+  plugins:
+    - id: wasi-blobstore-multiplexed
+      bindings:
+        assets:
+          config:
+            backend: s3
+            region: eu-central-1
+          secretFrom:
+            - s3-assets
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let bindings = config
+            .host()
+            .to_plugin_bindings(&config, Path::new("."), None)
+            .expect("the declaration must resolve");
+        let declared = bindings.for_plugin("wasi-blobstore-multiplexed");
+        let schema = MultiplexedBlobstore::new().binding_schema();
+
+        let resolved = declared
+            .resolve(
+                "assets",
+                &HashMap::new(),
+                &schema,
+                wash_runtime::plugin::bindings::never_narrows(),
+            )
+            .expect("a workload that asks for `assets` is served");
+        assert_eq!(
+            resolved.get("AWS_ACCESS_KEY_ID").map(String::as_str),
+            Some("AKIA-FROM-THE-CATALOG"),
+            "the credential arrives from the secrets catalog"
+        );
+        // The S3 backend accepts the resolved binding as it stands: the
+        // catalog's env-var names are spellings it reads.
+        assert!(S3BlobProvider.instantiate(&resolved).await.is_ok());
+
+        // A workload cannot bring or replace a credential itself.
+        let err = declared
+            .resolve(
+                "assets",
+                &HashMap::from([(
+                    "aws_secret_access_key".to_string(),
+                    "from-the-manifest".to_string(),
+                )]),
+                &schema,
+                wash_runtime::plugin::bindings::never_narrows(),
+            )
+            .expect_err("a workload-written credential is refused under `deny`")
+            .to_string();
+        assert!(err.contains("aws_secret_access_key"), "got: {err}");
+        assert!(!err.contains("from-the-manifest"), "got: {err}");
+    }
+
     /// The old block is an error, not an ignored key. Serde drops unknown
     /// fields, so an operator who upgrades with `host.wasmcloudNats` still in
     /// place would otherwise start a host that silently serves no binding, no
