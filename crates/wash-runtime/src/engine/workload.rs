@@ -168,6 +168,9 @@ pub struct WorkloadMetadata {
     /// [`Default`] here is an unmetered budget, so a metadata built outside an
     /// engine is neither charged nor limited.
     pub(crate) guest_memory: Arc<crate::engine::guest_memory::GuestMemoryBudget>,
+    /// Set once the workload's owner has been told what its trap may mean.
+    /// The engine gives every item of a workload the same one.
+    pub(crate) rebuild_advised: Arc<crate::engine::compat::RebuildAdvised>,
     /// Linked component ids
     linked_components: HashSet<Arc<str>>,
     /// Workload annotations
@@ -439,6 +442,7 @@ impl WorkloadService {
                 loopback,
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
+                rebuild_advised: Arc::default(),
                 linked_components: Default::default(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
@@ -551,6 +555,7 @@ impl WorkloadComponent {
                 loopback,
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
+                rebuild_advised: Arc::default(),
                 linked_components: Default::default(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
@@ -948,7 +953,8 @@ impl ResolvedWorkload {
                         .run_concurrent(async move |accessor| {
                             instance.wasi_cli_run().call_run(accessor).await
                         })
-                        .await;
+                        .await
+                        .inspect_err(|e| crate::engine::compat::advise_rebuild(store.data(), e));
                     match result {
                         Ok(Ok(Ok(()))) => {
                             info!("P3 service exited successfully");

@@ -225,6 +225,7 @@ pub fn targets_wasip3_http(component: &Component) -> bool {
 }
 
 pub mod abandon;
+pub mod compat;
 pub mod ctx;
 pub mod dispatch;
 pub mod guest_memory;
@@ -326,6 +327,8 @@ pub struct Engine {
     /// [`host_memory::HostMemoryBudgets::max_guest_memory`] is the cap on.
     /// Every store this engine builds carries a limiter drawing on it.
     pub(crate) guest_memory: Arc<guest_memory::GuestMemoryBudget>,
+    /// What is done at load with a guest whose async runtime wasmtime traps.
+    compat: compat::Pass,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
@@ -583,6 +586,7 @@ impl Engine {
         }
 
         let loopback = Arc::default();
+        let rebuild_advised = Arc::<compat::RebuildAdvised>::default();
 
         // Iniitalize service
         let service = if let Some(svc) = service {
@@ -594,8 +598,9 @@ impl Engine {
                 &validated_volumes,
                 Arc::clone(&loopback),
             ) {
-                Ok(handle) => {
+                Ok(mut handle) => {
                     tracing::debug!("successfully initialized service component");
+                    handle.metadata.rebuild_advised = Arc::clone(&rebuild_advised);
                     Some(handle.with_annotations(Arc::clone(&annotations_arc)))
                 }
                 Err(e) => {
@@ -618,8 +623,9 @@ impl Engine {
                 &validated_volumes,
                 Arc::clone(&loopback),
             ) {
-                Ok(handle) => {
+                Ok(mut handle) => {
                     tracing::debug!("successfully initialized workload component");
+                    handle.metadata.rebuild_advised = Arc::clone(&rebuild_advised);
                     workload_components.push(handle.with_annotations(Arc::clone(&annotations_arc)));
                 }
                 Err(e) => {
@@ -733,16 +739,20 @@ impl Engine {
     }
 
     /// Load a WebAssembly component from raw bytes or yields a previously compiled one.
+    ///
+    /// What is compiled is what [`compat::Pass::prepare`] makes of the bytes.
+    /// `digest` names the bytes as they arrived either way.
     #[instrument(name = "load_component_bytes", skip_all, fields(digest = %digest.as_ref().map(|d| d.as_ref()).unwrap_or("none")))]
     fn load_component_bytes(
         &self,
         bytes: impl AsRef<[u8]>,
         digest: Option<impl AsRef<str>>,
     ) -> anyhow::Result<Component> {
+        let compat = &self.compat;
         match digest {
             None => {
                 tracing::debug!("no digest provided, compiling component without caching");
-                let compiled = Component::new(&self.inner, bytes.as_ref())
+                let compiled = Component::new(&self.inner, compat.prepare(bytes.as_ref(), None))
                     .map_err(|e| self.explain_compile_failure(e))
                     .context("failed to compile component from bytes")?;
                 Ok(compiled)
@@ -759,7 +769,7 @@ impl Engine {
                     .try_get_with(key, || {
                         #[cfg(test)]
                         compiles.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        Component::new(inner, bytes_ref)
+                        Component::new(inner, compat.prepare(bytes_ref, Some(digest.as_ref())))
                             .map_err(|e| explain_compile_failure(e, heap))
                             .context("failed to compile component from bytes")
                             .map(CacheValue)
@@ -855,7 +865,7 @@ impl Engine {
         &self,
         bytes: &[u8],
     ) -> anyhow::Result<(Component, Linker<SharedCtx>)> {
-        let component = Component::new(&self.inner, bytes)
+        let component = Component::new(&self.inner, self.compat.prepare(bytes, None))
             .map_err(anyhow::Error::from)
             .context("failed to compile host component plugin")?;
 
@@ -1029,6 +1039,7 @@ pub struct EngineBuilder {
     scratch_root: Option<PathBuf>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
     guest_memory_mode: guest_memory::GuestMemoryMode,
+    guest_compat: Option<compat::GuestCompat>,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -1102,6 +1113,17 @@ impl EngineBuilder {
     #[must_use]
     pub fn with_guest_memory_mode(mut self, mode: guest_memory::GuestMemoryMode) -> Self {
         self.guest_memory_mode = mode;
+        self
+    }
+
+    /// What to do at load with a guest built on wit-bindgen older than 0.59,
+    /// whose async runtime wasmtime traps. See [`compat`].
+    ///
+    /// Unset, `WASH_GUEST_COMPAT` decides, and unset too the guest is repaired.
+    /// A host that must run only the bytes a digest names turns that off.
+    #[must_use]
+    pub fn with_guest_compat(mut self, mode: compat::GuestCompat) -> Self {
+        self.guest_compat = Some(mode);
         self
     }
 
@@ -1393,6 +1415,13 @@ impl EngineBuilder {
             proposal.apply(&mut config);
         }
 
+        // Strict, unlike the knobs above: the default rewrites, and whoever
+        // set this may have meant not to.
+        let guest_compat = match self.guest_compat {
+            Some(mode) => mode,
+            None => getenv_strict("WASH_GUEST_COMPAT")?.unwrap_or_default(),
+        };
+
         let inner = wasmtime::Engine::new(&config)?;
         spawn_epoch_ticker(&inner)?;
         let cache = Cache::builder()
@@ -1441,6 +1470,7 @@ impl EngineBuilder {
                 }
                 .into_metered()
             },
+            compat: compat::Pass::new(guest_compat),
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
             total_core_instances,
@@ -1511,6 +1541,24 @@ where
             warn!("`{key}` value is not valid UTF-8, ignoring");
             None
         }
+    }
+}
+
+/// Like [`getenv`], but a value that does not parse is an error instead of
+/// being ignored. A blank value counts as unset.
+fn getenv_strict<T>(key: &str) -> anyhow::Result<Option<T>>
+where
+    T: FromStr,
+    T::Err: core::fmt::Display,
+{
+    match env::var(key) {
+        Ok(raw) if raw.trim().is_empty() => Ok(None),
+        Ok(raw) => match raw.parse() {
+            Ok(value) => Ok(Some(value)),
+            Err(e) => bail!("{key}: {e}"),
+        },
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(..)) => bail!("{key} is not valid UTF-8"),
     }
 }
 

@@ -272,6 +272,8 @@ struct PluginStoreContext {
     host_ref: Option<crate::host::HostRef>,
     network: crate::host::ports::NetworkHandle,
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
+    /// One for the plugin, so a restart does not repeat the advice.
+    rebuild_advised: Arc<crate::engine::compat::RebuildAdvised>,
 }
 
 #[derive(Clone)]
@@ -490,6 +492,7 @@ impl ComponentHostPlugin {
                     host_ref,
                     network: crate::host::ports::NetworkHandle::new(),
                     socket_policy,
+                    rebuild_advised: Arc::default(),
                 },
             },
             egress_policy,
@@ -2012,12 +2015,11 @@ fn build_plugin_store(
     // and keeps the resources it hands out across the boundary alive.
     // A host component plugin is a guest too: its linear memory is charged to
     // the same host-wide budget the workloads on this engine draw on.
-    let mut store = Store::new(
-        engine.inner(),
-        SharedCtx::new(ctx)
-            .with_resource_registry()
-            .with_guest_memory(engine.guest_memory()),
-    );
+    let mut shared_ctx = SharedCtx::new(ctx)
+        .with_resource_registry()
+        .with_guest_memory(engine.guest_memory());
+    shared_ctx.rebuild_advised = Arc::clone(&store_context.rebuild_advised);
+    let mut store = Store::new(engine.inner(), shared_ctx);
     // The other half of the same requirement: on a fuel-metering engine a store
     // starts with no fuel, and calling a guest without fuel traps. See
     // `new_store_from_templates`, which does this for every workload store.
@@ -2206,6 +2208,7 @@ mod tests {
             host_ref: None,
             network: crate::host::ports::NetworkHandle::new(),
             socket_policy: policy,
+            rebuild_advised: Arc::default(),
         };
         let mut store = build_plugin_store(
             &engine,

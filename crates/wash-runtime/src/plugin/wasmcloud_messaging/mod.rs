@@ -366,6 +366,7 @@ pub(crate) async fn deliver_pooled(
     }))
     .await
     .ok_or_else(|| anyhow::anyhow!("delivery produced no message response in time"))?
+    .inspect_err(|e| crate::engine::compat::advise_rebuild(store.data(), e))
     .map_err(|e| anyhow::anyhow!("{e:#}"))?
     .map_err(|e| anyhow::anyhow!("{e:#}"))?;
     result_rx
@@ -557,7 +558,10 @@ macro_rules! messaging_handler_dispatch {
                                     .call_handle_message(accessor, wit_msg)
                                     .await
                             })
-                            .await??;
+                            .await
+                            .inspect_err(|e| {
+                                $crate::engine::compat::advise_rebuild(store.data(), e)
+                            })??;
                         Ok(outcome.map_err(render_handle_error))
                     }
                 }

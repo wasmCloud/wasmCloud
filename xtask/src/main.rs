@@ -154,6 +154,7 @@ const P3_FIXTURES: &[&str] = &[
     "http-loopback-gateway",
     "svc-no-run",
     "http-sleeper",
+    "http-legacy-async-p3",
     "msg-counter",
     "bridge-backend",
     "bridge-service",

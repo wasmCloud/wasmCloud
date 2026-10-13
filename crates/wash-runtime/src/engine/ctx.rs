@@ -88,6 +88,9 @@ pub struct SharedCtx {
     /// here is what makes the release exact: dropping the store drops this and
     /// hands the bytes back.
     pub memory_limiter: crate::engine::guest_memory::StoreMemoryLimiter,
+    /// Set once the workload's owner has been told what its trap may mean.
+    /// Shared with every store of the workload.
+    pub rebuild_advised: Arc<crate::engine::compat::RebuildAdvised>,
     /// Notifies waiters after all other store data is dropped.
     ///
     /// Wasmtime disposes guest fibers and host tasks before dropping store data.
@@ -149,6 +152,7 @@ impl SharedCtx {
             abandoned: Arc::default(),
             executed: Arc::default(),
             memory_limiter: Default::default(),
+            rebuild_advised: Arc::default(),
             dropped: StoreDropped::default(),
         }
     }

@@ -103,6 +103,22 @@ pub(crate) enum InstanceJob {
     Guest(GuestJob),
 }
 
+/// Log that a store faulted, naming whose it was. The names are only known
+/// to a host that meters; the ids always are.
+pub(crate) fn log_store_fault(ctx: &SharedCtx, err: &wasmtime::Error, what: &'static str) {
+    let identity = ctx.executed.identity();
+    tracing::error!(
+        err = ?err,
+        workload.id = &*ctx.active_ctx.workload_id,
+        component.id = &*ctx.active_ctx.component_id,
+        workload.namespace = identity.map(|i| &*i.namespace),
+        workload.name = identity.map(|i| &*i.name),
+        component.name = identity.map(|i| &*i.component),
+        "{what}"
+    );
+    crate::engine::compat::advise_rebuild(ctx, err);
+}
+
 /// Times one guest invocation, and records it when dropped.
 ///
 /// Wall clock, which is what a caller waited and what a latency dashboard is
@@ -533,7 +549,11 @@ impl InstanceDriver {
                 // The store is poisoned: every call in flight on this instance
                 // died with it. The pool reaps the handle and the next call
                 // starts a fresh instance.
-                tracing::error!(err = ?e, "pooled instance faulted; its in-flight calls failed");
+                log_store_fault(
+                    store.data(),
+                    &e,
+                    "pooled instance faulted; its in-flight calls failed",
+                );
             }
         });
 

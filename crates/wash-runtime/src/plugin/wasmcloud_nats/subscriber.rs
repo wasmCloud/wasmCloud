@@ -85,7 +85,8 @@ impl JsProxy {
                     .call_handle_message(accessor, handle)
                     .await
             })
-            .await?
+            .await
+            .inspect_err(|e| crate::engine::compat::advise_rebuild(store.data(), e))?
     }
 }
 

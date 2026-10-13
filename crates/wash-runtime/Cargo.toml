@@ -104,6 +104,9 @@ wasmtime-wasi = { workspace = true, features = ["p3"] }
 wasmtime-wasi-io = { workspace = true }
 wasmtime-wasi-http = { workspace = true, features = ["default-send-request", "p2", "p3", "component-model-async"] }
 wasmtime-wasi-tls = { workspace = true, optional = true, features = ["p3", "rustls"] }
+# Reads a component's core modules for `engine::compat`. `simd` so a guest
+# using vector instructions still has its function bodies read.
+wasmparser = { workspace = true, features = ["std", "component-model", "simd"] }
 io-lifetimes = { workspace = true }
 cap-primitives = { workspace = true }
 rustix = { workspace = true }

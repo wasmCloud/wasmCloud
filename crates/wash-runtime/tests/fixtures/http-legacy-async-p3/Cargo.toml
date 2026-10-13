@@ -1,0 +1,13 @@
+[package]
+name = "http-legacy-async-p3"
+edition = "2021"
+version = "0.0.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Pinned, and not to the workspace's version: this fixture exists to carry the
+# async runtime wit-bindgen shipped before 0.59, which cancels its wakeup
+# stream's read before removing the stream from its waitable set.
+wit-bindgen = { version = "=0.58.0", features = ["async-spawn", "inter-task-wakeup"] }

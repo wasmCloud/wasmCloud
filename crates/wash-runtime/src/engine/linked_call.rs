@@ -86,6 +86,7 @@ pub(crate) struct ComponentCtxTemplate {
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
     /// The host-wide guest memory budget this component's stores draw on.
     guest_memory: Arc<crate::engine::guest_memory::GuestMemoryBudget>,
+    rebuild_advised: Arc<crate::engine::compat::RebuildAdvised>,
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
 }
@@ -101,6 +102,7 @@ impl ComponentCtxTemplate {
             loopback: metadata.loopback.clone(),
             socket_policy: metadata.socket_policy.clone(),
             guest_memory: metadata.guest_memory.clone(),
+            rebuild_advised: metadata.rebuild_advised.clone(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
         }
@@ -342,6 +344,7 @@ pub(crate) async fn new_store_from_templates(
     )
     .await?;
     let mut shared_ctx = SharedCtx::new(active_ctx).with_guest_memory(&active.guest_memory);
+    shared_ctx.rebuild_advised = Arc::clone(&active.rebuild_advised);
 
     for linked in linked {
         let linked_ctx =
@@ -747,7 +750,8 @@ async fn invoke_ephemeral_relocated(
                 }
                 Ok::<(), wasmtime::Error>(())
             })
-            .await;
+            .await
+            .inspect_err(|e| crate::engine::compat::advise_rebuild(store.data(), e));
     }));
 
     let relocated = call
@@ -928,6 +932,7 @@ async fn invoke_ephemeral_plain(
                 Ok::<Vec<Val>, wasmtime::Error>(results_buf)
             })
             .await
+            .inspect_err(|e| crate::engine::compat::advise_rebuild(store.data(), e))
             .map_err(|e| wasmtime::format_err!("{e:#}"))
             .and_then(|inner| inner)
     }));

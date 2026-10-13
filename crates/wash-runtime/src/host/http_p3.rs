@@ -219,7 +219,11 @@ pub(crate) async fn handle_component_request_p3(
             match run {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => tracing::error!(err = ?e, "P3 response streaming failed"),
-                Err(e) => tracing::error!(err = ?e, "P3 run_concurrent failed"),
+                Err(e) => crate::engine::instance_driver::log_store_fault(
+                    store.data(),
+                    &e,
+                    "P3 run_concurrent failed",
+                ),
             }
             drop(store);
         }
