@@ -560,7 +560,7 @@ mod s3;
 pub use filesystem::{FilesystemBackend, FilesystemProvider};
 pub use in_memory::{InMemoryBackend, InMemoryProvider};
 pub use nats::{NatsBlobBackend, NatsBlobProvider};
-pub(crate) use s3::USE_HOST_IDENTITY_KEY;
+pub(crate) use s3::host_owned_spellings;
 pub use s3::{S3BlobBackend, S3BlobProvider};
 
 /// A blobstore backend provider: a [`BackendProvider`] producing [`BlobId`]s.
@@ -636,11 +636,13 @@ impl HostPlugin for MultiplexedBlobstore {
         true
     }
 
-    /// Only the S3 backend's opt-in to the host's AWS identity is the host's
-    /// to grant. The schema stays open: the other backends' keys (`root`,
+    /// Every S3 key is the host's: each decides where a binding connects or
+    /// as whom, so under `workloadConfig: deny` credentials and endpoints come
+    /// only from an operator's `host.plugins` binding (`secretFrom` for the
+    /// secrets). The schema stays open: the other backends' keys (`root`,
     /// `url`) are still the workload's, and unknown keys still pass through.
     fn binding_schema(&self) -> crate::plugin::BindingSchema {
-        crate::plugin::BindingSchema::with_host_owned_keys([s3::USE_HOST_IDENTITY_KEY])
+        crate::plugin::BindingSchema::with_host_owned_keys(host_owned_spellings())
     }
 
     async fn on_workload_item_bind<'a>(
@@ -874,15 +876,105 @@ mod tests {
     }
 
     #[test]
-    fn schema_owns_only_the_s3_host_identity_opt_in() {
+    fn schema_owns_every_s3_spelling_and_no_other_backends_keys() {
         let schema = MultiplexedBlobstore::new().binding_schema();
-        assert!(schema.owns("use_host_identity"));
-        assert!(schema.owns("use-host-identity"), "spellings fold");
+        // Every spelling, not only the canonical one: the host folds case and
+        // `_`/`-` but not an `aws_` prefix.
+        for key in [
+            "access_key_id",
+            "aws_access_key_id",
+            "secret_access_key",
+            "AWS_SECRET_ACCESS_KEY",
+            "session_token",
+            "token",
+            "aws_token",
+            "endpoint",
+            "aws_endpoint_url",
+            "region",
+            "default_region",
+            "allow_http",
+            "virtual_hosted_style_request",
+            "skip_signature",
+            "use_host_identity",
+            "use-host-identity",
+        ] {
+            assert!(schema.owns(key), "'{key}' must be host-owned");
+        }
         // Open schema: the other backends' keys stay the workload's and
         // unknown keys are not refused.
-        assert!(!schema.owns("root"));
-        assert!(!schema.owns("url"));
+        for key in ["backend", "root", "url"] {
+            assert!(!schema.owns(key), "'{key}' must stay the workload's");
+        }
         assert!(!schema.is_closed());
+    }
+
+    fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn deny_keeps_s3_credentials_and_endpoint_with_the_operator() {
+        use crate::plugin::bindings::{PluginBindingSet, WorkloadConfigPolicy, never_narrows};
+
+        let schema = MultiplexedBlobstore::new().binding_schema();
+        let set = PluginBindingSet::new(MULTIPLEXED_BLOBSTORE_ID)
+            .with_binding(
+                "assets",
+                map(&[
+                    ("backend", "s3"),
+                    ("endpoint", "https://s3.eu-central-1.amazonaws.com"),
+                    ("region", "eu-central-1"),
+                    // What `secretFrom` resolves to, here under the env-var
+                    // names a `fromEnv` source keeps.
+                    ("AWS_ACCESS_KEY_ID", "AKIA-OPERATOR"),
+                    ("AWS_SECRET_ACCESS_KEY", "operator-secret"),
+                ]),
+            )
+            .with_workload_config(WorkloadConfigPolicy::Deny);
+
+        // The operator's binding reaches the backend, and the backend accepts it.
+        let resolved = set
+            .resolve("assets", &HashMap::new(), &schema, never_narrows())
+            .expect("a workload asking for `assets` is served");
+        assert!(S3BlobProvider.instantiate(&resolved).await.is_ok());
+
+        // A workload can neither supply nor replace a credential or the
+        // endpoint, under any spelling.
+        for (key, value) in [
+            ("aws_secret_access_key", "workload-secret"),
+            ("access_key_id", "AKIA-WORKLOAD"),
+            ("endpoint", "http://workload.example:9000"),
+            ("allow_http", "true"),
+            ("use_host_identity", "true"),
+        ] {
+            let err = set
+                .resolve("assets", &map(&[(key, value)]), &schema, never_narrows())
+                .expect_err("a workload-written S3 key must be refused under deny")
+                .to_string();
+            assert!(err.contains(key), "names the key: {err}");
+            assert!(!err.contains(value), "must not echo the value: {err}");
+        }
+
+        // `wash dev` (allow) keeps working from the manifest alone.
+        let dev = PluginBindingSet::new(MULTIPLEXED_BLOBSTORE_ID)
+            .with_workload_config(WorkloadConfigPolicy::Allow);
+        let resolved = dev
+            .resolve(
+                "",
+                &map(&[
+                    ("backend", "s3"),
+                    ("region", "us-east-1"),
+                    ("access_key_id", "AKIA"),
+                    ("secret_access_key", "s"),
+                ]),
+                &schema,
+                never_narrows(),
+            )
+            .expect("allow serves the workload's own config");
+        assert!(S3BlobProvider.instantiate(&resolved).await.is_ok());
     }
 }
 
