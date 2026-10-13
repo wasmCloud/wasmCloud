@@ -219,7 +219,13 @@ pub(crate) async fn handle_component_request_p3(
             match run {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => tracing::error!(err = ?e, "P3 response streaming failed"),
-                Err(e) => tracing::error!(err = ?e, "P3 run_concurrent failed"),
+                Err(e) => {
+                    tracing::error!(err = ?e, "P3 run_concurrent failed");
+                    crate::engine::trap_remediation::warn_if_wit_bindgen_cancel_trap(
+                        &e,
+                        &store.data().active_ctx,
+                    );
+                }
             }
             drop(store);
         }
