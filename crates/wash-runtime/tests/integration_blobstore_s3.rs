@@ -3,33 +3,38 @@
     feature = "wasm_component_model_implements"
 ))]
 //! End-to-end test for the multiplexed `wasi:blobstore` S3 backend against a
-//! real S3 API (S3Mock), through `MultiplexedAsyncBlobstore`'s
-//! provider/registry path.
+//! real S3 API (RustFS, which checks SigV4 signatures), through
+//! `MultiplexedAsyncBlobstore`'s provider/registry path.
 //!
-//! Buckets are pre-created by the container: the backend cannot create or
-//! delete them, and the test asserts that too. Beyond the shared
+//! Buckets are created by the test with presigned requests: the backend
+//! cannot create or delete them, and the test asserts that too. Beyond the shared
 //! `BlobBackend` surface it pins what is S3-specific: pooling by config,
 //! `NoSuchContainer` vs `NoSuchObject` from a 404, the clamped range read,
 //! cross-bucket copy, bulk delete, and object-name validation.
 //!
-//! Requires Docker (S3Mock); marked `#[ignore]`, so it runs only under
+//! Requires Docker (RustFS); marked `#[ignore]`, so it runs only under
 //! `cargo test -- --ignored` (CI's Linux leg) and not a plain `cargo test`.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use testcontainers::{
-    GenericImage, ImageExt,
-    core::{IntoContainerPort, WaitFor},
-    runners::AsyncRunner,
-};
+use object_store::aws::AmazonS3Builder;
+use object_store::path::Path;
+use object_store::signer::Signer;
+use testcontainers::{GenericImage, ImageExt, core::IntoContainerPort, runners::AsyncRunner};
 
 use wash_runtime::plugin::wasi_blobstore::{
     BlobBackendError, MultiplexedAsyncBlobstore, S3BlobProvider,
 };
 use wash_runtime::wit::WitInterface;
+
+/// The server's own credentials: RustFS checks signatures, so the binding's
+/// keys have to be these.
+const ACCESS_KEY: &str = "wash-test";
+const SECRET_KEY: &str = "wash-test-secret";
 
 /// A named `wasmcloud:blobstore` interface routed to the S3 backend.
 fn s3_blob_iface(name: &str, endpoint: &str) -> WitInterface {
@@ -45,13 +50,46 @@ fn s3_blob_iface(name: &str, endpoint: &str) -> WitInterface {
             ("endpoint".to_string(), endpoint.to_string()),
             ("region".to_string(), "us-east-1".to_string()),
             ("allow_http".to_string(), "true".to_string()),
-            // S3Mock checks no signature, but without static keys object_store
-            // would go looking for instance credentials.
-            ("access_key_id".to_string(), "test".to_string()),
-            ("secret_access_key".to_string(), "test".to_string()),
+            ("access_key_id".to_string(), ACCESS_KEY.to_string()),
+            ("secret_access_key".to_string(), SECRET_KEY.to_string()),
         ]),
         name: Some(name.to_string()),
     }
+}
+
+/// Create the buckets the backend itself cannot, with a presigned
+/// `CreateBucket` per name. Retried until it succeeds, which doubles as the
+/// readiness wait: RustFS logs nothing that marks it ready to serve.
+async fn create_buckets(endpoint: &str, names: &[&str]) -> Result<()> {
+    let http = reqwest::Client::new();
+    for name in names {
+        let store = AmazonS3Builder::new()
+            .with_endpoint(endpoint)
+            .with_region("us-east-1")
+            .with_allow_http(true)
+            .with_access_key_id(ACCESS_KEY)
+            .with_secret_access_key(SECRET_KEY)
+            .with_bucket_name(*name)
+            .build()?;
+        let url = store
+            .signed_url(http::Method::PUT, &Path::from(""), Duration::from_secs(300))
+            .await?;
+        let mut last = String::new();
+        let mut created = false;
+        for _ in 0..60 {
+            match http.put(url.clone()).send().await {
+                Ok(response) if response.status().is_success() => {
+                    created = true;
+                    break;
+                }
+                Ok(response) => last = format!("HTTP {}", response.status()),
+                Err(e) => last = e.to_string(),
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        anyhow::ensure!(created, "creating bucket '{name}' never succeeded: {last}");
+    }
+    Ok(())
 }
 
 /// `BlobBackendError` is not `std::error::Error`; stringify it for `?`/`anyhow`.
@@ -60,20 +98,27 @@ fn err(e: impl std::fmt::Debug) -> anyhow::Error {
 }
 
 #[tokio::test]
-#[ignore = "requires Docker (S3Mock); run with `cargo test -- --ignored`"]
+#[ignore = "requires Docker (RustFS); run with `cargo test -- --ignored`"]
 async fn multiplexed_blobstore_routes_to_s3() -> Result<()> {
-    // --- S3Mock container, with the buckets the backend cannot create ---
-    let s3 = GenericImage::new("adobe/s3mock", "5.2.3")
-        .with_exposed_port(9090.tcp())
-        .with_wait_for(WaitFor::message_on_stdout("Started S3MockApplication"))
-        .with_env_var(
-            "COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS",
-            "photos,archive",
-        )
+    // --- RustFS container, plus the buckets the backend cannot create ---
+    let s3 = GenericImage::new("rustfs/rustfs", "1.0.1")
+        .with_exposed_port(9000.tcp())
+        .with_env_var("RUSTFS_ACCESS_KEY", ACCESS_KEY)
+        .with_env_var("RUSTFS_SECRET_KEY", SECRET_KEY)
         .start()
         .await
-        .map_err(|e| anyhow::anyhow!("failed to start s3mock: {e}"))?;
-    let endpoint = format!("http://127.0.0.1:{}", s3.get_host_port_ipv4(9090).await?);
+        .map_err(|e| anyhow::anyhow!("failed to start rustfs: {e}"))?;
+    let endpoint = format!("http://127.0.0.1:{}", s3.get_host_port_ipv4(9000).await?);
+    create_buckets(&endpoint, &["photos", "archive"]).await?;
+    // The server checks signatures, so every passing call below was signed
+    // in a way an S3 implementation accepts.
+    assert_eq!(
+        reqwest::get(format!("{endpoint}/photos?list-type=2"))
+            .await?
+            .status(),
+        reqwest::StatusCode::FORBIDDEN,
+        "an unsigned request must be refused"
+    );
 
     // --- registry: two names, one config, so they must share a backend ---
     let plugin = MultiplexedAsyncBlobstore::new().with_provider(Arc::new(S3BlobProvider));
@@ -269,8 +314,9 @@ fn real_s3_iface(name: &str, region: &str, credentials: &[(&str, &str)]) -> WitI
     }
 }
 
-/// What S3Mock cannot check: that requests this backend builds are signed in
-/// a way real AWS accepts, for both credential sources. Needs a dedicated
+/// What a local server cannot check: that real AWS accepts what this backend
+/// sends, for both credential sources, including a session token and the
+/// host identity, and how it answers someone else's bucket. Needs a dedicated
 /// bucket in `WASH_TEST_S3_BUCKET`, `AWS_REGION`, and `AWS_ACCESS_KEY_ID` /
 /// `AWS_SECRET_ACCESS_KEY` (plus `AWS_SESSION_TOKEN` if any) in the
 /// environment, e.g. from `aws configure export-credentials --format env`.
