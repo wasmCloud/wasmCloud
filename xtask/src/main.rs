@@ -125,6 +125,7 @@ const P3_FIXTURES: &[&str] = &[
     "http-local-caller-p3",
     "ctx-race-callee-p3",
     "ctx-race-caller-p3",
+    "vol-callee-p3",
     "http-memory-grow",
     "http-ip-name-lookup-p3",
     "http-blobstore-p3",
