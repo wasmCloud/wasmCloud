@@ -423,12 +423,20 @@ async fn multiplexed_blobstore_signs_against_real_s3() -> Result<()> {
             anyhow::Ok(())
         }
         .await;
-        // Best effort: on success this deletes nothing, on failure it removes
-        // whatever the block managed to write before propagating the error.
-        let _ = be
+        // On success this deletes nothing; on failure it removes whatever the
+        // block managed to write. A cleanup that fails is reported with the
+        // original error, so objects left behind under the prefix are visible.
+        let cleanup = be
             .delete_objects(&bucket, &[object.clone(), copy.clone()])
             .await;
-        written?;
+        written.map_err(|e| match &cleanup {
+            Ok(()) => e,
+            Err(c) => e.context(format!(
+                "{}: also failed, objects may remain under '{prefix}': {c:?}",
+                ctx("cleanup")
+            )),
+        })?;
+        cleanup.map_err(err).with_context(|| ctx("cleanup"))?;
 
         // Real S3 answers a PUT to a missing bucket with 404 NoSuchBucket.
         let missing = format!("wash-s3-test-missing-{run}");
