@@ -168,6 +168,10 @@ pub struct WorkloadMetadata {
     /// [`Default`] here is an unmetered budget, so a metadata built outside an
     /// engine is neither charged nor limited.
     pub(crate) guest_memory: Arc<crate::engine::guest_memory::GuestMemoryBudget>,
+    /// Set once this workload deploy has logged the remediation hint for a
+    /// known guest toolchain trap. One flag is shared by every component of a
+    /// deploy, so a redeploy starts with a fresh one.
+    pub(crate) trap_hint_logged: Arc<std::sync::atomic::AtomicBool>,
     /// Linked component ids
     linked_components: HashSet<Arc<str>>,
     /// Workload annotations
@@ -439,6 +443,7 @@ impl WorkloadService {
                 loopback,
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
+                trap_hint_logged: Arc::default(),
                 linked_components: Default::default(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
@@ -454,6 +459,12 @@ impl WorkloadService {
         annotations: impl Into<Arc<HashMap<String, String>>>,
     ) -> Self {
         self.metadata.annotations = annotations.into();
+        self
+    }
+
+    /// Share the workload deploy's trap-hint flag with this component.
+    pub(crate) fn with_trap_hint_flag(mut self, flag: &Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.metadata.trap_hint_logged = Arc::clone(flag);
         self
     }
 
@@ -551,6 +562,7 @@ impl WorkloadComponent {
                 loopback,
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
+                trap_hint_logged: Arc::default(),
                 linked_components: Default::default(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
@@ -566,6 +578,12 @@ impl WorkloadComponent {
         annotations: impl Into<Arc<HashMap<String, String>>>,
     ) -> Self {
         self.metadata.annotations = annotations.into();
+        self
+    }
+
+    /// Share the workload deploy's trap-hint flag with this component.
+    pub(crate) fn with_trap_hint_flag(mut self, flag: &Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.metadata.trap_hint_logged = Arc::clone(flag);
         self
     }
 
@@ -962,7 +980,10 @@ impl ResolvedWorkload {
                             }
                         }
                         Ok(Err(e)) | Err(e) => {
-                            error!(err = %e, retries = max_restarts, "P3 service execution failed");
+                            // `?e`, not `%e`: a trap's message is in the cause
+                            // chain, which `Display` leaves out.
+                            error!(err = ?e, retries = max_restarts, "P3 service execution failed");
+                            crate::engine::trap_remediation::note_guest_fault(store.data(), &e);
                             if max_restarts == 0 {
                                 warn!("max restarts reached, P3 service will not be restarted");
                                 break;

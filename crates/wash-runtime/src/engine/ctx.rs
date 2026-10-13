@@ -327,6 +327,10 @@ pub struct Ctx {
     plugins: HashMap<&'static str, Arc<dyn Any + Send + Sync>>,
     /// The HTTP hooks for outgoing HTTP requests.
     http_hooks: CtxHttpHooks,
+    /// Whether this workload deploy has already logged the remediation hint
+    /// for a known guest toolchain trap. Shared by every component of one
+    /// deploy (see [`crate::engine::trap_remediation`]).
+    pub(crate) trap_hint_logged: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Ctx {
@@ -634,6 +638,7 @@ impl CtxBuilder {
             },
             plugins,
             http_hooks,
+            trap_hint_logged: Arc::default(),
         }
     }
 }

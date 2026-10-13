@@ -279,6 +279,7 @@ async fn serve_alone(
             .await
         })
         .await
+        .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e))
         .map_err(|e| anyhow::anyhow!("dispatched call store faulted: {e:#}"))?
 }
 

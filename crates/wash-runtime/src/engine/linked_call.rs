@@ -86,6 +86,8 @@ pub(crate) struct ComponentCtxTemplate {
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
     /// The host-wide guest memory budget this component's stores draw on.
     guest_memory: Arc<crate::engine::guest_memory::GuestMemoryBudget>,
+    /// The workload deploy's trap-hint flag.
+    trap_hint_logged: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
 }
@@ -101,6 +103,7 @@ impl ComponentCtxTemplate {
             loopback: metadata.loopback.clone(),
             socket_policy: metadata.socket_policy.clone(),
             guest_memory: metadata.guest_memory.clone(),
+            trap_hint_logged: metadata.trap_hint_logged.clone(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
         }
@@ -317,6 +320,7 @@ async fn build_ctx_from_template(
     let mut ctx = ctx_builder.build();
     ctx.volume_mounts = all_volume_mounts.to_vec();
     ctx.store_id = store_id.to_string().into();
+    ctx.trap_hint_logged = Arc::clone(&template.trap_hint_logged);
     Ok(ctx)
 }
 
@@ -747,7 +751,8 @@ async fn invoke_ephemeral_relocated(
                 }
                 Ok::<(), wasmtime::Error>(())
             })
-            .await;
+            .await
+            .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e));
     }));
 
     let relocated = call
@@ -928,6 +933,7 @@ async fn invoke_ephemeral_plain(
                 Ok::<Vec<Val>, wasmtime::Error>(results_buf)
             })
             .await
+            .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e))
             .map_err(|e| wasmtime::format_err!("{e:#}"))
             .and_then(|inner| inner)
     }));
