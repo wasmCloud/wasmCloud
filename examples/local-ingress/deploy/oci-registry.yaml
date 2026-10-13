@@ -71,7 +71,9 @@ spec:
             root: /tmp/oci-registry
       components:
         - name: oci-registry
-          image: ghcr.io/wasmcloud/components/oci-registry:0.1.0
+          # Deliberately the 0.1.x line: it has no auth, which this plain-HTTP
+          # demo relies on. 0.2.0 and later require HTTP Basic auth.
+          image: ghcr.io/wasmcloud/components/oci-registry:0.1.1
 ---
 # Traefik route: registry.localhost.cosmonic.sh → the oci-registry Service.
 apiVersion: networking.k8s.io/v1
