@@ -123,6 +123,9 @@ impl AccessorTask<SharedCtx> for HttpTask {
                     return Ok(());
                 }
                 Err(e) => {
+                    accessor.with(|mut access| {
+                        crate::engine::trap_remediation::note_guest_fault(access.data_mut(), &e)
+                    });
                     if let Some(tx) = resp_tx.take() {
                         let _ =
                             tx.send(Err(anyhow::anyhow!(e).context("service HTTP handler trap")));
