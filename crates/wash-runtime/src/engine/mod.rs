@@ -235,6 +235,7 @@ pub mod host_memory;
 pub(crate) mod linked_call;
 mod scratch;
 pub(crate) mod store;
+pub(crate) mod trap_remediation;
 mod value;
 mod volumes;
 pub mod workload;

@@ -544,6 +544,12 @@ pub(crate) async fn run_trigger_driver(
                 futures::future::join_all(prepared.iter_mut().map(|p| p.serve(accessor))).await
             })
             .await
+            .inspect_err(|e| {
+                crate::engine::trap_remediation::warn_if_wit_bindgen_cancel_trap(
+                    e,
+                    &store.data().active_ctx,
+                )
+            })
             .context("trigger service driver exited")?;
         // Every channel closed → clean stop, unless an ingress asked to flush a
         // proxied-resource drop (which needs top-level store access), in which

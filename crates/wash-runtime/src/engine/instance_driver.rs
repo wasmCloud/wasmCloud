@@ -534,6 +534,10 @@ impl InstanceDriver {
                 // died with it. The pool reaps the handle and the next call
                 // starts a fresh instance.
                 tracing::error!(err = ?e, "pooled instance faulted; its in-flight calls failed");
+                crate::engine::trap_remediation::warn_if_wit_bindgen_cancel_trap(
+                    &e,
+                    &store.data().active_ctx,
+                );
             }
         });
 
