@@ -257,7 +257,7 @@ pub(crate) mod store;
 pub(crate) mod store_settings;
 pub(crate) mod trap_remediation;
 mod value;
-mod volumes;
+pub(crate) mod volumes;
 pub mod workload;
 
 /// How often the engine's epoch advances.
