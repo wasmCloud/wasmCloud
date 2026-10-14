@@ -46,6 +46,12 @@ impl ResolvedVolumeMount {
             tokio::task::spawn_blocking(move || ReservedHostPaths::default().open(&path)).await??;
         Self::from_opened(&volume, mount)
     }
+
+    /// The path the guest sees the directory at.
+    #[cfg(test)]
+    pub(crate) fn mount_path(&self) -> &str {
+        &self.mount_path
+    }
 }
 
 /// Expose retained handles alongside any preopens supplied by an embedder.
