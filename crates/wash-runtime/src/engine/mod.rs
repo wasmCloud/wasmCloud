@@ -656,7 +656,8 @@ impl Engine {
             workload_components,
             host_interfaces,
         )
-        .with_scratch(workload_scratch);
+        .with_scratch(workload_scratch)
+        .with_stream_payloads(Arc::clone(&self.stream_payloads));
 
         #[cfg(feature = "wasi-tls")]
         let workload = workload.maybe_with_tls_provider(self.tls_provider.clone());
@@ -724,7 +725,6 @@ impl Engine {
         service.metadata.resolved_volume_mounts = resolved_volume_mounts;
         service.metadata.socket_policy = Arc::clone(&self.socket_policy);
         service.metadata.guest_memory = Arc::clone(&self.guest_memory);
-        service.metadata.stream_payloads = Arc::clone(&self.stream_payloads);
 
         let world = service.world();
 
@@ -859,7 +859,6 @@ impl Engine {
         workload_component.metadata.resolved_volume_mounts = resolved_volume_mounts;
         workload_component.metadata.socket_policy = Arc::clone(&self.socket_policy);
         workload_component.metadata.guest_memory = Arc::clone(&self.guest_memory);
-        workload_component.metadata.stream_payloads = Arc::clone(&self.stream_payloads);
         Ok(workload_component)
     }
 
