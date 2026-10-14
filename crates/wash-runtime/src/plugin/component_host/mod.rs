@@ -86,6 +86,7 @@ use crate::engine::ctx::{CallerIdentity, Ctx, SharedCtx};
 use crate::engine::instance_pool::InstancePolicy;
 use crate::engine::store::relocate::{self, Relocated};
 use crate::engine::store::resource_bridge::{self, ProxyResource};
+use crate::engine::volumes::ResolvedVolumeMount;
 use crate::engine::workload::{
     ResolvedWorkload, UnresolvedWorkload, WorkloadComponent, WorkloadItem,
 };
@@ -96,7 +97,7 @@ use crate::host::trigger_service::{
 };
 use crate::oci::OciConfig;
 use crate::plugin::binding_of;
-use crate::plugin::component_plugin_spec::ComponentPluginSpec;
+use crate::plugin::component_plugin_spec::{ComponentPluginSpec, PluginVolume};
 use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::sockets::loopback;
 use crate::types::LocalResources;
@@ -272,6 +273,9 @@ struct PluginStoreContext {
     host_ref: Option<crate::host::HostRef>,
     network: crate::host::ports::NetworkHandle,
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
+    /// The plugin's volumes, opened once at load. Every incarnation's store
+    /// gets the same directory handles.
+    volumes: Arc<[ResolvedVolumeMount]>,
 }
 
 #[derive(Clone)]
@@ -326,8 +330,12 @@ impl ComponentHostPlugin {
     /// omitted, the default keeps host loopback closed; a non-empty loopback
     /// grant then warns and remains denied.
     ///
-    /// Egress lists default to empty. `native_plugins`, `config`, and
-    /// `host_ref` also defaults to `None`.
+    /// `volumes` are host directories preopened into the plugin's store. Each
+    /// host path must be an existing directory and each mount path absolute and
+    /// distinct; a declaration that breaks either fails the build here.
+    ///
+    /// Egress lists and `volumes` default to empty. `native_plugins`, `config`,
+    /// and `host_ref` also defaults to `None`.
     #[builder(finish_fn = build)]
     pub async fn new(
         id: &'static str,
@@ -344,9 +352,11 @@ impl ComponentHostPlugin {
         >,
         host_ref: Option<crate::host::HostRef>,
         #[builder(default)] ports: Arc<[crate::host::declared_port::DeclaredPort]>,
+        #[builder(default)] volumes: Arc<[PluginVolume]>,
         socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     ) -> anyhow::Result<Self> {
         crate::host::declared_port::validate_plugin_ports(&ports, &format!("host plugin '{id}'"))?;
+        let volumes = resolve_plugin_volumes(id, &volumes).await?;
         let socket_policy = socket_policy.unwrap_or_default();
         let egress_policy = crate::plugin::PluginEgressPolicy::new(
             Arc::clone(&allowed_hosts),
@@ -490,6 +500,7 @@ impl ComponentHostPlugin {
                     host_ref,
                     network: crate::host::ports::NetworkHandle::new(),
                     socket_policy,
+                    volumes,
                 },
             },
             egress_policy,
@@ -745,6 +756,7 @@ pub async fn load_component_plugin(
         .allowed_ip_name_lookups(Arc::clone(&spec.allowed_ip_name_lookups))
         .allowed_host_loopback_ports(Arc::clone(&spec.allowed_host_loopback_ports))
         .ports(Arc::clone(&spec.ports))
+        .volumes(Arc::clone(&spec.volumes))
         .maybe_host_ref(host_ref)
         .socket_policy(socket_policy)
         .build()
@@ -1805,12 +1817,50 @@ async fn run_supervisor(
     loop {
         // Installs this incarnation's virtual network on the handle, which is
         // how a listener published before this incarnation existed finds it.
-        let store = build_plugin_store(
+        let store = match build_plugin_store(
             &runtime.engine,
             state.id,
             &state.native_plugins,
             &runtime.store,
-        );
+        ) {
+            Ok(store) => store,
+            // A store that cannot be built (a volume directory removed since
+            // the plugin loaded) is a fault like any other: it is charged to the
+            // restart budget and retried after backoff. Nothing was served, so
+            // the channel and replay snapshot carry over to the next attempt
+            // unchanged.
+            Err(err) => {
+                if restarts >= max_restarts {
+                    error!(
+                        id = state.id,
+                        restarts,
+                        error = %format!("{err:#}"),
+                        "host component plugin store could not be built and the restart budget \
+                         is spent; giving up"
+                    );
+                    state.tx.store(None);
+                    state.registry.store(None);
+                    runtime.store.network.clear();
+                    return;
+                }
+                restarts += 1;
+                let backoff = crate::timeouts::plugin_restart_backoff_max().min(
+                    std::time::Duration::from_millis(200u64.saturating_mul(u64::from(restarts))),
+                );
+                warn!(
+                    id = state.id,
+                    restarts,
+                    backoff_ms = backoff.as_millis() as u64,
+                    error = %format!("{err:#}"),
+                    "failed to build host component plugin store; retrying after backoff"
+                );
+                tokio::time::sleep(backoff).await;
+                if state.sender().is_none() {
+                    return;
+                }
+                continue;
+            }
+        };
         // A fresh job registry per incarnation, published on `state` so the
         // baked-in identity/cancel imports reach this store's live jobs. Stale
         // jobs from a faulted incarnation die with its store (their guards retire
@@ -1979,7 +2029,12 @@ fn build_plugin_store(
     id: &'static str,
     native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
     store_context: &PluginStoreContext,
-) -> Store<SharedCtx> {
+) -> anyhow::Result<Store<SharedCtx>> {
+    // The same context `Ctx` builds when it is given none. The plugin's volumes
+    // are not preopened by path here: their directories were opened once at
+    // load, and the handles go to the context below.
+    let mut wasi = wasmtime_wasi::WasiCtxBuilder::new();
+    wasi.args(&["main.wasm"]).inherit_stderr();
     let policy = Arc::clone(&store_context.socket_policy);
     // A fresh network per incarnation, published on the handle so a
     // `PublishedPort` bound before this incarnation existed splices into it.
@@ -1996,6 +2051,7 @@ fn build_plugin_store(
     );
 
     let mut ctx_builder = Ctx::builder(id, id)
+        .with_wasi_ctx(wasi.build())
         .with_plugins(
             native_plugins
                 .iter()
@@ -2007,7 +2063,10 @@ fn build_plugin_store(
     if let Some(host) = &store_context.host_ref {
         ctx_builder = ctx_builder.with_host(host);
     }
-    let ctx = ctx_builder.build();
+    let mut ctx = ctx_builder.build();
+    // The handles pinned at load, handed over the way a workload's store gets
+    // its volume mounts.
+    ctx.volume_mounts = store_context.volumes.to_vec();
     // The registry marks this as the plugin (real) side of the resource bridge
     // and keeps the resources it hands out across the boundary alive.
     // A host component plugin is a guest too: its linear memory is charged to
@@ -2032,7 +2091,60 @@ fn build_plugin_store(
         crate::engine::abandon::AbandonedCallPolicy::WarnThenTrap,
     );
     crate::engine::guest_memory::install_memory_limiter(&mut store);
-    store
+    Ok(store)
+}
+
+/// Resolve a plugin's declared volumes once, at load: a declaration that cannot
+/// work fails the host's start naming the plugin, rather than failing every
+/// incarnation the supervisor starts. Each directory is opened here and its
+/// handle kept, so what was checked is what every incarnation mounts.
+async fn resolve_plugin_volumes(
+    id: &str,
+    volumes: &[PluginVolume],
+) -> anyhow::Result<Arc<[ResolvedVolumeMount]>> {
+    let mut mount_paths = std::collections::HashSet::new();
+    let mut resolved = Vec::with_capacity(volumes.len());
+    for volume in volumes {
+        anyhow::ensure!(
+            volume.mount_path.starts_with('/'),
+            "host component plugin '{id}': volume mountPath {:?} must be absolute",
+            volume.mount_path
+        );
+        anyhow::ensure!(
+            mount_paths.insert(volume.mount_path.as_str()),
+            "host component plugin '{id}': two volumes mount at {:?}",
+            volume.mount_path
+        );
+        let host_path = tokio::fs::canonicalize(&volume.host_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "host component plugin '{id}': volume hostPath {} does not exist",
+                    volume.host_path.display()
+                )
+            })?;
+        anyhow::ensure!(
+            tokio::fs::metadata(&host_path).await?.is_dir(),
+            "host component plugin '{id}': volume hostPath {} is not a directory",
+            host_path.display()
+        );
+        let mount = crate::types::VolumeMount {
+            name: volume.mount_path.clone(),
+            mount_path: volume.mount_path.clone(),
+            read_only: volume.read_only,
+        };
+        resolved.push(
+            ResolvedVolumeMount::from_mount(&host_path, &mount)
+                .await
+                .with_context(|| {
+                    format!(
+                        "host component plugin '{id}': volume hostPath {} cannot be mounted",
+                        host_path.display()
+                    )
+                })?,
+        );
+    }
+    Ok(resolved.into())
 }
 
 fn component_plugin_socket_policy(
@@ -2206,13 +2318,15 @@ mod tests {
             host_ref: None,
             network: crate::host::ports::NetworkHandle::new(),
             socket_policy: policy,
+            volumes: Arc::from([]),
         };
         let mut store = build_plugin_store(
             &engine,
             "socket-test-plugin",
             &HashMap::new(),
             &store_context,
-        );
+        )
+        .expect("plugin store builds");
         let check = store
             .data_mut()
             .active_ctx
@@ -2318,7 +2432,8 @@ mod tests {
             plugin.id,
             &plugin.state.native_plugins,
             &plugin.runtime.store,
-        );
+        )
+        .expect("plugin store builds");
         let check = store
             .data_mut()
             .active_ctx
@@ -2834,5 +2949,93 @@ mod tests {
             Some(plugin_id),
             "native plugin must see the plugin's own id, not a synthetic bind-time UUID"
         );
+    }
+
+    fn volume(host_path: &std::path::Path, mount_path: &str, read_only: bool) -> PluginVolume {
+        PluginVolume {
+            host_path: host_path.to_path_buf(),
+            mount_path: mount_path.to_string(),
+            read_only,
+        }
+    }
+
+    #[tokio::test]
+    async fn plugin_volumes_resolve_to_one_mount_each() {
+        let models = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let resolved = resolve_plugin_volumes(
+            "vol",
+            &[
+                volume(models.path(), "/models", true),
+                volume(cache.path(), "/cache", false),
+            ],
+        )
+        .await
+        .expect("both volumes resolve");
+
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].mount_path(), "/models");
+        assert_eq!(resolved[1].mount_path(), "/cache");
+    }
+
+    #[tokio::test]
+    async fn plugin_volumes_refuse_what_cannot_be_preopened() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("weights.gguf");
+        std::fs::write(&file, b"not a directory").unwrap();
+
+        for (volumes, expected) in [
+            (vec![volume(dir.path(), "models", true)], "must be absolute"),
+            (
+                vec![
+                    volume(dir.path(), "/models", true),
+                    volume(dir.path(), "/models", false),
+                ],
+                "two volumes mount at",
+            ),
+            (
+                vec![volume(&dir.path().join("missing"), "/models", true)],
+                "does not exist",
+            ),
+            (vec![volume(&file, "/models", true)], "is not a directory"),
+        ] {
+            let err = resolve_plugin_volumes("vol", &volumes)
+                .await
+                .err()
+                .expect("declaration should be refused")
+                .to_string();
+            assert!(err.contains(expected), "expected {expected:?}, got: {err}");
+            assert!(err.contains("'vol'"), "error should name the plugin: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn plugin_store_gets_its_volumes_each_time_it_is_built() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::builder().build().expect("failed to build engine");
+        let mut store_context = PluginStoreContext {
+            allowed_hosts: Arc::from([]),
+            allowed_ip_name_lookups: Arc::from([]),
+            host_ref: None,
+            network: crate::host::ports::NetworkHandle::new(),
+            socket_policy: Arc::new(crate::sockets::policy::SocketPolicy::default()),
+            volumes: resolve_plugin_volumes("vol", &[volume(dir.path(), "/models", true)])
+                .await
+                .unwrap(),
+        };
+        let store = build_plugin_store(&engine, "vol", &HashMap::new(), &store_context)
+            .expect("store builds while the directory exists");
+        assert_eq!(store.data().active_ctx.volume_mounts.len(), 1);
+
+        // The directory was opened at load and the handle kept, so an
+        // incarnation started after its path is gone still gets the volume:
+        // nothing is opened by path again.
+        let gone = dir.path().to_path_buf();
+        drop(dir);
+        assert!(!gone.exists());
+        store_context.network = crate::host::ports::NetworkHandle::new();
+        let store = build_plugin_store(&engine, "vol", &HashMap::new(), &store_context)
+            .expect("store still builds once the path is gone");
+        assert_eq!(store.data().active_ctx.volume_mounts.len(), 1);
     }
 }
