@@ -135,7 +135,6 @@ fn should_link_component_import(
 /// Metadata associated with components and services within a workload.
 #[derive(Clone)]
 pub struct WorkloadMetadata {
-    pub(crate) stream_payloads: Arc<super::stream_payload::StreamPayloads>,
     /// The unique identifier for this component
     pub(crate) id: Arc<str>,
     /// The unique identifier for the workload this component belongs to
@@ -427,7 +426,6 @@ impl WorkloadService {
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
-                stream_payloads: Arc::default(),
                 id: uuid::Uuid::now_v7().to_string().into(),
                 workload_id: workload_id.into(),
                 workload_name: workload_name.into(),
@@ -540,7 +538,6 @@ impl WorkloadComponent {
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
-                stream_payloads: Arc::default(),
                 id: uuid::Uuid::now_v7().to_string().into(),
                 workload_id: workload_id.into(),
                 workload_name: workload_name.into(),
@@ -702,6 +699,8 @@ impl DerefMut for WorkloadService {
 /// state of a workload before execution.
 #[derive(Clone)]
 pub struct ResolvedWorkload {
+    /// Engine-local adapters shared by linking and every store built for this workload.
+    stream_payloads: Arc<super::stream_payload::StreamPayloads>,
     /// The unique identifier of the workload, supplied by whoever starts it
     id: Arc<str>,
     /// The name of the workload
@@ -771,6 +770,7 @@ impl std::fmt::Debug for ResolvedWorkload {
 /// leave every restarted incarnation permanently broken.
 struct ServiceStoreRecipe {
     engine: wasmtime::Engine,
+    stream_payloads: Arc<super::stream_payload::StreamPayloads>,
     /// Weak, like the workload's own; the supervisor holds this recipe for as
     /// long as the service runs.
     http_handler: crate::host::HostRef,
@@ -792,6 +792,7 @@ impl ServiceStoreRecipe {
     async fn build(&self) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
         let store = new_store_from_templates(
             &self.engine,
+            &self.stream_payloads,
             &self.http_handler,
             &self.active_template,
             &self.linked_templates,
@@ -1663,10 +1664,7 @@ impl ResolvedWorkload {
                                 let plain_safe = func_is_ephemeral_safe(&func_ty);
                                 let relocate = !plain_safe
                                     && is_service_workload
-                                    && func_is_bridge_safe(
-                                        &func_ty,
-                                        &plugin_component.metadata.stream_payloads,
-                                    );
+                                    && func_is_bridge_safe(&func_ty, &self.stream_payloads);
                                 let target = if export_is_async && (plain_safe || relocate) {
                                     let mode = if relocate {
                                         EphemeralCallMode::Relocated {
@@ -1680,6 +1678,7 @@ impl ResolvedWorkload {
                                         pre: pre.clone(),
                                         invocation: self.invocation.clone(),
                                         engine: plugin_engine.clone(),
+                                        stream_payloads: self.stream_payloads.clone(),
                                         http_handler: self.http_handler.clone(),
                                         components: self.components.clone(),
                                         active_component_id: plugin_component_id.clone(),
@@ -1915,6 +1914,7 @@ impl ResolvedWorkload {
         };
         let store = new_store_from_templates(
             &engine,
+            &self.stream_payloads,
             &self.http_handler,
             &active_template,
             &linked_templates,
@@ -2207,6 +2207,7 @@ impl ResolvedWorkload {
 
         Ok(ServiceStoreRecipe {
             engine: metadata.engine().clone(),
+            stream_payloads: self.stream_payloads.clone(),
             http_handler: self.http_handler.clone(),
             active_template,
             linked_templates,
@@ -2319,7 +2320,7 @@ impl ResolvedWorkload {
         interface: &str,
         funcs: &[ExternalCallFunc<'_>],
     ) -> anyhow::Result<BTreeMap<Arc<str>, LinkedExportInvocation>> {
-        let (component, engine, linked_component_ids, payloads) = {
+        let (component, engine, linked_component_ids) = {
             let components = self.components.read().await;
             let component = components
                 .get(component_id)
@@ -2333,7 +2334,6 @@ impl ResolvedWorkload {
                     .iter()
                     .cloned()
                     .collect::<Vec<_>>(),
-                component.metadata.stream_payloads.clone(),
             )
         };
         let Some((ComponentItem::ComponentInstance(_), instance_idx)) =
@@ -2361,8 +2361,8 @@ impl ResolvedWorkload {
                 && types_are_ephemeral_safe(func.result_tys)
             {
                 EphemeralCallMode::PlainValue
-            } else if types_are_bridge_safe(func.param_tys, &payloads)
-                && types_are_bridge_safe(func.result_tys, &payloads)
+            } else if types_are_bridge_safe(func.param_tys, &self.stream_payloads)
+                && types_are_bridge_safe(func.result_tys, &self.stream_payloads)
             {
                 EphemeralCallMode::Relocated {
                     param_tys: func.param_tys.into(),
@@ -2389,6 +2389,7 @@ impl ResolvedWorkload {
                         pre: pre.clone(),
                         invocation: self.invocation.clone(),
                         engine: engine.clone(),
+                        stream_payloads: self.stream_payloads.clone(),
                         http_handler: self.http_handler.clone(),
                         components: self.components.clone(),
                         active_component_id: Arc::clone(&component_id),
@@ -2432,7 +2433,7 @@ impl ResolvedWorkload {
             .as_ref()
             .context("workload has no service to call into")?;
         let component = &service.metadata.component;
-        let payloads = &service.metadata.stream_payloads;
+        let payloads = &self.stream_payloads;
         let Some((ComponentItem::ComponentInstance(_), instance_idx)) =
             component.get_export(None, interface)
         else {
@@ -2633,6 +2634,8 @@ impl ResolvedWorkload {
 /// - Validate that all dependencies can be satisfied
 /// - Create the final executable workload representation
 pub struct UnresolvedWorkload {
+    /// Preserved through resolution so signature checks and stores use the same adapters.
+    stream_payloads: Arc<super::stream_payload::StreamPayloads>,
     /// The unique identifier of the workload, supplied by whoever starts it
     id: Arc<str>,
     /// The name of the workload
@@ -2837,6 +2840,7 @@ impl UnresolvedWorkload {
     ) -> Self {
         let mut component_order = Vec::new();
         Self {
+            stream_payloads: Arc::default(),
             id: id.into(),
             name: name.into(),
             namespace: namespace.into(),
@@ -2855,6 +2859,19 @@ impl UnresolvedWorkload {
             tls_provider: None,
             scratch: None,
         }
+    }
+
+    /// Use the engine's stream/future payload adapters for linking and store construction.
+    ///
+    /// [`super::Engine::initialize_workload`] sets this automatically. When building
+    /// a workload directly, pass a clone of [`super::Engine::stream_payloads`].
+    /// Register payload types before resolving the workload or loading plugins.
+    pub fn with_stream_payloads(
+        mut self,
+        stream_payloads: Arc<super::stream_payload::StreamPayloads>,
+    ) -> Self {
+        self.stream_payloads = stream_payloads;
+        self
     }
 
     pub(crate) fn with_scratch(
@@ -3488,6 +3505,7 @@ impl UnresolvedWorkload {
 
         // Resolve the workload
         let mut resolved_workload = ResolvedWorkload {
+            stream_payloads: self.stream_payloads,
             id: self.id.clone(),
             name: self.name.clone(),
             namespace: self.namespace.clone(),

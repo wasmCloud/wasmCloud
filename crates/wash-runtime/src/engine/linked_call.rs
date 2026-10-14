@@ -72,7 +72,6 @@ use crate::sockets::{self, loopback};
 /// TLS support that the request path has.
 #[derive(Clone)]
 pub(crate) struct ComponentCtxTemplate {
-    stream_payloads: Arc<super::stream_payload::StreamPayloads>,
     component_id: Arc<str>,
     workload_id: Arc<str>,
     local_resources: crate::types::LocalResources,
@@ -95,7 +94,6 @@ impl ComponentCtxTemplate {
     fn from_metadata(metadata: &WorkloadMetadata) -> Self {
         Self {
             component_id: metadata.id.clone(),
-            stream_payloads: metadata.stream_payloads.clone(),
             workload_id: metadata.workload_id.clone(),
             local_resources: metadata.local_resources.clone(),
             volume_mounts: metadata.resolved_volume_mounts.clone(),
@@ -161,6 +159,7 @@ pub(crate) struct EphemeralLinkedCall {
     /// this call ends up running in.
     pub(crate) pre: InstancePre<SharedCtx>,
     pub(crate) engine: wasmtime::Engine,
+    pub(crate) stream_payloads: Arc<super::stream_payload::StreamPayloads>,
     /// See [`crate::host::http::live_handler`] for why this is weak.
     pub(crate) http_handler: crate::host::HostRef,
     /// The meter of the host this call runs on; see
@@ -342,6 +341,7 @@ async fn build_ctx_from_template(
 
 pub(crate) async fn new_store_from_templates(
     engine: &wasmtime::Engine,
+    stream_payloads: &Arc<super::stream_payload::StreamPayloads>,
     http_handler: &crate::host::HostRef,
     active: &ComponentCtxTemplate,
     linked: &[ComponentCtxTemplate],
@@ -362,7 +362,7 @@ pub(crate) async fn new_store_from_templates(
     )
     .await?;
     let mut shared_ctx = SharedCtx::new(active_ctx).with_guest_memory(&active.guest_memory);
-    shared_ctx.stream_payloads = active.stream_payloads.clone();
+    shared_ctx.stream_payloads = Arc::clone(stream_payloads);
 
     for linked in linked {
         let linked_ctx =
@@ -496,6 +496,7 @@ async fn new_ephemeral_store(
 
     let store = new_store_from_templates(
         &call.engine,
+        &call.stream_payloads,
         &call.http_handler,
         &active,
         &linked,
