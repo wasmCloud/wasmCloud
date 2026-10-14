@@ -61,6 +61,8 @@ impl wasmtime_wasi_tls::TlsProvider for SharedTlsProvider {
 
 /// Shared context for linked components
 pub struct SharedCtx {
+    /// Typed adapters used when this store exchanges stream/future payloads.
+    pub stream_payloads: Arc<super::stream_payload::StreamPayloads>,
     /// Current active context
     pub active_ctx: Ctx,
     /// The resource table used to manage resources in the Wasmtime store.
@@ -142,6 +144,7 @@ impl SharedCtx {
     pub fn new(context: Ctx) -> Self {
         Self {
             active_ctx: context,
+            stream_payloads: Arc::default(),
             table: ResourceTable::new(),
             contexts: Default::default(),
             exporter_instances: Default::default(),

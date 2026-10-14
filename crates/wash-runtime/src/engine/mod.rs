@@ -225,11 +225,13 @@ pub fn targets_wasip3_http(component: &Component) -> bool {
 }
 
 pub mod abandon;
+pub mod command;
 pub mod ctx;
 pub mod dispatch;
 pub mod guest_memory;
 pub(crate) mod instance_driver;
 pub(crate) mod instance_pool;
+pub mod stream_payload;
 pub use instance_pool::{InstancePolicy, ReclaimPolicy};
 pub mod host_memory;
 pub(crate) mod linked_call;
@@ -300,6 +302,7 @@ fn spawn_epoch_ticker(engine: &wasmtime::Engine) -> anyhow::Result<()> {
 /// It wraps a wasmtime engine with additional functionality for workload management.
 #[derive(Clone)]
 pub struct Engine {
+    stream_payloads: Arc<stream_payload::StreamPayloads>,
     // wasmtime engine
     pub(crate) inner: wasmtime::Engine,
     pub(crate) cache: Cache<CacheKey, CacheValue>,
@@ -453,6 +456,11 @@ fn parse_pooling_minimum(text: &str) -> Option<u64> {
 }
 
 impl Engine {
+    /// Register application-defined stream/future payloads before resolving workloads.
+    pub fn stream_payloads(&self) -> &Arc<stream_payload::StreamPayloads> {
+        &self.stream_payloads
+    }
+
     /// host_memory has the memory budgets this engine was built with including max host
     /// memory available, default component heap limit, and number of core instances available.
     /// Read back rather than recomputed, so what a caller reports is what the engine actually
@@ -705,6 +713,7 @@ impl Engine {
         service.metadata.resolved_volume_mounts = resolved_volume_mounts;
         service.metadata.socket_policy = Arc::clone(&self.socket_policy);
         service.metadata.guest_memory = Arc::clone(&self.guest_memory);
+        service.metadata.stream_payloads = Arc::clone(&self.stream_payloads);
 
         let world = service.world();
 
@@ -839,6 +848,7 @@ impl Engine {
         workload_component.metadata.resolved_volume_mounts = resolved_volume_mounts;
         workload_component.metadata.socket_policy = Arc::clone(&self.socket_policy);
         workload_component.metadata.guest_memory = Arc::clone(&self.guest_memory);
+        workload_component.metadata.stream_payloads = Arc::clone(&self.stream_payloads);
         Ok(workload_component)
     }
 
@@ -1411,6 +1421,7 @@ impl EngineBuilder {
             Arc::from(format!("{e:#}"))
         });
         Ok(Engine {
+            stream_payloads: Arc::default(),
             inner,
             cache,
             #[cfg(test)]

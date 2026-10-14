@@ -86,6 +86,8 @@ impl FixtureKind {
 }
 
 const P2_FIXTURES: &[&str] = &[
+    "structured-plugin",
+    "structured-caller",
     "http-handler-p2",
     "http-counter",
     "cron-service",
@@ -116,6 +118,7 @@ const P2_FIXTURES: &[&str] = &[
 ];
 
 const P3_FIXTURES: &[&str] = &[
+    "command-p3",
     "messaging-echo-p3",
     "messaging-sleeper-p3",
     "nats-async-handler-p3",

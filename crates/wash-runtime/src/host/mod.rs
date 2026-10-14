@@ -387,6 +387,18 @@ pub struct HostRef {
 }
 
 impl HostRef {
+    /// A standalone embedder with no host lifetime or outgoing HTTP handler.
+    ///
+    /// Useful for command runners that provide capabilities through native
+    /// plugins. WASI HTTP egress remains unavailable; use [`Self::from_handler`]
+    /// to supply it explicitly.
+    pub fn detached() -> Self {
+        Self {
+            handler: None,
+            lifetime: None,
+        }
+    }
+
     /// A reference to a handler with no host behind it, for an embedder that
     /// builds stores itself. Egress works; nothing ends those stores when the
     /// handler goes, because no host owns them.
