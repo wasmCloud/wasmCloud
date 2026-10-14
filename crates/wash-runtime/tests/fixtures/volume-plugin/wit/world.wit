@@ -1,0 +1,7 @@
+package acme:volumeplugin@0.1.0;
+
+/// Host component plugin that reads and writes files with plain `std::fs`, so
+/// everything it can reach is whatever `volumes` preopened into its store.
+world volume-plugin {
+    export acme:volume/files@0.1.0;
+}
