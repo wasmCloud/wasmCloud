@@ -135,6 +135,7 @@ fn should_link_component_import(
 /// Metadata associated with components and services within a workload.
 #[derive(Clone)]
 pub struct WorkloadMetadata {
+    pub(crate) stream_payloads: Arc<super::stream_payload::StreamPayloads>,
     /// The unique identifier for this component
     pub(crate) id: Arc<str>,
     /// The unique identifier for the workload this component belongs to
@@ -430,6 +431,7 @@ impl WorkloadService {
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
+                stream_payloads: Arc::default(),
                 id: uuid::Uuid::now_v7().to_string().into(),
                 workload_id: workload_id.into(),
                 workload_name: workload_name.into(),
@@ -549,6 +551,7 @@ impl WorkloadComponent {
     ) -> Self {
         Self {
             metadata: WorkloadMetadata {
+                stream_payloads: Arc::default(),
                 id: uuid::Uuid::now_v7().to_string().into(),
                 workload_id: workload_id.into(),
                 workload_name: workload_name.into(),
@@ -1681,7 +1684,10 @@ impl ResolvedWorkload {
                                 let plain_safe = func_is_ephemeral_safe(&func_ty);
                                 let relocate = !plain_safe
                                     && is_service_workload
-                                    && func_is_bridge_safe(&func_ty);
+                                    && func_is_bridge_safe(
+                                        &func_ty,
+                                        &plugin_component.metadata.stream_payloads,
+                                    );
                                 let target = if export_is_async && (plain_safe || relocate) {
                                     let mode = if relocate {
                                         EphemeralCallMode::Relocated {
@@ -2334,7 +2340,7 @@ impl ResolvedWorkload {
         interface: &str,
         funcs: &[ExternalCallFunc<'_>],
     ) -> anyhow::Result<BTreeMap<Arc<str>, LinkedExportInvocation>> {
-        let (component, engine, linked_component_ids) = {
+        let (component, engine, linked_component_ids, payloads) = {
             let components = self.components.read().await;
             let component = components
                 .get(component_id)
@@ -2348,6 +2354,7 @@ impl ResolvedWorkload {
                     .iter()
                     .cloned()
                     .collect::<Vec<_>>(),
+                component.metadata.stream_payloads.clone(),
             )
         };
         let Some((ComponentItem::ComponentInstance(_), instance_idx)) =
@@ -2375,8 +2382,8 @@ impl ResolvedWorkload {
                 && types_are_ephemeral_safe(func.result_tys)
             {
                 EphemeralCallMode::PlainValue
-            } else if types_are_bridge_safe(func.param_tys)
-                && types_are_bridge_safe(func.result_tys)
+            } else if types_are_bridge_safe(func.param_tys, &payloads)
+                && types_are_bridge_safe(func.result_tys, &payloads)
             {
                 EphemeralCallMode::Relocated {
                     param_tys: func.param_tys.into(),
@@ -2386,7 +2393,8 @@ impl ResolvedWorkload {
                 bail!(
                     "{interface}#{} carries a handle that cannot cross the boundary between a \
                      plugin's store and a workload's; only plain values, `stream<T>`, and \
-                     `future<T>` can",
+                     `future<T>` can; a `stream<T>`/`future<T>` of an \
+                     application-defined payload needs `Engine::stream_payloads().register`",
                     func.name
                 );
             };
@@ -2445,6 +2453,7 @@ impl ResolvedWorkload {
             .as_ref()
             .context("workload has no service to call into")?;
         let component = &service.metadata.component;
+        let payloads = &service.metadata.stream_payloads;
         let Some((ComponentItem::ComponentInstance(_), instance_idx)) =
             component.get_export(None, interface)
         else {
@@ -2467,10 +2476,12 @@ impl ResolvedWorkload {
                 );
             };
             ensure!(
-                types_are_bridge_safe(func.param_tys) && types_are_bridge_safe(func.result_tys),
+                types_are_bridge_safe(func.param_tys, payloads)
+                    && types_are_bridge_safe(func.result_tys, payloads),
                 "{interface}#{} carries a handle that cannot cross the boundary between a \
                  plugin's store and a workload's; only plain values, `stream<T>`, and \
-                 `future<T>` can",
+                 `future<T>` can; a `stream<T>`/`future<T>` of an \
+                 application-defined payload needs `Engine::stream_payloads().register`",
                 func.name
             );
             let plain = types_are_ephemeral_safe(func.param_tys)

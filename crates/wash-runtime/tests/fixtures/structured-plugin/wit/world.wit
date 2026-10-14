@@ -1,0 +1,24 @@
+package test:payload;
+
+interface types {
+    record entry {
+        text: string,
+        data: list<u8>,
+        maybe: option<u64>,
+    }
+}
+
+interface native {
+    use types.{entry};
+    relay: async func(input: stream<entry>) -> tuple<stream<entry>, future<result<entry, string>>>;
+}
+
+interface provider {
+    use types.{entry};
+    relay: async func(input: stream<entry>) -> tuple<stream<entry>, future<result<entry, string>>>;
+}
+
+world plugin {
+    import native;
+    export provider;
+}

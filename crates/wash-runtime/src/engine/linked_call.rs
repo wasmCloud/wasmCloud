@@ -44,7 +44,7 @@ use crate::engine::ctx::SharedTlsProvider;
 use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx, StoreActiveCtxGuard};
 use crate::engine::instance_driver::{InstanceJob, LinkedJob};
 use crate::engine::instance_pool::{self, ComponentInstance, InstancePool};
-use crate::engine::store::relocate::{self, Relocated, bridgeable_element_type};
+use crate::engine::store::relocate::{self, Relocated};
 use crate::engine::store::stream_pump::Done;
 use crate::engine::value::{carries_cross_store_handle, lift_results, lower_params};
 use crate::engine::volumes::{ResolvedVolumeMount, resolve_component_volume_mounts_in_map};
@@ -72,6 +72,7 @@ use crate::sockets::{self, loopback};
 /// TLS support that the request path has.
 #[derive(Clone)]
 pub(crate) struct ComponentCtxTemplate {
+    stream_payloads: Arc<super::stream_payload::StreamPayloads>,
     component_id: Arc<str>,
     workload_id: Arc<str>,
     local_resources: crate::types::LocalResources,
@@ -96,6 +97,7 @@ impl ComponentCtxTemplate {
     fn from_metadata(metadata: &WorkloadMetadata) -> Self {
         Self {
             component_id: metadata.id.clone(),
+            stream_payloads: metadata.stream_payloads.clone(),
             workload_id: metadata.workload_id.clone(),
             local_resources: metadata.local_resources.clone(),
             volume_mounts: metadata.resolved_volume_mounts.clone(),
@@ -221,26 +223,28 @@ pub(crate) fn func_is_ephemeral_safe(func_ty: &ComponentFunc) -> bool {
 /// bridge-safe. (A `resource` crosses only the host-component-plugin bridge,
 /// where a plugin-side registry exists — see
 /// [`crate::engine::store::resource_bridge`].)
-fn type_is_bridge_safe(ty: &Type) -> bool {
+fn type_is_bridge_safe(ty: &Type, payloads: &super::stream_payload::StreamPayloads) -> bool {
     if !carries_cross_store_handle(ty) {
         return true;
     }
     match ty {
-        Type::Stream(st) => st.ty().is_some_and(|e| bridgeable_element_type(&e)),
-        Type::Future(ft) => ft.ty().is_some_and(|e| bridgeable_element_type(&e)),
-        Type::List(t) => type_is_bridge_safe(&t.ty()),
-        Type::FixedLengthList(t) => type_is_bridge_safe(&t.ty()),
-        Type::Option(t) => type_is_bridge_safe(&t.ty()),
-        Type::Tuple(t) => t.types().all(|t| type_is_bridge_safe(&t)),
-        Type::Record(t) => t.fields().all(|f| type_is_bridge_safe(&f.ty)),
+        Type::Stream(st) => st.ty().is_some_and(|e| payloads.supports(&e)),
+        Type::Future(ft) => ft.ty().is_none_or(|e| payloads.supports(&e)),
+        Type::List(t) => type_is_bridge_safe(&t.ty(), payloads),
+        Type::FixedLengthList(t) => type_is_bridge_safe(&t.ty(), payloads),
+        Type::Option(t) => type_is_bridge_safe(&t.ty(), payloads),
+        Type::Tuple(t) => t.types().all(|t| type_is_bridge_safe(&t, payloads)),
+        Type::Record(t) => t.fields().all(|f| type_is_bridge_safe(&f.ty, payloads)),
         Type::Variant(t) => t
             .cases()
-            .all(|c| c.ty.is_none_or(|t| type_is_bridge_safe(&t))),
+            .all(|c| c.ty.is_none_or(|t| type_is_bridge_safe(&t, payloads))),
         Type::Result(t) => {
-            t.ok().is_none_or(|t| type_is_bridge_safe(&t))
-                && t.err().is_none_or(|t| type_is_bridge_safe(&t))
+            t.ok().is_none_or(|t| type_is_bridge_safe(&t, payloads))
+                && t.err().is_none_or(|t| type_is_bridge_safe(&t, payloads))
         }
-        Type::Map(t) => type_is_bridge_safe(&t.key()) && type_is_bridge_safe(&t.value()),
+        Type::Map(t) => {
+            type_is_bridge_safe(&t.key(), payloads) && type_is_bridge_safe(&t.value(), payloads)
+        }
         // resource (own/borrow) / error-context: not relocatable here.
         _ => false,
     }
@@ -250,16 +254,42 @@ fn type_is_bridge_safe(ty: &Type) -> bool {
 /// [`func_is_bridge_safe`], for a caller holding params and results separately
 /// rather than as one [`ComponentFunc`].
 #[cfg(feature = "host-component-plugins")]
-pub(crate) fn types_are_bridge_safe(tys: &[Type]) -> bool {
-    tys.iter().all(type_is_bridge_safe)
+pub(crate) fn types_are_bridge_safe(
+    tys: &[Type],
+    payloads: &super::stream_payload::StreamPayloads,
+) -> bool {
+    tys.iter().all(|ty| type_is_bridge_safe(ty, payloads))
 }
 
 /// Whether every param/result of `func_ty` is [`type_is_bridge_safe`], so a call
 /// carrying a `stream<T>`/`future<T>` can still run in an ephemeral store (with
 /// relocation) instead of being pinned to the shared store.
-pub(crate) fn func_is_bridge_safe(func_ty: &ComponentFunc) -> bool {
-    func_ty.params().all(|(_, ty)| type_is_bridge_safe(&ty))
-        && func_ty.results().all(|ty| type_is_bridge_safe(&ty))
+pub(crate) fn func_is_bridge_safe(
+    func_ty: &ComponentFunc,
+    payloads: &super::stream_payload::StreamPayloads,
+) -> bool {
+    func_ty
+        .params()
+        .all(|(_, ty)| type_is_bridge_safe(&ty, payloads))
+        && func_ty
+            .results()
+            .all(|ty| type_is_bridge_safe(&ty, payloads))
+}
+
+/// Copy a component's manifest environment into a WASI CLI context.
+///
+/// Shared by the store template and [`crate::engine::command`], which rebuilds
+/// the CLI context to give one invocation its own arguments and streams and
+/// must end up with the same variables.
+pub(crate) fn apply_environment(
+    builder: &mut WasiCtxBuilder,
+    environment: &std::collections::HashMap<String, String>,
+) {
+    let pairs = environment
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    builder.envs(&pairs);
 }
 
 async fn build_ctx_from_template(
@@ -270,18 +300,8 @@ async fn build_ctx_from_template(
     is_service: bool,
 ) -> anyhow::Result<Ctx> {
     let mut wasi_ctx_builder = WasiCtxBuilder::new();
-    wasi_ctx_builder
-        .envs(
-            template
-                .local_resources
-                .environment
-                .iter()
-                .map(|kv| (kv.0.as_str(), kv.1.as_str()))
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
-        .inherit_stdout()
-        .inherit_stderr();
+    apply_environment(&mut wasi_ctx_builder, &template.local_resources.environment);
+    wasi_ctx_builder.inherit_stdout().inherit_stderr();
 
     let kind = if is_service {
         sockets::policy::GuestKind::Service
@@ -346,6 +366,7 @@ pub(crate) async fn new_store_from_templates(
     )
     .await?;
     let mut shared_ctx = SharedCtx::new(active_ctx).with_guest_memory(&active.guest_memory);
+    shared_ctx.stream_payloads = active.stream_payloads.clone();
 
     for linked in linked {
         let linked_ctx =
