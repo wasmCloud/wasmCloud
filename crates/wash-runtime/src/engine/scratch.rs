@@ -12,7 +12,9 @@
 //! - A host that crashed runs no teardown. Each host holds an exclusive lock on
 //!   a file in its own directory for as long as it runs, and the kernel drops
 //!   that lock when the process dies. When a host builds its engine it removes
-//!   every other host directory whose lock it can take.
+//!   every other host directory whose lock it can take. A host's lock file is
+//!   locked before it is published under its name, so no sweep ever finds a
+//!   starting host's lock free.
 //!
 //! The sweep deletes only what it can prove is dead. A directory whose lock
 //! cannot be taken, whose lock file is missing, or which cannot be read is kept:
@@ -46,10 +48,16 @@ impl ScratchRoot {
             .tempdir_in(root)
             .with_context(|| format!("failed to create a host directory in {}", root.display()))?
             .keep();
-        let lock = File::create(dir.join(LOCK_FILE))
-            .with_context(|| format!("failed to create {}", dir.join(LOCK_FILE).display()))?;
-        lock.try_lock()
-            .map_err(|e| anyhow::anyhow!("failed to lock {}: {e}", dir.display()))?;
+        let lock = tempfile::Builder::new()
+            .tempfile_in(&dir)
+            .with_context(|| format!("failed to create a lock file in {}", dir.display()))?;
+        lock.as_file()
+            .try_lock()
+            .map_err(|e| anyhow::anyhow!("failed to lock {}: {e}", lock.path().display()))?;
+        let lock = lock
+            .persist(dir.join(LOCK_FILE))
+            .map_err(|e| e.error)
+            .with_context(|| format!("failed to publish the lock in {}", dir.display()))?;
         Ok(Arc::new(Self { dir, _lock: lock }))
     }
 
@@ -214,6 +222,41 @@ mod tests {
         let _scratch = ScratchRoot::open(root.path()).unwrap();
         assert!(unlocked.exists());
         assert!(foreign.exists());
+    }
+
+    /// Hosts starting together on one root each sweep while the others are
+    /// claiming: no sweep may take a lock or a directory from a starting host.
+    #[test]
+    fn hosts_starting_together_never_sweep_each_other() {
+        const HOSTS: usize = 8;
+        let root = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Barrier::new(HOSTS);
+        let failures = std::sync::Mutex::new(Vec::new());
+        // A failure is recorded, never panicked on: every thread must keep
+        // reaching the barrier or the others wait forever.
+        let record = |e: anyhow::Error| failures.lock().unwrap().push(format!("{e:#}"));
+        std::thread::scope(|s| {
+            for _ in 0..HOSTS {
+                s.spawn(|| {
+                    for _ in 0..50 {
+                        barrier.wait();
+                        let scratch = ScratchRoot::open(root.path());
+                        // Every host has claimed before any workload starts.
+                        barrier.wait();
+                        match scratch {
+                            Ok(scratch) => {
+                                if let Err(e) = scratch.workload_dir() {
+                                    record(e);
+                                }
+                            }
+                            Err(e) => record(e),
+                        }
+                    }
+                });
+            }
+        });
+        let failures = failures.into_inner().unwrap();
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 
     #[cfg(unix)]
