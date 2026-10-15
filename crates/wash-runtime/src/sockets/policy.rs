@@ -330,7 +330,8 @@ impl SocketPolicy {
         //    entry permits the address itself (a literal, or `*`), or a name
         //    this store resolved into it. Being allowed to look a name up is
         //    not being allowed to connect to it: only `allowed_hosts` grants.
-        //    A decision resting on a name lapses with that name's grant.
+        //    A decision resting on a name lapses with that name's grant, if
+        //    grants have a lifetime.
         //
         //    Both layers are judged before either refuses. Enforcing, the
         //    first refusal is the answer. Counting, every refusal is recorded,
@@ -339,9 +340,7 @@ impl SocketPolicy {
         let named = if check_allowed_addr(&self.allowed_hosts, addr) {
             Some(None)
         } else {
-            names
-                .and_then(|names| names.permitted_until(&self.allowed_hosts, addr))
-                .map(Some)
+            names.and_then(|names| names.permitted_until(&self.allowed_hosts, addr))
         };
         let in_range = self.egress_addrs.permits(addr.ip());
         if named.is_none() {
@@ -477,6 +476,7 @@ impl SocketPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sockets::resolved_names::ResolvedNameLimits;
 
     fn addr(s: &str) -> SocketAddr {
         s.parse().expect("test address should parse")
@@ -1007,8 +1007,12 @@ mod tests {
         assert!(!policy.host_loopback_enabled);
     }
 
+    /// What a store whose grants last a minute resolved.
     fn resolved(name: &str, addrs: &[&str]) -> ResolvedNames {
-        let names = ResolvedNames::default();
+        let names = ResolvedNames::new(ResolvedNameLimits {
+            lifetime: Some(std::time::Duration::from_secs(60)),
+            ..Default::default()
+        });
         names.record(
             name,
             addrs.iter().map(|a| a.parse().unwrap()),
@@ -1209,9 +1213,10 @@ mod tests {
         }
     }
 
-    /// Only a decision resting on a resolved name lapses. A literal, `*`,
-    /// virtual loopback and the sentinel all stand, so a socket connected
-    /// through them never asks again.
+    /// Only a decision resting on a resolved name lapses, and only when
+    /// grants have a lifetime. A literal, `*`, virtual loopback and the
+    /// sentinel all stand, so a socket connected through them never asks
+    /// again.
     #[test]
     fn only_a_decision_resting_on_a_name_carries_a_deadline() {
         let names = resolved("db.internal", &["10.0.0.5"]);
@@ -1223,6 +1228,20 @@ mod tests {
         let deadline = connect(&named, "10.0.0.5:5432").expect("a name grant lapses");
         assert!(deadline > std::time::Instant::now());
         assert_eq!(connect(&named, "127.0.0.1:5432"), None);
+
+        let lasting = ResolvedNames::default();
+        lasting.record(
+            "db.internal",
+            [addr("10.0.0.5:0").ip()],
+            std::time::Instant::now(),
+        );
+        let decision =
+            named.decide_for_store(SocketAddrUse::UdpConnect, addr("10.0.0.5:5432"), &lasting);
+        assert_eq!(
+            valid_until(decision),
+            None,
+            "a grant with no lifetime stands"
+        );
 
         // A literal entry for the same address outranks the name: it stands.
         assert_eq!(
@@ -1243,8 +1262,15 @@ mod tests {
     /// then one policy decision that either extends it or refuses.
     #[test]
     fn a_connected_peer_is_decided_again_only_after_its_deadline() {
+        let policy = SocketPolicy {
+            resolved_names: ResolvedNameLimits {
+                lifetime: Some(std::time::Duration::from_secs(60)),
+                ..Default::default()
+            },
+            ..naming(&["db.internal"])
+        };
         let ctx = crate::sockets::WasiSocketsCtx::for_store(
-            Arc::new(naming(&["db.internal"])),
+            Arc::new(policy),
             Arc::default(),
             Arc::from([]),
         );

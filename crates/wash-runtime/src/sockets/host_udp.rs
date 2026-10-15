@@ -848,7 +848,7 @@ mod tests {
             egress_mode: EgressMode::Enforce,
             allowed_hosts: Arc::from(["db.internal:9".parse().unwrap()]),
             resolved_names: ResolvedNameLimits {
-                lifetime,
+                lifetime: Some(lifetime),
                 ..Default::default()
             },
             ..Default::default()
