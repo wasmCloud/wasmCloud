@@ -84,8 +84,8 @@ use wasmtime::{Store, StoreContextMut};
 use crate::engine::Engine;
 use crate::engine::ctx::{CallerIdentity, Ctx, SharedCtx};
 use crate::engine::instance_pool::InstancePolicy;
-use crate::engine::store::relocate::{self, Relocated};
-use crate::engine::store::resource_bridge::{self, ProxyResource};
+use crate::engine::store::relocate::{self, HostHandles, Relocated};
+use crate::engine::store::resource_bridge::{self, Owner, ProxyResource};
 use crate::engine::workload::{
     ResolvedWorkload, UnresolvedWorkload, WorkloadComponent, WorkloadItem,
 };
@@ -1677,7 +1677,12 @@ async fn drop_proxy_resource(
         let res = Resource::<ProxyResource>::new_own(rep);
         Ok(access.data_mut().table.delete(res)?.proxy_id)
     })?;
+    drop_plugin_resource(state, proxy_id).await;
+    Ok(())
+}
 
+/// Route a drop of the real resource behind `proxy_id` to the plugin store.
+async fn drop_plugin_resource(state: &ComponentHostPluginState, proxy_id: u64) {
     // Best-effort: if the plugin was stopped or restarted, the real resource is
     // already gone, so a closed channel here is not an error.
     if let Some(sender) = state.sender() {
@@ -1693,7 +1698,6 @@ async fn drop_proxy_resource(
             let _ = reply_rx.await;
         }
     }
-    Ok(())
 }
 
 /// Route one capability call from a workload store to the persistent plugin
@@ -1723,31 +1727,44 @@ async fn route_capability_call(
     // argument-stream pumps run under the caller's (long-lived) runtime, so their
     // drain signals are dropped here. Runaway re-entrant recursion is bounded by
     // the TriggerService's in-flight-task ceiling, not here.
-    let (caller, args) = accessor.with(
-        |mut access| -> wasmtime::Result<(CallerIdentity, Vec<Relocated>)> {
-            let caller = {
-                let ctx = &access.data_mut().active_ctx;
-                CallerIdentity {
-                    workload_id: Arc::clone(&ctx.workload_id),
-                    component_id: Some(Arc::clone(&ctx.component_id)),
-                    // Fixed when the shim was installed, not read from the
-                    // call, so nothing the guest passes can influence it.
-                    binding,
-                }
-            };
-            let mut dones = Vec::new();
-            let mut out = Vec::with_capacity(params.len());
-            for (val, ty) in params.iter().zip(param_tys.iter()) {
-                out.push(relocate::extract(
-                    access.as_context_mut(),
-                    val,
-                    ty,
-                    &mut dones,
-                )?);
+    let (caller, extracted) = accessor.with(|mut access| {
+        let caller = {
+            let ctx = &access.data_mut().active_ctx;
+            CallerIdentity {
+                workload_id: Arc::clone(&ctx.workload_id),
+                component_id: Some(Arc::clone(&ctx.component_id)),
+                // Fixed when the shim was installed, not read from the
+                // call, so nothing the guest passes can influence it.
+                binding,
             }
-            Ok((caller, out))
-        },
-    )?;
+        };
+        let extracted = relocate::extract_all(
+            access.as_context_mut(),
+            params,
+            param_tys,
+            HostHandles::Kept,
+            &mut Vec::new(),
+        );
+        (caller, extracted)
+    });
+    let args = match extracted {
+        Ok(args) => args,
+        // The plugin still holds each resource an argument gave up before the
+        // one that could not leave.
+        Err(failed) => {
+            for value in failed.stranded {
+                if let Relocated::Resource {
+                    owner: Owner::Plugin,
+                    proxy_id,
+                    owned: true,
+                } = value
+                {
+                    drop_plugin_resource(state, proxy_id).await;
+                }
+            }
+            return Err(failed.error);
+        }
+    };
 
     let sender = state.sender().ok_or_else(|| {
         wasmtime::format_err!("host component plugin '{}' is not running", state.id)
@@ -1792,8 +1809,12 @@ async fn route_capability_call(
 
     // Inject the relocated results into the caller store.
     accessor.with(|mut access| -> wasmtime::Result<()> {
-        for (slot, relocated) in results.iter_mut().zip(produced) {
-            *slot = relocate::inject(access.as_context_mut(), relocated)?;
+        // A result is never a `borrow`, so nothing is lent. What a failure
+        // strands is the plugin's, and is released with the plugin's store.
+        let (vals, _lent) =
+            relocate::inject_all(access.as_context_mut(), produced).map_err(|e| e.error)?;
+        for (slot, val) in results.iter_mut().zip(vals) {
+            *slot = val;
         }
         Ok(())
     })

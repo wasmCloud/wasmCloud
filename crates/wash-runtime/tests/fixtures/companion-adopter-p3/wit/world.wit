@@ -1,0 +1,34 @@
+package wasmcloud:companion-test@0.1.0;
+
+interface tokens {
+    resource token {
+        constructor(name: string);
+        wait: async func() -> string;
+        signal: async func(msg: string);
+    }
+
+    make-held: async func(name: string) -> token;
+    release: func();
+    live: func() -> u32;
+    hold: func(ms: u32);
+}
+
+interface adopter {
+    use tokens.{token};
+
+    /// Sync, so this component too is reached by a sync call and runs in a
+    /// store of its own, apart from its caller's.
+    ready: func() -> bool;
+
+    /// Takes a token and drops it `ms` later.
+    adopt-after: async func(t: token, ms: u32);
+}
+
+world adopter-component {
+    import tokens;
+    import wasi:cli/types@0.3.0;
+    import wasi:clocks/types@0.3.0;
+    import wasi:clocks/monotonic-clock@0.3.0;
+
+    export adopter;
+}

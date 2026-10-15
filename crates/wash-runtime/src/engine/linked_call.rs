@@ -5,10 +5,13 @@
 //! Each call is dispatched, by signature, down one of these paths (see
 //! [`LinkedTarget`]):
 //!
-//! - the **shared-store path** ([`invoke_shared_store_linked_export`] /
-//!   [`invoke_linked_sync_export`]), where the callee was pre-instantiated into
-//!   the caller's long-lived store and handles can cross the boundary by
-//!   identity,
+//! - the **shared-store path** ([`invoke_shared_store_linked_export`]), where
+//!   the callee was pre-instantiated into the caller's long-lived store and
+//!   handles can cross the boundary by identity. Only an async call takes it:
+//!   the host function behind a sync import cannot re-enter its own store,
+//! - the **companion path** ([`companion`]), where the callee has a store of
+//!   its own beside the caller's and living as long as it. Every sync call
+//!   takes it, as does an async one that must reach the same instance,
 //! - the **ephemeral path** ([`invoke_ephemeral_linked_export`]), where a
 //!   plain-value call runs in a throwaway store built per call, and
 //! - the **service path** ([`invoke_service_export`]), where the callee is the
@@ -31,7 +34,7 @@ use tokio::time::timeout;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::{debug, trace};
 use wasmtime::component::{
-    Accessor, ComponentExportIndex, InstancePre, Val,
+    Accessor, ComponentExportIndex, InstancePre, ResourceType, Val,
     types::{ComponentFunc, Type},
 };
 use wasmtime::error::Context as _;
@@ -39,14 +42,16 @@ use wasmtime::{AsContext, AsContextMut, StoreContextMut};
 use wasmtime_wasi::WasiCtxBuilder;
 
 use crate::engine::abandon::{AbandonedCallPolicy, arm_epoch_deadline};
+use crate::engine::companion;
 #[cfg(feature = "wasi-tls")]
 use crate::engine::ctx::SharedTlsProvider;
-use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx, StoreActiveCtxGuard};
+use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx};
 use crate::engine::instance_driver::{InstanceJob, LinkedJob};
 use crate::engine::instance_pool::{self, ComponentInstance, InstancePool};
-use crate::engine::store::relocate::{self, Relocated};
+use crate::engine::store::host_move::Reach;
+use crate::engine::store::relocate::{self, HostHandles, Relocated};
 use crate::engine::store::stream_pump::Done;
-use crate::engine::value::{carries_cross_store_handle, lift_results, lower_params};
+use crate::engine::value::{any_leaf, carries_cross_store_handle, lift_results, lower_params};
 use crate::engine::volumes::{ResolvedVolumeMount, resolve_component_volume_mounts_in_map};
 use crate::engine::workload::{WorkloadComponent, WorkloadMetadata};
 use crate::plugin::HostPlugin;
@@ -173,8 +178,6 @@ pub(crate) struct EphemeralLinkedCall {
     pub(crate) linked_component_ids: Vec<Arc<str>>,
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
-    /// How this call moves its args/results across the store boundary.
-    pub(crate) mode: EphemeralCallMode,
 }
 
 /// How an ephemeral linked call transfers its args/results across the store
@@ -185,11 +188,24 @@ pub(crate) enum EphemeralCallMode {
     PlainValue,
     /// The signature carries a bridgeable `stream<T>` or `future<T>`, so
     /// args/results are relocated across the boundary (see [`relocate`]), driven
-    /// by these param/result types.
-    Relocated {
-        param_tys: Arc<[Type]>,
-        result_tys: Arc<[Type]>,
-    },
+    /// by its types.
+    Relocated(Signature),
+}
+
+/// The parameter and result types a call's values are relocated by.
+#[derive(Clone)]
+pub(crate) struct Signature {
+    pub(crate) params: Arc<[Type]>,
+    pub(crate) results: Arc<[Type]>,
+}
+
+impl Signature {
+    pub(crate) fn of(func_ty: &ComponentFunc) -> Self {
+        Self {
+            params: func_ty.params().map(|(_, ty)| ty).collect(),
+            results: func_ty.results().collect(),
+        }
+    }
 }
 
 fn type_is_ephemeral_safe(ty: &Type) -> bool {
@@ -210,6 +226,15 @@ pub(crate) fn func_is_ephemeral_safe(func_ty: &ComponentFunc) -> bool {
         && func_ty.results().all(|ty| type_is_ephemeral_safe(&ty))
 }
 
+/// Whether `leaf` is a `stream` or `future` that [`relocate`] has no pump for.
+fn is_unbridgeable_pump(leaf: &Type, payloads: &super::stream_payload::StreamPayloads) -> bool {
+    match leaf {
+        Type::Stream(st) => !st.ty().is_some_and(|e| payloads.supports(&e)),
+        Type::Future(ft) => !ft.ty().is_none_or(|e| payloads.supports(&e)),
+        _ => false,
+    }
+}
+
 /// Whether a type can cross an ephemeral-store boundary via [`relocate`].
 ///
 /// True when the type is either:
@@ -219,34 +244,107 @@ pub(crate) fn func_is_ephemeral_safe(func_ty: &ComponentFunc) -> bool {
 ///
 /// `resource` (`own`/`borrow`) and `error-context` handles are not relocatable
 /// between two ephemeral-call stores, so a type carrying either is not
-/// bridge-safe. (A `resource` crosses only the host-component-plugin bridge,
-/// where a plugin-side registry exists — see
+/// bridge-safe. (A `resource` crosses only where its owner has a registry — see
 /// [`crate::engine::store::resource_bridge`].)
 fn type_is_bridge_safe(ty: &Type, payloads: &super::stream_payload::StreamPayloads) -> bool {
-    if !carries_cross_store_handle(ty) {
-        return true;
+    !any_leaf(ty, &|leaf| {
+        matches!(leaf, Type::Own(_) | Type::Borrow(_) | Type::ErrorContext)
+            || is_unbridgeable_pump(leaf, payloads)
+    })
+}
+
+/// The resource types that live in a component's own store, each with how far
+/// it can go to another (see [`crate::engine::store::host_move`]).
+#[derive(Default)]
+pub(crate) struct HostResources(Vec<(ResourceType, Option<Reach>)>);
+
+impl HostResources {
+    pub(crate) fn add(&mut self, ty: ResourceType, reach: Option<Reach>) {
+        self.0.push((ty, reach));
     }
-    match ty {
-        Type::Stream(st) => st.ty().is_some_and(|e| payloads.supports(&e)),
-        Type::Future(ft) => ft.ty().is_none_or(|e| payloads.supports(&e)),
-        Type::List(t) => type_is_bridge_safe(&t.ty(), payloads),
-        Type::FixedLengthList(t) => type_is_bridge_safe(&t.ty(), payloads),
-        Type::Option(t) => type_is_bridge_safe(&t.ty(), payloads),
-        Type::Tuple(t) => t.types().all(|t| type_is_bridge_safe(&t, payloads)),
-        Type::Record(t) => t.fields().all(|f| type_is_bridge_safe(&f.ty, payloads)),
-        Type::Variant(t) => t
-            .cases()
-            .all(|c| c.ty.is_none_or(|t| type_is_bridge_safe(&t, payloads))),
-        Type::Result(t) => {
-            t.ok().is_none_or(|t| type_is_bridge_safe(&t, payloads))
-                && t.err().is_none_or(|t| type_is_bridge_safe(&t, payloads))
-        }
-        Type::Map(t) => {
-            type_is_bridge_safe(&t.key(), payloads) && type_is_bridge_safe(&t.value(), payloads)
-        }
-        // resource (own/borrow) / error-context: not relocatable here.
+
+    pub(crate) fn contains(&self, ty: &ResourceType) -> bool {
+        self.0.iter().any(|(known, _)| known == ty)
+    }
+
+    /// Whether a handle to `ty` has to stay in this store when crossing would
+    /// take the reach `needs`.
+    fn keeps(&self, ty: &ResourceType, needs: Reach) -> bool {
+        let reaches = |(known, reach): &(ResourceType, Option<Reach>)| {
+            known == ty && reach.is_some_and(|reach| reach >= needs)
+        };
+        self.contains(ty) && !self.0.iter().any(reaches)
+    }
+}
+
+/// Whether a value of this type can cross to a companion store (see
+/// [`companion`]): what [`type_is_bridge_safe`] allows, a resource a linked
+/// component defines, and a host resource that can be moved there. `lends` says
+/// a `borrow` of one would be lent, which only a sync call's arguments are.
+fn type_crosses_to_companion(
+    ty: &Type,
+    host: &HostResources,
+    payloads: &super::stream_payload::StreamPayloads,
+    lends: bool,
+) -> bool {
+    !any_leaf(ty, &|leaf| match leaf {
+        Type::Own(resource) => host.keeps(resource, Reach::Own),
+        Type::Borrow(resource) => match lends {
+            true => host.keeps(resource, Reach::OwnOrBorrow),
+            false => host.contains(resource),
+        },
+        Type::ErrorContext => true,
+        other => is_unbridgeable_pump(other, payloads),
+    })
+}
+
+/// Whether a call to `func_ty` can be served from a companion store.
+///
+/// A sync call blocks its caller's store until it returns. Nothing there can
+/// feed a `stream` or `future` argument, so `sync` rules those out of the
+/// params, and nothing there can miss a host resource lent to the call.
+pub(crate) fn func_crosses_to_companion(
+    func_ty: &ComponentFunc,
+    host: &HostResources,
+    payloads: &super::stream_payload::StreamPayloads,
+    sync: bool,
+) -> bool {
+    let carries_pump = |ty: &Type| {
+        any_leaf(ty, &|leaf| {
+            matches!(leaf, Type::Stream(_) | Type::Future(_))
+        })
+    };
+    func_ty.params().all(|(_, ty)| {
+        type_crosses_to_companion(&ty, host, payloads, sync) && !(sync && carries_pump(&ty))
+    }) && func_ty
+        .results()
+        .all(|ty| type_crosses_to_companion(&ty, host, payloads, false))
+}
+
+/// Whether a value of this type carries a resource `is_one` picks out, as a
+/// handle or in what a `stream` or `future` delivers.
+fn type_carries_resource(ty: &Type, is_one: &impl Fn(&ResourceType) -> bool) -> bool {
+    let payload_carries =
+        |payload: Option<Type>| payload.is_some_and(|ty| type_carries_resource(&ty, is_one));
+    any_leaf(ty, &|leaf| match leaf {
+        Type::Own(resource) | Type::Borrow(resource) => is_one(resource),
+        Type::Stream(stream) => payload_carries(stream.ty()),
+        Type::Future(future) => payload_carries(future.ty()),
         _ => false,
-    }
+    })
+}
+
+/// Whether `func_ty`'s signature carries a resource `is_one` picks out.
+pub(crate) fn func_carries_resource(
+    func_ty: &ComponentFunc,
+    is_one: impl Fn(&ResourceType) -> bool,
+) -> bool {
+    func_ty
+        .params()
+        .any(|(_, ty)| type_carries_resource(&ty, &is_one))
+        || func_ty
+            .results()
+            .any(|ty| type_carries_resource(&ty, &is_one))
 }
 
 /// Whether every one of `tys` is [`type_is_bridge_safe`]. The type-list form of
@@ -294,7 +392,6 @@ pub(crate) fn apply_environment(
 async fn build_ctx_from_template(
     template: &ComponentCtxTemplate,
     http_handler: &crate::host::HostRef,
-    all_volume_mounts: &[ResolvedVolumeMount],
     store_id: &str,
     is_service: bool,
 ) -> anyhow::Result<Ctx> {
@@ -337,7 +434,8 @@ async fn build_ctx_from_template(
     }
 
     let mut ctx = ctx_builder.build();
-    ctx.volume_mounts = all_volume_mounts.to_vec();
+    // Its own mounts and no other component's, whatever else shares the store.
+    ctx.volume_mounts = template.volume_mounts.clone();
     ctx.store_id = store_id.to_string().into();
     ctx.trap_hint_logged = Arc::clone(&template.trap_hint_logged);
     Ok(ctx)
@@ -352,31 +450,60 @@ pub(crate) async fn new_store_from_templates(
     linked_instances: &[(Arc<str>, InstancePre<SharedCtx>)],
     is_service: bool,
 ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
-    let store_id = uuid::Uuid::now_v7().to_string();
-    let all_volume_mounts = std::iter::once(active)
-        .chain(linked.iter())
-        .flat_map(|template| template.volume_mounts.clone())
-        .collect::<Vec<_>>();
-    let active_ctx = build_ctx_from_template(
-        active,
+    new_store_from_templates_with(
+        engine,
+        stream_payloads,
         http_handler,
-        &all_volume_mounts,
-        &store_id,
-        is_service,
+        active,
+        linked,
+        linked_instances,
+        StoreKind {
+            is_service,
+            // Services included: trapping one means a supervisor restart,
+            // which beats carrying a wedged call forever.
+            abandoned: AbandonedCallPolicy::Trap,
+        },
+        |_| {},
     )
-    .await?;
+    .await
+}
+
+/// What kind of store [`new_store_from_templates_with`] builds.
+#[derive(Clone, Copy)]
+struct StoreKind {
+    is_service: bool,
+    /// What the store does about an abandoned call that has wedged it.
+    abandoned: AbandonedCallPolicy,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn new_store_from_templates_with(
+    engine: &wasmtime::Engine,
+    stream_payloads: &Arc<super::stream_payload::StreamPayloads>,
+    http_handler: &crate::host::HostRef,
+    active: &ComponentCtxTemplate,
+    linked: &[ComponentCtxTemplate],
+    linked_instances: &[(Arc<str>, InstancePre<SharedCtx>)],
+    kind: StoreKind,
+    configure: impl FnOnce(&mut SharedCtx),
+) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
+    let StoreKind {
+        is_service,
+        abandoned,
+    } = kind;
+    let store_id = uuid::Uuid::now_v7().to_string();
+    let active_ctx = build_ctx_from_template(active, http_handler, &store_id, is_service).await?;
     let mut shared_ctx = SharedCtx::new(active_ctx).with_guest_memory(&active.guest_memory);
     shared_ctx.stream_payloads = Arc::clone(stream_payloads);
 
     for linked in linked {
-        let linked_ctx =
-            build_ctx_from_template(linked, http_handler, &all_volume_mounts, &store_id, false)
-                .await?;
+        let linked_ctx = build_ctx_from_template(linked, http_handler, &store_id, false).await?;
         shared_ctx
             .contexts
             .insert(linked.component_id.clone(), linked_ctx);
     }
 
+    configure(&mut shared_ctx);
     let mut store = wasmtime::Store::new(engine, shared_ctx);
     // A store on a fuel-metering engine starts at zero, and calling a guest
     // without fuel traps. Fuel here is a counter, never a bound:
@@ -385,9 +512,7 @@ pub(crate) async fn new_store_from_templates(
     // the maximum is what lets a guest run while its consumption is counted.
     // Errors when the engine is not metering fuel, which is the ordinary case.
     let _ = store.set_fuel(u64::MAX);
-    // Trap for every store built here, services included: trapping a service
-    // means a supervisor restart, which beats carrying a wedged call forever.
-    arm_epoch_deadline(&mut store, AbandonedCallPolicy::Trap);
+    arm_epoch_deadline(&mut store, abandoned);
     crate::engine::guest_memory::install_memory_limiter(&mut store);
 
     let active_id = active.component_id.clone();
@@ -433,21 +558,36 @@ async fn callee_instance_pool(call: &EphemeralLinkedCall) -> Option<Arc<Instance
 /// host this is a read lock, a `format!` and six allocations per linked call
 /// for a value no one reads. An empty set is what a sample that records nothing
 /// needs.
-async fn linked_attributes(
+pub(crate) async fn linked_attributes(
     call: &EphemeralLinkedCall,
     inv: &LinkedExportInvocation,
 ) -> Arc<[opentelemetry::KeyValue]> {
+    if let Some(attributes) = inv.attributes.get() {
+        return Arc::clone(attributes);
+    }
     let Some(identity) = callee_identity(call).await else {
         return Arc::from([]);
     };
-    identity.attributes(
+    let attributes = identity.attributes(
         "linked",
         &format!("{}#{}", inv.import_name, inv.export_name),
-    )
+    );
+    Arc::clone(inv.attributes.get_or_init(|| attributes))
 }
 
-async fn new_ephemeral_store(
+pub(crate) async fn new_ephemeral_store(
     call: &EphemeralLinkedCall,
+) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
+    new_ephemeral_store_with(call, AbandonedCallPolicy::Trap, |_| {}).await
+}
+
+/// [`new_ephemeral_store`], with a say in what the store does about an
+/// abandoned call that has wedged it, and with `configure` run on the store's
+/// data before anything is instantiated into it.
+pub(crate) async fn new_ephemeral_store_with(
+    call: &EphemeralLinkedCall,
+    abandoned: AbandonedCallPolicy,
+    configure: impl FnOnce(&mut SharedCtx),
 ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
     let mut component_ids = call.linked_component_ids.clone();
     component_ids.push(call.active_component_id.clone());
@@ -468,20 +608,19 @@ async fn new_ephemeral_store(
 
     let (active, linked, linked_instances) = {
         let components = call.components.read().await;
-        let active = template_of(
-            &components
-                .get(&call.active_component_id)
-                .with_context(|| {
-                    format!(
-                        "ephemeral linked component '{}' not found",
-                        call.active_component_id
-                    )
-                })?
-                .metadata,
-        );
-        let mut linked = Vec::with_capacity(call.linked_component_ids.len());
-        let mut linked_instances = Vec::with_capacity(call.linked_component_ids.len());
-        for component_id in &call.linked_component_ids {
+        let callee = &components
+            .get(&call.active_component_id)
+            .with_context(|| {
+                format!(
+                    "ephemeral linked component '{}' not found",
+                    call.active_component_id
+                )
+            })?
+            .metadata;
+        let active = template_of(callee);
+        let mut linked = Vec::with_capacity(callee.in_store_links.len());
+        let mut linked_instances = Vec::with_capacity(callee.in_store_links.len());
+        for component_id in callee.in_store_links.iter() {
             let component = components
                 .get(component_id)
                 .with_context(|| format!("linked component '{component_id}' not found"))?;
@@ -498,14 +637,18 @@ async fn new_ephemeral_store(
         (active, linked, linked_instances)
     };
 
-    let store = new_store_from_templates(
+    let store = new_store_from_templates_with(
         &call.engine,
         &call.stream_payloads,
         &call.http_handler,
         &active,
         &linked,
         &linked_instances,
-        false,
+        StoreKind {
+            is_service: false,
+            abandoned,
+        },
+        configure,
     )
     .await?;
     if let Some(identity) = callee_identity(call).await {
@@ -543,6 +686,9 @@ pub(crate) struct LinkedExportInvocation {
     pub(crate) plugin_component_id: Arc<str>,
     pub(crate) func_idx: ComponentExportIndex,
     pub(crate) param_tys: Arc<std::sync::OnceLock<Arc<[Type]>>>,
+    /// What calls through this import are measured under, resolved by the
+    /// first; see [`linked_attributes`].
+    pub(crate) attributes: Arc<std::sync::OnceLock<Arc<[opentelemetry::KeyValue]>>>,
     pub(crate) target: LinkedTarget,
 }
 
@@ -555,7 +701,17 @@ pub(crate) enum LinkedTarget {
     /// The callee gets a store of its own — one of its warm instances, or one
     /// built for this call — and the call's values are copied or relocated into
     /// it.
-    Ephemeral(Arc<EphemeralLinkedCall>),
+    Ephemeral {
+        call: Arc<EphemeralLinkedCall>,
+        mode: EphemeralCallMode,
+    },
+    /// The callee runs beside the caller in a store of its own that lives as
+    /// long as the caller's, so its state and resources persist between calls
+    /// (see [`crate::engine::companion`]).
+    Companion {
+        callee: Arc<EphemeralLinkedCall>,
+        signature: Signature,
+    },
     /// The callee is the workload's long-lived service, which is never
     /// instantiated a second time: the call is delivered to the instance
     /// already running (see [`crate::engine::dispatch`]). Only a host component
@@ -571,8 +727,11 @@ pub(crate) async fn invoke_linked_async_export(
     inv: &LinkedExportInvocation,
 ) -> wasmtime::Result<()> {
     match &inv.target {
-        LinkedTarget::Ephemeral(call) => {
-            invoke_ephemeral_linked_export(accessor, params, results, inv, call).await
+        LinkedTarget::Ephemeral { call, mode } => {
+            invoke_ephemeral_linked_export(accessor, params, results, inv, call, mode).await
+        }
+        LinkedTarget::Companion { callee, signature } => {
+            companion::invoke_async(accessor, params, results, inv, callee, signature).await
         }
         #[cfg(feature = "host-component-plugins")]
         LinkedTarget::Service(service_call) => {
@@ -593,20 +752,18 @@ async fn invoke_ephemeral_linked_export(
     results: &mut [Val],
     inv: &LinkedExportInvocation,
     ephemeral_call: &Arc<EphemeralLinkedCall>,
+    mode: &EphemeralCallMode,
 ) -> wasmtime::Result<()> {
-    match &ephemeral_call.mode {
-        EphemeralCallMode::Relocated {
-            param_tys,
-            result_tys,
-        } => {
+    match mode {
+        EphemeralCallMode::Relocated(signature) => {
             invoke_ephemeral_relocated(
                 accessor,
                 params,
                 results,
                 inv,
                 ephemeral_call,
-                Arc::clone(param_tys),
-                Arc::clone(result_tys),
+                Arc::clone(&signature.params),
+                Arc::clone(&signature.results),
             )
             .await
         }
@@ -705,10 +862,11 @@ async fn invoke_ephemeral_relocated(
                                     "function not found for linked import {import_name}.{export_name}"
                                 )
                                 })?;
-                            let mut arg_vals = Vec::with_capacity(args.len());
-                            for a in args {
-                                arg_vals.push(relocate::inject(access.as_context_mut(), a)?);
-                            }
+                            // Nothing lent is taken back: this store serves the
+                            // one call.
+                            let (arg_vals, _lent) =
+                                relocate::inject_all(access.as_context_mut(), args)
+                                    .map_err(|e| e.error)?;
                             let executed = Arc::clone(&access.get().executed);
                             Ok((func, arg_vals, executed))
                         })?;
@@ -1134,10 +1292,9 @@ impl crate::engine::dispatch::GuestCall for ServiceExportTask {
                 let func = instance.get_func(&mut access, func_idx).with_context(|| {
                     format!("function not found for service export {import_name}.{export_name}")
                 })?;
-                let mut arg_vals = Vec::with_capacity(args.len());
-                for arg in args {
-                    arg_vals.push(relocate::inject(access.as_context_mut(), arg)?);
-                }
+                // This path carries no resources, so nothing is lent.
+                let (arg_vals, _lent) =
+                    relocate::inject_all(access.as_context_mut(), args).map_err(|e| e.error)?;
                 Ok((func, arg_vals))
             });
             let (func, arg_vals) = match prepared {
@@ -1183,41 +1340,34 @@ impl crate::engine::dispatch::GuestCall for ServiceExportTask {
     }
 }
 
-/// Prepare `vals` to cross a store boundary, appending the drain signal of any
-/// stream/future pump it sets up to `dones`.
-///
-/// Whether those signals are awaited or dropped is the caller's to decide, and
-/// it differs by path: a store about to be torn down has to wait for its result
-/// streams to drain, while one that goes on running does not.
+/// [`relocate::extract_all`] for a route the linker gives only signatures
+/// without a `resource`, where a failure strands nothing in another store and
+/// no host resource leaves.
 fn extract_all(
-    mut access: StoreContextMut<'_, SharedCtx>,
+    access: StoreContextMut<'_, SharedCtx>,
     vals: &[Val],
     tys: &[Type],
     dones: &mut Vec<Done>,
 ) -> wasmtime::Result<Vec<Relocated>> {
-    let mut out = Vec::with_capacity(vals.len());
-    for (val, ty) in vals.iter().zip(tys.iter()) {
-        out.push(relocate::extract(access.as_context_mut(), val, ty, dones)?);
-    }
-    Ok(out)
+    relocate::extract_all(access, vals, tys, HostHandles::Kept, dones)
+        .map_err(|failed| failed.error)
 }
 
 /// Rebuild relocated values in this store and write them into the caller's
 /// result slots.
-fn inject_results(
+pub(crate) fn inject_results(
     mut access: StoreContextMut<'_, SharedCtx>,
     relocated: Vec<Relocated>,
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    for (i, r) in relocated.into_iter().enumerate() {
-        let v = relocate::inject(access.as_context_mut(), r)?;
-        *results.get_mut(i).context("result index out of bounds")? = v;
-    }
-    Ok(())
+    // A result is never a `borrow`, so nothing is lent.
+    let (vals, _lent) =
+        relocate::inject_all(access.as_context_mut(), relocated).map_err(|e| e.error)?;
+    write_results(vals, results)
 }
 
 /// Copy a call's returned values into the caller's result slots.
-fn write_results(vals: Vec<Val>, results: &mut [Val]) -> wasmtime::Result<()> {
+pub(crate) fn write_results(vals: Vec<Val>, results: &mut [Val]) -> wasmtime::Result<()> {
     for (i, v) in vals.into_iter().enumerate() {
         *results.get_mut(i).context("result index out of bounds")? = v;
     }
@@ -1281,57 +1431,169 @@ async fn invoke_shared_store_linked_export(
     Ok(())
 }
 
-pub(crate) async fn invoke_linked_sync_export(
-    store: StoreContextMut<'_, SharedCtx>,
-    params: &[Val],
-    results: &mut [Val],
-    inv: &LinkedExportInvocation,
-) -> wasmtime::Result<()> {
-    let mut active_ctx = StoreActiveCtxGuard::new(store, &inv.plugin_component_id)?;
-    let mut store = active_ctx.store_mut();
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use wasmtime::component::types::ComponentItem;
 
-    async {
-        let instance = store
-            .data()
-            .exporter_instances
-            .get(&inv.plugin_component_id)
-            .copied()
-            .with_context(|| {
-                format!(
-                    "linked component '{}' was not pre-instantiated in this store",
-                    inv.plugin_component_id
-                )
-            })?;
+    /// Host-served resources that stay put, move, and move or are lent; one a
+    /// linked component defines; and a function import per shape of signature
+    /// the linker has to place.
+    const SIGNATURES: &str = r#"(component
+        (import "host" (instance $host
+            (export "handle" (type (sub resource)))
+            (export "body" (type (sub resource)))
+            (export "bytes" (type (sub resource)))))
+        (alias export $host "handle" (type $handle))
+        (alias export $host "body" (type $body))
+        (alias export $host "bytes" (type $bytes))
+        (import "linked" (instance $linked (export "token" (type (sub resource)))))
+        (alias export $linked "token" (type $token))
+        (import "plain" (func (param "x" u32) (result string)))
+        (import "takes-token" (func (param "t" (borrow $token)) (result string)))
+        (import "returns-token" (func (result (own $token))))
+        (import "nests-token" (func (param "t" (list (tuple string (own $token))))))
+        (import "takes-handle" (func (param "h" (borrow $handle))))
+        (import "returns-handle" (func (result (option (own $handle)))))
+        (import "takes-stream" (func (param "s" (stream u8))))
+        (import "returns-stream" (func (result (stream u8))))
+        (import "takes-error" (func (param "e" error-context)))
+        (import "streams-token" (func (result (stream (own $token)))))
+        (import "awaits-token" (func (param "t" (list (future (option (own $token)))))))
+        (import "takes-body" (func (param "b" (own $body))))
+        (import "returns-body" (func (result (list (own $body)))))
+        (import "borrows-body" (func (param "b" (borrow $body))))
+        (import "takes-bytes" (func (param "b" (own $bytes))))
+        (import "borrows-bytes" (func (param "b" (option (borrow $bytes)))))
+    )"#;
 
-        let func = instance
-            .get_func(&mut store, inv.func_idx)
-            .context("function not found")?;
-        let tys = inv.param_tys.get_or_init(|| {
-            func.ty(store.as_context())
-                .params()
-                .map(|(_, ty)| ty)
-                .collect::<Vec<_>>()
-                .into()
-        });
-        let lowered = lower_params(store, params, tys)?;
-        trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoking dynamic export");
-
-        let mut results_buf = vec![Val::Bool(false); results.len()];
-
-        let call_timeout = crate::timeouts::shared_store_call();
-        timeout(
-            call_timeout,
-            func.call_async(&mut store, &lowered.vals, &mut results_buf),
-        )
-        .await
-        .map_err(|e| {
-            wasmtime::format_err!("function call timed out after {call_timeout:?}: {e}")
-        })??;
-
-        lift_results(store, results_buf, results)?;
-        lowered.release_identity_borrows(&mut *store)?;
-        trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoked dynamic export");
-        Ok(())
+    struct Signatures {
+        funcs: BTreeMap<String, ComponentFunc>,
+        host_resources: HostResources,
     }
-    .await
+
+    fn signatures() -> Signatures {
+        let mut config = wasmtime::Config::new();
+        config.wasm_component_model_async(true);
+        config.wasm_component_model_error_context(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        let bytes = wat::parse_str(SIGNATURES).expect("component should assemble");
+        let component = wasmtime::component::Component::new(&engine, bytes).unwrap();
+
+        let mut funcs = BTreeMap::new();
+        let mut host_resources = HostResources::default();
+        for (name, import) in component.component_type().imports(&engine) {
+            match import.ty {
+                ComponentItem::ComponentFunc(func) => {
+                    funcs.insert(name.to_string(), func);
+                }
+                ComponentItem::ComponentInstance(instance) if name == "host" => {
+                    for (name, export) in instance.exports(&engine) {
+                        let ComponentItem::Resource(ty) = export.ty else {
+                            continue;
+                        };
+                        let reach = match name {
+                            "body" => Some(Reach::Own),
+                            "bytes" => Some(Reach::OwnOrBorrow),
+                            _ => None,
+                        };
+                        host_resources.add(ty, reach);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Signatures {
+            funcs,
+            host_resources,
+        }
+    }
+
+    impl Signatures {
+        fn crosses(&self, name: &str, sync: bool) -> bool {
+            func_crosses_to_companion(
+                &self.funcs[name],
+                &self.host_resources,
+                &Default::default(),
+                sync,
+            )
+        }
+    }
+
+    #[test]
+    fn a_linked_resource_crosses_to_a_companion_wherever_it_is_nested() {
+        let signatures = signatures();
+        for name in ["plain", "takes-token", "returns-token", "nests-token"] {
+            assert!(signatures.crosses(name, true), "{name} (sync)");
+            assert!(signatures.crosses(name, false), "{name} (async)");
+        }
+    }
+
+    #[test]
+    fn what_lives_in_the_callers_store_does_not_cross() {
+        let signatures = signatures();
+        for name in ["takes-handle", "returns-handle", "takes-error"] {
+            assert!(!signatures.crosses(name, true), "{name} (sync)");
+            assert!(!signatures.crosses(name, false), "{name} (async)");
+        }
+    }
+
+    #[test]
+    fn a_host_resource_that_moves_crosses_as_an_own() {
+        let signatures = signatures();
+        for name in ["takes-body", "returns-body", "takes-bytes"] {
+            assert!(signatures.crosses(name, true), "{name} (sync)");
+            assert!(signatures.crosses(name, false), "{name} (async)");
+        }
+    }
+
+    #[test]
+    fn a_host_resource_is_lent_only_to_a_sync_call_and_only_if_it_can_be() {
+        let signatures = signatures();
+        assert!(signatures.crosses("borrows-bytes", true));
+        // An async caller's store keeps running, and could use what it lent.
+        assert!(!signatures.crosses("borrows-bytes", false));
+        assert!(!signatures.crosses("borrows-body", true));
+        assert!(!signatures.crosses("borrows-body", false));
+    }
+
+    #[test]
+    fn a_blocked_sync_caller_cannot_feed_a_stream_argument() {
+        let signatures = signatures();
+        assert!(!signatures.crosses("takes-stream", true));
+        assert!(signatures.crosses("takes-stream", false));
+        // A result is produced by the callee's store, which keeps running.
+        assert!(signatures.crosses("returns-stream", true));
+        assert!(signatures.crosses("returns-stream", false));
+    }
+
+    #[test]
+    fn a_resource_is_found_wherever_a_signature_nests_it() {
+        let signatures = signatures();
+        let linked = |name: &str| {
+            func_carries_resource(&signatures.funcs[name], |resource| {
+                !signatures.host_resources.contains(resource)
+            })
+        };
+        for name in ["takes-token", "returns-token", "nests-token"] {
+            assert!(linked(name), "{name}");
+        }
+        // What a `stream` or `future` delivers is found too, though no pump
+        // carries it to a companion.
+        for name in ["streams-token", "awaits-token"] {
+            assert!(linked(name), "{name}");
+            assert!(!signatures.crosses(name, false), "{name}");
+        }
+        // A host resource is not a linked one, and a pump is not a resource.
+        for name in [
+            "plain",
+            "takes-handle",
+            "returns-handle",
+            "returns-stream",
+            "takes-body",
+        ] {
+            assert!(!linked(name), "{name}");
+        }
+    }
 }
