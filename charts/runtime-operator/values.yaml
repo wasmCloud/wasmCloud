@@ -851,15 +851,19 @@ runtime:
         socketEgress: enforce
         # -- How long an address a workload resolved stays connectable under an
         # `allowedHosts` entry naming the host it resolved, e.g. "60s". Empty
-        # leaves the host's default of 60s.
+        # (the default) keeps it connectable for as long as the workload's
+        # store remembers the lookup, even after the name has moved off that
+        # address. Set one where addresses are reused, such as pod IPs.
         #
         # A raw socket carries no name, so `allowedHosts: [db.internal:5432]`
         # permits a socket only to an address a lookup of `db.internal` handed
-        # that workload, on that port, for this long after the lookup. That
-        # entry also lets the workload resolve the name; `allowedIpNameLookups`
-        # is for names it resolves without connecting to them.
-        # Not a DNS TTL: a workload that caches an address longer must resolve
-        # again before a new connect, and open connections are unaffected.
+        # that workload, on that port. That entry also lets the workload
+        # resolve the name; `allowedIpNameLookups` is for names it resolves
+        # without connecting to them.
+        # With a lifetime set the grant lapses that long after the lookup. Not
+        # a DNS TTL: a workload that caches an address longer must then resolve
+        # again before a new connect or datagram, and open connections are
+        # unaffected.
         #
         # The grant is the address, not the server: two names behind one
         # address are indistinguishable, and a name that resolves to another
