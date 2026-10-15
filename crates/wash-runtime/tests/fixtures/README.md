@@ -28,7 +28,8 @@ a fixture's source or WIT.
 Fixtures are built by `xtask` rather than a build script so that `cargo test`
 doesn't trigger nested `cargo build` invocations (the "cargo building cargo"
 problem); the `wash-runtime` build script stays pure-Rust proto codegen. The
-build logic lives in `/xtask/src/main.rs`.
+build logic lives in `/xtask/src/main.rs`, and the list of fixtures in
+`/xtask/src/fixtures.rs`.
 
 ## Adding a fixture
 
@@ -36,9 +37,7 @@ build logic lives in `/xtask/src/main.rs`.
    it imports wasi interfaces) a `wit/` world.
 2. Add it to the `members` list in this directory's `Cargo.toml`.
 3. Add its package name to `P2_FIXTURES` or `P3_FIXTURES` in
-   `/xtask/src/main.rs`. If its world uses only local interfaces (no wasi
-   imports), also add it to `P2_SKIP_SHARED_WIT` so shared WIT deps aren't
-   copied in.
+   `/xtask/src/fixtures.rs`.
 
 Shared WIT dependencies live in `p2-wit-deps/` and `p3-wit-deps/`; `xtask`
 copies them into each fixture's `wit/deps/` at build time.
