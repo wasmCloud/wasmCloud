@@ -545,7 +545,7 @@ impl Host {
 
         let mut filter_plugins = |interface: &WitInterface| {
             let mut found = false;
-            for (_, plugin) in self.plugins.iter() {
+            for plugin in self.plugins.values() {
                 if plugin.world().includes(interface) {
                     found = true;
                     break;
