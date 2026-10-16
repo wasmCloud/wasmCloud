@@ -21,8 +21,8 @@
 //! whether or not anything grows into it: the larger of `default_heap_memory`
 //! and wasmtime's 4 GiB `memory_reservation`, plus a guard region (see
 //! [`pool_slot_bytes`]). Today a host claims 1000 such slots, 3.9 TiB of
-//! address space, and nobody is told, which is close enough to the 4 TiB the
-//! allocator probes for that raising `core_instances` crosses it. Naming the
+//! address space, and nobody is told; the 128 TiB a 64-bit process can map
+//! holds about 30,000 of them, so `core_instances` has a ceiling. Naming the
 //! budget lets the host say, at startup, whether the pool it is about to build
 //! is one the machine could actually back.
 //!
@@ -372,11 +372,19 @@ impl HostMemoryBudgets {
     /// independently, and the failure it causes — instantiation refusing, much
     /// later, with neither number in the message — is unpleasant to diagnose.
     pub fn advisory(&self) -> Option<String> {
+        self.advisory_within(usable_address_space())
+    }
+
+    /// [`Self::advisory`] against `address_space`, the most this process can
+    /// map, so the threshold can be tested apart from the machine running it.
+    fn advisory_within(&self, address_space: u64) -> Option<String> {
         // Reserving address space is not consuming memory: on 64-bit the kernel
         // backs it only when written to. So a reservation past the budget is a
-        // warning about over-commitment, not an error — but past what the
-        // allocator can actually map, it will fail at the first instantiation.
-        if self.pool_reservation() > MAX_POOL_RESERVATION {
+        // warning about over-commitment, not an error — but the pool maps its
+        // whole slab when the engine is built, so past what this process can
+        // map, the engine does not start.
+        let reservation = self.pool_reservation();
+        if reservation > address_space / 100 * POOL_ADDRESS_SPACE_PERCENT {
             // Below the reservation the heap ceiling no longer sizes the slot,
             // and advising an operator to lower it would change nothing.
             let remedy = if self.default_heap_memory <= WASMTIME_MEMORY_RESERVATION {
@@ -389,15 +397,21 @@ impl HostMemoryBudgets {
             } else {
                 "Lower one of the two.".to_string()
             };
+            let consequence = if reservation > address_space {
+                "The pool cannot be mapped, so the engine will fail to start."
+            } else {
+                "That leaves little for everything else the process maps, so the engine may \
+                 fail to start, or later mappings may."
+            };
             return Some(format!(
                 "default-heap-memory {} across core-instances {} would reserve {} of \
-                 address space ({} per slot), past the {} the pooling allocator is probed \
-                 for at startup. Instantiation will fail once the pool is exhausted. {remedy}",
+                 address space ({} per slot), past {POOL_ADDRESS_SPACE_PERCENT}% of the {} \
+                 this process can map. {consequence} {remedy}",
                 render_bytes(self.default_heap_memory),
                 self.core_instances,
-                render_bytes(self.pool_reservation()),
+                render_bytes(reservation),
                 render_bytes(pool_slot_bytes(self.default_heap_memory)),
-                render_bytes(MAX_POOL_RESERVATION),
+                render_bytes(address_space),
             ));
         }
         if self.default_heap_memory > self.max_guest_memory {
@@ -452,9 +466,56 @@ impl HostMemoryBudgets {
 /// `limits.memory` produces.
 const MAX_ENFORCED_SHARE_PERCENT: u64 = 90;
 
-/// What `is_pooling_allocator_supported` probes for at startup, and therefore
-/// the most address space the pool can be assumed to get.
-const MAX_POOL_RESERVATION: u64 = 4 * 1024 * 1024 * MIB;
+/// Address space a process can map with no `RLIMIT_AS`: the lower half of a
+/// 48-bit virtual address space, which is what Linux on x86_64 and aarch64
+/// (4-level page tables) and macOS give user space.
+///
+/// Not the 4 TiB that `is_pooling_allocator_supported` probes. That probe asks
+/// whether the pool is worth using at all; a host passes it and can then map
+/// a pool many times larger.
+#[cfg(target_pointer_width = "64")]
+const USER_ADDRESS_SPACE: u64 = 128 * 1024 * 1024 * MIB;
+#[cfg(not(target_pointer_width = "64"))]
+const USER_ADDRESS_SPACE: u64 = 2 * 1024 * MIB;
+
+/// Share of the usable address space the pool may reserve before the host
+/// says so. The rest is for everything else the process maps — heap, thread
+/// stacks, compiled code, libraries — small beside the pool, but not nothing.
+const POOL_ADDRESS_SPACE_PERCENT: u64 = 90;
+
+/// The most address space this process can map: [`USER_ADDRESS_SPACE`],
+/// lowered by `RLIMIT_AS` where one is set.
+///
+/// The limit is read on Linux only, from `/proc/self/limits`, which needs no
+/// FFI. Elsewhere it is rarely set, and a host that sets one is told by the
+/// engine failing to build.
+pub fn usable_address_space() -> u64 {
+    address_space_limit().map_or(USER_ADDRESS_SPACE, |limit| limit.min(USER_ADDRESS_SPACE))
+}
+
+#[cfg(target_os = "linux")]
+fn address_space_limit() -> Option<u64> {
+    let limits = std::fs::read_to_string("/proc/self/limits").ok()?;
+    soft_address_space_limit(&limits)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn address_space_limit() -> Option<u64> {
+    None
+}
+
+/// The soft `Max address space` out of `/proc/self/limits`, `None` when it is
+/// `unlimited`.
+#[cfg(any(target_os = "linux", test))]
+fn soft_address_space_limit(limits: &str) -> Option<u64> {
+    limits
+        .lines()
+        .find_map(|line| line.strip_prefix("Max address space"))?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
 
 /// The memory limit this process is really subject to.
 ///
@@ -757,13 +818,14 @@ mod tests {
     }
 
     #[test]
-    fn a_small_heap_over_the_probe_is_told_to_lower_the_count() {
+    fn a_small_heap_over_the_address_space_is_told_to_lower_the_count() {
         // The trap this is here for: lowering the heap ceiling to fit more
         // slots, and finding the reservation unchanged.
-        let resolved = HostMemoryBudgets::resolve(None, Some(64 * MIB), Some(2000)).unwrap();
+        let resolved = HostMemoryBudgets::resolve(None, Some(64 * MIB), Some(30_000)).unwrap();
         let advisory = resolved
-            .advisory()
-            .expect("2000 slots of 4 GiB are past the probe");
+            .advisory_within(USER_ADDRESS_SPACE)
+            .expect("30,000 slots of 4 GiB are 118.6 TiB, past 90% of 128 TiB");
+        assert!(advisory.contains("may fail"), "{advisory}");
         assert!(advisory.contains("Lower core-instances"), "{advisory}");
         assert!(
             advisory.contains("Lowering default-heap-memory will not help"),
@@ -773,35 +835,59 @@ mod tests {
     }
 
     #[test]
-    fn the_stock_defaults_sit_just_under_the_probe() {
+    fn the_stock_defaults_are_named_and_quiet() {
         // Worth pinning, because it is the number nobody is told today: 4 GiB
-        // and a 32 MiB guard per slot across 1000 slots is 3.9 TiB — close
-        // enough to the 4 TiB the allocator is probed for that raising the
-        // count crosses it, which is exactly why it is worth naming.
+        // and a 32 MiB guard per slot across 1000 slots is 3.9 TiB.
         let stock = HostMemoryBudgets::resolve(None, None, None).unwrap();
         assert_eq!(
             stock.pool_reservation(),
             1000 * (4096 * MIB + 32 * MIB) + 32 * MIB
         );
-        assert!(stock.pool_reservation() < MAX_POOL_RESERVATION);
         assert_eq!(render_bytes(stock.pool_reservation()), "3.9TiB");
         assert_eq!(
-            stock.advisory(),
+            stock.advisory_within(USER_ADDRESS_SPACE),
             None,
             "the stock configuration must not warn — it is what every host runs today"
         );
     }
 
     #[test]
+    fn a_pool_well_past_the_old_probe_is_quiet_while_it_fits() {
+        // 20,000 slots is 78.8 TiB: far past the 4 TiB the support probe maps,
+        // and comfortably inside what the process can.
+        let resolved = HostMemoryBudgets::resolve(None, None, Some(20_000)).unwrap();
+        assert_eq!(resolved.advisory_within(USER_ADDRESS_SPACE), None);
+        // Under an address-space limit of 64 TiB, the same pool cannot map.
+        let advisory = resolved
+            .advisory_within(64 * 1024 * 1024 * MIB)
+            .expect("78.8 TiB does not fit in 64 TiB");
+        assert!(advisory.contains("cannot be mapped"), "{advisory}");
+    }
+
+    #[test]
+    fn the_address_space_limit_is_read_from_proc_limits() {
+        let unlimited = "Limit                     Soft Limit           Hard Limit           Units\n\
+                         Max address space         unlimited            unlimited            bytes\n";
+        assert_eq!(soft_address_space_limit(unlimited), None);
+        let limited = "Max address space         8589934592           unlimited            bytes\n";
+        assert_eq!(soft_address_space_limit(limited), Some(8 * 1024 * MIB));
+        assert!(usable_address_space() <= USER_ADDRESS_SPACE);
+    }
+
+    #[test]
     fn an_unreservable_combination_is_reported_with_both_numbers() {
-        let resolved = HostMemoryBudgets::resolve(None, Some(16 * 1024 * MIB), Some(1000)).unwrap();
-        let advisory = resolved.advisory().expect("15.7TiB is past the probe");
+        let resolved =
+            HostMemoryBudgets::resolve(None, Some(16 * 1024 * MIB), Some(10_000)).unwrap();
+        let advisory = resolved
+            .advisory_within(USER_ADDRESS_SPACE)
+            .expect("156.6 TiB is past the 128 TiB a process can map");
+        assert!(advisory.contains("cannot be mapped"), "{advisory}");
         assert!(
-            advisory.contains("15.7TiB"),
+            advisory.contains("156.6TiB"),
             "names the reservation, to one decimal because it is not a round unit: {advisory}"
         );
         assert!(
-            advisory.contains("1000"),
+            advisory.contains("10000"),
             "names the instance count: {advisory}"
         );
         assert!(
