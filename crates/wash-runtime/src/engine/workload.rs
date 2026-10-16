@@ -178,6 +178,9 @@ pub struct WorkloadMetadata {
     pub(crate) annotations: Arc<HashMap<String, String>>,
     /// Top-level imports already supplied by host plugins.
     plugin_bound_instances: HashSet<String>,
+    /// Keeps the engine reusing this compile for any workload that loads the
+    /// same digest while this one runs (see [`super::LiveCompile`]).
+    pub(crate) compiled: Option<Arc<super::LiveCompile>>,
 }
 
 /// Kubernetes annotation set by the runtime-operator for the parent WorkloadDeployment.
@@ -484,6 +487,7 @@ impl WorkloadService {
                 linked_components: Default::default(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
+                compiled: None,
             },
             handle: None,
             max_restarts,
@@ -603,6 +607,7 @@ impl WorkloadComponent {
                 linked_components: Default::default(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
+                compiled: None,
             },
             name: component_name.into(),
             instances: Arc::new(InstancePool::new(instances)),

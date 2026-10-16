@@ -316,6 +316,9 @@ pub struct Engine {
     // wasmtime engine
     pub(crate) inner: wasmtime::Engine,
     pub(crate) cache: Cache<CacheKey, CacheValue>,
+    /// Compiles running workloads hold, consulted before the cache so a
+    /// digest still in use is never compiled twice. See [`LiveCompiles`].
+    live_compiles: Arc<LiveCompiles>,
     /// Compiles that actually ran on this engine.
     ///
     /// Test-only, and there is no way to do without it: what the digest-keyed
@@ -382,6 +385,44 @@ pub struct CacheValue(Component);
 impl std::fmt::Debug for CacheValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CacheValue").finish()
+    }
+}
+
+/// Compiles that running workloads still hold, by digest.
+///
+/// The compile cache is bounded and forgets idle entries, but a workload
+/// keeps its `Component` for as long as it runs. Without this, a digest the
+/// cache let go of would be compiled again by the next workload to start
+/// from it, holding a second copy of the machine code beside the first.
+/// Consulting the live set first keeps one copy per digest while any
+/// workload holds it, however small the cache.
+type LiveCompiles =
+    std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<LiveCompile>>>;
+
+/// One digest's compile, held by every workload loaded from it. The entry in
+/// [`LiveCompiles`] lives exactly as long as some workload holds this.
+pub(crate) struct LiveCompile {
+    digest: String,
+    component: Component,
+    live: std::sync::Weak<LiveCompiles>,
+}
+
+impl Drop for LiveCompile {
+    fn drop(&mut self) {
+        let Some(live) = self.live.upgrade() else {
+            return;
+        };
+        let mut live = live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A workload that started after this one's last holder let go has
+        // recorded a fresh compile under the same digest; leave that one.
+        if live
+            .get(&self.digest)
+            .is_some_and(|entry| entry.strong_count() == 0)
+        {
+            live.remove(&self.digest);
+        }
     }
 }
 
@@ -685,8 +726,8 @@ impl Engine {
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
     ) -> anyhow::Result<WorkloadService> {
         // Create a wasmtime component from the bytes
-        let wasmtime_component = self
-            .load_component_bytes(service.bytes, service.digest)
+        let (wasmtime_component, compiled) = self
+            .load_live_component(service.bytes, service.digest)
             .context("failed to create component from bytes")?;
 
         // Create a linker for this component
@@ -734,6 +775,7 @@ impl Engine {
         service.metadata.resolved_volume_mounts = resolved_volume_mounts;
         service.metadata.socket_policy = Arc::clone(&self.socket_policy);
         service.metadata.guest_memory = Arc::clone(&self.guest_memory);
+        service.metadata.compiled = compiled;
 
         let world = service.world();
 
@@ -759,6 +801,49 @@ impl Engine {
     fn effective_heap_memory(&self) -> u64 {
         self.installed_heap_memory
             .unwrap_or(self.host_memory.default_heap_memory)
+    }
+
+    /// [`Self::load_component_bytes`] for a workload, which holds the returned
+    /// [`LiveCompile`] while it runs: a digest some running workload was
+    /// loaded from is served from that workload's compile, whether or not the
+    /// cache still has it.
+    fn load_live_component(
+        &self,
+        bytes: impl AsRef<[u8]>,
+        digest: Option<impl AsRef<str>>,
+    ) -> anyhow::Result<(Component, Option<Arc<LiveCompile>>)> {
+        let Some(digest) = digest else {
+            return Ok((self.load_component_bytes(bytes, None::<&str>)?, None));
+        };
+        let digest = digest.as_ref();
+        if let Some(live) = self.live_compile(digest) {
+            return Ok((live.component.clone(), Some(live)));
+        }
+        let component = self.load_component_bytes(bytes, Some(digest))?;
+        let mut live = self
+            .live_compiles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Another start may have recorded this digest since the check above;
+        // share its compile rather than keep a second.
+        if let Some(existing) = live.get(digest).and_then(std::sync::Weak::upgrade) {
+            return Ok((existing.component.clone(), Some(existing)));
+        }
+        let entry = Arc::new(LiveCompile {
+            digest: digest.to_string(),
+            component: component.clone(),
+            live: Arc::downgrade(&self.live_compiles),
+        });
+        live.insert(digest.to_string(), Arc::downgrade(&entry));
+        Ok((component, Some(entry)))
+    }
+
+    fn live_compile(&self, digest: &str) -> Option<Arc<LiveCompile>> {
+        self.live_compiles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(digest)
+            .and_then(std::sync::Weak::upgrade)
     }
 
     /// Load a WebAssembly component from raw bytes or yields a previously compiled one.
@@ -817,8 +902,8 @@ impl Engine {
         let instances = InstancePolicy::from_component(&component);
 
         // Create a wasmtime component from the bytes
-        let wasmtime_component = self
-            .load_component_bytes(component.bytes, component.digest)
+        let (wasmtime_component, compiled) = self
+            .load_live_component(component.bytes, component.digest)
             .context("failed to create component from bytes")?;
 
         // Create a linker for this component
@@ -868,6 +953,7 @@ impl Engine {
         workload_component.metadata.resolved_volume_mounts = resolved_volume_mounts;
         workload_component.metadata.socket_policy = Arc::clone(&self.socket_policy);
         workload_component.metadata.guest_memory = Arc::clone(&self.guest_memory);
+        workload_component.metadata.compiled = compiled;
         Ok(workload_component)
     }
 
@@ -1443,6 +1529,7 @@ impl EngineBuilder {
             stream_payloads: Arc::default(),
             inner,
             cache,
+            live_compiles: Arc::default(),
             #[cfg(test)]
             compiles: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             host_paths: volumes::HostPathPolicy::new(
@@ -2043,6 +2130,46 @@ mod tests {
                 .unwrap_or_else(|e| panic!("wasi:random@{version} should link: {e:#}"));
         }
         assert!(linker.instantiate_pre(&importing("0.4.0")).is_err());
+    }
+
+    /// A digest a running workload holds is never compiled again, even once
+    /// the cache has let it go; once nothing holds it, it is forgotten.
+    #[test]
+    fn a_digest_in_use_is_not_recompiled_after_cache_eviction() {
+        use std::sync::atomic::Ordering;
+        const DIGEST: &str = "sha256:held-image";
+
+        let bytes = wat::parse_str("(component)").expect("component should assemble");
+        let engine = Engine::builder().build().expect("engine should build");
+
+        let (_, first) = engine
+            .load_live_component(&bytes, Some(DIGEST))
+            .expect("first load");
+        engine.cache.invalidate_all();
+        engine.cache.run_pending_tasks();
+        let (_, second) = engine
+            .load_live_component(&bytes, Some(DIGEST))
+            .expect("second load");
+        assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
+        assert!(Arc::ptr_eq(
+            first.as_ref().expect("a digest is tracked"),
+            second.as_ref().expect("a digest is tracked"),
+        ));
+
+        drop((first, second));
+        assert!(engine.live_compiles.lock().unwrap().is_empty());
+        engine.cache.invalidate_all();
+        engine.cache.run_pending_tasks();
+        let (_, third) = engine
+            .load_live_component(&bytes, Some(DIGEST))
+            .expect("third load");
+        assert_eq!(engine.compiles.load(Ordering::SeqCst), 2);
+        assert!(third.is_some());
+
+        let (_, untracked) = engine
+            .load_live_component(&bytes, None::<&str>)
+            .expect("load without a digest");
+        assert!(untracked.is_none(), "nothing to share without a digest");
     }
 
     // A scheduler placing N replicas of one image sends N starts carrying one
