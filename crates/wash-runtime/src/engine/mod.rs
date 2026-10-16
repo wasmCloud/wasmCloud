@@ -1463,7 +1463,21 @@ impl EngineBuilder {
             proposal.apply(&mut config);
         }
 
-        let inner = wasmtime::Engine::new(&config)?;
+        // The pool maps its whole slab here, so a pool too large for the
+        // address space fails now, with wasmtime naming only the mapping. Say
+        // which numbers produced it.
+        let inner = wasmtime::Engine::new(&config).map_err(|e| match installed_pool {
+            Some(pool) => e.context(format!(
+                "building the engine failed with a pooling allocator reserving {} of address \
+                 space ({} memories of {} each) out of the {} this process can map; if the \
+                 pool is the cause, lower core-instances or WASMTIME_POOLING_TOTAL_MEMORIES",
+                host_memory::render_bytes(pool.reservation()),
+                pool.memories,
+                host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size)),
+                host_memory::render_bytes(host_memory::usable_address_space()),
+            )),
+            None => e,
+        })?;
         spawn_epoch_ticker(&inner)?;
         let process_memory = Arc::new(process_memory::ProcessMemoryGuard::new(max_process_memory));
         process_memory.spawn_sampler()?;
