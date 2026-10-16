@@ -3096,7 +3096,7 @@ impl UnresolvedWorkload {
         }
 
         // A plugin that overrides WASI interfaces (see
-        // [`HostPlugin::wasi_overrides`]) is required by every component that
+        // [`HostPlugin::wasi_overrides`]) is required by every workload item that
         // imports one of them, for each `hostInterfaces` entry the plugin
         // serves. The entry is what opts the workload in; the matching below
         // then binds it like any other required interface.
@@ -3109,6 +3109,15 @@ impl UnresolvedWorkload {
             for entry in &host_interfaces {
                 if !world.includes_bidirectional(entry) || !p.claims(entry) {
                     continue;
+                }
+                if let Some(service) = &self.service {
+                    let service_world = service.world();
+                    if overrides.imports.iter().any(|o| service_world.uses(o)) {
+                        unmatched_interfaces
+                            .entry(IdFlavor::Service(Arc::from(service.id())))
+                            .or_default()
+                            .insert(entry.clone());
+                    }
                 }
                 for (id, _name, component_world) in &component_worlds {
                     if !overrides.imports.iter().any(|o| component_world.uses(o)) {
