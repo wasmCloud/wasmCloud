@@ -589,7 +589,19 @@ impl HostPlugin for NatsMessaging {
             .await
             .attributes(PLUGIN_MESSAGING_ID, super::MESSAGING_OPERATION);
 
-        let span = tracing::Span::current();
+        // The loop runs for the workload's life, so its span is a root of its
+        // own, linked to the start that created it. Parenting it on the
+        // current span would hold the start's span, and every span above it
+        // (`workload_start`, `handle_command`), open for as long as the
+        // workload runs, keeping them unexported and in memory. DEBUG, so a
+        // host not tracing at that level keeps no span per subscriber at all.
+        let span = tracing::debug_span!(
+            parent: None,
+            "wasmcloud.messaging.subscriber",
+            workload.id = %workload.id(),
+            component_id = %component_id,
+        );
+        span.follows_from(tracing::Span::current());
         let handle = tokio::spawn(async move {
             debug!(
                 parent: &span,
