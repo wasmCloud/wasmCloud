@@ -584,10 +584,8 @@ impl HostPlugin for NatsMessaging {
         let guest_meter = self.meters.read().await.guest();
         // The identity every message on this component is measured under,
         // resolved once here rather than per delivery.
-        let attributes = workload
-            .component_identity(&component_id)
-            .await
-            .attributes(PLUGIN_MESSAGING_ID, super::MESSAGING_OPERATION);
+        let identity = workload.component_identity(&component_id).await;
+        let attributes = identity.attributes(PLUGIN_MESSAGING_ID, super::MESSAGING_OPERATION);
 
         // The loop runs for the workload's life, so its span is a root of its
         // own, linked to the start that created it. Parenting it on the
@@ -798,7 +796,10 @@ impl HostPlugin for NatsMessaging {
                             continue;
                         }
 
-                        let mut store = match workload.new_store(&component_id).await {
+                        let mut store = match workload
+                            .new_store_as(&component_id, Some(&identity))
+                            .await
+                        {
                             Err(e) => {
                                 warn!("failed to create store for component {component_id}: {e}");
                                 continue;
