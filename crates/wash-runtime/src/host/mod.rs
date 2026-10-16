@@ -1069,16 +1069,20 @@ impl HostApi for Host {
             .await
             .context("failed to get CPU usage")?;
 
-        // Count components and providers from workloads
+        // Count components and providers from workloads. The walk awaits
+        // nothing: the map lock is held for one pass over plain fields, so a
+        // host with 100k workloads does not stall starts and stops behind a
+        // per-workload lock every heartbeat.
         let (workload_count, component_count) = {
             let workloads = self.workloads.read().await;
             let workload_count: u64 = workloads.len() as u64;
-            let mut component_count: u64 = 0;
-            for workload in workloads.values() {
-                if let HostWorkload::Running(workload) = workload {
-                    component_count += workload.component_count().await as u64;
-                }
-            }
+            let component_count: u64 = workloads
+                .values()
+                .filter_map(|workload| match workload {
+                    HostWorkload::Running(workload) => Some(workload.component_count() as u64),
+                    _ => None,
+                })
+                .sum();
             (workload_count, component_count)
         };
 
