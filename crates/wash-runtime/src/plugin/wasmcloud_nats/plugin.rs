@@ -1125,16 +1125,14 @@ impl HostPlugin for WasmcloudNats {
         workload_id: &str,
         _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        let workload_cleanup = |_| async {};
-        let component_cleanup = |data: ComponentData| async move {
-            data.cancel_token.cancel();
-        };
-
-        self.tracker
-            .write()
-            .await
-            .remove_workload_with_cleanup(workload_id, workload_cleanup, component_cleanup)
-            .await;
+        // Taken out under the lock and cancelled after it is released, so an
+        // unbind holds the plugin-wide tracker only for the removal itself.
+        let removed = self.tracker.write().await.take_workload(workload_id);
+        if let Some(removed) = removed {
+            for data in removed.components.into_values() {
+                data.cancel_token.cancel();
+            }
+        }
 
         self.connections.release(workload_id).await;
         debug!(

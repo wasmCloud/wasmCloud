@@ -703,6 +703,18 @@ impl<T, Y> WorkloadTracker<T, Y> {
         }
     }
 
+    /// Remove a workload and hand back what was tracked for it, for a caller
+    /// that cleans up after releasing the lock it holds the tracker under:
+    /// cleanup run under a plugin-wide write lock stalls every other bind and
+    /// unbind on the plugin for as long as it takes.
+    pub fn take_workload(&mut self, workload_id: &str) -> Option<WorkloadTrackerItem<T, Y>> {
+        let item = self.workloads.remove(workload_id)?;
+        for component_id in item.components.keys() {
+            self.components.remove(component_id);
+        }
+        Some(item)
+    }
+
     pub async fn remove_workload_with_cleanup<
         FutW: Future<Output = ()>,
         FutC: Future<Output = ()>,
