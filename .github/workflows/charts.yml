@@ -78,13 +78,13 @@ jobs:
       - name: Set up chart-testing
         id: chart-testing
         continue-on-error: true
-        uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # v2.8.0
+        uses: helm/chart-testing-action@720270857a28afd41e2426521a7801db09e9b510 # v2.9.0
       # The action downloads ct and its verification assets from GitHub
       # Releases. Retry once when that transient setup step fails; the actual
       # chart lint below remains a single, blocking run.
       - name: Retry chart-testing setup
         if: steps.chart-testing.outcome == 'failure'
-        uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # v2.8.0
+        uses: helm/chart-testing-action@720270857a28afd41e2426521a7801db09e9b510 # v2.9.0
       - name: Lint charts
         run: ct lint --config .github/ct.yaml
 
@@ -146,7 +146,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: bridgecrewio/checkov-action@a76233b2c1d4a820a9dc68be350c473a4a9dceec # v12.3130.0
+      - uses: bridgecrewio/checkov-action@c13aafd679d3814a25067d10fcaf98c4f7594931 # v12.3131.0
         with:
           directory: charts/runtime-operator
           framework: helm
