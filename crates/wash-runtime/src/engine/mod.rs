@@ -264,10 +264,9 @@ struct InstalledPool {
 
 impl InstalledPool {
     /// Address space the pool reserves. Keyed on the memory count, not the
-    /// instance count.
+    /// instance count, and never less than wasmtime's reservation per slot.
     fn reservation(&self) -> u64 {
-        self.max_memory_size
-            .saturating_mul(u64::from(self.memories))
+        host_memory::pool_slab_bytes(self.max_memory_size, self.memories)
     }
 }
 
@@ -1421,7 +1420,8 @@ impl EngineBuilder {
         let installed_heap_memory = installed_pool.map(|pool| pool.max_memory_size);
 
         // Reported here so every embedder says what it built. The reservation
-        // is `total_memories x max_memory_size`, not the instance count.
+        // is `total_memories x slot_size`, not the instance count, and the slot
+        // does not shrink with the heap ceiling.
         match installed_pool {
             Some(pool) => tracing::info!(
                 max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
@@ -1429,6 +1429,7 @@ impl EngineBuilder {
                 default_heap_memory = %host_memory::render_bytes(pool.max_memory_size),
                 core_instances = pool.core_instances,
                 memories = pool.memories,
+                slot_size = %host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size)),
                 pool_reservation = %host_memory::render_bytes(pool.reservation()),
                 "host memory resolved"
             ),

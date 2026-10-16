@@ -17,13 +17,24 @@
 //!
 //! # Why the budget is worth naming apart from enforcing it
 //!
-//! `default_heap_memory × core_instances` is what the pooling allocator
-//! reserves — every slot is sized for the largest memory it might hold, whether
-//! or not anything grows into it. Today a host claims 4 GiB × 1000 = 3.9 TiB of
-//! address space and nobody is told, which is close enough to the 4 TiB the
-//! allocator probes for that nudging either knob crosses it. Naming the budget
-//! lets the host say, at startup, whether the pool it is about to build is one
-//! the machine could actually back.
+//! Every pool slot reserves address space for the largest memory it might hold,
+//! whether or not anything grows into it: the larger of `default_heap_memory`
+//! and wasmtime's 4 GiB `memory_reservation`, plus a guard region (see
+//! [`pool_slot_bytes`]). Today a host claims 1000 such slots, 3.9 TiB of
+//! address space, and nobody is told, which is close enough to the 4 TiB the
+//! allocator probes for that raising `core_instances` crosses it. Naming the
+//! budget lets the host say, at startup, whether the pool it is about to build
+//! is one the machine could actually back.
+//!
+//! # The reservation is not a knob
+//!
+//! Lowering `default_heap_memory` below 4 GiB caps how far a guest may grow,
+//! but it does not shrink the slot: wasmtime still reserves 4 GiB for it. That
+//! reservation, with its guard, is what lets wasmtime elide bounds checks on
+//! 32-bit memories and keeps one guest's out-of-bounds access from reaching
+//! another's slot. It is an isolation boundary, so the host accounts for it
+//! rather than offering a way to shrink it; the slot count is what sizes the
+//! pool.
 
 use std::fmt;
 
@@ -41,6 +52,47 @@ pub const WASMTIME_DEFAULT_HEAP_MEMORY: u64 = 4 * 1024 * MIB;
 /// [`crate::engine::EngineBuilder`] has always passed when `max_instances` is
 /// unset.
 pub const WASMTIME_DEFAULT_CORE_INSTANCES: u32 = 1000;
+
+/// wasmtime's default `memory_reservation`: the address space each pooled
+/// linear memory slot reserves, however low its heap ceiling.
+///
+/// Restated, not configured: the engine never changes it, and the module docs
+/// say why it is not a knob.
+#[cfg(target_pointer_width = "64")]
+pub const WASMTIME_MEMORY_RESERVATION: u64 = 4 * 1024 * MIB;
+#[cfg(not(target_pointer_width = "64"))]
+pub const WASMTIME_MEMORY_RESERVATION: u64 = 10 * MIB;
+
+/// wasmtime's default `memory_guard_size`: unmapped address space after each
+/// pooled memory, and once more before the first.
+#[cfg(target_pointer_width = "64")]
+pub const WASMTIME_MEMORY_GUARD: u64 = 32 * MIB;
+#[cfg(not(target_pointer_width = "64"))]
+pub const WASMTIME_MEMORY_GUARD: u64 = 64 * 1024;
+
+/// Address space one pooled memory slot reserves when the heap ceiling is
+/// `max_memory_size`: the larger of the ceiling and
+/// [`WASMTIME_MEMORY_RESERVATION`], plus [`WASMTIME_MEMORY_GUARD`].
+///
+/// wasmtime's own slab layout without memory protection keys, which it leaves
+/// off by default. It assumes the engine's reservation and guard are
+/// wasmtime's defaults; a caller-supplied base config that changes them makes
+/// this an estimate.
+pub fn pool_slot_bytes(max_memory_size: u64) -> u64 {
+    max_memory_size
+        .max(WASMTIME_MEMORY_RESERVATION)
+        .saturating_add(WASMTIME_MEMORY_GUARD)
+}
+
+/// Address space a pool of `slots` memories reserves: one [`pool_slot_bytes`]
+/// each, plus the guard wasmtime places before the first.
+///
+/// Saturating for the reason [`HostMemoryBudgets::pool_reservation`] gives.
+pub fn pool_slab_bytes(max_memory_size: u64, slots: u32) -> u64 {
+    pool_slot_bytes(max_memory_size)
+        .saturating_mul(u64::from(slots))
+        .saturating_add(WASMTIME_MEMORY_GUARD)
+}
 
 /// Share of the detected memory limit that guest work may use. The rest is for
 /// everything a guest is not: wasmtime itself, NATS, OCI pulls, host buffers.
@@ -215,7 +267,7 @@ pub fn render_bytes(bytes: u64) -> String {
 /// The host's resolved memory budgets.
 ///
 /// Every field bounds memory: `core_instances` is a count of WebAssembly
-/// *core* instances (pool slots), each sized for `default_heap_memory`, not a
+/// *core* instances (pool slots), each sized by [`pool_slot_bytes`], not a
 /// CPU-side knob. Compute is metered separately via
 /// [`EngineBuilder::with_fuel_consumption`].
 ///
@@ -303,14 +355,14 @@ impl HostMemoryBudgets {
     }
 
     /// Address space the pooling allocator will reserve: every slot is sized
-    /// for the largest memory it might hold.
+    /// for the largest memory it might hold, and never below wasmtime's 4 GiB
+    /// reservation (see [`pool_slab_bytes`]).
     ///
     /// Saturating rather than checked because the answer to an overflow here is
     /// the same as the answer to a merely enormous number — refuse it — and a
     /// saturated `u64` is still comfortably past any real limit.
     pub fn pool_reservation(&self) -> u64 {
-        self.default_heap_memory
-            .saturating_mul(u64::from(self.core_instances))
+        pool_slab_bytes(self.default_heap_memory, self.core_instances)
     }
 
     /// What the host should say about this combination at startup, if anything.
@@ -325,13 +377,26 @@ impl HostMemoryBudgets {
         // warning about over-commitment, not an error — but past what the
         // allocator can actually map, it will fail at the first instantiation.
         if self.pool_reservation() > MAX_POOL_RESERVATION {
+            // Below the reservation the heap ceiling no longer sizes the slot,
+            // and advising an operator to lower it would change nothing.
+            let remedy = if self.default_heap_memory <= WASMTIME_MEMORY_RESERVATION {
+                format!(
+                    "Lower core-instances. Lowering default-heap-memory will not help: every \
+                     slot reserves wasmtime's {} plus a {} guard however small its heap.",
+                    render_bytes(WASMTIME_MEMORY_RESERVATION),
+                    render_bytes(WASMTIME_MEMORY_GUARD),
+                )
+            } else {
+                "Lower one of the two.".to_string()
+            };
             return Some(format!(
                 "default-heap-memory {} across core-instances {} would reserve {} of \
-                 address space, past the {} the pooling allocator is probed for at startup. \
-                 Instantiation will fail once the pool is exhausted. Lower one of the two.",
+                 address space ({} per slot), past the {} the pooling allocator is probed \
+                 for at startup. Instantiation will fail once the pool is exhausted. {remedy}",
                 render_bytes(self.default_heap_memory),
                 self.core_instances,
                 render_bytes(self.pool_reservation()),
+                render_bytes(pool_slot_bytes(self.default_heap_memory)),
                 render_bytes(MAX_POOL_RESERVATION),
             ));
         }
@@ -642,21 +707,52 @@ mod tests {
     }
 
     #[test]
-    fn the_pool_reservation_is_the_product_of_the_two_pool_knobs() {
+    fn a_slot_is_never_smaller_than_the_reservation() {
+        // A 128 MiB heap ceiling still reserves 4 GiB per slot: multiplying
+        // the ceiling by the count would report 12.5 GiB for what is 403 GiB.
         let resolved =
             HostMemoryBudgets::resolve(Some(8 * 1024 * MIB), Some(128 * MIB), Some(100)).unwrap();
-        assert_eq!(resolved.pool_reservation(), 12800 * MIB);
+        assert_eq!(pool_slot_bytes(128 * MIB), 4096 * MIB + 32 * MIB);
+        assert_eq!(
+            resolved.pool_reservation(),
+            100 * (4096 * MIB + 32 * MIB) + 32 * MIB
+        );
         assert_eq!(resolved.advisory(), None, "a modest pool needs no advisory");
+    }
+
+    #[test]
+    fn a_slot_above_the_reservation_is_sized_by_the_ceiling() {
+        assert_eq!(pool_slot_bytes(16 * 1024 * MIB), 16 * 1024 * MIB + 32 * MIB);
+        assert_eq!(pool_slab_bytes(16 * 1024 * MIB, 0), 32 * MIB);
+    }
+
+    #[test]
+    fn a_small_heap_over_the_probe_is_told_to_lower_the_count() {
+        // The trap this is here for: lowering the heap ceiling to fit more
+        // slots, and finding the reservation unchanged.
+        let resolved = HostMemoryBudgets::resolve(None, Some(64 * MIB), Some(2000)).unwrap();
+        let advisory = resolved
+            .advisory()
+            .expect("2000 slots of 4 GiB are past the probe");
+        assert!(advisory.contains("Lower core-instances"), "{advisory}");
+        assert!(
+            advisory.contains("Lowering default-heap-memory will not help"),
+            "{advisory}"
+        );
+        assert!(advisory.contains("per slot"), "{advisory}");
     }
 
     #[test]
     fn the_stock_defaults_sit_just_under_the_probe() {
         // Worth pinning, because it is the number nobody is told today: 4 GiB
-        // per slot across 1000 slots is 3.9 TiB — close enough to the 4 TiB the
-        // allocator is probed for that raising either knob crosses it, which is
-        // exactly why both are worth naming.
+        // and a 32 MiB guard per slot across 1000 slots is 3.9 TiB — close
+        // enough to the 4 TiB the allocator is probed for that raising the
+        // count crosses it, which is exactly why it is worth naming.
         let stock = HostMemoryBudgets::resolve(None, None, None).unwrap();
-        assert_eq!(stock.pool_reservation(), 4000 * 1024 * MIB);
+        assert_eq!(
+            stock.pool_reservation(),
+            1000 * (4096 * MIB + 32 * MIB) + 32 * MIB
+        );
         assert!(stock.pool_reservation() < MAX_POOL_RESERVATION);
         assert_eq!(render_bytes(stock.pool_reservation()), "3.9TiB");
         assert_eq!(
@@ -669,9 +765,9 @@ mod tests {
     #[test]
     fn an_unreservable_combination_is_reported_with_both_numbers() {
         let resolved = HostMemoryBudgets::resolve(None, Some(16 * 1024 * MIB), Some(1000)).unwrap();
-        let advisory = resolved.advisory().expect("15.6TiB is past the probe");
+        let advisory = resolved.advisory().expect("15.7TiB is past the probe");
         assert!(
-            advisory.contains("15.6TiB"),
+            advisory.contains("15.7TiB"),
             "names the reservation, to one decimal because it is not a round unit: {advisory}"
         );
         assert!(
@@ -681,6 +777,10 @@ mod tests {
         assert!(
             advisory.contains("default-heap-memory") && advisory.contains("core-instances"),
             "names both knobs so it is actionable: {advisory}"
+        );
+        assert!(
+            advisory.contains("Lower one of the two"),
+            "a ceiling above the reservation does size the slot: {advisory}"
         );
     }
 
