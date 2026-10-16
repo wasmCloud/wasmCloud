@@ -3,7 +3,7 @@
 //! The budget names a total; wasmtime's own knobs bound a *single* linear
 //! memory ([`HostMemoryBudgets::default_heap_memory`]) and a *count* of pool
 //! slots ([`HostMemoryBudgets::core_instances`]). Neither adds up to the total:
-//! `core_instances x default_heap_memory` bounds address space, which the
+//! `core_instances x` the slot size bounds address space, which the
 //! kernel does not back until it is written to. The case nothing covers is
 //! aggregate creep — N guests each under its own ceiling, together over the
 //! pod's — and the first notification is the OOM killer taking every workload
