@@ -463,6 +463,14 @@ impl HostPlugin for MultiplexedAsyncBlobstore {
         true
     }
 
+    /// Same schema as the sync plugin: every S3 key is host-owned, the other
+    /// backends' keys stay the workload's.
+    fn binding_schema(&self) -> crate::plugin::BindingSchema {
+        crate::plugin::BindingSchema::with_host_owned_keys(
+            super::multiplexed::host_owned_spellings(),
+        )
+    }
+
     async fn on_workload_item_bind<'a>(
         &self,
         item: &mut WorkloadItem<'a>,
@@ -622,5 +630,15 @@ mod tests {
             "workload-a's backend outlived it"
         );
         assert!(plugin.mux.default_for("workload-b").is_some());
+    }
+
+    #[test]
+    fn schema_matches_the_sync_plugin() {
+        // The two surfaces route to the same backends, so a key the operator
+        // owns on one must be owned on the other.
+        assert_eq!(
+            MultiplexedAsyncBlobstore::new().binding_schema(),
+            crate::plugin::wasi_blobstore::MultiplexedBlobstore::new().binding_schema()
+        );
     }
 }
