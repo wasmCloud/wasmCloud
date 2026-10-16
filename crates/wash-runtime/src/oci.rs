@@ -40,7 +40,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 use tracing::{debug, instrument, warn};
@@ -219,8 +219,9 @@ fn validate_ca_bundle(data: &[u8]) -> Result<()> {
 /// would be ignored there. Loading them when neither is set would only repeat
 /// the OS store the verifier already trusts.
 ///
-/// Read on every call, as the Linux verifier does, so a rotated bundle is
-/// trusted by the next pull without restarting a long-running host.
+/// Read each time a client is built, so a rotated bundle is trusted without
+/// restarting a long-running host: by the next push, and by pulls once the
+/// reused pull client expires (see [`pull_client`]).
 fn env_ca_certificates() -> Vec<Certificate> {
     if std::env::var_os("SSL_CERT_FILE").is_none() && std::env::var_os("SSL_CERT_DIR").is_none() {
         return Vec::new();
@@ -517,6 +518,10 @@ impl CacheManager {
     }
 }
 
+/// How long a docker credential lookup answers for its registry. A login or
+/// rotation through docker takes effect within this.
+const DOCKER_AUTH_REUSE: Duration = Duration::from_secs(30);
+
 /// Credential resolver that implements the precedence: explicit → docker creds → anonymous
 struct CredentialResolver {
     explicit_credentials: Option<(String, String)>,
@@ -538,19 +543,36 @@ impl CredentialResolver {
             return RegistryAuth::Basic(username.clone(), password.clone());
         }
 
-        // Next, try docker credential helper
-        match self.get_docker_credentials(registry).await {
+        // Next, try docker credential helper. Its answer is reused for a
+        // short while: asking means reading the docker config and possibly
+        // running a helper process, which once per workload start is a
+        // process spawn per workload on a host restoring thousands.
+        static DOCKER_AUTH: OnceLock<moka::sync::Cache<String, RegistryAuth>> = OnceLock::new();
+        let docker_auth = DOCKER_AUTH.get_or_init(|| {
+            moka::sync::Cache::builder()
+                .max_capacity(64)
+                .time_to_live(DOCKER_AUTH_REUSE)
+                .build()
+        });
+        if let Some(auth) = docker_auth.get(registry) {
+            return auth;
+        }
+        let auth = match self.get_docker_credentials(registry).await {
             Ok(Some(auth)) => {
                 debug!("using docker credential helper");
-                return auth;
+                auth
             }
-            Ok(None) => debug!("no docker credentials found"),
-            Err(e) => warn!(error = %e, "failed to retrieve docker credentials"),
-        }
-
-        // Fall back to anonymous
-        debug!("Using anonymous access");
-        RegistryAuth::Anonymous
+            Ok(None) => {
+                debug!("no docker credentials found; using anonymous access");
+                RegistryAuth::Anonymous
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to retrieve docker credentials; using anonymous access");
+                RegistryAuth::Anonymous
+            }
+        };
+        docker_auth.insert(registry.to_string(), auth.clone());
+        auth
     }
 
     /// Attempt to retrieve credentials from docker credential helper
@@ -598,7 +620,7 @@ impl CredentialResolver {
 }
 
 /// OCI pull policy
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum OciPullPolicy {
     /// ️ Always pull the component from the registry
     Always,
@@ -655,34 +677,236 @@ impl std::str::FromStr for OciPullPolicy {
 ///     Ok(())
 /// }
 /// ```
-#[instrument(skip(config), fields(reference = %reference, pull_policy = ?pull_policy))]
 pub async fn pull_component(
     reference: &str,
     config: OciConfig,
     pull_policy: OciPullPolicy,
 ) -> Result<(Vec<u8>, String)> {
-    // Parse OCI reference
+    let (bytes, digest) = pull_component_bytes(reference, config, pull_policy).await?;
+    Ok((bytes.to_vec(), digest))
+}
+
+/// [`pull_component`] without the copy into a `Vec`.
+///
+/// Concurrent pulls of one reference with the same credentials and settings
+/// are folded into one, and its result answers the same request for
+/// [`PULL_REUSE`] after it finishes: a host restoring thousands of workloads
+/// from a few images would otherwise read each image from disk and ask the
+/// registry for its digest once per workload.
+#[instrument(skip(config), fields(reference = %reference, pull_policy = ?pull_policy))]
+pub(crate) async fn pull_component_bytes(
+    reference: &str,
+    config: OciConfig,
+    pull_policy: OciPullPolicy,
+) -> Result<(bytes::Bytes, String)> {
     let reference_parsed = Reference::try_from(reference)
         .with_context(|| format!("invalid OCI reference: {reference}"))?;
 
-    // Configure OCI client
-    let client_config = ClientConfig {
-        protocol: if config.insecure {
-            ClientProtocol::Http
-        } else {
-            ClientProtocol::Https
-        },
-        extra_root_certificates: extra_ca_certificates(),
-        ..Default::default()
-    };
-
-    let client = oci_client(client_config)?;
-
-    // Setup credential resolver
-    let credential_resolver = CredentialResolver::new(config.credentials);
-    let auth = credential_resolver
+    let auth = CredentialResolver::new(config.credentials.clone())
         .resolve_credentials(reference_parsed.registry())
         .await;
+
+    // Everything that can change what a pull returns, or whether it may
+    // return at all, is in the key. The credentials above all: a result one
+    // caller was authorised to fetch must never answer a caller who was not.
+    let key = PullKey {
+        reference: reference.to_string(),
+        auth: AuthId::of(&auth),
+        insecure: config.insecure,
+        cache_dir: config.cache_dir.clone(),
+        pull_policy: pull_policy.clone(),
+    };
+    let pulled = pull_coalescer()
+        .run(key, || {
+            pull_uncoalesced(reference, &reference_parsed, &config, &auth, &pull_policy)
+        })
+        .await?;
+    Ok((pulled.bytes.clone(), pulled.digest.clone()))
+}
+
+/// What one pull produced, shared by every caller it answered.
+struct Pulled {
+    bytes: bytes::Bytes,
+    digest: String,
+}
+
+/// How long a finished pull answers identical requests: long enough to fold a
+/// burst of starts of one image into one pull, short enough that a re-pushed
+/// tag is seen almost at once.
+const PULL_REUSE: Duration = Duration::from_secs(5);
+
+/// The longest a pull still in flight is joined by identical requests. Past it
+/// a new caller starts its own pull rather than wait on one that may be stuck.
+const PULL_JOIN: Duration = Duration::from_secs(600);
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct PullKey {
+    reference: String,
+    auth: AuthId,
+    insecure: bool,
+    cache_dir: Option<PathBuf>,
+    pull_policy: OciPullPolicy,
+}
+
+/// Which credentials a pull or a client uses, without holding the secret.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct AuthId([u8; 32]);
+
+impl AuthId {
+    fn of(auth: &RegistryAuth) -> Self {
+        let mut hasher = Sha256::new();
+        // Length-prefixed, so no two different credentials hash the same bytes.
+        let mut field = |bytes: &[u8]| {
+            hasher.update((bytes.len() as u64).to_le_bytes());
+            hasher.update(bytes);
+        };
+        match auth {
+            RegistryAuth::Anonymous => field(b"anonymous"),
+            RegistryAuth::Basic(user, password) => {
+                field(b"basic");
+                field(user.as_bytes());
+                field(password.as_bytes());
+            }
+            RegistryAuth::Bearer(token) => {
+                field(b"bearer");
+                field(token.as_bytes());
+            }
+        }
+        Self(hasher.finalize().into())
+    }
+}
+
+fn pull_coalescer() -> &'static Coalescer<PullKey, Arc<Pulled>> {
+    static PULLS: OnceLock<Coalescer<PullKey, Arc<Pulled>>> = OnceLock::new();
+    // Distinct references pulled within a few seconds of each other; a bound
+    // only so a pathological burst cannot hold every image it pulled.
+    PULLS.get_or_init(|| Coalescer::new(256, PULL_JOIN, PULL_REUSE))
+}
+
+/// Folds concurrent identical requests into one: the first caller does the
+/// work and the others wait for its result, which then answers the same
+/// request until `reuse` after it was produced.
+///
+/// A failure is shared the same way. Callers queued behind a pull that timed
+/// out would otherwise each retry in turn, and each wait out the timeout.
+struct Coalescer<K, V> {
+    cells: moka::sync::Cache<K, Arc<CoalescedCell<V>>>,
+}
+
+type CoalescedCell<V> = tokio::sync::OnceCell<std::result::Result<V, Arc<anyhow::Error>>>;
+
+/// Keeps an entry while its work is in flight, then only for `reuse`.
+struct CoalescedExpiry {
+    join: Duration,
+    reuse: Duration,
+}
+
+impl<K, V> moka::Expiry<K, Arc<CoalescedCell<V>>> for CoalescedExpiry {
+    fn expire_after_create(
+        &self,
+        _key: &K,
+        value: &Arc<CoalescedCell<V>>,
+        _created_at: std::time::Instant,
+    ) -> Option<Duration> {
+        Some(if value.initialized() {
+            self.reuse
+        } else {
+            self.join
+        })
+    }
+
+    fn expire_after_update(
+        &self,
+        key: &K,
+        value: &Arc<CoalescedCell<V>>,
+        updated_at: std::time::Instant,
+        _duration_until_expiry: Option<Duration>,
+    ) -> Option<Duration> {
+        self.expire_after_create(key, value, updated_at)
+    }
+}
+
+impl<K, V> Coalescer<K, V>
+where
+    K: std::hash::Hash + Eq + Clone + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
+    fn new(capacity: u64, join: Duration, reuse: Duration) -> Self {
+        Self {
+            cells: moka::sync::Cache::builder()
+                .max_capacity(capacity)
+                .expire_after(CoalescedExpiry { join, reuse })
+                .build(),
+        }
+    }
+
+    async fn run<F, Fut>(&self, key: K, work: F) -> Result<V>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<V>>,
+    {
+        let cell = self.cells.get_with(key.clone(), Default::default);
+        let mut ran = false;
+        let result = cell
+            .get_or_init(|| {
+                ran = true;
+                async { work().await.map_err(Arc::new) }
+            })
+            .await
+            .clone();
+        if ran {
+            // Re-inserting restarts the entry's clock, now at `reuse`, so a
+            // slow pull is still reused for the full window after it lands.
+            self.cells.insert(key, cell);
+        }
+        result.map_err(|err| anyhow!("{err:#}"))
+    }
+}
+
+/// Clients reused across pulls, keyed by what they are built from and by the
+/// credentials they carry: `oci-client` keeps the first credentials it sees
+/// for a registry, so a client shared across credentials would pull with
+/// whichever came first.
+///
+/// Building a client loads its trust roots, reading `SSL_CERT_FILE` /
+/// `SSL_CERT_DIR` from disk; reusing one also keeps its registry tokens. A
+/// client lives [`CLIENT_REUSE`], which bounds how long a rotated environment
+/// bundle takes to be trusted.
+fn pull_client(insecure: bool, auth: &RegistryAuth) -> Result<Client> {
+    static CLIENTS: OnceLock<moka::sync::Cache<(bool, AuthId), Client>> = OnceLock::new();
+    CLIENTS
+        .get_or_init(|| {
+            moka::sync::Cache::builder()
+                .max_capacity(256)
+                .time_to_live(CLIENT_REUSE)
+                .build()
+        })
+        .try_get_with((insecure, AuthId::of(auth)), || {
+            oci_client(ClientConfig {
+                protocol: if insecure {
+                    ClientProtocol::Http
+                } else {
+                    ClientProtocol::Https
+                },
+                extra_root_certificates: extra_ca_certificates(),
+                ..Default::default()
+            })
+        })
+        .map_err(|err| anyhow!("{err:#}"))
+}
+
+const CLIENT_REUSE: Duration = Duration::from_secs(300);
+
+/// One pull as [`pull_component`] documents it, with nothing shared but the
+/// client.
+async fn pull_uncoalesced(
+    reference: &str,
+    reference_parsed: &Reference,
+    config: &OciConfig,
+    auth: &RegistryAuth,
+    pull_policy: &OciPullPolicy,
+) -> Result<Arc<Pulled>> {
+    let client = pull_client(config.insecure, auth)?;
 
     // Initialize cache manager
     let cache_manager = config
@@ -691,30 +915,40 @@ pub async fn pull_component(
         .map(|dir| CacheManager::new(dir.clone()));
     if let Some(cache_manager) = &cache_manager {
         // Check cache first
-        if pull_policy != OciPullPolicy::Always && cache_manager.is_cached(reference).await {
+        if *pull_policy != OciPullPolicy::Always && cache_manager.is_cached(reference).await {
             debug!("Found cached artifact");
             let (component_data, digest) = cache_manager.read_cached(reference).await?;
 
-            let fetched_digest = client
-                .fetch_manifest_digest(&reference_parsed, &auth)
-                .await?;
+            // A reference pinned by digest names the manifest the cache
+            // recorded, so there is nothing for the registry to confirm.
+            if cached_digest_is_pinned(reference_parsed, &digest) {
+                return Ok(Arc::new(Pulled {
+                    bytes: component_data.into(),
+                    digest,
+                }));
+            }
+
+            let fetched_digest = client.fetch_manifest_digest(reference_parsed, auth).await?;
 
             if digest == fetched_digest {
-                return Ok((component_data, digest));
+                return Ok(Arc::new(Pulled {
+                    bytes: component_data.into(),
+                    digest,
+                }));
             }
 
             debug!("Cached artifact expired; pulling new component version");
         }
     }
 
-    if pull_policy == OciPullPolicy::Never {
+    if *pull_policy == OciPullPolicy::Never {
         bail!("component not found in cache and pull policy is 'Never'");
     }
 
     // Pull the component using oci-client
     let pull_future = client.pull(
-        &reference_parsed,
-        &auth,
+        reference_parsed,
+        auth,
         vec![
             WASM_LAYER_MEDIA_TYPE,
             #[allow(deprecated)]
@@ -760,8 +994,15 @@ pub async fn pull_component(
             .with_context(|| "failed to cache component")?;
     }
 
-    // oci-client 0.17 hands back layer data as `Bytes`; callers expect `Vec<u8>`.
-    Ok((component_data.to_vec(), digest))
+    Ok(Arc::new(Pulled {
+        bytes: component_data,
+        digest,
+    }))
+}
+
+/// Whether `reference` pins the manifest digest the cache recorded for it.
+fn cached_digest_is_pinned(reference: &Reference, cached_digest: &str) -> bool {
+    reference.digest() == Some(cached_digest)
 }
 
 /// Push a WebAssembly component to an OCI registry
@@ -966,6 +1207,90 @@ pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Identical requests in flight together do the work once and all get its
+    /// answer; a different request does its own.
+    #[tokio::test]
+    async fn concurrent_identical_pulls_run_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let coalescer: Coalescer<&str, u32> =
+            Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60));
+        let runs = AtomicUsize::new(0);
+        let work = |value| {
+            let runs = &runs;
+            move || async move {
+                runs.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok(value)
+            }
+        };
+
+        let (a, b, c) = tokio::join!(
+            coalescer.run("ref", work(1)),
+            coalescer.run("ref", work(2)),
+            coalescer.run("other", work(3)),
+        );
+        assert_eq!((a.unwrap(), b.unwrap(), c.unwrap()), (1, 1, 3));
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
+    }
+
+    /// A failure answers the requests waiting on it rather than letting each
+    /// retry in turn, and once its window passes the next request tries again.
+    #[tokio::test]
+    async fn a_failed_pull_answers_its_waiters_then_expires() {
+        let coalescer: Coalescer<&str, u32> =
+            Coalescer::new(16, Duration::from_secs(60), Duration::from_millis(50));
+
+        let (a, b) = tokio::join!(
+            coalescer.run("ref", || async {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                bail!("registry unreachable")
+            }),
+            coalescer.run("ref", || async { Ok(7) }),
+        );
+        assert!(a.unwrap_err().to_string().contains("registry unreachable"));
+        assert!(b.unwrap_err().to_string().contains("registry unreachable"));
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(coalescer.run("ref", || async { Ok(7) }).await.unwrap(), 7);
+    }
+
+    /// Different credentials never share a pull or a client.
+    #[test]
+    fn credentials_are_part_of_the_identity() {
+        let basic = |user: &str, password: &str| {
+            AuthId::of(&RegistryAuth::Basic(user.to_string(), password.to_string()))
+        };
+        assert!(basic("a", "b") == basic("a", "b"));
+        assert!(basic("a", "b") != basic("a", "c"));
+        assert!(basic("ab", "") != basic("a", "b"));
+        assert!(basic("a", "b") != AuthId::of(&RegistryAuth::Anonymous));
+        assert!(AuthId::of(&RegistryAuth::Bearer("t".into())) != basic("t", ""));
+    }
+
+    /// A reference pinned by digest is served from the cache without asking a
+    /// registry: the host here does not resolve, so any request would fail.
+    #[tokio::test]
+    async fn a_digest_pinned_cache_hit_skips_the_registry() {
+        let temp_dir = TempDir::new().unwrap();
+        let digest = format!("sha256:{}", "ab".repeat(32));
+        let reference = format!("registry.invalid/ns/component@{digest}");
+        CacheManager::new(temp_dir.path().to_path_buf())
+            .write_to_cache(&reference, b"cached bytes", &digest)
+            .await
+            .unwrap();
+
+        // Explicit credentials, so no docker credential helper runs either.
+        let mut config = OciConfig::new_with_credentials("user", "secret");
+        config.cache_dir = Some(temp_dir.path().to_path_buf());
+        let (bytes, pulled_digest) =
+            pull_component(&reference, config, OciPullPolicy::IfNotPresent)
+                .await
+                .unwrap();
+        assert_eq!(bytes, b"cached bytes");
+        assert_eq!(pulled_digest, digest);
+    }
 
     /// Where the docker config is looked for has to match `docker_credential`'s
     /// own rule, since telling an absent config from an unparseable one is done
