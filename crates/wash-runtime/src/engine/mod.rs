@@ -59,6 +59,15 @@ use std::str::FromStr;
 use std::{path::PathBuf, sync::Arc};
 use wasmtime_wasi::WasiView;
 
+// Exact instance versions registered by the Wasmtime bindings below. Keep
+// these aligned when upgrading Wasmtime: partial overrides must reopen those
+// instances, since Linker::instance does not apply semver matching. The override
+// integration tests check both exact and compatible guest imports.
+pub(crate) const WASI_LINKER_VERSIONS: [semver::Version; 2] = [
+    semver::Version::new(0, 2, 12),
+    semver::Version::new(0, 3, 0),
+];
+
 /// Add all WASI interfaces to the linker, using upstream for non-socket interfaces
 /// and our custom socket implementation (with loopback support) for socket interfaces.
 /// Both P2 and P3 bindings are registered.

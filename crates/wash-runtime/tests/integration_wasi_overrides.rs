@@ -112,3 +112,55 @@ async fn service_using_only_wasi_receives_its_opted_in_override() -> Result<()> 
     }
     Ok(())
 }
+
+struct Declarations(&'static str, &'static [&'static str]);
+
+#[async_trait::async_trait]
+impl HostPlugin for Declarations {
+    fn id(&self) -> &'static str {
+        self.0
+    }
+    fn world(&self) -> WitWorld {
+        WitWorld::default()
+    }
+    fn wasi_overrides(&self) -> WitWorld {
+        WitWorld {
+            imports: self.1.iter().map(|entry| (*entry).into()).collect(),
+            ..Default::default()
+        }
+    }
+}
+
+fn overlapping_declarations() -> Arc<dyn HostPlugin> {
+    Arc::new(Declarations(
+        "clock-a",
+        &[
+            "wasi:clocks/monotonic-clock@0.2.0",
+            "wasi:clocks/monotonic-clock,wall-clock@0.2.12",
+        ],
+    ))
+}
+
+#[test]
+fn compatible_overlapping_declarations_from_one_plugin_are_allowed() -> Result<()> {
+    let plugin = overlapping_declarations();
+    wash_runtime::plugin::check_wasi_overrides(&HashMap::from([(plugin.id(), plugin)]))
+}
+
+#[test]
+fn overlapping_declarations_still_conflict_with_another_plugin() -> Result<()> {
+    let a = overlapping_declarations();
+    let b: Arc<dyn HostPlugin> =
+        Arc::new(Declarations("clock-b", &["wasi:clocks/wall-clock@0.2.0"]));
+    let Err(error) =
+        wash_runtime::plugin::check_wasi_overrides(&HashMap::from([(a.id(), a), (b.id(), b)]))
+    else {
+        anyhow::bail!("conflicting plugins were accepted");
+    };
+    let message = error.to_string();
+    assert!(
+        message.contains("clock-a") && message.contains("clock-b"),
+        "{message}"
+    );
+    Ok(())
+}
