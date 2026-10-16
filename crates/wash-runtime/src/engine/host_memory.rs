@@ -373,6 +373,29 @@ impl HostMemoryBudgets {
     /// later, with neither number in the message — is unpleasant to diagnose.
     pub fn advisory(&self) -> Option<String> {
         self.advisory_within(usable_address_space())
+            .or_else(|| self.map_count_advisory(max_map_count()?))
+    }
+
+    /// What to say when the pool would use up the kernel's per-process limit
+    /// on memory mappings, if anything.
+    ///
+    /// Address space is not the only ceiling on Linux: every slot also costs
+    /// mappings ([`MAPPINGS_PER_SLOT`]), and past `vm.max_map_count` an
+    /// `mmap` or `mprotect` fails however much address space is left. At the
+    /// kernel's default of 65530 that is about 13,000 slots — well before the
+    /// address space runs out.
+    fn map_count_advisory(&self, max_map_count: u64) -> Option<String> {
+        let needed = u64::from(self.core_instances).saturating_mul(MAPPINGS_PER_SLOT);
+        (needed > max_map_count).then(|| {
+            format!(
+                "core-instances {} needs about {needed} memory mappings once the pool is in \
+                 use, past this kernel's vm.max_map_count of {max_map_count}. Instantiation \
+                 will start failing before the pool is full. Raise vm.max_map_count (sysctl) \
+                 or lower core-instances to {}.",
+                self.core_instances,
+                max_map_count / MAPPINGS_PER_SLOT,
+            )
+        })
     }
 
     /// [`Self::advisory`] against `address_space`, the most this process can
@@ -515,6 +538,29 @@ fn soft_address_space_limit(limits: &str) -> Option<u64> {
         .next()?
         .parse()
         .ok()
+}
+
+/// Memory mappings a pool slot can cost: wasmtime's stack pool splits each
+/// stack's guard page off its stack (2), and a live linear memory is split
+/// into its accessible part and the rest of its reservation (about 2), plus
+/// one for tables and slack. The same figure Cosmonic Control sizes its
+/// default pool by.
+const MAPPINGS_PER_SLOT: u64 = 5;
+
+/// The kernel's per-process limit on memory mappings, where there is one to
+/// read.
+#[cfg(target_os = "linux")]
+fn max_map_count() -> Option<u64> {
+    std::fs::read_to_string("/proc/sys/vm/max_map_count")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn max_map_count() -> Option<u64> {
+    None
 }
 
 /// The memory limit this process is really subject to.
@@ -862,6 +908,24 @@ mod tests {
             .advisory_within(64 * 1024 * 1024 * MIB)
             .expect("78.8 TiB does not fit in 64 TiB");
         assert!(advisory.contains("cannot be mapped"), "{advisory}");
+    }
+
+    #[test]
+    fn a_pool_past_the_kernels_mapping_limit_is_called_out() {
+        // 20,000 slots fit the address space but not Linux's default 65530
+        // mappings.
+        let resolved = HostMemoryBudgets::resolve(None, None, Some(20_000)).unwrap();
+        let advisory = resolved
+            .map_count_advisory(65_530)
+            .expect("100,000 mappings are past 65530");
+        assert!(advisory.contains("vm.max_map_count"), "{advisory}");
+        assert!(
+            advisory.contains("13106"),
+            "names the count that fits: {advisory}"
+        );
+        assert_eq!(resolved.map_count_advisory(1_048_576), None);
+        let stock = HostMemoryBudgets::resolve(None, None, None).unwrap();
+        assert_eq!(stock.map_count_advisory(65_530), None);
     }
 
     #[test]
