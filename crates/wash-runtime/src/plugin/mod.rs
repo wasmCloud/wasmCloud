@@ -398,6 +398,35 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
         true
     }
 
+    /// The host-linked WASI interfaces this plugin redefines, wholly or in
+    /// part, on the linker of every item it binds. Default: none.
+    ///
+    /// The host links WASI into every component itself, so a plugin that
+    /// changes what components see through it — a filesystem view, an
+    /// environment, a clock — cannot be matched by what it serves: nothing
+    /// imports a WASI interface *from a plugin*. Declaring the interfaces it
+    /// overrides lets the host do three things it otherwise could not:
+    ///
+    /// - bind the plugin to every item of an opted-in workload that imports
+    ///   one of them (the workload opts in through a `hostInterfaces` entry
+    ///   naming an interface the plugin serves, as for any plugin);
+    /// - refuse two plugins that override the same interface, loudly and
+    ///   before anything runs, since nothing composes their definitions;
+    /// - allow name shadowing on the item's linker only while this plugin's
+    ///   [`HostPlugin::on_workload_item_bind`] runs, and bind such plugins
+    ///   after the others, so a redefinition is deliberate and final.
+    ///
+    /// Name whole interfaces (`0.2.0` and `0.3.0` stand for compatible
+    /// revisions). In the item bind, use
+    /// [`WorkloadMetadata::wasi_override_instance`] to reopen the host's exact
+    /// linker instance before redefining functions. Raw `Linker::instance`
+    /// names are exact: a different compatible revision creates a separate,
+    /// incomplete instance. Through the helper, the plugin may redefine only
+    /// some functions of an interface; the rest stay the host's.
+    fn wasi_overrides(&self) -> WitWorld {
+        WitWorld::default()
+    }
+
     /// The config keys this plugin considers the host operator's rather than a
     /// workload's — where a binding connects, as whom, and what it may reach.
     ///
@@ -655,6 +684,50 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     async fn stop(&self) -> anyhow::Result<()> {
         Ok(())
     }
+}
+
+/// Refuses a set of plugins in which two declare overrides
+/// ([`HostPlugin::wasi_overrides`]) of the same WASI interface.
+///
+/// Two redefinitions of one interface cannot both take effect: whichever
+/// bound last would silently win. Until the host can compose such plugins,
+/// the conflict is an error, raised when plugins are registered and again
+/// before a workload binds, so it is never discovered by a guest.
+pub fn check_wasi_overrides(
+    plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
+) -> anyhow::Result<()> {
+    let mut declared: Vec<(&'static str, WitInterface)> = Vec::new();
+    let mut ids: Vec<&&'static str> = plugins.keys().collect();
+    ids.sort();
+    for id in ids {
+        let Some(plugin) = plugins.get(id) else {
+            continue;
+        };
+        for interface in plugin.wasi_overrides().imports {
+            if let Some((other, theirs)) = declared
+                .iter()
+                .find(|(other, theirs)| *other != *id && overrides_overlap(theirs, &interface))
+            {
+                anyhow::bail!(
+                    "plugins '{other}' and '{id}' both override the WASI interface \
+                     {theirs} / {interface}; a host cannot serve two definitions of one \
+                     interface, so register only one of them"
+                );
+            }
+            declared.push((id, interface));
+        }
+    }
+    Ok(())
+}
+
+/// Whether two override declarations name a common interface: the same
+/// package at compatible versions, and a shared interface name (an entry
+/// naming no interface stands for the whole package).
+fn overrides_overlap(a: &WitInterface, b: &WitInterface) -> bool {
+    a.same_package(b)
+        && (a.interfaces.is_empty()
+            || b.interfaces.is_empty()
+            || a.interfaces.iter().any(|i| b.interfaces.contains(i)))
 }
 
 /// A tracker for workloads and their components, allowing storage of associated

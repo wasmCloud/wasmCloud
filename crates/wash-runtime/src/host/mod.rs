@@ -545,7 +545,7 @@ impl Host {
 
         let mut filter_plugins = |interface: &WitInterface| {
             let mut found = false;
-            for (_, plugin) in self.plugins.iter() {
+            for plugin in self.plugins.values() {
                 if plugin.world().includes(interface) {
                     found = true;
                     break;
@@ -1671,6 +1671,9 @@ impl HostBuilder {
         }
 
         self.plugins.insert(plugin_id, plugin);
+        // Two plugins redefining one WASI interface cannot both take effect;
+        // refuse the host rather than let whichever binds last win.
+        crate::plugin::check_wasi_overrides(&self.plugins)?;
         Ok(self)
     }
 

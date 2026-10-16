@@ -12,7 +12,7 @@ use anyhow::{bail, ensure};
 use tokio::{sync::RwLock, task::JoinHandle};
 use tracing::{Instrument, debug, error, info, instrument, trace, warn};
 use wasmtime::component::{
-    Component, InstancePre, Linker, ResourceAny, ResourceType, types::ComponentItem,
+    Component, InstancePre, Linker, LinkerInstance, ResourceAny, ResourceType, types::ComponentItem,
 };
 use wasmtime::error::Context as _;
 use wasmtime_wasi::p2::bindings::CommandPre;
@@ -257,6 +257,43 @@ impl WorkloadMetadata {
     /// Returns a mutable reference to the component's linker.
     pub fn linker(&mut self) -> &mut Linker<SharedCtx> {
         &mut self.linker
+    }
+
+    /// Reopen a host-linked WASI interface for a declared plugin override.
+    ///
+    /// Use this from [`HostPlugin::on_workload_item_bind`] after declaring the
+    /// interface in [`HostPlugin::wasi_overrides`]. Name one interface with a
+    /// version, such as `wasi:clocks/monotonic-clock@0.2.0`.
+    ///
+    /// Resolves compatible revisions to the exact instance the host registered,
+    /// preserving every function and resource the plugin does not redefine.
+    /// Calling `linker().instance(...)` with a different revision creates a
+    /// separate instance: it neither overrides the host's newer name nor
+    /// inherits the host's remaining definitions.
+    pub fn wasi_override_instance(
+        &mut self,
+        interface: &str,
+    ) -> anyhow::Result<LinkerInstance<'_, SharedCtx>> {
+        let interface = WitInterface::from(interface);
+        ensure!(
+            interface.is_host_builtin() && interface.interfaces.len() == 1,
+            "a WASI override must name one host-linked interface at a supported version"
+        );
+        let requested = interface
+            .version
+            .as_ref()
+            .context("a WASI override requires an explicit version to select WASIp2 or WASIp3")?;
+        let version = super::WASI_LINKER_VERSIONS
+            .into_iter()
+            .find(|linked| crate::wit::versions_compatible(Some(requested), Some(linked)))
+            .context("unsupported WASI override version")?;
+        let name = interface
+            .interfaces
+            .iter()
+            .next()
+            .context("missing WASI interface name")?;
+        let instance = format!("wasi:{}/{name}@{version}", interface.package);
+        Ok(self.linker.instance(&instance)?)
     }
 
     /// Returns a reference to the wasmtime [`Component`].
@@ -2985,6 +3022,9 @@ impl UnresolvedWorkload {
         plugin_bindings: &crate::plugin::PluginBindings,
         cleanup: Option<&WorkloadResources>,
     ) -> anyhow::Result<Vec<(Arc<dyn HostPlugin>, Vec<String>)>> {
+        // Before anything binds, so there is nothing to unbind: two plugins
+        // overriding one WASI interface is a host misconfiguration.
+        crate::plugin::check_wasi_overrides(plugins)?;
         // Track bound plugins with their matched interfaces for cleanup on failure
         let mut bound_plugins_with_interfaces: Vec<BoundPluginWithInterfaces> = Vec::new();
         let mut bound_plugins: Vec<(Arc<dyn HostPlugin + 'static>, Vec<String>)> = Vec::new();
@@ -3092,6 +3132,48 @@ impl UnresolvedWorkload {
             }
         }
 
+        // A plugin that overrides WASI interfaces (see
+        // [`HostPlugin::wasi_overrides`]) is required by every workload item that
+        // imports one of them, for each `hostInterfaces` entry the plugin
+        // serves. The entry is what opts the workload in; the matching below
+        // then binds it like any other required interface.
+        for (plugin_id, p) in plugins.iter() {
+            let overrides = p.wasi_overrides();
+            if overrides.imports.is_empty() {
+                continue;
+            }
+            let world = p.world();
+            for entry in &host_interfaces {
+                if !world.includes_bidirectional(entry) || !p.claims(entry) {
+                    continue;
+                }
+                if let Some(service) = &self.service {
+                    let service_world = service.world();
+                    if overrides.imports.iter().any(|o| service_world.uses(o)) {
+                        unmatched_interfaces
+                            .entry(IdFlavor::Service(Arc::from(service.id())))
+                            .or_default()
+                            .insert(entry.clone());
+                    }
+                }
+                for (id, _name, component_world) in &component_worlds {
+                    if !overrides.imports.iter().any(|o| component_world.uses(o)) {
+                        continue;
+                    }
+                    trace!(
+                        plugin_id,
+                        interface = %entry,
+                        component_id = id.as_ref(),
+                        "component imports a WASI interface the plugin overrides; requiring the plugin"
+                    );
+                    unmatched_interfaces
+                        .entry(IdFlavor::Component(id.clone()))
+                        .or_default()
+                        .insert(entry.clone());
+                }
+            }
+        }
+
         trace!(?unmatched_interfaces, "resolving unmatched interfaces");
 
         // Iterate through each plugin first, then check every component for matching worlds.
@@ -3103,7 +3185,11 @@ impl UnresolvedWorkload {
         // differently across process restarts — and with a plugin that *calls*
         // an interface rather than serving it, one of those outcomes fails the
         // deploy. A deterministic order at least makes the result reproducible.
-        let plugins_in_order: BTreeMap<_, _> = plugins.iter().collect();
+        // Plugins that override WASI bind after the rest, so that nothing binds
+        // over a redefinition and shadowing is on only while they bind.
+        let mut plugins_in_order: Vec<(&&'static str, &Arc<dyn HostPlugin>)> =
+            plugins.iter().collect();
+        plugins_in_order.sort_by_key(|(id, p)| (!p.wasi_overrides().imports.is_empty(), **id));
         for (plugin_id, p) in plugins_in_order {
             let plugin_interfaces = p.world();
             trace!(plugin_id = plugin_id, plugin_interfaces = ?plugin_interfaces, "checking plugin interfaces");
@@ -3362,14 +3448,23 @@ impl UnresolvedWorkload {
                         "plugin_on_workload_item_bind",
                         plugin_id = plugin_id,
                     );
-                    if let Err(e) = p
+                    // A WASI override redefines names the host already linked; the
+                    // linker allows that only for the duration of this bind.
+                    let overriding = !p.wasi_overrides().imports.is_empty();
+                    if overriding {
+                        workload_item.linker().allow_shadowing(true);
+                    }
+                    let bound = p
                         .on_workload_item_bind(
                             &mut workload_item,
                             WitInterfaces::new(&matching_interfaces),
                         )
                         .instrument(item_bind_span)
-                        .await
-                    {
+                        .await;
+                    if overriding {
+                        workload_item.linker().allow_shadowing(false);
+                    }
+                    if let Err(e) = bound {
                         tracing::error!(
                             plugin_id = plugin_id,
                             component_id = workload_item.id(),
@@ -4221,6 +4316,8 @@ mod tests {
         /// Every interface handed to `on_workload_bind` /
         /// `on_workload_item_bind`, with the config the plugin actually saw.
         bound_interfaces: Arc<Mutex<Vec<WitInterface>>>,
+        /// WASI interfaces this plugin claims to redefine.
+        wasi_overrides: WitWorld,
     }
 
     impl MockPlugin {
@@ -4241,7 +4338,17 @@ mod tests {
                 claims_from: None,
                 host_owned: Vec::new(),
                 bound_interfaces: Arc::new(Mutex::new(Vec::new())),
+                wasi_overrides: WitWorld::default(),
             }
+        }
+        /// Declare that this plugin redefines `interfaces` (a WASI entry such
+        /// as `wasi:filesystem/preopens,types@0.2.0`), the way a plugin
+        /// shaping a filesystem view does.
+        fn overriding(mut self, interfaces: &str) -> Self {
+            self.wasi_overrides
+                .imports
+                .insert(WitInterface::from(interfaces));
+            self
         }
 
         /// Declare `keys` host-owned in code, the way a real plugin's
@@ -4322,6 +4429,10 @@ mod tests {
                 Some(min) => interface.version.as_ref().is_some_and(|v| v >= min),
                 None => true,
             }
+        }
+
+        fn wasi_overrides(&self) -> WitWorld {
+            self.wasi_overrides.clone()
         }
 
         fn binding_schema(&self) -> crate::plugin::BindingSchema {
@@ -4707,6 +4818,114 @@ mod tests {
             bound_component_ids(&bound).contains(&importer_id),
             "with nothing in the workload exporting it, the plugin serves the import"
         );
+    }
+
+    /// A plugin that overrides a WASI interface (a filesystem view, say) binds
+    /// to the components that import that interface, as soon as the
+    /// workload's `hostInterfaces` names what the plugin serves. A component
+    /// not using the interface, or a workload without the entry, is untouched.
+    #[tokio::test]
+    async fn a_wasi_override_binds_the_components_that_use_the_interface() {
+        let fs_user = component_from_wat(
+            "fs-user",
+            r#"(component (import "wasi:filesystem/types@0.2.12" (instance)))"#,
+        );
+        let plain = component_from_wat("plain", "(component)");
+        let fs_user_id = fs_user.id().to_string();
+        let plain_id = plain.id().to_string();
+        let plugin = Arc::new(
+            MockPlugin::new("view-plugin", vec![WitInterface::from(MARKER)], vec![])
+                .overriding("wasi:filesystem/preopens,types@0.2.0"),
+        );
+        let plugins: HashMap<&'static str, Arc<dyn HostPlugin>> =
+            HashMap::from([(plugin.id(), plugin.clone() as Arc<dyn HostPlugin>)]);
+
+        let mut workload = marker_workload(vec![fs_user, plain]);
+        let bound = workload
+            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+            .await
+            .unwrap();
+        let bound_ids = bound_component_ids(&bound);
+        assert!(
+            bound_ids.contains(&fs_user_id),
+            "imports the overridden interface"
+        );
+        assert!(
+            !bound_ids.contains(&plain_id),
+            "imports nothing the plugin changes"
+        );
+        assert_eq!(plugin.get_call_count("on_workload_item_bind"), 1);
+
+        let fs_user = component_from_wat(
+            "fs-user",
+            r#"(component (import "wasi:filesystem/types@0.2.12" (instance)))"#,
+        );
+        let mut workload = UnresolvedWorkload::new(
+            "local-first".to_string(),
+            "local-first".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![fs_user],
+            vec![],
+        );
+        let bound = workload
+            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+            .await
+            .unwrap();
+        assert!(bound.is_empty(), "no entry, no binding");
+    }
+
+    /// Two plugins redefining one WASI interface cannot both take effect, so
+    /// the host refuses them before anything binds, naming both.
+    #[tokio::test]
+    async fn two_plugins_overriding_one_wasi_interface_are_refused() {
+        let a = Arc::new(
+            MockPlugin::new("view-a", vec![WitInterface::from(MARKER)], vec![])
+                .overriding("wasi:filesystem/types@0.2.0"),
+        );
+        let b = Arc::new(
+            MockPlugin::new(
+                "view-b",
+                vec![WitInterface::from("other:pkg/iface")],
+                vec![],
+            )
+            .overriding("wasi:filesystem/preopens,types@0.2.0"),
+        );
+        let plugins: HashMap<&'static str, Arc<dyn HostPlugin>> = HashMap::from([
+            (a.id(), a.clone() as Arc<dyn HostPlugin>),
+            (b.id(), b.clone() as Arc<dyn HostPlugin>),
+        ]);
+        let error = crate::plugin::check_wasi_overrides(&plugins)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("view-a") && error.contains("view-b"),
+            "{error}"
+        );
+        assert!(error.contains("wasi:filesystem"), "{error}");
+
+        let mut workload = marker_workload(vec![marker_importer("importer")]);
+        let refused = workload
+            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+            .await;
+        assert!(refused.is_err(), "binding refuses the pair too");
+        assert_eq!(a.get_call_count("on_workload_item_bind"), 0);
+        assert_eq!(b.get_call_count("on_workload_item_bind"), 0);
+
+        // Different versions of one package are different interfaces.
+        let c = Arc::new(
+            MockPlugin::new(
+                "view-c",
+                vec![WitInterface::from("other:pkg/iface")],
+                vec![],
+            )
+            .overriding("wasi:filesystem/types@0.3.0"),
+        );
+        let plugins: HashMap<&'static str, Arc<dyn HostPlugin>> = HashMap::from([
+            (a.id(), a.clone() as Arc<dyn HostPlugin>),
+            (c.id(), c as Arc<dyn HostPlugin>),
+        ]);
+        crate::plugin::check_wasi_overrides(&plugins).unwrap();
     }
 
     /// Two components exporting the same interface is the ambiguity
