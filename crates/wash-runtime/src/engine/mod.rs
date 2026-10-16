@@ -244,6 +244,7 @@ pub mod stream_payload;
 pub use instance_pool::{InstancePolicy, ReclaimPolicy};
 pub mod host_memory;
 pub(crate) mod linked_call;
+pub mod pool_usage;
 mod scratch;
 pub(crate) mod store;
 pub(crate) mod trap_remediation;
@@ -269,6 +270,7 @@ struct InstalledPool {
     core_instances: u32,
     memories: u32,
     max_memory_size: u64,
+    totals: pool_usage::PoolTotals,
 }
 
 impl InstalledPool {
@@ -364,6 +366,9 @@ pub struct Engine {
     /// replaces it outright. Quoting the flag in a refusal that the installed
     /// ceiling caused produces advice that cannot work.
     installed_heap_memory: Option<u64>,
+    /// Every total the installed pool was built with, for
+    /// [`Engine::pool_usage`]. `None` when pooling is off.
+    pool_totals: Option<pool_usage::PoolTotals>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -536,6 +541,16 @@ impl Engine {
     /// [`new_pooling_config`]) and drift the moment either side changed.
     pub fn total_core_instances(&self) -> Option<u32> {
         self.total_core_instances
+    }
+
+    /// Every pooling allocator total against what is in use now, so an
+    /// embedder can report a host whose pool is full: its workloads still say
+    /// running while every instantiation is refused. `None` when pooling is
+    /// off. See [`pool_usage::pool_refusals`] for refusals between readings.
+    pub fn pool_usage(&self) -> Option<pool_usage::PoolUsage> {
+        let totals = self.pool_totals.as_ref()?;
+        let metrics = self.inner.pooling_allocator_metrics()?;
+        Some(pool_usage::PoolUsage::read(&metrics, totals))
     }
 
     /// Creates a new [`EngineBuilder`] for configuring an engine.
@@ -1420,6 +1435,7 @@ impl EngineBuilder {
                 core_instances: pooling.get_total_core_instances(),
                 memories: pooling.get_total_memories(),
                 max_memory_size: u64::try_from(pooling.get_max_memory_size()).unwrap_or(u64::MAX),
+                totals: pool_usage::PoolTotals::of(&pooling),
             });
             config.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pooling));
         } else if use_pooling_allocator {
@@ -1427,6 +1443,7 @@ impl EngineBuilder {
         }
         let total_core_instances = installed_pool.map(|pool| pool.core_instances);
         let installed_heap_memory = installed_pool.map(|pool| pool.max_memory_size);
+        let pool_totals = installed_pool.map(|pool| pool.totals);
 
         // Reported here so every embedder says what it built. The reservation
         // is `total_memories x slot_size`, not the instance count, and the slot
@@ -1563,6 +1580,7 @@ impl EngineBuilder {
             tls_provider: self.tls_provider,
             total_core_instances,
             installed_heap_memory,
+            pool_totals,
         })
     }
 }
