@@ -3192,6 +3192,65 @@ fn ended_in_timeout(e: &(dyn std::error::Error + 'static)) -> bool {
     e.source().is_some_and(ended_in_timeout)
 }
 
+/// A warning a client can trigger on every request, let through at most once
+/// per interval. In between, the occurrences are logged at DEBUG and counted,
+/// and the next warning says how many it stands for: a scan of unserved
+/// hostnames should still be visible, not cost a log line per request.
+struct RateLimitedWarn {
+    interval_ms: u64,
+    /// When the next warning may be logged, in milliseconds since
+    /// [`warn_clock_ms`] started.
+    next_ms: std::sync::atomic::AtomicU64,
+    suppressed: std::sync::atomic::AtomicU64,
+}
+
+impl RateLimitedWarn {
+    const fn new(interval: Duration) -> Self {
+        Self {
+            interval_ms: interval.as_millis() as u64,
+            next_ms: std::sync::atomic::AtomicU64::new(0),
+            suppressed: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// `Some(suppressed)` when this occurrence should be warned about, with
+    /// how many were held back since the last warning; `None` when it is one
+    /// of those.
+    fn admit(&self) -> Option<u64> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let now = warn_clock_ms();
+        let next = self.next_ms.load(Relaxed);
+        if now >= next
+            && self
+                .next_ms
+                .compare_exchange(next, now.saturating_add(self.interval_ms), Relaxed, Relaxed)
+                .is_ok()
+        {
+            Some(self.suppressed.swap(0, Relaxed))
+        } else {
+            self.suppressed.fetch_add(1, Relaxed);
+            None
+        }
+    }
+}
+
+fn warn_clock_ms() -> u64 {
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    u64::try_from(
+        START
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX)
+}
+
+/// How often each per-request ingress warning may be logged.
+const INGRESS_WARN_INTERVAL: Duration = Duration::from_secs(10);
+static INVALID_AUTHORITY_WARN: RateLimitedWarn = RateLimitedWarn::new(INGRESS_WARN_INTERVAL);
+static ROUTE_FAILURE_WARN: RateLimitedWarn = RateLimitedWarn::new(INGRESS_WARN_INTERVAL);
+static UNBOUND_HOST_WARN: RateLimitedWarn = RateLimitedWarn::new(INGRESS_WARN_INTERVAL);
+
 /// Build an error response with the given status code.
 /// Building HTTP responses with valid status codes is infallible.
 #[allow(clippy::expect_used)]
@@ -3242,7 +3301,17 @@ async fn handle_http_request<T: Router>(
     // Every guest reads its scheme and authority off the URI, so they are put
     // there once, here, from this listener rather than from any header.
     if !normalize_ingress_uri(&mut req, &scheme) {
-        warn!(host = %host_header(&req), "rejecting a request whose Host is not a valid authority");
+        let host = host_header(&req);
+        match INVALID_AUTHORITY_WARN.admit() {
+            Some(suppressed) => warn!(
+                host,
+                suppressed, "rejecting a request whose Host is not a valid authority"
+            ),
+            None => debug!(
+                host,
+                "rejecting a request whose Host is not a valid authority"
+            ),
+        }
         let resp = error_response(400);
         record_response_status(&resp);
         return Ok(resp);
@@ -3259,7 +3328,12 @@ async fn handle_http_request<T: Router>(
     let workload_id = match handler.route_incoming_request(&req) {
         Ok(id) => id,
         Err(e) => {
-            warn!(err = %e, "failed to route incoming request");
+            match ROUTE_FAILURE_WARN.admit() {
+                Some(suppressed) => {
+                    warn!(err = %e, suppressed, "failed to route incoming request")
+                }
+                None => debug!(err = %e, "failed to route incoming request"),
+            }
             let resp = error_response(e.status());
             record_response_status(&resp);
             return Ok(resp);
@@ -3353,7 +3427,17 @@ async fn handle_http_request<T: Router>(
             }
         }
         None => {
-            warn!(host = %workload_id, "No workload bound to host header or wildcard '*'");
+            match UNBOUND_HOST_WARN.admit() {
+                Some(suppressed) => warn!(
+                    host = %workload_id,
+                    suppressed,
+                    "No workload bound to host header or wildcard '*'"
+                ),
+                None => debug!(
+                    host = %workload_id,
+                    "No workload bound to host header or wildcard '*'"
+                ),
+            }
             error_response(404)
         }
     };
@@ -6227,6 +6311,19 @@ mod tests {
             .flat_map(|b| b.workloads.iter().cloned())
             .collect();
         assert_eq!(now, ["b"]);
+    }
+
+    /// A per-request warning is let through once per interval, and the next
+    /// one counts the occurrences held back in between.
+    #[test]
+    fn a_rate_limited_warning_counts_what_it_held_back() {
+        let limiter = RateLimitedWarn::new(Duration::from_millis(50));
+        assert_eq!(limiter.admit(), Some(0));
+        assert_eq!(limiter.admit(), None);
+        assert_eq!(limiter.admit(), None);
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(limiter.admit(), Some(2));
+        assert_eq!(limiter.admit(), None);
     }
 
     /// A body error a local dispatch already produced reaches the guest as

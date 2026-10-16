@@ -265,7 +265,7 @@ impl WasmcloudNats {
                 .await?;
             *opened = true;
 
-            info!(
+            debug!(
                 workload_id,
                 binding = describe_binding(binding),
                 servers = config.servers.join(","),
