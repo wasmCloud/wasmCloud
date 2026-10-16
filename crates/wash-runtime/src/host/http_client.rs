@@ -898,6 +898,9 @@ pub struct WorkloadClients {
     /// before any request builds a client, and is dropped when it unbinds.
     call_concurrency: Arc<std::sync::RwLock<BTreeMap<String, usize>>>,
     clients: moka::sync::Cache<String, PooledClient>,
+    /// Set while a pass that drops invalidated clients is queued, so a burst
+    /// of unbinds queues one rather than one each.
+    release_queued: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl WorkloadClients {
@@ -943,6 +946,7 @@ impl WorkloadClients {
             tls,
             quotas,
             call_concurrency: Arc::new(std::sync::RwLock::new(BTreeMap::new())),
+            release_queued: Arc::default(),
             clients: moka::sync::Cache::builder()
                 .time_to_idle(WORKLOAD_CLIENT_IDLE)
                 .build(),
@@ -1024,14 +1028,37 @@ impl WorkloadClients {
     /// window ([`WORKLOAD_CLIENT_IDLE`]) once nothing refers to the workload.
     pub fn invalidate(&self, workload_id: &str) {
         self.clients.invalidate(workload_id);
-        // moka may defer dropping the evicted value to a maintenance pass;
-        // force it so the pool (and the permits its idle connections pin) is
-        // released now, not on the next cache access.
-        self.clients.run_pending_tasks();
         self.call_concurrency
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .remove(workload_id);
+        self.release_invalidated();
+    }
+
+    /// Drop invalidated clients now rather than on the next cache access.
+    ///
+    /// moka may defer dropping an evicted value to a maintenance pass, and
+    /// until then its pool keeps its idle connections, and the permits they
+    /// pin. Running that pass inline put the whole cache's pending work on
+    /// every unbind, so it runs off the caller's thread, once for however many
+    /// unbinds arrive before it starts.
+    fn release_invalidated(&self) {
+        use std::sync::atomic::Ordering;
+        if self.release_queued.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let clients = self.clients.clone();
+        let queued = Arc::clone(&self.release_queued);
+        let release = move || {
+            // Cleared first, so an invalidation landing during the pass
+            // queues another rather than relying on this one to see it.
+            queued.store(false, Ordering::Release);
+            clients.run_pending_tasks();
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => drop(runtime.spawn_blocking(release)),
+            Err(_) => release(),
+        }
     }
 
     /// The TLS configuration for egress belonging to no single workload.
