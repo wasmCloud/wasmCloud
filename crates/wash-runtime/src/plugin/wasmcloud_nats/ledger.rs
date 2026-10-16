@@ -14,7 +14,7 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 /// How often a binding that is dropping publishes reports its running totals.
 const REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
@@ -121,7 +121,7 @@ impl PublishLedger {
         if published == 0 && dropped == 0 {
             return;
         }
-        info!(
+        debug!(
             workload_id,
             binding,
             published_total = published,
