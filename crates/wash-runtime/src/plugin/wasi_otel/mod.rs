@@ -232,7 +232,7 @@ impl HostPlugin for WasiOtel {
             .await
             .add_component(component_handle, ctx);
 
-        tracing::info!(
+        tracing::debug!(
             component_id = component_handle.id(),
             "WASI OTel interfaces bound to component"
         );
@@ -249,7 +249,7 @@ impl HostPlugin for WasiOtel {
             .await
             .remove_workload(workload_id)
             .await;
-        tracing::info!(workload_id, "WASI OTel unbound from workload");
+        tracing::debug!(workload_id, "WASI OTel unbound from workload");
         Ok(())
     }
 
@@ -279,7 +279,7 @@ impl<'a> bindings::wasi::otel::logs::Host for ActiveCtx<'a> {
         &mut self,
         data: bindings::wasi::otel::logs::LogRecord,
     ) -> wasmtime::Result<()> {
-        tracing::info!(?data, "emitting log record");
+        tracing::debug!(?data, "emitting log record");
         if let Ok(plugin) = self.ctx.try_get_plugin::<WasiOtel>(WASI_OTEL_ID) {
             let service_name = plugin.config.service_name.clone();
             let provider = plugin.logger_provider.read().await;
@@ -304,7 +304,7 @@ impl<'a> bindings::wasi::otel::metrics::Host for ActiveCtx<'a> {
         if let Ok(plugin) = self.ctx.try_get_plugin::<WasiOtel>(WASI_OTEL_ID) {
             // Summarize incoming metrics for logging
             let summary = summarize_resource_metrics(&resource_metrics);
-            tracing::info!(
+            tracing::debug!(
                 total_scopes = summary.total_scopes,
                 total_metrics = summary.total_metrics,
                 metric_names = ?summary.metric_names,
@@ -349,7 +349,7 @@ impl<'a> bindings::wasi::otel::metrics::Host for ActiveCtx<'a> {
                     return Ok(Err(format!("Failed to flush metrics: {e}")));
                 }
 
-                tracing::info!(
+                tracing::debug!(
                     total_metrics = summary.total_metrics,
                     "Successfully processed WASI metrics"
                 );
@@ -370,7 +370,7 @@ impl<'a> bindings::wasi::otel::tracing::Host for ActiveCtx<'a> {
         span_context: bindings::wasi::otel::tracing::SpanContext,
     ) -> wasmtime::Result<()> {
         // Log the span start - the actual span is managed by the guest
-        tracing::info!(
+        tracing::debug!(
             trace_id = %span_context.trace_id,
             span_id = %span_context.span_id,
             is_remote = span_context.is_remote,
@@ -385,7 +385,7 @@ impl<'a> bindings::wasi::otel::tracing::Host for ActiveCtx<'a> {
     ) -> wasmtime::Result<()> {
         if let Ok(plugin) = self.ctx.try_get_plugin::<WasiOtel>(WASI_OTEL_ID) {
             let summary = summarize_span_data(&span_data);
-            tracing::info!(
+            tracing::debug!(
                 name = %summary.name,
                 trace_id = %summary.trace_id,
                 span_id = %summary.span_id,
@@ -440,7 +440,7 @@ impl<'a> bindings::wasi::otel::tracing::Host for ActiveCtx<'a> {
                 // End the span with the end time from WASI
                 span.end_with_timestamp(summary.end_time);
 
-                tracing::info!(
+                tracing::debug!(
                     name = %summary.name,
                     trace_id = %summary.trace_id,
                     "Successfully exported WASI span"
@@ -459,14 +459,14 @@ impl<'a> bindings::wasi::otel::tracing::Host for ActiveCtx<'a> {
         let span_context = current_context.span().span_context().clone();
 
         if span_context.is_valid() {
-            tracing::info!(
+            tracing::debug!(
                 trace_id = %format!("{:032x}", span_context.trace_id()),
                 span_id = %format!("{:016x}", span_context.span_id()),
                 "Returning outer span context"
             );
             Ok(otel_span_context_to_wit(&span_context))
         } else {
-            tracing::info!("No valid outer span context available");
+            tracing::debug!("No valid outer span context available");
             Ok(WitSpanContext {
                 trace_id: String::new(),
                 span_id: String::new(),

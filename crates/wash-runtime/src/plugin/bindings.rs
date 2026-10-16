@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 use crate::wit::WitInterface;
 
@@ -1216,7 +1216,7 @@ impl PluginBindingSet {
     ) {
         for bundle in &self.default_bundles {
             if lookup(resolved, &bundle.anchor, schema).is_some() {
-                info!(
+                debug!(
                     plugin_id = %self.plugin_id,
                     binding = describe_binding(binding),
                     anchor = %bundle.anchor,

@@ -1835,7 +1835,7 @@ async fn workload_start(
         }
     };
 
-    info!(
+    debug!(
         workload_id=?workload_id,
         namespace=?request.workload.namespace,
         name=?request.workload.name,
@@ -1854,7 +1854,7 @@ async fn workload_stop(
     host: &impl HostApi,
     req: types::v2::WorkloadStopRequest,
 ) -> anyhow::Result<types::v2::WorkloadStopResponse> {
-    info!(
+    debug!(
         workload_id=?req.workload_id,
         "Stopping workload");
 
