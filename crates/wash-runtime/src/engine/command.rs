@@ -129,22 +129,27 @@ impl ResolvedWorkload {
         // Only replace CLI state; keep the resolved filesystem and network
         // contexts and their retained directory handles intact.
         *store.data_mut().active_ctx.ctx.cli() = std::mem::take(cli.build().cli());
-        let result = if p3 {
-            let command = wasmtime_wasi::p3::bindings::CommandPre::new(pre)?
-                .instantiate_async(&mut store)
-                .await?;
-            store
-                .run_concurrent(async move |accessor| {
-                    command.wasi_cli_run().call_run(accessor).await
-                })
-                .await
-                .and_then(|result| result)
-        } else {
-            let command = wasmtime_wasi::p2::bindings::CommandPre::new(pre)?
-                .instantiate_async(&mut store)
-                .await?;
-            command.wasi_cli_run().call_run(&mut store).await
-        };
+        // A core start function can call wasi:cli/exit while the component
+        // is being instantiated. Classify that exit just like one from run.
+        let result = async {
+            if p3 {
+                let command = wasmtime_wasi::p3::bindings::CommandPre::new(pre)?
+                    .instantiate_async(&mut store)
+                    .await?;
+                store
+                    .run_concurrent(async move |accessor| {
+                        command.wasi_cli_run().call_run(accessor).await
+                    })
+                    .await
+                    .and_then(|result| result)
+            } else {
+                let command = wasmtime_wasi::p2::bindings::CommandPre::new(pre)?
+                    .instantiate_async(&mut store)
+                    .await?;
+                command.wasi_cli_run().call_run(&mut store).await
+            }
+        }
+        .await;
         match result {
             Ok(Ok(())) => Ok(CommandOutcome { exit_code: 0 }),
             Ok(Err(())) => Ok(CommandOutcome { exit_code: 1 }),
