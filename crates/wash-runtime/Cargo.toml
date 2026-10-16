@@ -160,6 +160,11 @@ ulid = { optional = true, workspace = true, features = ["std"] }
 url = { workspace = true }
 webpki-roots = { workspace = true }
 
+# `proc_pid_rusage`, for the process footprint `max-process-memory` is held
+# against: RSS understates a macOS process whose pages were compressed.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
+
 # wasi-webgpu dependencies (optional, behind 'wasi-webgpu' feature). Pulled in
 # only on platforms where the `wasi_webgpu` plugin module compiles: wgpu-hal
 # fails to build on Windows and s390x, so the deps are gated to match the

@@ -300,6 +300,22 @@ pub struct HostCommand {
     #[arg(long = "max-guest-memory", env = "WASH_HOST_MAX_GUEST_MEMORY")]
     pub max_guest_memory: Option<String>,
 
+    /// Most memory this whole process may use, guests and host together
+    /// (e.g. `48GiB`).
+    ///
+    /// Measured as the process's real footprint, which counts swapped and
+    /// (on macOS) compressed pages that RSS leaves out. Past it, guest memory
+    /// growth and new instances are refused until the footprint falls back
+    /// below 95% of it.
+    ///
+    /// Unset, it is 90% of the cgroup limit, or of physical memory where
+    /// there is no cgroup, so the host never sets out to use more memory than
+    /// the machine has. That matters most where nothing else stops it: macOS
+    /// does not OOM-kill an ordinary process, it swaps until the machine
+    /// stalls.
+    #[arg(long = "max-process-memory", env = "WASH_HOST_MAX_PROCESS_MEMORY")]
+    pub max_process_memory: Option<String>,
+
     /// How `--max-guest-memory` is applied.
     ///
     /// Under `enforce` (the default), a growth past the budget makes the
@@ -928,6 +944,20 @@ impl CliCommand for HostCommand {
             self.core_instances,
         )
         .map_err(|e| anyhow::anyhow!(e))?;
+        // Blank counts as unset, like the sibling sizes: clap's `env` fallback
+        // yields `Some("")` for a variable that is set but empty.
+        let max_process_memory = self
+            .max_process_memory
+            .as_deref()
+            .map(str::trim)
+            .filter(|raw| !raw.is_empty())
+            .map(wash_runtime::engine::host_memory::parse_bytes)
+            .transpose()
+            .map_err(|e| anyhow::anyhow!("invalid max-process-memory: {e}"))?;
+        anyhow::ensure!(
+            max_process_memory != Some(0),
+            "max-process-memory must be greater than zero"
+        );
         anyhow::ensure!(
             self.max_http_ingress_connections != Some(0),
             "max_http_ingress_connections must be at least 1"
@@ -1063,6 +1093,9 @@ impl CliCommand for HostCommand {
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         engine_builder = engine_builder.with_host_memory(host_memory);
         engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
+        if let Some(bytes) = max_process_memory {
+            engine_builder = engine_builder.with_max_process_memory(bytes);
+        }
 
         let engine = engine_builder.build()?;
 

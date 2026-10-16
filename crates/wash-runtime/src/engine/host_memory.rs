@@ -497,6 +497,36 @@ fn system_total_memory() -> Option<u64> {
     (total > 0).then_some(total)
 }
 
+/// Share of the detected memory limit the whole process may reach before it
+/// refuses guest growth. Above the guest share, because the process holds the
+/// guests and everything else; short of the whole, because past it the kernel
+/// is already deciding for the host — by OOM kill in a container, by swapping
+/// the machine to a halt on a laptop.
+const PROCESS_MEMORY_PERCENT: u64 = 90;
+
+/// `max_process_memory` when an operator names none: [`PROCESS_MEMORY_PERCENT`]
+/// of the cgroup limit, or of physical memory where there is no cgroup.
+/// `u64::MAX`, never enforced, where neither can be read.
+pub fn derive_max_process_memory() -> u64 {
+    detected_memory_limit().map_or(u64::MAX, |limit| limit / 100 * PROCESS_MEMORY_PERCENT)
+}
+
+/// What to say about `max_process_memory` at startup, if anything: a limit
+/// past the memory this process can actually have is one the kernel enforces
+/// first, and on macOS that means the whole machine stalling.
+pub fn process_memory_advisory(max_process_memory: u64) -> Option<String> {
+    let limit = detected_memory_limit()?;
+    (max_process_memory > limit).then(|| {
+        format!(
+            "max-process-memory {} is more than the {} this process can actually have, so it \
+             will never refuse anything; the kernel will get there first. Set it below {}",
+            render_bytes(max_process_memory),
+            render_bytes(limit),
+            render_bytes(limit),
+        )
+    })
+}
+
 /// The guest memory budget when an operator names none.
 ///
 /// A share of the limit that will actually kill the process, clamped. Mirrors
@@ -838,5 +868,21 @@ mod tests {
             HostMemoryBudgets::resolve(Some(512 * MIB), Some(2 * 1024 * MIB), Some(4)).unwrap();
         let advisory = resolved.advisory().expect("a guest can exhaust the host");
         assert!(advisory.contains("2GiB") && advisory.contains("512MiB"));
+    }
+
+    #[test]
+    fn the_derived_process_limit_fits_the_machine() {
+        let limit = detected_memory_limit().expect("a test machine has a readable memory limit");
+        let derived = derive_max_process_memory();
+        assert!(derived < limit, "{derived} must leave room under {limit}");
+        assert_eq!(process_memory_advisory(derived), None);
+    }
+
+    #[test]
+    fn a_process_limit_past_the_machine_is_called_out() {
+        let limit = detected_memory_limit().expect("a test machine has a readable memory limit");
+        let advisory = process_memory_advisory(limit.saturating_mul(2))
+            .expect("twice the machine can never be reached");
+        assert!(advisory.contains(&render_bytes(limit)), "{advisory}");
     }
 }

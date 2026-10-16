@@ -245,6 +245,7 @@ pub use instance_pool::{InstancePolicy, ReclaimPolicy};
 pub mod host_memory;
 pub(crate) mod linked_call;
 pub mod pool_usage;
+pub mod process_memory;
 mod scratch;
 pub(crate) mod store;
 pub(crate) mod trap_remediation;
@@ -343,6 +344,9 @@ pub struct Engine {
     /// [`host_memory::HostMemoryBudgets::max_guest_memory`] is the cap on.
     /// Every store this engine builds carries a limiter drawing on it.
     pub(crate) guest_memory: Arc<guest_memory::GuestMemoryBudget>,
+    /// The whole process's footprint against `max_process_memory`, sampled on
+    /// its own thread. The guest budget refuses growth while it is over.
+    process_memory: Arc<process_memory::ProcessMemoryGuard>,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
@@ -528,6 +532,13 @@ impl Engine {
     /// holding and what the budget has refused.
     pub fn guest_memory(&self) -> &Arc<guest_memory::GuestMemoryBudget> {
         &self.guest_memory
+    }
+
+    /// The process's memory footprint against `max_process_memory`, for an
+    /// embedder to report, or to stop taking on work while
+    /// [`process_memory::ProcessMemoryGuard::is_over`].
+    pub fn process_memory(&self) -> &Arc<process_memory::ProcessMemoryGuard> {
+        &self.process_memory
     }
 
     /// Core instances the pooling allocator was configured to admit, captured
@@ -1157,6 +1168,7 @@ pub struct EngineBuilder {
     allowed_host_paths: Vec<PathBuf>,
     scratch_root: Option<PathBuf>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
+    max_process_memory: Option<u64>,
     guest_memory_mode: guest_memory::GuestMemoryMode,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
@@ -1210,6 +1222,18 @@ impl EngineBuilder {
     #[must_use]
     pub fn with_socket_policy(mut self, policy: Arc<crate::sockets::policy::SocketPolicy>) -> Self {
         self.socket_policy = Some(policy);
+        self
+    }
+
+    /// Cap the whole process's memory footprint, guests and host together.
+    ///
+    /// Past it, guest memory growth and new instances are refused until the
+    /// footprint falls back (see [`process_memory`]). Unset, it is derived:
+    /// 90% of the cgroup limit, or of physical memory where there is none, so
+    /// a host never sets out to use more memory than the machine has.
+    #[must_use]
+    pub fn with_max_process_memory(mut self, bytes: u64) -> Self {
+        self.max_process_memory = Some(bytes);
         self
     }
 
@@ -1418,6 +1442,12 @@ impl EngineBuilder {
         {
             tracing::warn!("{advisory}");
         }
+        let max_process_memory = self
+            .max_process_memory
+            .unwrap_or_else(host_memory::derive_max_process_memory);
+        if let Some(advisory) = host_memory::process_memory_advisory(max_process_memory) {
+            tracing::warn!("{advisory}");
+        }
 
         // The pooling allocator can be more efficient for workloads with many short-lived instances.
         // Read back from the installed pool: the environment and a
@@ -1450,6 +1480,7 @@ impl EngineBuilder {
         // does not shrink with the heap ceiling.
         match installed_pool {
             Some(pool) => tracing::info!(
+                max_process_memory = %host_memory::render_bytes(max_process_memory),
                 max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
                 guest_memory_mode = self.guest_memory_mode.as_str(),
                 default_heap_memory = %host_memory::render_bytes(pool.max_memory_size),
@@ -1461,6 +1492,7 @@ impl EngineBuilder {
             ),
             // No pool, so no reservation and no installed ceiling to name.
             None => tracing::info!(
+                max_process_memory = %host_memory::render_bytes(max_process_memory),
                 max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
                 guest_memory_mode = self.guest_memory_mode.as_str(),
                 pooling = false,
@@ -1528,6 +1560,9 @@ impl EngineBuilder {
 
         let inner = wasmtime::Engine::new(&config)?;
         spawn_epoch_ticker(&inner)?;
+        let process_memory = Arc::new(process_memory::ProcessMemoryGuard::new(max_process_memory));
+        process_memory.spawn_sampler()?;
+        process_memory.register_metrics(&opentelemetry::global::meter("wash-runtime"));
         let cache = Cache::builder()
             .max_capacity(self.compilation_cache_size.unwrap_or(100))
             .time_to_idle(
@@ -1574,8 +1609,10 @@ impl EngineBuilder {
                     Some(ceiling) => budget.with_heap_ceiling(ceiling),
                     None => budget,
                 }
+                .with_process_guard(Arc::clone(&process_memory))
                 .into_metered()
             },
+            process_memory,
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
             total_core_instances,
