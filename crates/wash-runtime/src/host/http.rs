@@ -27,8 +27,6 @@ use std::{
     time::Duration,
 };
 
-use arc_swap::ArcSwap;
-
 use crate::engine::abandon::{AbandonFlag, AbandonOnDrop, DispatchedCall};
 use crate::host::allowed_hosts::AllowedHost;
 use crate::host::trigger_service::{BrokerMessage, MessagingJob};
@@ -496,29 +494,52 @@ pub trait Router: Send + Sync + 'static {
 }
 
 /// Router that routes requests by 'Host' header, configured via WitInterface config
-#[derive(Default)]
+///
+/// The tables are updated in place. A host holding 100k workloads cannot
+/// afford to copy a whole table on every start and stop (loading N workloads
+/// would cost O(N²)), so a write touches only the routes of the workload it
+/// registers or unbinds.
+///
+/// Every lock here is a std one and is never held across an await or a route
+/// match: a request holds one shard's read lock for a hash lookup and an `Arc`
+/// clone, a writer the shard's write lock for the one entry it changes.
 pub struct DynamicRouter {
-    /// Routing tables behind a single [`ArcSwap`] so the per-request read in
-    /// [`Self::select_workload`] is lock-free — a concurrent register/unbind can
-    /// never make a request wait or 503. Register and unbind are copy-on-write
-    /// via `rcu`; they happen on workload start/stop (rare relative to requests),
-    /// so cloning the tables is cheap next to the hot read path.
-    routes: ArcSwap<Routes>,
-}
-
-/// The `DynamicRouter` routing tables, swapped atomically as one unit so a
-/// reader never sees the forward and reverse maps disagree.
-#[derive(Default, Clone)]
-struct Routes {
-    /// Maps a hostname to the path-scoped buckets registered under it, held
-    /// longest-prefix-first so a lookup is an ordered scan that stops at the
-    /// first match. One hostname carries few prefixes in practice, so this
-    /// stays cheaper than a trie and keeps the table clonable for `rcu`.
-    host_to_workload: HashMap<String, Vec<PathBucket>>,
+    /// Maps a hostname to the path-scoped buckets registered under it, split
+    /// across shards by hostname so requests for different hostnames do not
+    /// contend on one lock word.
+    hosts: [std::sync::RwLock<HostBuckets>; ROUTE_SHARDS],
+    hasher: std::hash::RandomState,
     /// Maps workload_id -> every route (primary + aliases, each with its path
     /// prefix) registered for it, so `on_workload_unbind` can remove all
-    /// entries cleanly.
-    workload_to_host: HashMap<String, Vec<IngressRoute>>,
+    /// entries cleanly. Writers hold it across their whole update, which keeps
+    /// it and `hosts` in step and serializes writers; requests never take it.
+    workload_to_host: std::sync::Mutex<HashMap<String, Vec<IngressRoute>>>,
+}
+
+/// One shard of [`DynamicRouter`]'s hostname table.
+///
+/// A hostname's buckets are held longest-prefix-first so a lookup is an
+/// ordered scan that stops at the first match. One hostname carries few
+/// prefixes in practice, so this stays cheaper than a trie.
+///
+/// Each hostname's buckets sit behind their own `Arc` so a request matches
+/// against a snapshot after dropping the lock, and a write copies only the
+/// touched hostname's buckets, and only while a request still holds them
+/// (`Arc::make_mut`).
+type HostBuckets = HashMap<String, Arc<Vec<PathBucket>>>;
+
+/// Enough shards that requests spread across cores rarely meet on one lock,
+/// few enough that an empty router stays small.
+const ROUTE_SHARDS: usize = 64;
+
+impl Default for DynamicRouter {
+    fn default() -> Self {
+        Self {
+            hosts: std::array::from_fn(|_| Default::default()),
+            hasher: Default::default(),
+            workload_to_host: Default::default(),
+        }
+    }
 }
 
 /// Every workload replica serving one `(hostname, path_prefix, scope)` triple.
@@ -576,6 +597,12 @@ impl PartialEq for PathBucket {
 
 impl Eq for PathBucket {}
 
+/// Take a route-table guard whether or not a writer panicked holding it: no
+/// write can panic halfway through, so a poisoned table is still a whole one.
+fn lock_routes<G>(result: std::sync::LockResult<G>) -> G {
+    result.unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 impl DynamicRouter {
     /// Register `workload_id` under every route in `routes`, updating both the
     /// forward (host -> path buckets -> replicas) and reverse (workload ->
@@ -583,36 +610,71 @@ impl DynamicRouter {
     /// entry cleanly. Idempotent: re-registering the same workload (e.g. a
     /// service restart) leaves the tables unchanged.
     fn register_routes(&self, workload_id: &str, routes: &[IngressRoute]) {
-        self.routes.rcu(|cur| {
-            let mut table = (**cur).clone();
-            table
-                .workload_to_host
-                .insert(workload_id.to_string(), routes.to_vec());
-            for route in routes {
-                let buckets = table
-                    .host_to_workload
-                    .entry(route.host.clone())
-                    .or_default();
-                match buckets
-                    .iter_mut()
-                    .find(|b| b.prefix == route.path_prefix && b.scope == route.scope)
-                {
-                    Some(bucket) => {
-                        bucket.workloads.insert(workload_id.to_string());
-                    }
-                    None => {
-                        buckets.push(PathBucket {
-                            prefix: route.path_prefix.clone(),
-                            scope: route.scope,
-                            workloads: BTreeSet::from([workload_id.to_string()]),
-                        });
-                        // Most specific first — see `PathBucket`'s `Ord`.
-                        buckets.sort();
-                    }
+        let mut workloads = lock_routes(self.workload_to_host.lock());
+        workloads.insert(workload_id.to_string(), routes.to_vec());
+        for route in routes {
+            let mut shard = lock_routes(self.shard(&route.host).write());
+            let buckets = Arc::make_mut(shard.entry(route.host.clone()).or_default());
+            match buckets
+                .iter_mut()
+                .find(|b| b.prefix == route.path_prefix && b.scope == route.scope)
+            {
+                Some(bucket) => {
+                    bucket.workloads.insert(workload_id.to_string());
+                }
+                None => {
+                    buckets.push(PathBucket {
+                        prefix: route.path_prefix.clone(),
+                        scope: route.scope,
+                        workloads: BTreeSet::from([workload_id.to_string()]),
+                    });
+                    // Most specific first — see `PathBucket`'s `Ord`.
+                    buckets.sort();
                 }
             }
-            table
-        });
+        }
+    }
+
+    /// Remove every route `workload_id` registered, dropping emptied buckets
+    /// and hostnames. A no-op for a workload that registered none.
+    fn unregister_routes(&self, workload_id: &str) {
+        let mut workloads = lock_routes(self.workload_to_host.lock());
+        let Some(routes) = workloads.remove(workload_id) else {
+            return;
+        };
+        for route in &routes {
+            let mut shard = lock_routes(self.shard(&route.host).write());
+            let Some(buckets) = shard.get_mut(&route.host) else {
+                continue;
+            };
+            let buckets = Arc::make_mut(buckets);
+            if let Some(bucket) = buckets
+                .iter_mut()
+                .find(|b| b.prefix == route.path_prefix && b.scope == route.scope)
+            {
+                bucket.workloads.remove(workload_id);
+            }
+            // Drop emptied buckets, and the hostname itself once its last
+            // route is gone, so an unbound workload leaves nothing behind for
+            // `select_workload` to walk past.
+            buckets.retain(|b| !b.workloads.is_empty());
+            if buckets.is_empty() {
+                shard.remove(&route.host);
+            }
+        }
+    }
+
+    /// The buckets registered under `host`, cloned out so the match runs
+    /// without the lock.
+    fn host_buckets(&self, host: &str) -> Option<Arc<Vec<PathBucket>>> {
+        lock_routes(self.shard(host).read()).get(host).cloned()
+    }
+
+    fn shard(&self, host: &str) -> &std::sync::RwLock<HostBuckets> {
+        let [first, ..] = &self.hosts;
+        // `usize` is at least 32 bits wide, plenty to pick one of 64 shards.
+        let index = std::hash::BuildHasher::hash_one(&self.hasher, host) as usize % ROUTE_SHARDS;
+        self.hosts.get(index).unwrap_or(first)
     }
 
     /// Resolve `(host, path)` to one workload reachable at `scope`, spreading
@@ -657,9 +719,7 @@ impl DynamicRouter {
         // on. Hostnames are also case-insensitive per RFC 1123. Registration
         // normalizes both the same way (see [`IngressRoute::new`]).
         let host = split_host_port(host).0.to_ascii_lowercase();
-        // Lock-free read of a routing-table snapshot.
-        let routes = self.routes.load();
-        let Some(buckets) = routes.host_to_workload.get(&host) else {
+        let Some(buckets) = self.host_buckets(&host) else {
             return Err(RouteError::NoWorkloadForHost(host));
         };
         // Only buckets this caller may see. A hostname serving `localRoute`
@@ -762,30 +822,7 @@ impl Router for DynamicRouter {
     }
 
     async fn on_workload_unbind(&self, workload_id: &str) -> anyhow::Result<()> {
-        self.routes.rcu(|cur| {
-            let mut table = (**cur).clone();
-            if let Some(routes) = table.workload_to_host.remove(workload_id) {
-                for route in &routes {
-                    let Some(buckets) = table.host_to_workload.get_mut(&route.host) else {
-                        continue;
-                    };
-                    if let Some(bucket) = buckets
-                        .iter_mut()
-                        .find(|b| b.prefix == route.path_prefix && b.scope == route.scope)
-                    {
-                        bucket.workloads.remove(workload_id);
-                    }
-                    // Drop emptied buckets, and the hostname itself once its
-                    // last route is gone, so an unbound workload leaves nothing
-                    // behind for `select_workload` to walk past.
-                    buckets.retain(|b| !b.workloads.is_empty());
-                    if buckets.is_empty() {
-                        table.host_to_workload.remove(&route.host);
-                    }
-                }
-            }
-            table
-        });
+        self.unregister_routes(workload_id);
         Ok(())
     }
 
@@ -812,9 +849,9 @@ impl Router for DynamicRouter {
             .and_then(|h| h.to_str().ok())
             .or_else(|| req.uri().authority().map(|a| a.as_str()))
             .ok_or(RouteError::MissingHost)?;
-        // `select_workload` does a lock-free `ArcSwap` load and an in-memory
-        // lookup, so it runs inline on the async worker — no `block_in_place`
-        // needed (and routing works on any runtime flavor).
+        // `select_workload` holds the route lock for one hash lookup and never
+        // across an await, so it runs inline on the async worker — no
+        // `block_in_place` needed (and routing works on any runtime flavor).
         self.select_workload(workload_host, req.uri().path(), RouteScope::Ingress)
     }
 
@@ -6123,6 +6160,73 @@ mod tests {
             None,
             "unbind must drop the workload's local routes too"
         );
+    }
+
+    /// Writes edit the table in place: unbinding one workload leaves every
+    /// other workload's routes, on its hostname and on others, as they were,
+    /// and unbinding all of them leaves nothing behind.
+    #[tokio::test]
+    async fn unbind_touches_only_the_unbound_workloads_routes() {
+        let router = DynamicRouter::default();
+        for i in 0..100 {
+            router.register_routes(
+                &format!("w{i}"),
+                &[IngressRoute::ingress(format!("host{i}.example.com"))],
+            );
+        }
+        router.register_routes("w0-replica", &[IngressRoute::ingress("host0.example.com")]);
+
+        router.on_workload_unbind("w0").await.unwrap();
+        assert_eq!(
+            router
+                .select_workload("host0.example.com", "/", RouteScope::Ingress)
+                .ok(),
+            Some("w0-replica".to_string()),
+            "the remaining replica keeps the hostname"
+        );
+        assert_eq!(
+            router
+                .select_workload("host7.example.com", "/", RouteScope::Ingress)
+                .ok(),
+            Some("w7".to_string())
+        );
+
+        router.on_workload_unbind("w0-replica").await.unwrap();
+        for i in 1..100 {
+            router.on_workload_unbind(&format!("w{i}")).await.unwrap();
+        }
+        assert!(
+            router
+                .hosts
+                .iter()
+                .all(|shard| shard.read().unwrap().is_empty())
+        );
+        assert!(router.workload_to_host.lock().unwrap().is_empty());
+    }
+
+    /// A request matches against the buckets it cloned out of the table, so a
+    /// write landing mid-request neither blocks it nor changes what it sees.
+    #[test]
+    fn a_held_snapshot_is_unaffected_by_later_writes() {
+        let router = DynamicRouter::default();
+        router.register_routes("a", &[IngressRoute::ingress("svc.example.com")]);
+        let snapshot = router.host_buckets("svc.example.com").unwrap();
+
+        router.register_routes("b", &[IngressRoute::ingress("svc.example.com")]);
+        router.unregister_routes("a");
+
+        let held: Vec<_> = snapshot
+            .iter()
+            .flat_map(|b| b.workloads.iter().cloned())
+            .collect();
+        assert_eq!(held, ["a"]);
+        let now: Vec<_> = router
+            .host_buckets("svc.example.com")
+            .unwrap()
+            .iter()
+            .flat_map(|b| b.workloads.iter().cloned())
+            .collect();
+        assert_eq!(now, ["b"]);
     }
 
     /// A body error a local dispatch already produced reaches the guest as
