@@ -728,6 +728,8 @@ pub struct ResolvedWorkload {
     /// All components in the workload. This is behind a `RwLock` to support mutable
     /// access to the component linkers.
     components: Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
+    /// How many entries `components` holds, which never changes once resolved.
+    component_count: usize,
     /// The HTTP handler for outgoing HTTP requests. See
     /// [`crate::host::http::live_handler`] for why this is weak and how the
     /// two kinds of caller differ.
@@ -767,14 +769,7 @@ impl std::fmt::Debug for ResolvedWorkload {
             .field("namespace", &self.namespace)
             .field("host_interfaces", &self.host_interfaces)
             .field("has_service", &self.service.is_some())
-            .field(
-                "component_count",
-                &self
-                    .components
-                    .try_read()
-                    .map(|g| g.len() as isize)
-                    .unwrap_or(-1),
-            );
+            .field("component_count", &self.component_count);
         #[cfg(feature = "wasi-tls")]
         s.field("tls_provider", &self.tls_provider.is_some());
         s.finish_non_exhaustive()
@@ -1884,8 +1879,11 @@ impl ResolvedWorkload {
 
     /// Returns the number of components in this workload.
     /// Does not include the service component if one is defined.
-    pub async fn component_count(&self) -> usize {
-        self.components.read().await.len()
+    ///
+    /// Read without the components lock: the set is fixed once resolved, and
+    /// the host heartbeat asks every running workload for it.
+    pub fn component_count(&self) -> usize {
+        self.component_count
     }
 
     /// Helper to create a new wasmtime Store for multiple components and set active given component in the workload.
@@ -3530,6 +3528,7 @@ impl UnresolvedWorkload {
             id: self.id.clone(),
             name: self.name.clone(),
             namespace: self.namespace.clone(),
+            component_count: self.components.len(),
             components: Arc::new(RwLock::new(self.components)),
             service: self.service,
             service_calls: Arc::default(),
