@@ -416,9 +416,13 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     ///   [`HostPlugin::on_workload_item_bind`] runs, and bind such plugins
     ///   after the others, so a redefinition is deliberate and final.
     ///
-    /// Name whole interfaces, at the versions the host links (`0.2.0` and
-    /// `0.3.0` stand for any compatible revision). The plugin may redefine
-    /// only some functions of an interface; the rest stay the host's.
+    /// Name whole interfaces (`0.2.0` and `0.3.0` stand for compatible
+    /// revisions). In the item bind, use
+    /// [`WorkloadMetadata::wasi_override_instance`] to reopen the host's exact
+    /// linker instance before redefining functions. Raw `Linker::instance`
+    /// names are exact: a different compatible revision creates a separate,
+    /// incomplete instance. Through the helper, the plugin may redefine only
+    /// some functions of an interface; the rest stay the host's.
     fn wasi_overrides(&self) -> WitWorld {
         WitWorld::default()
     }
@@ -702,7 +706,7 @@ pub fn check_wasi_overrides(
         for interface in plugin.wasi_overrides().imports {
             if let Some((other, theirs)) = declared
                 .iter()
-                .find(|(_, theirs)| overrides_overlap(theirs, &interface))
+                .find(|(other, theirs)| *other != *id && overrides_overlap(theirs, &interface))
             {
                 anyhow::bail!(
                     "plugins '{other}' and '{id}' both override the WASI interface \

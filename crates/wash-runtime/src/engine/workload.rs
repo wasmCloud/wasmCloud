@@ -12,7 +12,7 @@ use anyhow::{bail, ensure};
 use tokio::{sync::RwLock, task::JoinHandle};
 use tracing::{Instrument, debug, error, info, instrument, trace, warn};
 use wasmtime::component::{
-    Component, InstancePre, Linker, ResourceAny, ResourceType, types::ComponentItem,
+    Component, InstancePre, Linker, LinkerInstance, ResourceAny, ResourceType, types::ComponentItem,
 };
 use wasmtime::error::Context as _;
 use wasmtime_wasi::p2::bindings::CommandPre;
@@ -257,6 +257,43 @@ impl WorkloadMetadata {
     /// Returns a mutable reference to the component's linker.
     pub fn linker(&mut self) -> &mut Linker<SharedCtx> {
         &mut self.linker
+    }
+
+    /// Reopen a host-linked WASI interface for a declared plugin override.
+    ///
+    /// Use this from [`HostPlugin::on_workload_item_bind`] after declaring the
+    /// interface in [`HostPlugin::wasi_overrides`]. Name one interface with a
+    /// version, such as `wasi:clocks/monotonic-clock@0.2.0`.
+    ///
+    /// Resolves compatible revisions to the exact instance the host registered,
+    /// preserving every function and resource the plugin does not redefine.
+    /// Calling `linker().instance(...)` with a different revision creates a
+    /// separate instance: it neither overrides the host's newer name nor
+    /// inherits the host's remaining definitions.
+    pub fn wasi_override_instance(
+        &mut self,
+        interface: &str,
+    ) -> anyhow::Result<LinkerInstance<'_, SharedCtx>> {
+        let interface = WitInterface::from(interface);
+        ensure!(
+            interface.is_host_builtin() && interface.interfaces.len() == 1,
+            "a WASI override must name one host-linked interface at a supported version"
+        );
+        let requested = interface
+            .version
+            .as_ref()
+            .context("a WASI override requires an explicit version to select WASIp2 or WASIp3")?;
+        let version = super::WASI_LINKER_VERSIONS
+            .into_iter()
+            .find(|linked| crate::wit::versions_compatible(Some(requested), Some(linked)))
+            .context("unsupported WASI override version")?;
+        let name = interface
+            .interfaces
+            .iter()
+            .next()
+            .context("missing WASI interface name")?;
+        let instance = format!("wasi:{}/{name}@{version}", interface.package);
+        Ok(self.linker.instance(&instance)?)
     }
 
     /// Returns a reference to the wasmtime [`Component`].
