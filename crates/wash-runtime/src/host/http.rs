@@ -1457,21 +1457,26 @@ fn watch_body(resp: hyper::Response<WasiBody>, watch: AbandonOnDrop) -> hyper::R
     })
 }
 
-/// A map from host header to resolved workload handles, their associated
-/// component id, and the identity that component's calls are measured under.
-pub type WorkloadHandles = Arc<
-    RwLock<
-        HashMap<
-            String,
-            (
-                ResolvedWorkload,
-                InstancePre<SharedCtx>,
-                String,
-                crate::observability::WorkloadIdentity,
-            ),
-        >,
-    >,
->;
+/// A map from workload id to the component serving its HTTP requests.
+pub type WorkloadHandles = Arc<RwLock<HashMap<String, Arc<ComponentHandle>>>>;
+
+/// What serving a request on a workload's HTTP component needs, settled when
+/// the component is bound so a request only reads it: the pre-linked
+/// component, the identity its calls are measured under, which `wasi:http`
+/// it speaks and the warm set it runs on. Behind an `Arc` in
+/// [`WorkloadHandles`], so a request takes it with one reference count.
+pub struct ComponentHandle {
+    workload: ResolvedWorkload,
+    instance_pre: InstancePre<SharedCtx>,
+    component_id: String,
+    identity: crate::observability::WorkloadIdentity,
+    /// Whether the component targets `wasi:http@0.3`, which walks its imports
+    /// and exports to answer.
+    targets_p3: bool,
+    /// The warm set its calls run on, if it keeps one. See
+    /// [`crate::engine::instance_pool::poolable`].
+    pool: Option<Arc<crate::engine::instance_pool::InstancePool>>,
+}
 
 /// An inbound HTTP request routed to a long-lived service instance, paired with
 /// a oneshot for its response and the abandonment flag of the [`DispatchedCall`]
@@ -1993,10 +1998,7 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
             return (!sender.is_closed()).then(|| LocalTarget::Service(sender.clone()));
         }
         let handles = self.workload_handles.try_read().ok()?;
-        handles
-            .get(target)
-            .cloned()
-            .map(|handle| LocalTarget::Component(Box::new(handle)))
+        handles.get(target).cloned().map(LocalTarget::Component)
     }
 
     /// The co-located workload to serve `uri` in-memory and where to dispatch
@@ -2374,16 +2376,8 @@ enum LocalTarget {
     /// the instance it already keeps warm.
     Service(tokio::sync::mpsc::Sender<ServiceHttpJob>),
     /// The workload's registered component handle, from which a per-request
-    /// instance is built. Boxed because it is much the larger of the two and
-    /// this enum is moved into the dispatch future.
-    Component(
-        Box<(
-            ResolvedWorkload,
-            InstancePre<SharedCtx>,
-            String,
-            crate::observability::WorkloadIdentity,
-        )>,
-    ),
+    /// instance is built.
+    Component(Arc<ComponentHandle>),
 }
 
 /// Dispatch a locally routed request to `workload_id` through the destination
@@ -2403,7 +2397,7 @@ async fn dispatch_local(
         request.headers_mut().insert(hyper::header::HOST, value);
     }
 
-    let (handle, instance_pre, component_id, identity) = match target {
+    let handle = match target {
         LocalTarget::Service(sender) => {
             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
             // The deadline is enforced out here, outside the service's store,
@@ -2432,25 +2426,18 @@ async fn dispatch_local(
                 None => anyhow::bail!("service HTTP instance produced no response"),
             };
         }
-        LocalTarget::Component(handle) => *handle,
+        LocalTarget::Component(handle) => handle,
     };
     let req_span = tracing::span!(
         tracing::Level::INFO,
         "invoke_component_handler",
-        workload.name = handle.name(),
-        workload.namespace = handle.namespace(),
-        workload.id = handle.id(),
+        workload.name = handle.workload.name(),
+        workload.namespace = handle.workload.namespace(),
+        workload.id = handle.workload.id(),
     );
-    invoke_component_handler(
-        handle,
-        instance_pre,
-        &component_id,
-        request,
-        guest_meter,
-        &identity,
-    )
-    .instrument(req_span)
-    .await
+    invoke_component_handler(&handle, request, guest_meter)
+        .instrument(req_span)
+        .await
 }
 
 #[async_trait::async_trait]
@@ -2565,19 +2552,25 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         // Only components that export wasi:http are routable HTTP entrypoints.
         // Anything else stays unregistered and routes to a 404.
         if crate::engine::exports_wasi_http(instance_pre.component()) {
-            // Resolved before the write lock is taken: it awaits a read of the
+            // Resolved before the write lock is taken: they await a read of the
             // component map, and holding the handles' writer across that stalls
             // every inbound request, which reads the same lock to route.
             let identity = resolved_handle.component_identity(component_id).await;
-            self.workload_handles.write().await.insert(
-                resolved_handle.id().to_string(),
-                (
-                    resolved_handle.clone(),
-                    instance_pre,
-                    component_id.to_string(),
-                    identity,
-                ),
-            );
+            let pool = resolved_handle
+                .instance_pool_for_component(component_id)
+                .await;
+            let handle = ComponentHandle {
+                workload: resolved_handle.clone(),
+                targets_p3: crate::engine::targets_wasip3_http(instance_pre.component()),
+                instance_pre,
+                component_id: component_id.to_string(),
+                identity,
+                pool,
+            };
+            self.workload_handles
+                .write()
+                .await
+                .insert(resolved_handle.id().to_string(), Arc::new(handle));
         }
 
         Ok(())
@@ -3400,24 +3393,17 @@ async fn handle_http_request<T: Router>(
     };
 
     let response = match workload_handle {
-        Some((handle, instance_pre, component_id, identity)) => {
+        Some(handle) => {
             let req_span = tracing::span!(
                 tracing::Level::INFO,
                 "invoke_component_handler",
-                workload.name = handle.name(),
-                workload.namespace = handle.namespace(),
-                workload.id = handle.id(),
+                workload.name = handle.workload.name(),
+                workload.namespace = handle.workload.namespace(),
+                workload.id = handle.workload.id(),
             );
-            match invoke_component_handler(
-                handle,
-                instance_pre,
-                &component_id,
-                req,
-                guest_meter,
-                &identity,
-            )
-            .instrument(req_span)
-            .await
+            match invoke_component_handler(&handle, req, guest_meter)
+                .instrument(req_span)
+                .await
             {
                 Ok(resp) => resp,
                 Err(e) => {
@@ -3645,19 +3631,21 @@ fn split_host_port(host: &str) -> (&str, Option<u16>) {
 
 /// Invoke the component handler for the given workload
 async fn invoke_component_handler(
-    workload_handle: ResolvedWorkload,
-    instance_pre: InstancePre<SharedCtx>,
-    component_id: &str,
+    // Resolved once when the route was registered: this runs per request.
+    handle: &ComponentHandle,
     req: hyper::Request<WasiBody>,
     guest_meter: GuestMeter,
-    // Resolved once when the route was registered: this runs per request.
-    identity: &crate::observability::WorkloadIdentity,
 ) -> anyhow::Result<hyper::Response<WasiBody>> {
-    if crate::engine::targets_wasip3_http(instance_pre.component()) {
-        let pool = workload_handle
-            .instance_pool_for_component(component_id)
-            .await;
-
+    let ComponentHandle {
+        workload: workload_handle,
+        instance_pre,
+        component_id,
+        identity,
+        targets_p3,
+        pool,
+    } = handle;
+    let component_id = component_id.as_str();
+    if *targets_p3 {
         // A component that keeps instances warm serves this on one of them,
         // alongside whatever else that instance already has in flight. Only
         // when every warm instance is full and the pool is at `pool_size` does
@@ -3674,8 +3662,8 @@ async fn invoke_component_handler(
                 abandoned: call.flag(),
             }));
             let outcome =
-                crate::engine::instance_pool::offer_or_install(pool, &instance_pre, job, || {
-                    workload_handle.new_store(component_id)
+                crate::engine::instance_pool::offer_or_install(pool, instance_pre, job, || {
+                    workload_handle.new_store_as(component_id, Some(identity))
                 })
                 .await?;
             match outcome {
@@ -3718,7 +3706,9 @@ async fn invoke_component_handler(
         let cold = match reclaimed {
             Some(built) => built,
             None => {
-                let mut store = workload_handle.new_store(component_id).await?;
+                let mut store = workload_handle
+                    .new_store_as(component_id, Some(identity))
+                    .await?;
                 let instance = instance_pre.instantiate_async(&mut store).await?;
                 crate::engine::instance_pool::ComponentInstance { store, instance }
             }
@@ -3737,8 +3727,10 @@ async fn invoke_component_handler(
     // The p2 path still builds and instantiates per request: its store is
     // owned by a detached task that outlives the response head, so recovering
     // it for reuse needs a restructure the p3 path did not.
-    let store = workload_handle.new_store(component_id).await?;
-    handle_component_request(store, instance_pre, req, guest_meter, identity).await
+    let store = workload_handle
+        .new_store_as(component_id, Some(identity))
+        .await?;
+    handle_component_request(store, instance_pre.clone(), req, guest_meter, identity).await
 }
 
 /// Handle a component request using WASI HTTP (copied from wash/crates/src/cli/dev.rs)

@@ -1985,6 +1985,18 @@ impl ResolvedWorkload {
         &self,
         component_id: &str,
     ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
+        self.new_store_as(component_id, None).await
+    }
+
+    /// [`Self::new_store`] for a caller that resolved the component's
+    /// [`Self::component_identity`] once, where it registered the route or
+    /// subscription, so a request pays neither the read lock nor the
+    /// allocations of looking it up again.
+    pub(crate) async fn new_store_as(
+        &self,
+        component_id: &str,
+        identity: Option<&crate::observability::WorkloadIdentity>,
+    ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
         let (engine, active_template, linked_templates, linked_instances) = {
             let components = self.components.read().await;
             let component = components
@@ -2024,10 +2036,14 @@ impl ResolvedWorkload {
         // A host asked to measure nothing must not pay for them because some
         // other host in the process measures.
         if self.invocation.is_enabled() {
-            store.data().executed.set_identity(
-                self.component_identity(component_id).await,
-                self.invocation.clone(),
-            );
+            let identity = match identity {
+                Some(identity) => identity.clone(),
+                None => self.component_identity(component_id).await,
+            };
+            store
+                .data()
+                .executed
+                .set_identity(identity, self.invocation.clone());
         }
         Ok(store)
     }
