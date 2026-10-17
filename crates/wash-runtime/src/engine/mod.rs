@@ -56,7 +56,10 @@ use crate::engine::workload::{UnresolvedWorkload, WorkloadComponent, WorkloadSer
 use crate::types::{EmptyDirVolume, HostPathVolume, VolumeType, Workload};
 use std::env;
 use std::str::FromStr;
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
 use wasmtime_wasi::WasiView;
 
 /// Add all WASI interfaces to the linker, using upstream for non-socket interfaces
@@ -365,6 +368,24 @@ pub struct Engine {
     /// Every total the installed pool was built with, for
     /// [`Engine::pool_usage`]. `None` when pooling is off.
     pool_totals: Option<pool_usage::PoolTotals>,
+    /// The linkers every workload component starts from, built once and
+    /// shared (see [`BaseLinkers`]).
+    base_linkers: Arc<BaseLinkers>,
+}
+
+/// The WASI linker, with and without `wasi:http`, that every workload
+/// component starts from.
+///
+/// Building one is the largest part of what an idle workload costs the host:
+/// about 140 KiB for WASI and 180 KiB with `wasi:http`, most of a
+/// scale-to-zero workload. What goes into them depends on nothing about the
+/// workload, so each is built once per engine and shared; a component's
+/// [`workload::WorkloadMetadata::linker`] copies its own only when a plugin
+/// or a link writes to it.
+#[derive(Default)]
+struct BaseLinkers {
+    wasi: OnceLock<Arc<Linker<SharedCtx>>>,
+    wasi_http: OnceLock<Arc<Linker<SharedCtx>>>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -935,20 +956,7 @@ impl Engine {
             .load_live_component(component.bytes, component.digest)
             .context("failed to create component from bytes")?;
 
-        // Create a linker for this component
-        let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
-
-        // Add WASI interfaces to the linker (with custom socket implementation)
-        add_wasi_to_linker(&mut linker).context("failed to add WASI to linker")?;
-
-        // Add HTTP interfaces to the linker
-        if uses_wasi_http(&wasmtime_component) {
-            wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
-                .map_err(anyhow::Error::from)
-                .context("failed to add wasi:http/types to linker")?;
-            wasmtime_wasi_http::p3::add_to_linker(&mut linker)
-                .map_err(|e| anyhow::anyhow!(e).context("failed to add wasi:http p3 to linker"))?;
-        }
+        let linker = self.base_linker(uses_wasi_http(&wasmtime_component))?;
 
         // Build volume mounts for this component by looking up validated volumes
         let mut component_volume_mounts = Vec::new();
@@ -984,6 +992,31 @@ impl Engine {
         workload_component.metadata.guest_memory = Arc::clone(&self.guest_memory);
         workload_component.metadata.compiled = compiled;
         Ok(workload_component)
+    }
+
+    /// The shared linker a workload component starts from: WASI (with our
+    /// socket implementation), plus `wasi:http` when the component uses it.
+    /// See [`BaseLinkers`].
+    fn base_linker(&self, with_http: bool) -> anyhow::Result<Arc<Linker<SharedCtx>>> {
+        let slot = if with_http {
+            &self.base_linkers.wasi_http
+        } else {
+            &self.base_linkers.wasi
+        };
+        if let Some(linker) = slot.get() {
+            return Ok(Arc::clone(linker));
+        }
+        let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
+        add_wasi_to_linker(&mut linker).context("failed to add WASI to linker")?;
+        if with_http {
+            wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
+                .map_err(anyhow::Error::from)
+                .context("failed to add wasi:http/types to linker")?;
+            wasmtime_wasi_http::p3::add_to_linker(&mut linker)
+                .map_err(|e| anyhow::anyhow!(e).context("failed to add wasi:http p3 to linker"))?;
+        }
+        // Concurrent first starts may each build one; all but one are dropped.
+        Ok(Arc::clone(slot.get_or_init(|| Arc::new(linker))))
     }
 
     /// Compile a host component plugin and build a linker with WASI (and
@@ -1657,6 +1690,7 @@ impl EngineBuilder {
         });
         Ok(Engine {
             stream_payloads: Arc::default(),
+            base_linkers: Arc::default(),
             inner,
             cache,
             live_compiles: Arc::default(),
