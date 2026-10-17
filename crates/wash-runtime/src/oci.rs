@@ -719,6 +719,7 @@ pub(crate) async fn pull_component_bytes(
         insecure: config.insecure,
         cache_dir: config.cache_dir.clone(),
         pull_policy: pull_policy.clone(),
+        timeout: config.timeout,
     };
     let pulled = pull_coalescer()
         .run(key, || {
@@ -750,6 +751,9 @@ struct PullKey {
     insecure: bool,
     cache_dir: Option<PathBuf>,
     pull_policy: OciPullPolicy,
+    /// A caller joining a pull waits as long as that pull is allowed to take,
+    /// so callers that set different timeouts must not wait on each other.
+    timeout: Option<Duration>,
 }
 
 /// Which credentials a pull or a client uses, without holding the secret.
@@ -880,7 +884,9 @@ where
             // slow pull is still reused for the full window after it lands.
             self.cells.insert(key, cell);
         }
-        result.map_err(|err| anyhow!("{err:#}"))
+        // Shared rather than reformatted, so each caller can still walk the
+        // chain (a timeout, an auth failure) under the top message.
+        result.map_err(|err| anyhow::Error::new(crate::engine::SharedError(err)))
     }
 }
 
@@ -894,7 +900,7 @@ where
 /// client lives [`CLIENT_REUSE`], which bounds how long a rotated environment
 /// bundle takes to be trusted.
 fn pull_client(insecure: bool, auth: &RegistryAuth) -> Result<Client> {
-    static CLIENTS: OnceLock<moka::sync::Cache<(bool, AuthId), Client>> = OnceLock::new();
+    static CLIENTS: OnceLock<moka::sync::Cache<(bool, AuthId, bool), Client>> = OnceLock::new();
     CLIENTS
         .get_or_init(|| {
             moka::sync::Cache::builder()
@@ -902,18 +908,28 @@ fn pull_client(insecure: bool, auth: &RegistryAuth) -> Result<Client> {
                 .time_to_live(CLIENT_REUSE)
                 .build()
         })
-        .try_get_with((insecure, AuthId::of(auth)), || {
-            oci_client(ClientConfig {
-                protocol: if insecure {
-                    ClientProtocol::Http
-                } else {
-                    ClientProtocol::Https
-                },
-                extra_root_certificates: extra_ca_certificates(),
-                ..Default::default()
-            })
-        })
-        .map_err(|err| anyhow!("{err:#}"))
+        // Whether extra trust roots are installed is in the key: they are
+        // installed at most once, and a client built before that would
+        // otherwise keep rejecting the private registry for CLIENT_REUSE.
+        .try_get_with(
+            (
+                insecure,
+                AuthId::of(auth),
+                EXTRA_CA_CERTIFICATES.get().is_some(),
+            ),
+            || {
+                oci_client(ClientConfig {
+                    protocol: if insecure {
+                        ClientProtocol::Http
+                    } else {
+                        ClientProtocol::Https
+                    },
+                    extra_root_certificates: extra_ca_certificates(),
+                    ..Default::default()
+                })
+            },
+        )
+        .map_err(|err| anyhow::Error::new(crate::engine::SharedError(err)))
 }
 
 const CLIENT_REUSE: Duration = Duration::from_secs(300);
@@ -927,8 +943,6 @@ async fn pull_uncoalesced(
     auth: &RegistryAuth,
     pull_policy: &OciPullPolicy,
 ) -> Result<Arc<Pulled>> {
-    let client = pull_client(config.insecure, auth)?;
-
     // Initialize cache manager
     let cache_manager = config
         .cache_dir
@@ -949,7 +963,12 @@ async fn pull_uncoalesced(
                 }));
             }
 
-            let fetched_digest = client.fetch_manifest_digest(reference_parsed, auth).await?;
+            // Fetched only now: the pinned hit above needs no client, and a
+            // host restoring from its cache would otherwise build or look one
+            // up per workload for nothing.
+            let fetched_digest = pull_client(config.insecure, auth)?
+                .fetch_manifest_digest(reference_parsed, auth)
+                .await?;
 
             if digest == fetched_digest {
                 return Ok(Arc::new(Pulled {
@@ -965,6 +984,8 @@ async fn pull_uncoalesced(
     if *pull_policy == OciPullPolicy::Never {
         bail!("component not found in cache and pull policy is 'Never'");
     }
+
+    let client = pull_client(config.insecure, auth)?;
 
     // Pull the component using oci-client
     let pull_future = client.pull(
@@ -1271,6 +1292,22 @@ mod tests {
             "three results of 8 cannot all fit in 10: {}",
             coalescer.cells.weighted_size()
         );
+    }
+
+    /// Every caller sharing a failure gets its whole chain, not just the top
+    /// message: the cause underneath is usually the part worth reading.
+    #[tokio::test]
+    async fn a_shared_failure_keeps_its_chain() {
+        let coalescer: Coalescer<&str, u32> =
+            Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
+        let err = coalescer
+            .run("ref", || async {
+                Err(anyhow!("certificate not trusted").context("pulling ref"))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(format!("{err:#}"), "pulling ref: certificate not trusted");
+        assert_eq!(err.chain().count(), 2);
     }
 
     /// A failure answers the requests waiting on it rather than letting each
