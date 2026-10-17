@@ -323,7 +323,9 @@ pub struct OciConfig {
     pub credentials: Option<(String, String)>,
     /// Whether to allow insecure registries (HTTP instead of HTTPS)
     pub insecure: bool,
-    /// Cache directory override
+    /// Cache directory override. Entries are scoped to the resolved credentials;
+    /// changing credentials requires fetching the artifact again. Legacy cache
+    /// entries without this scope are not reused.
     pub cache_dir: Option<PathBuf>,
     /// Timeout for OCI operations (pull, push, etc.)
     /// If None, uses default timeout from oci-client
@@ -373,12 +375,18 @@ impl OciConfig {
 /// Cache manager for OCI artifacts
 struct CacheManager {
     cache_dir: PathBuf,
+    auth: AuthId,
 }
 
 impl CacheManager {
-    /// Create a new cache manager with the specified cache directory
-    fn new(cache_dir: PathBuf) -> Self {
-        Self { cache_dir }
+    /// Offline reuse is confined to the credentials that populated the entry.
+    /// Legacy entries without an authentication context are intentionally not
+    /// reused: their contents cannot establish who was authorized to fetch them.
+    fn new(cache_dir: PathBuf, auth: &RegistryAuth) -> Self {
+        Self {
+            cache_dir,
+            auth: AuthId::of(auth),
+        }
     }
 
     /// Expire old artifacts from the cache
@@ -417,31 +425,17 @@ impl CacheManager {
 
     /// Get the cache directory for a given OCI reference
     fn get_cache_dir(&self, reference: &str) -> PathBuf {
-        // Hash for uniqueness, but keep the reference in the path for readability
         let mut hasher = Sha256::new();
+        hasher.update(b"wash-oci-cache-v2\0");
+        hasher.update(self.auth.0);
         hasher.update(reference.as_bytes());
         let hash = format!("{:x}", hasher.finalize());
-        let short_hash = &hash[..8];
-
-        // Sanitize the reference for filesystem use
-        let sanitized = reference.replace(['/', ':', '@'], "_");
-
-        // Directory: <cache_dir>/<sanitized_reference>_<short_hash>/
-        self.cache_dir.join(format!("{sanitized}_{short_hash}"))
+        self.cache_dir.join(format!("v2-{hash}"))
     }
 
     /// Get the cache path for the component .wasm data
     fn get_component_path(&self, reference: &str) -> PathBuf {
-        let cache_dir = self.get_cache_dir(reference);
-
-        // Use the last segment as the artifact name (after last '/')
-        let artifact_name = reference
-            .rsplit('/')
-            .next()
-            .unwrap_or("artifact")
-            .replace([':', '@'], "_");
-
-        cache_dir.join(format!("{artifact_name}.wasm"))
+        self.get_cache_dir(reference).join("component.wasm")
     }
 
     /// Get the cache path for the digest file
@@ -947,16 +941,19 @@ async fn pull_uncoalesced(
     let cache_manager = config
         .cache_dir
         .as_ref()
-        .map(|dir| CacheManager::new(dir.clone()));
+        .map(|dir| CacheManager::new(dir.clone(), auth));
     if let Some(cache_manager) = &cache_manager {
         // Check cache first
         if *pull_policy != OciPullPolicy::Always && cache_manager.is_cached(reference).await {
             debug!("Found cached artifact");
             let (component_data, digest) = cache_manager.read_cached(reference).await?;
 
-            // A reference pinned by digest names the manifest the cache
-            // recorded, so there is nothing for the registry to confirm.
-            if cached_digest_is_pinned(reference_parsed, &digest) {
+            // The cache is scoped to the resolved credentials. A pinned hit
+            // identifies the same content; Never explicitly requests offline
+            // reuse and must not contact the registry even for a tag.
+            if *pull_policy == OciPullPolicy::Never
+                || cached_digest_is_pinned(reference_parsed, &digest)
+            {
                 return Ok(Arc::new(Pulled {
                     bytes: component_data.into(),
                     digest,
@@ -1198,7 +1195,7 @@ pub async fn push_component(
     };
     // Cache the pushed component with its digest
     if let Some(cache_dir) = config.cache_dir {
-        let cache_manager = CacheManager::new(cache_dir);
+        let cache_manager = CacheManager::new(cache_dir, &auth);
         cache_manager
             .write_to_cache(reference, component_data, &digest)
             .await
@@ -1241,7 +1238,8 @@ pub async fn validate_component(data: &[u8]) -> Result<()> {
 /// Cleanup cached OCI artifacts
 #[instrument(skip(cache_dir))]
 pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result<()> {
-    let cache_manager = CacheManager::new(cache_dir.as_ref().to_path_buf());
+    let cache_manager =
+        CacheManager::new(cache_dir.as_ref().to_path_buf(), &RegistryAuth::Anonymous);
     cache_manager.expire_artifacts(age).await
 }
 
@@ -1355,10 +1353,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let digest = format!("sha256:{}", "ab".repeat(32));
         let reference = format!("registry.invalid/ns/component@{digest}");
-        CacheManager::new(temp_dir.path().to_path_buf())
-            .write_to_cache(&reference, b"cached bytes", &digest)
-            .await
-            .unwrap();
+        CacheManager::new(
+            temp_dir.path().to_path_buf(),
+            &RegistryAuth::Basic("user".into(), "secret".into()),
+        )
+        .write_to_cache(&reference, b"cached bytes", &digest)
+        .await
+        .unwrap();
 
         // Explicit credentials, so no docker credential helper runs either.
         let mut config = OciConfig::new_with_credentials("user", "secret");
@@ -1634,7 +1635,8 @@ mod tests {
     #[test]
     fn test_cache_manager_path_generation() {
         let temp_dir = TempDir::new().unwrap();
-        let cache_manager = CacheManager::new(temp_dir.path().to_path_buf());
+        let cache_manager =
+            CacheManager::new(temp_dir.path().to_path_buf(), &RegistryAuth::Anonymous);
 
         let reference = "localhost:5000/test:latest";
         let component_path = cache_manager.get_component_path(reference);
@@ -1649,7 +1651,8 @@ mod tests {
     #[tokio::test]
     async fn test_cache_manager_operations() {
         let temp_dir = TempDir::new().unwrap();
-        let cache_manager = CacheManager::new(temp_dir.path().to_path_buf());
+        let cache_manager =
+            CacheManager::new(temp_dir.path().to_path_buf(), &RegistryAuth::Anonymous);
 
         let reference = "localhost:5000/test:v1.0.0";
         let test_data = b"test component data";
