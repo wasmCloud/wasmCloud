@@ -559,8 +559,22 @@ impl InstancePool {
         let Some(reclaim) = self.reclaim_policy() else {
             return;
         };
-        if self.sweeping.swap(true, Ordering::SeqCst) {
+        // Read before the swap: nearly every call finds the timer already
+        // armed, and a load leaves the cache line shared where a swap would
+        // take it exclusive on every dispatch that parks an instance. The
+        // disarm happens under the state lock the caller has since taken and
+        // released, so a load after it cannot miss it.
+        if self.sweeping.load(Ordering::Relaxed) || self.sweeping.swap(true, Ordering::SeqCst) {
             return;
+        }
+        // The peak kept rising while nothing swept, through however long the
+        // pool sat at its floor, so the first window would measure all of it
+        // and keep instances only a long-gone burst needed. Start it from the
+        // work in flight now.
+        {
+            let mut state = self.lock_state();
+            let in_flight = in_flight_total(&state.drivers);
+            state.peak_in_flight = in_flight;
         }
         // Weak, so a stopped workload's pool is not kept alive by its own
         // timer.
