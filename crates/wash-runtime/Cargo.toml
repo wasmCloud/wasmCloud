@@ -202,6 +202,10 @@ criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
 # scripts/bench/run-bench.sh installs a matching one when the lock moves.
 gungraun = "0.20.0"
 
+# The scale_density bench pins itself to its CPU limit and reads CPU time.
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { workspace = true, features = ["thread", "time"] }
+
 # Integration tests that build a host through `tests/common`'s standard
 # plugin set (in-memory blobstore + keyvalue, tracing logger, dynamic
 # config) or import one of those plugins directly. `required-features`
