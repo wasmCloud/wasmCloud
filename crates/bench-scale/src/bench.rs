@@ -223,6 +223,7 @@ pub struct Step {
 #[derive(Debug, Clone, Serialize)]
 pub struct HostInfo {
     pub binary: Option<String>,
+    #[serde(serialize_with = "crate::report::serialize_args")]
     pub args: Vec<String>,
     pub unsupported_flags: Vec<String>,
     pub id: String,
