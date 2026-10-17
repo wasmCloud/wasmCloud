@@ -201,7 +201,7 @@ pub const FIXTURE: &str = "http-handler-p3";
 /// Build the poolable P3 fixture without wash: put the WIT packages its
 /// `wkg.toml` names into `wit/deps` (what `wash build`'s fetch does), then
 /// compile a wasip1 core module and wrap it with the same reactor adapter as wash.
-pub fn build_fixture(workspace: &Path, say: &dyn Fn(&str)) -> Result<PathBuf> {
+pub async fn build_fixture(workspace: &Path, say: &dyn Fn(&str)) -> Result<PathBuf> {
     let fixtures = workspace.join("crates/wash-runtime/tests/fixtures");
     let fixture = fixtures.join(FIXTURE);
     let wkg = std::fs::read_to_string(fixture.join("wkg.toml"))
@@ -222,7 +222,8 @@ pub fn build_fixture(workspace: &Path, say: &dyn Fn(&str)) -> Result<PathBuf> {
 
     say(&format!("building the {FIXTURE} fixture"));
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
+    let mut command = Command::new(cargo);
+    command
         .args([
             "build",
             "--release",
@@ -234,8 +235,9 @@ pub fn build_fixture(workspace: &Path, say: &dyn Fn(&str)) -> Result<PathBuf> {
         .current_dir(&fixtures)
         // The fixtures are their own workspace; an inherited target dir would
         // put the component somewhere this does not look.
-        .env_remove("CARGO_TARGET_DIR")
-        .output()
+        .env_remove("CARGO_TARGET_DIR");
+    let output = crate::process::output(command, std::time::Duration::from_secs(600))
+        .await
         .context("running cargo build for the fixture")?;
     if !output.status.success() {
         bail!(
@@ -332,10 +334,10 @@ mod tests {
         assert!(validate_poolable_http(b"not a component").is_err());
     }
 
-    #[test]
+    #[tokio::test]
     #[ignore = "builds the fixture; requires the wasm32-wasip1 Rust target"]
-    fn the_default_fixture_has_a_poolable_http_export() -> Result<()> {
-        let path = build_fixture(&workspace_dir(), &|line| eprintln!("{line}"))?;
+    async fn the_default_fixture_has_a_poolable_http_export() -> Result<()> {
+        let path = build_fixture(&workspace_dir(), &|line| eprintln!("{line}")).await?;
         validate_poolable_http(&std::fs::read(path)?)
     }
 

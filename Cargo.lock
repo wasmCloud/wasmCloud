@@ -427,6 +427,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "libc",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -434,6 +435,7 @@ dependencies = [
  "sysinfo",
  "tar",
  "tokio",
+ "tokio-util",
  "wasi-preview1-component-adapter-provider",
  "wit-component 0.259.0",
 ]

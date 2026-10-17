@@ -2,7 +2,7 @@
 //! on NATS by its heartbeat.
 
 use std::collections::HashSet;
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
@@ -104,7 +104,7 @@ fn free_port() -> Result<u16> {
 
 /// Run nats-server on a free loopback port and wait until it accepts
 /// connections.
-pub fn spawn_nats(binary: &Path, run_dir: &Path) -> Result<(ChildGuard, String)> {
+pub async fn spawn_nats(binary: &Path, run_dir: &Path) -> Result<(ChildGuard, String)> {
     let port = free_port()?;
     let log = run_dir.join("nats-server.log");
     let (stdout, stderr) = log_file(&log)?;
@@ -124,25 +124,30 @@ pub fn spawn_nats(binary: &Path, run_dir: &Path) -> Result<(ChildGuard, String)>
         if let Some(status) = guard.exited() {
             bail!("nats-server exited ({status}):\n{}", log_tail(&log, 20));
         }
-        if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+        if tokio::time::timeout(
+            Duration::from_millis(200),
+            tokio::net::TcpStream::connect(addr),
+        )
+        .await
+        .is_ok_and(|r| r.is_ok())
+        {
             break;
         }
         if Instant::now() > deadline {
             bail!("nats-server did not listen on {addr} within 15s");
         }
-        std::thread::sleep(Duration::from_millis(50));
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok((guard, format!("nats://{addr}")))
 }
 
 /// The `wash host` flags a binary takes, from its `host --help`.
-pub fn wash_host_flags(binary: &Path) -> Result<HashSet<String>> {
+pub async fn wash_host_flags(binary: &Path) -> Result<HashSet<String>> {
     let mut command = Command::new(binary);
     isolated(&mut command);
-    let output = command
-        .args(["host", "--help"])
-        .stdin(Stdio::null())
-        .output()
+    command.args(["host", "--help"]).stdin(Stdio::null());
+    let output = crate::process::output(command, Duration::from_secs(15))
+        .await
         .with_context(|| format!("running {} host --help", binary.display()))?;
     if !output.status.success() {
         bail!(
