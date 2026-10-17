@@ -613,6 +613,7 @@ impl HostPlugin for NatsMessaging {
                             None => {
                                 warn!(
                                     parent: &span,
+                                    workload.id = %workload.id(),
                                     component_id = %component_id,
                                     "NATS subscriber stream closed unexpectedly; handler will stop receiving messages"
                                 );
@@ -643,6 +644,7 @@ impl HostPlugin for NatsMessaging {
                         if http_handler.is_none() && pre.is_none() {
                             warn!(
                                 parent: &span,
+                                workload.id = %workload.id(),
                                 component_id = %component_id,
                                 "host is gone and this component has no per-message \
                                  instance; ending the NATS subscriber loop"
@@ -673,10 +675,10 @@ impl HostPlugin for NatsMessaging {
                             {
                                 Ok(Ok(())) => debug!(%subject, "trigger service handled message"),
                                 Ok(Err(e)) => {
-                                    warn!(%subject, error = %e, "trigger service message handler returned error")
+                                    warn!(workload.id = %workload.id(), %subject, error = %e, "trigger service message handler returned error")
                                 }
                                 Err(e) => {
-                                    warn!(%subject, error = %e, "failed to deliver message to trigger service")
+                                    warn!(workload.id = %workload.id(), %subject, error = %e, "failed to deliver message to trigger service")
                                 }
                             }
                             continue;
@@ -684,6 +686,7 @@ impl HostPlugin for NatsMessaging {
 
                         let Some(pre) = &pre else {
                             warn!(
+                                workload.id = %workload.id(),
                                 %subject,
                                 component_id = %component_id,
                                 "no trigger service registered and no per-message instance; dropping message"
@@ -801,14 +804,14 @@ impl HostPlugin for NatsMessaging {
                             .await
                         {
                             Err(e) => {
-                                warn!("failed to create store for component {component_id}: {e}");
+                                warn!(workload.id = %workload.id(), "failed to create store for component {component_id}: {e}");
                                 continue;
                             }
                             Ok(s) => s,
                         };
                         let proxy = match pre.instantiate(&mut store).await {
                             Err(e) => {
-                                warn!("failed to instantiate component {component_id}: {e}");
+                                warn!(workload.id = %workload.id(), "failed to instantiate component {component_id}: {e}");
                                 continue;
                             }
                             Ok(p) => p,
