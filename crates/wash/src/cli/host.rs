@@ -306,13 +306,15 @@ pub struct HostCommand {
     /// Measured as the process's real footprint, which counts swapped and
     /// (on macOS) compressed pages that RSS leaves out. Past it, guest memory
     /// growth and new instances are refused until the footprint falls back
-    /// below 95% of it.
+    /// below 95% of it, or holds under the limit without growing for a
+    /// minute (memory the host itself retains does not shrink because guests
+    /// are refused).
     ///
     /// Unset, it is 90% of the cgroup limit, or of physical memory where
     /// there is no cgroup, so the host never sets out to use more memory than
     /// the machine has. That matters most where nothing else stops it: macOS
     /// does not OOM-kill an ordinary process, it swaps until the machine
-    /// stalls.
+    /// stalls. `off` (or `none`) holds the process to no limit at all.
     #[arg(long = "max-process-memory", env = "WASH_HOST_MAX_PROCESS_MEMORY")]
     pub max_process_memory: Option<String>,
 
@@ -939,17 +941,24 @@ impl CliCommand for HostCommand {
         .map_err(|e| anyhow::anyhow!(e))?;
         // Blank counts as unset, like the sibling sizes: clap's `env` fallback
         // yields `Some("")` for a variable that is set but empty.
+        // `Some(None)` is `off`. A zero stays an error rather than meaning off:
+        // it is what a mistyped or unit-less size most often reads as.
         let max_process_memory_bytes = self
             .max_process_memory
             .as_deref()
             .map(str::trim)
             .filter(|raw| !raw.is_empty())
-            .map(wash_runtime::engine::host_memory::parse_bytes)
+            .map(|raw| {
+                if raw.eq_ignore_ascii_case("off") || raw.eq_ignore_ascii_case("none") {
+                    return Ok(None);
+                }
+                wash_runtime::engine::host_memory::parse_bytes(raw).map(Some)
+            })
             .transpose()
             .map_err(|e| anyhow::anyhow!("invalid max-process-memory: {e}"))?;
         anyhow::ensure!(
-            max_process_memory_bytes != Some(0),
-            "max-process-memory must be greater than zero"
+            max_process_memory_bytes != Some(Some(0)),
+            "max-process-memory must be greater than zero; use `off` for no limit"
         );
         anyhow::ensure!(
             self.max_http_ingress_connections != Some(0),
@@ -1086,8 +1095,12 @@ impl CliCommand for HostCommand {
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         engine_builder = engine_builder.with_host_memory(host_memory);
         engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
-        if let Some(bytes) = max_process_memory_bytes {
-            engine_builder = engine_builder.with_max_process_memory_bytes(bytes);
+        match max_process_memory_bytes {
+            Some(Some(bytes)) => {
+                engine_builder = engine_builder.with_max_process_memory_bytes(bytes);
+            }
+            Some(None) => engine_builder = engine_builder.without_max_process_memory(),
+            None => {}
         }
 
         let engine = engine_builder.build()?;
