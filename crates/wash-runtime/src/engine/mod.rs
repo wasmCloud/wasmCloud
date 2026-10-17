@@ -1439,26 +1439,36 @@ impl EngineBuilder {
             .or_else(|| getenv::<bool>("WASMTIME_POOLING"))
             .unwrap_or(!has_custom_config);
 
+        // Read once: each of the derivations and checks below needs it, and
+        // where there is no cgroup it means asking the OS for physical memory.
+        let memory_limit = host_memory::detected_memory_limit();
         // Resolved before the pooling config, which both of its knobs feed.
-        let host_memory = self.host_memory.unwrap_or_default();
+        let host_memory = self
+            .host_memory
+            .unwrap_or_else(|| host_memory::HostMemoryBudgets::derived_within(memory_limit));
         // Reads the resolved budgets, not the installed pool: it advises on the
-        // knobs as configured.
+        // knobs as configured. What the pool reserves is judged below, once
+        // the pool that is actually installed is known.
         if let Some(advisory) = host_memory.advisory() {
             tracing::warn!("{advisory}");
         }
         // Only when the budget is a real ceiling: an over-large budget the host
         // merely counts against costs nothing.
         if self.guest_memory_mode == guest_memory::GuestMemoryMode::Enforce
-            && let Some(advisory) = host_memory.enforcement_advisory()
+            && let Some(advisory) = host_memory.enforcement_advisory_within(memory_limit)
         {
             tracing::warn!("{advisory}");
         }
         let max_process_memory_bytes = (!self.max_process_memory_off).then(|| {
-            self.max_process_memory_bytes
-                .unwrap_or_else(host_memory::derive_max_process_memory_bytes)
+            self.max_process_memory_bytes.unwrap_or_else(|| {
+                host_memory::derive_max_process_memory_bytes_within(memory_limit)
+            })
         });
-        if let Some(advisory) =
-            max_process_memory_bytes.and_then(host_memory::process_memory_advisory)
+        // Only for a limit the operator named: a derived one is a share of the
+        // very limit this checks against.
+        if !self.max_process_memory_off
+            && let Some(bytes) = self.max_process_memory_bytes
+            && let Some(advisory) = host_memory::process_memory_advisory_within(bytes, memory_limit)
         {
             tracing::warn!("{advisory}");
         }
@@ -1491,6 +1501,14 @@ impl EngineBuilder {
         let total_core_instances = installed_pool.map(|pool| pool.core_instances);
         let installed_heap_memory = installed_pool.map(|pool| pool.max_memory_size);
         let pool_totals = installed_pool.map(|pool| pool.totals);
+        // Against the pool that was installed, not the knobs: the environment
+        // or a caller's own pooling config can move its memory count and slot
+        // size, and with no pool there is no reservation to warn about.
+        if let Some(pool) = installed_pool {
+            for advisory in host_memory::pool_advisories(pool.memories, pool.max_memory_size) {
+                tracing::warn!("{advisory}");
+            }
+        }
 
         // Reported here so every embedder says what it built. The reservation
         // is `total_memories x slot_size`, not the instance count, and the slot
