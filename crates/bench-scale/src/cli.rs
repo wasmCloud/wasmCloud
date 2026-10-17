@@ -32,7 +32,8 @@ pub struct Args {
 
     /// The host's memory budget (e.g. 4GiB): passed to the host where it
     /// takes one, and the footprint at which the bench stops. Default: half
-    /// of physical memory.
+    /// of the smaller of physical memory and the cgroup limit, leaving room
+    /// for the benchmark, registry, and NATS processes.
     #[arg(long, env = "BENCH_SCALE_MEMORY_LIMIT")]
     pub memory_limit: Option<String>,
 
@@ -162,10 +163,12 @@ pub struct Args {
     pub nats_version: String,
 
     /// Component image to start instead of serving the built fixture.
+    /// Only scale-to-zero accepts an uninspected image; warm runs use --wasm
+    /// so the benchmark can verify its poolable P3 HTTP export.
     #[arg(long, env = "BENCH_SCALE_IMAGE")]
     pub image: Option<String>,
 
-    /// Serve this component instead of building the http-handler-p2 fixture.
+    /// Serve this P3 HTTP component instead of building the http-handler-p3 fixture.
     #[arg(long, env = "BENCH_SCALE_WASM", conflicts_with = "image")]
     pub wasm: Option<PathBuf>,
 }

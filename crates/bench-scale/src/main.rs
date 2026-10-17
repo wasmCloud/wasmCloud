@@ -8,7 +8,9 @@ mod api;
 mod bench;
 mod cli;
 mod host;
+mod lifecycle;
 mod memory;
+mod process;
 mod provision;
 mod registry;
 mod report;
@@ -33,6 +35,53 @@ use crate::report::{ImageInfo, Machine, Report};
 /// Exit status when a flavour served fewer than --min-components.
 const EXIT_TOO_FEW: u8 = 2;
 
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    #[test]
+    fn zero_samples_are_rejected_before_any_host_is_started() -> Result<()> {
+        let args = Args::try_parse_from(["bench-scale", "--sample", "0"])?;
+        let machine = Machine::detect();
+        assert!(resolve_settings(&args, &machine).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn default_budget_leaves_room_inside_the_container() -> Result<()> {
+        let mut machine = Machine::detect();
+        machine.memory_total_bytes = 64 << 30;
+        machine.memory_budget_bytes = Some(512 << 20);
+        let args = Args::try_parse_from(["bench-scale"])?;
+        assert_eq!(
+            resolve_settings(&args, &machine)?.memory_limit_bytes,
+            256 << 20
+        );
+        let explicit = Args::try_parse_from(["bench-scale", "--memory-limit", "1GiB"])?;
+        assert_eq!(
+            resolve_settings(&explicit, &machine)?.memory_limit_bytes,
+            1 << 30
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn uninspected_external_images_cannot_claim_warm_pool_capacity() -> Result<()> {
+        let machine = Machine::detect();
+        let warm = Args::try_parse_from(["bench-scale", "--image", "registry.test/http:v1"])?;
+        assert!(resolve_settings(&warm, &machine).is_err());
+        let cold = Args::try_parse_from([
+            "bench-scale",
+            "--image",
+            "registry.test/http:v1",
+            "--flavour",
+            "scale-to-zero",
+        ])?;
+        resolve_settings(&cold, &machine)?;
+        Ok(())
+    }
+}
+
 fn main() -> ExitCode {
     let args = Args::parse();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -45,12 +94,17 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // Ctrl-C drops the run, and with it every child-process guard, so no
-    // host or nats-server is left behind.
     let result = runtime.block_on(async {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let run = run(args, &cancel);
+        tokio::pin!(run);
         tokio::select! {
-            result = run(args) => result,
-            _ = tokio::signal::ctrl_c() => Err(anyhow::anyhow!("interrupted")),
+            result = &mut run => result,
+            _ = tokio::signal::ctrl_c() => {
+                cancel.cancel();
+                // The run owns cleanup. Do not drop it when attached workloads exist.
+                run.await
+            },
         }
     });
     match result {
@@ -63,6 +117,12 @@ fn main() -> ExitCode {
 }
 
 fn resolve_settings(args: &Args, machine: &Machine) -> Result<Settings> {
+    if args.image.is_some() && args.flavour != FlavourArg::ScaleToZero {
+        bail!(
+            "warm runs must verify the component's P3 HTTP export; use --wasm instead of --image, or select --flavour scale-to-zero"
+        );
+    }
+    bench_tools::density::sample_size(args.sample).map_err(anyhow::Error::msg)?;
     if args.step == 0 || args.start_concurrency == 0 || args.request_concurrency == 0 {
         bail!("--step, --start-concurrency and --request-concurrency must be at least 1");
     }
@@ -71,8 +131,12 @@ fn resolve_settings(args: &Args, machine: &Machine) -> Result<Settings> {
     }
     let memory_limit_bytes = match &args.memory_limit {
         Some(limit) => size::parse(limit).context("--memory-limit")?,
-        None if machine.memory_total_bytes > 0 => machine.memory_total_bytes / 2,
-        None => bail!("cannot read physical memory; pass --memory-limit"),
+        None => {
+            machine
+                .memory_budget_bytes
+                .context("cannot detect a memory budget; pass --memory-limit")?
+                / 2
+        }
     };
     let core_instances = args.core_instances.unwrap_or_else(|| {
         provision::derive_core_instances(
@@ -187,7 +251,7 @@ async fn prepare_target(plan: &HostPlan<'_>, flavour: Flavour) -> Result<Target>
         client,
         info: HostInfo {
             binary: plan.binary.map(|b| b.display().to_string()),
-            args: info_args,
+            args: report::redact_args(&info_args),
             unsupported_flags: unsupported,
             id: heartbeat.id.clone(),
             version: heartbeat.version.clone(),
@@ -214,8 +278,9 @@ fn delta(before: Option<RegistryCounts>, after: Option<RegistryCounts>) -> Optio
     })
 }
 
-async fn run(args: Args) -> Result<u8> {
+async fn run(args: Args, cancel: &tokio_util::sync::CancellationToken) -> Result<u8> {
     let loud = args.report;
+    use lifecycle::cancellable;
     let say = move |message: &str| {
         if loud {
             eprintln!("bench-scale: {message}");
@@ -254,15 +319,22 @@ async fn run(args: Args) -> Result<u8> {
     let (_nats_server, nats_url) = match &args.nats_url {
         Some(url) => (None, url.clone()),
         None => {
-            let binary = provision::ensure_nats(&cache, &args.nats_version, &say).await?;
-            let (guard, url) = host::spawn_nats(&binary, &run_dir)?;
+            let binary = cancellable(
+                cancel,
+                provision::ensure_nats(&cache, &args.nats_version, &say),
+            )
+            .await?;
+            let (guard, url) = cancellable(cancel, host::spawn_nats(&binary, &run_dir)).await?;
             (Some(guard), url)
         }
     };
-    let nats = async_nats::ConnectOptions::new()
-        .connect(&nats_url)
-        .await
-        .with_context(|| format!("connecting to {nats_url}"))?;
+    let nats = cancellable(cancel, async {
+        async_nats::ConnectOptions::new()
+            .connect(&nats_url)
+            .await
+            .with_context(|| format!("connecting to {}", report::redact_url(&nats_url)))
+    })
+    .await?;
 
     // The component: an image the caller names, or ours, served locally.
     let (image, registry): (ImageInfo, Option<Registry>) = match &args.image {
@@ -279,12 +351,13 @@ async fn run(args: Args) -> Result<u8> {
             let (wasm_path, source): (PathBuf, String) = match &args.wasm {
                 Some(path) => (path.clone(), format!("wasm:{}", path.display())),
                 None => (
-                    provision::build_fixture(&workspace, &say)?,
+                    cancellable(cancel, provision::build_fixture(&workspace, &say)).await?,
                     format!("fixture:{}", provision::FIXTURE),
                 ),
             };
             let wasm = std::fs::read(&wasm_path)
                 .with_context(|| format!("reading {}", wasm_path.display()))?;
+            provision::validate_poolable_http(&wasm)?;
             let size_bytes = wasm.len() as u64;
             let image = Arc::new(Image::new("bench/http-handler", wasm)?);
             let registry = Registry::serve(Arc::clone(&image)).await?;
@@ -309,11 +382,11 @@ async fn run(args: Args) -> Result<u8> {
                 .wash_version
                 .clone()
                 .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
-            Some(provision::ensure_wash(&cache, &version, &say).await?)
+            Some(cancellable(cancel, provision::ensure_wash(&cache, &version, &say)).await?)
         }
     };
     let flags = match (&binary, args.host_cli) {
-        (Some(binary), HostCli::Wash) => host::wash_host_flags(binary)?,
+        (Some(binary), HostCli::Wash) => cancellable(cancel, host::wash_host_flags(binary)).await?,
         _ => Default::default(),
     };
 
@@ -356,12 +429,13 @@ async fn run(args: Args) -> Result<u8> {
         image: &image.reference,
         run_id: &run_id,
         on_step: &print_step,
+        cancel,
     };
 
     let mut reports = Vec::new();
     for flavour in flavours {
         // A fresh host per flavour, so neither inherits the other's footprint.
-        let target = prepare_target(&plan, flavour).await?;
+        let target = lifecycle::cancellable(cancel, prepare_target(&plan, flavour)).await?;
         if args.report {
             report::print_flavour_header(flavour, &target.info, target.sampler.source().describe());
         }
@@ -396,7 +470,7 @@ async fn run(args: Args) -> Result<u8> {
             machine,
             settings,
             image,
-            nats_url,
+            nats_url: report::redact_url(&nats_url),
             run_dir: run_dir.display().to_string(),
             flavours: reports,
             exit_code,

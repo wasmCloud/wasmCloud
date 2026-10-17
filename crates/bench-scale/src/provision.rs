@@ -23,10 +23,18 @@ pub fn workspace_dir() -> PathBuf {
 
 /// The target triple wash releases are named by, as install.sh picks it.
 pub fn wash_target() -> Result<&'static str> {
-    Ok(match (std::env::consts::ARCH, std::env::consts::OS) {
-        ("x86_64", "linux") if cfg!(target_env = "musl") => "x86_64-unknown-linux-musl",
+    wash_target_for(
+        std::env::consts::ARCH,
+        std::env::consts::OS,
+        cfg!(target_env = "musl"),
+    )
+}
+
+fn wash_target_for(arch: &str, os: &str, musl: bool) -> Result<&'static str> {
+    Ok(match (arch, os) {
+        ("x86_64", "linux") if musl => "x86_64-unknown-linux-musl",
         ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
-        ("aarch64", "linux") if cfg!(target_env = "musl") => "aarch64-unknown-linux-musl",
+        ("aarch64", "linux") if musl => "aarch64-unknown-linux-musl",
         ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
         ("x86_64", "macos") => "x86_64-apple-darwin",
         ("aarch64", "macos") => "aarch64-apple-darwin",
@@ -188,12 +196,12 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-pub const FIXTURE: &str = "http-handler-p2";
+pub const FIXTURE: &str = "http-handler-p3";
 
-/// Build the `http-handler-p2` fixture without wash: put the WIT packages its
+/// Build the poolable P3 fixture without wash: put the WIT packages its
 /// `wkg.toml` names into `wit/deps` (what `wash build`'s fetch does), then
-/// compile it straight to a wasip2 component with cargo.
-pub fn build_fixture(workspace: &Path, say: &dyn Fn(&str)) -> Result<PathBuf> {
+/// compile a wasip1 core module and wrap it with the same reactor adapter as wash.
+pub async fn build_fixture(workspace: &Path, say: &dyn Fn(&str)) -> Result<PathBuf> {
     let fixtures = workspace.join("crates/wash-runtime/tests/fixtures");
     let fixture = fixtures.join(FIXTURE);
     let wkg = std::fs::read_to_string(fixture.join("wkg.toml"))
@@ -214,20 +222,22 @@ pub fn build_fixture(workspace: &Path, say: &dyn Fn(&str)) -> Result<PathBuf> {
 
     say(&format!("building the {FIXTURE} fixture"));
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
+    let mut command = Command::new(cargo);
+    command
         .args([
             "build",
             "--release",
             "--target",
-            "wasm32-wasip2",
+            "wasm32-wasip1",
             "-p",
             FIXTURE,
         ])
         .current_dir(&fixtures)
         // The fixtures are their own workspace; an inherited target dir would
         // put the component somewhere this does not look.
-        .env_remove("CARGO_TARGET_DIR")
-        .output()
+        .env_remove("CARGO_TARGET_DIR");
+    let output = crate::process::output(command, std::time::Duration::from_secs(600))
+        .await
         .context("running cargo build for the fixture")?;
     if !output.status.success() {
         bail!(
@@ -235,11 +245,45 @@ pub fn build_fixture(workspace: &Path, say: &dyn Fn(&str)) -> Result<PathBuf> {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let wasm = fixtures.join("target/wasm32-wasip2/release/http_handler_p2.wasm");
+    let wasm = fixtures.join("target/wasm32-wasip1/release/http_handler_p3.wasm");
     if !wasm.exists() {
         bail!("cargo built {FIXTURE} but {} is missing", wasm.display());
     }
-    Ok(wasm)
+    let component = wit_component::ComponentEncoder::default()
+        .validate(true)
+        .module(&std::fs::read(&wasm)?)?
+        .adapter(
+            "wasi_snapshot_preview1",
+            wasi_preview1_component_adapter_provider::WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
+        )?
+        .encode()
+        .context("wrapping the P3 fixture as a component")?;
+    validate_poolable_http(&component)?;
+    let path = wasm.with_extension("component.wasm");
+    std::fs::write(&path, component)?;
+    Ok(path)
+}
+
+/// The experiment needs a reusable P3 HTTP handler, not a single-use P2 store.
+pub fn validate_poolable_http(bytes: &[u8]) -> Result<()> {
+    let wit_component::DecodedWasm::Component(resolve, world) = wit_component::decode(bytes)?
+    else {
+        bail!("the benchmark requires a P3 HTTP component");
+    };
+    let world = resolve
+        .worlds
+        .get(world)
+        .context("component world is missing")?;
+    if world
+        .exports
+        .keys()
+        .any(|key| resolve.name_world_key(key) == "wasi:http/handler@0.3.0")
+    {
+        return Ok(());
+    }
+    bail!(
+        "the benchmark requires a poolable wasi:http/handler@0.3.0 export; P2 HTTP instances cannot stay warm"
+    )
 }
 
 /// Pool slots sized the way a large host sizes them: half the usable
@@ -285,6 +329,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_component_without_a_p3_handler_is_rejected() {
+        assert!(validate_poolable_http(b"\0asm\x0d\0\x01\0").is_err());
+        assert!(validate_poolable_http(b"not a component").is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "builds the fixture; requires the wasm32-wasip1 Rust target"]
+    async fn the_default_fixture_has_a_poolable_http_export() -> Result<()> {
+        let path = build_fixture(&workspace_dir(), &|line| eprintln!("{line}")).await?;
+        validate_poolable_http(&std::fs::read(path)?)
+    }
+
+    #[test]
     fn release_urls() {
         assert_eq!(
             wash_url("2.10.3", "x86_64-unknown-linux-gnu"),
@@ -294,7 +351,29 @@ mod tests {
             nats_url("2.12.8", "linux-amd64"),
             "https://github.com/nats-io/nats-server/releases/download/v2.12.8/nats-server-v2.12.8-linux-amd64.tar.gz"
         );
-        assert!(wash_target().is_ok());
+    }
+
+    #[test]
+    fn release_targets_do_not_depend_on_the_test_platform() -> Result<()> {
+        for (arch, os, musl, expected) in [
+            ("x86_64", "linux", false, "x86_64-unknown-linux-gnu"),
+            ("x86_64", "linux", true, "x86_64-unknown-linux-musl"),
+            ("aarch64", "linux", false, "aarch64-unknown-linux-gnu"),
+            ("aarch64", "linux", true, "aarch64-unknown-linux-musl"),
+            ("x86_64", "macos", false, "x86_64-apple-darwin"),
+            ("aarch64", "macos", false, "aarch64-apple-darwin"),
+        ] {
+            assert_eq!(wash_target_for(arch, os, musl)?, expected);
+        }
+        for (arch, os) in [
+            ("x86_64", "windows"),
+            ("aarch64", "windows"),
+            ("s390x", "linux"),
+        ] {
+            let error = wash_target_for(arch, os, false).expect_err("no download is supported");
+            assert!(error.to_string().contains("--host-bin"));
+        }
+        Ok(())
     }
 
     #[test]

@@ -9,6 +9,7 @@ use crate::size::{render, render_opt};
 pub struct Machine {
     pub cores: usize,
     pub memory_total_bytes: u64,
+    pub memory_budget_bytes: Option<u64>,
     pub os: String,
     pub kernel: String,
     pub arch: String,
@@ -23,6 +24,7 @@ impl Machine {
         Self {
             cores: std::thread::available_parallelism().map_or(1, |n| n.get()),
             memory_total_bytes: system.total_memory(),
+            memory_budget_bytes: bench_tools::memory::memory_budget(system.total_memory()),
             os: System::long_os_version().unwrap_or_else(|| std::env::consts::OS.to_string()),
             kernel: System::kernel_version().unwrap_or_default(),
             arch: std::env::consts::ARCH.to_string(),
@@ -33,7 +35,7 @@ impl Machine {
 #[derive(Debug, Clone, Serialize)]
 pub struct ImageInfo {
     pub reference: String,
-    /// `fixture:http-handler-p2`, `wasm:<path>` or `external`.
+    /// `fixture:http-handler-p3`, `wasm:<path>` or `external`.
     pub source: String,
     pub size_bytes: Option<u64>,
     pub layer_digest: Option<String>,
@@ -47,10 +49,89 @@ pub struct Report {
     pub machine: Machine,
     pub settings: Settings,
     pub image: ImageInfo,
+    #[serde(serialize_with = "serialize_url")]
     pub nats_url: String,
     pub run_dir: String,
     pub flavours: Vec<FlavourReport>,
     pub exit_code: u8,
+}
+
+/// Reports retain endpoints, never URL credentials, query tokens or fragments.
+/// Unparseable values are omitted rather than risking a partial credential leak.
+pub fn redact_url(value: &str) -> String {
+    let normalized = if value.contains("://") {
+        value.to_string()
+    } else {
+        format!("nats://{value}")
+    };
+    let Ok(mut url) = reqwest::Url::parse(&normalized) else {
+        return "[redacted address]".to_string();
+    };
+    if !url.username().is_empty() || url.password().is_some() {
+        if url.set_username("redacted").is_err() || url.set_password(None).is_err() {
+            return "[redacted address]".to_string();
+        }
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string()
+}
+
+/// Preserve known measurement settings. Unknown arguments may carry arbitrary
+/// credentials, so their values and positional arguments are omitted.
+pub fn redact_args(args: &[String]) -> Vec<String> {
+    let mut output = Vec::new();
+    let mut args = args.iter().peekable();
+    while let Some(arg) = args.next() {
+        if arg == "host" {
+            output.push(arg.clone());
+            continue;
+        }
+        let (flag, inline) = arg
+            .split_once('=')
+            .map_or((arg.as_str(), None), |(k, v)| (k, Some(v)));
+        let safe = matches!(
+            flag,
+            "--name"
+                | "--http-address"
+                | "--max-process-memory"
+                | "--max-guest-memory"
+                | "--core-instances"
+                | "--default-heap-memory"
+                | "--guest-memory-mode"
+                | "--log-level"
+                | "--log-format"
+        );
+        let url = matches!(flag, "--scheduler-nats-url" | "--data-nats-url");
+        let value = inline.or_else(|| {
+            args.peek().filter(|next| !next.starts_with('-'))?;
+            args.next().map(String::as_str)
+        });
+        if safe || url {
+            output.push(flag.to_string());
+            if let Some(value) = value {
+                output.push(if url {
+                    redact_url(value)
+                } else {
+                    value.to_string()
+                });
+            }
+        } else {
+            output.push("[redacted argument]".to_string());
+        }
+    }
+    output
+}
+
+pub fn serialize_url<S: serde::Serializer>(value: &str, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&redact_url(value))
+}
+
+pub fn serialize_args<S: serde::Serializer>(
+    args: &[String],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    redact_args(args).serialize(serializer)
 }
 
 fn ms(value: Option<f64>) -> String {
@@ -96,7 +177,7 @@ pub fn print_header(
             .size_bytes
             .map_or_else(String::new, |s| format!(", {}", render(s)))
     );
-    println!("nats:     {nats_url}");
+    println!("nats:     {}", redact_url(nats_url));
     println!("run dir:  {run_dir}");
     println!("cpu:      not limited; the host uses whatever the machine gives it");
 }
@@ -116,7 +197,7 @@ pub fn print_flavour_header(flavour: Flavour, report_host: &crate::bench::HostIn
         report_host.http,
     );
     if !report_host.args.is_empty() {
-        println!("args:     {}", report_host.args.join(" "));
+        println!("args:     {}", redact_args(&report_host.args).join(" "));
     }
     if !report_host.unsupported_flags.is_empty() {
         println!(
@@ -269,5 +350,64 @@ pub fn print_comparison(reports: &[FlavourReport]) {
     });
     for report in reports {
         println!("{}: stopped by {}", report.flavour.name(), report.stop);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_and_json_reports_omit_credentials_and_unknown_arguments() -> anyhow::Result<()> {
+        use clap::Parser as _;
+        let machine = Machine::detect();
+        let settings = crate::resolve_settings(
+            &crate::cli::Args::try_parse_from(["bench-scale"])?,
+            &machine,
+        )?;
+        let report = Report {
+            tool: "bench-scale", tool_version: "test", started_unix_secs: 0,
+            machine, settings,
+            image: ImageInfo { reference: "example/component:v1".into(), source: "external".into(), size_bytes: None, layer_digest: None },
+            run_dir: String::new(), flavours: Vec::new(), exit_code: 0,
+            nats_url: "nats://SENTINEL_USER:SENTINEL_PASSWORD@localhost:4222?token=SENTINEL_QUERY#SENTINEL_FRAGMENT".into(),
+        };
+        let host = crate::bench::HostInfo {
+            binary: None,
+            unsupported_flags: Vec::new(),
+            id: String::new(),
+            version: String::new(),
+            hostname: String::new(),
+            http: String::new(),
+            pid: None,
+            log: None,
+            args: [
+                "host",
+                "--scheduler-nats-url",
+                "nats://SENTINEL_TOKEN@localhost:4222",
+                "--max-process-memory=2GiB",
+                "--password",
+                "SENTINEL_ARG",
+                "--custom-secret=SENTINEL_CUSTOM",
+                "SENTINEL_POSITIONAL",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        };
+        let text = format!(
+            "{} {}",
+            redact_url(&report.nats_url),
+            redact_args(&host.args).join(" ")
+        );
+        let json = serde_json::to_string(&(report, host))?;
+        for rendered in [text, json] {
+            assert!(!rendered.contains("SENTINEL"), "{rendered}");
+            assert!(rendered.contains("localhost:4222"));
+            assert!(rendered.contains("2GiB"));
+        }
+        assert_eq!(redact_url("nats://bad SENTINEL@"), "[redacted address]");
+        assert_eq!(redact_url("localhost:4222"), "nats://localhost:4222");
+        Ok(())
     }
 }

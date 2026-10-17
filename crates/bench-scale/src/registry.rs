@@ -91,7 +91,7 @@ impl Image {
         let config = serde_json::to_vec(&WasmConfig {
             created: "1970-01-01T00:00:00Z",
             architecture: "wasm",
-            os: "wasip2",
+            os: "wasip3",
             layer_digests: [&layer_digest],
         })?;
         let config_digest = sha256_digest(&config);

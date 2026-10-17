@@ -3,7 +3,7 @@
 `scale_density` ramps HTTP workloads onto one host until something refuses
 them, and prints, beside what it served, the count each constraint predicts.
 How to run it and every knob are in the module docs of `scale_density.rs`.
-`∞` means that constraint never limits this flavour.
+`?` means there is not enough measurement evidence to estimate a constraint. CPU idle capacity is reported explicitly as unbounded; CPU throughput remains unknown until measured.
 
 ## What a workload costs
 
@@ -40,10 +40,10 @@ footprint there.
 | Limit | Formula | Binds for |
 | --- | --- | --- |
 | max-process-memory | `n + (limit - F) / marginal`, where `marginal = (F - F_first) / (n - n_first)` over the clean steps | both |
-| max-guest-memory | `max_guest_memory / (guest charged / n)` | warm (∞ for scale-to-zero) |
+| max-guest-memory | `max_guest_memory / (guest charged / n)` | warm (? when no retained charge is measurable) |
 | pool core instances | `core instance total / (core instances in use / n)` | warm |
 | pool memories | `memory total / (memories in use / n)` | warm |
-| cpu | ∞: an idle workload uses no CPU | neither |
+| cpu | unbounded idle capacity: an idle workload uses no CPU | neither |
 
 - **Why marginal, not average:** the first workload pays once for everyone,
   for the compile and the shared linkers. An average over a few thousand
@@ -52,7 +52,7 @@ footprint there.
   one step of it, and the stop line says which limit stopped it.
 - **CPU** caps rates, not counts:
   - `cpu max starts/s = cores / (CPU spent starting / workloads started)`
-  - `cpu max req/s = cores / (CPU spent serving the sample / requests)`
+  - `cpu max req/s = cores / (CPU spent serving the sample / successful requests)`
 
   Both are summed over the clean steps. On Linux the load generator's own
   CPU is left out.
@@ -66,9 +66,12 @@ footprint there.
 max-process-memory is enforced by sampling the footprint every second, and
 again on demand: at most every 50 ms, whenever a workload starts or a guest
 grows. Once the footprint is over the limit, guest growth, new instances and
-new workloads are all refused. So the overshoot is roughly growth rate × 50
-ms. At ~10,000 scale-to-zero starts a second that is under 1% of a 512 MiB
-limit.
+new workloads are refused. This is sampled admission control, not a hard
+allocation cap. Work already admitted, large individual allocations, guest
+writes into committed memory, and host/plugin buffers can cross the threshold
+between readings. Queued starts recheck after acquiring their permit and before
+pulling or compiling. Reserve headroom; use OS/container limits for a hard bound.
+
 
 If the footprint passes 125% of the limit without the guard tripping, the
 run stops and reports that the guard did not hold.

@@ -65,8 +65,8 @@ A flavour stops at the first of:
 | `starts-failed` | most of a step's starts failed for another reason |
 | `cap` | `--max-components`, or the theoretical limit × `--overshoot`, was reached |
 
-"Served" is the most workloads at a step where most sampled
-(and, for warm, warm-up) requests succeeded.
+"Served" is the largest workload count with a nonempty, error-free sample
+and no failed warm-up requests. Zero samples are rejected.
 
 ## Provisioning
 
@@ -82,13 +82,16 @@ so a second run downloads and builds nothing.
   wash 2.x is not on crates.io, and its binstall metadata points at stale tags.
 - **NATS**: `--nats-url`, or a `nats-server` (`--nats-version`, default 2.12.8)
   downloaded from its GitHub release and run on a free loopback port.
-- **Component**: `--image <oci ref>` for an image the host can already pull,
-  `--wasm <path>` for a component to serve,
-  or by default the `http-handler-p2` test fixture
-  (`crates/wash-runtime/tests/fixtures/http-handler-p2`, exporting `wasi:http/incoming-handler@0.2.2`).
+- **Component**: `--image <oci ref> --flavour scale-to-zero` for an image the host can already pull,
+  `--wasm <path>` for a P3 HTTP component to inspect and serve,
+  or by default the `http-handler-p3` test fixture
+  (`crates/wash-runtime/tests/fixtures/http-handler-p3`, exporting `wasi:http/handler@0.3.0`).
   The fixture is built without wash:
   the WIT packages its `wkg.toml` names are copied into its `wit/deps`,
-  then `cargo build --target wasm32-wasip2 --release` builds the component directly.
+  then `cargo build --target wasm32-wasip1 --release` builds the core module,
+  which is wrapped with the WASI reactor adapter. Install the `wasm32-wasip1` Rust target first.
+  Warm runs require a verified P3 HTTP export; an external OCI reference cannot
+  establish that, so use `--wasm` for a custom warm experiment.
   The component is served from a read-only OCI registry inside the bench,
   tagged by its content hash: `127.0.0.1:<port>/bench/http-handler:<hash>`.
   The registry answers exactly what the host's OCI client (oci-client 0.17) asks in a pull:
@@ -125,7 +128,7 @@ cargo xtask bench-scale --host-nats-only --nats-url nats://127.0.0.1:4222 \
   --host-pid 12345 --report
 
 # Any image the host can pull
-cargo xtask bench-scale --image registry.example.com/team/http-handler:1.0.0 --report
+cargo xtask bench-scale --image registry.example.com/team/http-handler:1.0.0 --flavour scale-to-zero --report
 ```
 
 Raw placeholders are `{nats_url}`, `{memory_limit}` and `{guest_memory}` (bytes),
@@ -143,7 +146,7 @@ except the repeatable `--host-arg`.
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--flavour` | `both` | `warm`, `scale-to-zero` or `both` (each on a fresh host) |
-| `--memory-limit` | half of physical RAM | host memory budget and the footprint the bench stops at (`4GiB`, `512MiB`, `1G`) |
+| `--memory-limit` | half of the smaller of physical RAM and the cgroup limit | host memory budget and the footprint the bench stops at (`4GiB`, `512MiB`, `1G`) |
 | `--max-components` | theoretical × overshoot | stop after this many workloads |
 | `--overshoot` | `1.1` | how far past the theoretical limit the default cap goes |
 | `--step` | `250` | workloads started between measurements |
@@ -214,14 +217,22 @@ so runs against different host binaries can be compared.
 - The memory limit is enforced by design, not by the kernel:
   the footprint is checked every 100 ms and after every step,
   and a step stops starting workloads once the limit is reached,
-  so overshoot is bounded by what in-flight starts add.
+  but in-flight work, large allocations, and guest writes can still overshoot.
+  Leave headroom and use OS/container limits where a hard bound is needed.
 - Footprint is `VmRSS + VmSwap` from `/proc/<pid>/status` on Linux,
-  and sysinfo's resident size elsewhere (which misses compressed and swapped pages).
+  `phys_footprint` on macOS (including compressed pages), and sysinfo's resident
+  size elsewhere (which misses compressed and swapped pages).
   The report says which.
 - Attached to a running host (`--host-nats-only`), memory is unknown without `--host-pid`,
   and the run then needs `--max-components` to bound it.
-  Workloads it started are stopped again at the end of each flavour.
+  Every submitted workload ID is journaled, including unanswered starts. Normal
+  completion, errors, and Ctrl-C all run a cleanup phase with a 60-second budget.
+  Stops are retried and removal is checked. Unconfirmed IDs are printed as an
+  error and the next flavour is not started. An unanswered start that remains
+  absent is still reported as uncertain because it could be queued at the host.
 - The released wash is what runs by default.
   To bench a local build, pass `--host-bin target/release/wash`.
 - Scale-to-zero spin-down is read from the footprint,
   so an allocator that keeps freed memory shows no spin-down (`-`).
+
+Latency percentiles describe successful responses only. Request rates count successful responses; failures are reported separately. Capacity requires a positive sample with no request or warm-up failures.
