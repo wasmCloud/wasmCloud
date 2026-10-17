@@ -145,8 +145,10 @@ pub struct WorkloadMetadata {
     workload_namespace: Arc<str>,
     /// The actual wasmtime [`Component`] that can be instantiated
     component: Component,
-    /// The wasmtime [`Linker`] used to instantiate the component
-    linker: Linker<SharedCtx>,
+    /// The wasmtime [`Linker`] used to instantiate the component. Shared with
+    /// every component that started from the same base until something
+    /// writes to it (see [`Self::linker`]).
+    linker: Arc<Linker<SharedCtx>>,
     /// The volume mounts requested by this component
     pub(crate) volume_mounts: Vec<(PathBuf, VolumeMount)>,
     /// Pinned directory handles with guest mount names and permissions.
@@ -261,12 +263,16 @@ impl WorkloadMetadata {
 
     /// Returns a mutable reference to the component's linker.
     ///
+    /// Copies the linker first if it is still the engine's shared one, so ask
+    /// for it only to write to it: a component nothing writes to never pays
+    /// for a linker of its own.
+    ///
     /// Forgets the linked component [`WorkloadComponent::pre_instantiate_ref`]
     /// keeps, since a caller holding the linker mutably may change what it
     /// links.
     pub fn linker(&mut self) -> &mut Linker<SharedCtx> {
         self.pre = std::sync::OnceLock::new();
-        &mut self.linker
+        Arc::make_mut(&mut self.linker)
     }
 
     /// Returns a reference to the wasmtime [`Component`].
@@ -432,7 +438,7 @@ impl WorkloadService {
         workload_name: impl Into<Arc<str>>,
         workload_namespace: impl Into<Arc<str>>,
         component: Component,
-        linker: Linker<SharedCtx>,
+        linker: impl Into<Arc<Linker<SharedCtx>>>,
         volume_mounts: Vec<(PathBuf, VolumeMount)>,
         local_resources: LocalResources,
         max_restarts: u64,
@@ -445,7 +451,7 @@ impl WorkloadService {
                 workload_name: workload_name.into(),
                 workload_namespace: workload_namespace.into(),
                 component,
-                linker,
+                linker: linker.into(),
                 volume_mounts,
                 resolved_volume_mounts: Vec::new(),
                 local_resources,
@@ -553,7 +559,7 @@ impl WorkloadComponent {
         workload_namespace: impl Into<Arc<str>>,
         component_name: impl Into<Arc<str>>,
         component: Component,
-        linker: Linker<SharedCtx>,
+        linker: impl Into<Arc<Linker<SharedCtx>>>,
         volume_mounts: Vec<(PathBuf, VolumeMount)>,
         local_resources: LocalResources,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
@@ -566,7 +572,7 @@ impl WorkloadComponent {
                 workload_name: workload_name.into(),
                 workload_namespace: workload_namespace.into(),
                 component,
-                linker,
+                linker: linker.into(),
                 volume_mounts,
                 resolved_volume_mounts: Vec::new(),
                 local_resources,
@@ -1471,12 +1477,10 @@ impl ResolvedWorkload {
 
             let component = workload_component.metadata.component.clone();
             let plugin_bound_instances = workload_component.metadata.plugin_bound_instances.clone();
-            let linker = workload_component.metadata.linker();
-
             let res = match self
                 .resolve_component_imports(
                     &component,
-                    linker,
+                    &mut workload_component.metadata,
                     exports,
                     &plugin_bound_instances,
                     Some(component_id.as_ref()),
@@ -1507,12 +1511,10 @@ impl ResolvedWorkload {
             let service = Arc::make_mut(&mut shared);
             let component = service.metadata.component.clone();
             let plugin_bound_instances = service.metadata.plugin_bound_instances.clone();
-            let linker = service.metadata.linker();
-
             let res = match self
                 .resolve_component_imports(
                     &component,
-                    linker,
+                    &mut service.metadata,
                     exports,
                     &plugin_bound_instances,
                     None,
@@ -1539,7 +1541,9 @@ impl ResolvedWorkload {
     async fn resolve_component_imports(
         &self,
         component: &wasmtime::component::Component,
-        linker: &mut Linker<SharedCtx>,
+        // Its linker is taken mutably only to link an import another component
+        // exports: taking it copies the engine's shared one.
+        metadata: &mut WorkloadMetadata,
         exports: &ExportMaps,
         plugin_bound_instances: &HashSet<String>,
         // The importer's own id. A component resolving an import to ITSELF is a
@@ -1677,7 +1681,7 @@ impl ResolvedWorkload {
                         e.context("failed to pre-instantiate during component linking")
                     })?;
 
-                    let mut linker_instance = match linker.instance(import_name) {
+                    let mut linker_instance = match metadata.linker().instance(import_name) {
                         Ok(i) => i,
                         Err(e) => {
                             trace!(name = import_name, error = %e, "error finding instance in linker, skipping");
@@ -4703,6 +4707,33 @@ mod tests {
 
         let _ = component.metadata.linker();
         assert!(component.metadata.pre.get().is_none());
+    }
+
+    /// Components share the linker they start from until one is written to;
+    /// the write lands on a copy of that one component's own.
+    #[test]
+    fn a_shared_linker_is_copied_only_when_written() {
+        let mut a = component_from_wat("a", "(component)");
+        let shared = Arc::clone(&a.metadata.linker);
+        let mut b = a.clone();
+        assert!(Arc::ptr_eq(&a.metadata.linker, &b.metadata.linker));
+
+        b.metadata
+            .linker()
+            .instance("test:cow/iface")
+            .unwrap()
+            .func_wrap("f", |_, (): ()| Ok(()))
+            .unwrap();
+        assert!(!Arc::ptr_eq(&a.metadata.linker, &b.metadata.linker));
+        assert!(
+            Arc::ptr_eq(&a.metadata.linker, &shared),
+            "the component not written to keeps the shared linker"
+        );
+        let _ = a.metadata.linker();
+        assert!(
+            !Arc::ptr_eq(&a.metadata.linker, &shared),
+            "taking it mutably while shared copies it"
+        );
     }
 
     fn marker_importer(id: &str) -> WorkloadComponent {
