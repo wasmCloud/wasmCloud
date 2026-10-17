@@ -35,53 +35,6 @@ use crate::report::{ImageInfo, Machine, Report};
 /// Exit status when a flavour served fewer than --min-components.
 const EXIT_TOO_FEW: u8 = 2;
 
-#[cfg(test)]
-mod settings_tests {
-    use super::*;
-
-    #[test]
-    fn zero_samples_are_rejected_before_any_host_is_started() -> Result<()> {
-        let args = Args::try_parse_from(["bench-scale", "--sample", "0"])?;
-        let machine = Machine::detect();
-        assert!(resolve_settings(&args, &machine).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn default_budget_leaves_room_inside_the_container() -> Result<()> {
-        let mut machine = Machine::detect();
-        machine.memory_total_bytes = 64 << 30;
-        machine.memory_budget_bytes = Some(512 << 20);
-        let args = Args::try_parse_from(["bench-scale"])?;
-        assert_eq!(
-            resolve_settings(&args, &machine)?.memory_limit_bytes,
-            256 << 20
-        );
-        let explicit = Args::try_parse_from(["bench-scale", "--memory-limit", "1GiB"])?;
-        assert_eq!(
-            resolve_settings(&explicit, &machine)?.memory_limit_bytes,
-            1 << 30
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn uninspected_external_images_cannot_claim_warm_pool_capacity() -> Result<()> {
-        let machine = Machine::detect();
-        let warm = Args::try_parse_from(["bench-scale", "--image", "registry.test/http:v1"])?;
-        assert!(resolve_settings(&warm, &machine).is_err());
-        let cold = Args::try_parse_from([
-            "bench-scale",
-            "--image",
-            "registry.test/http:v1",
-            "--flavour",
-            "scale-to-zero",
-        ])?;
-        resolve_settings(&cold, &machine)?;
-        Ok(())
-    }
-}
-
 fn main() -> ExitCode {
     let args = Args::parse();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -482,4 +435,51 @@ async fn run(args: Args, cancel: &tokio_util::sync::CancellationToken) -> Result
             .with_context(|| format!("writing {}", path.display()))?;
     }
     Ok(exit_code)
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    #[test]
+    fn zero_samples_are_rejected_before_any_host_is_started() -> Result<()> {
+        let args = Args::try_parse_from(["bench-scale", "--sample", "0"])?;
+        let machine = Machine::detect();
+        assert!(resolve_settings(&args, &machine).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn default_budget_leaves_room_inside_the_container() -> Result<()> {
+        let mut machine = Machine::detect();
+        machine.memory_total_bytes = 64 << 30;
+        machine.memory_budget_bytes = Some(512 << 20);
+        let args = Args::try_parse_from(["bench-scale"])?;
+        assert_eq!(
+            resolve_settings(&args, &machine)?.memory_limit_bytes,
+            256 << 20
+        );
+        let explicit = Args::try_parse_from(["bench-scale", "--memory-limit", "1GiB"])?;
+        assert_eq!(
+            resolve_settings(&explicit, &machine)?.memory_limit_bytes,
+            1 << 30
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn uninspected_external_images_cannot_claim_warm_pool_capacity() -> Result<()> {
+        let machine = Machine::detect();
+        let warm = Args::try_parse_from(["bench-scale", "--image", "registry.test/http:v1"])?;
+        assert!(resolve_settings(&warm, &machine).is_err());
+        let cold = Args::try_parse_from([
+            "bench-scale",
+            "--image",
+            "registry.test/http:v1",
+            "--flavour",
+            "scale-to-zero",
+        ])?;
+        resolve_settings(&cold, &machine)?;
+        Ok(())
+    }
 }
