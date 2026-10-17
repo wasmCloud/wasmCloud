@@ -29,9 +29,28 @@
 //!
 //! [`GuestMemoryBudget`]: crate::engine::guest_memory::GuestMemoryBudget
 //! [`GuestMemoryBudget::with_process_guard`]: crate::engine::guest_memory::GuestMemoryBudget::with_process_guard
+//!
+//! # When refusals stop
+//!
+//! Refusals start past the limit and stop once the footprint falls back under
+//! [`RECOVER_PERCENT`] of it, so a host at the line does not flap. They also
+//! stop when refusing is plainly not helping: memory the host itself retains
+//! (the allocator, compiled code, warm instance pools) does not shrink because
+//! guests are refused, and could otherwise hold the footprint in that band,
+//! refusing every instantiation, for the rest of the process's life. So once
+//! the footprint has stayed within the limit without growing for
+//! [`OVER_RECHECK_SAMPLES`] samples, refusals stop and the host says so
+//! loudly; they start again the moment it crosses the limit. Past the limit
+//! itself refusals continue however flat the footprint is, with a loud
+//! reminder each time the same period passes, because letting guests grow
+//! there is what an OOM kill follows.
+//!
+//! A footprint that stops being readable cannot hold refusals in place either:
+//! after [`MAX_FAILED_READS`] failed samples in a row the guard goes back to
+//! normal and says the limit is not being enforced until a reading returns.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -45,20 +64,39 @@ pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 /// Share of the limit at which the host warns that it is getting close.
 const HIGH_PERCENT: u64 = 80;
 
+/// Share of the limit the footprint must fall back under before a host that
+/// was close is back to normal, so one hovering at [`HIGH_PERCENT`] does not
+/// log a pair of lines on every sample.
+const NORMAL_PERCENT: u64 = 75;
+
 /// Share of the limit the footprint must fall back under before refusals stop,
 /// so a host hovering at the limit does not flap on every sample.
 const RECOVER_PERCENT: u64 = 95;
+
+/// Samples an over-limit host may go without growing before the guard
+/// reconsiders refusing (see the module docs): a minute at [`SAMPLE_INTERVAL`].
+const OVER_RECHECK_SAMPLES: u32 = 60;
+
+/// Share of the limit the footprint must grow by to count as growing while
+/// over, so allocator noise does not keep the recheck from ever running.
+const OVER_GROWTH_PERCENT: u64 = 1;
+
+/// Failed footprint reads in a row after which the guard stops acting on its
+/// last reading.
+const MAX_FAILED_READS: u32 = 5;
 
 /// Where the footprint stands against the limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ProcessMemoryState {
-    /// Under [`HIGH_PERCENT`] of the limit.
+    /// Under [`HIGH_PERCENT`] of the limit, or back under [`NORMAL_PERCENT`]
+    /// after being above it.
     Normal = 0,
     /// Close to the limit. Nothing is refused yet.
     High = 1,
     /// Past the limit. Guest memory growth and new instances are refused
-    /// until the footprint falls back under [`RECOVER_PERCENT`] of it.
+    /// until the footprint falls back under [`RECOVER_PERCENT`] of it, or
+    /// stops growing for a while (see the module docs).
     Over = 2,
 }
 
@@ -83,7 +121,54 @@ impl ProcessMemoryState {
 /// This process's memory footprint, in bytes, counting pages the kernel has
 /// swapped or compressed. `None` where it cannot be read.
 pub fn process_footprint() -> Option<u64> {
-    read_footprint()
+    FootprintReader::new().read()
+}
+
+/// Reads the footprint over and over without paying to set up each reading.
+///
+/// On Linux it keeps `/proc/self/status` open and re-reads it from the start
+/// into one buffer: no open, and so no `EMFILE` on a host at its descriptor
+/// limit, and no allocation per sample.
+struct FootprintReader {
+    #[cfg(target_os = "linux")]
+    status: Option<std::fs::File>,
+    #[cfg(target_os = "linux")]
+    buf: String,
+}
+
+impl FootprintReader {
+    fn new() -> Self {
+        Self {
+            #[cfg(target_os = "linux")]
+            status: None,
+            #[cfg(target_os = "linux")]
+            buf: String::with_capacity(2048),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn read(&mut self) -> Option<u64> {
+        use std::io::{Read as _, Seek as _};
+
+        let status = match &mut self.status {
+            Some(status) => status,
+            None => self
+                .status
+                .insert(std::fs::File::open("/proc/self/status").ok()?),
+        };
+        self.buf.clear();
+        if status.rewind().is_err() || status.read_to_string(&mut self.buf).is_err() {
+            // Reopened next time rather than trusted again.
+            self.status = None;
+            return None;
+        }
+        linux_footprint(&self.buf)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn read(&mut self) -> Option<u64> {
+        read_footprint()
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -101,12 +186,6 @@ fn read_footprint() -> Option<u64> {
     // SAFETY: a zero return means the kernel filled the buffer, and it was
     // zeroed before that, so every field is initialised either way.
     Some(unsafe { info.assume_init() }.ri_phys_footprint)
-}
-
-#[cfg(target_os = "linux")]
-fn read_footprint() -> Option<u64> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    linux_footprint(&status)
 }
 
 /// `VmRSS + VmSwap` out of `/proc/self/status`, in bytes.
@@ -146,6 +225,21 @@ pub struct ProcessMemoryGuard {
     footprint: AtomicU64,
     high_water: AtomicU64,
     state: AtomicU8,
+    /// Set while the footprint cannot be read, so losing and regaining it are
+    /// each said once.
+    blind: AtomicBool,
+    /// How long the footprint has been over without growing. Only the
+    /// sampler writes it, once a second; nothing on a guest's path reads it.
+    over: Mutex<OverEpisode>,
+}
+
+/// One stretch of [`ProcessMemoryState::Over`], measured for growth.
+#[derive(Debug, Default)]
+struct OverEpisode {
+    /// The footprint the current flat stretch is measured from.
+    baseline: u64,
+    /// Samples since the footprint last grew past `baseline`.
+    flat_samples: u32,
 }
 
 impl ProcessMemoryGuard {
@@ -155,6 +249,8 @@ impl ProcessMemoryGuard {
             footprint: AtomicU64::new(0),
             high_water: AtomicU64::new(0),
             state: AtomicU8::new(ProcessMemoryState::Normal as u8),
+            blind: AtomicBool::new(false),
+            over: Mutex::new(OverEpisode::default()),
         }
     }
 
@@ -183,23 +279,110 @@ impl ProcessMemoryGuard {
         self.state() == ProcessMemoryState::Over
     }
 
+    /// Divided before multiplied so a `u64::MAX` limit cannot overflow.
+    fn share(&self, percent: u64) -> u64 {
+        self.limit / 100 * percent
+    }
+
     /// Record one footprint reading and move between states, logging each
     /// move once rather than on every sample.
     pub fn observe(&self, footprint_bytes: u64) {
         self.footprint.store(footprint_bytes, Ordering::Relaxed);
         self.high_water
             .fetch_max(footprint_bytes, Ordering::Relaxed);
+        if self.blind.swap(false, Ordering::Relaxed) {
+            tracing::info!(
+                footprint = %render_bytes(footprint_bytes),
+                "this process's memory footprint is readable again; max-process-memory is \
+                 enforced again"
+            );
+        }
 
         let previous = self.state();
-        let next = self.next_state(previous, footprint_bytes);
+        let mut next = self.next_state(previous, footprint_bytes);
+        if next == ProcessMemoryState::Over && self.over_without_growing(footprint_bytes) {
+            if footprint_bytes <= self.limit {
+                tracing::warn!(
+                    footprint = %render_bytes(footprint_bytes),
+                    max_process_memory = %render_bytes(self.limit),
+                    "this process has stayed close to max-process-memory without growing for \
+                     {OVER_RECHECK_SAMPLES} samples. Refusing guests is not bringing it down, \
+                     so whatever holds it is not a guest; guest memory growth is allowed again \
+                     and will be refused if the footprint crosses the limit. Give this host \
+                     fewer workloads, or raise max-process-memory if the machine can back it"
+                );
+                next = ProcessMemoryState::High;
+            } else {
+                tracing::error!(
+                    footprint = %render_bytes(footprint_bytes),
+                    max_process_memory = %render_bytes(self.limit),
+                    "this process is still past max-process-memory and has not shrunk in \
+                     {OVER_RECHECK_SAMPLES} samples. Guest memory growth and new instances \
+                     stay refused; whatever holds the memory is not a guest"
+                );
+            }
+        }
+        self.transition(previous, next, footprint_bytes);
+    }
+
+    /// Note that a sample could not be read. After [`MAX_FAILED_READS`] in a
+    /// row the guard stops acting on its last reading, which would otherwise
+    /// hold whatever state it left behind for as long as reads keep failing.
+    fn lose_reading(&self) {
+        if self.blind.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        tracing::warn!(
+            "cannot read this process's memory footprint ({MAX_FAILED_READS} samples in a row); \
+             max-process-memory is not being enforced until it can be read again"
+        );
+        let previous = self.state();
+        self.transition(previous, ProcessMemoryState::Normal, self.footprint_bytes());
+    }
+
+    /// Whether this sample ends [`OVER_RECHECK_SAMPLES`] of being over without
+    /// growing. Restarts the count when it does, so the reconsideration comes
+    /// round once per period rather than on every sample after the first.
+    fn over_without_growing(&self, footprint: u64) -> bool {
+        let mut over = self
+            .over
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if footprint
+            > over
+                .baseline
+                .saturating_add(self.share(OVER_GROWTH_PERCENT))
+        {
+            *over = OverEpisode {
+                baseline: footprint,
+                flat_samples: 0,
+            };
+            return false;
+        }
+        over.flat_samples = over.flat_samples.saturating_add(1);
+        if over.flat_samples < OVER_RECHECK_SAMPLES {
+            return false;
+        }
+        over.flat_samples = 0;
+        true
+    }
+
+    fn transition(&self, previous: ProcessMemoryState, next: ProcessMemoryState, footprint: u64) {
+        if next != ProcessMemoryState::Over {
+            // The next episode measures its growth from where it starts.
+            *self
+                .over
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = OverEpisode::default();
+        }
         if next == previous {
             return;
         }
         self.state.store(next as u8, Ordering::Relaxed);
-        let footprint = render_bytes(footprint_bytes);
+        let footprint = render_bytes(footprint);
         let limit = render_bytes(self.limit);
-        match next {
-            ProcessMemoryState::Over => tracing::error!(
+        match (previous, next) {
+            (_, ProcessMemoryState::Over) => tracing::error!(
                 %footprint,
                 max_process_memory = %limit,
                 "this process has outgrown max-process-memory. Guest memory growth and new \
@@ -207,35 +390,39 @@ impl ProcessMemoryGuard {
                  Whatever is holding the rest is not a guest: give this host fewer workloads, \
                  or raise max-process-memory if the machine can back it"
             ),
-            ProcessMemoryState::High if previous == ProcessMemoryState::Normal => tracing::warn!(
+            (ProcessMemoryState::Over, _) => tracing::warn!(
+                %footprint,
+                max_process_memory = %limit,
+                state = next.as_str(),
+                "this process is no longer refusing for max-process-memory; guest memory \
+                 growth is allowed again"
+            ),
+            (_, ProcessMemoryState::High) => tracing::warn!(
                 %footprint,
                 max_process_memory = %limit,
                 "this process is past {HIGH_PERCENT}% of max-process-memory"
             ),
-            ProcessMemoryState::High => tracing::warn!(
+            (_, ProcessMemoryState::Normal) => tracing::info!(
                 %footprint,
                 max_process_memory = %limit,
-                "this process is back under max-process-memory; guest memory growth is \
-                 allowed again"
-            ),
-            ProcessMemoryState::Normal => tracing::info!(
-                %footprint,
-                max_process_memory = %limit,
-                "this process is back under {HIGH_PERCENT}% of max-process-memory"
+                "this process is back under {NORMAL_PERCENT}% of max-process-memory"
             ),
         }
     }
 
     fn next_state(&self, previous: ProcessMemoryState, footprint: u64) -> ProcessMemoryState {
-        // Divided before multiplied so a `u64::MAX` limit cannot overflow.
-        let share = |percent: u64| self.limit / 100 * percent;
         if footprint > self.limit {
             return ProcessMemoryState::Over;
         }
-        if previous == ProcessMemoryState::Over && footprint >= share(RECOVER_PERCENT) {
+        if previous == ProcessMemoryState::Over && footprint >= self.share(RECOVER_PERCENT) {
             return ProcessMemoryState::Over;
         }
-        if footprint >= share(HIGH_PERCENT) {
+        if footprint >= self.share(HIGH_PERCENT) {
+            return ProcessMemoryState::High;
+        }
+        // Between the two marks a host stays where it was, so one hovering at
+        // the high mark does not flip on every sample.
+        if previous != ProcessMemoryState::Normal && footprint >= self.share(NORMAL_PERCENT) {
             return ProcessMemoryState::High;
         }
         ProcessMemoryState::Normal
@@ -267,7 +454,8 @@ impl ProcessMemoryGuard {
     /// guard ends its thread at the next tick. Takes one reading before
     /// returning, so the guard is never acting on a zero.
     pub fn spawn_sampler(self: &Arc<Self>) -> anyhow::Result<()> {
-        let Some(first) = process_footprint() else {
+        let mut reader = FootprintReader::new();
+        let Some(first) = reader.read() else {
             tracing::warn!(
                 "cannot read this process's memory footprint on this platform; \
                  max-process-memory will not be enforced"
@@ -279,13 +467,23 @@ impl ProcessMemoryGuard {
         std::thread::Builder::new()
             .name("wash-process-memory".to_string())
             .spawn(move || {
+                let mut failed_reads = 0_u32;
                 loop {
                     std::thread::sleep(SAMPLE_INTERVAL);
                     let Some(guard) = weak.upgrade() else {
                         return;
                     };
-                    if let Some(footprint) = process_footprint() {
-                        guard.observe(footprint);
+                    match reader.read() {
+                        Some(footprint) => {
+                            failed_reads = 0;
+                            guard.observe(footprint);
+                        }
+                        None => {
+                            failed_reads = failed_reads.saturating_add(1);
+                            if failed_reads >= MAX_FAILED_READS {
+                                guard.lose_reading();
+                            }
+                        }
                     }
                 }
             })
@@ -381,5 +579,74 @@ mod tests {
         let guard = ProcessMemoryGuard::new(u64::MAX);
         guard.observe(u64::MAX - 1);
         assert_ne!(guard.state(), ProcessMemoryState::Over);
+    }
+
+    #[test]
+    fn the_reader_can_be_read_again_and_again() {
+        let mut reader = FootprintReader::new();
+        for _ in 0..3 {
+            assert!(reader.read().is_some_and(|footprint| footprint > MIB));
+        }
+    }
+
+    #[test]
+    fn leaving_high_needs_to_fall_under_the_lower_mark() {
+        let guard = ProcessMemoryGuard::new(1000 * MIB);
+        guard.observe(810 * MIB);
+        assert_eq!(guard.state(), ProcessMemoryState::High);
+        guard.observe(790 * MIB);
+        assert_eq!(
+            guard.state(),
+            ProcessMemoryState::High,
+            "between the marks a high host stays high"
+        );
+        guard.observe(740 * MIB);
+        assert_eq!(guard.state(), ProcessMemoryState::Normal);
+        guard.observe(790 * MIB);
+        assert_eq!(
+            guard.state(),
+            ProcessMemoryState::Normal,
+            "between the marks a normal host stays normal"
+        );
+    }
+
+    /// Memory the host holds, not its guests, can sit in the recovery band
+    /// forever; refusing guests for ever after would not bring it down.
+    #[test]
+    fn a_flat_footprint_under_the_limit_stops_being_refused() {
+        let guard = ProcessMemoryGuard::new(1000 * MIB);
+        guard.observe(1001 * MIB);
+        assert!(guard.is_over());
+        for _ in 1..OVER_RECHECK_SAMPLES {
+            guard.observe(980 * MIB);
+            assert!(guard.is_over());
+        }
+        guard.observe(980 * MIB);
+        assert_eq!(guard.state(), ProcessMemoryState::High);
+        guard.observe(985 * MIB);
+        assert_eq!(guard.state(), ProcessMemoryState::High);
+        guard.observe(1001 * MIB);
+        assert!(guard.is_over(), "crossing the limit refuses again");
+    }
+
+    #[test]
+    fn a_footprint_past_the_limit_stays_refused_however_flat() {
+        let guard = ProcessMemoryGuard::new(1000 * MIB);
+        guard.observe(1001 * MIB);
+        for _ in 0..OVER_RECHECK_SAMPLES * 2 {
+            guard.observe(1002 * MIB);
+        }
+        assert!(guard.is_over());
+    }
+
+    #[test]
+    fn an_unreadable_footprint_stops_refusing() {
+        let guard = ProcessMemoryGuard::new(1000 * MIB);
+        guard.observe(1001 * MIB);
+        assert!(guard.is_over());
+        guard.lose_reading();
+        assert_eq!(guard.state(), ProcessMemoryState::Normal);
+        guard.observe(1001 * MIB);
+        assert!(guard.is_over(), "a reading that returns is acted on again");
     }
 }
