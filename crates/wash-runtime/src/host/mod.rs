@@ -1405,6 +1405,13 @@ impl WorkloadReservation for Host {
             debug!(workload_id, reason = message, "refused to start workload");
             return Err(message);
         }
+        // After the duplicate check, so a replayed start still reads as the
+        // workload already running rather than as a refusal. The guard logs
+        // its own refusals, rate-limited: a host past its limit can be asked
+        // for thousands of starts a second.
+        if let Some(guard) = self.engine.process_memory() {
+            guard.admit_start()?;
+        }
         workloads.insert(workload_id.to_string(), HostWorkload::Starting(reservation));
         Ok(reservation)
     }
