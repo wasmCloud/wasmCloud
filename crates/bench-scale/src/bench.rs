@@ -223,6 +223,7 @@ pub struct Step {
 #[derive(Debug, Clone, Serialize)]
 pub struct HostInfo {
     pub binary: Option<String>,
+    #[serde(serialize_with = "crate::report::serialize_args")]
     pub args: Vec<String>,
     pub unsupported_flags: Vec<String>,
     pub id: String,
@@ -328,6 +329,7 @@ struct Starter<'a> {
     timeout: Duration,
     retries: u32,
     halt: &'a AtomicBool,
+    journal: &'a crate::lifecycle::Journal,
 }
 
 fn host_header(flavour: Flavour, index: usize) -> String {
@@ -358,22 +360,28 @@ impl Starter<'_> {
             self.flavour.pool_size(),
             &host_header(self.flavour, index),
         );
+        self.journal.submitted(&id);
         let began = Instant::now();
         let mut attempt = 0;
         outcome.result = loop {
             let resolved = match self.client.start(&request, self.timeout).await {
-                Ok(status) => match status.workload_state {
-                    WorkloadState::Running => Some(Started::Running),
-                    // A retried start can be refused as a duplicate of the
-                    // first, which did start after all.
-                    WorkloadState::Error if attempt > 0 => match self.settle(&id).await {
-                        Some(Started::Running) => Some(Started::Running),
-                        _ => Some(Started::Refused(status.message)),
-                    },
-                    WorkloadState::Error => Some(Started::Refused(status.message)),
-                    WorkloadState::Starting | WorkloadState::Unspecified => self.settle(&id).await,
-                    other => Some(Started::Failed(format!("{other:?}: {}", status.message))),
-                },
+                Ok(status) => {
+                    self.journal.acknowledged(&id);
+                    match status.workload_state {
+                        WorkloadState::Running => Some(Started::Running),
+                        // A retried start can be refused as a duplicate of the
+                        // first, which did start after all.
+                        WorkloadState::Error if attempt > 0 => match self.settle(&id).await {
+                            Some(Started::Running) => Some(Started::Running),
+                            _ => Some(Started::Refused(status.message)),
+                        },
+                        WorkloadState::Error => Some(Started::Refused(status.message)),
+                        WorkloadState::Starting | WorkloadState::Unspecified => {
+                            self.settle(&id).await
+                        }
+                        other => Some(Started::Failed(format!("{other:?}: {}", status.message))),
+                    }
+                }
                 Err(RpcError::Timeout) => {
                     outcome.timeouts += 1;
                     self.settle(&id).await
@@ -566,12 +574,31 @@ pub struct Run<'a> {
     pub image: &'a str,
     pub run_id: &'a str,
     pub on_step: &'a dyn Fn(&Step, bool),
+    pub cancel: &'a tokio_util::sync::CancellationToken,
 }
 
 pub async fn run_flavour(
     run: &Run<'_>,
     flavour: Flavour,
     target: &Target,
+) -> Result<FlavourReport> {
+    let journal = crate::lifecycle::Journal::default();
+    crate::lifecycle::with_cleanup(
+        run.cancel,
+        &target.client,
+        &journal,
+        !target.owned,
+        run.settings.start_concurrency,
+        measure_flavour(run, flavour, target, &journal),
+    )
+    .await
+}
+
+async fn measure_flavour(
+    run: &Run<'_>,
+    flavour: Flavour,
+    target: &Target,
+    journal: &crate::lifecycle::Journal,
 ) -> Result<FlavourReport> {
     let settings = run.settings;
     let http = reqwest::Client::builder()
@@ -592,7 +619,7 @@ pub async fn run_flavour(
     let exit_watch = target.guard.as_ref().map(|guard| {
         let guard = Arc::clone(guard);
         let halt = Arc::clone(&halt);
-        tokio::spawn(async move {
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 if guard.lock().ok().and_then(|mut g| g.exited()).is_some() {
@@ -600,7 +627,7 @@ pub async fn run_flavour(
                     return;
                 }
             }
-        })
+        }))
     });
 
     let starter = Starter {
@@ -611,6 +638,7 @@ pub async fn run_flavour(
         timeout: Duration::from_secs(settings.start_timeout_secs),
         retries: settings.start_retries,
         halt: &halt,
+        journal,
     };
     let mut pool_total = target.core_instances.map(u64::from);
     let mut per_workload = settings.core_instances_per_workload.map(u64::from);
@@ -750,7 +778,7 @@ pub async fn run_flavour(
             heartbeat_components: heartbeat.as_ref().map(|h| h.component_count),
             requests_ok: answers.ok,
             requests_failed: answers.failed,
-            requests_per_sec: (answers.ok + answers.failed) as f64 / sample_secs.max(f64::EPSILON),
+            requests_per_sec: answers.ok as f64 / sample_secs.max(f64::EPSILON),
             request_p50_ms: percentile(&answers.latencies, 0.50),
             request_p99_ms: percentile(&answers.latencies, 0.99),
             sample_growth_bytes: sample_growth,
@@ -820,20 +848,11 @@ pub async fn run_flavour(
     }
     drop(watch);
 
-    if !target.owned {
-        stop_all(
-            &target.client,
-            run.run_id,
-            flavour,
-            &running,
-            settings.start_concurrency,
-        )
-        .await;
-    }
-
     let served = steps
         .iter()
-        .filter(|s| s.requests_ok >= s.requests_failed && s.warmup_ok >= s.warmup_failed)
+        .filter(|s| {
+            bench_tools::density::served_sample(s.requests_ok, s.requests_failed, s.warmup_failed)
+        })
         .map(|s| s.workloads)
         .max()
         .unwrap_or(0);
@@ -866,29 +885,6 @@ pub async fn run_flavour(
         summary,
         registry_requests: None,
     })
-}
-
-/// Stop what this run started on a host it does not own, so the next
-/// flavour (or the host's owner) starts clean.
-async fn stop_all(
-    client: &HostClient,
-    run_id: &str,
-    flavour: Flavour,
-    running: &[usize],
-    concurrency: usize,
-) {
-    stream::iter(running.iter().copied())
-        .map(|index| async move {
-            let _ = client
-                .stop(
-                    &workload_id(run_id, flavour, index),
-                    Duration::from_secs(30),
-                )
-                .await;
-        })
-        .buffer_unordered(concurrency.max(1))
-        .collect::<Vec<()>>()
-        .await;
 }
 
 #[cfg(test)]
