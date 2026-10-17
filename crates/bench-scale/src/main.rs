@@ -201,7 +201,7 @@ async fn prepare_target(plan: &HostPlan<'_>, flavour: Flavour) -> Result<Target>
         client,
         info: HostInfo {
             binary: plan.binary.map(|b| b.display().to_string()),
-            args: info_args,
+            args: report::redact_args(&info_args),
             unsupported_flags: unsupported,
             id: heartbeat.id.clone(),
             version: heartbeat.version.clone(),
@@ -276,7 +276,7 @@ async fn run(args: Args) -> Result<u8> {
     let nats = async_nats::ConnectOptions::new()
         .connect(&nats_url)
         .await
-        .with_context(|| format!("connecting to {nats_url}"))?;
+        .with_context(|| format!("connecting to {}", report::redact_url(&nats_url)))?;
 
     // The component: an image the caller names, or ours, served locally.
     let (image, registry): (ImageInfo, Option<Registry>) = match &args.image {
@@ -410,7 +410,7 @@ async fn run(args: Args) -> Result<u8> {
             machine,
             settings,
             image,
-            nats_url,
+            nats_url: report::redact_url(&nats_url),
             run_dir: run_dir.display().to_string(),
             flavours: reports,
             exit_code,
