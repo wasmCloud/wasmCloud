@@ -217,14 +217,22 @@ so runs against different host binaries can be compared.
 - The memory limit is enforced by design, not by the kernel:
   the footprint is checked every 100 ms and after every step,
   and a step stops starting workloads once the limit is reached,
-  so overshoot is bounded by what in-flight starts add.
+  but in-flight work, large allocations, and guest writes can still overshoot.
+  Leave headroom and use OS/container limits where a hard bound is needed.
 - Footprint is `VmRSS + VmSwap` from `/proc/<pid>/status` on Linux,
-  and sysinfo's resident size elsewhere (which misses compressed and swapped pages).
+  `phys_footprint` on macOS (including compressed pages), and sysinfo's resident
+  size elsewhere (which misses compressed and swapped pages).
   The report says which.
 - Attached to a running host (`--host-nats-only`), memory is unknown without `--host-pid`,
   and the run then needs `--max-components` to bound it.
-  Workloads it started are stopped again at the end of each flavour.
+  Every submitted workload ID is journaled, including unanswered starts. Normal
+  completion, errors, and Ctrl-C all run a cleanup phase with a 60-second budget.
+  Stops are retried and removal is checked. Unconfirmed IDs are printed as an
+  error and the next flavour is not started. An unanswered start that remains
+  absent is still reported as uncertain because it could be queued at the host.
 - The released wash is what runs by default.
   To bench a local build, pass `--host-bin target/release/wash`.
 - Scale-to-zero spin-down is read from the footprint,
   so an allocator that keeps freed memory shows no spin-down (`-`).
+
+Latency percentiles describe successful responses only. Request rates count successful responses; failures are reported separately. Capacity requires a positive sample with no request or warm-up failures.
