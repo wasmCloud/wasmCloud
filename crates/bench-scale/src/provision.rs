@@ -23,10 +23,18 @@ pub fn workspace_dir() -> PathBuf {
 
 /// The target triple wash releases are named by, as install.sh picks it.
 pub fn wash_target() -> Result<&'static str> {
-    Ok(match (std::env::consts::ARCH, std::env::consts::OS) {
-        ("x86_64", "linux") if cfg!(target_env = "musl") => "x86_64-unknown-linux-musl",
+    wash_target_for(
+        std::env::consts::ARCH,
+        std::env::consts::OS,
+        cfg!(target_env = "musl"),
+    )
+}
+
+fn wash_target_for(arch: &str, os: &str, musl: bool) -> Result<&'static str> {
+    Ok(match (arch, os) {
+        ("x86_64", "linux") if musl => "x86_64-unknown-linux-musl",
         ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
-        ("aarch64", "linux") if cfg!(target_env = "musl") => "aarch64-unknown-linux-musl",
+        ("aarch64", "linux") if musl => "aarch64-unknown-linux-musl",
         ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
         ("x86_64", "macos") => "x86_64-apple-darwin",
         ("aarch64", "macos") => "aarch64-apple-darwin",
@@ -294,7 +302,29 @@ mod tests {
             nats_url("2.12.8", "linux-amd64"),
             "https://github.com/nats-io/nats-server/releases/download/v2.12.8/nats-server-v2.12.8-linux-amd64.tar.gz"
         );
-        assert!(wash_target().is_ok());
+    }
+
+    #[test]
+    fn release_targets_do_not_depend_on_the_test_platform() -> Result<()> {
+        for (arch, os, musl, expected) in [
+            ("x86_64", "linux", false, "x86_64-unknown-linux-gnu"),
+            ("x86_64", "linux", true, "x86_64-unknown-linux-musl"),
+            ("aarch64", "linux", false, "aarch64-unknown-linux-gnu"),
+            ("aarch64", "linux", true, "aarch64-unknown-linux-musl"),
+            ("x86_64", "macos", false, "x86_64-apple-darwin"),
+            ("aarch64", "macos", false, "aarch64-apple-darwin"),
+        ] {
+            assert_eq!(wash_target_for(arch, os, musl)?, expected);
+        }
+        for (arch, os) in [
+            ("x86_64", "windows"),
+            ("aarch64", "windows"),
+            ("s390x", "linux"),
+        ] {
+            let error = wash_target_for(arch, os, false).expect_err("no download is supported");
+            assert!(error.to_string().contains("--host-bin"));
+        }
+        Ok(())
     }
 
     #[test]
