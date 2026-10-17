@@ -38,6 +38,7 @@
 //! | Variable | Meaning | Default |
 //! | --- | --- | --- |
 //! | `WASH_SCALE_MEMORY_LIMIT` | the host's max-process-memory, e.g. `4GiB` | half of physical memory, at most 2 GiB |
+//! | `WASH_SCALE_GUEST_MEMORY` | max-guest-memory, the budget for guest linear memory as declared, resident or not | physical memory |
 //! | `WASH_SCALE_MAX_COMPONENTS` | stop after this many workloads | none |
 //! | `WASH_SCALE_MAX_SECS` | stop a flavour after this long | `600` |
 //! | `WASH_SCALE_STEP` | workloads started between measurements | `250` |
@@ -45,10 +46,17 @@
 //! | `WASH_SCALE_SAMPLE` | requests per step, spread across the set | `200` |
 //! | `WASH_SCALE_CORE_INSTANCES` | pool slots | sized from address space and `vm.max_map_count` |
 //! | `WASH_SCALE_FIXTURE` | `p3` or `p2` HTTP handler | `p3` |
+//! | `WASH_SCALE_CPUS` | cores the host may use; a list (`1,2,4`) runs each flavour at each | all |
 //! | `WASH_SCALE_REPORT_JSON` | also write every flavour's results as JSON here | unset |
 //!
-//! CPU cannot be limited from inside the process; a run uses what the machine
-//! gives it, and the report says how many cores that was.
+//! A CPU limit pins the child to that many of the cores it may use, on Linux,
+//! before it starts any thread the host uses, so tokio's workers, wasmtime's
+//! compile pool and the memory sampler all inherit it; the host's runtime gets
+//! that many workers too. Elsewhere there is no affinity to set, and only the
+//! worker count is limited. The load generator runs on a runtime of its own,
+//! built before the pin, so its requests still come from outside the limit.
+//! CPU used is reported per step, without the load generator's on Linux and
+//! with it elsewhere.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -68,16 +76,17 @@ use wash_runtime::engine::host_memory::{
 };
 use wash_runtime::engine::pool_usage::{PoolUsage, pool_refusals};
 use wash_runtime::engine::process_memory::process_footprint;
-use wash_runtime::host::http::{DevRouter, Ingress};
+use wash_runtime::host::http::{DynamicRouter, Ingress};
 use wash_runtime::host::{HostApi, HostBuilder};
 use wash_runtime::types::{
     Component, LocalResources, Workload, WorkloadStartRequest, WorkloadState,
 };
 use wash_runtime::wit::WitInterface;
 
-/// Set on a child process: the flavour it runs, and where it writes its
-/// [`Report`].
+/// Set on a child process: the flavour it runs, its CPU limit, and where it
+/// writes its [`Report`].
 const CHILD_FLAVOUR: &str = "WASH_SCALE_CHILD_FLAVOUR";
+const CHILD_CPUS: &str = "WASH_SCALE_CHILD_CPUS";
 const CHILD_REPORT: &str = "WASH_SCALE_CHILD_REPORT";
 
 /// How far past the memory limit the footprint may go, with the guard still
@@ -86,15 +95,7 @@ const GUARD_SLACK_PERCENT: u64 = 125;
 
 fn main() -> Result<()> {
     if let Ok(flavour) = std::env::var(CHILD_FLAVOUR) {
-        let flavour = Flavour::parse(&flavour)?;
-        let path = std::env::var(CHILD_REPORT).context(CHILD_REPORT)?;
-        let report = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()?
-            .block_on(run(flavour, Settings::from_env()?))?;
-        std::fs::write(&path, serde_json::to_vec(&report)?)
-            .with_context(|| format!("writing {path}"))?;
-        return Ok(());
+        return child_main(Flavour::parse(&flavour)?);
     }
 
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -120,9 +121,11 @@ fn main() -> Result<()> {
     let settings = Settings::from_env()?;
 
     let mut reports = Vec::new();
-    for flavour in flavours {
-        eprintln!("\n== {} ==", flavour.name());
-        reports.push(run_child(flavour)?);
+    for &cpus in &settings.cpus {
+        for &flavour in &flavours {
+            eprintln!("\n== {} ==", label(flavour.name(), cpus));
+            reports.push(run_child(flavour, cpus)?);
+        }
     }
     print_comparison(&settings, &reports);
     if let Some(path) = &settings.report_json {
@@ -133,18 +136,231 @@ fn main() -> Result<()> {
 }
 
 /// Run one flavour in a fresh copy of this binary and read back its report.
-fn run_child(flavour: Flavour) -> Result<Report> {
+fn run_child(flavour: Flavour, cpus: Option<usize>) -> Result<Report> {
+    let name = label(flavour.name(), cpus);
     let report = tempfile::NamedTempFile::new()?;
-    let status = std::process::Command::new(std::env::current_exe()?)
+    let mut child = std::process::Command::new(std::env::current_exe()?);
+    child
         .env(CHILD_FLAVOUR, flavour.name())
-        .env(CHILD_REPORT, report.path())
+        .env(CHILD_REPORT, report.path());
+    if let Some(cpus) = cpus {
+        child.env(CHILD_CPUS, cpus.to_string());
+    }
+    let status = child
         .status()
-        .with_context(|| format!("running the {} child", flavour.name()))?;
+        .with_context(|| format!("running the {name} child"))?;
     if !status.success() {
-        bail!("the {} run failed: {status}", flavour.name());
+        bail!("the {name} run failed: {status}");
     }
     let bytes = std::fs::read(report.path())?;
-    serde_json::from_slice(&bytes).with_context(|| format!("reading the {} report", flavour.name()))
+    serde_json::from_slice(&bytes).with_context(|| format!("reading the {name} report"))
+}
+
+/// A flavour, and its CPU limit when it has one: `warm`, `warm@2cpu`.
+fn label(flavour: &str, cpus: Option<usize>) -> String {
+    match cpus {
+        Some(n) => format!("{flavour}@{n}cpu"),
+        None => flavour.to_string(),
+    }
+}
+
+fn child_main(flavour: Flavour) -> Result<()> {
+    // The host's own logs, only when asked for: at the default level a ramp
+    // to the limit is thousands of lines.
+    if std::env::var_os("RUST_LOG").is_some() {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_writer(std::io::stderr)
+            .init();
+    }
+    let path = std::env::var(CHILD_REPORT).context(CHILD_REPORT)?;
+    let cpu_limit = std::env::var(CHILD_CPUS)
+        .ok()
+        .map(|v| {
+            v.parse::<usize>()
+                .with_context(|| format!("{CHILD_CPUS}={v}"))
+        })
+        .transpose()?;
+
+    // Built before the pin, so its threads keep every core and the requests
+    // they send are not charged to the host.
+    let load = Arc::new(LoadThreads::default());
+    let load_runtime = {
+        let load = Arc::clone(&load);
+        tokio::runtime::Builder::new_multi_thread()
+            .thread_name("scale-load")
+            .on_thread_start(move || load.register_current())
+            .enable_all()
+            .build()?
+    };
+    // Every worker has started once `build` returns; wait for them to say so.
+    load.wait_for(load_runtime.metrics().num_workers());
+
+    let pinned = cpu_limit.map(pin_to_cpus).transpose()?.unwrap_or(false);
+    let mut host_runtime = tokio::runtime::Builder::new_multi_thread();
+    if let Some(cpus) = cpu_limit {
+        host_runtime.worker_threads(cpus);
+    }
+    let cpu = CpuLimit {
+        limit: cpu_limit,
+        pinned,
+        cores: cpu_limit
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get())),
+    };
+    let report = host_runtime.enable_all().build()?.block_on(run(
+        flavour,
+        Settings::from_env()?,
+        cpu,
+        Load::new(load_runtime.handle().clone(), load)?,
+    ))?;
+    std::fs::write(&path, serde_json::to_vec(&report)?)
+        .with_context(|| format!("writing {path}"))?;
+    Ok(())
+}
+
+/// The CPU a child runs with.
+#[derive(Debug, Clone, Copy)]
+struct CpuLimit {
+    limit: Option<usize>,
+    /// Whether the limit is held by affinity, not just the worker count.
+    pinned: bool,
+    /// What the host may use: the limit, or every core this process may.
+    cores: usize,
+}
+
+/// Pin this thread, and every thread it starts from now on, to the first
+/// `cpus` cores it may use. Returns whether it could.
+#[cfg(target_os = "linux")]
+fn pin_to_cpus(cpus: usize) -> Result<bool> {
+    use rustix::thread::{CpuSet, sched_getaffinity, sched_setaffinity};
+    let allowed = sched_getaffinity(None).context("reading this process's CPU affinity")?;
+    let mut chosen = CpuSet::new();
+    let mut count = 0;
+    for cpu in (0..CpuSet::MAX_CPU).filter(|cpu| allowed.is_set(*cpu)) {
+        if count == cpus {
+            break;
+        }
+        chosen.set(cpu);
+        count += 1;
+    }
+    if count < cpus {
+        bail!("WASH_SCALE_CPUS asks for {cpus} cores, but this process may only use {count}");
+    }
+    sched_setaffinity(None, &chosen).context("pinning to the CPU limit")?;
+    Ok(true)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn pin_to_cpus(_cpus: usize) -> Result<bool> {
+    Ok(false)
+}
+
+/// The load generator's threads, so their CPU can be told apart from the
+/// host's.
+#[derive(Default)]
+struct LoadThreads {
+    ids: std::sync::Mutex<Vec<u32>>,
+    started: std::sync::Condvar,
+}
+
+impl LoadThreads {
+    fn register_current(&self) {
+        let mut ids = self.ids.lock().unwrap();
+        ids.push(current_thread_id());
+        self.started.notify_all();
+    }
+
+    fn wait_for(&self, workers: usize) {
+        let ids = self.ids.lock().unwrap();
+        drop(
+            self.started
+                .wait_while(ids, |ids| ids.len() < workers)
+                .unwrap(),
+        );
+    }
+
+    /// CPU the load generator's threads have used, where it can be read.
+    #[cfg(target_os = "linux")]
+    fn cpu(&self) -> Option<Duration> {
+        let ids = self.ids.lock().unwrap().clone();
+        ids.iter()
+            .map(|tid| {
+                let raw =
+                    std::fs::read_to_string(format!("/proc/self/task/{tid}/schedstat")).ok()?;
+                raw.split_whitespace().next()?.parse::<u64>().ok()
+            })
+            .sum::<Option<u64>>()
+            .map(Duration::from_nanos)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn cpu(&self) -> Option<Duration> {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn current_thread_id() -> u32 {
+    rustix::thread::gettid().as_raw_nonzero().get() as u32
+}
+
+#[cfg(not(target_os = "linux"))]
+fn current_thread_id() -> u32 {
+    0
+}
+
+/// CPU this whole process has used.
+#[cfg(unix)]
+fn process_cpu() -> Option<Duration> {
+    let now = rustix::time::clock_gettime(rustix::time::ClockId::ProcessCPUTime);
+    Some(Duration::new(
+        u64::try_from(now.tv_sec).ok()?,
+        u32::try_from(now.tv_nsec).ok()?,
+    ))
+}
+
+#[cfg(not(unix))]
+fn process_cpu() -> Option<Duration> {
+    None
+}
+
+/// CPU the host has used: the process's, less the load generator's where
+/// that can be read. The flag says whether it was.
+fn host_cpu(load: &LoadThreads) -> (Option<Duration>, bool) {
+    let process = process_cpu();
+    match (process, load.cpu()) {
+        (Some(process), Some(load)) => (Some(process.saturating_sub(load)), true),
+        (process, _) => (process, false),
+    }
+}
+
+/// Sends requests from the load generator's runtime.
+#[derive(Clone)]
+struct Load {
+    runtime: tokio::runtime::Handle,
+    threads: Arc<LoadThreads>,
+    client: reqwest::Client,
+}
+
+impl Load {
+    fn new(runtime: tokio::runtime::Handle, threads: Arc<LoadThreads>) -> Result<Self> {
+        Ok(Self {
+            runtime,
+            threads,
+            client: reqwest::Client::builder()
+                .pool_max_idle_per_host(256)
+                .timeout(Duration::from_secs(30))
+                .build()?,
+        })
+    }
+
+    async fn send(&self, addr: SocketAddr, indices: Vec<usize>, concurrency: usize) -> Answered {
+        let client = self.client.clone();
+        self.runtime
+            .spawn(async move { requests(&client, addr, indices.into_iter(), concurrency).await })
+            .await
+            .expect("the load generator should not panic")
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,13 +399,18 @@ impl Flavour {
 struct Settings {
     report_json: Option<String>,
     memory_limit: u64,
+    /// Unset, physical memory, so the process limit binds first.
+    guest_memory: u64,
     max_components: Option<usize>,
     max_duration: Option<Duration>,
     step: usize,
-    start_concurrency: usize,
+    /// Unset, as many as the host has cores.
+    start_concurrency: Option<usize>,
     sample: usize,
     core_instances: u32,
     fixture: &'static str,
+    /// One run per entry; `None` is no limit.
+    cpus: Vec<Option<usize>>,
 }
 
 impl Settings {
@@ -205,6 +426,11 @@ impl Settings {
                 .map_err(|e| anyhow::anyhow!("WASH_SCALE_MEMORY_LIMIT={v}: {e}"))?,
             None => (physical_memory()? / 2).min(2 << 30),
         };
+        let guest_memory = match var("WASH_SCALE_GUEST_MEMORY") {
+            Some(v) => parse_bytes(v.trim())
+                .map_err(|e| anyhow::anyhow!("WASH_SCALE_GUEST_MEMORY={v}: {e}"))?,
+            None => physical_memory()?,
+        };
         let core_instances = match number("WASH_SCALE_CORE_INSTANCES")? {
             Some(n) => u32::try_from(n).context("WASH_SCALE_CORE_INSTANCES")?,
             None => derived_core_instances(),
@@ -217,6 +443,7 @@ impl Settings {
         Ok(Self {
             report_json: var("WASH_SCALE_REPORT_JSON"),
             memory_limit,
+            guest_memory,
             max_components: number("WASH_SCALE_MAX_COMPONENTS")?,
             max_duration: match number("WASH_SCALE_MAX_SECS")? {
                 Some(0) => None,
@@ -224,12 +451,22 @@ impl Settings {
                 None => Some(Duration::from_secs(600)),
             },
             step: number("WASH_SCALE_STEP")?.unwrap_or(250).max(1),
-            start_concurrency: number("WASH_SCALE_START_CONCURRENCY")?
-                .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()))
-                .max(1),
+            start_concurrency: number("WASH_SCALE_START_CONCURRENCY")?.map(|n| n.max(1)),
             sample: number("WASH_SCALE_SAMPLE")?.unwrap_or(200),
             core_instances,
             fixture,
+            cpus: match var("WASH_SCALE_CPUS") {
+                None => vec![None],
+                Some(list) => list
+                    .split(',')
+                    .map(|n| match n.trim().parse::<usize>() {
+                        Ok(0) | Err(_) => {
+                            bail!("WASH_SCALE_CPUS={list}: each entry must be a core count")
+                        }
+                        Ok(n) => Ok(Some(n)),
+                    })
+                    .collect::<Result<_>>()?,
+            },
         })
     }
 }
@@ -306,6 +543,9 @@ enum Stop {
         /// Memory growths the guard refused during the run.
         refused: u64,
     },
+    /// max-guest-memory refused growth first: the budget for guest memory
+    /// as declared, which warm instances fill before the footprint does.
+    GuestBudget { refused: u64 },
     /// The footprint went [`GUARD_SLACK_PERCENT`] of the limit without the
     /// guard tripping.
     GuardDidNotHold,
@@ -324,6 +564,9 @@ impl std::fmt::Display for Stop {
         match self {
             Self::MemoryGuard { refused } => {
                 write!(f, "max-process-memory ({refused} growths refused)")
+            }
+            Self::GuestBudget { refused } => {
+                write!(f, "max-guest-memory ({refused} growths refused)")
             }
             Self::GuardDidNotHold => f.write_str("footprint passed the limit, guard never tripped"),
             Self::StartRefused(message) => write!(f, "start refused: {message}"),
@@ -359,6 +602,13 @@ struct Step {
     /// the pool, so far.
     memory_refusals: u64,
     pool_refusals: u64,
+    /// Guest memory charged now, and growths the guest budget refused so far.
+    guest_memory_bytes: u64,
+    guest_refusals: u64,
+    /// CPU the host used during the step, and that as a share of the cores
+    /// it may use over the step's wall time.
+    cpu_secs: Option<f64>,
+    cpu_percent: Option<f64>,
     /// The workload count the measurements so far say this host can hold.
     theoretical_limit: usize,
 }
@@ -366,9 +616,19 @@ struct Step {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct Report {
     flavour: String,
+    /// The flavour and its CPU limit, as the comparison heads its column.
+    label: String,
     fixture: String,
+    /// Cores the host may use: the CPU limit, or every core.
     cores: usize,
+    cpu_limit: Option<usize>,
+    /// Whether the limit was held by affinity, not just tokio's worker count.
+    cpu_pinned: bool,
+    /// Whether CPU figures leave out the load generator.
+    cpu_host_only: bool,
+    cpu_secs_total: Option<f64>,
     memory_limit_bytes: u64,
+    guest_memory_bytes: u64,
     core_instances: u32,
     baseline_footprint_bytes: u64,
     core_instances_per_workload: Option<u64>,
@@ -378,16 +638,18 @@ struct Report {
     steps: Vec<Step>,
 }
 
-async fn run(flavour: Flavour, settings: Settings) -> Result<Report> {
+async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) -> Result<Report> {
     let wasm = fixture_bytes(settings.fixture)?;
     let digest = fixture_digest(&wasm);
 
-    // The guest budget is no tighter than the process limit, so the process
-    // guard is what gates the run.
+    // The guest budget charges each linear memory at its declared size, resident
+    // or not, so a warm workload costs it several times what it adds to the
+    // footprint. Left at physical memory, it leaves the process guard to gate
+    // the run; set lower, the run shows where it binds instead.
     let engine = Engine::builder()
         .with_host_memory(
             HostMemoryBudgets::resolve(
-                Some(settings.memory_limit),
+                Some(settings.guest_memory),
                 None,
                 Some(settings.core_instances),
             )
@@ -399,7 +661,9 @@ async fn run(flavour: Flavour, settings: Settings) -> Result<Report> {
         .process_memory()
         .cloned()
         .context("the engine was built without a process memory guard")?;
-    let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    // Routed by Host header, as a real host routes: `DevRouter` would send
+    // every request to the newest workload and never reach the rest.
+    let ingress = Ingress::new(DynamicRouter::default(), "127.0.0.1:0".parse()?).await?;
     let addr = ingress.addr();
     let host = HostBuilder::new()
         .with_engine(engine.clone())
@@ -409,16 +673,14 @@ async fn run(flavour: Flavour, settings: Settings) -> Result<Report> {
         .await
         .context("host should start")?;
 
-    let client = reqwest::Client::builder()
-        .pool_max_idle_per_host(256)
-        .timeout(Duration::from_secs(30))
-        .build()?;
-    let concurrency = settings.start_concurrency;
-    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let concurrency = settings.start_concurrency.unwrap_or(cpu.cores);
     let baseline = process_footprint().unwrap_or(0);
+    let (cpu_baseline, cpu_host_only) = host_cpu(&load.threads);
+    let mut cpu_before = cpu_baseline;
     let pool_baseline = engine.pool_usage();
     let baseline_in_use = pool_baseline.map_or(0, |u| u.core_instances.in_use);
     let memory_refusals_baseline = engine.guest_memory().process_refused();
+    let guest_refusals_baseline = engine.guest_memory().refused();
     let pool_refusals_baseline = pool_refusals();
     let ceiling = settings.memory_limit / 100 * GUARD_SLACK_PERCENT;
 
@@ -449,7 +711,8 @@ async fn run(flavour: Flavour, settings: Settings) -> Result<Report> {
         // answering one request each.
         let mut warm_failed = 0;
         if flavour == Flavour::Warm && newly > 0 {
-            warm_failed = requests(&client, addr, started..started + newly, concurrency * 4)
+            warm_failed = load
+                .send(addr, (started..started + newly).collect(), concurrency * 4)
                 .await
                 .failed;
         }
@@ -458,7 +721,7 @@ async fn run(flavour: Flavour, settings: Settings) -> Result<Report> {
 
         let sample = spread(started, settings.sample);
         let sample_started = Instant::now();
-        let mut answered = requests(&client, addr, sample.iter().copied(), concurrency * 4).await;
+        let mut answered = load.send(addr, sample.clone(), concurrency * 4).await;
         let sample_secs = sample_started.elapsed().as_secs_f64();
         let spin_down_ms = match flavour {
             Flavour::Warm => None,
@@ -474,6 +737,13 @@ async fn run(flavour: Flavour, settings: Settings) -> Result<Report> {
         }
         let bytes_per_workload = footprint.saturating_sub(baseline) / started.max(1) as u64;
         let memory_refused = engine.guest_memory().process_refused() - memory_refusals_baseline;
+        let guest_refused = engine.guest_memory().refused() - guest_refusals_baseline;
+        let (cpu_now, _) = host_cpu(&load.threads);
+        let cpu_secs = cpu_now
+            .zip(cpu_before)
+            .map(|(now, before)| now.saturating_sub(before).as_secs_f64());
+        cpu_before = cpu_now;
+        let wall_secs = step_started.elapsed().as_secs_f64().max(f64::EPSILON);
         answered.latencies.sort_by(f64::total_cmp);
         let step = Step {
             workloads: started,
@@ -494,6 +764,10 @@ async fn run(flavour: Flavour, settings: Settings) -> Result<Report> {
             spin_down_ms,
             memory_refusals: memory_refused,
             pool_refusals: pool_refusals() - pool_refusals_baseline,
+            guest_memory_bytes: engine.guest_memory().in_use(),
+            guest_refusals: guest_refused,
+            cpu_secs,
+            cpu_percent: cpu_secs.map(|secs| secs / (wall_secs * cpu.cores as f64) * 100.0),
             theoretical_limit: theoretical_limit(
                 flavour,
                 &settings,
@@ -510,6 +784,11 @@ async fn run(flavour: Flavour, settings: Settings) -> Result<Report> {
         if guard.is_over() {
             break Stop::MemoryGuard {
                 refused: memory_refused,
+            };
+        }
+        if guest_refused > 0 {
+            break Stop::GuestBudget {
+                refused: guest_refused,
             };
         }
         if footprint >= ceiling {
@@ -539,9 +818,18 @@ async fn run(flavour: Flavour, settings: Settings) -> Result<Report> {
         .map_or(0, |s| s.workloads);
     let report = Report {
         flavour: flavour.name().to_string(),
+        label: label(flavour.name(), cpu.limit),
         fixture: settings.fixture.to_string(),
-        cores,
+        cores: cpu.cores,
+        cpu_limit: cpu.limit,
+        cpu_pinned: cpu.pinned,
+        cpu_host_only,
+        cpu_secs_total: host_cpu(&load.threads)
+            .0
+            .zip(cpu_baseline)
+            .map(|(now, before)| now.saturating_sub(before).as_secs_f64()),
         memory_limit_bytes: settings.memory_limit,
+        guest_memory_bytes: settings.guest_memory,
         core_instances: settings.core_instances,
         baseline_footprint_bytes: baseline,
         core_instances_per_workload: per_workload_core_instances,
@@ -718,10 +1006,11 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 fn print_step(header: bool, step: &Step) {
     if header {
         eprintln!(
-            "{:>9} {:>8} {:>10} {:>9} {:>6} {:>13} {:>9} {:>7} {:>8} {:>8} {:>7} {:>9} {:>10}",
+            "{:>9} {:>8} {:>10} {:>10} {:>9} {:>6} {:>13} {:>9} {:>7} {:>8} {:>8} {:>7} {:>11} {:>5} {:>10}",
             "workloads",
             "starts/s",
             "footprint",
+            "guest mem",
             "per-wkld",
             "guard",
             "core inst",
@@ -730,15 +1019,17 @@ fn print_step(header: bool, step: &Step) {
             "p50 ms",
             "p99 ms",
             "down ms",
-            "mem/pool",
+            "refused",
+            "cpu%",
             "limit",
         );
     }
     eprintln!(
-        "{:>9} {:>8.0} {:>10} {:>9} {:>6} {:>13} {:>9} {:>7.0} {:>8.1} {:>8.1} {:>7} {:>9} {:>10}",
+        "{:>9} {:>8.0} {:>10} {:>10} {:>9} {:>6} {:>13} {:>9} {:>7.0} {:>8.1} {:>8.1} {:>7} {:>11} {:>5} {:>10}",
         step.workloads,
         step.starts_per_sec,
         render_bytes(step.footprint_bytes),
+        render_bytes(step.guest_memory_bytes),
         render_bytes(step.bytes_per_workload),
         step.guard,
         format!(
@@ -751,7 +1042,12 @@ fn print_step(header: bool, step: &Step) {
         step.latency_p99_ms,
         step.spin_down_ms
             .map_or_else(|| "-".to_string(), |ms| format!("{ms:.0}")),
-        format!("{}/{}", step.memory_refusals, step.pool_refusals),
+        format!(
+            "{}/{}/{}",
+            step.memory_refusals, step.guest_refusals, step.pool_refusals
+        ),
+        step.cpu_percent
+            .map_or_else(|| "-".to_string(), |p| format!("{p:.0}")),
         step.theoretical_limit,
     );
 }
@@ -763,18 +1059,32 @@ fn print_comparison(settings: &Settings, reports: &[Report]) {
     };
     eprintln!();
     eprintln!(
-        "== {} on {} cores, max-process-memory {}, pool {} core instances ==",
+        "== {}, max-process-memory {}, max-guest-memory {}, pool {} core instances ==",
         first.fixture,
-        first.cores,
         render_bytes(settings.memory_limit),
+        render_bytes(settings.guest_memory),
         settings.core_instances,
     );
     let row = |label: &str, cell: &dyn Fn(&Report) -> String| {
-        let cells: Vec<String> = reports.iter().map(|r| format!("{:>16}", cell(r))).collect();
-        eprintln!("{label:<22}{}", cells.join(""));
+        let cells: Vec<String> = reports.iter().map(|r| format!("{:>20}", cell(r))).collect();
+        eprintln!("{label:<24}{}", cells.join(""));
     };
     let last = |r: &Report| r.steps.last().cloned();
-    row("", &|r| r.flavour.clone());
+    // Request figures from the last step that still served, not the one the
+    // limit stopped, whose refusals would read as zero latency.
+    let served = |r: &Report| {
+        r.steps
+            .iter()
+            .rev()
+            .find(|s| s.requests_ok > 0 && s.requests_ok >= s.requests_failed)
+            .cloned()
+    };
+    row("", &|r| r.label.clone());
+    row("cores", &|r| match (r.cpu_limit, r.cpu_pinned) {
+        (Some(n), true) => format!("{n} pinned"),
+        (Some(n), false) => format!("{n} workers"),
+        (None, _) => r.cores.to_string(),
+    });
     row("served workloads", &|r| r.served.to_string());
     row("theoretical limit", &|r| {
         last(r).map_or("-".into(), |s| s.theoretical_limit.to_string())
@@ -784,6 +1094,9 @@ fn print_comparison(settings: &Settings, reports: &[Report]) {
     });
     row("final footprint", &|r| {
         last(r).map_or("-".into(), |s| render_bytes(s.footprint_bytes))
+    });
+    row("guest memory charged", &|r| {
+        last(r).map_or("-".into(), |s| render_bytes(s.guest_memory_bytes))
     });
     row("bytes per workload", &|r| {
         last(r).map_or("-".into(), |s| render_bytes(s.bytes_per_workload))
@@ -799,25 +1112,49 @@ fn print_comparison(settings: &Settings, reports: &[Report]) {
             rates.iter().sum::<f64>() / rates.len().max(1) as f64
         )
     });
-    row("req/s (last step)", &|r| {
-        last(r).map_or("-".into(), |s| format!("{:.0}", s.requests_per_sec))
+    row("req/s (last served)", &|r| {
+        served(r).map_or("-".into(), |s| format!("{:.0}", s.requests_per_sec))
     });
-    row("p50 / p99 ms (last)", &|r| {
-        last(r).map_or("-".into(), |s| {
+    row("p50 / p99 ms (served)", &|r| {
+        served(r).map_or("-".into(), |s| {
             format!("{:.1} / {:.1}", s.latency_p50_ms, s.latency_p99_ms)
         })
     });
-    row("spin-down ms (last)", &|r| {
-        last(r)
+    row("spin-down ms (served)", &|r| {
+        served(r)
             .and_then(|s| s.spin_down_ms)
             .map_or("-".into(), |ms| format!("{ms:.0}"))
     });
-    row("refused mem / pool", &|r| {
+    row("refused proc/guest/pool", &|r| {
         last(r).map_or("-".into(), |s| {
-            format!("{} / {}", s.memory_refusals, s.pool_refusals)
+            format!(
+                "{} / {} / {}",
+                s.memory_refusals, s.guest_refusals, s.pool_refusals
+            )
         })
     });
+    row("cpu-s total", &|r| {
+        r.cpu_secs_total.map_or("-".into(), |s| format!("{s:.1}"))
+    });
+    row("cpu-ms per start", &|r| {
+        r.cpu_secs_total
+            .zip(r.steps.last())
+            .filter(|(_, s)| s.workloads > 0)
+            .map_or("-".into(), |(secs, s)| {
+                format!("{:.2}", secs * 1000.0 / s.workloads as f64)
+            })
+    });
+    row("cpu% (mean)", &|r| {
+        let shares: Vec<f64> = r.steps.iter().filter_map(|s| s.cpu_percent).collect();
+        if shares.is_empty() {
+            return "-".into();
+        }
+        format!("{:.0}", shares.iter().sum::<f64>() / shares.len() as f64)
+    });
+    if reports.iter().any(|r| !r.cpu_host_only) {
+        eprintln!("CPU figures include the load generator's");
+    }
     for report in reports {
-        eprintln!("{}: stopped by {}", report.flavour, report.stop);
+        eprintln!("{}: stopped by {}", report.label, report.stop);
     }
 }
