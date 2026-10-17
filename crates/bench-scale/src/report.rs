@@ -67,10 +67,10 @@ pub fn redact_url(value: &str) -> String {
     let Ok(mut url) = reqwest::Url::parse(&normalized) else {
         return "[redacted address]".to_string();
     };
-    if !url.username().is_empty() || url.password().is_some() {
-        if url.set_username("redacted").is_err() || url.set_password(None).is_err() {
-            return "[redacted address]".to_string();
-        }
+    if (!url.username().is_empty() || url.password().is_some())
+        && (url.set_username("redacted").is_err() || url.set_password(None).is_err())
+    {
+        return "[redacted address]".to_string();
     }
     url.set_query(None);
     url.set_fragment(None);
