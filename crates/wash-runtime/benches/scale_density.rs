@@ -64,9 +64,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::HashMap;
-use std::hash::{Hash as _, Hasher as _};
 use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -74,9 +72,7 @@ use anyhow::{Context as _, Result, bail};
 use futures::{StreamExt as _, stream};
 
 use wash_runtime::engine::Engine;
-use wash_runtime::engine::host_memory::{
-    self, HostMemoryBudgets, parse_bytes, pool_slot_bytes, render_bytes,
-};
+use wash_runtime::engine::host_memory::HostMemoryBudgets;
 use wash_runtime::engine::pool_usage::{PoolUsage, pool_refusals};
 use wash_runtime::engine::process_memory::process_footprint;
 use wash_runtime::host::http::{DynamicRouter, Ingress};
@@ -84,7 +80,19 @@ use wash_runtime::host::{HostApi, HostBuilder};
 use wash_runtime::types::{
     Component, LocalResources, Workload, WorkloadStartRequest, WorkloadState,
 };
-use wash_runtime::wit::WitInterface;
+
+#[path = "scale_density/estimate.rs"]
+mod estimate;
+#[path = "scale_density/load.rs"]
+mod load;
+#[path = "scale_density/report.rs"]
+mod report;
+#[path = "scale_density/settings.rs"]
+mod settings;
+use estimate::*;
+use load::*;
+use report::*;
+use settings::*;
 
 /// Set on a child process: the flavour it runs, its CPU limit, and where it
 /// writes its [`Report`].
@@ -224,335 +232,6 @@ fn child_main(flavour: Flavour) -> Result<()> {
     Ok(())
 }
 
-/// The CPU a child runs with.
-#[derive(Debug, Clone, Copy)]
-struct CpuLimit {
-    limit: Option<usize>,
-    /// Whether the limit is held by affinity, not just the worker count.
-    pinned: bool,
-    /// What the host may use: the limit, or every core this process may.
-    cores: usize,
-}
-
-/// Pin this thread, and every thread it starts from now on, to the first
-/// `cpus` cores it may use. Returns whether it could.
-#[cfg(target_os = "linux")]
-fn pin_to_cpus(cpus: usize) -> Result<bool> {
-    use rustix::thread::{CpuSet, sched_getaffinity, sched_setaffinity};
-    let allowed = sched_getaffinity(None).context("reading this process's CPU affinity")?;
-    let mut chosen = CpuSet::new();
-    let mut count = 0;
-    for cpu in (0..CpuSet::MAX_CPU).filter(|cpu| allowed.is_set(*cpu)) {
-        if count == cpus {
-            break;
-        }
-        chosen.set(cpu);
-        count += 1;
-    }
-    if count < cpus {
-        bail!("WASH_SCALE_CPUS asks for {cpus} cores, but this process may only use {count}");
-    }
-    sched_setaffinity(None, &chosen).context("pinning to the CPU limit")?;
-    Ok(true)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn pin_to_cpus(_cpus: usize) -> Result<bool> {
-    Ok(false)
-}
-
-/// The load generator's threads, so their CPU can be told apart from the
-/// host's.
-#[derive(Default)]
-struct LoadThreads {
-    ids: std::sync::Mutex<Vec<u32>>,
-    started: std::sync::Condvar,
-}
-
-impl LoadThreads {
-    fn register_current(&self) {
-        let mut ids = self.ids.lock().unwrap();
-        ids.push(current_thread_id());
-        self.started.notify_all();
-    }
-
-    fn wait_for(&self, workers: usize) {
-        let ids = self.ids.lock().unwrap();
-        drop(
-            self.started
-                .wait_while(ids, |ids| ids.len() < workers)
-                .unwrap(),
-        );
-    }
-
-    /// CPU the load generator's threads have used, where it can be read.
-    #[cfg(target_os = "linux")]
-    fn cpu(&self) -> Option<Duration> {
-        let ids = self.ids.lock().unwrap().clone();
-        ids.iter()
-            .map(|tid| {
-                let raw =
-                    std::fs::read_to_string(format!("/proc/self/task/{tid}/schedstat")).ok()?;
-                raw.split_whitespace().next()?.parse::<u64>().ok()
-            })
-            .sum::<Option<u64>>()
-            .map(Duration::from_nanos)
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn cpu(&self) -> Option<Duration> {
-        None
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn current_thread_id() -> u32 {
-    rustix::thread::gettid().as_raw_nonzero().get() as u32
-}
-
-#[cfg(not(target_os = "linux"))]
-fn current_thread_id() -> u32 {
-    0
-}
-
-/// CPU this whole process has used.
-#[cfg(unix)]
-fn process_cpu() -> Option<Duration> {
-    let now = rustix::time::clock_gettime(rustix::time::ClockId::ProcessCPUTime);
-    Some(Duration::new(
-        u64::try_from(now.tv_sec).ok()?,
-        u32::try_from(now.tv_nsec).ok()?,
-    ))
-}
-
-#[cfg(not(unix))]
-fn process_cpu() -> Option<Duration> {
-    None
-}
-
-/// CPU the host has used: the process's, less the load generator's where
-/// that can be read. The flag says whether it was.
-fn host_cpu(load: &LoadThreads) -> (Option<Duration>, bool) {
-    let process = process_cpu();
-    match (process, load.cpu()) {
-        (Some(process), Some(load)) => (process.checked_sub(load), true),
-        (process, _) => (process, false),
-    }
-}
-
-/// Sends requests from the load generator's runtime.
-#[derive(Clone)]
-struct Load {
-    runtime: tokio::runtime::Handle,
-    threads: Arc<LoadThreads>,
-    client: reqwest::Client,
-}
-
-impl Load {
-    fn new(runtime: tokio::runtime::Handle, threads: Arc<LoadThreads>) -> Result<Self> {
-        Ok(Self {
-            runtime,
-            threads,
-            client: reqwest::Client::builder()
-                .pool_max_idle_per_host(256)
-                .timeout(Duration::from_secs(30))
-                .build()?,
-        })
-    }
-
-    async fn send(&self, addr: SocketAddr, indices: Vec<usize>, concurrency: usize) -> Answered {
-        let client = self.client.clone();
-        self.runtime
-            .spawn(async move { requests(&client, addr, indices.into_iter(), concurrency).await })
-            .await
-            .expect("the load generator should not panic")
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Flavour {
-    Warm,
-    ScaleToZero,
-}
-
-impl Flavour {
-    const ALL: [Self; 2] = [Self::Warm, Self::ScaleToZero];
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Warm => "warm",
-            Self::ScaleToZero => "scale-to-zero",
-        }
-    }
-
-    fn parse(name: &str) -> Result<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|f| f.name() == name)
-            .with_context(|| format!("unknown flavour {name}"))
-    }
-
-    fn pool_size(self) -> i32 {
-        match self {
-            Self::Warm => 1,
-            Self::ScaleToZero => 0,
-        }
-    }
-}
-
-/// What a run was told, from the environment.
-#[derive(Debug, Clone)]
-struct Settings {
-    report_json: Option<String>,
-    memory_limit: u64,
-    /// Unset, the effective machine/container budget, so the process limit binds first.
-    guest_memory: u64,
-    max_components: Option<usize>,
-    max_duration: Option<Duration>,
-    step: usize,
-    /// Unset, as many as the host has cores.
-    start_concurrency: Option<usize>,
-    sample: usize,
-    core_instances: u32,
-    fixture: &'static str,
-    /// One run per entry; `None` is no limit.
-    cpus: Vec<Option<usize>>,
-}
-
-impl Settings {
-    fn validate_flavour(&self, flavour: Flavour) -> Result<()> {
-        if flavour == Flavour::Warm && self.fixture != "http_handler_p3" {
-            bail!(
-                "warm runs require the P3 HTTP fixture; use WASH_SCALE_FIXTURE=p3 or run scale-to-zero"
-            );
-        }
-        Ok(())
-    }
-
-    fn from_env() -> Result<Self> {
-        Self::from_values(|key| std::env::var(key).ok().filter(|v| !v.trim().is_empty()))
-    }
-
-    fn from_values(var: impl Fn(&str) -> Option<String>) -> Result<Self> {
-        let number = |key: &str| -> Result<Option<usize>> {
-            var(key)
-                .map(|v| v.trim().parse().with_context(|| format!("{key}={v}")))
-                .transpose()
-        };
-        let memory_limit = match var("WASH_SCALE_MEMORY_LIMIT") {
-            Some(v) => parse_bytes(v.trim())
-                .map_err(|e| anyhow::anyhow!("WASH_SCALE_MEMORY_LIMIT={v}: {e}"))?,
-            None => (effective_memory()? / 2).min(2 << 30),
-        };
-        let guest_memory = match var("WASH_SCALE_GUEST_MEMORY") {
-            Some(v) => parse_bytes(v.trim())
-                .map_err(|e| anyhow::anyhow!("WASH_SCALE_GUEST_MEMORY={v}: {e}"))?,
-            None => effective_memory()?,
-        };
-        let core_instances = match number("WASH_SCALE_CORE_INSTANCES")? {
-            Some(n) => u32::try_from(n).context("WASH_SCALE_CORE_INSTANCES")?,
-            None => derived_core_instances(),
-        };
-        let fixture = match var("WASH_SCALE_FIXTURE").as_deref().map(str::trim) {
-            None | Some("p3") => "http_handler_p3",
-            Some("p2") => "http_handler_p2",
-            Some(other) => bail!("WASH_SCALE_FIXTURE must be p2 or p3, not {other}"),
-        };
-        Ok(Self {
-            report_json: var("WASH_SCALE_REPORT_JSON"),
-            memory_limit,
-            guest_memory,
-            max_components: number("WASH_SCALE_MAX_COMPONENTS")?,
-            max_duration: match number("WASH_SCALE_MAX_SECS")? {
-                Some(0) => None,
-                Some(secs) => Some(Duration::from_secs(secs as u64)),
-                None => Some(Duration::from_secs(600)),
-            },
-            step: number("WASH_SCALE_STEP")?.unwrap_or(250).max(1),
-            start_concurrency: number("WASH_SCALE_START_CONCURRENCY")?.map(|n| n.max(1)),
-            sample: bench_tools::density::sample_size(number("WASH_SCALE_SAMPLE")?.unwrap_or(200))
-                .map_err(anyhow::Error::msg)
-                .context("WASH_SCALE_SAMPLE")?,
-            core_instances,
-            fixture,
-            cpus: match var("WASH_SCALE_CPUS") {
-                None => vec![None],
-                Some(list) => list
-                    .split(',')
-                    .map(|n| match n.trim().parse::<usize>() {
-                        Ok(0) | Err(_) => {
-                            bail!("WASH_SCALE_CPUS={list}: each entry must be a core count")
-                        }
-                        Ok(n) => Ok(Some(n)),
-                    })
-                    .collect::<Result<_>>()?,
-            },
-        })
-    }
-}
-
-fn effective_memory() -> Result<u64> {
-    use sysinfo::{MemoryRefreshKind, RefreshKind, System};
-    let system = System::new_with_specifics(
-        RefreshKind::new().with_memory(MemoryRefreshKind::new().with_ram()),
-    );
-    bench_tools::memory::memory_budget(system.total_memory()).context(
-        "cannot detect a memory budget; set WASH_SCALE_MEMORY_LIMIT and WASH_SCALE_GUEST_MEMORY",
-    )
-}
-
-/// Pool slots sized the way a large host would size them: half the address
-/// space at wasmtime's fixed 4 GiB-plus-guard slot, and no more than the
-/// kernel's mapping limit allows (about five mappings per slot).
-fn derived_core_instances() -> u32 {
-    let by_address_space = host_memory::usable_address_space()
-        / 2
-        / pool_slot_bytes(host_memory::WASMTIME_DEFAULT_HEAP_MEMORY);
-    let by_map_count = std::fs::read_to_string("/proc/sys/vm/max_map_count")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<u64>().ok())
-        .map_or(u64::MAX, |limit| limit / 5);
-    u32::try_from(by_address_space.min(by_map_count).max(1)).unwrap_or(u32::MAX)
-}
-
-fn fixture_bytes(name: &str) -> Result<bytes::Bytes> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/wasm")
-        .join(format!("{name}.wasm"));
-    let bytes = std::fs::read(&path).with_context(|| {
-        format!(
-            "missing {}; build it with `cargo xtask build-fixtures {}`",
-            path.display(),
-            name.replace('_', "-"),
-        )
-    })?;
-    Ok(bytes.into())
-}
-
-/// A digest for the fixture, so every workload shares one compile the way
-/// workloads pulled from one image do. Without one, each start compiles the
-/// component again and the bench measures cranelift, not density.
-fn fixture_digest(wasm: &[u8]) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    wasm.hash(&mut hasher);
-    format!("scale-density:{:016x}", hasher.finish())
-}
-
-fn http_interface(host_header: &str) -> WitInterface {
-    WitInterface {
-        namespace: "wasi".to_string(),
-        package: "http".to_string(),
-        interfaces: ["incoming-handler".to_string()].into_iter().collect(),
-        version: Some(semver::Version::new(0, 2, 2)),
-        config: HashMap::from([("host".to_string(), host_header.to_string())]),
-        name: None,
-    }
-}
-
-fn host_header(index: usize) -> String {
-    format!("w{index}.scale.test")
-}
-
 /// Why a run stopped.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "reason", content = "detail", rename_all = "snake_case")]
@@ -617,8 +296,8 @@ struct Step {
     requests_failed: usize,
     warmup_failed: usize,
     requests_per_sec: f64,
-    latency_p50_ms: f64,
-    latency_p99_ms: f64,
+    latency_p50_ms: Option<f64>,
+    latency_p99_ms: Option<f64>,
     /// Scale-to-zero only: how long until instances made by the sample were
     /// gone again.
     spin_down_ms: Option<f64>,
@@ -747,8 +426,8 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
             &wasm,
             &digest,
             flavour,
-            next_index,
-            batch,
+            settings.fixture,
+            next_index..next_index + batch,
             concurrency,
         )
         .await;
@@ -773,7 +452,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
             .filter_map(|position| running.get(position).copied())
             .collect();
         let sample_started = Instant::now();
-        let mut answered = load.send(addr, sample.clone(), concurrency * 4).await;
+        let answered = load.send(addr, sample.clone(), concurrency * 4).await;
         let sample_secs = sample_started.elapsed().as_secs_f64();
         let spin_down_ms = match flavour {
             Flavour::Warm => None,
@@ -800,7 +479,6 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         let sample_cpu_secs = between(cpu_started, cpu_now);
         cpu_before = cpu_now;
         let wall_secs = step_started.elapsed().as_secs_f64().max(f64::EPSILON);
-        answered.latencies.sort_by(f64::total_cmp);
         let step = Step {
             workloads: started,
             elapsed_secs: run_started.elapsed().as_secs_f64(),
@@ -956,11 +634,11 @@ async fn start_batch(
     wasm: &bytes::Bytes,
     digest: &str,
     flavour: Flavour,
-    first: usize,
-    count: usize,
+    fixture: &str,
+    indices: std::ops::Range<usize>,
     concurrency: usize,
 ) -> StartedBatch {
-    let requests = stream::iter(first..first + count).map(|index| {
+    let requests = stream::iter(indices).map(|index| {
         let host_header = host_header(index);
         let request = WorkloadStartRequest {
             workload_id: uuid::Uuid::new_v4().to_string(),
@@ -977,7 +655,7 @@ async fn start_batch(
                     pool_size: flavour.pool_size(),
                     ..Default::default()
                 }],
-                host_interfaces: vec![http_interface(&host_header)],
+                host_interfaces: vec![http_interface(&host_header, fixture)],
                 volumes: vec![],
             },
         };
@@ -1043,7 +721,7 @@ async fn requests(
     }
 }
 
-use bench_tools::density::spread;
+use bench_tools::density::{percentile, spread};
 
 /// How long until the pool is back to the instances it held before the
 /// sample, in milliseconds; capped at ten seconds.
@@ -1061,326 +739,19 @@ async fn wait_for_spin_down(engine: &Engine, floor: u64) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum CpuCapacity {
-    #[default]
-    IdleUnbounded,
-}
-
-/// What each measured constraint predicts. `None` means unmeasured or
-/// insufficient evidence for an estimate, rendered as `?` in the report.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-struct Limits {
-    /// Workloads max-process-memory fits, at the marginal cost per workload.
-    memory: Option<u64>,
-    /// Workloads max-guest-memory fits, at the guest charge per workload.
-    guest_memory: Option<u64>,
-    /// Workloads the pool's core instances and linear memories fit.
-    pool_core_instances: Option<u64>,
-    pool_memories: Option<u64>,
-    /// Idle capacity is unbounded by CPU; throughput still needs measurements.
-    cpu: CpuCapacity,
-    /// The figures the limits are built from.
-    marginal_bytes_per_workload: Option<u64>,
-    guest_bytes_per_workload: Option<u64>,
-    core_instances_per_workload: Option<u64>,
-    memories_per_workload: Option<u64>,
-    /// What the CPU limit allows: starts a second, and requests a second
-    /// spread across the set, at the CPU each cost.
-    max_starts_per_sec: Option<f64>,
-    max_requests_per_sec: Option<f64>,
-}
-
-impl Limits {
-    fn from_steps(
-        settings: &Settings,
-        cores: usize,
-        baseline: u64,
-        pool_baseline: &Option<PoolUsage>,
-        steps: &[Step],
-    ) -> Self {
-        // Only clean steps: once anything is refused, a full pool or a guard
-        // holding growth back distorts what a workload appears to cost.
-        let served: Vec<&Step> = steps
-            .iter()
-            .filter(|s| s.workloads > 0 && s.clean)
-            .collect();
-        let (Some(first), Some(last)) = (served.first(), served.last()) else {
-            return Self::default();
-        };
-        let workloads = last.workloads as u64;
-        // The slope between the first and last steps that served leaves out
-        // what the first workload paid once for everyone (the compile, the
-        // shared linkers), which an average over few workloads would count.
-        let marginal = if last.workloads > first.workloads {
-            last.footprint_bytes.saturating_sub(first.footprint_bytes)
-                / (last.workloads - first.workloads) as u64
-        } else {
-            last.footprint_bytes.saturating_sub(baseline) / workloads
-        };
-        let memory = (marginal > 0).then(|| {
-            let headroom = settings.memory_limit as i128 - last.footprint_bytes as i128;
-            (workloads as i128 + headroom / marginal as i128).max(0) as u64
-        });
-        let per = |held: u64| (held > 0).then_some(held);
-        let guest_per = per(last.guest_memory_bytes / workloads);
-        let core_per = per(last
-            .core_instances_in_use
-            .saturating_sub(pool_baseline.map_or(0, |u| u.core_instances.in_use))
-            / workloads);
-        let memories_per = per(last
-            .memories_in_use
-            .saturating_sub(pool_baseline.map_or(0, |u| u.memories.in_use))
-            / workloads);
-        let rate = |cpu: fn(&Step) -> Option<f64>, count: fn(&Step) -> usize| {
-            measured_rate(cores, served.iter().map(|s| (cpu(s), count(s))))
-        };
-        Self {
-            memory,
-            guest_memory: guest_per.map(|per| settings.guest_memory / per),
-            pool_core_instances: core_per.map(|per| last.core_instances_total / per),
-            pool_memories: memories_per.map(|per| last.memories_total / per),
-            cpu: CpuCapacity::IdleUnbounded,
-            marginal_bytes_per_workload: Some(marginal),
-            guest_bytes_per_workload: guest_per,
-            core_instances_per_workload: core_per,
-            memories_per_workload: memories_per,
-            max_starts_per_sec: rate(|s| s.start_cpu_secs, |s| s.started_in_step),
-            max_requests_per_sec: rate(|s| s.sample_cpu_secs, |s| s.requests_ok),
-        }
-    }
-
-    /// The constraint that binds first, and the count it allows.
-    fn binding(&self) -> (&'static str, Option<u64>) {
-        [
-            ("max-process-memory", self.memory),
-            ("max-guest-memory", self.guest_memory),
-            ("pool core instances", self.pool_core_instances),
-            ("pool memories", self.pool_memories),
-        ]
-        .into_iter()
-        .filter_map(|(name, limit)| limit.map(|n| (name, Some(n))))
-        .min_by_key(|(_, n)| *n)
-        .unwrap_or(("none", None))
-    }
-}
-
-/// Only count operations whose CPU observation is available. Missing CPU
-/// readings must not contribute work to a zero-duration denominator.
-fn measured_rate(cores: usize, samples: impl Iterator<Item = (Option<f64>, usize)>) -> Option<f64> {
-    let (seconds, operations) = samples
-        .filter_map(|(cpu, n)| cpu.map(|cpu| (cpu, n)))
-        .filter(|(cpu, _)| cpu.is_finite() && *cpu > 0.0)
-        .fold((0.0, 0usize), |(secs, count), (cpu, n)| {
-            (secs + cpu, count + n)
-        });
-    (seconds > 0.0 && operations > 0).then(|| cores as f64 * operations as f64 / seconds)
-}
-
-/// Missing measurements are unknown, not evidence of unlimited capacity.
-fn or_unknown(limit: Option<u64>) -> String {
-    limit.map_or_else(|| "?".to_string(), |n| n.to_string())
-}
-
-fn percentile(sorted: &[f64], p: f64) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-    let index = ((sorted.len() - 1) as f64 * p).round() as usize;
-    sorted.get(index).copied().unwrap_or(0.0)
-}
-
-fn print_step(header: bool, step: &Step) {
-    if header {
-        eprintln!(
-            "{:>9} {:>8} {:>10} {:>10} {:>9} {:>6} {:>13} {:>9} {:>7} {:>8} {:>8} {:>7} {:>11} {:>5} {:>10}",
-            "workloads",
-            "starts/s",
-            "footprint",
-            "guest mem",
-            "per-wkld",
-            "guard",
-            "core inst",
-            "ok/fail",
-            "req/s",
-            "p50 ms",
-            "p99 ms",
-            "down ms",
-            "refused",
-            "cpu%",
-            "limit",
-        );
-    }
-    eprintln!(
-        "{:>9} {:>8.0} {:>10} {:>10} {:>9} {:>6} {:>13} {:>9} {:>7.0} {:>8.1} {:>8.1} {:>7} {:>11} {:>5} {:>10}",
-        step.workloads,
-        step.starts_per_sec,
-        render_bytes(step.footprint_bytes),
-        render_bytes(step.guest_memory_bytes),
-        render_bytes(step.bytes_per_workload),
-        step.guard,
-        format!(
-            "{}/{}",
-            step.core_instances_in_use, step.core_instances_total
-        ),
-        format!("{}/{}", step.requests_ok, step.requests_failed),
-        step.requests_per_sec,
-        step.latency_p50_ms,
-        step.latency_p99_ms,
-        step.spin_down_ms
-            .map_or_else(|| "-".to_string(), |ms| format!("{ms:.0}")),
-        format!(
-            "{}/{}/{}",
-            step.memory_refusals, step.guest_refusals, step.pool_refusals
-        ),
-        step.cpu_percent
-            .map_or_else(|| "-".to_string(), |p| format!("{p:.0}")),
-        or_unknown(step.theoretical_limit),
-    );
-}
-
-/// The flavours side by side, one row per measure.
-fn print_comparison(settings: &Settings, reports: &[Report]) {
-    let Some(first) = reports.first() else {
-        return;
-    };
-    eprintln!();
-    eprintln!(
-        "== {}, max-process-memory {}, max-guest-memory {}, pool {} core instances ==",
-        first.fixture,
-        render_bytes(settings.memory_limit),
-        render_bytes(settings.guest_memory),
-        settings.core_instances,
-    );
-    let row = |label: &str, cell: &dyn Fn(&Report) -> String| {
-        let cells: Vec<String> = reports.iter().map(|r| format!("{:>20}", cell(r))).collect();
-        eprintln!("{label:<24}{}", cells.join(""));
-    };
-    let last = |r: &Report| r.steps.last().cloned();
-    // Request figures from the last step that still served, not the one the
-    // limit stopped, whose refusals would read as zero latency.
-    let served = |r: &Report| r.steps.iter().rev().find(|s| s.clean).cloned();
-    row("", &|r| r.label.clone());
-    row("cores", &|r| match (r.cpu_limit, r.cpu_pinned) {
-        (Some(n), true) => format!("{n} pinned"),
-        (Some(n), false) => format!("{n} workers"),
-        (None, _) => r.cores.to_string(),
-    });
-    row("served workloads", &|r| r.served.to_string());
-    row("limit: max-process-memory", &|r| {
-        or_unknown(r.limits.memory)
-    });
-    row("limit: max-guest-memory", &|r| {
-        or_unknown(r.limits.guest_memory)
-    });
-    row("limit: pool core inst", &|r| {
-        or_unknown(r.limits.pool_core_instances)
-    });
-    row("limit: pool memories", &|r| {
-        or_unknown(r.limits.pool_memories)
-    });
-    row("limit: cpu", &|_| "unbounded (idle)".into());
-    row("binding limit", &|r| {
-        let (name, limit) = r.limits.binding();
-        format!("{} ({name})", or_unknown(limit))
-    });
-    row("marginal per workload", &|r| {
-        r.limits
-            .marginal_bytes_per_workload
-            .map_or("-".into(), render_bytes)
-    });
-    row("guest per workload", &|r| {
-        r.limits
-            .guest_bytes_per_workload
-            .map_or_else(|| "0B".into(), render_bytes)
-    });
-    row("cpu max starts/s", &|r| {
-        r.limits
-            .max_starts_per_sec
-            .map_or("?".into(), |n| format!("{n:.0}"))
-    });
-    row("cpu max req/s", &|r| {
-        r.limits
-            .max_requests_per_sec
-            .map_or("?".into(), |n| format!("{n:.0}"))
-    });
-    row("baseline footprint", &|r| {
-        render_bytes(r.baseline_footprint_bytes)
-    });
-    row("final footprint", &|r| {
-        last(r).map_or("-".into(), |s| render_bytes(s.footprint_bytes))
-    });
-    row("guest memory charged", &|r| {
-        last(r).map_or("-".into(), |s| render_bytes(s.guest_memory_bytes))
-    });
-    row("bytes per workload", &|r| {
-        last(r).map_or("-".into(), |s| render_bytes(s.bytes_per_workload))
-    });
-    row("core inst / workload", &|r| {
-        r.core_instances_per_workload
-            .map_or("-".into(), |n| n.to_string())
-    });
-    row("starts/s (mean)", &|r| {
-        let rates: Vec<f64> = r.steps.iter().map(|s| s.starts_per_sec).collect();
-        format!(
-            "{:.0}",
-            rates.iter().sum::<f64>() / rates.len().max(1) as f64
-        )
-    });
-    row("req/s (last served)", &|r| {
-        served(r).map_or("-".into(), |s| format!("{:.0}", s.requests_per_sec))
-    });
-    row("p50 / p99 ms (served)", &|r| {
-        served(r).map_or("-".into(), |s| {
-            format!("{:.1} / {:.1}", s.latency_p50_ms, s.latency_p99_ms)
-        })
-    });
-    row("spin-down ms (served)", &|r| {
-        served(r)
-            .and_then(|s| s.spin_down_ms)
-            .map_or("-".into(), |ms| format!("{ms:.0}"))
-    });
-    row("refused starts", &|r| {
-        last(r).map_or("-".into(), |s| s.refused_starts.to_string())
-    });
-    row("refused proc/guest/pool", &|r| {
-        last(r).map_or("-".into(), |s| {
-            format!(
-                "{} / {} / {}",
-                s.memory_refusals, s.guest_refusals, s.pool_refusals
-            )
-        })
-    });
-    row("cpu-s total", &|r| {
-        r.cpu_secs_total.map_or("-".into(), |s| format!("{s:.1}"))
-    });
-    row("cpu-ms per start", &|r| {
-        r.cpu_secs_total
-            .zip(r.steps.last())
-            .filter(|(_, s)| s.workloads > 0)
-            .map_or("-".into(), |(secs, s)| {
-                format!("{:.2}", secs * 1000.0 / s.workloads as f64)
-            })
-    });
-    row("cpu% (mean)", &|r| {
-        let shares: Vec<f64> = r.steps.iter().filter_map(|s| s.cpu_percent).collect();
-        if shares.is_empty() {
-            return "-".into();
-        }
-        format!("{:.0}", shares.iter().sum::<f64>() / shares.len() as f64)
-    });
-    if reports.iter().any(|r| !r.cpu_host_only) {
-        eprintln!("CPU figures include the load generator's");
-    }
-    for report in reports {
-        eprintln!("{}: stopped by {}", report.label, report.stop);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixture_binding_matches_the_selected_http_version() {
+        let p3 = http_interface("w0.test", "http_handler_p3");
+        assert!(p3.interfaces.contains("handler"));
+        assert_eq!(p3.version, Some(semver::Version::new(0, 3, 0)));
+        let p2 = http_interface("w0.test", "http_handler_p2");
+        assert!(p2.interfaces.contains("incoming-handler"));
+        assert_eq!(p2.version, Some(semver::Version::new(0, 2, 2)));
+    }
 
     #[test]
     fn missing_cpu_does_not_inflate_rates_or_claim_infinite_capacity() {
@@ -1391,6 +762,7 @@ mod tests {
             Some(10.0)
         );
         assert_eq!(or_unknown(None), "?");
+        assert_eq!(percentile(&[], 0.5), None);
         assert_eq!(
             serde_json::to_value(CpuCapacity::IdleUnbounded).unwrap(),
             "idle-unbounded"
