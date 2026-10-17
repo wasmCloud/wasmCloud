@@ -566,9 +566,13 @@ impl CredentialResolver {
                 debug!("no docker credentials found; using anonymous access");
                 RegistryAuth::Anonymous
             }
+            // Not cached: a helper that failed once (a keychain locked for a
+            // moment, a helper process that timed out) would otherwise turn
+            // every private pull from this registry anonymous, and failing,
+            // for the whole reuse window.
             Err(e) => {
                 warn!(error = %e, "failed to retrieve docker credentials; using anonymous access");
-                RegistryAuth::Anonymous
+                return RegistryAuth::Anonymous;
             }
         };
         docker_auth.insert(registry.to_string(), auth.clone());
