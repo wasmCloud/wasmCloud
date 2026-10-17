@@ -20,7 +20,7 @@
 
 use std::sync::atomic::AtomicBool;
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::HashMap,
     net::SocketAddr,
     path::Path,
     sync::{Arc, OnceLock},
@@ -496,21 +496,13 @@ pub trait Router: Send + Sync + 'static {
 
 /// Router that routes requests by 'Host' header, configured via WitInterface config
 ///
-/// Requests never lock and never write shared memory to read the table: each
-/// shard is an [`ArcSwap`](arc_swap::ArcSwap) snapshot, and a lookup matches
-/// inside a borrowed guard. Register and unbind therefore never make a request
-/// wait; a request in flight keeps matching against the snapshot it loaded.
-///
-/// A writer copies only the shards its workload's routes hash to, once each,
-/// and that copy is a shallow one (an `Arc` clone per hostname in the shard)
-/// plus a deep copy of just the hostnames it edits. A host holding 100k
-/// workloads cannot afford to copy a whole table on every start and stop
-/// (loading N workloads would cost O(N²)), and many shards keep each copy
-/// small.
+/// Requests read an ArcSwap snapshot without taking the writers' mutex.
+/// Persistent maps and replica sets share unchanged nodes between snapshots,
+/// so an update copies paths through those structures instead of the entire
+/// touched shard or replica set. Path buckets remain a small ordered vector.
 pub struct DynamicRouter {
     /// Maps a hostname to the path-scoped buckets registered under it, split
-    /// across shards by hostname so one write copies a small slice of the
-    /// table.
+    /// across shards by hostname. Updates copy persistent tree paths.
     hosts: Box<[RouteShard; ROUTE_SHARDS]>,
     /// Maps workload_id -> every route (primary + aliases, each with its path
     /// prefix) registered for it, so `on_workload_unbind` can remove all
@@ -526,9 +518,9 @@ pub struct DynamicRouter {
 /// ordered scan that stops at the first match. One hostname carries few
 /// prefixes in practice, so this stays cheaper than a trie.
 ///
-/// Keys and each hostname's buckets sit behind their own `Arc`s so copying a
-/// shard to edit it clones pointers, not strings and buckets.
-type HostBuckets = HashMap<Arc<str>, Arc<Vec<PathBucket>>>;
+/// Cloning a shard shares its root. Mutations copy tree paths and the edited
+/// hostname's bucket vector; replica sets share their unchanged tree nodes.
+type HostBuckets = im::HashMap<Arc<str>, Arc<Vec<PathBucket>>>;
 
 /// A shard on its own cache line pair, so a writer storing one shard does not
 /// invalidate the line readers of its neighbours load from.
@@ -536,8 +528,7 @@ type HostBuckets = HashMap<Arc<str>, Arc<Vec<PathBucket>>>;
 #[derive(Default)]
 struct RouteShard(arc_swap::ArcSwap<HostBuckets>);
 
-/// Enough shards that a write copies a small slice of a large table, few
-/// enough that an empty router stays small (32 KiB of shards).
+/// Bound each snapshot publication to one hostname shard.
 const ROUTE_SHARDS: usize = 256;
 
 impl Default for DynamicRouter {
@@ -550,7 +541,7 @@ impl Default for DynamicRouter {
 }
 
 /// Every workload replica serving one `(hostname, path_prefix, scope)` triple.
-/// A `BTreeSet` keeps membership ordered and deterministic; a request picks one
+/// A persistent ordered set keeps membership deterministic; a request picks one
 /// replica at random (see [`DynamicRouter::select_workload`]).
 ///
 /// `scope` is part of the key, not a property of the bucket: the same
@@ -560,7 +551,7 @@ impl Default for DynamicRouter {
 struct PathBucket {
     prefix: NormalizedPathPrefix,
     scope: RouteScope,
-    workloads: BTreeSet<String>,
+    workloads: im::OrdSet<String>,
 }
 
 /// Most-specific-first: a longer prefix sorts before a shorter one, and the
@@ -605,7 +596,8 @@ impl PartialEq for PathBucket {
 impl Eq for PathBucket {}
 
 /// Take the writers' lock whether or not a writer panicked holding it: no
-/// write can panic halfway through, so a poisoned table is still a whole one.
+/// snapshots already published remain valid. An interrupted multi-shard update
+/// can be partial; poisoning alone must not make unrelated routes unavailable.
 fn lock_routes<G>(result: std::sync::LockResult<G>) -> G {
     result.unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -675,7 +667,7 @@ impl DynamicRouter {
                     buckets.push(PathBucket {
                         prefix: route.path_prefix.clone(),
                         scope: route.scope,
-                        workloads: BTreeSet::from([workload_id.to_string()]),
+                        workloads: im::OrdSet::unit(workload_id.to_string()),
                     });
                     // Most specific first — see `PathBucket`'s `Ord`.
                     buckets.sort();
@@ -769,8 +761,8 @@ impl DynamicRouter {
         } else {
             host.into()
         };
-        // Matched inside the guard: loading it writes nothing shared, where
-        // cloning the `Arc` out would bump a count every request shares.
+        // Keep the ArcSwap guard while matching to avoid an explicit Arc clone
+        // for the common lookup path.
         let table = self.shard(shard_index(&host)).load();
         let Some(buckets) = table.get(&*host) else {
             return Err(RouteError::NoWorkloadForHost(host.into_owned()));
@@ -4264,6 +4256,7 @@ async fn send_grpc_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     fn build_request(uri: &str) -> hyper::Request<WasiBody> {
         hyper::Request::builder()
@@ -5892,7 +5885,7 @@ mod tests {
         let bucket = |prefix: &str| PathBucket {
             prefix: NormalizedPathPrefix::new(prefix),
             scope: RouteScope::Local,
-            workloads: BTreeSet::new(),
+            workloads: im::OrdSet::new(),
         };
         let mut buckets = [
             bucket(""),
@@ -6332,6 +6325,76 @@ mod tests {
             .flat_map(|b| b.workloads.iter().cloned())
             .collect();
         assert_eq!(now, ["b"]);
+    }
+
+    #[test]
+    fn concurrent_route_churn_preserves_shared_replicas_and_held_snapshots() {
+        let router = Arc::new(DynamicRouter::default());
+        let shared = IngressRoute::ingress("shared.example.com");
+        router.register_routes("anchor", std::slice::from_ref(&shared));
+        let held = router.host_buckets("shared.example.com").unwrap();
+        std::thread::scope(|scope| {
+            for worker in 0..4 {
+                let router = &router;
+                let shared = &shared;
+                scope.spawn(move || {
+                    for index in 0..1000 {
+                        let id = format!("worker-{worker}-{index}");
+                        let distinct =
+                            IngressRoute::ingress(format!("w{worker}-{index}.example.com"));
+                        router.register_routes(&id, &[shared.clone(), distinct.clone()]);
+                        assert_eq!(
+                            router
+                                .select_workload(&distinct.host, "/", RouteScope::Ingress)
+                                .unwrap(),
+                            id
+                        );
+                        assert!(
+                            router
+                                .select_workload(&shared.host, "/", RouteScope::Ingress)
+                                .is_ok()
+                        );
+                        router.unregister_routes(&id);
+                    }
+                });
+            }
+        });
+        assert_eq!(
+            held[0].workloads.iter().cloned().collect::<Vec<_>>(),
+            ["anchor"]
+        );
+        assert_eq!(
+            router
+                .select_workload(&shared.host, "/", RouteScope::Ingress)
+                .unwrap(),
+            "anchor"
+        );
+    }
+
+    #[test]
+    #[ignore = "100k-route scaling probe; run explicitly with --ignored --nocapture"]
+    fn routing_write_scaling() {
+        for replicas in [false, true] {
+            let router = DynamicRouter::default();
+            let began = std::time::Instant::now();
+            for index in 0..100_000 {
+                let host = if replicas {
+                    "shared.scale.test".to_string()
+                } else {
+                    format!("w{index}.scale.test")
+                };
+                router.register_routes(&format!("w{index}"), &[IngressRoute::ingress(host)]);
+            }
+            let registered = began.elapsed();
+            for index in 0..100_000 {
+                router.unregister_routes(&format!("w{index}"));
+            }
+            assert!(lock_routes(router.workload_to_host.lock()).is_empty());
+            eprintln!(
+                "replicas={replicas}: register={registered:?}, register+remove={:?}",
+                began.elapsed()
+            );
+        }
     }
 
     /// A body error a local dispatch already produced reaches the guest as
