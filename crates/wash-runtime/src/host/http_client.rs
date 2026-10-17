@@ -898,9 +898,10 @@ pub struct WorkloadClients {
     /// before any request builds a client, and is dropped when it unbinds.
     call_concurrency: Arc<std::sync::RwLock<BTreeMap<String, usize>>>,
     clients: moka::sync::Cache<String, PooledClient>,
-    /// Set while a pass that drops invalidated clients is queued, so a burst
-    /// of unbinds queues one rather than one each.
-    release_queued: Arc<std::sync::atomic::AtomicBool>,
+    /// Unbinds whose invalidated clients have not been dropped yet. Non-zero
+    /// while a task is dropping them, so a burst of unbinds runs one task
+    /// rather than one each.
+    release_pending: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl WorkloadClients {
@@ -946,7 +947,7 @@ impl WorkloadClients {
             tls,
             quotas,
             call_concurrency: Arc::new(std::sync::RwLock::new(BTreeMap::new())),
-            release_queued: Arc::default(),
+            release_pending: Arc::default(),
             clients: moka::sync::Cache::builder()
                 .time_to_idle(WORKLOAD_CLIENT_IDLE)
                 .build(),
@@ -1040,20 +1041,32 @@ impl WorkloadClients {
     /// moka may defer dropping an evicted value to a maintenance pass, and
     /// until then its pool keeps its idle connections, and the permits they
     /// pin. Running that pass inline put the whole cache's pending work on
-    /// every unbind, so it runs off the caller's thread, once for however many
-    /// unbinds arrive before it starts.
+    /// every unbind, so it runs off the caller's thread, on one task at a time
+    /// that keeps passing until no unbind arrived during its last pass.
     fn release_invalidated(&self) {
         use std::sync::atomic::Ordering;
-        if self.release_queued.swap(true, Ordering::AcqRel) {
+        // Only the unbind that finds nothing pending starts a task: a burst
+        // otherwise spawned one blocking task per unbind, each queueing on
+        // moka's maintenance lock behind the last.
+        if self.release_pending.fetch_add(1, Ordering::AcqRel) != 0 {
             return;
         }
         let clients = self.clients.clone();
-        let queued = Arc::clone(&self.release_queued);
+        let pending = Arc::clone(&self.release_pending);
         let release = move || {
-            // Cleared first, so an invalidation landing during the pass
-            // queues another rather than relying on this one to see it.
-            queued.store(false, Ordering::Release);
-            clients.run_pending_tasks();
+            loop {
+                let seen = pending.load(Ordering::Acquire);
+                clients.run_pending_tasks();
+                // An unbind that landed during the pass found the count
+                // non-zero and left its invalidation to this task, so go round
+                // again for it rather than stopping.
+                if pending
+                    .compare_exchange(seen, 0, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    break;
+                }
+            }
         };
         match tokio::runtime::Handle::try_current() {
             Ok(runtime) => drop(runtime.spawn_blocking(release)),
