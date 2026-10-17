@@ -213,9 +213,10 @@ impl HostPlugin for DynamicConfig {
             return Ok(());
         };
         // A host component plugin's own bind-time config is filed under its
-        // plugin id as both ids (`component_host::link_native_imports`), and
-        // workload ids come from the caller. A workload that happens to carry a
-        // plugin's id stops without taking that plugin's config with it.
+        // plugin id as both ids (`component_host::link_native_imports`). The
+        // host refuses a workload id equal to a plugin id
+        // (`Host::workload_reserve`); this keeps the plugin's own entry even
+        // if a workload with that id is ever bound some other way.
         components.retain(|component_id, _| component_id.as_ref() == workload_id);
         if components.is_empty() {
             config.remove(workload_id);

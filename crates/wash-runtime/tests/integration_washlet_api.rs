@@ -125,6 +125,8 @@ struct TestHarnessBuilder {
     heartbeat_interval: Option<Duration>,
     max_concurrent_starts: Option<usize>,
     ingress: bool,
+    #[cfg_attr(not(feature = "wasi-config"), allow(dead_code))]
+    config_plugin: bool,
 }
 
 impl TestHarnessBuilder {
@@ -145,6 +147,14 @@ impl TestHarnessBuilder {
         self
     }
 
+    /// Register the `wasi:config` native plugin, so its id is a registered
+    /// plugin id on this host.
+    #[cfg_attr(not(feature = "wasi-config"), allow(dead_code))]
+    fn with_config_plugin(mut self) -> Self {
+        self.config_plugin = true;
+        self
+    }
+
     async fn start(self) -> Result<TestHarness> {
         tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -162,6 +172,12 @@ impl TestHarnessBuilder {
         }
         if let Some(starts) = self.max_concurrent_starts {
             builder = builder.with_max_concurrent_starts(starts);
+        }
+        #[cfg(feature = "wasi-config")]
+        if self.config_plugin {
+            builder = builder.with_plugin(Arc::new(
+                wash_runtime::plugin::wasi_config::DynamicConfig::default(),
+            ))?;
         }
         let mut ingress = None;
         if self.ingress {
@@ -838,6 +854,42 @@ async fn duplicate_workload_id_rejected_over_washlet_api() -> Result<()> {
         v2::WorkloadState::Running,
         "restart after stop should run: {}",
         restarted.message
+    );
+
+    harness.shutdown().await
+}
+
+/// A workload id equal to a registered plugin id is refused over the wire the
+/// same way a duplicate is: `WORKLOAD_STATE_ERROR`, the id echoed, and nothing
+/// left reserved, so the operator's status poll converges on NOT_FOUND. An id
+/// unrelated to any plugin still starts.
+#[cfg(feature = "wasi-config")]
+#[tokio::test]
+#[ignore = "requires Docker (NATS) or NATS_URL; run with `cargo test --include-ignored`"]
+async fn plugin_workload_id_rejected_over_washlet_api() -> Result<()> {
+    let harness = TestHarness::builder().with_config_plugin().start().await?;
+    let plugin_id = "wasi-config";
+
+    let refused = harness.start(&empty_start_request(plugin_id)).await?;
+    assert_eq!(refused.workload_state(), v2::WorkloadState::Error);
+    assert_eq!(
+        refused.message,
+        format!("Workload ID [{plugin_id}] is reserved by host plugin [{plugin_id}]"),
+    );
+    assert_eq!(refused.workload_id, plugin_id);
+    assert_eq!(
+        harness.status(plugin_id).await?.workload_state(),
+        v2::WorkloadState::NotFound,
+        "a refused start must leave no reservation behind"
+    );
+
+    let unrelated = "washlet-api-e2e-not-a-plugin";
+    let started = harness.start(&empty_start_request(unrelated)).await?;
+    assert_eq!(
+        started.workload_state(),
+        v2::WorkloadState::Running,
+        "an id unrelated to any plugin should start: {}",
+        started.message
     );
 
     harness.shutdown().await
