@@ -44,6 +44,24 @@ mod settings_tests {
         assert!(resolve_settings(&args, &machine).is_err());
         Ok(())
     }
+
+    #[test]
+    fn default_budget_leaves_room_inside_the_container() -> Result<()> {
+        let mut machine = Machine::detect();
+        machine.memory_total_bytes = 64 << 30;
+        machine.memory_budget_bytes = Some(512 << 20);
+        let args = Args::try_parse_from(["bench-scale"])?;
+        assert_eq!(
+            resolve_settings(&args, &machine)?.memory_limit_bytes,
+            256 << 20
+        );
+        let explicit = Args::try_parse_from(["bench-scale", "--memory-limit", "1GiB"])?;
+        assert_eq!(
+            resolve_settings(&explicit, &machine)?.memory_limit_bytes,
+            1 << 30
+        );
+        Ok(())
+    }
 }
 
 fn main() -> ExitCode {
@@ -85,8 +103,12 @@ fn resolve_settings(args: &Args, machine: &Machine) -> Result<Settings> {
     }
     let memory_limit_bytes = match &args.memory_limit {
         Some(limit) => size::parse(limit).context("--memory-limit")?,
-        None if machine.memory_total_bytes > 0 => machine.memory_total_bytes / 2,
-        None => bail!("cannot read physical memory; pass --memory-limit"),
+        None => {
+            machine
+                .memory_budget_bytes
+                .context("cannot detect a memory budget; pass --memory-limit")?
+                / 2
+        }
     };
     let core_instances = args.core_instances.unwrap_or_else(|| {
         provision::derive_core_instances(

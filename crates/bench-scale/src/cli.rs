@@ -32,7 +32,8 @@ pub struct Args {
 
     /// The host's memory budget (e.g. 4GiB): passed to the host where it
     /// takes one, and the footprint at which the bench stops. Default: half
-    /// of physical memory.
+    /// of the smaller of physical memory and the cgroup limit, leaving room
+    /// for the benchmark, registry, and NATS processes.
     #[arg(long, env = "BENCH_SCALE_MEMORY_LIMIT")]
     pub memory_limit: Option<String>,
 
