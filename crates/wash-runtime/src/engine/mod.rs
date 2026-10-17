@@ -1613,7 +1613,9 @@ impl EngineBuilder {
             Some(limit) => {
                 let guard = Arc::new(process_memory::ProcessMemoryGuard::new(limit));
                 guard.spawn_sampler()?;
-                guard.register_metrics(&opentelemetry::global::meter("wash-runtime"));
+                process_memory::ProcessMemoryGuard::register_metrics(
+                    &opentelemetry::global::meter("wash-runtime"),
+                );
                 Some(guard)
             }
             None => None,
