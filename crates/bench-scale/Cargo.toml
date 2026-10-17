@@ -23,6 +23,7 @@ async-nats = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["std"] }
 flate2 = { workspace = true, features = ["rust_backend"] }
+libc = { workspace = true }
 futures = { workspace = true, features = ["std"] }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["server", "http1"] }
@@ -34,5 +35,9 @@ sha2 = { workspace = true }
 sysinfo = { workspace = true }
 tar = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true, features = ["rt"] }
 wit-component = { workspace = true }
 wasi-preview1-component-adapter-provider = "46"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
