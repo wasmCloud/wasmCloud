@@ -815,14 +815,26 @@ fn pull_coalescer() -> &'static Coalescer<PullKey, Arc<Pulled>> {
     // its whole component for the reuse window, and a burst of large images
     // would otherwise all stay resident.
     PULLS.get_or_init(|| {
-        Coalescer::new(PULL_REUSE_BYTES, PULL_JOIN, PULL_REUSE, |pulled| {
-            u32::try_from(pulled.bytes.len()).unwrap_or(u32::MAX)
-        })
+        Coalescer::with_min_weight(
+            PULL_REUSE_BYTES,
+            PULL_JOIN,
+            PULL_REUSE,
+            PULL_ENTRY_WEIGHT,
+            |pulled| {
+                u32::try_from(pulled.bytes.len())
+                    .unwrap_or(u32::MAX)
+                    .saturating_add(PULL_ENTRY_WEIGHT)
+            },
+        )
     })
 }
 
 /// The most component bytes finished pulls hold for reuse at once.
 const PULL_REUSE_BYTES: u64 = 256 * 1024 * 1024;
+/// Account for keys, cells and error chains even when no bytes were pulled.
+/// This also limits the cache to about 16k small/pending/failed entries. Moka's
+/// maintenance is eventual; this is a retention target, not a strict RSS cap.
+const PULL_ENTRY_WEIGHT: u32 = 16 * 1024;
 
 /// Folds concurrent identical requests into one: the first caller does the
 /// work and the others wait for its result, which then answers the same
@@ -872,17 +884,26 @@ where
     K: std::hash::Hash + Eq + Clone + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    /// `capacity` is in the units `weigh` gives a finished success. An entry
-    /// still in flight, or one that failed, weighs one.
+    #[cfg(test)]
     fn new(capacity: u64, join: Duration, reuse: Duration, weigh: fn(&V) -> u32) -> Self {
+        Self::with_min_weight(capacity, join, reuse, 1, weigh)
+    }
+
+    fn with_min_weight(
+        capacity: u64,
+        join: Duration,
+        reuse: Duration,
+        minimum: u32,
+        weigh: fn(&V) -> u32,
+    ) -> Self {
         Self {
             cells: moka::sync::Cache::builder()
                 .max_capacity(capacity)
                 // Weighed again when `run` re-inserts the finished cell.
                 .weigher(
                     move |_key: &K, cell: &Arc<CoalescedCell<V>>| match cell.get() {
-                        Some(Ok(value)) => weigh(value).max(1),
-                        _ => 1,
+                        Some(Ok(value)) => weigh(value).max(minimum.max(1)),
+                        _ => minimum.max(1),
                     },
                 )
                 .expire_after(CoalescedExpiry { join, reuse })
@@ -1355,6 +1376,38 @@ pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn failed_and_oversized_pulls_have_bounded_retention() {
+        let cache: Coalescer<String, u32> = Coalescer::with_min_weight(
+            16 * u64::from(PULL_ENTRY_WEIGHT),
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            PULL_ENTRY_WEIGHT,
+            |size| *size,
+        );
+        for index in 0..256 {
+            assert!(
+                cache
+                    .run(format!("registry/image-{index}"), || async {
+                        anyhow::bail!("unavailable")
+                    })
+                    .await
+                    .is_err()
+            );
+        }
+        cache.cells.run_pending_tasks();
+        assert!(cache.cells.entry_count() <= 16);
+        assert_eq!(
+            cache
+                .run("oversized".into(), || async { Ok(u32::MAX) })
+                .await
+                .unwrap(),
+            u32::MAX
+        );
+        cache.cells.run_pending_tasks();
+        assert!(!cache.cells.contains_key("oversized"));
+    }
 
     #[tokio::test]
     async fn credential_misses_coalesce_without_blocking_the_runtime() {
