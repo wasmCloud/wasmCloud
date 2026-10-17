@@ -398,10 +398,10 @@ pub(crate) async fn new_store_from_templates(
             .await
             .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e));
         store.data_mut().set_active_ctx(&active_id)?;
-        let instance = instantiate_result.map_err(|e| {
-            anyhow::anyhow!(
-                "failed to instantiate linked component '{linked_id}' in ephemeral store: {e}"
-            )
+        // Context rather than a new error, so the pool refusal and its remedy
+        // stay in the chain underneath.
+        let instance = instantiate_result.with_context(|| {
+            format!("failed to instantiate linked component '{linked_id}' in ephemeral store")
         })?;
         store
             .data_mut()
