@@ -129,11 +129,16 @@ pub fn process_footprint() -> Option<u64> {
 /// On Linux it keeps `/proc/self/status` open and re-reads it from the start
 /// into one buffer: no open, and so no `EMFILE` on a host at its descriptor
 /// limit, and no allocation per sample.
+///
+/// Elsewhere `sysinfo` keeps one `System` for the life of the reader rather
+/// than building one per sample.
 struct FootprintReader {
     #[cfg(target_os = "linux")]
     status: Option<std::fs::File>,
     #[cfg(target_os = "linux")]
     buf: String,
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    system: sysinfo::System,
 }
 
 impl FootprintReader {
@@ -143,6 +148,8 @@ impl FootprintReader {
             status: None,
             #[cfg(target_os = "linux")]
             buf: String::with_capacity(2048),
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+            system: sysinfo::System::new_with_specifics(sysinfo::RefreshKind::new()),
         }
     }
 
@@ -165,9 +172,22 @@ impl FootprintReader {
         linux_footprint(&self.buf)
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     fn read(&mut self) -> Option<u64> {
         read_footprint()
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    fn read(&mut self) -> Option<u64> {
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
+
+        let pid = sysinfo::get_current_pid().ok()?;
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            false,
+            ProcessRefreshKind::new().with_memory(),
+        );
+        self.system.process(pid).map(|process| process.memory())
     }
 }
 
@@ -201,20 +221,6 @@ fn linux_footprint(status: &str) -> Option<u64> {
     // Swap is absent on kernels built without it, which means none.
     let kib_total = kib("VmRSS:")?.saturating_add(kib("VmSwap:").unwrap_or(0));
     Some(kib_total.saturating_mul(1024))
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn read_footprint() -> Option<u64> {
-    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
-
-    let pid = sysinfo::get_current_pid().ok()?;
-    let mut system = System::new_with_specifics(RefreshKind::new());
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[pid]),
-        false,
-        ProcessRefreshKind::new().with_memory(),
-    );
-    system.process(pid).map(|process| process.memory())
 }
 
 /// The process's footprint against `max_process_memory`, shared by the
@@ -431,31 +437,35 @@ impl ProcessMemoryGuard {
     /// Say where the process stands, for the periodic host status line: at
     /// `info` while it is above [`HIGH_PERCENT`], `debug` otherwise.
     pub fn report(&self) {
-        let state = self.state();
-        let footprint = render_bytes(self.footprint_bytes());
-        let high_water = render_bytes(self.high_water_bytes());
-        let limit = render_bytes(self.limit);
-        if state == ProcessMemoryState::Normal {
-            tracing::debug!(%footprint, %high_water, max_process_memory = %limit, "process memory");
+        // Rendered in the fields, which are only evaluated when the line is
+        // enabled: the usual case logs nothing at `debug`.
+        if self.state() == ProcessMemoryState::Normal {
+            tracing::debug!(
+                footprint = %render_bytes(self.footprint_bytes()),
+                high_water = %render_bytes(self.high_water_bytes()),
+                max_process_memory = %render_bytes(self.limit),
+                "process memory"
+            );
         } else {
             tracing::info!(
-                state = state.as_str(),
-                %footprint,
-                %high_water,
-                max_process_memory = %limit,
+                state = self.state().as_str(),
+                footprint = %render_bytes(self.footprint_bytes()),
+                high_water = %render_bytes(self.high_water_bytes()),
+                max_process_memory = %render_bytes(self.limit),
                 "process memory is close to or past max-process-memory"
             );
         }
     }
 
-    /// Start sampling the footprint every [`SAMPLE_INTERVAL`].
+    /// Have the process's sampler feed this guard every [`SAMPLE_INTERVAL`].
     ///
-    /// Holds a weak reference, like the epoch ticker, so a dropped engine's
-    /// guard ends its thread at the next tick. Takes one reading before
-    /// returning, so the guard is never acting on a zero.
+    /// The footprint is the process's, not the engine's, so one thread reads
+    /// it for every guard in the process, starting with the first guard and
+    /// ending once the last is dropped. It holds the guards weakly, like the
+    /// epoch ticker, so a dropped engine is not kept alive by it. Takes one
+    /// reading before returning, so the guard is never acting on a zero.
     pub fn spawn_sampler(self: &Arc<Self>) -> anyhow::Result<()> {
-        let mut reader = FootprintReader::new();
-        let Some(first) = reader.read() else {
+        let Some(first) = process_footprint() else {
             tracing::warn!(
                 "cannot read this process's memory footprint on this platform; \
                  max-process-memory will not be enforced"
@@ -463,68 +473,116 @@ impl ProcessMemoryGuard {
             return Ok(());
         };
         self.observe(first);
-        let weak = Arc::downgrade(self);
+        let mut sampled = lock_ignoring_poison(&SAMPLED);
+        sampled.guards.retain(|guard| guard.strong_count() > 0);
+        sampled.guards.push(Arc::downgrade(self));
+        if sampled.running {
+            return Ok(());
+        }
         std::thread::Builder::new()
             .name("wash-process-memory".to_string())
-            .spawn(move || {
-                let mut failed_reads = 0_u32;
-                loop {
-                    std::thread::sleep(SAMPLE_INTERVAL);
-                    let Some(guard) = weak.upgrade() else {
-                        return;
-                    };
-                    match reader.read() {
-                        Some(footprint) => {
-                            failed_reads = 0;
-                            guard.observe(footprint);
-                        }
-                        None => {
-                            failed_reads = failed_reads.saturating_add(1);
-                            if failed_reads >= MAX_FAILED_READS {
-                                guard.lose_reading();
-                            }
-                        }
-                    }
-                }
-            })
+            .spawn(sample_forever)
             .context("failed to spawn the process memory sampler thread")?;
+        sampled.running = true;
         Ok(())
     }
 
-    /// Publish the guard as OpenTelemetry gauges, read on the exporter's own
-    /// schedule like the guest memory budget's.
-    pub(crate) fn register_metrics(self: &Arc<Self>, meter: &opentelemetry::metrics::Meter) {
-        macro_rules! observe {
-            ($name:literal, $doc:literal, $read:expr) => {{
-                let guard = Arc::downgrade(self);
-                let _ = meter
-                    .u64_observable_gauge($name)
-                    .with_description($doc)
-                    .with_unit("By")
-                    .with_callback(move |observer| {
-                        if let Some(guard) = guard.upgrade() {
+    /// Publish the process's memory as OpenTelemetry gauges, read on the
+    /// exporter's own schedule like the guest memory budget's.
+    ///
+    /// Once per process, however many engines call it: the footprint is the
+    /// process's, so a series per engine would only repeat it. The limit
+    /// reported is the lowest any live guard holds, the one that refuses
+    /// first.
+    pub(crate) fn register_metrics(meter: &opentelemetry::metrics::Meter) {
+        static REGISTERED: std::sync::Once = std::sync::Once::new();
+        REGISTERED.call_once(|| {
+            macro_rules! observe {
+                ($name:literal, $doc:literal, $read:expr) => {{
+                    let _ = meter
+                        .u64_observable_gauge($name)
+                        .with_description($doc)
+                        .with_unit("By")
+                        .with_callback(|observer| {
                             #[allow(clippy::redundant_closure_call)]
-                            observer.observe($read(&guard), &[]);
-                        }
-                    })
-                    .build();
-            }};
+                            let value = $read();
+                            if let Some(value) = value {
+                                observer.observe(value, &[]);
+                            }
+                        })
+                        .build();
+                }};
+            }
+            observe!(
+                "process_memory.footprint",
+                "This process's memory footprint, counting swapped and compressed pages",
+                || live_guards(|guards| guards.map(|g| g.footprint_bytes()).max())
+            );
+            observe!(
+                "process_memory.high_water",
+                "The largest memory footprint sampled since this host started",
+                || live_guards(|guards| guards.map(|g| g.high_water_bytes()).max())
+            );
+            observe!(
+                "process_memory.limit",
+                "This host's max-process-memory",
+                || live_guards(|guards| guards.map(|g| g.limit_bytes()).min())
+            );
+        });
+    }
+}
+
+/// Every guard in the process, and whether a thread is sampling for them.
+struct Sampled {
+    guards: Vec<std::sync::Weak<ProcessMemoryGuard>>,
+    running: bool,
+}
+
+static SAMPLED: Mutex<Sampled> = Mutex::new(Sampled {
+    guards: Vec::new(),
+    running: false,
+});
+
+/// A poisoned lock here only means a panic elsewhere mid-update of plain data.
+fn lock_ignoring_poison<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// `read` over the live guards, under the registry's lock.
+fn live_guards<R>(read: impl FnOnce(&mut dyn Iterator<Item = Arc<ProcessMemoryGuard>>) -> R) -> R {
+    let sampled = lock_ignoring_poison(&SAMPLED);
+    read(&mut sampled.guards.iter().filter_map(std::sync::Weak::upgrade))
+}
+
+/// The process's one sampler: reads the footprint every [`SAMPLE_INTERVAL`]
+/// and hands it to every live guard, until none is left.
+fn sample_forever() {
+    let mut reader = FootprintReader::new();
+    let mut failed_reads = 0_u32;
+    loop {
+        std::thread::sleep(SAMPLE_INTERVAL);
+        let reading = reader.read();
+        // Decided under the lock `spawn_sampler` takes, so a guard registered
+        // as this thread gives up finds `running` cleared and starts another.
+        let mut sampled = lock_ignoring_poison(&SAMPLED);
+        sampled.guards.retain(|guard| guard.strong_count() > 0);
+        if sampled.guards.is_empty() {
+            sampled.running = false;
+            return;
         }
-        observe!(
-            "process_memory.footprint",
-            "This process's memory footprint, counting swapped and compressed pages",
-            |g: &Arc<Self>| g.footprint_bytes()
-        );
-        observe!(
-            "process_memory.high_water",
-            "The largest memory footprint sampled since this host started",
-            |g: &Arc<Self>| g.high_water_bytes()
-        );
-        observe!(
-            "process_memory.limit",
-            "This host's max-process-memory",
-            |g: &Arc<Self>| g.limit_bytes()
-        );
+        match reading {
+            Some(_) => failed_reads = 0,
+            None => failed_reads = failed_reads.saturating_add(1),
+        }
+        for guard in sampled.guards.iter().filter_map(std::sync::Weak::upgrade) {
+            match reading {
+                Some(footprint) => guard.observe(footprint),
+                None if failed_reads >= MAX_FAILED_READS => guard.lose_reading(),
+                None => {}
+            }
+        }
     }
 }
 
