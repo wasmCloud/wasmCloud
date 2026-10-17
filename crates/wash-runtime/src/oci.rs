@@ -782,10 +782,18 @@ impl AuthId {
 
 fn pull_coalescer() -> &'static Coalescer<PullKey, Arc<Pulled>> {
     static PULLS: OnceLock<Coalescer<PullKey, Arc<Pulled>>> = OnceLock::new();
-    // Distinct references pulled within a few seconds of each other; a bound
-    // only so a pathological burst cannot hold every image it pulled.
-    PULLS.get_or_init(|| Coalescer::new(256, PULL_JOIN, PULL_REUSE))
+    // Bounded by the bytes finished pulls hold, not their count: each keeps
+    // its whole component for the reuse window, and a burst of large images
+    // would otherwise all stay resident.
+    PULLS.get_or_init(|| {
+        Coalescer::new(PULL_REUSE_BYTES, PULL_JOIN, PULL_REUSE, |pulled| {
+            u32::try_from(pulled.bytes.len()).unwrap_or(u32::MAX)
+        })
+    })
 }
+
+/// The most component bytes finished pulls hold for reuse at once.
+const PULL_REUSE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Folds concurrent identical requests into one: the first caller does the
 /// work and the others wait for its result, which then answers the same
@@ -835,10 +843,19 @@ where
     K: std::hash::Hash + Eq + Clone + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    fn new(capacity: u64, join: Duration, reuse: Duration) -> Self {
+    /// `capacity` is in the units `weigh` gives a finished success. An entry
+    /// still in flight, or one that failed, weighs one.
+    fn new(capacity: u64, join: Duration, reuse: Duration, weigh: fn(&V) -> u32) -> Self {
         Self {
             cells: moka::sync::Cache::builder()
                 .max_capacity(capacity)
+                // Weighed again when `run` re-inserts the finished cell.
+                .weigher(
+                    move |_key: &K, cell: &Arc<CoalescedCell<V>>| match cell.get() {
+                        Some(Ok(value)) => weigh(value).max(1),
+                        _ => 1,
+                    },
+                )
                 .expire_after(CoalescedExpiry { join, reuse })
                 .build(),
         }
@@ -1219,7 +1236,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let coalescer: Coalescer<&str, u32> =
-            Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60));
+            Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
         let runs = AtomicUsize::new(0);
         let work = |value| {
             let runs = &runs;
@@ -1239,12 +1256,33 @@ mod tests {
         assert_eq!(runs.load(Ordering::SeqCst), 2);
     }
 
+    /// Finished results are bounded by their weight, not their count, so a
+    /// burst of large pulls cannot all stay resident for the reuse window.
+    #[tokio::test]
+    async fn finished_results_are_bounded_by_weight() {
+        let coalescer: Coalescer<&str, u32> =
+            Coalescer::new(10, Duration::from_secs(60), Duration::from_secs(60), |v| *v);
+        for key in ["a", "b", "c"] {
+            assert_eq!(coalescer.run(key, || async { Ok(8) }).await.unwrap(), 8);
+        }
+        coalescer.cells.run_pending_tasks();
+        assert!(
+            coalescer.cells.weighted_size() <= 10,
+            "three results of 8 cannot all fit in 10: {}",
+            coalescer.cells.weighted_size()
+        );
+    }
+
     /// A failure answers the requests waiting on it rather than letting each
     /// retry in turn, and once its window passes the next request tries again.
     #[tokio::test]
     async fn a_failed_pull_answers_its_waiters_then_expires() {
-        let coalescer: Coalescer<&str, u32> =
-            Coalescer::new(16, Duration::from_secs(60), Duration::from_millis(50));
+        let coalescer: Coalescer<&str, u32> = Coalescer::new(
+            16,
+            Duration::from_secs(60),
+            Duration::from_millis(50),
+            |_| 1,
+        );
 
         let (a, b) = tokio::join!(
             coalescer.run("ref", || async {
