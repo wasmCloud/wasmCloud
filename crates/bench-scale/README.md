@@ -143,7 +143,7 @@ except the repeatable `--host-arg`.
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--flavour` | `both` | `warm`, `scale-to-zero` or `both` (each on a fresh host) |
-| `--memory-limit` | half of physical RAM | host memory budget and the footprint the bench stops at (`4GiB`, `512MiB`, `1G`) |
+| `--memory-limit` | half of the smaller of physical RAM and the cgroup limit | host memory budget and the footprint the bench stops at (`4GiB`, `512MiB`, `1G`) |
 | `--max-components` | theoretical × overshoot | stop after this many workloads |
 | `--overshoot` | `1.1` | how far past the theoretical limit the default cap goes |
 | `--step` | `250` | workloads started between measurements |

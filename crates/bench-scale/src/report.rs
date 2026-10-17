@@ -9,6 +9,7 @@ use crate::size::{render, render_opt};
 pub struct Machine {
     pub cores: usize,
     pub memory_total_bytes: u64,
+    pub memory_budget_bytes: Option<u64>,
     pub os: String,
     pub kernel: String,
     pub arch: String,
@@ -23,6 +24,7 @@ impl Machine {
         Self {
             cores: std::thread::available_parallelism().map_or(1, |n| n.get()),
             memory_total_bytes: system.total_memory(),
+            memory_budget_bytes: bench_tools::memory::memory_budget(system.total_memory()),
             os: System::long_os_version().unwrap_or_else(|| std::env::consts::OS.to_string()),
             kernel: System::kernel_version().unwrap_or_default(),
             arch: std::env::consts::ARCH.to_string(),
