@@ -420,6 +420,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bench-scale"
+version = "2.10.3"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "bytes",
+ "clap",
+ "flate2",
+ "futures",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sysinfo",
+ "tar",
+ "tokio",
+]
+
+[[package]]
 name = "bench-tools"
 version = "2.10.3"
 dependencies = [
