@@ -122,6 +122,9 @@ fn main() -> Result<()> {
     }
     // Read here too, so a bad variable fails before any child starts.
     let settings = Settings::from_env()?;
+    for &flavour in &flavours {
+        settings.validate_flavour(flavour)?;
+    }
 
     let mut reports = Vec::new();
     for &cpus in &settings.cpus {
@@ -417,6 +420,15 @@ struct Settings {
 }
 
 impl Settings {
+    fn validate_flavour(&self, flavour: Flavour) -> Result<()> {
+        if flavour == Flavour::Warm && self.fixture != "http_handler_p3" {
+            bail!(
+                "warm runs require the P3 HTTP fixture; use WASH_SCALE_FIXTURE=p3 or run scale-to-zero"
+            );
+        }
+        Ok(())
+    }
+
     fn from_env() -> Result<Self> {
         Self::from_values(|key| std::env::var(key).ok().filter(|v| !v.trim().is_empty()))
     }
@@ -662,6 +674,7 @@ struct Report {
 }
 
 async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) -> Result<Report> {
+    settings.validate_flavour(flavour)?;
     let wasm = fixture_bytes(settings.fixture)?;
     let digest = fixture_digest(&wasm);
 
@@ -1360,6 +1373,16 @@ fn print_comparison(settings: &Settings, reports: &[Report]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn p2_cannot_be_reported_as_a_warm_pool() -> Result<()> {
+        let settings =
+            Settings::from_values(|key| (key == "WASH_SCALE_FIXTURE").then(|| "p2".into()))?;
+        assert!(settings.validate_flavour(Flavour::Warm).is_err());
+        settings.validate_flavour(Flavour::ScaleToZero)?;
+        Settings::from_values(|_| None)?.validate_flavour(Flavour::Warm)?;
+        Ok(())
+    }
 
     #[tokio::test(start_paused = true)]
     async fn partial_start_batches_keep_later_successes() {

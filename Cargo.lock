@@ -434,6 +434,8 @@ dependencies = [
  "sysinfo",
  "tar",
  "tokio",
+ "wasi-preview1-component-adapter-provider",
+ "wit-component 0.259.0",
 ]
 
 [[package]]
