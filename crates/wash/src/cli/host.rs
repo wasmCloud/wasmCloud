@@ -939,7 +939,7 @@ impl CliCommand for HostCommand {
         .map_err(|e| anyhow::anyhow!(e))?;
         // Blank counts as unset, like the sibling sizes: clap's `env` fallback
         // yields `Some("")` for a variable that is set but empty.
-        let max_process_memory = self
+        let max_process_memory_bytes = self
             .max_process_memory
             .as_deref()
             .map(str::trim)
@@ -948,7 +948,7 @@ impl CliCommand for HostCommand {
             .transpose()
             .map_err(|e| anyhow::anyhow!("invalid max-process-memory: {e}"))?;
         anyhow::ensure!(
-            max_process_memory != Some(0),
+            max_process_memory_bytes != Some(0),
             "max-process-memory must be greater than zero"
         );
         anyhow::ensure!(
@@ -1086,8 +1086,8 @@ impl CliCommand for HostCommand {
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         engine_builder = engine_builder.with_host_memory(host_memory);
         engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
-        if let Some(bytes) = max_process_memory {
-            engine_builder = engine_builder.with_max_process_memory(bytes);
+        if let Some(bytes) = max_process_memory_bytes {
+            engine_builder = engine_builder.with_max_process_memory_bytes(bytes);
         }
 
         let engine = engine_builder.build()?;
