@@ -327,7 +327,8 @@ pub struct HostCommand {
     /// `count` charges every guest `memory.grow` to the budget and records
     /// what it would have refused, but allows the growth anyway. Use it to
     /// size a budget: watch the reported high-water mark and `would_refuse`
-    /// count, then return to `enforce`.
+    /// count, then return to `enforce`. The separate `--max-process-memory`
+    /// limit remains enforced in either mode.
     ///
     /// `enforce` makes `--max-guest-memory` a real ceiling, so it has to leave
     /// the host room to be a host: wasmtime, compiled module images, NATS, OCI
