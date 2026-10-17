@@ -163,10 +163,12 @@ pub struct Args {
     pub nats_version: String,
 
     /// Component image to start instead of serving the built fixture.
+    /// Only scale-to-zero accepts an uninspected image; warm runs use --wasm
+    /// so the benchmark can verify its poolable P3 HTTP export.
     #[arg(long, env = "BENCH_SCALE_IMAGE")]
     pub image: Option<String>,
 
-    /// Serve this component instead of building the http-handler-p2 fixture.
+    /// Serve this P3 HTTP component instead of building the http-handler-p3 fixture.
     #[arg(long, env = "BENCH_SCALE_WASM", conflicts_with = "image")]
     pub wasm: Option<PathBuf>,
 }

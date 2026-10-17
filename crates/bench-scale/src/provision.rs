@@ -196,11 +196,11 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-pub const FIXTURE: &str = "http-handler-p2";
+pub const FIXTURE: &str = "http-handler-p3";
 
-/// Build the `http-handler-p2` fixture without wash: put the WIT packages its
+/// Build the poolable P3 fixture without wash: put the WIT packages its
 /// `wkg.toml` names into `wit/deps` (what `wash build`'s fetch does), then
-/// compile it straight to a wasip2 component with cargo.
+/// compile a wasip1 core module and wrap it with the same reactor adapter as wash.
 pub fn build_fixture(workspace: &Path, say: &dyn Fn(&str)) -> Result<PathBuf> {
     let fixtures = workspace.join("crates/wash-runtime/tests/fixtures");
     let fixture = fixtures.join(FIXTURE);
@@ -227,7 +227,7 @@ pub fn build_fixture(workspace: &Path, say: &dyn Fn(&str)) -> Result<PathBuf> {
             "build",
             "--release",
             "--target",
-            "wasm32-wasip2",
+            "wasm32-wasip1",
             "-p",
             FIXTURE,
         ])
@@ -243,11 +243,45 @@ pub fn build_fixture(workspace: &Path, say: &dyn Fn(&str)) -> Result<PathBuf> {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let wasm = fixtures.join("target/wasm32-wasip2/release/http_handler_p2.wasm");
+    let wasm = fixtures.join("target/wasm32-wasip1/release/http_handler_p3.wasm");
     if !wasm.exists() {
         bail!("cargo built {FIXTURE} but {} is missing", wasm.display());
     }
-    Ok(wasm)
+    let component = wit_component::ComponentEncoder::default()
+        .validate(true)
+        .module(&std::fs::read(&wasm)?)?
+        .adapter(
+            "wasi_snapshot_preview1",
+            wasi_preview1_component_adapter_provider::WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
+        )?
+        .encode()
+        .context("wrapping the P3 fixture as a component")?;
+    validate_poolable_http(&component)?;
+    let path = wasm.with_extension("component.wasm");
+    std::fs::write(&path, component)?;
+    Ok(path)
+}
+
+/// The experiment needs a reusable P3 HTTP handler, not a single-use P2 store.
+pub fn validate_poolable_http(bytes: &[u8]) -> Result<()> {
+    let wit_component::DecodedWasm::Component(resolve, world) = wit_component::decode(bytes)?
+    else {
+        bail!("the benchmark requires a P3 HTTP component");
+    };
+    let world = resolve
+        .worlds
+        .get(world)
+        .context("component world is missing")?;
+    if world
+        .exports
+        .keys()
+        .any(|key| resolve.name_world_key(key) == "wasi:http/handler@0.3.0")
+    {
+        return Ok(());
+    }
+    bail!(
+        "the benchmark requires a poolable wasi:http/handler@0.3.0 export; P2 HTTP instances cannot stay warm"
+    )
 }
 
 /// Pool slots sized the way a large host sizes them: half the usable
@@ -291,6 +325,19 @@ pub fn max_map_count() -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_component_without_a_p3_handler_is_rejected() {
+        assert!(validate_poolable_http(b"\0asm\x0d\0\x01\0").is_err());
+        assert!(validate_poolable_http(b"not a component").is_err());
+    }
+
+    #[test]
+    #[ignore = "builds the fixture; requires the wasm32-wasip1 Rust target"]
+    fn the_default_fixture_has_a_poolable_http_export() -> Result<()> {
+        let path = build_fixture(&workspace_dir(), &|line| eprintln!("{line}"))?;
+        validate_poolable_http(&std::fs::read(path)?)
+    }
 
     #[test]
     fn release_urls() {

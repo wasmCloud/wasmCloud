@@ -65,8 +65,8 @@ A flavour stops at the first of:
 | `starts-failed` | most of a step's starts failed for another reason |
 | `cap` | `--max-components`, or the theoretical limit × `--overshoot`, was reached |
 
-"Served" is the most workloads at a step where most sampled
-(and, for warm, warm-up) requests succeeded.
+"Served" is the largest workload count with a nonempty, error-free sample
+and no failed warm-up requests. Zero samples are rejected.
 
 ## Provisioning
 
@@ -82,13 +82,16 @@ so a second run downloads and builds nothing.
   wash 2.x is not on crates.io, and its binstall metadata points at stale tags.
 - **NATS**: `--nats-url`, or a `nats-server` (`--nats-version`, default 2.12.8)
   downloaded from its GitHub release and run on a free loopback port.
-- **Component**: `--image <oci ref>` for an image the host can already pull,
-  `--wasm <path>` for a component to serve,
-  or by default the `http-handler-p2` test fixture
-  (`crates/wash-runtime/tests/fixtures/http-handler-p2`, exporting `wasi:http/incoming-handler@0.2.2`).
+- **Component**: `--image <oci ref> --flavour scale-to-zero` for an image the host can already pull,
+  `--wasm <path>` for a P3 HTTP component to inspect and serve,
+  or by default the `http-handler-p3` test fixture
+  (`crates/wash-runtime/tests/fixtures/http-handler-p3`, exporting `wasi:http/handler@0.3.0`).
   The fixture is built without wash:
   the WIT packages its `wkg.toml` names are copied into its `wit/deps`,
-  then `cargo build --target wasm32-wasip2 --release` builds the component directly.
+  then `cargo build --target wasm32-wasip1 --release` builds the core module,
+  which is wrapped with the WASI reactor adapter. Install the `wasm32-wasip1` Rust target first.
+  Warm runs require a verified P3 HTTP export; an external OCI reference cannot
+  establish that, so use `--wasm` for a custom warm experiment.
   The component is served from a read-only OCI registry inside the bench,
   tagged by its content hash: `127.0.0.1:<port>/bench/http-handler:<hash>`.
   The registry answers exactly what the host's OCI client (oci-client 0.17) asks in a pull:
@@ -125,7 +128,7 @@ cargo xtask bench-scale --host-nats-only --nats-url nats://127.0.0.1:4222 \
   --host-pid 12345 --report
 
 # Any image the host can pull
-cargo xtask bench-scale --image registry.example.com/team/http-handler:1.0.0 --report
+cargo xtask bench-scale --image registry.example.com/team/http-handler:1.0.0 --flavour scale-to-zero --report
 ```
 
 Raw placeholders are `{nats_url}`, `{memory_limit}` and `{guest_memory}` (bytes),
