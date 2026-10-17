@@ -495,24 +495,27 @@ pub trait Router: Send + Sync + 'static {
 
 /// Router that routes requests by 'Host' header, configured via WitInterface config
 ///
-/// The tables are updated in place. A host holding 100k workloads cannot
-/// afford to copy a whole table on every start and stop (loading N workloads
-/// would cost O(N²)), so a write touches only the routes of the workload it
-/// registers or unbinds.
+/// Requests never lock and never write shared memory to read the table: each
+/// shard is an [`ArcSwap`](arc_swap::ArcSwap) snapshot, and a lookup matches
+/// inside a borrowed guard. Register and unbind therefore never make a request
+/// wait; a request in flight keeps matching against the snapshot it loaded.
 ///
-/// Every lock here is a std one and is never held across an await or a route
-/// match: a request holds one shard's read lock for a hash lookup and an `Arc`
-/// clone, a writer the shard's write lock for the one entry it changes.
+/// A writer copies only the shards its workload's routes hash to, once each,
+/// and that copy is a shallow one (an `Arc` clone per hostname in the shard)
+/// plus a deep copy of just the hostnames it edits. A host holding 100k
+/// workloads cannot afford to copy a whole table on every start and stop
+/// (loading N workloads would cost O(N²)), and many shards keep each copy
+/// small.
 pub struct DynamicRouter {
     /// Maps a hostname to the path-scoped buckets registered under it, split
-    /// across shards by hostname so requests for different hostnames do not
-    /// contend on one lock word.
-    hosts: [std::sync::RwLock<HostBuckets>; ROUTE_SHARDS],
-    hasher: std::hash::RandomState,
+    /// across shards by hostname so one write copies a small slice of the
+    /// table.
+    hosts: Box<[RouteShard; ROUTE_SHARDS]>,
     /// Maps workload_id -> every route (primary + aliases, each with its path
     /// prefix) registered for it, so `on_workload_unbind` can remove all
     /// entries cleanly. Writers hold it across their whole update, which keeps
-    /// it and `hosts` in step and serializes writers; requests never take it.
+    /// it and `hosts` in step and serializes writers, so a writer's
+    /// load-copy-store of a shard never races another; requests never take it.
     workload_to_host: std::sync::Mutex<HashMap<String, Vec<IngressRoute>>>,
 }
 
@@ -522,21 +525,24 @@ pub struct DynamicRouter {
 /// ordered scan that stops at the first match. One hostname carries few
 /// prefixes in practice, so this stays cheaper than a trie.
 ///
-/// Each hostname's buckets sit behind their own `Arc` so a request matches
-/// against a snapshot after dropping the lock, and a write copies only the
-/// touched hostname's buckets, and only while a request still holds them
-/// (`Arc::make_mut`).
-type HostBuckets = HashMap<String, Arc<Vec<PathBucket>>>;
+/// Keys and each hostname's buckets sit behind their own `Arc`s so copying a
+/// shard to edit it clones pointers, not strings and buckets.
+type HostBuckets = HashMap<Arc<str>, Arc<Vec<PathBucket>>>;
 
-/// Enough shards that requests spread across cores rarely meet on one lock,
-/// few enough that an empty router stays small.
-const ROUTE_SHARDS: usize = 64;
+/// A shard on its own cache line pair, so a writer storing one shard does not
+/// invalidate the line readers of its neighbours load from.
+#[repr(align(128))]
+#[derive(Default)]
+struct RouteShard(arc_swap::ArcSwap<HostBuckets>);
+
+/// Enough shards that a write copies a small slice of a large table, few
+/// enough that an empty router stays small (32 KiB of shards).
+const ROUTE_SHARDS: usize = 256;
 
 impl Default for DynamicRouter {
     fn default() -> Self {
         Self {
-            hosts: std::array::from_fn(|_| Default::default()),
-            hasher: Default::default(),
+            hosts: Box::new(std::array::from_fn(|_| RouteShard::default())),
             workload_to_host: Default::default(),
         }
     }
@@ -597,13 +603,56 @@ impl PartialEq for PathBucket {
 
 impl Eq for PathBucket {}
 
-/// Take a route-table guard whether or not a writer panicked holding it: no
+/// Take the writers' lock whether or not a writer panicked holding it: no
 /// write can panic halfway through, so a poisoned table is still a whole one.
 fn lock_routes<G>(result: std::sync::LockResult<G>) -> G {
     result.unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The shard `host` lives in. FNV-1a rather than the maps' SipHash: it runs on
+/// every request, the shard index needs spread rather than DoS resistance (a
+/// probe cannot change which shard a registered name lives in), and it folds
+/// ASCII case so a request's mixed-case Host needs no lowercased copy to pick
+/// its shard.
+fn shard_index(host: &str) -> usize {
+    let hash = host.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte.to_ascii_lowercase())).wrapping_mul(0x0100_0000_01b3)
+    });
+    // `usize` is at least 32 bits wide, plenty to pick one of 256 shards.
+    (hash % ROUTE_SHARDS as u64) as usize
+}
+
 impl DynamicRouter {
+    fn shard(&self, index: usize) -> &arc_swap::ArcSwap<HostBuckets> {
+        let [first, ..] = &*self.hosts;
+        &self.hosts.get(index).unwrap_or(first).0
+    }
+
+    /// Apply `edit` to every route in `routes`, copying each touched shard
+    /// once and publishing it with one store. Callers hold `workload_to_host`,
+    /// which serializes writers, so nothing can store a shard between this
+    /// load and store.
+    fn edit_shards(
+        &self,
+        routes: &[IngressRoute],
+        mut edit: impl FnMut(&mut HostBuckets, &IngressRoute),
+    ) {
+        let mut by_shard: Vec<(usize, &IngressRoute)> =
+            routes.iter().map(|r| (shard_index(&r.host), r)).collect();
+        by_shard.sort_by_key(|(index, _)| *index);
+        for group in by_shard.chunk_by(|(a, _), (b, _)| a == b) {
+            let Some((index, _)) = group.first() else {
+                continue;
+            };
+            let shard = self.shard(*index);
+            let mut table = HostBuckets::clone(&shard.load());
+            for (_, route) in group {
+                edit(&mut table, route);
+            }
+            shard.store(Arc::new(table));
+        }
+    }
+
     /// Register `workload_id` under every route in `routes`, updating both the
     /// forward (host -> path buckets -> replicas) and reverse (workload ->
     /// routes) maps so [`Router::on_workload_unbind`] can later remove every
@@ -612,9 +661,8 @@ impl DynamicRouter {
     fn register_routes(&self, workload_id: &str, routes: &[IngressRoute]) {
         let mut workloads = lock_routes(self.workload_to_host.lock());
         workloads.insert(workload_id.to_string(), routes.to_vec());
-        for route in routes {
-            let mut shard = lock_routes(self.shard(&route.host).write());
-            let buckets = Arc::make_mut(shard.entry(route.host.clone()).or_default());
+        self.edit_shards(routes, |table, route| {
+            let buckets = Arc::make_mut(table.entry(Arc::from(route.host.as_str())).or_default());
             match buckets
                 .iter_mut()
                 .find(|b| b.prefix == route.path_prefix && b.scope == route.scope)
@@ -632,7 +680,7 @@ impl DynamicRouter {
                     buckets.sort();
                 }
             }
-        }
+        });
     }
 
     /// Remove every route `workload_id` registered, dropping emptied buckets
@@ -642,10 +690,9 @@ impl DynamicRouter {
         let Some(routes) = workloads.remove(workload_id) else {
             return;
         };
-        for route in &routes {
-            let mut shard = lock_routes(self.shard(&route.host).write());
-            let Some(buckets) = shard.get_mut(&route.host) else {
-                continue;
+        self.edit_shards(&routes, |table, route| {
+            let Some(buckets) = table.get_mut(route.host.as_str()) else {
+                return;
             };
             let buckets = Arc::make_mut(buckets);
             if let Some(bucket) = buckets
@@ -659,22 +706,16 @@ impl DynamicRouter {
             // `select_workload` to walk past.
             buckets.retain(|b| !b.workloads.is_empty());
             if buckets.is_empty() {
-                shard.remove(&route.host);
+                table.remove(route.host.as_str());
             }
-        }
+        });
     }
 
-    /// The buckets registered under `host`, cloned out so the match runs
-    /// without the lock.
+    /// The buckets registered under `host`, as a snapshot that outlives later
+    /// writes.
+    #[cfg(test)]
     fn host_buckets(&self, host: &str) -> Option<Arc<Vec<PathBucket>>> {
-        lock_routes(self.shard(host).read()).get(host).cloned()
-    }
-
-    fn shard(&self, host: &str) -> &std::sync::RwLock<HostBuckets> {
-        let [first, ..] = &self.hosts;
-        // `usize` is at least 32 bits wide, plenty to pick one of 64 shards.
-        let index = std::hash::BuildHasher::hash_one(&self.hasher, host) as usize % ROUTE_SHARDS;
-        self.hosts.get(index).unwrap_or(first)
+        self.shard(shard_index(host)).load().get(host).cloned()
     }
 
     /// Resolve `(host, path)` to one workload reachable at `scope`, spreading
@@ -718,9 +759,20 @@ impl DynamicRouter {
         // rather than making callers register every port they might be reached
         // on. Hostnames are also case-insensitive per RFC 1123. Registration
         // normalizes both the same way (see [`IngressRoute::new`]).
-        let host = split_host_port(host).0.to_ascii_lowercase();
-        let Some(buckets) = self.host_buckets(&host) else {
-            return Err(RouteError::NoWorkloadForHost(host));
+        //
+        // Lowercase only when needed: nearly every client sends a lowercase
+        // Host, and the copy would be the lookup's only allocation.
+        let host = split_host_port(host).0;
+        let host: std::borrow::Cow<'_, str> = if host.bytes().any(|b| b.is_ascii_uppercase()) {
+            host.to_ascii_lowercase().into()
+        } else {
+            host.into()
+        };
+        // Matched inside the guard: loading it writes nothing shared, where
+        // cloning the `Arc` out would bump a count every request shares.
+        let table = self.shard(shard_index(&host)).load();
+        let Some(buckets) = table.get(&*host) else {
+            return Err(RouteError::NoWorkloadForHost(host.into_owned()));
         };
         // Only buckets this caller may see. A hostname serving `localRoute`
         // entries is invisible to the network, and vice versa, so "visible"
@@ -730,7 +782,7 @@ impl DynamicRouter {
             .filter(|b| b.scope == scope && !b.workloads.is_empty())
             .peekable();
         if visible.peek().is_none() {
-            return Err(RouteError::NoWorkloadForHost(host));
+            return Err(RouteError::NoWorkloadForHost(host.into_owned()));
         }
         // Buckets are sorted longest-prefix-first, so the first match is the
         // most specific one.
@@ -739,7 +791,7 @@ impl DynamicRouter {
             // do not cover this path — a routing-config mistake worth naming
             // separately from an entirely unserved hostname.
             return Err(RouteError::NoWorkloadForPath {
-                host,
+                host: host.into_owned(),
                 path: path.to_string(),
             });
         };
@@ -751,7 +803,7 @@ impl DynamicRouter {
             .chain(bucket.workloads.iter().take(start))
             .find(|id| can_serve(id))
             .cloned()
-            .ok_or(RouteError::NoWorkloadForHost(host))
+            .ok_or_else(|| RouteError::NoWorkloadForHost(host.into_owned()))
     }
 }
 
@@ -849,9 +901,9 @@ impl Router for DynamicRouter {
             .and_then(|h| h.to_str().ok())
             .or_else(|| req.uri().authority().map(|a| a.as_str()))
             .ok_or(RouteError::MissingHost)?;
-        // `select_workload` holds the route lock for one hash lookup and never
-        // across an await, so it runs inline on the async worker — no
-        // `block_in_place` needed (and routing works on any runtime flavor).
+        // `select_workload` takes no lock and never awaits, so it runs inline
+        // on the async worker — no `block_in_place` needed (and routing works
+        // on any runtime flavor).
         self.select_workload(workload_host, req.uri().path(), RouteScope::Ingress)
     }
 
@@ -6238,7 +6290,7 @@ mod tests {
         );
     }
 
-    /// Writes edit the table in place: unbinding one workload leaves every
+    /// Writes edit only what they touch: unbinding one workload leaves every
     /// other workload's routes, on its hostname and on others, as they were,
     /// and unbinding all of them leaves nothing behind.
     #[tokio::test]
@@ -6271,16 +6323,11 @@ mod tests {
         for i in 1..100 {
             router.on_workload_unbind(&format!("w{i}")).await.unwrap();
         }
-        assert!(
-            router
-                .hosts
-                .iter()
-                .all(|shard| shard.read().unwrap().is_empty())
-        );
+        assert!(router.hosts.iter().all(|shard| shard.0.load().is_empty()));
         assert!(router.workload_to_host.lock().unwrap().is_empty());
     }
 
-    /// A request matches against the buckets it cloned out of the table, so a
+    /// A request matches against the snapshot it loaded from the table, so a
     /// write landing mid-request neither blocks it nor changes what it sees.
     #[test]
     fn a_held_snapshot_is_unaffected_by_later_writes() {
