@@ -416,8 +416,8 @@ impl GuestMemoryBudget {
             // one per `memory.grow` on a host already in trouble.
             tracing::debug!(
                 requested = %render_bytes(bytes),
-                footprint = %render_bytes(process.footprint()),
-                max_process_memory = %render_bytes(process.limit()),
+                footprint = %render_bytes(process.footprint_bytes()),
+                max_process_memory = %render_bytes(process.limit_bytes()),
                 mode = self.mode.as_str(),
                 "guest memory growth while this process is past max-process-memory"
             );
