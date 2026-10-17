@@ -29,6 +29,18 @@ pub fn spread(count: usize, requested: usize) -> Vec<usize> {
     }
 }
 
+/// The `p` quantile (0.0..=1.0) of `values` by nearest rank, or `None` for
+/// no values. Sorts a copy, so callers can pass samples in arrival order.
+pub fn percentile(values: &[f64], p: f64) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let rank = ((sorted.len() - 1) as f64 * p.clamp(0.0, 1.0)).round() as usize;
+    sorted.get(rank).copied()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
