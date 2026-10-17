@@ -61,6 +61,7 @@ wasmcloud-postgres = [
 wasi-tls = ["dep:wasmtime-wasi-tls"]
 
 [dependencies]
+im = "15.1"
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 x509-parser = { workspace = true }
