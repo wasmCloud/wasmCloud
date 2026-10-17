@@ -418,7 +418,10 @@ struct Settings {
 
 impl Settings {
     fn from_env() -> Result<Self> {
-        let var = |key: &str| std::env::var(key).ok().filter(|v| !v.trim().is_empty());
+        Self::from_values(|key| std::env::var(key).ok().filter(|v| !v.trim().is_empty()))
+    }
+
+    fn from_values(var: impl Fn(&str) -> Option<String>) -> Result<Self> {
         let number = |key: &str| -> Result<Option<usize>> {
             var(key)
                 .map(|v| v.trim().parse().with_context(|| format!("{key}={v}")))
@@ -455,7 +458,9 @@ impl Settings {
             },
             step: number("WASH_SCALE_STEP")?.unwrap_or(250).max(1),
             start_concurrency: number("WASH_SCALE_START_CONCURRENCY")?.map(|n| n.max(1)),
-            sample: number("WASH_SCALE_SAMPLE")?.unwrap_or(200),
+            sample: bench_tools::density::sample_size(number("WASH_SCALE_SAMPLE")?.unwrap_or(200))
+                .map_err(anyhow::Error::msg)
+                .context("WASH_SCALE_SAMPLE")?,
             core_instances,
             fixture,
             cpus: match var("WASH_SCALE_CPUS") {
@@ -811,8 +816,11 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         let mut step = step;
         step.clean = refusals_now == refusals_before
             && refused.is_ok()
-            && warm_failed == 0
-            && step.requests_ok >= step.requests_failed;
+            && bench_tools::density::served_sample(
+                step.requests_ok,
+                step.requests_failed,
+                warm_failed,
+            );
         refusals_before = refusals_now;
         steps.push(step);
         let so_far = Limits::from_steps(&settings, cpu.cores, baseline, &pool_baseline, &steps);
@@ -990,15 +998,7 @@ async fn requests(
     }
 }
 
-/// Up to `n` indices spread evenly across `0..count`, so a sample reaches the
-/// oldest workloads as well as the newest.
-fn spread(count: usize, n: usize) -> Vec<usize> {
-    if count == 0 || n == 0 {
-        return Vec::new();
-    }
-    let n = n.min(count);
-    (0..n).map(|i| i * count / n).collect()
-}
+use bench_tools::density::spread;
 
 /// How long until the pool is back to the instances it held before the
 /// sample, in milliseconds; capped at ten seconds.
@@ -1323,5 +1323,19 @@ fn print_comparison(settings: &Settings, reports: &[Report]) {
     }
     for report in reports {
         eprintln!("{}: stopped by {}", report.label, report.stop);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_samples_cannot_claim_served_capacity() -> Result<()> {
+        let zero = Settings::from_values(|key| (key == "WASH_SCALE_SAMPLE").then(|| "0".into()));
+        assert!(zero.is_err());
+        let one = Settings::from_values(|key| (key == "WASH_SCALE_SAMPLE").then(|| "1".into()))?;
+        assert_eq!(one.sample, 1);
+        Ok(())
     }
 }

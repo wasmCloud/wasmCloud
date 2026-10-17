@@ -833,7 +833,9 @@ pub async fn run_flavour(
 
     let served = steps
         .iter()
-        .filter(|s| s.requests_ok >= s.requests_failed && s.warmup_ok >= s.warmup_failed)
+        .filter(|s| {
+            bench_tools::density::served_sample(s.requests_ok, s.requests_failed, s.warmup_failed)
+        })
         .map(|s| s.workloads)
         .max()
         .unwrap_or(0);
