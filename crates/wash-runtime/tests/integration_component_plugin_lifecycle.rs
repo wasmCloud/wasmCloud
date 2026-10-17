@@ -51,6 +51,7 @@ const KV_PLUGIN_CALLER_WASM: &[u8] = include_bytes!("wasm/kv_plugin_caller.wasm"
 const KV_PLUGIN_SERVICE_WASM: &[u8] = include_bytes!("wasm/kv_plugin_service.wasm");
 const BRIDGE_BACKEND_WASM: &[u8] = include_bytes!("wasm/bridge_backend.wasm");
 const BADLIFECYCLE_WASM: &[u8] = include_bytes!("wasm/badlifecycle.wasm");
+const CONFIG_CALLEE_WASM: &[u8] = include_bytes!("wasm/config_callee.wasm");
 const PLUGIN_ID: &str = "acme-kv-plugin";
 
 /// Compilation-cache key for the one component every workload in this file
@@ -1076,5 +1077,148 @@ async fn test_plugin_without_lifecycle_export_is_unaffected() -> Result<()> {
         .on_workload_unbind("wl-plain", WitInterfaces::new(&matched))
         .await?;
     plugin.stop().await?;
+    Ok(())
+}
+
+/// A native plugin serving `acme:kv` that records the config of every entry
+/// it is handed. It links nothing: the workload's plain import stays with the
+/// component plugin, and this one only receives the entry named after it.
+struct RecordingKv {
+    seen: std::sync::Mutex<Vec<HashMap<String, String>>>,
+}
+
+const RECORDING_KV_ID: &str = "other-kv";
+
+#[async_trait::async_trait]
+impl HostPlugin for RecordingKv {
+    fn id(&self) -> &'static str {
+        RECORDING_KV_ID
+    }
+
+    fn world(&self) -> wash_runtime::wit::WitWorld {
+        wash_runtime::wit::WitWorld {
+            imports: [acme_kv_interface()].into_iter().collect(),
+            exports: HashSet::new(),
+        }
+    }
+
+    async fn on_workload_bind(
+        &self,
+        _workload: &UnresolvedWorkload,
+        interfaces: WitInterfaces<'_>,
+    ) -> anyhow::Result<()> {
+        let mut seen = self.seen.lock().unwrap();
+        seen.extend(interfaces.iter().map(|i| i.config.clone()));
+        Ok(())
+    }
+}
+
+/// `on-workload-bind` delivers only the entries routed to this plugin. The
+/// workload also carries config for the HTTP ingress, for `wasi:config` (served
+/// by `DynamicConfig`) and for a second `acme:kv` binding routed by name to a
+/// different plugin; none of those keys reach the component plugin, by
+/// `bind-info` or by `bound-config`.
+#[tokio::test]
+async fn test_lifecycle_bind_delivers_only_this_plugins_entries() -> Result<()> {
+    let host = "kv-lc-isolation";
+    let engine = Engine::builder().build()?;
+    let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let addr = ingress.addr();
+    let plugin = Arc::new(
+        ComponentHostPlugin::builder()
+            .id(PLUGIN_ID)
+            .wasm(KV_PLUGIN_WASM)
+            .engine(engine.clone())
+            .build()
+            .await?,
+    );
+    let other = Arc::new(RecordingKv {
+        seen: std::sync::Mutex::new(Vec::new()),
+    });
+    let h = HostBuilder::new()
+        .with_engine(engine)
+        .with_http_handler(Arc::new(ingress))
+        .with_plugin(Arc::clone(&plugin) as Arc<dyn HostPlugin>)?
+        .with_plugin(Arc::clone(&other) as Arc<dyn HostPlugin>)?
+        .with_plugin(Arc::new(
+            wash_runtime::plugin::wasi_config::DynamicConfig::default(),
+        ))?
+        .build()?
+        .start()
+        .await
+        .context("failed to start host")?;
+
+    let mut request = caller_workload_with_config(host, &[("tier", "gold")]);
+    let workload_id = request.workload_id.clone();
+    let workload = &mut request.workload;
+    // Config on the ingress entry, served by the host's HTTP handler.
+    workload.host_interfaces[0]
+        .config
+        .insert("ingress-token".to_string(), "ingress-secret".to_string());
+    // A second component importing `wasi:config/store`, with a config entry
+    // served by the native `DynamicConfig` plugin.
+    workload.components.push(wash_runtime::types::Component {
+        name: "config-callee".to_string(),
+        bytes: bytes::Bytes::from_static(CONFIG_CALLEE_WASM),
+        pool_size: 1,
+        max_invocations: 100,
+        max_concurrency: 1,
+        ..Default::default()
+    });
+    let mut wasi_config = WitInterface::from("wasi:config/store@0.2.0-rc.1");
+    wasi_config.config = HashMap::from([("api-key".to_string(), "config-secret".to_string())]);
+    workload.host_interfaces.push(wasi_config);
+    // A second `acme:kv` binding, routed by name to the native plugin.
+    workload.host_interfaces.push(WitInterface {
+        name: Some(RECORDING_KV_ID.to_string()),
+        config: HashMap::from([("backend-key".to_string(), "kv-secret".to_string())]),
+        ..acme_kv_interface()
+    });
+
+    h.workload_start(request).await?;
+    let client = reqwest::Client::new();
+
+    let (status, body) = req(&client, &addr, host, "/bound-config?key=tier").await?;
+    assert_eq!(status.as_u16(), 200, "this plugin's own config must arrive");
+    assert_eq!(body, "gold");
+    for key in ["ingress-token", "api-key", "backend-key"] {
+        let (status, body) = req(&client, &addr, host, &format!("/bound-config?key={key}")).await?;
+        assert_eq!(
+            status.as_u16(),
+            404,
+            "`{key}` belongs to another binding and must not reach the plugin, got: {body}"
+        );
+    }
+
+    let (status, info) = req(
+        &client,
+        &addr,
+        host,
+        &format!("/bind-info?workload={workload_id}"),
+    )
+    .await?;
+    assert_eq!(status.as_u16(), 200, "the bind must be captured by id");
+    let ifaces = info
+        .split_once("ifaces=")
+        .map(|(_, i)| i)
+        .unwrap_or_default();
+    assert_eq!(
+        ifaces, "acme:kv/store@0.1.0?tier=gold",
+        "only the entry routed to this plugin may be delivered, got: {info}"
+    );
+    for secret in ["ingress-secret", "config-secret", "kv-secret"] {
+        assert!(!info.contains(secret), "leaked `{secret}` in: {info}");
+    }
+
+    // The other direction: the native plugin saw only its own entry.
+    let seen = other.seen.lock().unwrap().clone();
+    assert_eq!(
+        seen,
+        vec![HashMap::from([(
+            "backend-key".to_string(),
+            "kv-secret".to_string()
+        )])],
+        "the named binding's plugin must see only its own entry"
+    );
     Ok(())
 }
