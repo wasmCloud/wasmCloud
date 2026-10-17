@@ -149,28 +149,28 @@ pub struct ProcessMemoryGuard {
 }
 
 impl ProcessMemoryGuard {
-    pub fn new(limit: u64) -> Self {
+    pub fn new(limit_bytes: u64) -> Self {
         Self {
-            limit,
+            limit: limit_bytes,
             footprint: AtomicU64::new(0),
             high_water: AtomicU64::new(0),
             state: AtomicU8::new(ProcessMemoryState::Normal as u8),
         }
     }
 
-    /// The `max_process_memory` this guard holds the process to.
-    pub fn limit(&self) -> u64 {
+    /// The `max_process_memory` this guard holds the process to, in bytes.
+    pub fn limit_bytes(&self) -> u64 {
         self.limit
     }
 
-    /// The footprint at the last sample. Zero before the first, or where the
+    /// The footprint at the last sample, in bytes. Zero before the first, or where the
     /// footprint cannot be read.
-    pub fn footprint(&self) -> u64 {
+    pub fn footprint_bytes(&self) -> u64 {
         self.footprint.load(Ordering::Relaxed)
     }
 
-    /// The largest footprint sampled since the guard was built.
-    pub fn high_water(&self) -> u64 {
+    /// The largest footprint sampled since the guard was built, in bytes.
+    pub fn high_water_bytes(&self) -> u64 {
         self.high_water.load(Ordering::Relaxed)
     }
 
@@ -185,17 +185,18 @@ impl ProcessMemoryGuard {
 
     /// Record one footprint reading and move between states, logging each
     /// move once rather than on every sample.
-    pub fn observe(&self, footprint: u64) {
-        self.footprint.store(footprint, Ordering::Relaxed);
-        self.high_water.fetch_max(footprint, Ordering::Relaxed);
+    pub fn observe(&self, footprint_bytes: u64) {
+        self.footprint.store(footprint_bytes, Ordering::Relaxed);
+        self.high_water
+            .fetch_max(footprint_bytes, Ordering::Relaxed);
 
         let previous = self.state();
-        let next = self.next_state(previous, footprint);
+        let next = self.next_state(previous, footprint_bytes);
         if next == previous {
             return;
         }
         self.state.store(next as u8, Ordering::Relaxed);
-        let footprint = render_bytes(footprint);
+        let footprint = render_bytes(footprint_bytes);
         let limit = render_bytes(self.limit);
         match next {
             ProcessMemoryState::Over => tracing::error!(
@@ -244,8 +245,8 @@ impl ProcessMemoryGuard {
     /// `info` while it is above [`HIGH_PERCENT`], `debug` otherwise.
     pub fn report(&self) {
         let state = self.state();
-        let footprint = render_bytes(self.footprint());
-        let high_water = render_bytes(self.high_water());
+        let footprint = render_bytes(self.footprint_bytes());
+        let high_water = render_bytes(self.high_water_bytes());
         let limit = render_bytes(self.limit);
         if state == ProcessMemoryState::Normal {
             tracing::debug!(%footprint, %high_water, max_process_memory = %limit, "process memory");
@@ -314,17 +315,17 @@ impl ProcessMemoryGuard {
         observe!(
             "process_memory.footprint",
             "This process's memory footprint, counting swapped and compressed pages",
-            |g: &Arc<Self>| g.footprint()
+            |g: &Arc<Self>| g.footprint_bytes()
         );
         observe!(
             "process_memory.high_water",
             "The largest memory footprint sampled since this host started",
-            |g: &Arc<Self>| g.high_water()
+            |g: &Arc<Self>| g.high_water_bytes()
         );
         observe!(
             "process_memory.limit",
             "This host's max-process-memory",
-            |g: &Arc<Self>| g.limit()
+            |g: &Arc<Self>| g.limit_bytes()
         );
     }
 }
@@ -371,8 +372,8 @@ mod tests {
         assert_eq!(guard.state(), ProcessMemoryState::High);
         guard.observe(10 * MIB);
         assert_eq!(guard.state(), ProcessMemoryState::Normal);
-        assert_eq!(guard.high_water(), 1001 * MIB);
-        assert_eq!(guard.footprint(), 10 * MIB);
+        assert_eq!(guard.high_water_bytes(), 1001 * MIB);
+        assert_eq!(guard.footprint_bytes(), 10 * MIB);
     }
 
     #[test]
