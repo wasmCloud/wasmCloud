@@ -983,11 +983,20 @@ impl Host {
         Ok(monitor.cpu_usage().global_usage)
     }
 
+    /// Recheck after queued work obtains a permit and before expensive phases.
+    /// Reserving an ID earlier is still necessary for stop/status correctness.
+    pub(crate) fn check_start_memory(&self) -> Result<(), String> {
+        self.engine
+            .process_memory()
+            .map_or(Ok(()), |guard| guard.admit_start())
+    }
+
     async fn workload_start_inner(
         &self,
         request: WorkloadStartRequest,
         cleanup: &crate::engine::workload::WorkloadResources,
     ) -> anyhow::Result<ResolvedWorkload> {
+        self.check_start_memory().map_err(anyhow::Error::msg)?;
         let service_present = request.workload.service.is_some();
         let workload_id = request.workload_id.clone();
 
@@ -1003,6 +1012,10 @@ impl Host {
         let span = tracing::Span::current();
         let unresolved_workload = tokio::task::spawn_blocking(move || {
             let _entered = span.enter();
+            // The blocking executor can queue this after the check above.
+            if let Some(guard) = engine.process_memory() {
+                guard.admit_start().map_err(anyhow::Error::msg)?;
+            }
             engine.initialize_workload(&init_id, workload)
         })
         .await

@@ -1729,9 +1729,11 @@ async fn workload_start(
 
     // The guard retains the reservation until cancellation cleanup finishes.
     let prepared = async {
+        host.check_start_memory()?;
         let (components, host_interfaces) = if let Some(wit_world) = wit_world {
             let mut pulled_components = Vec::with_capacity(wit_world.components.len());
             for component in &wit_world.components {
+                host.check_start_memory()?;
                 let oci_config =
                     image_pull_secret_to_oci_config(config, &component.image_pull_secret);
                 let source = ComponentSource::Oci {
@@ -1774,6 +1776,7 @@ async fn workload_start(
         };
 
         let service = if let Some(service) = service {
+            host.check_start_memory()?;
             let oci_config = image_pull_secret_to_oci_config(config, &service.image_pull_secret);
             let source = ComponentSource::Oci {
                 image: service.image.clone(),
@@ -2417,6 +2420,55 @@ mod tests {
                 types::v2::WorkloadState::NotFound
             );
         }
+        host.stop().await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn queued_start_rechecks_memory_before_preparing_and_releases_its_id()
+    -> anyhow::Result<()> {
+        let engine = crate::engine::Engine::builder()
+            .with_max_process_memory_bytes(u64::MAX)
+            .build()?;
+        let guard = engine.process_memory().context("memory guard")?.clone();
+        let host = crate::host::HostBuilder::default()
+            .with_engine(engine)
+            .build()?
+            .start()
+            .await?;
+        // Let the sampler's initial tick finish before simulating pressure.
+        tokio::task::yield_now().await;
+        let defaults = control_defaults(host.clone());
+        let permit = defaults.starts.acquire().await?;
+        let request = types::v2::WorkloadStartRequest {
+            workload_id: "queued-memory".into(),
+            workload: Some(types::v2::Workload::default()),
+        };
+        let mut start = Box::pin(defaults.start(request.clone()));
+        assert!(start.as_mut().now_or_never().is_none());
+        guard.observe(u64::MAX);
+        drop(permit);
+        let status = start.await?.workload_status.context("start status")?;
+        assert_eq!(status.workload_state(), types::v2::WorkloadState::Error);
+        assert!(status.message.contains("max-process-memory"));
+        assert_eq!(
+            defaults
+                .status(types::v2::WorkloadStatusRequest {
+                    workload_id: request.workload_id.clone(),
+                })
+                .await?
+                .workload_status
+                .context("status")?
+                .workload_state(),
+            types::v2::WorkloadState::NotFound
+        );
+        guard.observe(0);
+        // The ID was released and can be reserved again after recovery.
+        let reservation = host
+            .workload_reserve(&request.workload_id)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        host.workload_release(&request.workload_id, reservation)
+            .await;
         host.stop().await
     }
 
