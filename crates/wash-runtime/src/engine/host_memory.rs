@@ -614,20 +614,20 @@ const PROCESS_MEMORY_PERCENT: u64 = 90;
 /// `max_process_memory` when an operator names none: [`PROCESS_MEMORY_PERCENT`]
 /// of the cgroup limit, or of physical memory where there is no cgroup.
 /// `u64::MAX`, never enforced, where neither can be read.
-pub fn derive_max_process_memory() -> u64 {
+pub fn derive_max_process_memory_bytes() -> u64 {
     detected_memory_limit().map_or(u64::MAX, |limit| limit / 100 * PROCESS_MEMORY_PERCENT)
 }
 
 /// What to say about `max_process_memory` at startup, if anything: a limit
 /// past the memory this process can actually have is one the kernel enforces
 /// first, and on macOS that means the whole machine stalling.
-pub fn process_memory_advisory(max_process_memory: u64) -> Option<String> {
+pub fn process_memory_advisory(max_process_memory_bytes: u64) -> Option<String> {
     let limit = detected_memory_limit()?;
-    (max_process_memory > limit).then(|| {
+    (max_process_memory_bytes > limit).then(|| {
         format!(
             "max-process-memory {} is more than the {} this process can actually have, so it \
              will never refuse anything; the kernel will get there first. Set it below {}",
-            render_bytes(max_process_memory),
+            render_bytes(max_process_memory_bytes),
             render_bytes(limit),
             render_bytes(limit),
         )
@@ -1023,7 +1023,7 @@ mod tests {
     #[test]
     fn the_derived_process_limit_fits_the_machine() {
         let limit = detected_memory_limit().expect("a test machine has a readable memory limit");
-        let derived = derive_max_process_memory();
+        let derived = derive_max_process_memory_bytes();
         assert!(derived < limit, "{derived} must leave room under {limit}");
         assert_eq!(process_memory_advisory(derived), None);
     }

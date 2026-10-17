@@ -1159,7 +1159,7 @@ pub struct EngineBuilder {
     allowed_host_paths: Vec<PathBuf>,
     scratch_root: Option<PathBuf>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
-    max_process_memory: Option<u64>,
+    max_process_memory_bytes: Option<u64>,
     guest_memory_mode: guest_memory::GuestMemoryMode,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
@@ -1223,8 +1223,8 @@ impl EngineBuilder {
     /// 90% of the cgroup limit, or of physical memory where there is none, so
     /// a host never sets out to use more memory than the machine has.
     #[must_use]
-    pub fn with_max_process_memory(mut self, bytes: u64) -> Self {
-        self.max_process_memory = Some(bytes);
+    pub fn with_max_process_memory_bytes(mut self, bytes: u64) -> Self {
+        self.max_process_memory_bytes = Some(bytes);
         self
     }
 
@@ -1433,10 +1433,10 @@ impl EngineBuilder {
         {
             tracing::warn!("{advisory}");
         }
-        let max_process_memory = self
-            .max_process_memory
-            .unwrap_or_else(host_memory::derive_max_process_memory);
-        if let Some(advisory) = host_memory::process_memory_advisory(max_process_memory) {
+        let max_process_memory_bytes = self
+            .max_process_memory_bytes
+            .unwrap_or_else(host_memory::derive_max_process_memory_bytes);
+        if let Some(advisory) = host_memory::process_memory_advisory(max_process_memory_bytes) {
             tracing::warn!("{advisory}");
         }
 
@@ -1471,7 +1471,7 @@ impl EngineBuilder {
         // does not shrink with the heap ceiling.
         match installed_pool {
             Some(pool) => tracing::info!(
-                max_process_memory = %host_memory::render_bytes(max_process_memory),
+                max_process_memory = %host_memory::render_bytes(max_process_memory_bytes),
                 max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
                 guest_memory_mode = self.guest_memory_mode.as_str(),
                 default_heap_memory = %host_memory::render_bytes(pool.max_memory_size),
@@ -1483,7 +1483,7 @@ impl EngineBuilder {
             ),
             // No pool, so no reservation and no installed ceiling to name.
             None => tracing::info!(
-                max_process_memory = %host_memory::render_bytes(max_process_memory),
+                max_process_memory = %host_memory::render_bytes(max_process_memory_bytes),
                 max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
                 guest_memory_mode = self.guest_memory_mode.as_str(),
                 pooling = false,
@@ -1565,7 +1565,9 @@ impl EngineBuilder {
             None => e,
         })?;
         spawn_epoch_ticker(&inner)?;
-        let process_memory = Arc::new(process_memory::ProcessMemoryGuard::new(max_process_memory));
+        let process_memory = Arc::new(process_memory::ProcessMemoryGuard::new(
+            max_process_memory_bytes,
+        ));
         process_memory.spawn_sampler()?;
         process_memory.register_metrics(&opentelemetry::global::meter("wash-runtime"));
         let cache = Cache::builder()
