@@ -136,6 +136,14 @@ async fn answer_404(mut stream: impl AsyncRead + AsyncWrite + Unpin, reached: &A
 ///
 /// Explicit credentials keep the pull off the docker credential helper.
 async fn pull_reaches(registry: &Registry, insecure: bool) -> Result<bool, anyhow::Error> {
+    pull_reaches_with_policy(registry, insecure, OciPullPolicy::Always).await
+}
+
+async fn pull_reaches_with_policy(
+    registry: &Registry,
+    insecure: bool,
+    policy: OciPullPolicy,
+) -> Result<bool, anyhow::Error> {
     let before = registry.reached();
     let config = OciConfig {
         credentials: Some(("user".into(), "pass".into())),
@@ -144,7 +152,7 @@ async fn pull_reaches(registry: &Registry, insecure: bool) -> Result<bool, anyho
     };
     let err = tokio::time::timeout(
         Duration::from_secs(30),
-        pull_component(&registry.reference(), config, OciPullPolicy::Always),
+        pull_component(&registry.reference(), config, policy),
     )
     .await
     .context("pull timed out")?
@@ -246,12 +254,16 @@ async fn oci_pulls_trust_ssl_cert_env_and_ca_paths() -> Result<()> {
 
     // `--ca-path` last: the store it writes can be set once per process.
     clear_env();
+    assert_untrusted(
+        pull_reaches_with_policy(&registry_b, false, OciPullPolicy::IfNotPresent).await,
+        "cache a failure before installing the extra CA",
+    );
     let ca_path = dir.path().join("ca-path.pem");
     write(&ca_path, &ca_b.pem());
     set_extra_ca_certificates(&[ca_path])?;
     assert!(
-        pull_reaches(&registry_b, false).await?,
-        "a --ca-path CA is trusted"
+        pull_reaches_with_policy(&registry_b, false, OciPullPolicy::IfNotPresent).await?,
+        "a --ca-path CA is trusted immediately, including through the result cache"
     );
     assert_untrusted(
         pull_reaches(&registry_a, false).await,

@@ -219,9 +219,8 @@ fn validate_ca_bundle(data: &[u8]) -> Result<()> {
 /// would be ignored there. Loading them when neither is set would only repeat
 /// the OS store the verifier already trusts.
 ///
-/// Read each time a client is built, so a rotated bundle is trusted without
-/// restarting a long-running host: by the next push, and by pulls once the
-/// reused pull client expires (see [`pull_client`]).
+/// Read for each pull's trust snapshot and each new push client, so changes
+/// apply to subsequent operations without waiting for a cached client to expire.
 fn env_ca_certificates() -> Vec<Certificate> {
     if std::env::var_os("SSL_CERT_FILE").is_none() && std::env::var_os("SSL_CERT_DIR").is_none() {
         return Vec::new();
@@ -548,33 +547,19 @@ impl CredentialResolver {
                 .time_to_live(DOCKER_AUTH_REUSE)
                 .build()
         });
-        if let Some(auth) = docker_auth.get(registry) {
-            return auth;
-        }
-        let auth = match self.get_docker_credentials(registry).await {
-            Ok(Some(auth)) => {
-                debug!("using docker credential helper");
-                auth
-            }
-            Ok(None) => {
-                debug!("no docker credentials found; using anonymous access");
-                RegistryAuth::Anonymous
-            }
-            // Not cached: a helper that failed once (a keychain locked for a
-            // moment, a helper process that timed out) would otherwise turn
-            // every private pull from this registry anonymous, and failing,
-            // for the whole reuse window.
-            Err(e) => {
-                warn!(error = %e, "failed to retrieve docker credentials; using anonymous access");
-                return RegistryAuth::Anonymous;
-            }
-        };
-        docker_auth.insert(registry.to_string(), auth.clone());
-        auth
+        let registry = registry.to_owned();
+        cached_credentials(docker_auth.clone(), registry.clone(), move || {
+            Ok(Self::get_docker_credentials(&registry)?.unwrap_or(RegistryAuth::Anonymous))
+        })
+        .await
+        .unwrap_or_else(|error| {
+            warn!(%error, "failed to retrieve docker credentials; using anonymous access");
+            RegistryAuth::Anonymous
+        })
     }
 
     /// Attempt to retrieve credentials from docker credential helper
-    async fn get_docker_credentials(&self, registry: &str) -> Result<Option<RegistryAuth>> {
+    fn get_docker_credentials(registry: &str) -> Result<Option<RegistryAuth>> {
         match get_credential(registry) {
             Ok(DockerCredential::UsernamePassword(user, pass)) => {
                 Ok(Some(RegistryAuth::Basic(user, pass)))
@@ -598,9 +583,9 @@ impl CredentialResolver {
             // wrong with what you configured".
             Err(CredentialRetrievalError::ConfigReadError) => {
                 match docker_config_path() {
-                    Some(path) if path.is_file() => warn!(
-                        path = %path.display(),
-                        "docker config exists but could not be read or parsed; pulling anonymously"
+                    Some(path) if path.is_file() => bail!(
+                        "docker config {} exists but could not be read or parsed",
+                        path.display()
                     ),
                     _ => debug!("no docker config; pulling anonymously"),
                 }
@@ -615,6 +600,24 @@ impl CredentialResolver {
             Err(e) => Err(anyhow!("docker credential retrieval error: {e}")),
         }
     }
+}
+
+/// Cache and coalesce successful helper lookups, including anonymous results.
+/// Failures are retried next time, so a repaired configuration is usable at once.
+async fn cached_credentials(
+    cache: moka::sync::Cache<String, RegistryAuth>,
+    registry: String,
+    lookup: impl FnOnce() -> Result<RegistryAuth> + Send + 'static,
+) -> Result<RegistryAuth> {
+    if let Some(auth) = cache.get(&registry) {
+        return Ok(auth);
+    }
+    blocking_io(move || {
+        cache
+            .try_get_with(registry, lookup)
+            .map_err(|error| anyhow::Error::new(crate::engine::SharedError(error)))
+    })
+    .await
 }
 
 /// OCI pull policy
@@ -687,8 +690,8 @@ pub async fn pull_component(
 /// [`pull_component`] without the copy into a `Vec`.
 ///
 /// Concurrent pulls of one reference with the same credentials and settings
-/// are folded into one, and its result answers the same request for
-/// [`PULL_REUSE`] after it finishes: a host restoring thousands of workloads
+/// are folded into one. Except for `Always`, its result answers the same
+/// request for [`PULL_REUSE`] after it finishes: a host restoring workloads
 /// from a few images would otherwise read each image from disk and ask the
 /// registry for its digest once per workload.
 #[instrument(skip(config), fields(reference = %reference, pull_policy = ?pull_policy))]
@@ -697,30 +700,57 @@ pub(crate) async fn pull_component_bytes(
     config: OciConfig,
     pull_policy: OciPullPolicy,
 ) -> Result<(bytes::Bytes, String)> {
-    let reference_parsed = Reference::try_from(reference)
-        .with_context(|| format!("invalid OCI reference: {reference}"))?;
+    with_pull_timeout(reference, config.timeout, async {
+        let reference_parsed = Reference::try_from(reference)
+            .with_context(|| format!("invalid OCI reference: {reference}"))?;
 
-    let auth = CredentialResolver::new(config.credentials.clone())
-        .resolve_credentials(reference_parsed.registry())
-        .await;
+        let auth = CredentialResolver::new(config.credentials.clone())
+            .resolve_credentials(reference_parsed.registry())
+            .await;
+        let trust = TrustSnapshot::load().await?;
 
-    // Everything that can change what a pull returns, or whether it may
-    // return at all, is in the key. The credentials above all: a result one
-    // caller was authorised to fetch must never answer a caller who was not.
-    let key = PullKey {
-        reference: reference.to_string(),
-        auth: AuthId::of(&auth),
-        insecure: config.insecure,
-        cache_dir: config.cache_dir.clone(),
-        pull_policy: pull_policy.clone(),
-        timeout: config.timeout,
-    };
-    let pulled = pull_coalescer()
-        .run(key, || {
-            pull_uncoalesced(reference, &reference_parsed, &config, &auth, &pull_policy)
-        })
-        .await?;
-    Ok((pulled.bytes.clone(), pulled.digest.clone()))
+        // Everything that can change what a pull returns, or whether it may
+        // return at all, is in the key. The credentials above all: a result one
+        // caller was authorised to fetch must never answer a caller who was not.
+        let key = PullKey {
+            reference: reference.to_string(),
+            auth: AuthId::of(&auth),
+            insecure: config.insecure,
+            cache_dir: config.cache_dir.clone(),
+            pull_policy: pull_policy.clone(),
+            timeout: config.timeout,
+            trust: trust.id,
+        };
+        let pulled = pull_coalescer()
+            .run_with_reuse(key, pull_policy != OciPullPolicy::Always, || {
+                pull_uncoalesced(
+                    reference,
+                    &reference_parsed,
+                    &config,
+                    &auth,
+                    &pull_policy,
+                    &trust,
+                )
+            })
+            .await?;
+        Ok((pulled.bytes.clone(), pulled.digest.clone()))
+    })
+    .await
+}
+
+/// The caller's deadline includes credential resolution, cache I/O and waiting
+/// for another pull. Taking over a cancelled initializer never resets it.
+async fn with_pull_timeout<T>(
+    reference: &str,
+    timeout: Option<Duration>,
+    work: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    match timeout {
+        Some(timeout) => tokio::time::timeout(timeout, work).await.with_context(|| {
+            format!("timeout pulling component from {reference} after {timeout:?}")
+        })?,
+        None => work.await,
+    }
 }
 
 /// What one pull produced, shared by every caller it answered.
@@ -748,6 +778,7 @@ struct PullKey {
     /// A caller joining a pull waits as long as that pull is allowed to take,
     /// so callers that set different timeouts must not wait on each other.
     timeout: Option<Duration>,
+    trust: TrustId,
 }
 
 /// Which credentials a pull or a client uses, without holding the secret.
@@ -859,12 +890,27 @@ where
         }
     }
 
+    #[cfg(test)]
     async fn run<F, Fut>(&self, key: K, work: F) -> Result<V>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<V>>,
     {
-        let cell = self.cells.get_with(key.clone(), Default::default);
+        self.run_with_reuse(key, true, work).await
+    }
+
+    async fn run_with_reuse<F, Fut>(&self, key: K, reuse_finished: bool, work: F) -> Result<V>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<V>>,
+    {
+        let cell = self
+            .cells
+            .entry(key.clone())
+            .or_insert_with_if(Default::default, |cell| {
+                !reuse_finished && cell.initialized()
+            })
+            .into_value();
         let mut ran = false;
         let result = cell
             .get_or_init(|| {
@@ -876,7 +922,16 @@ where
         if ran {
             // Re-inserting restarts the entry's clock, now at `reuse`, so a
             // slow pull is still reused for the full window after it lands.
-            self.cells.insert(key, cell);
+            self.cells.entry(key).and_compute_with(|current| {
+                use moka::ops::compute::Op;
+                if current.is_some_and(|entry| Arc::ptr_eq(entry.value(), &cell)) {
+                    Op::Put(cell)
+                } else {
+                    // A fresh caller may already have replaced this completed
+                    // cell. Do not overwrite its work with an older result.
+                    Op::Nop
+                }
+            });
         }
         // Shared rather than reformatted, so each caller can still walk the
         // chain (a timeout, an auth failure) under the top message.
@@ -889,44 +944,106 @@ where
 /// for a registry, so a client shared across credentials would pull with
 /// whichever came first.
 ///
-/// Building a client loads its trust roots, reading `SSL_CERT_FILE` /
-/// `SSL_CERT_DIR` from disk; reusing one also keeps its registry tokens. A
-/// client lives [`CLIENT_REUSE`], which bounds how long a rotated environment
-/// bundle takes to be trusted.
-fn pull_client(insecure: bool, auth: &RegistryAuth) -> Result<Client> {
-    static CLIENTS: OnceLock<moka::sync::Cache<(bool, AuthId, bool), Client>> = OnceLock::new();
-    CLIENTS
-        .get_or_init(|| {
-            moka::sync::Cache::builder()
-                .max_capacity(256)
-                .time_to_live(CLIENT_REUSE)
-                .build()
-        })
-        // Whether extra trust roots are installed is in the key: they are
-        // installed at most once, and a client built before that would
-        // otherwise keep rejecting the private registry for CLIENT_REUSE.
-        .try_get_with(
-            (
-                insecure,
-                AuthId::of(auth),
-                EXTRA_CA_CERTIFICATES.get().is_some(),
-            ),
-            || {
+/// Environment roots are snapshotted for each pull. The snapshot identifies
+/// both the client and the completed-result cache, so rotation or installation
+/// of extra roots cannot reuse a result from a different trust configuration.
+async fn pull_client(insecure: bool, auth: &RegistryAuth, trust: &TrustSnapshot) -> Result<Client> {
+    static CLIENTS: OnceLock<moka::sync::Cache<(bool, AuthId, TrustId), Client>> = OnceLock::new();
+    let clients = CLIENTS.get_or_init(|| {
+        moka::sync::Cache::builder()
+            .max_capacity(256)
+            .time_to_live(CLIENT_REUSE)
+            .build()
+    });
+    let key = (insecure, AuthId::of(auth), trust.id);
+    if let Some(client) = clients.get(&key) {
+        return Ok(client);
+    }
+    let roots = trust.roots.clone();
+    blocking_io(move || {
+        clients
+            .try_get_with(key, || {
                 oci_client(ClientConfig {
                     protocol: if insecure {
                         ClientProtocol::Http
                     } else {
                         ClientProtocol::Https
                     },
-                    extra_root_certificates: extra_ca_certificates(),
+                    extra_root_certificates: roots,
                     ..Default::default()
                 })
-            },
-        )
-        .map_err(|err| anyhow::Error::new(crate::engine::SharedError(err)))
+            })
+            .map_err(|err| anyhow::Error::new(crate::engine::SharedError(err)))
+    })
+    .await
 }
 
 const CLIENT_REUSE: Duration = Duration::from_secs(300);
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct TrustId([u8; 32]);
+
+struct TrustSnapshot {
+    id: TrustId,
+    roots: Vec<Certificate>,
+}
+
+impl TrustSnapshot {
+    async fn load() -> Result<Self> {
+        let load = || {
+            let roots = extra_ca_certificates();
+            let mut hash = Sha256::new();
+            // Include paths as well as contents: removing an environment
+            // override also changes what the platform verifier loads.
+            for name in ["SSL_CERT_FILE", "SSL_CERT_DIR"] {
+                let value = std::env::var_os(name);
+                hash.update([u8::from(value.is_some())]);
+                let bytes = value
+                    .as_deref()
+                    .map_or(&[][..], std::ffi::OsStr::as_encoded_bytes);
+                hash.update((bytes.len() as u64).to_le_bytes());
+                hash.update(bytes);
+            }
+            hash.update([u8::from(EXTRA_CA_CERTIFICATES.get().is_some())]);
+            for root in &roots {
+                hash.update([match root.encoding {
+                    CertificateEncoding::Der => 0,
+                    CertificateEncoding::Pem => 1,
+                }]);
+                hash.update((root.data.len() as u64).to_le_bytes());
+                hash.update(&root.data);
+            }
+            Ok(Self {
+                id: TrustId(hash.finalize().into()),
+                roots,
+            })
+        };
+        if std::env::var_os("SSL_CERT_FILE").is_some() || std::env::var_os("SSL_CERT_DIR").is_some()
+        {
+            blocking_io(load).await
+        } else {
+            load()
+        }
+    }
+}
+
+/// Bound synchronous helper and trust-store work without blocking Tokio's
+/// worker threads. A cancelled caller does not release a running task's permit.
+async fn blocking_io<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    static LIMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(8);
+    let permit = LIMIT
+        .acquire()
+        .await
+        .context("OCI blocking-work limiter closed")?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await
+    .context("OCI blocking task failed")?
+}
 
 /// One pull as [`pull_component`] documents it, with nothing shared but the
 /// client.
@@ -936,6 +1053,7 @@ async fn pull_uncoalesced(
     config: &OciConfig,
     auth: &RegistryAuth,
     pull_policy: &OciPullPolicy,
+    trust: &TrustSnapshot,
 ) -> Result<Arc<Pulled>> {
     // Initialize cache manager
     let cache_manager = config
@@ -963,7 +1081,8 @@ async fn pull_uncoalesced(
             // Fetched only now: the pinned hit above needs no client, and a
             // host restoring from its cache would otherwise build or look one
             // up per workload for nothing.
-            let fetched_digest = pull_client(config.insecure, auth)?
+            let fetched_digest = pull_client(config.insecure, auth, trust)
+                .await?
                 .fetch_manifest_digest(reference_parsed, auth)
                 .await?;
 
@@ -982,7 +1101,7 @@ async fn pull_uncoalesced(
         bail!("component not found in cache and pull policy is 'Never'");
     }
 
-    let client = pull_client(config.insecure, auth)?;
+    let client = pull_client(config.insecure, auth, trust).await?;
 
     // Pull the component using oci-client
     let pull_future = client.pull(
@@ -995,19 +1114,9 @@ async fn pull_uncoalesced(
         ],
     );
 
-    // Apply timeout if configured, otherwise just await the pull
-    let image_data = if let Some(timeout) = config.timeout {
-        tokio::time::timeout(timeout, pull_future)
-            .await
-            .with_context(|| {
-                format!("timeout pulling component from {reference} after {timeout:?}")
-            })?
-            .with_context(|| format!("failed to pull component from {reference}"))?
-    } else {
-        pull_future
-            .await
-            .with_context(|| format!("failed to pull component from {reference}"))?
-    };
+    let image_data = pull_future
+        .await
+        .with_context(|| format!("failed to pull component from {reference}"))?;
 
     // Extract the component bytes from the first layer
     let component_data = image_data
@@ -1246,6 +1355,101 @@ pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn credential_misses_coalesce_without_blocking_the_runtime() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let cache = moka::sync::Cache::new(16);
+        let runs = Arc::new(AtomicUsize::new(0));
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let first = tokio::spawn(cached_credentials(cache.clone(), "registry".into(), {
+            let runs = Arc::clone(&runs);
+            move || {
+                runs.fetch_add(1, Ordering::SeqCst);
+                let _ = started.send(());
+                wait.recv_timeout(Duration::from_secs(2))?;
+                Ok(RegistryAuth::Basic("user".into(), "secret".into()))
+            }
+        }));
+        ready.await.unwrap();
+        let second = tokio::spawn(cached_credentials(cache.clone(), "registry".into(), {
+            let runs = Arc::clone(&runs);
+            move || {
+                runs.fetch_add(1, Ordering::SeqCst);
+                Ok(RegistryAuth::Anonymous)
+            }
+        }));
+        // On a current-thread runtime this cannot progress if the helper is
+        // running in an async task instead of on the bounded blocking pool.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        release.send(()).unwrap();
+        let expected = AuthId::of(&first.await.unwrap().unwrap());
+        assert!(expected == AuthId::of(&second.await.unwrap().unwrap()));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+
+        assert!(
+            cached_credentials(cache.clone(), "broken".into(), || bail!("bad config"))
+                .await
+                .is_err()
+        );
+        assert!(
+            cached_credentials(cache, "broken".into(), || Ok(RegistryAuth::Anonymous))
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cancelled_leader_does_not_extend_the_waiters_deadline() {
+        let coalescer = Arc::new(Coalescer::<&str, u32>::new(
+            16,
+            Duration::from_secs(60),
+            Duration::from_secs(5),
+            |_| 1,
+        ));
+        let deadline = Some(Duration::from_secs(30));
+        let began = tokio::time::Instant::now();
+        let leader = tokio::spawn({
+            let coalescer = Arc::clone(&coalescer);
+            async move {
+                with_pull_timeout("ref", deadline, coalescer.run("ref", std::future::pending)).await
+            }
+        });
+        tokio::task::yield_now().await;
+        let waiter = tokio::spawn(async move {
+            with_pull_timeout("ref", deadline, coalescer.run("ref", std::future::pending)).await
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(29)).await;
+        leader.abort();
+        let _ = leader.await;
+        let error = waiter.await.unwrap().unwrap_err();
+        assert!(error.is::<tokio::time::error::Elapsed>());
+        assert_eq!(began.elapsed(), Duration::from_secs(30));
+    }
+
+    #[tokio::test]
+    async fn fresh_pulls_share_active_work_but_never_completed_results() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let coalescer = Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
+        let runs = AtomicUsize::new(0);
+        let work = || async {
+            let value = runs.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok(value)
+        };
+        let (a, b) = tokio::join!(
+            coalescer.run_with_reuse("ref", false, work),
+            coalescer.run_with_reuse("ref", false, work),
+        );
+        assert_eq!(a.unwrap(), 0);
+        assert_eq!(b.unwrap(), 0);
+        assert_eq!(
+            coalescer.run_with_reuse("ref", false, work).await.unwrap(),
+            1
+        );
+    }
     use tempfile::TempDir;
 
     /// Identical requests in flight together do the work once and all get its
