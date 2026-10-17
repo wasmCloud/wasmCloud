@@ -399,7 +399,7 @@ impl std::fmt::Debug for CacheValue {
 /// straight into the original error, since `anyhow::Error` derefs to
 /// `dyn StdError`.
 #[derive(Debug)]
-struct SharedError(Arc<anyhow::Error>);
+pub(crate) struct SharedError(pub(crate) Arc<anyhow::Error>);
 
 impl std::fmt::Display for SharedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
