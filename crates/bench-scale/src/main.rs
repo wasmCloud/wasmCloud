@@ -33,6 +33,19 @@ use crate::report::{ImageInfo, Machine, Report};
 /// Exit status when a flavour served fewer than --min-components.
 const EXIT_TOO_FEW: u8 = 2;
 
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    #[test]
+    fn zero_samples_are_rejected_before_any_host_is_started() -> Result<()> {
+        let args = Args::try_parse_from(["bench-scale", "--sample", "0"])?;
+        let machine = Machine::detect();
+        assert!(resolve_settings(&args, &machine).is_err());
+        Ok(())
+    }
+}
+
 fn main() -> ExitCode {
     let args = Args::parse();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -63,6 +76,7 @@ fn main() -> ExitCode {
 }
 
 fn resolve_settings(args: &Args, machine: &Machine) -> Result<Settings> {
+    bench_tools::density::sample_size(args.sample).map_err(anyhow::Error::msg)?;
     if args.step == 0 || args.start_concurrency == 0 || args.request_concurrency == 0 {
         bail!("--step, --start-concurrency and --request-concurrency must be at least 1");
     }
