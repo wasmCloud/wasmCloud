@@ -3,8 +3,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::convert::Infallible;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -29,8 +29,8 @@ fn digest(bytes: &[u8]) -> String {
 }
 
 impl Image {
-    fn new() -> Self {
-        let wasm = wat::parse_str("(component)").unwrap();
+    fn new(wasm: &str) -> Self {
+        let wasm = wat::parse_str(wasm).unwrap();
         let wasm_digest = digest(&wasm);
         let config = serde_json::to_vec(&serde_json::json!({
             "architecture": "wasm", "os": "wasip2", "layerDigests": [&wasm_digest]
@@ -62,7 +62,8 @@ impl Image {
 
 struct Registry {
     addr: std::net::SocketAddr,
-    image: Arc<Image>,
+    image: Arc<RwLock<Image>>,
+    unavailable: Arc<AtomicBool>,
     requests: Arc<AtomicUsize>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -71,19 +72,30 @@ impl Registry {
     async fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let image = Arc::new(Image::new());
+        let image = Arc::new(RwLock::new(Image::new("(component)")));
+        let unavailable = Arc::new(AtomicBool::new(false));
         let requests = Arc::new(AtomicUsize::new(0));
         let task = tokio::spawn({
             let image = Arc::clone(&image);
             let requests = Arc::clone(&requests);
+            let unavailable = Arc::clone(&unavailable);
             async move {
                 while let Ok((stream, _)) = listener.accept().await {
                     let image = Arc::clone(&image);
                     let requests = Arc::clone(&requests);
+                    let unavailable = Arc::clone(&unavailable);
                     tokio::spawn(async move {
                         let service = service_fn(move |req| {
                             requests.fetch_add(1, Ordering::SeqCst);
-                            std::future::ready(Ok::<_, Infallible>(answer(req, &image)))
+                            let response = if unavailable.load(Ordering::SeqCst) {
+                                Response::builder()
+                                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                                    .body(Full::new(Bytes::new()))
+                                    .unwrap()
+                            } else {
+                                answer(req, &image.read().unwrap())
+                            };
+                            std::future::ready(Ok::<_, Infallible>(response))
                         });
                         let _ = hyper::server::conn::http1::Builder::new()
                             .serve_connection(TokioIo::new(stream), service)
@@ -95,13 +107,18 @@ impl Registry {
         Self {
             addr,
             image,
+            unavailable,
             requests,
             task,
         }
     }
 
     fn reference(&self) -> String {
-        format!("{}/private/component@{}", self.addr, self.image.digest)
+        format!(
+            "{}/private/component@{}",
+            self.addr,
+            self.image.read().unwrap().digest
+        )
     }
 }
 
@@ -165,7 +182,7 @@ async fn private_cached_images_do_not_cross_credentials() {
         let (bytes, _) = pull_component(&reference, config.clone(), OciPullPolicy::IfNotPresent)
             .await
             .unwrap();
-        assert_eq!(bytes, registry.image.wasm);
+        assert_eq!(bytes, registry.image.read().unwrap().wasm);
         let fetched = registry.requests.load(Ordering::SeqCst);
         pull_component(&reference, config.clone(), OciPullPolicy::Never)
             .await
@@ -193,4 +210,42 @@ async fn private_cached_images_do_not_cross_credentials() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn always_resolves_repushed_tags_and_retries_completed_failures() {
+    wash_runtime::init_crypto();
+    let registry = Registry::start().await;
+    let config = OciConfig {
+        credentials: Some(("user".into(), "secret".into())),
+        insecure: true,
+        timeout: Some(Duration::from_secs(5)),
+        ..Default::default()
+    };
+    let reference = format!("{}/private/component:latest", registry.addr);
+    let first = pull_component(&reference, config.clone(), OciPullPolicy::Always)
+        .await
+        .unwrap();
+    *registry.image.write().unwrap() = Image::new("(component (core module))");
+    let second = pull_component(&reference, config.clone(), OciPullPolicy::Always)
+        .await
+        .unwrap();
+    assert_ne!(
+        first.1, second.1,
+        "a completed Always pull must resolve the tag again"
+    );
+    assert_ne!(first.0, second.0);
+
+    registry.unavailable.store(true, Ordering::SeqCst);
+    assert!(
+        pull_component(&reference, config.clone(), OciPullPolicy::Always)
+            .await
+            .is_err()
+    );
+    registry.unavailable.store(false, Ordering::SeqCst);
+    assert!(
+        pull_component(&reference, config, OciPullPolicy::Always)
+            .await
+            .is_ok()
+    );
 }
