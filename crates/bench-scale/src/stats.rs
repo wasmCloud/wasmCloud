@@ -12,15 +12,7 @@ pub fn percentile(values: &[f64], p: f64) -> Option<f64> {
     sorted.get(rank).copied()
 }
 
-/// Up to `n` positions spread evenly across `0..count`, so a sample reaches
-/// the oldest workloads as well as the newest. Distinct and ascending.
-pub fn spread(count: usize, n: usize) -> Vec<usize> {
-    if count == 0 || n == 0 {
-        return Vec::new();
-    }
-    let n = n.min(count);
-    (0..n).map(|i| i * count / n).collect()
-}
+pub use bench_tools::density::spread;
 
 /// Milliseconds, as the report keeps latencies.
 pub fn millis(duration: std::time::Duration) -> f64 {
@@ -47,11 +39,11 @@ mod tests {
         assert!(spread(0, 10).is_empty());
         assert!(spread(10, 0).is_empty());
         assert_eq!(spread(3, 10), vec![0, 1, 2]);
-        assert_eq!(spread(100, 4), vec![0, 25, 50, 75]);
+        assert_eq!(spread(100, 4), vec![0, 33, 66, 99]);
         let picks = spread(1000, 50);
         assert_eq!(picks.len(), 50);
         assert_eq!(picks.first(), Some(&0));
-        assert!(picks.last().is_some_and(|last| *last >= 980));
+        assert_eq!(picks.last(), Some(&999));
         assert!(picks.windows(2).all(|w| w[0] < w[1]));
     }
 }
