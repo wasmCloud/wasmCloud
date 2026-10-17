@@ -2612,9 +2612,26 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
             let pool = resolved_handle
                 .instance_pool_for_component(component_id)
                 .await;
+            let targets_p3 = crate::engine::targets_wasip3_http(instance_pre.component());
+            // A wasip2 incoming-handler instance serves one request, so HTTP
+            // never reuses one; asking for a pool there would otherwise look
+            // like it worked while every request still paid for a cold store.
+            if pool.is_some()
+                && !targets_p3
+                && let Some(suppressed) = P2_POOL_WARN.admit()
+            {
+                warn!(
+                    workload_id = resolved_handle.id(),
+                    component_id,
+                    suppressed,
+                    "poolSize is set on a wasip2 HTTP handler, which serves one request per \
+                     instance: HTTP requests to it are not pooled. Build it for wasip3 to keep \
+                     instances warm"
+                );
+            }
             let handle = ComponentHandle {
                 workload: resolved_handle.clone(),
-                targets_p3: crate::engine::targets_wasip3_http(instance_pre.component()),
+                targets_p3,
                 instance_pre,
                 component_id: component_id.to_string(),
                 identity,
@@ -3242,6 +3259,8 @@ fn ended_in_timeout(e: &(dyn std::error::Error + 'static)) -> bool {
 const INGRESS_WARN_INTERVAL: Duration = Duration::from_secs(10);
 static INVALID_AUTHORITY_WARN: RateLimitedWarn = RateLimitedWarn::new(INGRESS_WARN_INTERVAL);
 static ROUTE_FAILURE_WARN: RateLimitedWarn = RateLimitedWarn::new(INGRESS_WARN_INTERVAL);
+/// `poolSize` on a wasip2 HTTP handler, once per interval however many bind.
+static P2_POOL_WARN: RateLimitedWarn = RateLimitedWarn::new(INGRESS_WARN_INTERVAL);
 static UNBOUND_HOST_WARN: RateLimitedWarn = RateLimitedWarn::new(INGRESS_WARN_INTERVAL);
 
 /// Build an error response with the given status code.
