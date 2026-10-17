@@ -1,6 +1,6 @@
 //! Load for the density experiment.
 use super::{Answered, requests};
-use anyhow::{Context as _, Result, bail};
+use anyhow::Result;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 /// The CPU a child runs with.
@@ -17,6 +17,7 @@ pub(super) struct CpuLimit {
 /// `cpus` cores it may use. Returns whether it could.
 #[cfg(target_os = "linux")]
 pub(super) fn pin_to_cpus(cpus: usize) -> Result<bool> {
+    use anyhow::{Context as _, bail};
     use rustix::thread::{CpuSet, sched_getaffinity, sched_setaffinity};
     let allowed = sched_getaffinity(None).context("reading this process's CPU affinity")?;
     let mut chosen = CpuSet::new();
