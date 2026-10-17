@@ -1350,6 +1350,29 @@ impl ResolvedWorkload {
                         continue;
                     }
                     let (interface, label) = resolve_import(import_name, import_item.implements);
+                    // An import a plugin already bound is the host's (see
+                    // `served_within_workload`): the link step skips it, so it
+                    // has no exporter to depend on or disambiguate. `bind_plugins`
+                    // has run by now, so this is the same answer the link step
+                    // reaches through `should_link_component_import`; recording
+                    // an edge here anyway would order the graph around a link
+                    // that never happens, and can manufacture a false
+                    // circular-dependency bail.
+                    if !should_link_component_import(
+                        import_name,
+                        &component.metadata.plugin_bound_instances,
+                    ) {
+                        if exports.ambiguous.contains(interface) {
+                            debug!(
+                                component_id = %component_id,
+                                import = import_name,
+                                interface,
+                                "a plugin holds this import, so the sibling components \
+                                 that export the interface are not considered for it"
+                            );
+                        }
+                        continue;
+                    }
                     match label {
                         // For labeled imports without a labeled exporter, we
                         // record no dependency, as resolution will happen
@@ -1359,18 +1382,7 @@ impl ResolvedWorkload {
                         // exporter, then we must record the exporter as a
                         // dependency.
                         Some(l) => {
-                            // A label a plugin already bound is the host's (see
-                            // `served_within_workload`), so it is not an
-                            // intra-workload dependency. `bind_plugins` has run
-                            // by now, so this is the same answer the link step
-                            // reaches through `should_link_component_import`;
-                            // recording an edge here anyway would order the
-                            // graph around a link that never happens, and can
-                            // manufacture a false circular-dependency bail.
-                            if should_link_component_import(
-                                import_name,
-                                &component.metadata.plugin_bound_instances,
-                            ) && let Some((labelled, _)) =
+                            if let Some((labelled, _)) =
                                 labelled_exporter(&exports.exporters, interface, l)?
                                 && labelled != component_id
                             {
@@ -4627,6 +4639,38 @@ mod tests {
         )
     }
 
+    /// A MARKER exporter with a function in it, so a link to it is recorded
+    /// in the importer's `linked_components` (an empty instance links nothing).
+    fn func_marker_exporter(name: &str) -> WorkloadComponent {
+        implements_component_from_wat(
+            name,
+            &format!(
+                r#"(component
+                    (core module $m (func (export "f")))
+                    (core instance $i (instantiate $m))
+                    (func $f (canon lift (core func $i "f")))
+                    (instance $marker (export "f" (func $f)))
+                    (export "{MARKER}" (instance $marker)))"#
+            ),
+        )
+    }
+
+    /// An importer of MARKER's function, once per name in `names`: MARKER
+    /// itself is the unlabelled import, anything else is a label.
+    fn func_marker_importer(name: &str, names: &[&str]) -> WorkloadComponent {
+        let imports = names
+            .iter()
+            .map(|n| match *n {
+                MARKER => format!(r#"(import "{MARKER}" (instance (export "f" (func))))"#),
+                l => format!(
+                    r#"(import "{l}" (implements "{MARKER}") (instance (export "f" (func))))"#
+                ),
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        implements_component_from_wat(name, &format!("(component {imports})"))
+    }
+
     fn marker_workload(components: Vec<WorkloadComponent>) -> UnresolvedWorkload {
         UnresolvedWorkload::new(
             "local-first".to_string(),
@@ -4730,6 +4774,112 @@ mod tests {
         assert!(
             bound_component_ids(&bound).contains(&importer_id),
             "an ambiguous sibling export is not a provider, so the plugin keeps the import"
+        );
+    }
+
+    async fn resolve_marker_workload(
+        workload: UnresolvedWorkload,
+        plugins: Option<&HashMap<&'static str, Arc<dyn HostPlugin>>>,
+    ) -> anyhow::Result<ResolvedWorkload> {
+        let http_handler: Arc<dyn crate::host::http::HostHandler> =
+            Arc::new(crate::host::http::NullServer::default());
+        workload
+            .resolve(
+                plugins,
+                &crate::plugin::PluginBindings::new(),
+                &crate::host::HostRef::from_handler(&http_handler),
+                &crate::observability::Meters::new(crate::observability::MeterKind::Off),
+            )
+            .await
+    }
+
+    /// The rest of the path above: once the plugin holds the import, the two
+    /// sibling exporters have nothing left to disambiguate for that importer,
+    /// so the workload resolves, and the importer links to neither sibling.
+    #[tokio::test]
+    async fn a_plugin_bound_import_is_not_ambiguous() {
+        let importer = func_marker_importer("importer", &[MARKER]);
+        let importer_id: Arc<str> = Arc::from(importer.id());
+        let exporter_a = func_marker_exporter("exporter-a");
+        let exporter_b = func_marker_exporter("exporter-b");
+        let exporter_ids: HashSet<Arc<str>> = [exporter_a.id(), exporter_b.id()]
+            .into_iter()
+            .map(Arc::from)
+            .collect();
+
+        let workload = marker_workload(vec![importer, exporter_a, exporter_b]);
+        let resolved = resolve_marker_workload(workload, Some(&marker_plugin()))
+            .await
+            .expect("the plugin serves the import, so the sibling exports are not ambiguous");
+
+        let components = resolved.components();
+        let components = components.read().await;
+        let importer = components.get(&importer_id).expect("importer is resolved");
+        assert!(
+            importer.metadata.plugin_bound_instances.contains(MARKER),
+            "the plugin holds the import"
+        );
+        assert!(
+            importer.linked_components.is_disjoint(&exporter_ids),
+            "a plugin-bound import must not also link to a sibling exporter"
+        );
+    }
+
+    /// The control: with no plugin serving it, an unlabelled import of an
+    /// interface two siblings export is still refused as ambiguous.
+    #[tokio::test]
+    async fn an_unbound_import_of_two_sibling_exports_is_still_ambiguous() {
+        let workload = marker_workload(vec![
+            marker_importer("importer"),
+            marker_exporter("exporter-a"),
+            marker_exporter("exporter-b"),
+        ]);
+        let Err(err) = resolve_marker_workload(workload, None).await else {
+            panic!("two sibling exporters and no plugin is ambiguous");
+        };
+        assert!(
+            format!("{err:#}").contains("exported by multiple components"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    /// The other half of the guard: a plugin-bound unlabelled import records no
+    /// dependency edge either, even toward a single unambiguous exporter. Each
+    /// component here exports one interface of the entry, so it keeps the
+    /// entry and the plugin binds both of its imports; neither is linked, so
+    /// the A->B and B->A edges main records are a false circular dependency.
+    #[tokio::test]
+    async fn plugin_bound_unlabelled_imports_record_no_dependency_edge() {
+        const X: &str = "test:probe/x@0.1.0";
+        const Y: &str = "test:probe/y@0.1.0";
+        let a = component_from_wat(
+            "a",
+            &format!(
+                r#"(component (import "{X}" (instance)) (instance $y) (export "{Y}" (instance $y)))"#
+            ),
+        );
+        let b = component_from_wat(
+            "b",
+            &format!(
+                r#"(component (import "{Y}" (instance)) (instance $x) (export "{X}" (instance $x)))"#
+            ),
+        );
+        let entry = WitInterface::from("test:probe/x,y@0.1.0");
+        let workload = UnresolvedWorkload::new(
+            "cycle".to_string(),
+            "cycle".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![a, b],
+            vec![entry.clone()],
+        );
+        let plugin = Arc::new(MockPlugin::new("xy-plugin", vec![entry], vec![]));
+        let plugins = HashMap::from([(plugin.id(), plugin as Arc<dyn HostPlugin>)]);
+        let resolved = resolve_marker_workload(workload, Some(&plugins)).await;
+        assert!(
+            resolved.is_ok(),
+            "both imports are the plugin's, so there is no cycle: {:#}",
+            resolved.err().unwrap()
         );
     }
 
@@ -7288,6 +7438,31 @@ mod tests {
 
         assert_eq!(bound.len(), 1);
         assert_eq!(plugin.get_call_count("on_workload_item_bind"), 1);
+    }
+
+    /// Skipping a plugin-bound import is per import, not per interface: the
+    /// same importer's label naming one of the two siblings still links to
+    /// that sibling, while its unlabelled import stays with the plugin.
+    #[tokio::test]
+    async fn a_plugin_bound_import_leaves_a_labelled_sibling_link_in_place() {
+        let importer = func_marker_importer("importer", &[MARKER, "exporter-a"]);
+        let importer_id: Arc<str> = Arc::from(importer.id());
+        let exporter_a = func_marker_exporter("exporter-a");
+        let exporter_b = func_marker_exporter("exporter-b");
+        let exporter_a_id: Arc<str> = Arc::from(exporter_a.id());
+        let exporter_b_id: Arc<str> = Arc::from(exporter_b.id());
+
+        let workload = marker_workload(vec![importer, exporter_a, exporter_b]);
+        let resolved = resolve_marker_workload(workload, Some(&marker_plugin()))
+            .await
+            .expect("the unlabelled import is the plugin's and the label settles the other");
+
+        let components = resolved.components();
+        let components = components.read().await;
+        let importer = components.get(&importer_id).expect("importer is resolved");
+        assert!(importer.metadata.plugin_bound_instances.contains(MARKER));
+        assert!(importer.linked_components.contains(&exporter_a_id));
+        assert!(!importer.linked_components.contains(&exporter_b_id));
     }
 
     fn served_within_workload_fixture(
