@@ -220,8 +220,8 @@ fn validate_ca_bundle(data: &[u8]) -> Result<()> {
 /// the OS store the verifier already trusts.
 ///
 /// Read each time a client is built, so a rotated bundle is trusted without
-/// restarting a long-running host: by the next push, and by pulls once the
-/// reused pull client expires (see [`pull_client`]).
+/// restarting a long-running host: by the next push or pull (see
+/// [`pull_client`]).
 fn env_ca_certificates() -> Vec<Certificate> {
     if std::env::var_os("SSL_CERT_FILE").is_none() && std::env::var_os("SSL_CERT_DIR").is_none() {
         return Vec::new();
@@ -713,9 +713,11 @@ pub(crate) async fn pull_component_bytes(
     // Everything that can change what a pull returns, or whether it may
     // return at all, is in the key. The credentials above all: a result one
     // caller was authorised to fetch must never answer a caller who was not.
+    let roots = extra_ca_certificates();
     let key = PullKey {
         reference: reference.to_string(),
         auth: AuthId::of(&auth),
+        roots: RootsId::of(&roots),
         insecure: config.insecure,
         cache_dir: config.cache_dir.clone(),
         pull_policy: pull_policy.clone(),
@@ -723,7 +725,14 @@ pub(crate) async fn pull_component_bytes(
     };
     let pulled = pull_coalescer()
         .run(key, || {
-            pull_uncoalesced(reference, &reference_parsed, &config, &auth, &pull_policy)
+            pull_uncoalesced(
+                reference,
+                &reference_parsed,
+                &config,
+                &auth,
+                &roots,
+                &pull_policy,
+            )
         })
         .await?;
     Ok((pulled.bytes.clone(), pulled.digest.clone()))
@@ -748,6 +757,9 @@ const PULL_JOIN: Duration = Duration::from_secs(600);
 struct PullKey {
     reference: String,
     auth: AuthId,
+    /// The extra trust roots, so a pull that failed TLS does not answer one made
+    /// after a CA was rotated in.
+    roots: RootsId,
     insecure: bool,
     cache_dir: Option<PathBuf>,
     pull_policy: OciPullPolicy,
@@ -803,8 +815,10 @@ const PULL_REUSE_BYTES: u64 = 256 * 1024 * 1024;
 /// work and the others wait for its result, which then answers the same
 /// request until `reuse` after it was produced.
 ///
-/// A failure is shared the same way. Callers queued behind a pull that timed
-/// out would otherwise each retry in turn, and each wait out the timeout.
+/// A failure answers only the callers that joined while the work ran: those
+/// queued behind a pull that timed out would otherwise each retry in turn, and
+/// each wait out the timeout. A request made after it fails tries again, since
+/// whatever failed (a registry, a CA bundle, a credential) may be fixed by then.
 struct Coalescer<K, V> {
     cells: moka::sync::Cache<K, Arc<CoalescedCell<V>>>,
 }
@@ -880,9 +894,17 @@ where
             .await
             .clone();
         if ran {
-            // Re-inserting restarts the entry's clock, now at `reuse`, so a
-            // slow pull is still reused for the full window after it lands.
-            self.cells.insert(key, cell);
+            if result.is_ok() {
+                // Re-inserting restarts the entry's clock, now at `reuse`, so a
+                // slow pull is still reused for the full window after it lands.
+                self.cells.insert(key, cell);
+            } else if self
+                .cells
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(&current, &cell))
+            {
+                self.cells.invalidate(&key);
+            }
         }
         // Shared rather than reformatted, so each caller can still walk the
         // chain (a timeout, an auth failure) under the top message.
@@ -895,12 +917,14 @@ where
 /// for a registry, so a client shared across credentials would pull with
 /// whichever came first.
 ///
-/// Building a client loads its trust roots, reading `SSL_CERT_FILE` /
-/// `SSL_CERT_DIR` from disk; reusing one also keeps its registry tokens. A
-/// client lives [`CLIENT_REUSE`], which bounds how long a rotated environment
-/// bundle takes to be trusted.
-fn pull_client(insecure: bool, auth: &RegistryAuth) -> Result<Client> {
-    static CLIENTS: OnceLock<moka::sync::Cache<(bool, AuthId, bool), Client>> = OnceLock::new();
+/// Reusing a client keeps its registry tokens and skips rebuilding its TLS
+/// configuration. The extra trust roots are in the key, so a bundle rotated
+/// into `SSL_CERT_FILE` / `SSL_CERT_DIR`, or `--ca-path` roots installed after
+/// a client was built, is trusted by the next pull rather than once that
+/// client expires. Finding them reads the environment bundles each pull, but
+/// only when one of those variables is set.
+fn pull_client(insecure: bool, auth: &RegistryAuth, roots: &[Certificate]) -> Result<Client> {
+    static CLIENTS: OnceLock<moka::sync::Cache<(bool, AuthId, RootsId), Client>> = OnceLock::new();
     CLIENTS
         .get_or_init(|| {
             moka::sync::Cache::builder()
@@ -908,28 +932,34 @@ fn pull_client(insecure: bool, auth: &RegistryAuth) -> Result<Client> {
                 .time_to_live(CLIENT_REUSE)
                 .build()
         })
-        // Whether extra trust roots are installed is in the key: they are
-        // installed at most once, and a client built before that would
-        // otherwise keep rejecting the private registry for CLIENT_REUSE.
-        .try_get_with(
-            (
-                insecure,
-                AuthId::of(auth),
-                EXTRA_CA_CERTIFICATES.get().is_some(),
-            ),
-            || {
-                oci_client(ClientConfig {
-                    protocol: if insecure {
-                        ClientProtocol::Http
-                    } else {
-                        ClientProtocol::Https
-                    },
-                    extra_root_certificates: extra_ca_certificates(),
-                    ..Default::default()
-                })
-            },
-        )
+        .try_get_with((insecure, AuthId::of(auth), RootsId::of(roots)), || {
+            oci_client(ClientConfig {
+                protocol: if insecure {
+                    ClientProtocol::Http
+                } else {
+                    ClientProtocol::Https
+                },
+                extra_root_certificates: roots.to_vec(),
+                ..Default::default()
+            })
+        })
         .map_err(|err| anyhow::Error::new(crate::engine::SharedError(err)))
+}
+
+/// A digest of a set of extra trust roots, so a key does not hold them.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct RootsId([u8; 32]);
+
+impl RootsId {
+    fn of(roots: &[Certificate]) -> Self {
+        let mut hasher = Sha256::new();
+        // Length-prefixed, so no two different sets hash the same bytes.
+        for cert in roots {
+            hasher.update((cert.data.len() as u64).to_le_bytes());
+            hasher.update(&cert.data);
+        }
+        Self(hasher.finalize().into())
+    }
 }
 
 const CLIENT_REUSE: Duration = Duration::from_secs(300);
@@ -941,6 +971,7 @@ async fn pull_uncoalesced(
     reference_parsed: &Reference,
     config: &OciConfig,
     auth: &RegistryAuth,
+    roots: &[Certificate],
     pull_policy: &OciPullPolicy,
 ) -> Result<Arc<Pulled>> {
     // Initialize cache manager
@@ -966,7 +997,7 @@ async fn pull_uncoalesced(
             // Fetched only now: the pinned hit above needs no client, and a
             // host restoring from its cache would otherwise build or look one
             // up per workload for nothing.
-            let fetched_digest = pull_client(config.insecure, auth)?
+            let fetched_digest = pull_client(config.insecure, auth, roots)?
                 .fetch_manifest_digest(reference_parsed, auth)
                 .await?;
 
@@ -985,7 +1016,7 @@ async fn pull_uncoalesced(
         bail!("component not found in cache and pull policy is 'Never'");
     }
 
-    let client = pull_client(config.insecure, auth)?;
+    let client = pull_client(config.insecure, auth, roots)?;
 
     // Pull the component using oci-client
     let pull_future = client.pull(
@@ -1311,15 +1342,11 @@ mod tests {
     }
 
     /// A failure answers the requests waiting on it rather than letting each
-    /// retry in turn, and once its window passes the next request tries again.
+    /// retry in turn, but the next request after it tries again at once.
     #[tokio::test]
-    async fn a_failed_pull_answers_its_waiters_then_expires() {
-        let coalescer: Coalescer<&str, u32> = Coalescer::new(
-            16,
-            Duration::from_secs(60),
-            Duration::from_millis(50),
-            |_| 1,
-        );
+    async fn a_failed_pull_answers_only_its_waiters() {
+        let coalescer: Coalescer<&str, u32> =
+            Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
 
         let (a, b) = tokio::join!(
             coalescer.run("ref", || async {
@@ -1331,7 +1358,6 @@ mod tests {
         assert!(a.unwrap_err().to_string().contains("registry unreachable"));
         assert!(b.unwrap_err().to_string().contains("registry unreachable"));
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(coalescer.run("ref", || async { Ok(7) }).await.unwrap(), 7);
     }
 
