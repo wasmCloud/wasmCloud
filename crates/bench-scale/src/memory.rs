@@ -16,6 +16,8 @@ pub enum MemorySource {
     /// sysinfo's resident size, elsewhere. Pages the OS compressed or swapped
     /// do not show up in it.
     Sysinfo,
+    #[cfg(target_os = "macos")]
+    PhysFootprint,
     /// No process to read: attached to a host without `--host-pid`.
     Unknown,
 }
@@ -25,6 +27,10 @@ impl MemorySource {
         match self {
             Self::ProcStatus => "VmRSS + VmSwap from /proc/<pid>/status",
             Self::Sysinfo => "resident size from sysinfo (excludes swapped/compressed pages)",
+            #[cfg(target_os = "macos")]
+            Self::PhysFootprint => {
+                "phys_footprint from proc_pid_rusage (includes compressed pages)"
+            }
             Self::Unknown => "unknown (attached without --host-pid)",
         }
     }
@@ -52,6 +58,9 @@ impl Sampler {
         let source = match pid {
             None => MemorySource::Unknown,
             Some(_) if cfg!(target_os = "linux") => MemorySource::ProcStatus,
+            #[cfg(target_os = "macos")]
+            Some(_) => MemorySource::PhysFootprint,
+            #[cfg(not(target_os = "macos"))]
             Some(_) => MemorySource::Sysinfo,
         };
         Self {
@@ -84,9 +93,27 @@ impl Sampler {
                 );
                 system.process(pid).map(sysinfo::Process::memory)
             }
+            #[cfg(target_os = "macos")]
+            MemorySource::PhysFootprint => phys_footprint(pid),
             MemorySource::Unknown => None,
         }
     }
+}
+
+/// Same macOS accounting as the runtime guard, for the measured host PID.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+fn phys_footprint(pid: u32) -> Option<u64> {
+    let pid = libc::c_int::try_from(pid).ok()?;
+    let mut info = std::mem::MaybeUninit::<libc::rusage_info_v2>::zeroed();
+    // SAFETY: the requested version matches the buffer's layout and size.
+    // A vanished/inaccessible process returns an error instead of a reading.
+    let rc = unsafe { libc::proc_pid_rusage(pid, libc::RUSAGE_INFO_V2, info.as_mut_ptr().cast()) };
+    if rc != 0 {
+        return None;
+    }
+    // SAFETY: success filled the correctly sized, initially zeroed buffer.
+    Some(unsafe { info.assume_init() }.ri_phys_footprint)
 }
 
 /// Samples the footprint in the background between the bench's own
@@ -143,6 +170,15 @@ mod tests {
         assert_eq!(parse_proc_status(status), Some((2048 + 16) * 1024));
         assert_eq!(parse_proc_status("VmRSS:\t 4 kB\n"), Some(4096));
         assert_eq!(parse_proc_status("Name:\tzombie\n"), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_uses_the_same_accounting_as_the_runtime_guard() {
+        let sampler = Sampler::new(Some(std::process::id()));
+        assert_eq!(sampler.source(), MemorySource::PhysFootprint);
+        assert!(sampler.footprint().is_some_and(|n| n > 0));
+        assert_eq!(phys_footprint(u32::MAX), None);
     }
 
     #[test]
