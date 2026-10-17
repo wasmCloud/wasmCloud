@@ -62,6 +62,22 @@ mod settings_tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn uninspected_external_images_cannot_claim_warm_pool_capacity() -> Result<()> {
+        let machine = Machine::detect();
+        let warm = Args::try_parse_from(["bench-scale", "--image", "registry.test/http:v1"])?;
+        assert!(resolve_settings(&warm, &machine).is_err());
+        let cold = Args::try_parse_from([
+            "bench-scale",
+            "--image",
+            "registry.test/http:v1",
+            "--flavour",
+            "scale-to-zero",
+        ])?;
+        resolve_settings(&cold, &machine)?;
+        Ok(())
+    }
 }
 
 fn main() -> ExitCode {
@@ -94,6 +110,11 @@ fn main() -> ExitCode {
 }
 
 fn resolve_settings(args: &Args, machine: &Machine) -> Result<Settings> {
+    if args.image.is_some() && args.flavour != FlavourArg::ScaleToZero {
+        bail!(
+            "warm runs must verify the component's P3 HTTP export; use --wasm instead of --image, or select --flavour scale-to-zero"
+        );
+    }
     bench_tools::density::sample_size(args.sample).map_err(anyhow::Error::msg)?;
     if args.step == 0 || args.start_concurrency == 0 || args.request_concurrency == 0 {
         bail!("--step, --start-concurrency and --request-concurrency must be at least 1");
@@ -321,6 +342,7 @@ async fn run(args: Args) -> Result<u8> {
             };
             let wasm = std::fs::read(&wasm_path)
                 .with_context(|| format!("reading {}", wasm_path.display()))?;
+            provision::validate_poolable_http(&wasm)?;
             let size_bytes = wasm.len() as u64;
             let image = Arc::new(Image::new("bench/http-handler", wasm)?);
             let registry = Registry::serve(Arc::clone(&image)).await?;

@@ -318,15 +318,15 @@ fn status_of(response: WorkloadResponse) -> Result<WorkloadStatus, RpcError> {
         .ok_or_else(|| RpcError::Other(anyhow::anyhow!("reply carries no workloadStatus")))
 }
 
-/// The `wasi:http/incoming-handler` binding that routes `host_header` to a
+/// The poolable `wasi:http/handler` binding that routes `host_header` to a
 /// workload. The host matches the request's Host header against it, so it has
 /// to be an RFC 1123 hostname.
 pub fn http_interface(host_header: &str) -> WitInterface {
     WitInterface {
         namespace: "wasi".to_string(),
         package: "http".to_string(),
-        interfaces: vec!["incoming-handler".to_string()],
-        version: "0.2.2".to_string(),
+        interfaces: vec!["handler".to_string()],
+        version: "0.3.0".to_string(),
         config: BTreeMap::from([("host".to_string(), host_header.to_string())]),
     }
 }
@@ -393,8 +393,8 @@ mod tests {
         let interface = &workload["witWorld"]["hostInterfaces"][0];
         assert_eq!(interface["namespace"], "wasi");
         assert_eq!(interface["package"], "http");
-        assert_eq!(interface["interfaces"][0], "incoming-handler");
-        assert_eq!(interface["version"], "0.2.2");
+        assert_eq!(interface["interfaces"][0], "handler");
+        assert_eq!(interface["version"], "0.3.0");
         assert_eq!(interface["config"]["host"], "w1.warm.scale.test");
         // Only proto fields: pbjson's deserializers refuse anything else.
         let keys: Vec<&String> = component.as_object().unwrap().keys().collect();

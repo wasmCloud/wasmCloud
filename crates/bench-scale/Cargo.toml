@@ -34,3 +34,5 @@ sha2 = { workspace = true }
 sysinfo = { workspace = true }
 tar = { workspace = true }
 tokio = { workspace = true }
+wit-component = { workspace = true }
+wasi-preview1-component-adapter-provider = "46"

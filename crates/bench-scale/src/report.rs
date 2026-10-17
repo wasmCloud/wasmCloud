@@ -35,7 +35,7 @@ impl Machine {
 #[derive(Debug, Clone, Serialize)]
 pub struct ImageInfo {
     pub reference: String,
-    /// `fixture:http-handler-p2`, `wasm:<path>` or `external`.
+    /// `fixture:http-handler-p3`, `wasm:<path>` or `external`.
     pub source: String,
     pub size_bytes: Option<u64>,
     pub layer_digest: Option<String>,
