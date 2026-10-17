@@ -8,7 +8,9 @@ mod api;
 mod bench;
 mod cli;
 mod host;
+mod lifecycle;
 mod memory;
+mod process;
 mod provision;
 mod registry;
 mod report;
@@ -92,12 +94,17 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // Ctrl-C drops the run, and with it every child-process guard, so no
-    // host or nats-server is left behind.
     let result = runtime.block_on(async {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let run = run(args, &cancel);
+        tokio::pin!(run);
         tokio::select! {
-            result = run(args) => result,
-            _ = tokio::signal::ctrl_c() => Err(anyhow::anyhow!("interrupted")),
+            result = &mut run => result,
+            _ = tokio::signal::ctrl_c() => {
+                cancel.cancel();
+                // The run owns cleanup. Do not drop it when attached workloads exist.
+                run.await
+            },
         }
     });
     match result {
@@ -271,8 +278,9 @@ fn delta(before: Option<RegistryCounts>, after: Option<RegistryCounts>) -> Optio
     })
 }
 
-async fn run(args: Args) -> Result<u8> {
+async fn run(args: Args, cancel: &tokio_util::sync::CancellationToken) -> Result<u8> {
     let loud = args.report;
+    use lifecycle::cancellable;
     let say = move |message: &str| {
         if loud {
             eprintln!("bench-scale: {message}");
@@ -311,15 +319,22 @@ async fn run(args: Args) -> Result<u8> {
     let (_nats_server, nats_url) = match &args.nats_url {
         Some(url) => (None, url.clone()),
         None => {
-            let binary = provision::ensure_nats(&cache, &args.nats_version, &say).await?;
-            let (guard, url) = host::spawn_nats(&binary, &run_dir)?;
+            let binary = cancellable(
+                cancel,
+                provision::ensure_nats(&cache, &args.nats_version, &say),
+            )
+            .await?;
+            let (guard, url) = cancellable(cancel, host::spawn_nats(&binary, &run_dir)).await?;
             (Some(guard), url)
         }
     };
-    let nats = async_nats::ConnectOptions::new()
-        .connect(&nats_url)
-        .await
-        .with_context(|| format!("connecting to {}", report::redact_url(&nats_url)))?;
+    let nats = cancellable(cancel, async {
+        async_nats::ConnectOptions::new()
+            .connect(&nats_url)
+            .await
+            .with_context(|| format!("connecting to {}", report::redact_url(&nats_url)))
+    })
+    .await?;
 
     // The component: an image the caller names, or ours, served locally.
     let (image, registry): (ImageInfo, Option<Registry>) = match &args.image {
@@ -336,7 +351,7 @@ async fn run(args: Args) -> Result<u8> {
             let (wasm_path, source): (PathBuf, String) = match &args.wasm {
                 Some(path) => (path.clone(), format!("wasm:{}", path.display())),
                 None => (
-                    provision::build_fixture(&workspace, &say)?,
+                    cancellable(cancel, provision::build_fixture(&workspace, &say)).await?,
                     format!("fixture:{}", provision::FIXTURE),
                 ),
             };
@@ -367,11 +382,11 @@ async fn run(args: Args) -> Result<u8> {
                 .wash_version
                 .clone()
                 .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
-            Some(provision::ensure_wash(&cache, &version, &say).await?)
+            Some(cancellable(cancel, provision::ensure_wash(&cache, &version, &say)).await?)
         }
     };
     let flags = match (&binary, args.host_cli) {
-        (Some(binary), HostCli::Wash) => host::wash_host_flags(binary)?,
+        (Some(binary), HostCli::Wash) => cancellable(cancel, host::wash_host_flags(binary)).await?,
         _ => Default::default(),
     };
 
@@ -414,12 +429,13 @@ async fn run(args: Args) -> Result<u8> {
         image: &image.reference,
         run_id: &run_id,
         on_step: &print_step,
+        cancel,
     };
 
     let mut reports = Vec::new();
     for flavour in flavours {
         // A fresh host per flavour, so neither inherits the other's footprint.
-        let target = prepare_target(&plan, flavour).await?;
+        let target = lifecycle::cancellable(cancel, prepare_target(&plan, flavour)).await?;
         if args.report {
             report::print_flavour_header(flavour, &target.info, target.sampler.source().describe());
         }
