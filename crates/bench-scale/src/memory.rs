@@ -15,6 +15,7 @@ pub enum MemorySource {
     ProcStatus,
     /// sysinfo's resident size, elsewhere. Pages the OS compressed or swapped
     /// do not show up in it.
+    #[cfg(not(target_os = "macos"))]
     Sysinfo,
     #[cfg(target_os = "macos")]
     PhysFootprint,
@@ -26,6 +27,7 @@ impl MemorySource {
     pub fn describe(self) -> &'static str {
         match self {
             Self::ProcStatus => "VmRSS + VmSwap from /proc/<pid>/status",
+            #[cfg(not(target_os = "macos"))]
             Self::Sysinfo => "resident size from sysinfo (excludes swapped/compressed pages)",
             #[cfg(target_os = "macos")]
             Self::PhysFootprint => {
@@ -50,6 +52,7 @@ pub fn parse_proc_status(status: &str) -> Option<u64> {
 pub struct Sampler {
     pid: Option<u32>,
     source: MemorySource,
+    #[cfg(not(target_os = "macos"))]
     system: std::sync::Mutex<sysinfo::System>,
 }
 
@@ -66,6 +69,7 @@ impl Sampler {
         Self {
             pid,
             source,
+            #[cfg(not(target_os = "macos"))]
             system: std::sync::Mutex::new(sysinfo::System::new()),
         }
     }
@@ -82,6 +86,7 @@ impl Sampler {
                 let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
                 parse_proc_status(&status)
             }
+            #[cfg(not(target_os = "macos"))]
             MemorySource::Sysinfo => {
                 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate};
                 let mut system = self.system.lock().ok()?;
