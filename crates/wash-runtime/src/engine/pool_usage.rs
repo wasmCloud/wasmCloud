@@ -13,13 +13,13 @@
 //! annotates the refusal itself ([`explain_instantiate_failure`]) so the
 //! error a caller sees says what to change.
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use wasmtime::{PoolConcurrencyLimitError, PoolingAllocationConfig, PoolingAllocatorMetrics};
 
 use crate::engine::ctx::SharedCtx;
+use crate::observability::rate_limit::RateLimitedWarn;
 
 /// One pool total and how much of it is handed out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,25 +122,32 @@ pub fn pool_refusals() -> u64 {
 
 static REFUSALS: AtomicU64 = AtomicU64::new(0);
 
-/// The last time a refusal was logged at `warn`, so a pool refusing every
-/// request says so a few times a minute rather than on every request.
-static LAST_WARNED: Mutex<Option<Instant>> = Mutex::new(None);
+/// Lets a refusal through at `warn` a few times a minute, so a pool refusing
+/// every request on every core neither logs nor contends on each one.
+static REFUSAL_WARN: RateLimitedWarn = RateLimitedWarn::new(Duration::from_secs(10));
 
-const WARN_INTERVAL: Duration = Duration::from_secs(10);
+/// The context a refusal is annotated with, ahead of its remedy.
+macro_rules! exhausted {
+    ($remedy:literal) => {
+        concat!("host instance pool exhausted. ", $remedy)
+    };
+}
+const EXHAUSTED: &str = exhausted!("");
 
-/// The knob that raises the total wasmtime names in a refusal.
+/// The context naming the knob that raises the total wasmtime names in a
+/// refusal. Whole static strings, so annotating a refusal allocates nothing.
 fn remedy(kind: &str) -> &'static str {
     match kind {
-        "core instances" => {
+        "core instances" => exhausted!(
             "Raise --core-instances (or WASMTIME_POOLING_TOTAL_CORE_INSTANCES), or give this \
              host fewer warm instances"
-        }
-        "component instances" => "Raise WASMTIME_POOLING_TOTAL_COMPONENT_INSTANCES",
-        "memories" => "Raise WASMTIME_POOLING_TOTAL_MEMORIES",
-        "tables" => "Raise WASMTIME_POOLING_TOTAL_TABLES",
-        "fibers" | "stacks" => "Raise WASMTIME_POOLING_TOTAL_STACKS",
-        "GC heaps" => "Raise WASMTIME_POOLING_TOTAL_GC_HEAPS",
-        _ => "Raise the matching WASMTIME_POOLING_TOTAL_* setting",
+        ),
+        "component instances" => exhausted!("Raise WASMTIME_POOLING_TOTAL_COMPONENT_INSTANCES"),
+        "memories" => exhausted!("Raise WASMTIME_POOLING_TOTAL_MEMORIES"),
+        "tables" => exhausted!("Raise WASMTIME_POOLING_TOTAL_TABLES"),
+        "fibers" | "stacks" => exhausted!("Raise WASMTIME_POOLING_TOTAL_STACKS"),
+        "GC heaps" => exhausted!("Raise WASMTIME_POOLING_TOTAL_GC_HEAPS"),
+        _ => exhausted!("Raise the matching WASMTIME_POOLING_TOTAL_* setting"),
     }
 }
 
@@ -167,36 +174,24 @@ pub(crate) fn explain_instantiate_failure(
     let refusals = REFUSALS.fetch_add(1, Ordering::Relaxed).saturating_add(1);
 
     let ctx = &data.active_ctx;
-    let warn = match LAST_WARNED.lock() {
-        Ok(mut last) => {
-            let now = Instant::now();
-            let due = last.is_none_or(|at| now.duration_since(at) >= WARN_INTERVAL);
-            if due {
-                *last = Some(now);
-            }
-            due
-        }
-        // A poisoned lock only means a panic elsewhere mid-update; saying it
-        // again is better than going quiet.
-        Err(_) => true,
-    };
-    if warn {
-        tracing::warn!(
+    match REFUSAL_WARN.admit() {
+        Some(suppressed) => tracing::warn!(
             workload_id = %ctx.workload_id,
             component_id = %ctx.component_id,
             refusals,
+            suppressed,
             "host instance pool exhausted ({message}): the instantiation was refused, and the \
-             workload keeps running but cannot serve until a slot frees. {remedy}"
-        );
-    } else {
-        tracing::debug!(
+             workload keeps running but cannot serve until a slot frees. {}",
+            remedy.strip_prefix(EXHAUSTED).unwrap_or(remedy)
+        ),
+        None => tracing::debug!(
             workload_id = %ctx.workload_id,
             component_id = %ctx.component_id,
             refusals,
             "host instance pool exhausted ({message})"
-        );
+        ),
     }
-    err.context(format!("host instance pool exhausted. {remedy}"))
+    err.context(remedy)
 }
 
 #[cfg(test)]
