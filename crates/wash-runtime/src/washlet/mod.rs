@@ -2426,17 +2426,18 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn queued_start_rechecks_memory_before_preparing_and_releases_its_id()
     -> anyhow::Result<()> {
+        let guard = Arc::new(crate::engine::process_memory::ProcessMemoryGuard::new(
+            1 << 30,
+        ));
         let engine = crate::engine::Engine::builder()
-            .with_max_process_memory_bytes(u64::MAX)
-            .build()?;
-        let guard = engine.process_memory().context("memory guard")?.clone();
+            .without_max_process_memory()
+            .build()?
+            .with_unsampled_admission_guard(guard.clone());
         let host = crate::host::HostBuilder::default()
             .with_engine(engine)
             .build()?
             .start()
             .await?;
-        // Let the sampler's initial tick finish before simulating pressure.
-        tokio::task::yield_now().await;
         let defaults = control_defaults(host.clone());
         let permit = defaults.starts.acquire().await?;
         let request = types::v2::WorkloadStartRequest {

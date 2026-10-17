@@ -312,8 +312,8 @@ pub struct Engine {
     // wasmtime engine
     pub(crate) inner: wasmtime::Engine,
     pub(crate) cache: Cache<CacheKey, CacheValue>,
-    /// Compiles running workloads hold, consulted before the cache so a
-    /// digest still in use is never compiled twice. See [`LiveCompiles`].
+    /// Compiles running workloads hold, consulted before the cache so a live
+    /// compile can be reused after cache eviction. See [`LiveCompiles`].
     live_compiles: Arc<LiveCompiles>,
     /// Compiles that actually ran on this engine.
     ///
@@ -554,6 +554,16 @@ impl Engine {
     /// [`without_max_process_memory`](EngineBuilder::without_max_process_memory).
     pub fn process_memory(&self) -> Option<&Arc<process_memory::ProcessMemoryGuard>> {
         self.process_memory.as_ref()
+    }
+
+    /// Inject admission state without the process sampler overwriting it.
+    #[cfg(all(test, feature = "washlet"))]
+    pub(crate) fn with_unsampled_admission_guard(
+        mut self,
+        guard: Arc<process_memory::ProcessMemoryGuard>,
+    ) -> Self {
+        self.process_memory = Some(guard);
+        self
     }
 
     /// Core instances the pooling allocator was configured to admit, captured
