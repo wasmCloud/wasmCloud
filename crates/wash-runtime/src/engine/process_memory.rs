@@ -554,17 +554,24 @@ impl ProcessMemoryGuard {
     /// The footprint is the process's, not the engine's, so one thread reads
     /// it for every guard in the process, starting with the first guard and
     /// ending once the last is dropped. It holds the guards weakly, like the
-    /// epoch ticker, so a dropped engine is not kept alive by it. Takes one
-    /// reading before returning, so the guard is never acting on a zero.
+    /// epoch ticker, so a dropped engine is not kept alive by it. Attempts an
+    /// initial reading before returning; an unavailable reading is retried by
+    /// the sampler rather than permanently disabling this guard.
     pub fn spawn_sampler(self: &Arc<Self>) -> anyhow::Result<()> {
-        let Some(first) = process_footprint() else {
-            tracing::warn!(
-                "cannot read this process's memory footprint on this platform; \
-                 max-process-memory will not be enforced"
-            );
-            return Ok(());
-        };
-        self.observe(first);
+        self.spawn_sampler_with_reading(process_footprint())
+    }
+
+    fn spawn_sampler_with_reading(self: &Arc<Self>, first: Option<u64>) -> anyhow::Result<()> {
+        match first {
+            Some(footprint) => self.observe(footprint),
+            None => {
+                self.blind.store(true, Ordering::Relaxed);
+                tracing::warn!(
+                    "cannot read this process's initial memory footprint; \
+                     max-process-memory is not enforced until a sample succeeds"
+                );
+            }
+        }
         let mut sampled = lock_ignoring_poison(&SAMPLED);
         sampled.guards.retain(|guard| guard.strong_count() > 0);
         sampled.guards.push(Arc::downgrade(self));
@@ -721,6 +728,25 @@ mod tests {
     use super::*;
 
     const MIB: u64 = 1024 * 1024;
+
+    #[test]
+    fn an_unreadable_initial_sample_is_retried() -> anyhow::Result<()> {
+        let guard = Arc::new(ProcessMemoryGuard::new(1));
+        guard.spawn_sampler_with_reading(None)?;
+        // Exercise the real sampler registration and background reader, not
+        // just observe(): the regression omitted registration on this path.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while (guard.blind.load(Ordering::Relaxed) || !guard.is_over())
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(guard.footprint_bytes() > 1);
+        assert!(guard.is_over());
+        assert!(!guard.blind.load(Ordering::Relaxed));
+        assert!(guard.admit_start().is_err());
+        Ok(())
+    }
 
     #[test]
     fn the_footprint_of_this_process_is_readable() {
