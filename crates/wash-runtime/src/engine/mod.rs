@@ -346,7 +346,8 @@ pub struct Engine {
     pub(crate) guest_memory: Arc<guest_memory::GuestMemoryBudget>,
     /// The whole process's footprint against `max_process_memory`, sampled on
     /// its own thread. The guest budget refuses growth while it is over.
-    process_memory: Arc<process_memory::ProcessMemoryGuard>,
+    /// `None` when the guard was switched off.
+    process_memory: Option<Arc<process_memory::ProcessMemoryGuard>>,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
@@ -537,8 +538,10 @@ impl Engine {
     /// The process's memory footprint against `max_process_memory`, for an
     /// embedder to report, or to stop taking on work while
     /// [`process_memory::ProcessMemoryGuard::is_over`].
-    pub fn process_memory(&self) -> &Arc<process_memory::ProcessMemoryGuard> {
-        &self.process_memory
+    /// `None` when the engine was built
+    /// [`without_max_process_memory`](EngineBuilder::without_max_process_memory).
+    pub fn process_memory(&self) -> Option<&Arc<process_memory::ProcessMemoryGuard>> {
+        self.process_memory.as_ref()
     }
 
     /// Core instances the pooling allocator was configured to admit, captured
@@ -1169,6 +1172,7 @@ pub struct EngineBuilder {
     scratch_root: Option<PathBuf>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
     max_process_memory_bytes: Option<u64>,
+    max_process_memory_off: bool,
     guest_memory_mode: guest_memory::GuestMemoryMode,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
@@ -1231,9 +1235,25 @@ impl EngineBuilder {
     /// footprint falls back (see [`process_memory`]). Unset, it is derived:
     /// 90% of the cgroup limit, or of physical memory where there is none, so
     /// a host never sets out to use more memory than the machine has.
+    ///
+    /// Overrides an earlier [`Self::without_max_process_memory`].
     #[must_use]
     pub fn with_max_process_memory_bytes(mut self, bytes: u64) -> Self {
         self.max_process_memory_bytes = Some(bytes);
+        self.max_process_memory_off = false;
+        self
+    }
+
+    /// Hold the process to no footprint at all: no sampler runs, and only the
+    /// guest budget and the kernel limit memory. For an embedder that bounds
+    /// the process some other way, or a host whose footprint reading cannot
+    /// be trusted.
+    ///
+    /// Overrides an earlier [`Self::with_max_process_memory_bytes`].
+    #[must_use]
+    pub fn without_max_process_memory(mut self) -> Self {
+        self.max_process_memory_bytes = None;
+        self.max_process_memory_off = true;
         self
     }
 
@@ -1442,12 +1462,18 @@ impl EngineBuilder {
         {
             tracing::warn!("{advisory}");
         }
-        let max_process_memory_bytes = self
-            .max_process_memory_bytes
-            .unwrap_or_else(host_memory::derive_max_process_memory_bytes);
-        if let Some(advisory) = host_memory::process_memory_advisory(max_process_memory_bytes) {
+        let max_process_memory_bytes = (!self.max_process_memory_off).then(|| {
+            self.max_process_memory_bytes
+                .unwrap_or_else(host_memory::derive_max_process_memory_bytes)
+        });
+        if let Some(advisory) =
+            max_process_memory_bytes.and_then(host_memory::process_memory_advisory)
+        {
             tracing::warn!("{advisory}");
         }
+        // What the startup line says the process is held to.
+        let max_process_memory =
+            max_process_memory_bytes.map_or_else(|| "off".to_string(), host_memory::render_bytes);
 
         // The pooling allocator can be more efficient for workloads with many short-lived instances.
         // Read back from the installed pool: the environment and a
@@ -1480,7 +1506,7 @@ impl EngineBuilder {
         // does not shrink with the heap ceiling.
         match installed_pool {
             Some(pool) => tracing::info!(
-                max_process_memory = %host_memory::render_bytes(max_process_memory_bytes),
+                %max_process_memory,
                 max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
                 guest_memory_mode = self.guest_memory_mode.as_str(),
                 default_heap_memory = %host_memory::render_bytes(pool.max_memory_size),
@@ -1492,7 +1518,7 @@ impl EngineBuilder {
             ),
             // No pool, so no reservation and no installed ceiling to name.
             None => tracing::info!(
-                max_process_memory = %host_memory::render_bytes(max_process_memory_bytes),
+                %max_process_memory,
                 max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
                 guest_memory_mode = self.guest_memory_mode.as_str(),
                 pooling = false,
@@ -1574,11 +1600,15 @@ impl EngineBuilder {
             None => e,
         })?;
         spawn_epoch_ticker(&inner)?;
-        let process_memory = Arc::new(process_memory::ProcessMemoryGuard::new(
-            max_process_memory_bytes,
-        ));
-        process_memory.spawn_sampler()?;
-        process_memory.register_metrics(&opentelemetry::global::meter("wash-runtime"));
+        let process_memory = match max_process_memory_bytes {
+            Some(limit) => {
+                let guard = Arc::new(process_memory::ProcessMemoryGuard::new(limit));
+                guard.spawn_sampler()?;
+                guard.register_metrics(&opentelemetry::global::meter("wash-runtime"));
+                Some(guard)
+            }
+            None => None,
+        };
         let cache = Cache::builder()
             .max_capacity(self.compilation_cache_size.unwrap_or(100))
             .time_to_idle(
@@ -1621,11 +1651,14 @@ impl EngineBuilder {
                 // asked for it: the budget must not charge for growth the pool
                 // is going to refuse. The same figure `explain_compile_failure`
                 // measures against, so they cannot drift apart.
-                match installed_heap_memory {
+                let budget = match installed_heap_memory {
                     Some(ceiling) => budget.with_heap_ceiling(ceiling),
                     None => budget,
+                };
+                match &process_memory {
+                    Some(guard) => budget.with_process_guard(Arc::clone(guard)),
+                    None => budget,
                 }
-                .with_process_guard(Arc::clone(&process_memory))
                 .into_metered()
             },
             process_memory,

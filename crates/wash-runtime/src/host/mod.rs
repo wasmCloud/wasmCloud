@@ -1057,7 +1057,9 @@ impl HostApi for Host {
         self.engine.guest_memory().report();
         // RSS from the monitor understates a process under pressure; this
         // counts swapped and compressed pages too.
-        self.engine.process_memory().report();
+        if let Some(process_memory) = self.engine.process_memory() {
+            process_memory.report();
+        }
 
         let (os_arch, os_name, os_kernel) = self.get_system_info().await;
         let (system_memory_total, system_memory_free) = self
