@@ -904,6 +904,21 @@ pub struct WorkloadClients {
     release_pending: Arc<std::sync::atomic::AtomicUsize>,
 }
 
+/// A queued blocking task can be cancelled before it ever runs. Its ownership
+/// of the pending counter must end then, as well as on normal completion.
+struct ReleaseOwner {
+    pending: Arc<std::sync::atomic::AtomicUsize>,
+    armed: bool,
+}
+
+impl Drop for ReleaseOwner {
+    fn drop(&mut self) {
+        if self.armed {
+            self.pending.store(0, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
 impl WorkloadClients {
     /// Create a per-workload client cache using the given TLS configuration
     /// for HTTPS and a private quota registry of default size.
@@ -1043,34 +1058,45 @@ impl WorkloadClients {
     /// pin. Running that pass inline put the whole cache's pending work on
     /// every unbind, so it runs off the caller's thread, on one task at a time
     /// that keeps passing until no unbind arrived during its last pass.
-    fn release_invalidated(&self) {
+    fn release_invalidated(&self) -> Option<tokio::task::JoinHandle<()>> {
         use std::sync::atomic::Ordering;
         // Only the unbind that finds nothing pending starts a task: a burst
         // otherwise spawned one blocking task per unbind, each queueing on
         // moka's maintenance lock behind the last.
         if self.release_pending.fetch_add(1, Ordering::AcqRel) != 0 {
-            return;
+            return None;
         }
         let clients = self.clients.clone();
         let pending = Arc::clone(&self.release_pending);
+        let owner = ReleaseOwner {
+            pending,
+            armed: true,
+        };
         let release = move || {
+            let mut owner = owner;
             loop {
-                let seen = pending.load(Ordering::Acquire);
+                let seen = owner.pending.load(Ordering::Acquire);
                 clients.run_pending_tasks();
                 // An unbind that landed during the pass found the count
                 // non-zero and left its invalidation to this task, so go round
                 // again for it rather than stopping.
-                if pending
+                if owner
+                    .pending
                     .compare_exchange(seen, 0, Ordering::AcqRel, Ordering::Acquire)
                     .is_ok()
                 {
+                    // Another invalidation may start a new owner immediately.
+                    owner.armed = false;
                     break;
                 }
             }
         };
         match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => drop(runtime.spawn_blocking(release)),
-            Err(_) => release(),
+            Ok(runtime) => Some(runtime.spawn_blocking(release)),
+            Err(_) => {
+                release();
+                None
+            }
         }
     }
 
@@ -1467,6 +1493,38 @@ fn classify_client_error(err: &hyper_util::client::legacy::Error) -> HttpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelling_queued_release_does_not_wedge_future_invalidations() {
+        use std::sync::atomic::Ordering;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        let (started, ready) = std::sync::mpsc::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let busy = runtime.spawn_blocking(move || {
+            started.send(()).unwrap();
+            blocked.recv().unwrap();
+        });
+        ready.recv().unwrap();
+        let clients = WorkloadClients::new(default_client_tls_config());
+        let queued = {
+            let _entered = runtime.enter();
+            clients.release_invalidated().unwrap()
+        };
+        assert_eq!(clients.release_pending.load(Ordering::Acquire), 1);
+        queued.abort();
+        release.send(()).unwrap();
+        runtime.block_on(async {
+            busy.await.unwrap();
+            assert!(queued.await.unwrap_err().is_cancelled());
+        });
+        assert_eq!(clients.release_pending.load(Ordering::Acquire), 0);
+        clients.invalidate("another-workload");
+        assert_eq!(clients.release_pending.load(Ordering::Acquire), 0);
+    }
 
     /// Shorter than the production [`PERMIT_WAIT`]: the connection-bound tests
     /// deliberately wait out abandoned connect attempts parked on the
