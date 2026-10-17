@@ -40,8 +40,8 @@
 //!
 //! | Variable | Meaning | Default |
 //! | --- | --- | --- |
-//! | `WASH_SCALE_MEMORY_LIMIT` | the host's max-process-memory, e.g. `4GiB` | half of physical memory, at most 2 GiB |
-//! | `WASH_SCALE_GUEST_MEMORY` | max-guest-memory, the budget for guest linear memory as declared, resident or not | physical memory |
+//! | `WASH_SCALE_MEMORY_LIMIT` | the host's max-process-memory, e.g. `4GiB` | half of the machine/container budget, at most 2 GiB |
+//! | `WASH_SCALE_GUEST_MEMORY` | max-guest-memory, the budget for guest linear memory as declared, resident or not | machine/container budget |
 //! | `WASH_SCALE_MAX_COMPONENTS` | stop after this many workloads | none |
 //! | `WASH_SCALE_MAX_SECS` | stop a flavour after this long | `600` |
 //! | `WASH_SCALE_STEP` | workloads started between measurements | `250` |
@@ -402,7 +402,7 @@ impl Flavour {
 struct Settings {
     report_json: Option<String>,
     memory_limit: u64,
-    /// Unset, physical memory, so the process limit binds first.
+    /// Unset, the effective machine/container budget, so the process limit binds first.
     guest_memory: u64,
     max_components: Option<usize>,
     max_duration: Option<Duration>,
@@ -430,12 +430,12 @@ impl Settings {
         let memory_limit = match var("WASH_SCALE_MEMORY_LIMIT") {
             Some(v) => parse_bytes(v.trim())
                 .map_err(|e| anyhow::anyhow!("WASH_SCALE_MEMORY_LIMIT={v}: {e}"))?,
-            None => (physical_memory()? / 2).min(2 << 30),
+            None => (effective_memory()? / 2).min(2 << 30),
         };
         let guest_memory = match var("WASH_SCALE_GUEST_MEMORY") {
             Some(v) => parse_bytes(v.trim())
                 .map_err(|e| anyhow::anyhow!("WASH_SCALE_GUEST_MEMORY={v}: {e}"))?,
-            None => physical_memory()?,
+            None => effective_memory()?,
         };
         let core_instances = match number("WASH_SCALE_CORE_INSTANCES")? {
             Some(n) => u32::try_from(n).context("WASH_SCALE_CORE_INSTANCES")?,
@@ -479,15 +479,14 @@ impl Settings {
     }
 }
 
-fn physical_memory() -> Result<u64> {
+fn effective_memory() -> Result<u64> {
     use sysinfo::{MemoryRefreshKind, RefreshKind, System};
     let system = System::new_with_specifics(
         RefreshKind::new().with_memory(MemoryRefreshKind::new().with_ram()),
     );
-    match system.total_memory() {
-        0 => bail!("cannot read physical memory; set WASH_SCALE_MEMORY_LIMIT"),
-        total => Ok(total),
-    }
+    bench_tools::memory::memory_budget(system.total_memory()).context(
+        "cannot detect a memory budget; set WASH_SCALE_MEMORY_LIMIT and WASH_SCALE_GUEST_MEMORY",
+    )
 }
 
 /// Pool slots sized the way a large host would size them: half the address
@@ -668,7 +667,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
 
     // The guest budget charges each linear memory at its declared size, resident
     // or not, so a warm workload costs it several times what it adds to the
-    // footprint. Left at physical memory, it leaves the process guard to gate
+    // footprint. Left at the machine/container budget, it leaves the process guard to gate
     // the run; set lower, the run shows where it binds instead.
     let engine = Engine::builder()
         .with_host_memory(
