@@ -711,6 +711,8 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
     let run_started = Instant::now();
     let mut steps = Vec::new();
     let mut started = 0usize;
+    let mut running = Vec::new();
+    let mut next_index = 0;
     let mut per_workload_core_instances = None;
     let stop = loop {
         if settings.max_components.is_some_and(|cap| started >= cap) {
@@ -726,25 +728,36 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
             .max_components
             .map_or(settings.step, |cap| settings.step.min(cap - started));
         let step_started = Instant::now();
-        let refused =
-            start_batch(&host, &wasm, &digest, flavour, started, batch, concurrency).await;
-        let newly = match &refused {
-            Ok(n) | Err((n, _)) => *n,
-        };
+        let starts = start_batch(
+            &host,
+            &wasm,
+            &digest,
+            flavour,
+            next_index,
+            batch,
+            concurrency,
+        )
+        .await;
+        next_index += batch;
+        let newly = starts.running.len();
         // Warm workloads are proven live, and their instance parked, by
         // answering one request each.
         let mut warm_failed = 0;
         if flavour == Flavour::Warm && newly > 0 {
             warm_failed = load
-                .send(addr, (started..started + newly).collect(), concurrency * 4)
+                .send(addr, starts.running.clone(), concurrency * 4)
                 .await
                 .failed;
         }
-        started += newly;
+        running.extend(starts.running);
+        started = running.len();
         let step_secs = step_started.elapsed().as_secs_f64();
         let (cpu_started, _) = host_cpu(&load.threads);
 
-        let sample = spread(started, settings.sample);
+        let sample: Vec<_> = spread(started, settings.sample)
+            .into_iter()
+            .filter_map(|position| running.get(position).copied())
+            .collect();
         let sample_started = Instant::now();
         let mut answered = load.send(addr, sample.clone(), concurrency * 4).await;
         let sample_secs = sample_started.elapsed().as_secs_f64();
@@ -814,7 +827,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         );
         let mut step = step;
         step.clean = refusals_now == refusals_before
-            && refused.is_ok()
+            && starts.first_error.is_none()
             && bench_tools::density::served_sample(
                 step.requests_ok,
                 step.requests_failed,
@@ -843,7 +856,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         if footprint >= ceiling {
             break Stop::GuardDidNotHold;
         }
-        if let Err((_, message)) = refused {
+        if let Some(message) = starts.first_error {
             break Stop::StartRefused(message);
         }
         if warm_failed > newly / 2 {
@@ -894,8 +907,36 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
     Ok(report)
 }
 
-/// Start workloads `first..first + count`. Returns how many started, and,
-/// if the host refused one, why.
+#[derive(Debug, Default)]
+struct StartedBatch {
+    running: Vec<usize>,
+    first_error: Option<String>,
+}
+
+/// Drain every submitted start, including successes after a failed index.
+async fn collect_starts<F>(
+    requests: impl futures::Stream<Item = F>,
+    concurrency: usize,
+) -> StartedBatch
+where
+    F: std::future::Future<Output = (usize, std::result::Result<(), String>)>,
+{
+    let results = requests
+        .buffered(concurrency.max(1))
+        .collect::<Vec<_>>()
+        .await;
+    let mut batch = StartedBatch::default();
+    for (index, result) in results {
+        match result {
+            Ok(()) => batch.running.push(index),
+            Err(error) if batch.first_error.is_none() => batch.first_error = Some(error),
+            Err(_) => {}
+        }
+    }
+    batch
+}
+
+/// Start workloads `first..first + count`, retaining their actual indices.
 async fn start_batch(
     host: &impl HostApi,
     wasm: &bytes::Bytes,
@@ -904,54 +945,45 @@ async fn start_batch(
     first: usize,
     count: usize,
     concurrency: usize,
-) -> std::result::Result<usize, (usize, String)> {
-    let results: Vec<std::result::Result<(), String>> = stream::iter(first..first + count)
-        .map(|index| {
-            let host_header = host_header(index);
-            let request = WorkloadStartRequest {
-                workload_id: uuid::Uuid::new_v4().to_string(),
-                workload: Workload {
-                    namespace: "scale".to_string(),
-                    name: host_header.clone(),
-                    annotations: HashMap::new(),
-                    service: None,
-                    components: vec![Component {
-                        name: "handler".to_string(),
-                        digest: Some(digest.to_string()),
-                        bytes: wasm.clone(),
-                        local_resources: LocalResources::default(),
-                        pool_size: flavour.pool_size(),
-                        ..Default::default()
-                    }],
-                    host_interfaces: vec![http_interface(&host_header)],
-                    volumes: vec![],
-                },
-            };
-            async move {
-                match host.workload_start(request).await {
-                    Ok(response)
-                        if response.workload_status.workload_state == WorkloadState::Running =>
-                    {
-                        Ok(())
-                    }
-                    Ok(response) => Err(format!(
-                        "{:?}: {}",
-                        response.workload_status.workload_state, response.workload_status.message
-                    )),
-                    Err(e) => Err(format!("{e:#}")),
+) -> StartedBatch {
+    let requests = stream::iter(first..first + count).map(|index| {
+        let host_header = host_header(index);
+        let request = WorkloadStartRequest {
+            workload_id: uuid::Uuid::new_v4().to_string(),
+            workload: Workload {
+                namespace: "scale".to_string(),
+                name: host_header.clone(),
+                annotations: HashMap::new(),
+                service: None,
+                components: vec![Component {
+                    name: "handler".to_string(),
+                    digest: Some(digest.to_string()),
+                    bytes: wasm.clone(),
+                    local_resources: LocalResources::default(),
+                    pool_size: flavour.pool_size(),
+                    ..Default::default()
+                }],
+                host_interfaces: vec![http_interface(&host_header)],
+                volumes: vec![],
+            },
+        };
+        async move {
+            let result = match host.workload_start(request).await {
+                Ok(response)
+                    if response.workload_status.workload_state == WorkloadState::Running =>
+                {
+                    Ok(())
                 }
-            }
-        })
-        .buffered(concurrency)
-        .collect()
-        .await;
-    // `buffered` keeps order, so everything before the first refusal started
-    // and has a contiguous index the request sampler can address.
-    let started = results.iter().take_while(|r| r.is_ok()).count();
-    match results.into_iter().find_map(|r| r.err()) {
-        Some(message) => Err((started, message)),
-        None => Ok(started),
-    }
+                Ok(response) => Err(format!(
+                    "{:?}: {}",
+                    response.workload_status.workload_state, response.workload_status.message
+                )),
+                Err(e) => Err(format!("{e:#}")),
+            };
+            (index, result)
+        }
+    });
+    collect_starts(requests, concurrency).await
 }
 
 struct Answered {
@@ -1328,6 +1360,35 @@ fn print_comparison(settings: &Settings, reports: &[Report]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn partial_start_batches_keep_later_successes() {
+        let completed = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let requests = stream::iter(0..3).map(|index| {
+            let completed = Arc::clone(&completed);
+            async move {
+                tokio::time::sleep(Duration::from_secs(3 - index as u64)).await;
+                completed.lock().unwrap().push(index);
+                (
+                    index,
+                    if index == 1 {
+                        Err("start 1 refused".into())
+                    } else {
+                        Ok(())
+                    },
+                )
+            }
+        });
+        let batch = collect_starts(requests, 3).await;
+        assert_eq!(*completed.lock().unwrap(), vec![2, 1, 0]);
+        assert_eq!(batch.running, vec![0, 2]);
+        assert_eq!(batch.first_error.as_deref(), Some("start 1 refused"));
+        let sampled: Vec<_> = spread(batch.running.len(), 2)
+            .into_iter()
+            .filter_map(|position| batch.running.get(position).copied())
+            .collect();
+        assert_eq!(sampled, vec![0, 2]);
+    }
 
     #[test]
     fn zero_samples_cannot_claim_served_capacity() -> Result<()> {
