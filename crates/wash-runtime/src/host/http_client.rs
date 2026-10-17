@@ -898,6 +898,25 @@ pub struct WorkloadClients {
     /// before any request builds a client, and is dropped when it unbinds.
     call_concurrency: Arc<std::sync::RwLock<BTreeMap<String, usize>>>,
     clients: moka::sync::Cache<String, PooledClient>,
+    /// Unbinds whose invalidated clients have not been dropped yet. Non-zero
+    /// while a task is dropping them, so a burst of unbinds runs one task
+    /// rather than one each.
+    release_pending: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// A queued blocking task can be cancelled before it ever runs. Its ownership
+/// of the pending counter must end then, as well as on normal completion.
+struct ReleaseOwner {
+    pending: Arc<std::sync::atomic::AtomicUsize>,
+    armed: bool,
+}
+
+impl Drop for ReleaseOwner {
+    fn drop(&mut self) {
+        if self.armed {
+            self.pending.store(0, std::sync::atomic::Ordering::Release);
+        }
+    }
 }
 
 impl WorkloadClients {
@@ -943,6 +962,7 @@ impl WorkloadClients {
             tls,
             quotas,
             call_concurrency: Arc::new(std::sync::RwLock::new(BTreeMap::new())),
+            release_pending: Arc::default(),
             clients: moka::sync::Cache::builder()
                 .time_to_idle(WORKLOAD_CLIENT_IDLE)
                 .build(),
@@ -1024,14 +1044,60 @@ impl WorkloadClients {
     /// window ([`WORKLOAD_CLIENT_IDLE`]) once nothing refers to the workload.
     pub fn invalidate(&self, workload_id: &str) {
         self.clients.invalidate(workload_id);
-        // moka may defer dropping the evicted value to a maintenance pass;
-        // force it so the pool (and the permits its idle connections pin) is
-        // released now, not on the next cache access.
-        self.clients.run_pending_tasks();
         self.call_concurrency
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .remove(workload_id);
+        self.release_invalidated();
+    }
+
+    /// Drop invalidated clients now rather than on the next cache access.
+    ///
+    /// moka may defer dropping an evicted value to a maintenance pass, and
+    /// until then its pool keeps its idle connections, and the permits they
+    /// pin. Running that pass inline put the whole cache's pending work on
+    /// every unbind, so it runs off the caller's thread, on one task at a time
+    /// that keeps passing until no unbind arrived during its last pass.
+    fn release_invalidated(&self) -> Option<tokio::task::JoinHandle<()>> {
+        use std::sync::atomic::Ordering;
+        // Only the unbind that finds nothing pending starts a task: a burst
+        // otherwise spawned one blocking task per unbind, each queueing on
+        // moka's maintenance lock behind the last.
+        if self.release_pending.fetch_add(1, Ordering::AcqRel) != 0 {
+            return None;
+        }
+        let clients = self.clients.clone();
+        let pending = Arc::clone(&self.release_pending);
+        let owner = ReleaseOwner {
+            pending,
+            armed: true,
+        };
+        let release = move || {
+            let mut owner = owner;
+            loop {
+                let seen = owner.pending.load(Ordering::Acquire);
+                clients.run_pending_tasks();
+                // An unbind that landed during the pass found the count
+                // non-zero and left its invalidation to this task, so go round
+                // again for it rather than stopping.
+                if owner
+                    .pending
+                    .compare_exchange(seen, 0, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    // Another invalidation may start a new owner immediately.
+                    owner.armed = false;
+                    break;
+                }
+            }
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => Some(runtime.spawn_blocking(release)),
+            Err(_) => {
+                release();
+                None
+            }
+        }
     }
 
     /// The TLS configuration for egress belonging to no single workload.
@@ -1427,6 +1493,38 @@ fn classify_client_error(err: &hyper_util::client::legacy::Error) -> HttpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelling_queued_release_does_not_wedge_future_invalidations() {
+        use std::sync::atomic::Ordering;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        let (started, ready) = std::sync::mpsc::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let busy = runtime.spawn_blocking(move || {
+            started.send(()).unwrap();
+            blocked.recv().unwrap();
+        });
+        ready.recv().unwrap();
+        let clients = WorkloadClients::new(default_client_tls_config());
+        let queued = {
+            let _entered = runtime.enter();
+            clients.release_invalidated().unwrap()
+        };
+        assert_eq!(clients.release_pending.load(Ordering::Acquire), 1);
+        queued.abort();
+        release.send(()).unwrap();
+        runtime.block_on(async {
+            busy.await.unwrap();
+            assert!(queued.await.unwrap_err().is_cancelled());
+        });
+        assert_eq!(clients.release_pending.load(Ordering::Acquire), 0);
+        clients.invalidate("another-workload");
+        assert_eq!(clients.release_pending.load(Ordering::Acquire), 0);
+    }
 
     /// Shorter than the production [`PERMIT_WAIT`]: the connection-bound tests
     /// deliberately wait out abandoned connect attempts parked on the

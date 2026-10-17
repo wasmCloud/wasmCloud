@@ -545,7 +545,7 @@ impl Host {
 
         let mut filter_plugins = |interface: &WitInterface| {
             let mut found = false;
-            for (_, plugin) in self.plugins.iter() {
+            for plugin in self.plugins.values() {
                 if plugin.world().includes(interface) {
                     found = true;
                     break;
@@ -983,11 +983,20 @@ impl Host {
         Ok(monitor.cpu_usage().global_usage)
     }
 
+    /// Recheck after queued work obtains a permit and before expensive phases.
+    /// Reserving an ID earlier is still necessary for stop/status correctness.
+    pub(crate) fn check_start_memory(&self) -> Result<(), String> {
+        self.engine
+            .process_memory()
+            .map_or(Ok(()), |guard| guard.admit_start())
+    }
+
     async fn workload_start_inner(
         &self,
         request: WorkloadStartRequest,
         cleanup: &crate::engine::workload::WorkloadResources,
     ) -> anyhow::Result<ResolvedWorkload> {
+        self.check_start_memory().map_err(anyhow::Error::msg)?;
         let service_present = request.workload.service.is_some();
         let workload_id = request.workload_id.clone();
 
@@ -1003,6 +1012,10 @@ impl Host {
         let span = tracing::Span::current();
         let unresolved_workload = tokio::task::spawn_blocking(move || {
             let _entered = span.enter();
+            // The blocking executor can queue this after the check above.
+            if let Some(guard) = engine.process_memory() {
+                guard.admit_start().map_err(anyhow::Error::msg)?;
+            }
             engine.initialize_workload(&init_id, workload)
         })
         .await
@@ -1055,6 +1068,11 @@ impl HostApi for Host {
         // different questions: the monitor says how much memory this process
         // holds, the budget says how much of it guests asked for.
         self.engine.guest_memory().report();
+        // RSS from the monitor understates a process under pressure; this
+        // counts swapped and compressed pages too.
+        if let Some(process_memory) = self.engine.process_memory() {
+            process_memory.report();
+        }
 
         let (os_arch, os_name, os_kernel) = self.get_system_info().await;
         let (system_memory_total, system_memory_free) = self
@@ -1066,16 +1084,20 @@ impl HostApi for Host {
             .await
             .context("failed to get CPU usage")?;
 
-        // Count components and providers from workloads
+        // Count components and providers from workloads. The walk awaits
+        // nothing: the map lock is held for one pass over plain fields, so a
+        // host with 100k workloads does not stall starts and stops behind a
+        // per-workload lock every heartbeat.
         let (workload_count, component_count) = {
             let workloads = self.workloads.read().await;
             let workload_count: u64 = workloads.len() as u64;
-            let mut component_count: u64 = 0;
-            for workload in workloads.values() {
-                if let HostWorkload::Running(workload) = workload {
-                    component_count += workload.component_count().await as u64;
-                }
-            }
+            let component_count: u64 = workloads
+                .values()
+                .filter_map(|workload| match workload {
+                    HostWorkload::Running(workload) => Some(workload.component_count() as u64),
+                    _ => None,
+                })
+                .sum();
             (workload_count, component_count)
         };
 
@@ -1395,6 +1417,13 @@ impl WorkloadReservation for Host {
             // the caller as an error.
             debug!(workload_id, reason = message, "refused to start workload");
             return Err(message);
+        }
+        // After the duplicate check, so a replayed start still reads as the
+        // workload already running rather than as a refusal. The guard logs
+        // its own refusals, rate-limited: a host past its limit can be asked
+        // for thousands of starts a second.
+        if let Some(guard) = self.engine.process_memory() {
+            guard.admit_start()?;
         }
         workloads.insert(workload_id.to_string(), HostWorkload::Starting(reservation));
         Ok(reservation)

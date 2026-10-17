@@ -61,6 +61,7 @@ wasmcloud-postgres = [
 wasi-tls = ["dep:wasmtime-wasi-tls"]
 
 [dependencies]
+im = "15.1"
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 x509-parser = { workspace = true }
@@ -159,6 +160,11 @@ ulid = { optional = true, workspace = true, features = ["std"] }
 url = { workspace = true }
 webpki-roots = { workspace = true }
 
+# `proc_pid_rusage`, for the process footprint `max-process-memory` is held
+# against: RSS understates a macOS process whose pages were compressed.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
+
 # wasi-webgpu dependencies (optional, behind 'wasi-webgpu' feature). Pulled in
 # only on platforms where the `wasi_webgpu` plugin module compiles: wgpu-hal
 # fails to build on Windows and s390x, so the deps are gated to match the
@@ -167,6 +173,7 @@ webpki-roots = { workspace = true }
 wasi-webgpu-wasmtime = { version = "0.3", optional = true }
 
 [dev-dependencies]
+bench-tools = { path = "../bench-tools" }
 tokio = { workspace = true, features = ["full"] }
 # `testing` brings in `InMemoryMetricExporter`, which is how the guest memory
 # budget's OTel instruments are asserted against a real collection rather than
@@ -195,6 +202,10 @@ criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
 # Cargo.lock. The bench host's provision.yml installs it, and
 # scripts/bench/run-bench.sh installs a matching one when the lock moves.
 gungraun = "0.20.0"
+
+# The scale_density bench pins itself to its CPU limit and reads CPU time.
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { workspace = true, features = ["thread", "time"] }
 
 # Integration tests that build a host through `tests/common`'s standard
 # plugin set (in-memory blobstore + keyvalue, tracing logger, dynamic
@@ -352,6 +363,12 @@ harness = false
 
 [[bench]]
 name = "wasmtime_serve"
+harness = false
+
+# Ramps warm and scale-to-zero HTTP workloads to max-process-memory; see the
+# module docs for the knobs.
+[[bench]]
+name = "scale_density"
 harness = false
 
 # Requires `--features host-component-plugins`, plus valgrind and a

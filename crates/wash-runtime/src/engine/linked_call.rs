@@ -393,12 +393,15 @@ pub(crate) async fn new_store_from_templates(
     let active_id = active.component_id.clone();
     for (linked_id, linked_pre) in linked_instances {
         store.data_mut().set_active_ctx(linked_id)?;
-        let instantiate_result = linked_pre.instantiate_async(&mut store).await;
+        let instantiate_result = linked_pre
+            .instantiate_async(&mut store)
+            .await
+            .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e));
         store.data_mut().set_active_ctx(&active_id)?;
-        let instance = instantiate_result.map_err(|e| {
-            anyhow::anyhow!(
-                "failed to instantiate linked component '{linked_id}' in ephemeral store: {e}"
-            )
+        // Context rather than a new error, so the pool refusal and its remedy
+        // stay in the chain underneath.
+        let instance = instantiate_result.with_context(|| {
+            format!("failed to instantiate linked component '{linked_id}' in ephemeral store")
         })?;
         store
             .data_mut()
@@ -685,13 +688,16 @@ async fn invoke_ephemeral_relocated(
         // included.
         let drain_flag = Arc::clone(&call_flag);
         let _abandoned = store.data().abandoned.watch(call_flag);
-        let instance = match callee_pre.instantiate_async(&mut store).await {
-            Ok(i) => i,
-            Err(e) => {
-                let _ = ready_tx.send(Err(e));
-                return;
-            }
-        };
+        let instance =
+            match callee_pre.instantiate_async(&mut store).await.map_err(|e| {
+                crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+            }) {
+                Ok(i) => i,
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e));
+                    return;
+                }
+            };
         let _ = store
             .run_concurrent(async move |accessor| {
                 let ready = async {
@@ -905,7 +911,13 @@ async fn invoke_ephemeral_plain(
             let mut store = new_ephemeral_store(ephemeral_call)
                 .await
                 .map_err(|e| wasmtime::format_err!("new ephemeral store creation failed: {e:#}"))?;
-            let instance = ephemeral_call.pre.instantiate_async(&mut store).await?;
+            let instance = ephemeral_call
+                .pre
+                .instantiate_async(&mut store)
+                .await
+                .map_err(|e| {
+                    crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                })?;
             ComponentInstance { store, instance }
         }
     };

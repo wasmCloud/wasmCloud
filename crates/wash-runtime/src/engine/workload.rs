@@ -145,8 +145,10 @@ pub struct WorkloadMetadata {
     workload_namespace: Arc<str>,
     /// The actual wasmtime [`Component`] that can be instantiated
     component: Component,
-    /// The wasmtime [`Linker`] used to instantiate the component
-    linker: Linker<SharedCtx>,
+    /// The wasmtime [`Linker`] used to instantiate the component. Shared with
+    /// every component that started from the same base until something
+    /// writes to it (see [`Self::linker`]).
+    linker: Arc<Linker<SharedCtx>>,
     /// The volume mounts requested by this component
     pub(crate) volume_mounts: Vec<(PathBuf, VolumeMount)>,
     /// Pinned directory handles with guest mount names and permissions.
@@ -178,6 +180,11 @@ pub struct WorkloadMetadata {
     pub(crate) annotations: Arc<HashMap<String, String>>,
     /// Top-level imports already supplied by host plugins.
     plugin_bound_instances: HashSet<String>,
+    /// Keeps the engine reusing this compile for any workload that loads the
+    /// same digest while this one runs (see [`super::LiveCompile`]).
+    pub(crate) compiled: Option<Arc<super::LiveCompile>>,
+    /// The component linked against `linker`, kept once a caller asked for it.
+    pre: std::sync::OnceLock<InstancePre<SharedCtx>>,
 }
 
 /// Kubernetes annotation set by the runtime-operator for the parent WorkloadDeployment.
@@ -255,8 +262,17 @@ impl WorkloadMetadata {
     }
 
     /// Returns a mutable reference to the component's linker.
+    ///
+    /// Copies the linker first if it is still the engine's shared one, so ask
+    /// for it only to write to it: a component nothing writes to never pays
+    /// for a linker of its own.
+    ///
+    /// Forgets the linked component [`WorkloadComponent::pre_instantiate_ref`]
+    /// keeps, since a caller holding the linker mutably may change what it
+    /// links.
     pub fn linker(&mut self) -> &mut Linker<SharedCtx> {
-        &mut self.linker
+        self.pre = std::sync::OnceLock::new();
+        Arc::make_mut(&mut self.linker)
     }
 
     /// Returns a reference to the wasmtime [`Component`].
@@ -422,7 +438,7 @@ impl WorkloadService {
         workload_name: impl Into<Arc<str>>,
         workload_namespace: impl Into<Arc<str>>,
         component: Component,
-        linker: Linker<SharedCtx>,
+        linker: impl Into<Arc<Linker<SharedCtx>>>,
         volume_mounts: Vec<(PathBuf, VolumeMount)>,
         local_resources: LocalResources,
         max_restarts: u64,
@@ -435,7 +451,7 @@ impl WorkloadService {
                 workload_name: workload_name.into(),
                 workload_namespace: workload_namespace.into(),
                 component,
-                linker,
+                linker: linker.into(),
                 volume_mounts,
                 resolved_volume_mounts: Vec::new(),
                 local_resources,
@@ -447,6 +463,8 @@ impl WorkloadService {
                 linked_components: Default::default(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
+                compiled: None,
+                pre: std::sync::OnceLock::new(),
             },
             handle: None,
             max_restarts,
@@ -469,7 +487,7 @@ impl WorkloadService {
     }
 
     /// Pre-instantiate the component to prepare for execution.
-    pub fn pre_instantiate(&mut self) -> anyhow::Result<CommandPre<SharedCtx>> {
+    pub fn pre_instantiate(&self) -> anyhow::Result<CommandPre<SharedCtx>> {
         let component = self.metadata.component.clone();
         let pre = self.metadata.linker.instantiate_pre(&component)?;
         let command = CommandPre::new(pre)?;
@@ -478,7 +496,7 @@ impl WorkloadService {
 
     /// Pre-instantiate the component for P3 execution.
     pub fn pre_instantiate_p3(
-        &mut self,
+        &self,
     ) -> anyhow::Result<wasmtime_wasi::p3::bindings::CommandPre<SharedCtx>> {
         let component = self.metadata.component.clone();
         let pre = self.metadata.linker.instantiate_pre(&component)?;
@@ -541,7 +559,7 @@ impl WorkloadComponent {
         workload_namespace: impl Into<Arc<str>>,
         component_name: impl Into<Arc<str>>,
         component: Component,
-        linker: Linker<SharedCtx>,
+        linker: impl Into<Arc<Linker<SharedCtx>>>,
         volume_mounts: Vec<(PathBuf, VolumeMount)>,
         local_resources: LocalResources,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
@@ -554,7 +572,7 @@ impl WorkloadComponent {
                 workload_name: workload_name.into(),
                 workload_namespace: workload_namespace.into(),
                 component,
-                linker,
+                linker: linker.into(),
                 volume_mounts,
                 resolved_volume_mounts: Vec::new(),
                 local_resources,
@@ -566,6 +584,8 @@ impl WorkloadComponent {
                 linked_components: Default::default(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
+                compiled: None,
+                pre: std::sync::OnceLock::new(),
             },
             name: component_name.into(),
             instances: Arc::new(InstancePool::new(instances)),
@@ -597,10 +617,22 @@ impl WorkloadComponent {
     /// `Linker::instantiate_pre` only needs `&self`, so callers holding a read
     /// lock on the component map can pre-instantiate without serializing on a
     /// write lock.
+    ///
+    /// Linked once and reused: a request store or dispatch asks for this every
+    /// time, and checking every import against the linker per request is work
+    /// whose answer cannot change while nothing takes the linker mutably
+    /// (see [`WorkloadMetadata::linker`], which forgets it).
     pub fn pre_instantiate_ref(&self) -> wasmtime::Result<InstancePre<SharedCtx>> {
-        self.metadata
+        if let Some(pre) = self.metadata.pre.get() {
+            return Ok(pre.clone());
+        }
+        let pre = self
+            .metadata
             .linker
-            .instantiate_pre(&self.metadata.component)
+            .instantiate_pre(&self.metadata.component)?;
+        // Losing a race to another caller leaves the same answer stored.
+        let _ = self.metadata.pre.set(pre.clone());
+        Ok(pre)
     }
 
     pub fn metadata(&self) -> &WorkloadMetadata {
@@ -728,6 +760,8 @@ pub struct ResolvedWorkload {
     /// All components in the workload. This is behind a `RwLock` to support mutable
     /// access to the component linkers.
     components: Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
+    /// How many entries `components` holds, which never changes once resolved.
+    component_count: usize,
     /// The HTTP handler for outgoing HTTP requests. See
     /// [`crate::host::http::live_handler`] for why this is weak and how the
     /// two kinds of caller differ.
@@ -737,7 +771,11 @@ pub struct ResolvedWorkload {
     /// because a store has no other way back to the host that owns it.
     invocation: crate::observability::InvocationMeter,
     /// An optional service component that runs once to completion or for the duration of the workload
-    service: Option<WorkloadService>,
+    ///
+    /// Shared for the same reason as `host_interfaces`: its `Linker` is held
+    /// by value. The few writes after resolution go through `Arc::make_mut`,
+    /// so a clone taken earlier keeps what it saw, as a by-value copy did.
+    service: Option<Arc<WorkloadService>>,
     /// The ingress plugin-dispatched calls reach the service on, once one has
     /// claimed it as a [`DispatchTarget`]. Present whether or not the workload
     /// has a service — an unclaimed one costs a lock and an empty option.
@@ -748,7 +786,9 @@ pub struct ResolvedWorkload {
     /// checks this rather than instantiating into a workload that is going away.
     released: Arc<std::sync::atomic::AtomicBool>,
     /// The requested host [`WitInterface`]s to resolve this workload
-    host_interfaces: Vec<WitInterface>,
+    /// Shared, because a resolved workload is cloned per request and per
+    /// plugin binding and never changes these.
+    host_interfaces: Arc<Vec<WitInterface>>,
     /// Native bindings retained after a successful start so a cancelled stop
     /// can resume the same per-plugin teardown journal.
     teardown_bindings: Arc<[PendingBinding]>,
@@ -767,14 +807,7 @@ impl std::fmt::Debug for ResolvedWorkload {
             .field("namespace", &self.namespace)
             .field("host_interfaces", &self.host_interfaces)
             .field("has_service", &self.service.is_some())
-            .field(
-                "component_count",
-                &self
-                    .components
-                    .try_read()
-                    .map(|g| g.len() as isize)
-                    .unwrap_or(-1),
-            );
+            .field("component_count", &self.component_count);
         #[cfg(feature = "wasi-tls")]
         s.field("tls_provider", &self.tls_provider.is_some());
         s.finish_non_exhaustive()
@@ -897,13 +930,13 @@ impl ResolvedWorkload {
             return self.execute_service_p3().await;
         }
 
-        let Some(service) = self.service.as_mut() else {
+        let Some(service) = self.service.as_ref() else {
             return Ok(None);
         };
         let pre = service.pre_instantiate()?;
         let mut max_restarts = service.max_restarts;
         self.resolve_service_volume_mounts().await?;
-        // Re-borrow immutably after the mutable borrow for pre_instantiate() is done
+        // Re-borrow after resolving volume mounts, which needs `&mut self`
         let Some(service) = self.service.as_ref() else {
             bail!("service unexpectedly missing during execution");
         };
@@ -912,7 +945,10 @@ impl ResolvedWorkload {
             .await?
             .build()
             .await?;
-        let instance = pre.instantiate_async(&mut store).await?;
+        let instance = pre
+            .instantiate_async(&mut store)
+            .await
+            .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e))?;
         let handle = tokio::spawn(async move {
             loop {
                 if let Err(e) = instance.wasi_cli_run().call_run(&mut store).await {
@@ -930,7 +966,7 @@ impl ResolvedWorkload {
         });
 
         let handle = Arc::new(handle);
-        if let Some(s) = self.service.as_mut() {
+        if let Some(s) = self.service_mut() {
             s.handle = Some(Arc::clone(&handle));
         }
         Ok(Some(handle))
@@ -940,7 +976,7 @@ impl ResolvedWorkload {
     async fn execute_service_p3(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
         let service = self
             .service
-            .as_mut()
+            .as_ref()
             .map(|s| (s.pre_instantiate_p3(), s.max_restarts));
 
         if let Some((Ok(pre), mut max_restarts)) = service {
@@ -959,7 +995,9 @@ impl ResolvedWorkload {
             let mut store = recipe.build().await?;
             let handle = tokio::spawn(async move {
                 loop {
-                    let instance = match pre.instantiate_async(&mut store).await {
+                    let instance = match pre.instantiate_async(&mut store).await.map_err(|e| {
+                        crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                    }) {
                         Ok(i) => i,
                         Err(e) => {
                             error!(err = %e, "failed to instantiate P3 service");
@@ -1006,7 +1044,7 @@ impl ResolvedWorkload {
             });
 
             let handle = Arc::new(handle);
-            if let Some(s) = self.service.as_mut() {
+            if let Some(s) = self.service_mut() {
                 s.handle = Some(Arc::clone(&handle));
             }
             Ok(Some(handle))
@@ -1190,7 +1228,7 @@ impl ResolvedWorkload {
         });
 
         let handle = Arc::new(handle);
-        if let Some(s) = self.service.as_mut() {
+        if let Some(s) = self.service_mut() {
             s.handle = Some(Arc::clone(&handle));
         }
         Ok(Some(handle))
@@ -1219,6 +1257,13 @@ impl ResolvedWorkload {
         // is about to be aborted.
         self.service_calls.shutdown();
         self.stop_service();
+    }
+
+    /// The service, for one of the few writes after resolution. Copies it
+    /// first when a clone of this workload shares it, so that clone keeps
+    /// what it saw, as it did when the service was held by value.
+    fn service_mut(&mut self) -> Option<&mut WorkloadService> {
+        self.service.as_mut().map(Arc::make_mut)
     }
 
     /// Aborts the running service [`JoinHandle`] if it exists.
@@ -1264,7 +1309,7 @@ impl ResolvedWorkload {
             .unwrap_or_default();
         self.resolve_component_volume_mounts(&linked_component_ids)
             .await?;
-        if let Some(service) = &mut self.service
+        if let Some(service) = self.service_mut()
             && service.metadata.resolved_volume_mounts.is_empty()
             && !service.metadata.volume_mounts.is_empty()
         {
@@ -1432,12 +1477,10 @@ impl ResolvedWorkload {
 
             let component = workload_component.metadata.component.clone();
             let plugin_bound_instances = workload_component.metadata.plugin_bound_instances.clone();
-            let linker = &mut workload_component.metadata.linker;
-
             let res = match self
                 .resolve_component_imports(
                     &component,
-                    linker,
+                    &mut workload_component.metadata,
                     exports,
                     &plugin_bound_instances,
                     Some(component_id.as_ref()),
@@ -1464,15 +1507,14 @@ impl ResolvedWorkload {
             res?;
         }
 
-        if let Some(mut service) = self.service.take() {
+        if let Some(mut shared) = self.service.take() {
+            let service = Arc::make_mut(&mut shared);
             let component = service.metadata.component.clone();
             let plugin_bound_instances = service.metadata.plugin_bound_instances.clone();
-            let linker = &mut service.metadata.linker;
-
             let res = match self
                 .resolve_component_imports(
                     &component,
-                    linker,
+                    &mut service.metadata,
                     exports,
                     &plugin_bound_instances,
                     None,
@@ -1487,7 +1529,7 @@ impl ResolvedWorkload {
                 Err(err) => Err(err),
             };
 
-            self.service = Some(service);
+            self.service = Some(shared);
 
             // Propagate any errors encountered during import resolution
             res?;
@@ -1499,7 +1541,9 @@ impl ResolvedWorkload {
     async fn resolve_component_imports(
         &self,
         component: &wasmtime::component::Component,
-        linker: &mut Linker<SharedCtx>,
+        // Its linker is taken mutably only to link an import another component
+        // exports: taking it copies the engine's shared one.
+        metadata: &mut WorkloadMetadata,
         exports: &ExportMaps,
         plugin_bound_instances: &HashSet<String>,
         // The importer's own id. A component resolving an import to ITSELF is a
@@ -1637,7 +1681,7 @@ impl ResolvedWorkload {
                         e.context("failed to pre-instantiate during component linking")
                     })?;
 
-                    let mut linker_instance = match linker.instance(import_name) {
+                    let mut linker_instance = match metadata.linker().instance(import_name) {
                         Ok(i) => i,
                         Err(e) => {
                             trace!(name = import_name, error = %e, "error finding instance in linker, skipping");
@@ -1884,8 +1928,11 @@ impl ResolvedWorkload {
 
     /// Returns the number of components in this workload.
     /// Does not include the service component if one is defined.
-    pub async fn component_count(&self) -> usize {
-        self.components.read().await.len()
+    ///
+    /// Read without the components lock: the set is fixed once resolved, and
+    /// the host heartbeat asks every running workload for it.
+    pub fn component_count(&self) -> usize {
+        self.component_count
     }
 
     /// Helper to create a new wasmtime Store for multiple components and set active given component in the workload.
@@ -1909,6 +1956,18 @@ impl ResolvedWorkload {
     pub async fn new_store(
         &self,
         component_id: &str,
+    ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
+        self.new_store_as(component_id, None).await
+    }
+
+    /// [`Self::new_store`] for a caller that resolved the component's
+    /// [`Self::component_identity`] once, where it registered the route or
+    /// subscription, so a request pays neither the read lock nor the
+    /// allocations of looking it up again.
+    pub(crate) async fn new_store_as(
+        &self,
+        component_id: &str,
+        identity: Option<&crate::observability::WorkloadIdentity>,
     ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
         let (engine, active_template, linked_templates, linked_instances) = {
             let components = self.components.read().await;
@@ -1949,10 +2008,14 @@ impl ResolvedWorkload {
         // A host asked to measure nothing must not pay for them because some
         // other host in the process measures.
         if self.invocation.is_enabled() {
-            store.data().executed.set_identity(
-                self.component_identity(component_id).await,
-                self.invocation.clone(),
-            );
+            let identity = match identity {
+                Some(identity) => identity.clone(),
+                None => self.component_identity(component_id).await,
+            };
+            store
+                .data()
+                .executed
+                .set_identity(identity, self.invocation.clone());
         }
         Ok(store)
     }
@@ -2251,15 +2314,13 @@ impl ResolvedWorkload {
         &self,
         component_id: &str,
     ) -> anyhow::Result<wasmtime::component::InstancePre<SharedCtx>> {
-        let mut components = self.components.write().await;
+        // A read lock: linking needs only `&Linker`, and a write lock here
+        // would serialize every request and dispatch on this workload.
+        let components = self.components.read().await;
         let component = components
-            .get_mut(component_id)
+            .get(component_id)
             .context("component ID not found in workload")?;
-        let wasmtime_component = component.metadata.component.clone();
-        let linker = component.metadata.linker();
-        let pre = linker.instantiate_pre(&wasmtime_component)?;
-
-        Ok(pre)
+        Ok(component.pre_instantiate_ref()?)
     }
 
     /// Which item of the workload exports `interface` — what a host component
@@ -3530,11 +3591,12 @@ impl UnresolvedWorkload {
             id: self.id.clone(),
             name: self.name.clone(),
             namespace: self.namespace.clone(),
+            component_count: self.components.len(),
             components: Arc::new(RwLock::new(self.components)),
-            service: self.service,
+            service: self.service.map(Arc::new),
             service_calls: Arc::default(),
             released: Arc::default(),
-            host_interfaces: self.host_interfaces,
+            host_interfaces: Arc::new(self.host_interfaces),
             teardown_bindings: Arc::default(),
             http_handler: host.clone(),
             invocation: meters.invocation.clone(),
@@ -4612,6 +4674,67 @@ mod tests {
     }
 
     const MARKER: &str = "test:probe/marker@0.1.0";
+
+    /// The linked component is kept once asked for, and forgotten whenever the
+    /// linker is taken mutably, so a link added afterwards is never missed.
+    #[test]
+    fn pre_instantiate_ref_is_kept_until_the_linker_changes() {
+        let mut component = component_from_wat(
+            "pre",
+            r#"(component
+                 (import "test:pre/iface" (instance (export "f" (func))))
+               )"#,
+        );
+        assert!(
+            component.pre_instantiate_ref().is_err(),
+            "the import is not linked yet"
+        );
+        assert!(
+            component.metadata.pre.get().is_none(),
+            "a failure is not kept"
+        );
+
+        component
+            .metadata
+            .linker()
+            .instance("test:pre/iface")
+            .unwrap()
+            .func_wrap("f", |_, (): ()| Ok(()))
+            .unwrap();
+        component.pre_instantiate_ref().unwrap();
+        assert!(component.metadata.pre.get().is_some());
+        component.pre_instantiate_ref().unwrap();
+
+        let _ = component.metadata.linker();
+        assert!(component.metadata.pre.get().is_none());
+    }
+
+    /// Components share the linker they start from until one is written to;
+    /// the write lands on a copy of that one component's own.
+    #[test]
+    fn a_shared_linker_is_copied_only_when_written() {
+        let mut a = component_from_wat("a", "(component)");
+        let shared = Arc::clone(&a.metadata.linker);
+        let mut b = a.clone();
+        assert!(Arc::ptr_eq(&a.metadata.linker, &b.metadata.linker));
+
+        b.metadata
+            .linker()
+            .instance("test:cow/iface")
+            .unwrap()
+            .func_wrap("f", |_, (): ()| Ok(()))
+            .unwrap();
+        assert!(!Arc::ptr_eq(&a.metadata.linker, &b.metadata.linker));
+        assert!(
+            Arc::ptr_eq(&a.metadata.linker, &shared),
+            "the component not written to keeps the shared linker"
+        );
+        let _ = a.metadata.linker();
+        assert!(
+            !Arc::ptr_eq(&a.metadata.linker, &shared),
+            "taking it mutably while shared copies it"
+        );
+    }
 
     fn marker_importer(id: &str) -> WorkloadComponent {
         component_from_wat(
