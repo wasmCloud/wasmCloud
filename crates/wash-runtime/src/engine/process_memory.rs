@@ -11,9 +11,16 @@
 //! A [`ProcessMemoryGuard`] samples the process's real footprint and compares
 //! it with `max_process_memory`. Past it, the host refuses what it can refuse
 //! on its own account: guest memory growth, which includes the initial memory
-//! of every new instance (see [`GuestMemoryBudget::with_process_guard`]). It
-//! cannot shed memory an embedder holds, so it also says so loudly and
-//! exposes the reading for the embedder to act on.
+//! of every new instance (see [`GuestMemoryBudget::with_process_guard`]), and
+//! new workloads (see [`ProcessMemoryGuard::admit_start`]), whose bookkeeping
+//! grows the host even when they hold no instance. It cannot shed memory an
+//! embedder holds, so it also says so loudly and exposes the reading for the
+//! embedder to act on.
+//!
+//! A sampler reads the footprint every [`SAMPLE_INTERVAL`]. Growth and starts
+//! also ask for a fresh reading, at most every [`REFRESH_INTERVAL`] across the
+//! process, so a host growing fast is caught within a fraction of a second
+//! rather than a second after it crossed.
 //!
 //! # Footprint, not RSS
 //!
@@ -60,6 +67,13 @@ use crate::engine::host_memory::render_bytes;
 /// How often the footprint is read. Reading it is a syscall or a small file
 /// read; a host can grow by gigabytes in the seconds a slower sample misses.
 pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How old a reading may be when something about to add to the footprint asks
+/// for one (see [`ProcessMemoryGuard::refresh`]). A host starting workloads
+/// by the thousand a second grows by hundreds of megabytes in one
+/// [`SAMPLE_INTERVAL`]; this bounds how far past the limit it gets before the
+/// guard sees it, for about twenty reads a second at most.
+pub const REFRESH_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Share of the limit at which the host warns that it is getting close.
 const HIGH_PERCENT: u64 = 80;
@@ -234,9 +248,12 @@ pub struct ProcessMemoryGuard {
     /// Set while the footprint cannot be read, so losing and regaining it are
     /// each said once.
     blind: AtomicBool,
-    /// How long the footprint has been over without growing. Only the
-    /// sampler writes it, once a second; nothing on a guest's path reads it.
+    /// How long the footprint has been over without growing. The sampler
+    /// writes it once a second; a [`Self::refresh`] only when it moves the
+    /// state, so a guest's path does not take it on every call.
     over: Mutex<OverEpisode>,
+    /// Workload starts refused while over (see [`Self::admit_start`]).
+    refused_starts: AtomicU64,
 }
 
 /// One stretch of [`ProcessMemoryState::Over`], measured for growth.
@@ -257,6 +274,7 @@ impl ProcessMemoryGuard {
             state: AtomicU8::new(ProcessMemoryState::Normal as u8),
             blind: AtomicBool::new(false),
             over: Mutex::new(OverEpisode::default()),
+            refused_starts: AtomicU64::new(0),
         }
     }
 
@@ -283,6 +301,80 @@ impl ProcessMemoryGuard {
     /// Whether the host is past its limit and refusing guest growth.
     pub fn is_over(&self) -> bool {
         self.state() == ProcessMemoryState::Over
+    }
+
+    /// Workload starts [`Self::admit_start`] refused.
+    pub fn refused_starts(&self) -> u64 {
+        self.refused_starts.load(Ordering::Relaxed)
+    }
+
+    /// Read the footprint now, for a caller about to add to it, unless some
+    /// caller in this process already did within [`REFRESH_INTERVAL`].
+    ///
+    /// The once-a-second sampler is too slow on its own for a host that grows
+    /// fast: at a thousand workload starts a second the footprint can pass
+    /// the limit and keep going for most of a second before a sample sees it.
+    /// A refresh only ever moves the state up, into [`ProcessMemoryState::High`]
+    /// or [`ProcessMemoryState::Over`]. Leaving them, and the recheck of a
+    /// footprint that has stopped growing, stay with the sampler, so how soon
+    /// refusals end does not depend on how much traffic is asking.
+    ///
+    /// Cheap when it does not read: one clock read and an atomic load.
+    pub fn refresh(&self) {
+        let Some(footprint) = refresh_reading() else {
+            return;
+        };
+        // The footprint is the process's, so every guard hears it, as every
+        // guard hears the sampler.
+        live_guards(|guards| {
+            for guard in guards {
+                guard.escalate(footprint);
+            }
+        });
+    }
+
+    /// Whether a workload may start, on a fresh reading: `Err` with the reason
+    /// to report while the host is past its limit. A workload a host cannot
+    /// back would only add the bookkeeping it is already short of, and a
+    /// workload that never instantiates until its first request (`pool_size`
+    /// 0) adds that bookkeeping without any guest growth for the guard to
+    /// refuse. Counted, and logged a few times a minute however many arrive.
+    pub fn admit_start(&self) -> Result<(), String> {
+        self.refresh();
+        if !self.is_over() {
+            return Ok(());
+        }
+        let refused = self
+            .refused_starts
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let message = format!(
+            "this host is past max-process-memory ({} of {}) and accepts no new workloads until \
+             it falls back below {RECOVER_PERCENT}% of it",
+            render_bytes(self.footprint_bytes()),
+            render_bytes(self.limit),
+        );
+        if let Some(suppressed) = START_REFUSAL_WARN.admit() {
+            tracing::warn!(
+                refused_starts = refused,
+                suppressed,
+                "refused a workload start: {message}. Give this host fewer workloads, or raise \
+                 max-process-memory if the machine can back it"
+            );
+        }
+        Err(message)
+    }
+
+    /// Take a reading that may only move the state up (see [`Self::refresh`]).
+    fn escalate(&self, footprint_bytes: u64) {
+        self.footprint.store(footprint_bytes, Ordering::Relaxed);
+        self.high_water
+            .fetch_max(footprint_bytes, Ordering::Relaxed);
+        let previous = self.state();
+        let next = self.next_state(previous, footprint_bytes);
+        if (next as u8) > (previous as u8) {
+            self.transition(previous, next, footprint_bytes);
+        }
     }
 
     /// Divided before multiplied so a `u64::MAX` limit cannot overflow.
@@ -556,6 +648,44 @@ fn live_guards<R>(read: impl FnOnce(&mut dyn Iterator<Item = Arc<ProcessMemoryGu
     read(&mut sampled.guards.iter().filter_map(std::sync::Weak::upgrade))
 }
 
+/// Lets a refused start through at `warn` a few times a minute.
+static START_REFUSAL_WARN: crate::observability::rate_limit::RateLimitedWarn =
+    crate::observability::rate_limit::RateLimitedWarn::new(Duration::from_secs(10));
+
+/// A reading for [`ProcessMemoryGuard::refresh`], or `None` when one was taken
+/// within [`REFRESH_INTERVAL`] (or is being taken now) and the last stands.
+///
+/// One caller per interval wins the clock and reads; the rest return at once,
+/// without waiting on the reader or each other.
+fn refresh_reading() -> Option<u64> {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    static NEXT_MS: AtomicU64 = AtomicU64::new(0);
+    static READER: Mutex<Option<FootprintReader>> = Mutex::new(None);
+
+    let now = u64::try_from(
+        START
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX);
+    let next = NEXT_MS.load(Ordering::Relaxed);
+    if now < next
+        || NEXT_MS
+            .compare_exchange(
+                next,
+                now.saturating_add(REFRESH_INTERVAL.as_millis() as u64),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_err()
+    {
+        return None;
+    }
+    let mut reader = READER.try_lock().ok()?;
+    reader.get_or_insert_with(FootprintReader::new).read()
+}
+
 /// The process's one sampler: reads the footprint every [`SAMPLE_INTERVAL`]
 /// and hands it to every live guard, until none is left.
 fn sample_forever() {
@@ -637,6 +767,38 @@ mod tests {
         let guard = ProcessMemoryGuard::new(u64::MAX);
         guard.observe(u64::MAX - 1);
         assert_ne!(guard.state(), ProcessMemoryState::Over);
+    }
+
+    #[test]
+    fn a_refreshed_reading_only_moves_the_state_up() {
+        let guard = ProcessMemoryGuard::new(1000 * MIB);
+        guard.observe(100 * MIB);
+        guard.escalate(1001 * MIB);
+        assert!(guard.is_over(), "a reading past the limit trips at once");
+        guard.escalate(10 * MIB);
+        assert!(
+            guard.is_over(),
+            "leaving over is the sampler's call, not a refresh's"
+        );
+        assert_eq!(guard.footprint_bytes(), 10 * MIB);
+        guard.observe(10 * MIB);
+        assert_eq!(guard.state(), ProcessMemoryState::Normal);
+    }
+
+    #[test]
+    fn starts_are_refused_and_counted_only_while_over() {
+        // Not registered with the sampler, so the real footprint a refresh
+        // reads never reaches it.
+        let guard = ProcessMemoryGuard::new(1000 * MIB);
+        guard.observe(100 * MIB);
+        assert!(guard.admit_start().is_ok());
+        guard.observe(1001 * MIB);
+        let refusal = guard.admit_start().expect_err("over the limit");
+        assert!(refusal.contains("max-process-memory"), "{refusal}");
+        assert_eq!(guard.refused_starts(), 1);
+        guard.observe(10 * MIB);
+        assert!(guard.admit_start().is_ok());
+        assert_eq!(guard.refused_starts(), 1);
     }
 
     #[test]

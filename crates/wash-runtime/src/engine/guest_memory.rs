@@ -425,7 +425,9 @@ impl GuestMemoryBudget {
         // A zero-byte growth takes nothing, so there is nothing to refuse.
         if bytes > 0
             && let Some(process) = &self.process
-            && process.is_over()
+            // A fresh reading at most every `REFRESH_INTERVAL`: growth is how
+            // the footprint gets past the limit between samples.
+            && { process.refresh(); process.is_over() }
         {
             self.process_refused.fetch_add(1, Ordering::Relaxed);
             // The guard logged the crossing once; a line per refusal would be
