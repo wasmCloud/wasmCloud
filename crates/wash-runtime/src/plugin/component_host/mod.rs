@@ -1085,6 +1085,11 @@ fn is_base_wasi(wit: &WitInterface) -> bool {
 /// single-component workload purely to reuse `bind_plugins`'s matching and
 /// rollback logic — never by writing `config` to a file the plugin reads.
 ///
+/// Natives file that bind-time state under the synthetic workload's id, which
+/// is the plugin id. It cannot collide with a real workload's state because
+/// the host refuses to start a workload whose id is a registered plugin id
+/// (`Host::workload_reserve`).
+///
 /// `native_plugins` must already exclude every [`ComponentHostPlugin`] (this
 /// plugin's own natural self-imports are handled separately, before this
 /// runs): a loading plugin may depend on host natives fully, but never on

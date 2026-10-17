@@ -37,14 +37,18 @@ use wash_runtime::host::http::{DevRouter, Ingress};
 use wash_runtime::host::{HostApi, HostBuilder};
 use wash_runtime::plugin::component_host::ComponentHostPlugin;
 use wash_runtime::plugin::wasmcloud_secrets::WasmcloudSecrets;
-use wash_runtime::types::LocalResources;
+use wash_runtime::types::{LocalResources, WorkloadState, WorkloadStopRequest};
 use wash_runtime::wit::WitInterface;
 
 mod common;
-use common::{component_workload_request, http_incoming_handler_interface};
+use common::{
+    component_workload_request, http_incoming_handler_interface,
+    secrets_caller_host_interfaces_with_config,
+};
 
 const CONSUMER_PLUGIN_WASM: &[u8] = include_bytes!("wasm/secrets_consumer_plugin.wasm");
 const CALLER_WASM: &[u8] = include_bytes!("wasm/secrets_consumer_plugin_caller.wasm");
+const SECRETS_CALLER_WASM: &[u8] = include_bytes!("wasm/secrets_caller.wasm");
 const PLUGIN_ID: &str = "secrets-consumer-plugin";
 
 fn secretsproxy_interface() -> WitInterface {
@@ -196,5 +200,118 @@ async fn test_missing_labeled_secret_fails_plugin_construction() -> Result<()> {
         "expected the error to name the specific missing label, got: {msg}"
     );
 
+    Ok(())
+}
+
+/// The plugin's own secrets are filed under its plugin id, so a workload
+/// started with that id would have shared them and, on stop, deleted them. The
+/// host refuses that id outright: the start fails before binding, the stop
+/// that follows finds nothing, and the plugin keeps serving its own secrets.
+#[tokio::test]
+async fn test_workload_with_plugin_id_is_refused_and_plugin_keeps_its_secrets() -> Result<()> {
+    let engine = Engine::builder().build()?;
+    let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let addr = ingress.addr();
+    let builder = HostBuilder::new()
+        .with_engine(engine.clone())
+        .with_http_handler(Arc::new(ingress))
+        .with_plugin(Arc::new(WasmcloudSecrets::new()))?;
+    let plugin = ComponentHostPlugin::builder()
+        .id(PLUGIN_ID)
+        .wasm(CONSUMER_PLUGIN_WASM)
+        .engine(engine)
+        .native_plugins(builder.native_plugins())
+        .config(HashMap::from([
+            ("api-key".to_string(), "plugin-own".to_string()),
+            ("db-password".to_string(), "hunter2".to_string()),
+        ]))
+        .maybe_host_ref(Some(builder.host_ref()))
+        .build()
+        .await?;
+    let host = builder
+        .with_plugin(Arc::new(plugin))?
+        .build()?
+        .start()
+        .await?;
+
+    host.workload_start(component_workload_request(
+        "secrets-consumer-plugin-caller",
+        "caller",
+        CALLER_WASM,
+        LocalResources::default(),
+        vec![
+            http_incoming_handler_interface("caller", None),
+            secretsproxy_interface(),
+        ],
+    ))
+    .await?;
+    let client = reqwest::Client::new();
+    let plugin_reads = |path: &'static str| {
+        let client = client.clone();
+        async move {
+            let (status, body) = req(&client, &addr, path).await?;
+            anyhow::Ok(format!("{} {body}", status.as_u16()))
+        }
+    };
+    assert_eq!(plugin_reads("/get?key=api-key").await?, "200 plugin-own");
+
+    // A workload carrying its own secret, under the plugin's id.
+    let mut colliding = component_workload_request(
+        "secrets-caller",
+        "tenant",
+        SECRETS_CALLER_WASM,
+        LocalResources::default(),
+        secrets_caller_host_interfaces_with_config(
+            "tenant",
+            HashMap::from([("api-key".to_string(), "tenant-secret".to_string())]),
+        ),
+    );
+    colliding.workload_id = PLUGIN_ID.to_string();
+    let refused = host.workload_start(colliding).await?;
+    assert_eq!(
+        refused.workload_status.workload_state,
+        WorkloadState::Error,
+        "a workload id equal to a plugin id must be refused, got {:?}",
+        refused.workload_status
+    );
+    assert_eq!(
+        refused.workload_status.message,
+        format!("Workload ID [{PLUGIN_ID}] is reserved by host plugin [{PLUGIN_ID}]"),
+    );
+
+    let stopped = host
+        .workload_stop(WorkloadStopRequest {
+            workload_id: PLUGIN_ID.to_string(),
+        })
+        .await?;
+    assert_eq!(
+        stopped.workload_status.workload_state,
+        WorkloadState::NotFound,
+        "the refused start must leave nothing for a stop to tear down"
+    );
+
+    // `DevRouter` sends every request to the last workload resolved. Without
+    // the guard that would be the colliding tenant, so start the caller again
+    // to make sure the read below reaches the plugin through it. Without the
+    // guard, the tenant's unbind has deleted the plugin's dynamic `api-key`
+    // entry and this read is a 404.
+    // (Labelled secrets such as `db-password` are fixed into the plugin's
+    // linker at build, so they survive either way and prove nothing here.)
+    host.workload_start(component_workload_request(
+        "secrets-consumer-plugin-caller",
+        "caller",
+        CALLER_WASM,
+        LocalResources::default(),
+        vec![
+            http_incoming_handler_interface("caller", None),
+            secretsproxy_interface(),
+        ],
+    ))
+    .await?;
+    assert_eq!(
+        plugin_reads("/get?key=api-key").await?,
+        "200 plugin-own",
+        "the plugin must keep serving its own secret"
+    );
     Ok(())
 }

@@ -1383,6 +1383,21 @@ impl WorkloadReservation for Host {
             tracing::warn!(workload_id, reason = message, "refused to start workload");
             return Err(message);
         }
+        // Plugin ids are not available as workload ids. A host component
+        // plugin binds its own native imports as a workload whose workload and
+        // component ids are both the plugin id
+        // (`component_host::link_native_imports`), and natives key per-workload
+        // state by workload id, so a workload under that id would share, then
+        // delete, the plugin's own state. Refusing every registered plugin id,
+        // native ones included, also keeps host-level state keyed by workload
+        // id distinct from anything named after a plugin. Plugins are fixed
+        // when the host is built, so this check is the only place needed.
+        if self.plugins.contains_key(workload_id) {
+            let message =
+                format!("Workload ID [{workload_id}] is reserved by host plugin [{workload_id}]");
+            tracing::warn!(workload_id, reason = message, "refused to start workload");
+            return Err(message);
+        }
         if workloads.contains_key(workload_id) {
             let message = format!(
                 "Workload ID [{workload_id}] already exists (the existing workload must be stopped to reuse the ID)"
@@ -3575,6 +3590,122 @@ mod tests {
             !host.workloads.read().await.contains_key("after-stop"),
             "a refused start must leave no reservation behind"
         );
+    }
+
+    /// A plugin's id is not available as a workload id: a host component
+    /// plugin's own native bindings are filed under it, so a workload sharing
+    /// it would share and then delete that state. The refusal comes before
+    /// anything binds, leaves no reservation behind, and does not affect ids
+    /// unrelated to a plugin.
+    #[tokio::test]
+    async fn test_a_workload_cannot_take_a_plugin_id() {
+        let plugin = Arc::new(BindRecordingPlugin::default());
+        let host = host_with(Arc::clone(&plugin));
+        let plugin_id = plugin.id();
+
+        let refused = host
+            .workload_start(marker_request(plugin_id))
+            .await
+            .expect("a refusal is a response, not a transport failure");
+        assert_eq!(
+            refused.workload_status.workload_state,
+            WorkloadState::Error,
+            "a workload id equal to a plugin id must be refused, got {:?}",
+            refused.workload_status
+        );
+        assert_eq!(
+            refused.workload_status.message,
+            format!("Workload ID [{plugin_id}] is reserved by host plugin [{plugin_id}]"),
+        );
+        assert!(
+            plugin.bound().is_empty() && plugin.unbound().is_empty(),
+            "a refused start must not reach any plugin: bound {:?}, unbound {:?}",
+            plugin.bound(),
+            plugin.unbound()
+        );
+        assert!(
+            !host.workloads.read().await.contains_key(plugin_id),
+            "a refused start must leave no reservation behind"
+        );
+        let status = host
+            .workload_status(WorkloadStatusRequest {
+                workload_id: plugin_id.to_string(),
+            })
+            .await
+            .expect("status should report");
+        assert_eq!(
+            status.workload_status.workload_state,
+            WorkloadState::NotFound
+        );
+
+        let unrelated = format!("{plugin_id}-2");
+        let started = host
+            .workload_start(marker_request(&unrelated))
+            .await
+            .expect("workload_start should report");
+        assert_eq!(
+            started.workload_status.workload_state,
+            WorkloadState::Running,
+            "an id that is not a plugin id still starts: {}",
+            started.workload_status.message
+        );
+        assert_eq!(plugin.bound(), vec![unrelated]);
+    }
+
+    /// The natives that key per-workload state by workload id, registered the
+    /// way a host registers them: none of their ids can be taken by a
+    /// workload, so a host component plugin's own bindings in any of them stay
+    /// its own.
+    #[cfg(all(
+        feature = "wasi-config",
+        feature = "wasi-logging",
+        feature = "wasi-keyvalue",
+        feature = "wasi-blobstore",
+        feature = "wasmcloud-postgres",
+        feature = "wasm_component_model_implements"
+    ))]
+    #[tokio::test]
+    async fn test_no_native_plugin_id_can_be_taken_by_a_workload() -> anyhow::Result<()> {
+        use crate::plugin::{
+            wasi_blobstore, wasi_config, wasi_keyvalue, wasi_logging, wasmcloud_messaging,
+            wasmcloud_postgres, wasmcloud_secrets,
+        };
+        let postgres_url = url::Url::parse("postgres://u:p@127.0.0.1:1/")?;
+        let host = Host::builder()
+            .with_plugin(Arc::new(wasi_config::DynamicConfig::default()))?
+            .with_plugin(Arc::new(wasi_logging::TracingLogger::default()))?
+            .with_plugin(Arc::new(wasi_keyvalue::InMemoryKeyValue::new()))?
+            .with_plugin(Arc::new(wasi_blobstore::InMemoryBlobstore::new(None)))?
+            .with_plugin(Arc::new(wasmcloud_messaging::InMemoryMessaging::new()))?
+            .with_plugin(Arc::new(wasmcloud_secrets::WasmcloudSecrets::new()))?
+            .with_plugin(Arc::new(wasmcloud_postgres::WasmcloudPostgres::new(
+                &postgres_url,
+            )?))?
+            .with_multiplexed_plugins()?
+            .build()?;
+
+        let mut ids: Vec<&str> = host.plugins.keys().copied().collect();
+        ids.sort_unstable();
+        assert!(ids.len() >= 11, "expected the full native set, got {ids:?}");
+        for id in ids {
+            let refused = host.workload_start(marker_request(id)).await?;
+            assert_eq!(
+                refused.workload_status.workload_state,
+                WorkloadState::Error,
+                "workload id [{id}] must be refused: {:?}",
+                refused.workload_status
+            );
+            assert!(
+                refused
+                    .workload_status
+                    .message
+                    .contains("reserved by host plugin"),
+                "unexpected refusal for [{id}]: {}",
+                refused.workload_status.message
+            );
+        }
+        assert!(host.workloads.read().await.is_empty());
+        Ok(())
     }
 
     /// A stop that arrives while a workload is still starting cannot tear it
