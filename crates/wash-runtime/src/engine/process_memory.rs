@@ -589,45 +589,43 @@ impl ProcessMemoryGuard {
     /// Publish the process's memory as OpenTelemetry gauges, read on the
     /// exporter's own schedule like the guest memory budget's.
     ///
-    /// Once per process, however many engines call it: the footprint is the
-    /// process's, so a series per engine would only repeat it. The limit
-    /// reported is the lowest any live guard holds, the one that refuses
-    /// first.
+    /// Register with the current provider, including after a provider is
+    /// installed or replaced. A process-wide Once would bind these gauges to
+    /// the first provider forever, even if it was a no-op. Identical gauges
+    /// share a stream within the provider; callbacks report process-wide
+    /// values without engine-specific attributes.
     pub(crate) fn register_metrics(meter: &opentelemetry::metrics::Meter) {
-        static REGISTERED: std::sync::Once = std::sync::Once::new();
-        REGISTERED.call_once(|| {
-            macro_rules! observe {
-                ($name:literal, $doc:literal, $read:expr) => {{
-                    let _ = meter
-                        .u64_observable_gauge($name)
-                        .with_description($doc)
-                        .with_unit("By")
-                        .with_callback(|observer| {
-                            #[allow(clippy::redundant_closure_call)]
-                            let value = $read();
-                            if let Some(value) = value {
-                                observer.observe(value, &[]);
-                            }
-                        })
-                        .build();
-                }};
-            }
-            observe!(
-                "process_memory.footprint",
-                "This process's memory footprint, counting swapped and compressed pages",
-                || live_guards(|guards| guards.map(|g| g.footprint_bytes()).max())
-            );
-            observe!(
-                "process_memory.high_water",
-                "The largest memory footprint sampled since this host started",
-                || live_guards(|guards| guards.map(|g| g.high_water_bytes()).max())
-            );
-            observe!(
-                "process_memory.limit",
-                "This host's max-process-memory",
-                || live_guards(|guards| guards.map(|g| g.limit_bytes()).min())
-            );
-        });
+        macro_rules! observe {
+            ($name:literal, $doc:literal, $read:expr) => {{
+                let _ = meter
+                    .u64_observable_gauge($name)
+                    .with_description($doc)
+                    .with_unit("By")
+                    .with_callback(|observer| {
+                        #[allow(clippy::redundant_closure_call)]
+                        let value = $read();
+                        if let Some(value) = value {
+                            observer.observe(value, &[]);
+                        }
+                    })
+                    .build();
+            }};
+        }
+        observe!(
+            "process_memory.footprint",
+            "This process's memory footprint, counting swapped and compressed pages",
+            || live_guards(|guards| guards.map(|g| g.footprint_bytes()).max())
+        );
+        observe!(
+            "process_memory.high_water",
+            "The largest memory footprint sampled since this host started",
+            || live_guards(|guards| guards.map(|g| g.high_water_bytes()).max())
+        );
+        observe!(
+            "process_memory.limit",
+            "This host's max-process-memory",
+            || live_guards(|guards| guards.map(|g| g.limit_bytes()).min())
+        );
     }
 }
 
@@ -728,6 +726,54 @@ mod tests {
     use super::*;
 
     const MIB: u64 = 1024 * 1024;
+
+    #[test]
+    fn metrics_follow_provider_lifetimes_without_duplicate_series() -> anyhow::Result<()> {
+        use opentelemetry::metrics::MeterProvider as _;
+        use opentelemetry_sdk::metrics::{
+            InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
+            data::{AggregatedMetrics, MetricData},
+        };
+
+        // An SDK without a reader creates no-op instruments. It must not
+        // prevent a later provider from observing this process.
+        ProcessMemoryGuard::register_metrics(&SdkMeterProvider::default().meter("test"));
+        let guard = Arc::new(ProcessMemoryGuard::new(u64::MAX));
+        guard.spawn_sampler()?;
+        for _ in 0..2 {
+            let exporter = InMemoryMetricExporter::default();
+            let provider = SdkMeterProvider::builder()
+                .with_reader(PeriodicReader::builder(exporter.clone()).build())
+                .build();
+            // Multiple engines using one provider still emit one series per
+            // process gauge. The next iteration replaces that provider.
+            ProcessMemoryGuard::register_metrics(&provider.meter("test"));
+            ProcessMemoryGuard::register_metrics(&provider.meter("test"));
+            provider.force_flush()?;
+            let metrics = exporter.get_finished_metrics()?;
+            let mut names = std::collections::BTreeSet::new();
+            for metric in metrics
+                .iter()
+                .flat_map(|r| r.scope_metrics())
+                .flat_map(|s| s.metrics())
+            {
+                if let AggregatedMetrics::U64(MetricData::Gauge(gauge)) = metric.data() {
+                    assert_eq!(gauge.data_points().count(), 1);
+                    names.insert(metric.name());
+                }
+            }
+            assert_eq!(
+                names,
+                std::collections::BTreeSet::from([
+                    "process_memory.footprint",
+                    "process_memory.high_water",
+                    "process_memory.limit"
+                ])
+            );
+            provider.shutdown()?;
+        }
+        Ok(())
+    }
 
     #[test]
     fn an_unreadable_initial_sample_is_retried() -> anyhow::Result<()> {
