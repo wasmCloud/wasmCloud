@@ -21,7 +21,8 @@ pub fn workspace_dir() -> PathBuf {
     }
 }
 
-/// The target triple wash releases are named by, as install.sh picks it.
+/// The target triple wash releases are named by, as install.sh picks it (and
+/// the Windows build it does not offer).
 pub fn wash_target() -> Result<&'static str> {
     wash_target_for(
         std::env::consts::ARCH,
@@ -38,6 +39,7 @@ fn wash_target_for(arch: &str, os: &str, musl: bool) -> Result<&'static str> {
         ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
         ("x86_64", "macos") => "x86_64-apple-darwin",
         ("aarch64", "macos") => "aarch64-apple-darwin",
+        ("x86_64", "windows") => "x86_64-pc-windows-msvc",
         (arch, os) => bail!("no released wash for {arch}-{os}; pass --host-bin"),
     })
 }
@@ -121,7 +123,7 @@ pub async fn ensure_wash(cache: &Path, version: &str, say: &dyn Fn(&str)) -> Res
     let dest = cache
         .join("wash")
         .join(version)
-        .join(format!("wash-{target}"));
+        .join(format!("wash-{target}{}", std::env::consts::EXE_SUFFIX));
     if dest.exists() {
         return Ok(dest);
     }
@@ -362,14 +364,11 @@ mod tests {
             ("aarch64", "linux", true, "aarch64-unknown-linux-musl"),
             ("x86_64", "macos", false, "x86_64-apple-darwin"),
             ("aarch64", "macos", false, "aarch64-apple-darwin"),
+            ("x86_64", "windows", false, "x86_64-pc-windows-msvc"),
         ] {
             assert_eq!(wash_target_for(arch, os, musl)?, expected);
         }
-        for (arch, os) in [
-            ("x86_64", "windows"),
-            ("aarch64", "windows"),
-            ("s390x", "linux"),
-        ] {
+        for (arch, os) in [("aarch64", "windows"), ("s390x", "linux")] {
             let error = wash_target_for(arch, os, false).expect_err("no download is supported");
             assert!(error.to_string().contains("--host-bin"));
         }
