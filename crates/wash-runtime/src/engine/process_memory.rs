@@ -22,6 +22,13 @@
 //! process, so a host growing fast is caught within a fraction of a second
 //! rather than a second after it crossed.
 //!
+//! This is sampled admission control, not a hard allocation cap. Work already
+//! admitted can still allocate; writes into previously committed guest memory
+//! and arbitrary host/plugin buffers do not consult this guard. Starts recheck
+//! after queueing and before pulls/compilation, but a large allocation can still
+//! cross the limit between readings. Reserve headroom and use an OS/container
+//! limit where a hard boundary is required.
+//!
 //! # Footprint, not RSS
 //!
 //! Resident set size understates memory exactly when it matters: under
