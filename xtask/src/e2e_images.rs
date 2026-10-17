@@ -161,6 +161,7 @@ fn build_phase(
     fixtures_out: Option<&Path>,
 ) -> Result<PathBuf> {
     let wash = build_wash(workspace)?;
+    let linker = crate::wasip2_linker(workspace)?;
 
     if let Some(out) = fixtures_out {
         fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
@@ -171,7 +172,7 @@ fn build_phase(
 
     for &(fixture, kind) in FIXTURES {
         eprintln!(">>> e2e-images: wash build {fixture}");
-        wash_build(&wash, &fixtures_dir.join(fixture))
+        wash_build(&wash, linker.as_deref(), &fixtures_dir.join(fixture))
             .with_context(|| format!("wash build {fixture}"))?;
         if let Some(out) = fixtures_out {
             let built = built_component(fixtures_dir, fixture, kind)?;
@@ -292,19 +293,21 @@ fn push_wash(fixtures_out: Option<&Path>) -> Result<PathBuf> {
     Ok(PathBuf::from("wash"))
 }
 
-fn wash_build(wash: &Path, fixture_dir: &Path) -> Result<()> {
+fn wash_build(wash: &Path, linker: Option<&Path>, fixture_dir: &Path) -> Result<()> {
     if !fixture_dir.exists() {
         bail!("fixture directory {} does not exist", fixture_dir.display());
     }
-    run_checked(
-        Command::new(wash)
-            .args(["-C", &fixture_dir.to_string_lossy(), "build"])
-            // The bench hosts set a job-wide CARGO_TARGET_DIR; drop it so the
-            // nested build lands in fixtures/target, where the component lookup
-            // below expects it.
-            .env_remove("CARGO_TARGET_DIR"),
-        "wash build",
-    )
+    let mut build = Command::new(wash);
+    build
+        .args(["-C", &fixture_dir.to_string_lossy(), "build"])
+        // The bench hosts set a job-wide CARGO_TARGET_DIR; drop it so the
+        // nested build lands in fixtures/target, where the component lookup
+        // below expects it.
+        .env_remove("CARGO_TARGET_DIR");
+    if let Some(linker) = linker {
+        build.env("CARGO_TARGET_WASM32_WASIP2_LINKER", linker);
+    }
+    run_checked(&mut build, "wash build")
 }
 
 /// The built component filename: the fixture crate's underscore name.

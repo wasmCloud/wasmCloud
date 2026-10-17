@@ -104,6 +104,7 @@ fn build_fixtures(workspace: &Path, names: &[String]) -> Result<()> {
     }
 
     let wash = ensure_wash(workspace)?;
+    let linker = wasip2_linker(workspace)?;
 
     let fixtures = P2_FIXTURES
         .iter()
@@ -112,8 +113,15 @@ fn build_fixtures(workspace: &Path, names: &[String]) -> Result<()> {
         .filter(|(f, _)| names.is_empty() || names.iter().any(|n| n == f));
     let mut count = 0;
     for (fixture, kind) in fixtures {
-        build_and_stage(&wash, &fixtures_dir, &wasm_dir, fixture, kind)
-            .with_context(|| format!("failed to build fixture {fixture}"))?;
+        build_and_stage(
+            &wash,
+            linker.as_deref(),
+            &fixtures_dir,
+            &wasm_dir,
+            fixture,
+            kind,
+        )
+        .with_context(|| format!("failed to build fixture {fixture}"))?;
         count += 1;
     }
 
@@ -134,11 +142,7 @@ pub(crate) fn ensure_wash(workspace: &Path) -> Result<PathBuf> {
     // Join against workspace so a relative CARGO_TARGET_DIR resolves the same
     // way cargo resolves it (cargo runs below with current_dir = workspace); an
     // absolute value replaces the base, matching cargo too.
-    let target_dir = workspace.join(
-        std::env::var_os("CARGO_TARGET_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("target")),
-    );
+    let target_dir = target_dir(workspace);
     for profile in ["release", "debug"] {
         let candidate = target_dir.join(profile).join("wash");
         if candidate.exists() {
@@ -157,10 +161,95 @@ pub(crate) fn ensure_wash(workspace: &Path) -> Result<PathBuf> {
     Ok(target_dir.join("debug").join("wash"))
 }
 
+fn target_dir(workspace: &Path) -> PathBuf {
+    workspace.join(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("target")),
+    )
+}
+
+/// The standalone `wasm-component-ld` CI links wasm32-wasip2 fixtures with.
+/// Keep in step with `wasm-component-ld-version` in
+/// `.github/actions/setup-rust/action.yml`.
+const WASM_COMPONENT_LD_VERSION: &str = "0.5.24";
+
+/// The oldest `wasm-component-ld` that can decode the labeled (`implements`)
+/// imports wit-bindgen emits. Older ones fail to link such a fixture with
+/// "invalid leading byte (0x2) for import name".
+const WASM_COMPONENT_LD_MIN: (u64, u64, u64) = (0, 5, 23);
+
+/// The `wasm-component-ld` to link wasm32-wasip2 fixtures with, or `None`
+/// when the one bundled with the pinned toolchain is new enough.
+///
+/// CI copies a newer one over the bundled one (see `setup-rust`). Locally,
+/// [`WASM_COMPONENT_LD_VERSION`] is installed once under the target dir
+/// instead, and handed to cargo as the wasm32-wasip2 linker, so the toolchain
+/// itself is left alone.
+pub(crate) fn wasip2_linker(workspace: &Path) -> Result<Option<PathBuf>> {
+    let exe = format!("wasm-component-ld{}", std::env::consts::EXE_SUFFIX);
+    let rustc = |arg: &[&str]| -> Result<String> {
+        // From the workspace, so its rust-toolchain.toml picks the toolchain.
+        let out = Command::new("rustc")
+            .args(arg)
+            .current_dir(workspace)
+            .output()
+            .context("failed to execute rustc")?;
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+    let sysroot = rustc(&["--print", "sysroot"])?;
+    let host = rustc(&["-vV"])?
+        .lines()
+        .find_map(|l| l.strip_prefix("host: ").map(str::to_string))
+        .context("rustc -vV printed no host")?;
+    let bundled = Path::new(&sysroot)
+        .join("lib/rustlib")
+        .join(host)
+        .join("bin")
+        .join(&exe);
+    if linker_version(&bundled).is_some_and(|v| v >= WASM_COMPONENT_LD_MIN) {
+        return Ok(None);
+    }
+
+    let root = target_dir(workspace)
+        .join("xtask-tools")
+        .join(format!("wasm-component-ld-{WASM_COMPONENT_LD_VERSION}"));
+    let installed = root.join("bin").join(&exe);
+    if !installed.exists() {
+        println!(
+            "the toolchain's wasm-component-ld is too old for labeled imports; \
+             installing wasm-component-ld {WASM_COMPONENT_LD_VERSION}…"
+        );
+        let status = Command::new("cargo")
+            .args(["install", "--locked", "wasm-component-ld", "--version"])
+            .arg(WASM_COMPONENT_LD_VERSION)
+            .arg("--root")
+            .arg(&root)
+            .current_dir(workspace)
+            .status()
+            .context("failed to execute cargo install wasm-component-ld")?;
+        if !status.success() {
+            bail!("failed to install wasm-component-ld {WASM_COMPONENT_LD_VERSION}");
+        }
+    }
+    Ok(Some(installed))
+}
+
+/// The version `wasm-component-ld --version` reports, or `None` when it
+/// cannot be run or read.
+fn linker_version(path: &Path) -> Option<(u64, u64, u64)> {
+    let out = Command::new(path).arg("--version").output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut parts = text.split_whitespace().nth(1)?.split('.');
+    let mut next = || parts.next()?.parse().ok();
+    Some((next()?, next()?, next()?))
+}
+
 /// Build one fixture through `wash build` and stage the resulting component
 /// under `tests/wasm/`.
 fn build_and_stage(
     wash: &Path,
+    linker: Option<&Path>,
     fixtures_dir: &Path,
     wasm_dir: &Path,
     fixture: &str,
@@ -171,11 +260,16 @@ fn build_and_stage(
         bail!("fixture directory {} does not exist", fixture_dir.display());
     }
 
-    let status = Command::new(wash)
+    let mut build = Command::new(wash);
+    build
         .args(["-C", &fixture_dir.to_string_lossy(), "build"])
         // The bench hosts set a job-wide CARGO_TARGET_DIR; drop it so the nested
         // build lands in `fixtures_dir/target`, where staging looks below.
-        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("CARGO_TARGET_DIR");
+    if let Some(linker) = linker {
+        build.env("CARGO_TARGET_WASM32_WASIP2_LINKER", linker);
+    }
+    let status = build
         .status()
         .with_context(|| format!("failed to run wash build for {fixture}"))?;
     if !status.success() {
