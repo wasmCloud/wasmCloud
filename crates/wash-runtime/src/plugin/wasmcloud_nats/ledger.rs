@@ -121,16 +121,30 @@ impl PublishLedger {
         if published == 0 && dropped == 0 {
             return;
         }
-        debug!(
+        // A clean run is routine at every unbind, so debug; a run that shed
+        // publishes is the figure an operator needs after the fact, so warn.
+        if dropped == 0 {
+            debug!(
+                workload_id,
+                binding,
+                published_total = published,
+                published_bytes = self.published_bytes.load(Ordering::Relaxed),
+                "wasmcloud:nats publish ledger at unbind: {published} messages reached the \
+                 wire. A receiver that saw fewer lost them downstream of this host, which \
+                 nothing on the publish side can observe."
+            );
+            return;
+        }
+        warn!(
             workload_id,
             binding,
             published_total = published,
             published_bytes = self.published_bytes.load(Ordering::Relaxed),
             shed_total = dropped,
             shed_bytes = self.dropped_bytes.load(Ordering::Relaxed),
-            "wasmcloud:nats publish ledger at unbind: {published} messages reached the wire. \
-             A receiver that saw fewer lost them downstream of this host, which nothing on \
-             the publish side can observe."
+            "wasmcloud:nats publish ledger at unbind: {published} messages reached the wire \
+             and {dropped} were shed at the publish side. A receiver that saw fewer than \
+             {published} lost the rest downstream of this host."
         );
     }
 }
