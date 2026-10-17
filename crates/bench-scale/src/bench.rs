@@ -778,7 +778,7 @@ async fn measure_flavour(
             heartbeat_components: heartbeat.as_ref().map(|h| h.component_count),
             requests_ok: answers.ok,
             requests_failed: answers.failed,
-            requests_per_sec: (answers.ok + answers.failed) as f64 / sample_secs.max(f64::EPSILON),
+            requests_per_sec: answers.ok as f64 / sample_secs.max(f64::EPSILON),
             request_p50_ms: percentile(&answers.latencies, 0.50),
             request_p99_ms: percentile(&answers.latencies, 0.99),
             sample_growth_bytes: sample_growth,

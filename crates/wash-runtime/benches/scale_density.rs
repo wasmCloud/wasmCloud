@@ -28,8 +28,8 @@
 //!
 //! This is a ramp, not a repeated measurement, so it does not use criterion.
 //! Beside what it served, it prints what each constraint (max-process-memory,
-//! max-guest-memory, the pool, CPU) predicts the host can hold, ∞ where one
-//! never binds; `scale_density.md` beside this file says how each is derived.
+//! max-guest-memory, the pool, CPU) predicts the host can hold, ? when a
+//! constraint cannot be estimated; `scale_density.md` beside this file says how each is derived.
 //!
 //! ```text
 //! cargo xtask build-fixtures http-handler-p3
@@ -335,7 +335,7 @@ fn process_cpu() -> Option<Duration> {
 fn host_cpu(load: &LoadThreads) -> (Option<Duration>, bool) {
     let process = process_cpu();
     match (process, load.cpu()) {
-        (Some(process), Some(load)) => (Some(process.saturating_sub(load)), true),
+        (Some(process), Some(load)) => (process.checked_sub(load), true),
         (process, _) => (process, false),
     }
 }
@@ -615,6 +615,7 @@ struct Step {
     sample_requests: usize,
     requests_ok: usize,
     requests_failed: usize,
+    warmup_failed: usize,
     requests_per_sec: f64,
     latency_p50_ms: f64,
     latency_p99_ms: f64,
@@ -642,7 +643,7 @@ struct Step {
     start_cpu_secs: Option<f64>,
     sample_cpu_secs: Option<f64>,
     /// The workload count the measurements so far say this host can hold,
-    /// the lowest of [`Limits`]; `None` when nothing measured limits it.
+    /// the lowest measured bound in [`Limits`]; `None` when no bound is known.
     theoretical_limit: Option<u64>,
 }
 
@@ -792,7 +793,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         let (cpu_now, _) = host_cpu(&load.threads);
         let between = |from: Option<Duration>, to: Option<Duration>| {
             to.zip(from)
-                .map(|(to, from)| to.saturating_sub(from).as_secs_f64())
+                .and_then(|(to, from)| to.checked_sub(from).map(|d| d.as_secs_f64()))
         };
         let cpu_secs = between(cpu_before, cpu_now);
         let start_cpu_secs = between(cpu_before, cpu_started);
@@ -815,8 +816,8 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
             sample_requests: sample.len(),
             requests_ok: answered.ok,
             requests_failed: answered.failed,
-            requests_per_sec: (answered.ok + answered.failed) as f64
-                / sample_secs.max(f64::EPSILON),
+            warmup_failed: warm_failed,
+            requests_per_sec: answered.ok as f64 / sample_secs.max(f64::EPSILON),
             latency_p50_ms: percentile(&answered.latencies, 0.50),
             latency_p99_ms: percentile(&answered.latencies, 0.99),
             spin_down_ms,
@@ -1060,9 +1061,15 @@ async fn wait_for_spin_down(engine: &Engine, floor: u64) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
 
-/// What each constraint says this host can hold, from what the run measured.
-/// `None` is no limit from that constraint: ∞ in the report. How each is
-/// derived is in `scale_density.md` beside this file.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum CpuCapacity {
+    #[default]
+    IdleUnbounded,
+}
+
+/// What each measured constraint predicts. `None` means unmeasured or
+/// insufficient evidence for an estimate, rendered as `?` in the report.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct Limits {
     /// Workloads max-process-memory fits, at the marginal cost per workload.
@@ -1072,9 +1079,8 @@ struct Limits {
     /// Workloads the pool's core instances and linear memories fit.
     pool_core_instances: Option<u64>,
     pool_memories: Option<u64>,
-    /// Workloads the CPU limit fits. An idle workload uses no CPU, so CPU
-    /// bounds how fast a host starts and serves, never how many it holds.
-    cpu: Option<u64>,
+    /// Idle capacity is unbounded by CPU; throughput still needs measurements.
+    cpu: CpuCapacity,
     /// The figures the limits are built from.
     marginal_bytes_per_workload: Option<u64>,
     guest_bytes_per_workload: Option<u64>,
@@ -1128,23 +1134,20 @@ impl Limits {
             .saturating_sub(pool_baseline.map_or(0, |u| u.memories.in_use))
             / workloads);
         let rate = |cpu: fn(&Step) -> Option<f64>, count: fn(&Step) -> usize| {
-            let (secs, n) = served.iter().fold((0.0, 0), |(secs, n), s| {
-                (secs + cpu(s).unwrap_or(0.0), n + count(s))
-            });
-            (secs > 0.0 && n > 0).then(|| cores as f64 / (secs / n as f64))
+            measured_rate(cores, served.iter().map(|s| (cpu(s), count(s))))
         };
         Self {
             memory,
             guest_memory: guest_per.map(|per| settings.guest_memory / per),
             pool_core_instances: core_per.map(|per| last.core_instances_total / per),
             pool_memories: memories_per.map(|per| last.memories_total / per),
-            cpu: None,
+            cpu: CpuCapacity::IdleUnbounded,
             marginal_bytes_per_workload: Some(marginal),
             guest_bytes_per_workload: guest_per,
             core_instances_per_workload: core_per,
             memories_per_workload: memories_per,
             max_starts_per_sec: rate(|s| s.start_cpu_secs, |s| s.started_in_step),
-            max_requests_per_sec: rate(|s| s.sample_cpu_secs, |s| s.sample_requests),
+            max_requests_per_sec: rate(|s| s.sample_cpu_secs, |s| s.requests_ok),
         }
     }
 
@@ -1155,7 +1158,6 @@ impl Limits {
             ("max-guest-memory", self.guest_memory),
             ("pool core instances", self.pool_core_instances),
             ("pool memories", self.pool_memories),
-            ("cpu", self.cpu),
         ]
         .into_iter()
         .filter_map(|(name, limit)| limit.map(|n| (name, Some(n))))
@@ -1164,9 +1166,21 @@ impl Limits {
     }
 }
 
-/// A limit, or ∞ where nothing limits it.
-fn or_infinity(limit: Option<u64>) -> String {
-    limit.map_or_else(|| "∞".to_string(), |n| n.to_string())
+/// Only count operations whose CPU observation is available. Missing CPU
+/// readings must not contribute work to a zero-duration denominator.
+fn measured_rate(cores: usize, samples: impl Iterator<Item = (Option<f64>, usize)>) -> Option<f64> {
+    let (seconds, operations) = samples
+        .filter_map(|(cpu, n)| cpu.map(|cpu| (cpu, n)))
+        .filter(|(cpu, _)| cpu.is_finite() && *cpu > 0.0)
+        .fold((0.0, 0usize), |(secs, count), (cpu, n)| {
+            (secs + cpu, count + n)
+        });
+    (seconds > 0.0 && operations > 0).then(|| cores as f64 * operations as f64 / seconds)
+}
+
+/// Missing measurements are unknown, not evidence of unlimited capacity.
+fn or_unknown(limit: Option<u64>) -> String {
+    limit.map_or_else(|| "?".to_string(), |n| n.to_string())
 }
 
 fn percentile(sorted: &[f64], p: f64) -> f64 {
@@ -1222,7 +1236,7 @@ fn print_step(header: bool, step: &Step) {
         ),
         step.cpu_percent
             .map_or_else(|| "-".to_string(), |p| format!("{p:.0}")),
-        or_infinity(step.theoretical_limit),
+        or_unknown(step.theoretical_limit),
     );
 }
 
@@ -1246,13 +1260,7 @@ fn print_comparison(settings: &Settings, reports: &[Report]) {
     let last = |r: &Report| r.steps.last().cloned();
     // Request figures from the last step that still served, not the one the
     // limit stopped, whose refusals would read as zero latency.
-    let served = |r: &Report| {
-        r.steps
-            .iter()
-            .rev()
-            .find(|s| s.requests_ok > 0 && s.requests_ok >= s.requests_failed)
-            .cloned()
-    };
+    let served = |r: &Report| r.steps.iter().rev().find(|s| s.clean).cloned();
     row("", &|r| r.label.clone());
     row("cores", &|r| match (r.cpu_limit, r.cpu_pinned) {
         (Some(n), true) => format!("{n} pinned"),
@@ -1261,21 +1269,21 @@ fn print_comparison(settings: &Settings, reports: &[Report]) {
     });
     row("served workloads", &|r| r.served.to_string());
     row("limit: max-process-memory", &|r| {
-        or_infinity(r.limits.memory)
+        or_unknown(r.limits.memory)
     });
     row("limit: max-guest-memory", &|r| {
-        or_infinity(r.limits.guest_memory)
+        or_unknown(r.limits.guest_memory)
     });
     row("limit: pool core inst", &|r| {
-        or_infinity(r.limits.pool_core_instances)
+        or_unknown(r.limits.pool_core_instances)
     });
     row("limit: pool memories", &|r| {
-        or_infinity(r.limits.pool_memories)
+        or_unknown(r.limits.pool_memories)
     });
-    row("limit: cpu", &|r| or_infinity(r.limits.cpu));
+    row("limit: cpu", &|_| "unbounded (idle)".into());
     row("binding limit", &|r| {
         let (name, limit) = r.limits.binding();
-        format!("{} ({name})", or_infinity(limit))
+        format!("{} ({name})", or_unknown(limit))
     });
     row("marginal per workload", &|r| {
         r.limits
@@ -1290,12 +1298,12 @@ fn print_comparison(settings: &Settings, reports: &[Report]) {
     row("cpu max starts/s", &|r| {
         r.limits
             .max_starts_per_sec
-            .map_or("∞".into(), |n| format!("{n:.0}"))
+            .map_or("?".into(), |n| format!("{n:.0}"))
     });
     row("cpu max req/s", &|r| {
         r.limits
             .max_requests_per_sec
-            .map_or("∞".into(), |n| format!("{n:.0}"))
+            .map_or("?".into(), |n| format!("{n:.0}"))
     });
     row("baseline footprint", &|r| {
         render_bytes(r.baseline_footprint_bytes)
@@ -1373,6 +1381,21 @@ fn print_comparison(settings: &Settings, reports: &[Report]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_cpu_does_not_inflate_rates_or_claim_infinite_capacity() {
+        assert_eq!(measured_rate(2, [(None, 1000)].into_iter()), None);
+        assert_eq!(measured_rate(2, [(Some(0.0), 1000)].into_iter()), None);
+        assert_eq!(
+            measured_rate(2, [(None, 1000), (Some(2.0), 10)].into_iter()),
+            Some(10.0)
+        );
+        assert_eq!(or_unknown(None), "?");
+        assert_eq!(
+            serde_json::to_value(CpuCapacity::IdleUnbounded).unwrap(),
+            "idle-unbounded"
+        );
+    }
 
     #[test]
     fn p2_cannot_be_reported_as_a_warm_pool() -> Result<()> {
