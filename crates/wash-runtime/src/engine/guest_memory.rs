@@ -146,8 +146,10 @@ pub struct GuestMemoryBudget {
     /// The whole process's footprint against `max_process_memory`. While it is
     /// over, every growth is refused however much of this budget is left.
     process: Option<Arc<ProcessMemoryGuard>>,
-    /// Growths refused because the process, not the guests, was over its
-    /// limit. Also counted in `refused` or `would_refuse`.
+    /// Growths refused (or, in count mode, that would have been) because the
+    /// process, not the guests, was over its limit. Kept out of `refused` and
+    /// `would_refuse`, which are this budget's own: a host whose guests sit
+    /// well inside their budget should not read as having outgrown it.
     process_refused: AtomicU64,
 }
 
@@ -331,6 +333,18 @@ impl GuestMemoryBudget {
              allowed because it is only being counted",
             |b: &Arc<Self>| b.would_refuse()
         );
+        // Named for the process, not the budget: it is the process's limit
+        // that refused, and a budget without a guard never counts one.
+        if self.process.is_some() {
+            observe!(
+                u64_observable_counter,
+                "process_memory.refused",
+                "{growth}",
+                "Guest memory growths refused (or, in count mode, that would have \
+                 been) because this process was past max-process-memory",
+                |b: &Arc<Self>| b.process_refused()
+            );
+        }
     }
 
     /// The budget, published as metrics on the process-wide meter.
@@ -408,7 +422,9 @@ impl GuestMemoryBudget {
     /// fits, so the high-water figure describes what the host actually did
     /// rather than what it would have permitted.
     fn charge(&self, bytes: u64) -> bool {
-        if let Some(process) = &self.process
+        // A zero-byte growth takes nothing, so there is nothing to refuse.
+        if bytes > 0
+            && let Some(process) = &self.process
             && process.is_over()
         {
             self.process_refused.fetch_add(1, Ordering::Relaxed);
@@ -421,17 +437,14 @@ impl GuestMemoryBudget {
                 mode = self.mode.as_str(),
                 "guest memory growth while this process is past max-process-memory"
             );
-            match self.mode {
-                GuestMemoryMode::Enforce => {
-                    self.refused.fetch_add(1, Ordering::Relaxed);
-                    return false;
-                }
-                // Charged below as usual, so the high-water figure still
-                // describes what the host did.
-                GuestMemoryMode::Count => {
-                    self.would_refuse.fetch_add(1, Ordering::Relaxed);
-                }
+            // Counted in `process_refused` alone: `refused` and `would_refuse`
+            // are the budget's own, and counting here too would count one
+            // growth twice in count mode when it also crosses the cap.
+            if self.mode == GuestMemoryMode::Enforce {
+                return false;
             }
+            // Count mode charges it below as usual, so the high-water figure
+            // still describes what the host did.
         }
         match self.mode {
             GuestMemoryMode::Enforce => {
@@ -1061,7 +1074,7 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(budget.in_use(), 10 * MIB, "a refused growth is not charged");
-        assert_eq!(budget.refused(), 1);
+        assert_eq!(budget.refused(), 0, "the budget itself refused nothing");
         assert_eq!(budget.process_refused(), 1);
 
         guard.observe(100 * MIB);
@@ -1084,7 +1097,40 @@ mod tests {
         guard.observe(2000 * MIB);
         assert!(limiter.memory_growing(0, 10 * MIB as usize, None).unwrap());
         assert_eq!(budget.in_use(), 10 * MIB);
+        assert_eq!(budget.would_refuse(), 0, "the budget has room");
+        assert_eq!(budget.process_refused(), 1);
+    }
+
+    /// One growth past both limits in count mode is one would-refuse for the
+    /// budget and one for the process, not two for the budget.
+    #[test]
+    fn count_mode_counts_each_limit_once_per_growth() {
+        let guard = Arc::new(ProcessMemoryGuard::new(1000 * MIB));
+        let budget = Arc::new(
+            GuestMemoryBudget::new(10 * MIB, GuestMemoryMode::Count)
+                .with_process_guard(Arc::clone(&guard)),
+        );
+        let mut limiter = budget.limiter();
+        guard.observe(2000 * MIB);
+        assert!(limiter.memory_growing(0, 20 * MIB as usize, None).unwrap());
         assert_eq!(budget.would_refuse(), 1);
         assert_eq!(budget.process_refused(), 1);
+    }
+
+    #[test]
+    fn a_zero_byte_growth_is_never_refused_for_the_process() {
+        let guard = Arc::new(ProcessMemoryGuard::new(1000 * MIB));
+        let budget = Arc::new(
+            GuestMemoryBudget::new(100 * MIB, GuestMemoryMode::Enforce)
+                .with_process_guard(Arc::clone(&guard)),
+        );
+        let mut limiter = budget.limiter();
+        guard.observe(2000 * MIB);
+        assert!(
+            limiter
+                .memory_growing(10 * MIB as usize, 10 * MIB as usize, None)
+                .unwrap()
+        );
+        assert_eq!(budget.process_refused(), 0);
     }
 }
