@@ -310,6 +310,10 @@ pub struct HostCommand {
     /// minute (memory the host itself retains does not shrink because guests
     /// are refused).
     ///
+    /// This is sampled admission control. In-flight allocations, writes into
+    /// committed guest memory, and host/plugin buffers can overshoot it.
+    /// Leave headroom and use an OS/container limit for a hard boundary.
+    ///
     /// Unset, it is 90% of the cgroup limit, or of physical memory where
     /// there is no cgroup, so the host never sets out to use more memory than
     /// the machine has. That matters most where nothing else stops it: macOS
@@ -940,27 +944,7 @@ impl CliCommand for HostCommand {
             self.core_instances,
         )
         .map_err(|e| anyhow::anyhow!(e))?;
-        // Blank counts as unset, like the sibling sizes: clap's `env` fallback
-        // yields `Some("")` for a variable that is set but empty.
-        // `Some(None)` is `off`. A zero stays an error rather than meaning off:
-        // it is what a mistyped or unit-less size most often reads as.
-        let max_process_memory_bytes = self
-            .max_process_memory
-            .as_deref()
-            .map(str::trim)
-            .filter(|raw| !raw.is_empty())
-            .map(|raw| {
-                if raw.eq_ignore_ascii_case("off") || raw.eq_ignore_ascii_case("none") {
-                    return Ok(None);
-                }
-                wash_runtime::engine::host_memory::parse_bytes(raw).map(Some)
-            })
-            .transpose()
-            .map_err(|e| anyhow::anyhow!("invalid max-process-memory: {e}"))?;
-        anyhow::ensure!(
-            max_process_memory_bytes != Some(Some(0)),
-            "max-process-memory must be greater than zero; use `off` for no limit"
-        );
+        let process_memory_policy = ProcessMemoryPolicy::parse(self.max_process_memory.as_deref())?;
         anyhow::ensure!(
             self.max_http_ingress_connections != Some(0),
             "max_http_ingress_connections must be at least 1"
@@ -1096,12 +1080,14 @@ impl CliCommand for HostCommand {
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         engine_builder = engine_builder.with_host_memory(host_memory);
         engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
-        match max_process_memory_bytes {
-            Some(Some(bytes)) => {
+        match process_memory_policy {
+            ProcessMemoryPolicy::Limit(bytes) => {
                 engine_builder = engine_builder.with_max_process_memory_bytes(bytes);
             }
-            Some(None) => engine_builder = engine_builder.without_max_process_memory(),
-            None => {}
+            ProcessMemoryPolicy::Disabled => {
+                engine_builder = engine_builder.without_max_process_memory()
+            }
+            ProcessMemoryPolicy::Automatic => {}
         }
 
         let engine = engine_builder.build()?;
@@ -1808,8 +1794,60 @@ fn parse_ip_name_lookup_grant_lifetime(raw: &str) -> Result<Duration, String> {
     humantime::parse_duration(raw).map_err(|e| e.to_string())
 }
 
-/// [`GuestMemoryMode`] from a flag or environment value, reading a blank one
-/// as unset.
+/// The three distinct meanings of the process-memory flag.
+#[derive(Debug, PartialEq, Eq)]
+enum ProcessMemoryPolicy {
+    Automatic,
+    Disabled,
+    Limit(u64),
+}
+
+impl ProcessMemoryPolicy {
+    fn parse(raw: Option<&str>) -> anyhow::Result<Self> {
+        let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+            return Ok(Self::Automatic);
+        };
+        if raw.eq_ignore_ascii_case("off") || raw.eq_ignore_ascii_case("none") {
+            return Ok(Self::Disabled);
+        }
+        let bytes = wash_runtime::engine::host_memory::parse_bytes(raw)
+            .map_err(|e| anyhow::anyhow!("invalid max-process-memory: {e}"))?;
+        anyhow::ensure!(
+            bytes > 0,
+            "max-process-memory must be greater than zero; use `off` for no limit"
+        );
+        Ok(Self::Limit(bytes))
+    }
+}
+
+#[cfg(test)]
+mod process_memory_policy_tests {
+    use super::*;
+    #[test]
+    fn distinguishes_automatic_disabled_and_explicit_limits() -> anyhow::Result<()> {
+        for raw in [None, Some(""), Some("  ")] {
+            assert_eq!(
+                ProcessMemoryPolicy::parse(raw)?,
+                ProcessMemoryPolicy::Automatic
+            );
+        }
+        for raw in ["off", " NONE "] {
+            assert_eq!(
+                ProcessMemoryPolicy::parse(Some(raw))?,
+                ProcessMemoryPolicy::Disabled
+            );
+        }
+        assert_eq!(
+            ProcessMemoryPolicy::parse(Some("1GiB"))?,
+            ProcessMemoryPolicy::Limit(1 << 30)
+        );
+        assert!(ProcessMemoryPolicy::parse(Some("0")).is_err());
+        assert!(ProcessMemoryPolicy::parse(Some("invalid")).is_err());
+        Ok(())
+    }
+}
+
+/// Parse the guest mode, treating a blank environment value as unset.
 fn parse_guest_memory_mode(raw: &str) -> Result<GuestMemoryMode, String> {
     let raw = raw.trim();
     if raw.is_empty() {
