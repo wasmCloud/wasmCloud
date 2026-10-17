@@ -21,7 +21,8 @@ pub fn workspace_dir() -> PathBuf {
     }
 }
 
-/// The target triple wash releases are named by, as install.sh picks it.
+/// The target triple wash releases are named by, as install.sh picks it (and
+/// the Windows build it does not offer).
 pub fn wash_target() -> Result<&'static str> {
     Ok(match (std::env::consts::ARCH, std::env::consts::OS) {
         ("x86_64", "linux") if cfg!(target_env = "musl") => "x86_64-unknown-linux-musl",
@@ -30,6 +31,7 @@ pub fn wash_target() -> Result<&'static str> {
         ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
         ("x86_64", "macos") => "x86_64-apple-darwin",
         ("aarch64", "macos") => "aarch64-apple-darwin",
+        ("x86_64", "windows") => "x86_64-pc-windows-msvc",
         (arch, os) => bail!("no released wash for {arch}-{os}; pass --host-bin"),
     })
 }
@@ -113,7 +115,7 @@ pub async fn ensure_wash(cache: &Path, version: &str, say: &dyn Fn(&str)) -> Res
     let dest = cache
         .join("wash")
         .join(version)
-        .join(format!("wash-{target}"));
+        .join(format!("wash-{target}{}", std::env::consts::EXE_SUFFIX));
     if dest.exists() {
         return Ok(dest);
     }
