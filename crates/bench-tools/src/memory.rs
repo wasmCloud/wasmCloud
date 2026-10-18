@@ -62,10 +62,16 @@ fn memory_budget_with(physical: u64, read: impl Fn(&Path) -> Option<String>) -> 
 mod tests {
     use super::*;
 
+    /// `path` with `/` separators: `Path::join` uses `\` on Windows, and the
+    /// fake cgroup files below are named the Linux way.
+    fn linux_path(path: &Path) -> Option<String> {
+        Some(path.to_str()?.replace('\\', "/"))
+    }
+
     #[test]
     fn container_budget_overrides_physical_ram_and_checks_ancestors() {
         let gib = 1 << 30;
-        let read = |path: &Path| match path.to_str()? {
+        let read = |path: &Path| match linux_path(path)?.as_str() {
             "/proc/self/cgroup" => Some("0::/tenant/worker".to_string()),
             "/sys/fs/cgroup/memory.max" => Some("max".to_string()),
             "/sys/fs/cgroup/tenant/memory.max" => Some((gib / 2).to_string()),
@@ -81,7 +87,7 @@ mod tests {
     fn legacy_and_unlimited_cgroups_have_explicit_fallbacks() {
         assert_eq!(memory_budget_with(4096, |_| None), Some(4096));
         assert_eq!(memory_budget_with(0, |_| None), None);
-        let legacy = |path: &Path| match path.to_str()? {
+        let legacy = |path: &Path| match linux_path(path)?.as_str() {
             "/sys/fs/cgroup/memory/memory.limit_in_bytes" => Some("1024".into()),
             _ => None,
         };

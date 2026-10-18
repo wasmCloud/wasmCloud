@@ -92,15 +92,16 @@ pub fn redact_args(args: &[String]) -> Vec<String> {
             .map_or((arg.as_str(), None), |(k, v)| (k, Some(v)));
         let safe = matches!(
             flag,
-            "--name"
-                | "--http-address"
+            "--host-name"
+                | "--http-addr"
+                | "--allow-insecure-registries"
+                | "--oci-cache-dir"
                 | "--max-process-memory"
                 | "--max-guest-memory"
                 | "--core-instances"
                 | "--default-heap-memory"
                 | "--guest-memory-mode"
                 | "--log-level"
-                | "--log-format"
         );
         let url = matches!(flag, "--scheduler-nats-url" | "--data-nats-url");
         let value = inline.or_else(|| {
@@ -409,5 +410,38 @@ mod tests {
         assert_eq!(redact_url("nats://bad SENTINEL@"), "[redacted address]");
         assert_eq!(redact_url("localhost:4222"), "nats://localhost:4222");
         Ok(())
+    }
+
+    #[test]
+    fn the_bench_host_command_line_survives_redaction() {
+        let supported: std::collections::HashSet<String> = [
+            "scheduler-nats-url",
+            "data-nats-url",
+            "http-addr",
+            "allow-insecure-registries",
+            "max-process-memory",
+            "max-guest-memory",
+            "core-instances",
+            "oci-cache-dir",
+            "host-name",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let command = crate::host::host_command(
+            crate::cli::HostCli::Wash,
+            &supported,
+            "nats://127.0.0.1:4222",
+            &crate::host::HostLimits {
+                memory_limit: 1 << 30,
+                guest_memory: 3 << 28,
+                core_instances: 100,
+            },
+            std::path::Path::new("/tmp/oci"),
+            "bench-scale-1-warm",
+            &[],
+        );
+        assert!(command.unsupported_flags.is_empty());
+        assert_eq!(redact_args(&command.args), command.args);
     }
 }
