@@ -410,7 +410,10 @@ func TestFinalizeGivesUpFailedStopWhenHostIsGone(t *testing.T) {
 // p3 workload Ready with a working `host` route and no aliases at all, and the
 // only sign of it is a routing WARN in the host log.
 func TestInjectServiceDNSAliases(t *testing.T) {
-	const wantAliases = "my-svc.my-ns,my-svc.my-ns.svc"
+	const (
+		wantAliases = "my-svc.my-ns,my-svc.my-ns.svc"
+		wasi        = "wasi"
+	)
 
 	tests := []struct {
 		name  string
@@ -420,7 +423,7 @@ func TestInjectServiceDNSAliases(t *testing.T) {
 		{
 			name: "p2 incoming-handler",
 			iface: &runtimev2.WitInterface{
-				Namespace:  "wasi",
+				Namespace:  wasi,
 				Package:    "http",
 				Version:    "0.2.0",
 				Interfaces: []string{"incoming-handler"},
@@ -430,7 +433,7 @@ func TestInjectServiceDNSAliases(t *testing.T) {
 		{
 			name: "p3 handler",
 			iface: &runtimev2.WitInterface{
-				Namespace:  "wasi",
+				Namespace:  wasi,
 				Package:    "http",
 				Version:    "0.3.0",
 				Interfaces: []string{"handler"},
@@ -440,7 +443,7 @@ func TestInjectServiceDNSAliases(t *testing.T) {
 		{
 			name: "non-http interface",
 			iface: &runtimev2.WitInterface{
-				Namespace:  "wasi",
+				Namespace:  wasi,
 				Package:    "keyvalue",
 				Interfaces: []string{"handler"},
 			},
