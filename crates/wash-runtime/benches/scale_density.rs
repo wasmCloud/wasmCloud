@@ -741,6 +741,10 @@ async fn wait_for_spin_down(engine: &Engine, floor: u64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    // These run from `tests/scale_density.rs`. `cargo test` also builds this
+    // harnessless bench with `cfg(test)` but drops its `#[test]` functions,
+    // which leaves the import unused there.
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]

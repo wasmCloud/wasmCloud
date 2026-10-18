@@ -107,7 +107,9 @@ It reads `wash host --help` first and leaves out flags the binary does not have
 (wash 2.10.3 has no `--max-process-memory`, for example);
 the report notes them, and the bench's own footprint check still enforces the limit.
 The host gets a cleared environment except `PATH`, `HOME`, `TMPDIR`, `USER`, `LANG`
-and the `SSL_CERT_*` variables, with `RUST_LOG` from `--host-log` (default `warn`).
+and the `SSL_CERT_*` variables (on Windows also `SystemRoot`, `SystemDrive`, `windir`,
+`TEMP`, `TMP`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `PATHEXT` and `ComSpec`),
+with `RUST_LOG` from `--host-log` (default `warn`).
 Its stdout and stderr go to `host-<flavour>.log` in the run directory.
 
 All child processes are killed when the bench exits, errors, panics or is interrupted.

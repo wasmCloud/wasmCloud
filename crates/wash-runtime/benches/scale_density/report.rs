@@ -174,13 +174,19 @@ pub(super) fn print_comparison(settings: &Settings, reports: &[Report]) {
     row("cpu-s total", &|r| {
         r.cpu_secs_total.map_or("-".into(), |s| format!("{s:.1}"))
     });
+    // Only the CPU spent starting, not the samples and spin-downs between.
     row("cpu-ms per start", &|r| {
-        r.cpu_secs_total
-            .zip(r.steps.last())
-            .filter(|(_, s)| s.workloads > 0)
-            .map_or("-".into(), |(secs, s)| {
-                format!("{:.2}", secs * 1000.0 / s.workloads as f64)
-            })
+        let (secs, starts) = r
+            .steps
+            .iter()
+            .filter_map(|s| s.start_cpu_secs.map(|cpu| (cpu, s.started_in_step)))
+            .fold((0.0, 0usize), |(secs, count), (cpu, n)| {
+                (secs + cpu, count + n)
+            });
+        if starts == 0 {
+            return "-".into();
+        }
+        format!("{:.2}", secs * 1000.0 / starts as f64)
     });
     row("cpu% (mean)", &|r| {
         let shares: Vec<f64> = r.steps.iter().filter_map(|s| s.cpu_percent).collect();
