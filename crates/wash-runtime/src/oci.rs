@@ -1115,15 +1115,11 @@ mod tests {
     }
 
     /// A failure answers the requests waiting on it rather than letting each
-    /// retry in turn, and once its window passes the next request tries again.
+    /// retry in turn, but the next request after it tries again at once.
     #[tokio::test]
-    async fn a_failed_pull_answers_its_waiters_then_expires() {
-        let coalescer: Coalescer<&str, u32> = Coalescer::new(
-            16,
-            Duration::from_secs(60),
-            Duration::from_millis(50),
-            |_| 1,
-        );
+    async fn a_failed_pull_answers_only_its_waiters() {
+        let coalescer: Coalescer<&str, u32> =
+            Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
 
         let (a, b) = tokio::join!(
             coalescer.run("ref", || async {
@@ -1135,7 +1131,6 @@ mod tests {
         assert!(a.unwrap_err().to_string().contains("registry unreachable"));
         assert!(b.unwrap_err().to_string().contains("registry unreachable"));
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(coalescer.run("ref", || async { Ok(7) }).await.unwrap(), 7);
     }
 

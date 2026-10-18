@@ -5,8 +5,8 @@ use std::{sync::Arc, time::Duration};
 /// work and the others wait for its result, which then answers the same
 /// request until `reuse` after it was produced.
 ///
-/// A failure is shared the same way. Callers queued behind a pull that timed
-/// out would otherwise each retry in turn, and each wait out the timeout.
+/// A failure answers only callers that joined while the work ran. Later callers
+/// retry immediately, since the registry, credentials or trust may have changed.
 pub(super) struct Coalescer<K, V> {
     pub(super) cells: moka::sync::Cache<K, Arc<CoalescedCell<V>>>,
 }
@@ -105,7 +105,8 @@ where
             .cells
             .entry(key.clone())
             .or_insert_with_if(Default::default, |cell| {
-                !reuse_finished && cell.initialized()
+                cell.get()
+                    .is_some_and(|result| !reuse_finished || result.is_err())
             })
             .into_value();
         let mut ran = false;
@@ -117,12 +118,16 @@ where
             .await
             .clone();
         if ran {
-            // Re-inserting restarts the entry's clock, now at `reuse`, so a
-            // slow pull is still reused for the full window after it lands.
+            // Successful results get the full reuse window. Remove failures
+            // while retaining the cell for callers already waiting on it.
             self.cells.entry(key).and_compute_with(|current| {
                 use moka::ops::compute::Op;
                 if current.is_some_and(|entry| Arc::ptr_eq(entry.value(), &cell)) {
-                    Op::Put(cell)
+                    if result.is_ok() {
+                        Op::Put(cell)
+                    } else {
+                        Op::Remove
+                    }
                 } else {
                     // A fresh caller may already have replaced this completed
                     // cell. Do not overwrite its work with an older result.
