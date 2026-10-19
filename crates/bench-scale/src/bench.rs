@@ -517,6 +517,33 @@ struct Answers {
     example_error: Option<String>,
 }
 
+const ERROR_BODY_LIMIT: usize = 16 * 1024;
+
+/// Measure the whole response without retaining a guest-controlled body.
+/// Keep only a bounded diagnostic prefix when the response is unsuccessful.
+async fn drain_response(mut response: reqwest::Response) -> Result<(), String> {
+    let status = response.status();
+    let mut diagnostic = Vec::new();
+    let mut truncated = false;
+    while let Some(chunk) = response.chunk().await.map_err(|e| format!("{e}"))? {
+        if !status.is_success() {
+            let retain = chunk
+                .len()
+                .min(ERROR_BODY_LIMIT.saturating_sub(diagnostic.len()));
+            diagnostic.extend_from_slice(&chunk[..retain]);
+            truncated |= retain < chunk.len();
+        }
+    }
+    if !status.is_success() {
+        return Err(format!(
+            "{status}: {}{}",
+            String::from_utf8_lossy(&diagnostic),
+            if truncated { " [truncated]" } else { "" },
+        ));
+    }
+    Ok(())
+}
+
 /// One GET to each workload, from outside the host, routed by Host header.
 async fn requests(
     http: &reqwest::Client,
@@ -534,11 +561,7 @@ async fn requests(
                 .send()
                 .await
                 .map_err(|e| format!("{e}"))?;
-            let status = response.status();
-            let body = response.bytes().await.map_err(|e| format!("{e}"))?;
-            if !status.is_success() {
-                return Err(format!("{status}: {}", String::from_utf8_lossy(&body)));
-            }
+            drain_response(response).await?;
             Ok(millis(began.elapsed()))
         })
         .buffer_unordered(concurrency.max(1))
@@ -917,6 +940,58 @@ async fn measure_flavour(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn response_bodies_are_drained_with_bounded_error_examples() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        for (status, complete, success) in [
+            ("200 OK", true, true),
+            ("500 Internal Server Error", true, false),
+            ("200 OK", false, false),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut header = Vec::new();
+                while !header.ends_with(b"\r\n\r\n") {
+                    header.push(socket.read_u8().await.unwrap());
+                    assert!(header.len() <= 4096);
+                }
+                let head = format!(
+                    "HTTP/1.1 {status}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                );
+                socket.write_all(head.as_bytes()).await.unwrap();
+                // A body much larger than the retained error prefix, emitted
+                // incrementally so the server need not buffer it either.
+                let chunk = vec![b'x'; 4096];
+                for _ in 0..128 {
+                    socket.write_all(b"1000\r\n").await.unwrap();
+                    socket.write_all(&chunk).await.unwrap();
+                    socket.write_all(b"\r\n").await.unwrap();
+                }
+                if complete {
+                    socket.write_all(b"0\r\n\r\n").await.unwrap();
+                }
+            });
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap();
+            let answers = requests(&client, &url, Flavour::Warm, vec![0], 1).await;
+            server.await.unwrap();
+            assert_eq!(answers.ok, usize::from(success));
+            assert_eq!(answers.failed, usize::from(!success));
+            if status.starts_with("500") {
+                let example = answers.example_error.unwrap();
+                assert!(example.len() <= ERROR_BODY_LIMIT + 100);
+                assert!(example.starts_with("500 Internal Server Error: "));
+                assert!(example.ends_with(" [truncated]"));
+            }
+        }
+    }
 
     #[test]
     fn classifies_refusals() {
