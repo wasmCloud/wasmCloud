@@ -529,6 +529,13 @@ type HostBuckets = imbl::HashMap<Arc<str>, Arc<Vec<PathBucket>>>;
 struct RouteShard(arc_swap::ArcSwap<HostBuckets>);
 
 /// Bound each snapshot publication to one hostname shard.
+///
+/// An edit copies one persistent-tree path whatever the shard count, so the
+/// shards no longer bound how much a write copies. They keep a writer's store
+/// off the `ArcSwap` and cache lines that requests for other hostnames load,
+/// and keep each shard's tree a level or two shallower. 256 keeps an empty
+/// router small: 32 KiB of 128-byte shards, plus one ~48-byte `Arc` per shard
+/// for its empty map (an empty `imbl::HashMap` allocates no root node).
 const ROUTE_SHARDS: usize = 256;
 
 impl Default for DynamicRouter {
