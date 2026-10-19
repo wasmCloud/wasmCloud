@@ -1515,7 +1515,7 @@ impl EngineBuilder {
         // or a caller's own pooling config can move its memory count and slot
         // size, and with no pool there is no reservation to warn about.
         if let Some(pool) = installed_pool {
-            for advisory in host_memory::pool_advisories(pool.memories, pool.max_memory_size) {
+            for advisory in host_memory::pool_advisories(&pool.totals, pool.max_memory_size) {
                 tracing::warn!("{advisory}");
             }
         }

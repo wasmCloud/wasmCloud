@@ -41,9 +41,9 @@ impl PoolSlots {
 pub(crate) struct PoolTotals {
     core_instances: u32,
     component_instances: u32,
-    memories: u32,
-    tables: u32,
-    stacks: u32,
+    pub(super) memories: u32,
+    pub(super) tables: u32,
+    pub(super) stacks: u32,
     gc_heaps: u32,
 }
 
