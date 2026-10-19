@@ -76,7 +76,7 @@ use footprint::FootprintReader;
 #[cfg(test)]
 use footprint::linux_footprint;
 pub use footprint::process_footprint;
-use sampling::{SAMPLED, live_guards, lock_ignoring_poison, refresh_reading, sample_forever};
+use sampling::{SAMPLED, live_guards, lock_ignoring_poison, sample_forever};
 
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -243,16 +243,7 @@ impl ProcessMemoryGuard {
     ///
     /// Cheap when it does not read: one clock read and an atomic load.
     pub fn refresh(&self) {
-        let Some(footprint) = refresh_reading() else {
-            return;
-        };
-        // The footprint is the process's, so every guard hears it, as every
-        // guard hears the sampler.
-        live_guards(|guards| {
-            for guard in guards {
-                guard.escalate(footprint);
-            }
-        });
+        sampling::refresh();
     }
 
     /// Whether a workload may start, on a fresh reading: `Err` with the reason
@@ -289,9 +280,7 @@ impl ProcessMemoryGuard {
 
     /// Take a reading that may only move the state up (see [`Self::refresh`]).
     fn escalate(&self, footprint_bytes: u64) {
-        self.footprint.store(footprint_bytes, Ordering::Relaxed);
-        self.high_water
-            .fetch_max(footprint_bytes, Ordering::Relaxed);
+        self.record_reading(footprint_bytes);
         let previous = self.state();
         let next = self.next_state(previous, footprint_bytes);
         if (next as u8) > (previous as u8) {
@@ -304,9 +293,7 @@ impl ProcessMemoryGuard {
         self.limit / 100 * percent
     }
 
-    /// Record one footprint reading and move between states, logging each
-    /// move once rather than on every sample.
-    pub fn observe(&self, footprint_bytes: u64) {
+    fn record_reading(&self, footprint_bytes: u64) {
         self.footprint.store(footprint_bytes, Ordering::Relaxed);
         self.high_water
             .fetch_max(footprint_bytes, Ordering::Relaxed);
@@ -317,7 +304,12 @@ impl ProcessMemoryGuard {
                  enforced again"
             );
         }
+    }
 
+    /// Record one footprint reading and move between states, logging each
+    /// move once rather than on every sample.
+    pub fn observe(&self, footprint_bytes: u64) {
+        self.record_reading(footprint_bytes);
         let previous = self.state();
         let mut next = self.next_state(previous, footprint_bytes);
         if next == ProcessMemoryState::Over && self.over_without_growing(footprint_bytes) {
@@ -484,12 +476,20 @@ impl ProcessMemoryGuard {
     /// initial reading before returning; an unavailable reading is retried by
     /// the sampler rather than permanently disabling this guard.
     pub fn spawn_sampler(self: &Arc<Self>) -> anyhow::Result<()> {
-        self.spawn_sampler_with_reading(process_footprint())
+        self.spawn_sampler_with_reading(process_footprint)
     }
 
-    fn spawn_sampler_with_reading(self: &Arc<Self>, first: Option<u64>) -> anyhow::Result<()> {
-        match first {
-            Some(footprint) => self.observe(footprint),
+    fn spawn_sampler_with_reading(
+        self: &Arc<Self>,
+        read: impl FnOnce() -> Option<u64>,
+    ) -> anyhow::Result<()> {
+        // Keep the initial read ordered with periodic and on-demand reads.
+        let mut sampled = lock_ignoring_poison(&SAMPLED);
+        match read() {
+            Some(footprint) => {
+                sampled.failed_reads = 0;
+                self.observe(footprint);
+            }
             None => {
                 self.blind.store(true, Ordering::Relaxed);
                 tracing::warn!(
@@ -498,7 +498,6 @@ impl ProcessMemoryGuard {
                 );
             }
         }
-        let mut sampled = lock_ignoring_poison(&SAMPLED);
         sampled.guards.retain(|guard| guard.strong_count() > 0);
         sampled.guards.push(Arc::downgrade(self));
         if sampled.running {
@@ -574,7 +573,7 @@ mod tests {
     #[test]
     fn an_unreadable_initial_sample_is_retried() -> anyhow::Result<()> {
         let guard = Arc::new(ProcessMemoryGuard::new(1));
-        guard.spawn_sampler_with_reading(None)?;
+        guard.spawn_sampler_with_reading(|| None)?;
         // Exercise the real sampler registration and background reader, not
         // just observe(): the regression omitted registration on this path.
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
