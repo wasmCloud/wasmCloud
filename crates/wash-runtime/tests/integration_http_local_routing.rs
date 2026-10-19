@@ -513,7 +513,9 @@ async fn test_local_dispatch_draws_on_the_outbound_http_quota() -> Result<()> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let (status, body) = loop {
         let (status, body) = call(addr, "/example").await?;
-        if status == 200 || tokio::time::Instant::now() >= deadline {
+        // Only the quota refusal is waited out; any other answer is final.
+        let refused = status == 502 && body.contains("ConnectionLimitReached");
+        if !refused || tokio::time::Instant::now() >= deadline {
             break (status, body);
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
