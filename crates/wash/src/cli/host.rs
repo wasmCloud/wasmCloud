@@ -304,7 +304,9 @@ pub struct HostCommand {
     /// (e.g. `48GiB`).
     ///
     /// Measured as the process's real footprint, which counts swapped and
-    /// (on macOS) compressed pages that RSS leaves out. Past it, guest memory
+    /// (on macOS) compressed pages that RSS leaves out. On Linux it also
+    /// leaves out shared file and shmem pages, such as wasmtime's memory
+    /// images, which RSS counts once per mapping. Past it, guest memory
     /// growth and new instances are refused until the footprint falls back
     /// below 95% of it, or holds under the limit without growing for a
     /// minute (memory the host itself retains does not shrink because guests

@@ -38,8 +38,13 @@
 //! | Platform | Reading |
 //! | --- | --- |
 //! | macOS | `phys_footprint` from `proc_pid_rusage`, what Activity Monitor shows as Memory: resident plus compressed |
-//! | Linux | `VmRSS + VmSwap` from `/proc/self/status` |
+//! | Linux | `RssAnon + VmSwap` from `/proc/self/status` (`VmRSS + VmSwap` on kernels without `RssAnon`) |
 //! | elsewhere | the resident size `sysinfo` reports |
+//!
+//! On Linux, file and shmem pages are left out: `VmRSS` counts a shared page
+//! once per mapping, and wasmtime maps each instance's copy-on-write memory
+//! image separately, so it would count one copy of the image per warm
+//! instance though memory holds one.
 //!
 //! [`GuestMemoryBudget`]: crate::engine::guest_memory::GuestMemoryBudget
 //! [`GuestMemoryBudget::with_process_guard`]: crate::engine::guest_memory::GuestMemoryBudget::with_process_guard
@@ -587,11 +592,26 @@ mod tests {
 
     #[test]
     fn linux_counts_swapped_pages() {
-        let status = "Name:\tx\nVmRSS:\t  2048 kB\nVmSwap:\t  1024 kB\n";
+        let status = "Name:\tx\nVmRSS:\t  4096 kB\nRssAnon:\t  2048 kB\nVmSwap:\t  1024 kB\n";
         assert_eq!(linux_footprint(status), Some(3 * MIB));
-        let no_swap = "VmRSS:\t  2048 kB\n";
+        let no_swap = "VmRSS:\t  4096 kB\nRssAnon:\t  2048 kB\n";
         assert_eq!(linux_footprint(no_swap), Some(2 * MIB));
         assert_eq!(linux_footprint("Name:\tx\n"), None);
+    }
+
+    /// Image pages mapped into every warm instance are one copy in memory,
+    /// however many times `VmRSS` counts them.
+    #[test]
+    fn linux_leaves_out_shared_file_and_shmem_pages() {
+        let status = "VmRSS:\t 4196352 kB\nRssAnon:\t  2048 kB\nRssFile:\t  4096 kB\n\
+                      RssShmem:\t 4190208 kB\nVmSwap:\t  1024 kB\n";
+        assert_eq!(linux_footprint(status), Some(3 * MIB));
+    }
+
+    #[test]
+    fn linux_without_rss_anon_falls_back_to_vm_rss() {
+        let status = "VmRSS:\t  2048 kB\nVmSwap:\t  1024 kB\n";
+        assert_eq!(linux_footprint(status), Some(3 * MIB));
     }
 
     #[test]
