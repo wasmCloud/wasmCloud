@@ -608,6 +608,79 @@ pub fn dynamic_cap(theoretical: u64, overshoot: f64) -> usize {
     (theoretical as f64 * overshoot.max(1.0)).ceil() as usize
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CapacityEstimate {
+    bytes_per_workload: Option<u64>,
+    theoretical_limit: Option<u64>,
+}
+
+impl CapacityEstimate {
+    fn from_step(
+        step: &Step,
+        flavour: Flavour,
+        memory_limit: u64,
+        baseline: Option<u64>,
+        by_pool: Option<u64>,
+    ) -> Option<Self> {
+        if step.workloads == 0
+            || step.started != step.attempted
+            || step.start_refused > 0
+            || step.start_unanswered > 0
+            || step.start_failed > 0
+            || step.requests_ok == 0
+            || step.requests_failed > 0
+            || step.warmup_failed > 0
+            || (flavour == Flavour::Warm && step.warmup_ok != step.started)
+        {
+            return None;
+        }
+        let bytes_per_workload = match (step.footprint_bytes, baseline) {
+            (Some(now), Some(base)) => Some(now.saturating_sub(base) / step.workloads as u64),
+            _ => None,
+        };
+        let theoretical_limit =
+            theoretical_limit(memory_limit, baseline, bytes_per_workload, by_pool);
+        (bytes_per_workload.is_some() || theoretical_limit.is_some()).then_some(Self {
+            bytes_per_workload,
+            theoretical_limit,
+        })
+    }
+}
+
+struct CapacityTracker {
+    latest: Option<CapacityEstimate>,
+    cap: Option<usize>,
+}
+
+impl CapacityTracker {
+    fn observe(
+        &mut self,
+        step: &mut Step,
+        flavour: Flavour,
+        settings: &Settings,
+        baseline: Option<u64>,
+        by_pool: Option<u64>,
+    ) {
+        let Some(estimate) = CapacityEstimate::from_step(
+            step,
+            flavour,
+            settings.memory_limit_bytes,
+            baseline,
+            by_pool,
+        ) else {
+            return;
+        };
+        step.bytes_per_workload = estimate.bytes_per_workload;
+        step.theoretical_limit = estimate.theoretical_limit;
+        self.latest = Some(estimate);
+        if settings.max_components.is_none()
+            && let Some(theoretical) = estimate.theoretical_limit
+        {
+            self.cap = Some(dynamic_cap(theoretical, settings.overshoot));
+        }
+    }
+}
+
 /// Wait for the footprint to settle back near `before`; how long that took.
 async fn spin_down(sampler: &Sampler, before: u64, wait: Duration) -> Option<f64> {
     let tolerance = (before / 100).max(1 << 20);
@@ -693,7 +766,7 @@ async fn measure_flavour(
         journal,
     };
     let mut pool_total = target.core_instances.map(u64::from);
-    let mut per_workload = settings.core_instances_per_workload.map(u64::from);
+    let per_workload = settings.core_instances_per_workload.map(u64::from);
     let pool_bound = |total: Option<u64>, per: Option<u64>| match (flavour, total, per) {
         (Flavour::Warm, Some(total), Some(per)) if per > 0 => Some(total / per),
         _ => None,
@@ -703,7 +776,10 @@ async fn measure_flavour(
     let mut running: Vec<usize> = Vec::new();
     let mut next_index = 0usize;
     let mut steps: Vec<Step> = Vec::new();
-    let mut cap = settings.max_components;
+    let mut capacity = CapacityTracker {
+        latest: None,
+        cap: settings.max_components,
+    };
     let mut all_start_latencies = Vec::new();
     let mut all_warmup_latencies = Vec::new();
     let mut all_request_latencies = Vec::new();
@@ -713,12 +789,14 @@ async fn measure_flavour(
         if let Some(stop) = target.exited() {
             break stop;
         }
-        if let Some(cap) = cap
+        if let Some(cap) = capacity.cap
             && running.len() >= cap
         {
             break Stop::Cap { cap };
         }
-        let room = cap.map_or(settings.step, |cap| cap.saturating_sub(running.len()));
+        let room = capacity
+            .cap
+            .map_or(settings.step, |cap| cap.saturating_sub(running.len()));
         let attempted = settings.step.min(room).max(1);
         let step_began = Instant::now();
         let batch = start_batch(
@@ -784,29 +862,11 @@ async fn measure_flavour(
 
         let heartbeat = target.client.heartbeat(Duration::from_secs(5)).await.ok();
         let footprint = target.sampler.footprint();
-        let bytes_per_workload = match (footprint, baseline) {
-            (Some(now), Some(base)) if !running.is_empty() => {
-                Some(now.saturating_sub(base) / running.len() as u64)
-            }
-            _ => None,
-        };
         if let Some(limit) = batch.refused.iter().find_map(|m| core_instance_limit(m)) {
             pool_total = Some(limit);
-            if per_workload.is_none() && !running.is_empty() {
-                per_workload = Some((limit / running.len() as u64).max(1));
-            }
-        }
-        let theoretical = theoretical_limit(
-            settings.memory_limit_bytes,
-            baseline,
-            bytes_per_workload,
-            pool_bound(pool_total, per_workload),
-        );
-        if settings.max_components.is_none() {
-            cap = theoretical.map(|t| dynamic_cap(t, settings.overshoot));
         }
 
-        let step = Step {
+        let mut step = Step {
             workloads: running.len(),
             attempted,
             started: batch.started.len(),
@@ -827,7 +887,7 @@ async fn measure_flavour(
             warmup_p99_ms: percentile(&warmup.latencies, 0.99),
             footprint_bytes: footprint,
             peak_footprint_bytes: watch.peak(),
-            bytes_per_workload,
+            bytes_per_workload: None,
             heartbeat_workloads: heartbeat.as_ref().map(|h| h.workload_count),
             heartbeat_components: heartbeat.as_ref().map(|h| h.component_count),
             requests_ok: answers.ok,
@@ -837,8 +897,15 @@ async fn measure_flavour(
             request_p99_ms: percentile(&answers.latencies, 0.99),
             sample_growth_bytes: sample_growth,
             spin_down_ms,
-            theoretical_limit: theoretical,
+            theoretical_limit: None,
         };
+        capacity.observe(
+            &mut step,
+            flavour,
+            settings,
+            baseline,
+            pool_bound(pool_total, per_workload),
+        );
         (run.on_step)(&step, steps.is_empty());
         steps.push(step);
 
@@ -909,12 +976,11 @@ async fn measure_flavour(
         .map(|s| s.workloads)
         .max()
         .unwrap_or(0);
-    let last = steps.last();
     let summary = Summary {
         achieved: running.len(),
         served,
-        theoretical_limit: last.and_then(|s| s.theoretical_limit),
-        bytes_per_workload: last.and_then(|s| s.bytes_per_workload),
+        theoretical_limit: capacity.latest.and_then(|s| s.theoretical_limit),
+        bytes_per_workload: capacity.latest.and_then(|s| s.bytes_per_workload),
         peak_footprint_bytes: steps.iter().filter_map(|s| s.peak_footprint_bytes).max(),
         starts_per_sec: running.len() as f64 / total_start_secs.max(f64::EPSILON),
         start_p50_ms: percentile(&all_start_latencies, 0.50),
@@ -1069,6 +1135,95 @@ mod tests {
         );
         assert_eq!(dynamic_cap(1000, 1.1), 1100);
         assert_eq!(dynamic_cap(1000, 0.5), 1000);
+    }
+
+    #[test]
+    fn failed_terminal_steps_preserve_the_verified_estimate_and_cap() {
+        let settings = Settings {
+            memory_limit_bytes: 2100,
+            max_components: None,
+            overshoot: 1.1,
+            step: 250,
+            start_concurrency: 10,
+            start_timeout_secs: 30,
+            start_retries: 0,
+            sample: 200,
+            request_concurrency: 10,
+            request_timeout_secs: 5,
+            spin_down_wait_ms: 0,
+            core_instances: 10_000,
+            core_instances_per_workload: None,
+            min_components: 0,
+        };
+        let measured_step = || Step {
+            workloads: 250,
+            attempted: 250,
+            started: 250,
+            elapsed_secs: 1.0,
+            start_secs: 1.0,
+            starts_per_sec: 250.0,
+            start_p50_ms: None,
+            start_p99_ms: None,
+            start_refused: 0,
+            start_timeouts: 0,
+            start_no_responders: 0,
+            start_retries: 0,
+            start_unanswered: 0,
+            start_failed: 0,
+            warmup_ok: 250,
+            warmup_failed: 0,
+            warmup_p50_ms: None,
+            warmup_p99_ms: None,
+            footprint_bytes: Some(1100),
+            peak_footprint_bytes: Some(1100),
+            bytes_per_workload: None,
+            heartbeat_workloads: None,
+            heartbeat_components: None,
+            requests_ok: 200,
+            requests_failed: 0,
+            requests_per_sec: 200.0,
+            request_p50_ms: None,
+            request_p99_ms: None,
+            sample_growth_bytes: None,
+            spin_down_ms: None,
+            theoretical_limit: None,
+        };
+        let failures: [fn(&mut Step); 8] = [
+            |step| step.warmup_failed = 1,
+            |step| step.warmup_ok -= 1,
+            |step| step.requests_failed = 1,
+            |step| step.requests_ok = 0,
+            |step| step.start_refused = 1,
+            |step| step.start_unanswered = 1,
+            |step| step.start_failed = 1,
+            |step| step.started -= 1,
+        ];
+        for fail in failures {
+            let mut capacity = CapacityTracker {
+                latest: None,
+                cap: None,
+            };
+            let mut first = measured_step();
+            capacity.observe(&mut first, Flavour::Warm, &settings, Some(100), None);
+            let verified = CapacityEstimate {
+                bytes_per_workload: Some(4),
+                theoretical_limit: Some(500),
+            };
+            assert_eq!(capacity.latest, Some(verified));
+            assert_eq!(capacity.cap, Some(550));
+
+            // The new batch reports started workloads without paying all of
+            // their expected memory costs. Its unverified slope would double
+            // both the predicted capacity and the automatic stopping cap.
+            let mut terminal = measured_step();
+            terminal.workloads = 500;
+            fail(&mut terminal);
+            capacity.observe(&mut terminal, Flavour::Warm, &settings, Some(100), None);
+            assert_eq!(terminal.bytes_per_workload, None);
+            assert_eq!(terminal.theoretical_limit, None);
+            assert_eq!(capacity.latest, Some(verified));
+            assert_eq!(capacity.cap, Some(550));
+        }
     }
 
     #[test]

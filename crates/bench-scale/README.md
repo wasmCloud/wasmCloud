@@ -50,8 +50,11 @@ and the theoretical limit so far.
 
 The **theoretical limit** is `(memory limit − baseline footprint) / bytes per workload`,
 and for warm also `core instances / core instances per workload` when that is known
-(from `--core-instances-per-workload`,
-or inferred from a "maximum concurrent limit of N for core instances" refusal).
+(from `--core-instances-per-workload`). A pool refusal can report the total
+slot count, but cannot establish how many slots each fully warmed workload needs.
+Only steps with successful starts, warm-ups, and a positive error-free request
+sample contribute estimates. A failed final step leaves the last verified
+estimate and automatic cap unchanged; its own estimate fields are unknown.
 
 A flavour stops at the first of:
 
@@ -167,7 +170,7 @@ except the repeatable `--host-arg`.
 | `--request-timeout` | `30` | seconds before a request counts as failed |
 | `--spin-down-wait` | `3000` | scale-to-zero: ms to wait for the footprint to settle |
 | `--core-instances` | derived | pool slots passed to the host; default min(usable address space / 2 / (4 GiB + 32 MiB), `vm.max_map_count` / 5) |
-| `--core-instances-per-workload` | inferred | for the pool's share of the warm theoretical limit |
+| `--core-instances-per-workload` | unknown | for the pool's share of the warm theoretical limit |
 | `--min-components` | `1` | exit 2 if a flavour served fewer |
 | `--report` | off (`BENCH_SCALE_REPORT=1`) | print the human report; otherwise the run is silent |
 | `--json <path>` | none | write full results as JSON, report or not |

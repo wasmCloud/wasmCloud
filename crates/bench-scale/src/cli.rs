@@ -88,7 +88,7 @@ pub struct Args {
     pub core_instances: Option<u32>,
 
     /// Core instances one warm workload holds, for the pool's share of the
-    /// theoretical limit. Otherwise inferred from a pool refusal.
+    /// theoretical limit. Omit to leave the pool's contribution unknown.
     #[arg(long, env = "BENCH_SCALE_CORE_INSTANCES_PER_WORKLOAD")]
     pub core_instances_per_workload: Option<u32>,
 
