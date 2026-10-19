@@ -4835,7 +4835,14 @@ mod tests {
                 (import "test:cow/iface" (instance $iface
                     (export "f" (func (result u32)))))
                 (alias export $iface "f" (func $f))
-                (export "call" (func $f))
+                (core func $f (canon lower (func $f)))
+                (core module $forward
+                    (import "host" "f" (func $f (result i32)))
+                    (func (export "call") (result i32) call $f))
+                (core instance $forward (instantiate $forward
+                    (with "host" (instance (export "f" (func $f))))))
+                (func (export "call") (result u32)
+                    (canon lift (core func $forward "call")))
             )"#,
         );
         let shared = Arc::clone(&a.metadata.linker);
