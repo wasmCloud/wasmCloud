@@ -425,6 +425,7 @@ version = "2.10.3"
 dependencies = [
  "anyhow",
  "async-nats",
+ "base64 0.22.1",
  "bench-tools",
  "bytes",
  "clap",

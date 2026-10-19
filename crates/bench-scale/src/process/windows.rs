@@ -17,8 +17,8 @@ use windows_sys::Win32::{
         },
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-            SetInformationJobObject,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicProcessIdList,
+            JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
         },
         Threading::{CREATE_SUSPENDED, OpenThread, ResumeThread, THREAD_SUSPEND_RESUME},
     },
@@ -27,6 +27,43 @@ use windows_sys::Win32::{
 pub(super) struct Job(OwnedHandle);
 
 impl Job {
+    pub(super) fn members(&self) -> Option<Vec<u32>> {
+        // This is JOBOBJECT_BASIC_PROCESS_ID_LIST with room for its variable
+        // trailing array. A larger job is explicitly unmeasurable, not partial.
+        #[repr(C)]
+        struct ProcessIds {
+            assigned: u32,
+            count: u32,
+            ids: [usize; super::MAX_PROCESS_MEMBERS],
+        }
+        let mut processes = ProcessIds {
+            assigned: 0,
+            count: 0,
+            ids: [0; super::MAX_PROCESS_MEMBERS],
+        };
+        // SAFETY: the C layout matches the selected information class, the
+        // writable buffer size is exact, and the job handle remains owned.
+        #[allow(unsafe_code)]
+        let queried = unsafe {
+            QueryInformationJobObject(
+                self.0.as_raw_handle(),
+                JobObjectBasicProcessIdList,
+                std::ptr::from_mut(&mut processes).cast(),
+                std::mem::size_of_val(&processes) as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        if queried == 0 || processes.count != processes.assigned {
+            return None;
+        }
+        processes
+            .ids
+            .get(..processes.count as usize)?
+            .iter()
+            .map(|pid| u32::try_from(*pid).ok())
+            .collect()
+    }
+
     pub(super) fn prepare(command: &mut Command) -> Result<Self> {
         // SAFETY: null attributes/name create an unnamed, non-inheritable job.
         #[allow(unsafe_code)]

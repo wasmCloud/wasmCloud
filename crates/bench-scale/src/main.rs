@@ -34,6 +34,8 @@ use crate::report::{ImageInfo, Machine, Report};
 
 /// Exit status when a flavour served fewer than --min-components.
 const EXIT_TOO_FEW: u8 = 2;
+/// Exit status when cleanup left workloads on an attached host (the error status).
+const EXIT_CLEANUP_FAILED: u8 = 1;
 
 fn main() -> ExitCode {
     let args = Args::parse();
@@ -143,8 +145,11 @@ async fn prepare_target(plan: &HostPlan<'_>, flavour: Flavour) -> Result<Target>
     let mut heartbeats = host::Heartbeats::subscribe(plan.nats).await?;
     let (heartbeat, guard, log, info_args, unsupported, pid, core_instances) = match plan.binary {
         None => {
-            let pick = args.host_id.as_deref().map_or(Pick::Any, Pick::Id);
-            let heartbeat = heartbeats.wait(pick, timeout, None).await.context(
+            let heartbeat = match args.host_id.as_deref() {
+                Some(id) => heartbeats.wait(Pick::Id(id), timeout, None).await,
+                None => heartbeats.wait_for_only_host(timeout).await,
+            }
+            .context(
                 "waiting for an attached host; it heartbeats every 15s, so allow at least that",
             )?;
             (
@@ -202,6 +207,10 @@ async fn prepare_target(plan: &HostPlan<'_>, flavour: Flavour) -> Result<Target>
     };
     let client = api::HostClient::new(plan.nats.clone(), heartbeat.id.clone());
     client.wait_ready(Duration::from_secs(30)).await?;
+    let sampler = match (&guard, pid) {
+        (Some(guard), Some(pid)) => Sampler::owned(pid, Arc::downgrade(guard)),
+        _ => Sampler::new(pid),
+    };
     Ok(Target {
         client,
         info: HostInfo {
@@ -215,7 +224,7 @@ async fn prepare_target(plan: &HostPlan<'_>, flavour: Flavour) -> Result<Target>
             pid,
             log: log.as_ref().map(|l| l.display().to_string()),
         },
-        sampler: Arc::new(Sampler::new(pid)),
+        sampler: Arc::new(sampler),
         guard,
         log,
         core_instances,
@@ -404,14 +413,29 @@ async fn run(args: Args, cancel: &tokio_util::sync::CancellationToken) -> Result
         if args.report {
             report::print_flavour_summary(&flavour_report);
         }
+        let cleanup_failed = flavour_report.cleanup_error.is_some();
+        if let Some(e) = &flavour_report.cleanup_error {
+            eprintln!("bench-scale: {}: {e}", flavour.name());
+        }
         reports.push(flavour_report);
         target.shutdown();
+        if cleanup_failed {
+            // Workloads left on the host would skew the next flavour; report what ran.
+            break;
+        }
     }
 
     let too_few = reports
         .iter()
         .any(|r| r.summary.served < settings.min_components);
-    let exit_code = if too_few { EXIT_TOO_FEW } else { 0 };
+    let cleanup_failed = reports.iter().any(|r| r.cleanup_error.is_some());
+    let exit_code = if cleanup_failed {
+        EXIT_CLEANUP_FAILED
+    } else if too_few {
+        EXIT_TOO_FEW
+    } else {
+        0
+    };
     if args.report {
         report::print_comparison(&reports);
         if too_few {
