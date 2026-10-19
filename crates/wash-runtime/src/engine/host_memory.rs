@@ -637,23 +637,36 @@ fn max_map_count() -> Option<u64> {
 /// cgroup first, because in Kubernetes that is the number behind an OOMKill and
 /// the machine's total is irrelevant to a container limited well below it. Both
 /// cgroup revisions are read; v2 spells "no limit" as the literal string `max`.
+///
+/// A cgroup limit is never taken above physical memory: cgroup v1 spells
+/// "unlimited" as `PAGE_COUNTER_MAX * PAGE_SIZE`, a number just under
+/// `i64::MAX`, and a limit past RAM can't be reached before the machine runs out.
 pub(crate) fn detected_memory_limit() -> Option<u64> {
     fn read_cgroup(path: &str) -> Option<u64> {
-        let raw = std::fs::read_to_string(path).ok()?;
-        let raw = raw.trim();
-        if raw == "max" {
-            return None;
-        }
-        let value: u64 = raw.parse().ok()?;
-        // cgroup v1 spells "unlimited" as a very large number rather than a
-        // word, so anything past what a machine could plausibly have is treated
-        // as absent rather than believed.
-        (value < u64::MAX / 2).then_some(value)
+        parse_cgroup_limit(&std::fs::read_to_string(path).ok()?)
     }
 
-    read_cgroup("/sys/fs/cgroup/memory.max")
-        .or_else(|| read_cgroup("/sys/fs/cgroup/memory/memory.limit_in_bytes"))
-        .or_else(system_total_memory)
+    let cgroup = read_cgroup("/sys/fs/cgroup/memory.max")
+        .or_else(|| read_cgroup("/sys/fs/cgroup/memory/memory.limit_in_bytes"));
+    effective_memory_limit(cgroup, system_total_memory())
+}
+
+/// A cgroup memory limit file's value, or `None` when it sets no limit.
+fn parse_cgroup_limit(raw: &str) -> Option<u64> {
+    let raw = raw.trim();
+    if raw == "max" {
+        return None;
+    }
+    let value: u64 = raw.parse().ok()?;
+    // cgroup v1 spells "unlimited" as a very large number rather than a word;
+    // anything this large is treated as absent rather than believed.
+    // [`effective_memory_limit`] also caps what gets through at physical RAM.
+    (value < u64::MAX / 2).then_some(value)
+}
+
+/// The smaller of a cgroup limit and physical memory, whichever are known.
+fn effective_memory_limit(cgroup: Option<u64>, physical: Option<u64>) -> Option<u64> {
+    cgroup.into_iter().chain(physical).min()
 }
 
 /// Total physical memory, for a host with no cgroup to read — a developer's
@@ -796,6 +809,35 @@ mod tests {
         assert_eq!(parse_bytes("12PiB"), Ok(12 * 1024 * 1024 * 1024 * MIB));
         assert!(parse_bytes("MiB").is_err());
         assert!(parse_bytes("").is_err());
+    }
+
+    /// cgroup v1's "unlimited" is just under `u64::MAX / 2`, so the parse
+    /// lets it through; the limit must still fall back to physical memory.
+    #[test]
+    fn an_unlimited_cgroup_v1_limit_falls_back_to_physical_memory() {
+        const CGROUP_V1_UNLIMITED: &str = "9223372036854771712\n";
+        let physical = 16 * 1024 * MIB;
+
+        let cgroup = parse_cgroup_limit(CGROUP_V1_UNLIMITED);
+        assert_eq!(
+            effective_memory_limit(cgroup, Some(physical)),
+            Some(physical)
+        );
+
+        assert_eq!(parse_cgroup_limit("max\n"), None);
+        assert_eq!(effective_memory_limit(None, Some(physical)), Some(physical));
+
+        let container = 512 * MIB;
+        assert_eq!(parse_cgroup_limit("536870912\n"), Some(container));
+        assert_eq!(
+            effective_memory_limit(Some(container), Some(physical)),
+            Some(container)
+        );
+        assert_eq!(
+            effective_memory_limit(Some(container), None),
+            Some(container)
+        );
+        assert_eq!(effective_memory_limit(None, None), None);
     }
 
     #[test]
