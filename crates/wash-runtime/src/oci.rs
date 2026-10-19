@@ -940,6 +940,19 @@ pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result
 mod tests {
     use super::*;
 
+    /// Open `gate` once `joined` holds, so work held at the gate is provably
+    /// still in flight while every caller joins it.
+    async fn open_once(joined: impl Fn() -> bool, gate: &tokio::sync::watch::Sender<bool>) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !joined() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("every caller joins the flight");
+        gate.send_replace(true);
+    }
+
     #[tokio::test]
     async fn failed_and_oversized_pulls_have_bounded_retention() {
         let cache: Coalescer<String, u32> = Coalescer::with_min_weight(
@@ -984,15 +997,17 @@ mod tests {
                 u32::MAX
             });
         let runs = AtomicUsize::new(0);
+        let (open, gate) = tokio::sync::watch::channel(false);
         let work = || async {
             runs.fetch_add(1, Ordering::SeqCst);
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            gate.clone().wait_for(|open| *open).await.unwrap();
             Ok(1)
         };
-        let (a, b, c) = tokio::join!(
+        let (a, b, c, ()) = tokio::join!(
             coalescer.run("ref", work),
             coalescer.run("ref", work),
             coalescer.run("ref", work),
+            open_once(|| coalescer.waiters(&"ref") == 3, &open),
         );
         assert_eq!((a.unwrap(), b.unwrap(), c.unwrap()), (1, 1, 1));
         assert_eq!(runs.load(Ordering::SeqCst), 1);
@@ -1027,9 +1042,15 @@ mod tests {
                 Ok(RegistryAuth::Anonymous)
             }
         }));
-        // On a current-thread runtime this cannot progress if the helper is
-        // running in an async task instead of on the bounded blocking pool.
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        // On a current-thread runtime the second caller cannot join while the
+        // helper blocks, unless the helper runs on the bounded blocking pool.
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while cache.waiters(&"registry".to_string()) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the second caller joins while the helper blocks");
         release.send(()).unwrap();
         let expected = AuthId::of(&first.await.unwrap().unwrap());
         assert!(expected == AuthId::of(&second.await.unwrap().unwrap()));
@@ -1081,14 +1102,16 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let coalescer = Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
         let runs = AtomicUsize::new(0);
+        let (open, gate) = tokio::sync::watch::channel(false);
         let work = || async {
             let value = runs.fetch_add(1, Ordering::SeqCst);
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            gate.clone().wait_for(|open| *open).await.unwrap();
             Ok(value)
         };
-        let (a, b) = tokio::join!(
+        let (a, b, ()) = tokio::join!(
             coalescer.run_with_reuse("ref", false, work),
             coalescer.run_with_reuse("ref", false, work),
+            open_once(|| coalescer.waiters(&"ref") == 2, &open),
         );
         assert_eq!(a.unwrap(), 0);
         assert_eq!(b.unwrap(), 0);
@@ -1112,19 +1135,25 @@ mod tests {
         let coalescer: Coalescer<&str, u32> =
             Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
         let runs = AtomicUsize::new(0);
+        let (open, gate) = tokio::sync::watch::channel(false);
         let work = |value| {
             let runs = &runs;
+            let mut gate = gate.clone();
             move || async move {
                 runs.fetch_add(1, Ordering::SeqCst);
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                gate.wait_for(|open| *open).await.unwrap();
                 Ok(value)
             }
         };
 
-        let (a, b, c) = tokio::join!(
+        let (a, b, c, ()) = tokio::join!(
             coalescer.run("ref", work(1)),
             coalescer.run("ref", work(2)),
             coalescer.run("other", work(3)),
+            open_once(
+                || coalescer.waiters(&"ref") == 2 && coalescer.waiters(&"other") == 1,
+                &open,
+            ),
         );
         assert_eq!((a.unwrap(), b.unwrap(), c.unwrap()), (1, 1, 3));
         assert_eq!(runs.load(Ordering::SeqCst), 2);
@@ -1170,12 +1199,14 @@ mod tests {
         let coalescer: Coalescer<&str, u32> =
             Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
 
-        let (a, b) = tokio::join!(
+        let (open, gate) = tokio::sync::watch::channel(false);
+        let (a, b, ()) = tokio::join!(
             coalescer.run("ref", || async {
-                tokio::time::sleep(Duration::from_millis(20)).await;
+                gate.clone().wait_for(|open| *open).await.unwrap();
                 bail!("registry unreachable")
             }),
             coalescer.run("ref", || async { Ok(7) }),
+            open_once(|| coalescer.waiters(&"ref") == 2, &open),
         );
         assert!(a.unwrap_err().to_string().contains("registry unreachable"));
         assert!(b.unwrap_err().to_string().contains("registry unreachable"));
