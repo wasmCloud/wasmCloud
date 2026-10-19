@@ -7,6 +7,10 @@ These changes affect embedders and operators upgrading the runtime.
 - `ResolvedWorkload::component_count()` is synchronous. Replace
   `workload.component_count().await` with `workload.component_count()`. The count
   is fixed when the workload is resolved and does not require its component lock.
+- `ResolvedWorkload::components()` still exposes a writable map for updates to
+  existing component metadata. Adding or removing components after resolution
+  is unsupported: the cached count and bindings would no longer describe the
+  same workload. Resolve a new workload to change component membership.
 - `host::http::WorkloadHandles` now stores `Arc<ComponentHandle>` values.
   `ComponentHandle` contains runtime-owned pre-instantiation and pooling state;
   its fields are private. Code that only shares or creates an empty map can

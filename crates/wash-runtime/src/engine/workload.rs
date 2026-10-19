@@ -1305,6 +1305,11 @@ impl ResolvedWorkload {
         }
     }
 
+    /// Access the resolved components and their metadata.
+    ///
+    /// The map remains writable for updates to existing component metadata.
+    /// Adding or removing components after resolution is unsupported: the
+    /// component count and bindings are settled when the workload is resolved.
     pub fn components(&self) -> Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>> {
         self.components.clone()
     }
