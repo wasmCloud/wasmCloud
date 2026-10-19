@@ -59,6 +59,35 @@ to DEBUG. Run with `RUST_LOG=wash_runtime=debug` to see them again.
   The process guard is sampled admission control: it cannot cap allocations
   already in flight, writes into committed guest memory, or arbitrary plugin
   buffers. Leave headroom and use OS/container limits for a hard boundary.
+- Linux measures anonymous resident memory plus swap, excluding shared file
+  and shmem mappings to avoid counting a shared Wasmtime memory image once
+  per instance. Older kernels without `RssAnon` fall back to total RSS plus
+  swap. macOS includes compressed pages; other platforms use resident memory.
+- Refusals normally stop below 95% of the limit. They also stop after a full
+  minute without growth below the limit, or after five consecutive failed
+  periodic reads. A successful reading resumes enforcement. Initial read
+  failures are retried by the shared process sampler.
+- Process readings are exported as `process_memory.footprint`,
+  `process_memory.high_water` and `process_memory.limit` gauges, in bytes.
+  `process_memory.refused` counts guest growth refused by the process limit,
+  independently of guest-budget refusals. Registering another engine after
+  installing or replacing the meter provider registers these gauges with it.
 
-Process-footprint readers and metric registration live in
-`src/engine/process_memory/`.
+## Pool diagnostics
+
+The default pool keeps Wasmtime's 4 GiB reservation and 32 MiB guard per
+memory. Lowering `--default-heap-memory` limits guest growth without reducing
+that reservation; a ceiling above 4 GiB is incompatible with the default
+reservation. Reduce the pool's slot count to reduce its address-space use.
+
+Startup diagnostics use the installed pool counts, including
+`WASMTIME_POOLING_TOTAL_*` overrides. Linux mapping estimates account for
+memory, stack and table totals independently; stack guards can exhaust
+`vm.max_map_count` during engine construction, before any workload starts.
+These figures are estimates and leave room for the process's other mappings.
+
+`Engine::pool_usage()` reports used and total slots. `pool_usage::pool_refusals()`
+counts refusals across the process. Instantiation errors retain their original
+cause and add the relevant pool setting; warnings are rate-limited, with
+repeats at DEBUG. A `poolSize` on a WASIp2 HTTP handler now warns that HTTP
+instances are not reused; use WASIp3 for warm HTTP instances.
