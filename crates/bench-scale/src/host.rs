@@ -81,8 +81,7 @@ fn log_file(path: &Path) -> Result<(Stdio, Stdio)> {
 /// Only what a process needs to find its tools and home, so the bench's own
 /// environment (a cargo build's CARGO_*/RUST* variables) does not reach it.
 fn isolated(command: &mut Command) {
-    command.env_clear();
-    for key in [
+    const KEPT: &[&str] = &[
         "PATH",
         "HOME",
         "TMPDIR",
@@ -90,7 +89,26 @@ fn isolated(command: &mut Command) {
         "LANG",
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
-    ] {
+    ];
+    // Without these, Winsock fails to initialise and the temp and profile
+    // directories fall back to the Windows directory.
+    #[cfg(windows)]
+    const KEPT_WINDOWS: &[&str] = &[
+        "SystemRoot",
+        "SystemDrive",
+        "windir",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PATHEXT",
+        "ComSpec",
+    ];
+    #[cfg(not(windows))]
+    const KEPT_WINDOWS: &[&str] = &[];
+    command.env_clear();
+    for &key in KEPT.iter().chain(KEPT_WINDOWS) {
         if let Some(value) = std::env::var_os(key) {
             command.env(key, value);
         }
