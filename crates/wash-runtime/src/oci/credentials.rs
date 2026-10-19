@@ -1,5 +1,5 @@
-use super::{blocking_io, docker_config_path};
-use anyhow::{Result, anyhow, bail};
+use super::{Coalescer, blocking_on, docker_config_path};
+use anyhow::{Context, Result, anyhow, bail};
 use docker_credential::{CredentialRetrievalError, DockerCredential, get_credential};
 use oci_client::secrets::RegistryAuth;
 use std::{sync::OnceLock, time::Duration};
@@ -8,6 +8,11 @@ use tracing::{debug, instrument, warn};
 /// How long a docker credential lookup answers for its registry. A login or
 /// rotation through docker takes effect within this.
 const DOCKER_AUTH_REUSE: Duration = Duration::from_secs(30);
+
+/// The longest a docker credential lookup may take, including waiting for a
+/// helper slot. Past it the pull proceeds anonymously, as for any other
+/// failed lookup. `docker_credential` gives no way to stop the helper itself.
+const DOCKER_HELPER_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Credential resolver that implements the precedence: explicit → docker creds → anonymous
 pub(super) struct CredentialResolver {
@@ -34,15 +39,12 @@ impl CredentialResolver {
         // short while: asking means reading the docker config and possibly
         // running a helper process, which once per workload start is a
         // process spawn per workload on a host restoring thousands.
-        static DOCKER_AUTH: OnceLock<moka::sync::Cache<String, RegistryAuth>> = OnceLock::new();
+        static DOCKER_AUTH: OnceLock<Coalescer<String, RegistryAuth>> = OnceLock::new();
         let docker_auth = DOCKER_AUTH.get_or_init(|| {
-            moka::sync::Cache::builder()
-                .max_capacity(64)
-                .time_to_live(DOCKER_AUTH_REUSE)
-                .build()
+            Coalescer::with_min_weight(64, DOCKER_HELPER_TIMEOUT, DOCKER_AUTH_REUSE, 1, |_| 1)
         });
         let registry = registry.to_owned();
-        cached_credentials(docker_auth.clone(), registry.clone(), move || {
+        cached_credentials(docker_auth, registry.clone(), move || {
             Ok(Self::get_docker_credentials(&registry)?.unwrap_or(RegistryAuth::Anonymous))
         })
         .await
@@ -98,18 +100,27 @@ impl CredentialResolver {
 
 /// Cache and coalesce successful helper lookups, including anonymous results.
 /// Failures are retried next time, so a repaired configuration is usable at once.
+///
+/// Concurrent lookups for one registry share one helper run, taken before any
+/// permit, so a registry costs at most one blocking task at a time. Helpers
+/// run on their own limiter and under [`DOCKER_HELPER_TIMEOUT`]: one that hangs
+/// fails its lookup instead of stalling every pull, and cannot starve client
+/// builds of permits.
 pub(super) async fn cached_credentials(
-    cache: moka::sync::Cache<String, RegistryAuth>,
+    cache: &Coalescer<String, RegistryAuth>,
     registry: String,
     lookup: impl FnOnce() -> Result<RegistryAuth> + Send + 'static,
 ) -> Result<RegistryAuth> {
-    if let Some(auth) = cache.get(&registry) {
-        return Ok(auth);
-    }
-    blocking_io(move || {
-        cache
-            .try_get_with(registry, lookup)
-            .map_err(|error| anyhow::Error::new(crate::engine::SharedError(error)))
-    })
-    .await
+    static HELPERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+    cache
+        .run_with_reuse(registry, true, || async move {
+            tokio::time::timeout(DOCKER_HELPER_TIMEOUT, blocking_on(&HELPERS, lookup))
+                .await
+                .with_context(|| {
+                    format!(
+                        "docker credential lookup did not finish within {DOCKER_HELPER_TIMEOUT:?}"
+                    )
+                })?
+        })
+        .await
 }
