@@ -141,9 +141,12 @@ impl CliCommand for WashCliCommand {
     }
 }
 
-/// The stack wash runs on. Linux and macOS give the main thread 8 MiB, but
-/// Windows gives it only 1 MiB, which a debug build of wash can overrun. So
-/// wash runs on a thread of its own with the stack the other platforms give.
+/// The stack wash's top-level future runs on. Linux (by default, through
+/// `ulimit -s`) and macOS give the main thread 8 MiB, but Windows gives it only
+/// 1 MiB, which a debug build of wash can overrun. So wash runs on a thread of
+/// its own with the stack the other platforms usually give. Tasks spawned onto
+/// the runtime, and `spawn_blocking` closures, still run on tokio's own
+/// threads with tokio's default stack.
 const MAIN_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 fn main() {
