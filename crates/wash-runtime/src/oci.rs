@@ -660,21 +660,18 @@ async fn pull_uncoalesced(
             debug!("Found cached artifact");
             let (component_data, digest) = cache_manager.read_cached(reference).await?;
 
-            // The cache is scoped to the resolved credentials, transport and
-            // trust roots. Never stays offline even for a tag, but cannot use
-            // an entry fetched under a different security policy.
-            if *pull_policy == OciPullPolicy::Never
-                || cached_digest_is_pinned(reference_parsed, &digest)
-            {
+            // Never explicitly requests offline reuse. The cache key covers
+            // configured extra roots, but cannot encode all native trust-store
+            // policies or changes to the registry's authorization decisions.
+            if *pull_policy == OciPullPolicy::Never {
                 return Ok(Arc::new(Pulled {
                     bytes: component_data.into(),
                     digest,
                 }));
             }
 
-            // Fetched only now: the pinned hit above needs no client, and a
-            // host restoring from its cache would otherwise build or look one
-            // up per workload for nothing.
+            // Even a pinned digest must pass the caller's current registry
+            // authorization and TLS policy before a disk entry can be reused.
             let fetched_digest = pull_client(reference_parsed, config.insecure, auth, trust)
                 .await?
                 .fetch_manifest_digest(reference_parsed, auth)
@@ -741,11 +738,6 @@ async fn pull_uncoalesced(
         bytes: component_data,
         digest,
     }))
-}
-
-/// Whether `reference` pins the manifest digest the cache recorded for it.
-fn cached_digest_is_pinned(reference: &Reference, cached_digest: &str) -> bool {
-    reference.digest() == Some(cached_digest)
 }
 
 /// Push a WebAssembly component to an OCI registry
@@ -1208,10 +1200,10 @@ mod tests {
         assert!(AuthId::of(&RegistryAuth::Bearer("t".into())) != basic("t", ""));
     }
 
-    /// A reference pinned by digest is served from the cache without asking a
-    /// registry: the host here does not resolve, so any request would fail.
+    /// Never serves a pinned entry offline: the host here does not resolve,
+    /// so any request would fail.
     #[tokio::test]
-    async fn a_digest_pinned_cache_hit_skips_the_registry() {
+    async fn never_reuses_a_digest_pinned_entry_offline() {
         let temp_dir = TempDir::new().unwrap();
         let digest = format!("sha256:{}", "ab".repeat(32));
         let reference = format!("registry.invalid/ns/component@{digest}");
@@ -1230,10 +1222,9 @@ mod tests {
         // Explicit credentials, so no docker credential helper runs either.
         let mut config = OciConfig::new_with_credentials("user", "secret");
         config.cache_dir = Some(temp_dir.path().to_path_buf());
-        let (bytes, pulled_digest) =
-            pull_component(&reference, config, OciPullPolicy::IfNotPresent)
-                .await
-                .unwrap();
+        let (bytes, pulled_digest) = pull_component(&reference, config, OciPullPolicy::Never)
+            .await
+            .unwrap();
         assert_eq!(bytes, b"cached bytes");
         assert_eq!(pulled_digest, digest);
     }
