@@ -202,6 +202,10 @@ async fn prepare_target(plan: &HostPlan<'_>, flavour: Flavour) -> Result<Target>
     };
     let client = api::HostClient::new(plan.nats.clone(), heartbeat.id.clone());
     client.wait_ready(Duration::from_secs(30)).await?;
+    let sampler = match (&guard, pid) {
+        (Some(guard), Some(pid)) => Sampler::owned(pid, Arc::downgrade(guard)),
+        _ => Sampler::new(pid),
+    };
     Ok(Target {
         client,
         info: HostInfo {
@@ -215,7 +219,7 @@ async fn prepare_target(plan: &HostPlan<'_>, flavour: Flavour) -> Result<Target>
             pid,
             log: log.as_ref().map(|l| l.display().to_string()),
         },
-        sampler: Arc::new(Sampler::new(pid)),
+        sampler: Arc::new(sampler),
         guard,
         log,
         core_instances,

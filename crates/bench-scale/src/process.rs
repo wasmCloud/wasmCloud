@@ -8,6 +8,9 @@ use std::{
 #[cfg(windows)]
 mod windows;
 
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+const MAX_PROCESS_MEMBERS: usize = 4096;
+
 /// Own the descendants as well as the immediate child, including after a
 /// wrapper exits. Windows children cannot run until assigned to their job.
 pub struct ProcessTree {
@@ -18,6 +21,78 @@ pub struct ProcessTree {
 }
 
 impl ProcessTree {
+    pub(crate) fn members(&self) -> Option<Vec<u32>> {
+        #[cfg(target_os = "linux")]
+        {
+            let group = i32::try_from(self.group?).ok()?;
+            let mut members = Vec::new();
+            // Enumerate IDs directly: a metadata refresh may omit an unreadable
+            // live child and turn its missing footprint into an underestimate.
+            for entry in std::fs::read_dir("/proc").ok()? {
+                let name = entry.ok()?.file_name();
+                let Ok(pid) = name.to_str()?.parse::<i32>() else {
+                    continue;
+                };
+                // SAFETY: getpgid only queries metadata; the owned group also
+                // identifies grandchildren reparented after a wrapper exits.
+                #[allow(unsafe_code)]
+                let actual_group = unsafe { libc::getpgid(pid) };
+                if actual_group == -1 {
+                    if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                        continue; // It exited after directory enumeration.
+                    }
+                    return None;
+                }
+                if actual_group == group {
+                    if members.len() == MAX_PROCESS_MEMBERS {
+                        return None;
+                    }
+                    members.push(u32::try_from(pid).ok()?);
+                }
+            }
+            Some(members)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            // PROC_PGRP_ONLY from Apple's sys/proc_info.h; libc exposes the
+            // function but not this selector. An extra slot detects truncation.
+            const PROC_PGRP_ONLY: u32 = 2;
+            let mut members: [libc::pid_t; MAX_PROCESS_MEMBERS + 1] = [0; MAX_PROCESS_MEMBERS + 1];
+            let buffer_bytes = std::mem::size_of_val(&members);
+            // SAFETY: members is writable for exactly buffer_bytes and the
+            // selected query returns an array of process IDs, measured in bytes.
+            #[allow(unsafe_code)]
+            let bytes = unsafe {
+                libc::proc_listpids(
+                    PROC_PGRP_ONLY,
+                    self.group?,
+                    members.as_mut_ptr().cast(),
+                    i32::try_from(buffer_bytes).ok()?,
+                )
+            };
+            let bytes = usize::try_from(bytes).ok()?;
+            if bytes == 0
+                || bytes >= buffer_bytes
+                || !bytes.is_multiple_of(size_of::<libc::pid_t>())
+            {
+                return None;
+            }
+            members
+                .get(..bytes / size_of::<libc::pid_t>())?
+                .iter()
+                .map(|pid| u32::try_from(*pid).ok())
+                .collect()
+        }
+        #[cfg(windows)]
+        {
+            self.job.as_ref()?.members()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        {
+            None
+        }
+    }
+
     fn prepare(command: &mut Command) -> Result<Self> {
         #[cfg(unix)]
         {

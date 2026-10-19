@@ -757,6 +757,7 @@ async fn measure_flavour(
         Arc::clone(&target.sampler),
         settings.memory_limit_bytes,
         Arc::clone(&halt),
+        settings.max_components.is_none(),
     );
     let exit_watch = target.guard.as_ref().map(|guard| {
         let guard = Arc::clone(guard);
@@ -811,6 +812,7 @@ async fn measure_flavour(
         {
             break Stop::Cap { cap };
         }
+        watch.check_available()?;
         checked_footprint(
             target.sampler.footprint(),
             settings.max_components,
@@ -883,6 +885,7 @@ async fn measure_flavour(
         };
 
         let heartbeat = target.client.heartbeat(Duration::from_secs(5)).await.ok();
+        watch.check_available()?;
         let footprint = checked_footprint(
             target.sampler.footprint(),
             settings.max_components,

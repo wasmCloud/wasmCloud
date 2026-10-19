@@ -36,6 +36,10 @@ impl ChildGuard {
         self.child.id()
     }
 
+    pub(crate) fn process_ids(&self) -> Option<Vec<u32>> {
+        self.tree.members()
+    }
+
     /// The exit status if the process has ended on its own.
     pub fn exited(&mut self) -> Option<ExitStatus> {
         if self.exited.is_none() {

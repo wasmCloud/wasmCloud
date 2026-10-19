@@ -252,7 +252,14 @@ as the listener.
 - Footprint is `VmRSS + VmSwap` from `/proc/<pid>/status` on Linux,
   `phys_footprint` on macOS (including compressed pages), and sysinfo's resident
   size elsewhere (which misses compressed and swapped pages).
-  The report says which.
+  The report says which. For an owned host, it sums every process in the owned
+  Unix process group or Windows job, so a wrapper's child cannot escape the
+  memory check. This can count shared pages more than once and is conservative.
+  Attached hosts still sample only the explicitly supplied PID.
+  A missing owned member reading makes the measurement unknown; groups or jobs
+  with more than 4096 members are likewise unmeasurable rather than truncated.
+  Owned-process measurement is supported on Linux, macOS, and Windows; other
+  platforms require an explicit component cap.
   On Linux this includes resident file-backed pages, while the new wash host's
   process admission guard uses `RssAnon + VmSwap`, excluding resident file-backed
   and shared-memory pages (`VmRSS + VmSwap` when `RssAnon` is unavailable).
@@ -260,7 +267,8 @@ as the listener.
   the host refuses starts; the two limits intentionally measure different footprints.
 - Without `--max-components`, a valid process footprint is required at baseline
   and throughout the run. An unavailable reading aborts the experiment and runs
-  cleanup. An explicit component cap permits unknown footprint values in the report.
+  cleanup. The background watcher also halts new starts if a reading disappears
+  mid-batch. An explicit component cap permits unknown footprint values in the report.
 - Attached to a running host (`--host-nats-only`), memory is unknown without `--host-pid`,
   and the run then needs `--max-components` to bound it.
   Every submitted workload ID is journaled, including unanswered starts. Normal
