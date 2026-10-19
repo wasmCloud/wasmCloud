@@ -18,9 +18,10 @@
 //! # Why the budget is worth naming apart from enforcing it
 //!
 //! Every pool slot reserves address space for the largest memory it might hold,
-//! whether or not anything grows into it: the larger of `default_heap_memory`
-//! and wasmtime's 4 GiB `memory_reservation`, plus a guard region (see
-//! [`pool_slot_bytes`]). Today a host claims 1000 such slots, 3.9 TiB of
+//! whether or not anything grows into it: wasmtime's 4 GiB
+//! `memory_reservation`, plus a guard region (see [`pool_slot_bytes`]). A
+//! `default_heap_memory` past the reservation does not make the slot larger;
+//! wasmtime refuses to build that pool at all. Today a host claims 1000 such slots, 3.9 TiB of
 //! address space, and nobody is told; the 128 TiB a 64-bit process can map
 //! holds about 30,000 of them, so `core_instances` has a ceiling. Naming the
 //! budget lets the host say, at startup, whether the pool it is about to build
@@ -78,6 +79,13 @@ pub const WASMTIME_MEMORY_GUARD: u64 = 64 * 1024;
 /// off by default. It assumes the engine's reservation and guard are
 /// wasmtime's defaults; a caller-supplied base config that changes them makes
 /// this an estimate.
+///
+/// A ceiling above the reservation does not make a bigger slot in practice:
+/// wasmtime refuses to build a pool whose `max_memory_size` exceeds its
+/// `memory_reservation`, and the engine never raises the reservation (see
+/// [`pool_heap_ceiling_advisory`]). So every pool that builds has slots of
+/// exactly the reservation plus the guard; the larger figure is only what
+/// such a pool would have needed.
 pub fn pool_slot_bytes(max_memory_size: u64) -> u64 {
     max_memory_size
         .max(WASMTIME_MEMORY_RESERVATION)
@@ -361,9 +369,9 @@ impl HostMemoryBudgets {
         )
     }
 
-    /// Address space the pooling allocator will reserve: every slot is sized
-    /// for the largest memory it might hold, and never below wasmtime's 4 GiB
-    /// reservation (see [`pool_slab_bytes`]).
+    /// Address space the pooling allocator will reserve: wasmtime's 4 GiB
+    /// reservation and a guard for every slot, however small its heap (see
+    /// [`pool_slab_bytes`]).
     ///
     /// Saturating rather than checked because the answer to an overflow here is
     /// the same as the answer to a merely enormous number — refuse it — and a
@@ -439,12 +447,33 @@ impl HostMemoryBudgets {
 /// neither number in the message — is unpleasant to diagnose.
 pub(crate) fn pool_advisories(memories: u32, max_memory_size: u64) -> Vec<String> {
     [
+        pool_heap_ceiling_advisory(max_memory_size),
         pool_reservation_advisory(memories, max_memory_size, usable_address_space()),
         max_map_count().and_then(|limit| pool_map_count_advisory(memories, limit)),
     ]
     .into_iter()
     .flatten()
     .collect()
+}
+
+/// What to say when the heap ceiling is past wasmtime's memory reservation,
+/// if it is.
+///
+/// wasmtime refuses to build a pool whose `max_memory_size` exceeds its
+/// `memory_reservation`, and the engine leaves the reservation at wasmtime's
+/// default (see the module docs), so the engine will not start. The error
+/// wasmtime gives names neither knob.
+fn pool_heap_ceiling_advisory(max_memory_size: u64) -> Option<String> {
+    (max_memory_size > WASMTIME_MEMORY_RESERVATION).then(|| {
+        format!(
+            "default-heap-memory {} is past wasmtime's {} memory reservation, and the pooling \
+             allocator refuses a heap ceiling larger than the reservation, so the engine will \
+             fail to start. Set default-heap-memory to {} or less.",
+            render_bytes(max_memory_size),
+            render_bytes(WASMTIME_MEMORY_RESERVATION),
+            render_bytes(WASMTIME_MEMORY_RESERVATION),
+        )
+    })
 }
 
 /// What to say when the pool would use up the kernel's per-process limit
@@ -482,23 +511,25 @@ fn pool_reservation_advisory(
     // warning about over-commitment, not an error — but the pool maps its
     // whole slab when the engine is built, so past what this process can
     // map, the engine does not start.
+    // A ceiling past the reservation is a pool wasmtime will not build at
+    // all, which `pool_heap_ceiling_advisory` says; how much it would have
+    // reserved is beside the point.
+    if max_memory_size > WASMTIME_MEMORY_RESERVATION {
+        return None;
+    }
     let reservation = pool_slab_bytes(max_memory_size, memories);
     if reservation <= address_space / 100 * POOL_ADDRESS_SPACE_PERCENT {
         return None;
     }
-    // Below the reservation the heap ceiling no longer sizes the slot, and
-    // advising an operator to lower it would change nothing.
-    let remedy = if max_memory_size <= WASMTIME_MEMORY_RESERVATION {
-        format!(
-            "Lower core-instances (or WASMTIME_POOLING_TOTAL_MEMORIES). Lowering \
-             default-heap-memory will not help: every slot reserves wasmtime's {} plus a {} \
-             guard however small its heap.",
-            render_bytes(WASMTIME_MEMORY_RESERVATION),
-            render_bytes(WASMTIME_MEMORY_GUARD),
-        )
-    } else {
-        "Lower one of the two.".to_string()
-    };
+    // The heap ceiling does not size the slot, so advising an operator to
+    // lower it would change nothing.
+    let remedy = format!(
+        "Lower core-instances (or WASMTIME_POOLING_TOTAL_MEMORIES). Lowering \
+         default-heap-memory will not help: every slot reserves wasmtime's {} plus a {} \
+         guard however small its heap.",
+        render_bytes(WASMTIME_MEMORY_RESERVATION),
+        render_bytes(WASMTIME_MEMORY_GUARD),
+    );
     let consequence = if reservation > address_space {
         "The pool cannot be mapped, so the engine will fail to start."
     } else {
@@ -926,9 +957,18 @@ mod tests {
     }
 
     #[test]
-    fn a_slot_above_the_reservation_is_sized_by_the_ceiling() {
-        assert_eq!(pool_slot_bytes(16 * 1024 * MIB), 16 * 1024 * MIB + 32 * MIB);
-        assert_eq!(pool_slab_bytes(16 * 1024 * MIB, 0), 32 * MIB);
+    fn a_heap_ceiling_past_the_reservation_is_named_as_the_cause() {
+        // wasmtime refuses this pool outright, so the advice is about the
+        // ceiling, not about how much the pool would have reserved.
+        let resolved =
+            HostMemoryBudgets::resolve(None, Some(16 * 1024 * MIB), Some(10_000)).unwrap();
+        let advisory = pool_heap_ceiling_advisory(resolved.default_heap_memory)
+            .expect("16 GiB is past the 4 GiB reservation");
+        assert!(advisory.contains("default-heap-memory 16GiB"), "{advisory}");
+        assert!(advisory.contains("4GiB or less"), "{advisory}");
+        assert_eq!(reservation_advisory(&resolved, USER_ADDRESS_SPACE), None);
+        assert_eq!(pool_heap_ceiling_advisory(4 * 1024 * MIB), None);
+        assert_eq!(pool_heap_ceiling_advisory(128 * MIB), None);
     }
 
     #[test]
@@ -1005,27 +1045,23 @@ mod tests {
 
     #[test]
     fn an_unreservable_combination_is_reported_with_both_numbers() {
-        let resolved =
-            HostMemoryBudgets::resolve(None, Some(16 * 1024 * MIB), Some(10_000)).unwrap();
+        let resolved = HostMemoryBudgets::resolve(None, None, Some(35_000)).unwrap();
         let advisory = reservation_advisory(&resolved, USER_ADDRESS_SPACE)
-            .expect("156.6 TiB is past the 128 TiB a process can map");
+            .expect("137.8 TiB is past the 128 TiB a process can map");
         assert!(advisory.contains("cannot be mapped"), "{advisory}");
         assert!(
-            advisory.contains("156.6TiB"),
+            advisory.contains("137.8TiB"),
             "names the reservation, to one decimal because it is not a round unit: {advisory}"
         );
         assert!(
-            advisory.contains("10000"),
+            advisory.contains("35000"),
             "names the instance count: {advisory}"
         );
         assert!(
             advisory.contains("default-heap-memory") && advisory.contains("core-instances"),
             "names both knobs so it is actionable: {advisory}"
         );
-        assert!(
-            advisory.contains("Lower one of the two"),
-            "a ceiling above the reservation does size the slot: {advisory}"
-        );
+        assert!(advisory.contains("Lower core-instances"), "{advisory}");
     }
 
     /// A budget set to the pod's own `resources.limits.memory` is a ceiling
