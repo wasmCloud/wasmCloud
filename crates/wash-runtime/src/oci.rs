@@ -429,63 +429,55 @@ impl CacheManager {
         self.cache_dir.join(format!("{sanitized}_{short_hash}"))
     }
 
-    /// Get the cache path for the component .wasm data
-    fn get_component_path(&self, reference: &str) -> PathBuf {
-        let cache_dir = self.get_cache_dir(reference);
-
-        // Use the last segment as the artifact name (after last '/')
-        let artifact_name = reference
-            .rsplit('/')
-            .next()
-            .unwrap_or("artifact")
-            .replace([':', '@'], "_");
-
-        cache_dir.join(format!("{artifact_name}.wasm"))
+    /// Get the cache path for the entry holding the digest and component.
+    ///
+    /// The digest and the component bytes share one file, written whole and
+    /// renamed into place, so a reader never pairs one pull's bytes with
+    /// another's digest. Entries from the old layout (a `.wasm` file beside a
+    /// `digest` file) have no entry file and are fetched again.
+    fn get_entry_path(&self, reference: &str) -> PathBuf {
+        self.get_cache_dir(reference).join("entry")
     }
 
-    /// Get the cache path for the digest file
-    fn get_digest_path(&self, reference: &str) -> PathBuf {
-        let cache_dir = self.get_cache_dir(reference);
-        cache_dir.join("digest")
-    }
-
-    /// Check if an artifact is cached (both component and digest must exist)
+    /// Check if an artifact is cached
     async fn is_cached(&self, reference: &str) -> bool {
-        let component_path = self.get_component_path(reference);
-        let digest_path = self.get_digest_path(reference);
-        tokio::fs::metadata(&component_path).await.is_ok()
-            && tokio::fs::metadata(&digest_path).await.is_ok()
+        tokio::fs::metadata(self.get_entry_path(reference))
+            .await
+            .is_ok()
     }
 
     /// Read cached artifact, returning (component_data, digest)
     async fn read_cached(&self, reference: &str) -> Result<(Vec<u8>, String)> {
-        let component_path = self.get_component_path(reference);
-        let digest_path = self.get_digest_path(reference);
+        let entry_path = self.get_entry_path(reference);
 
-        debug!(component_path = %component_path.display(), digest_path = %digest_path.display(), "reading cached artifact");
+        debug!(entry_path = %entry_path.display(), "reading cached artifact");
 
-        let component_data = tokio::fs::read(&component_path).await.with_context(|| {
+        let mut digest = tokio::fs::read(&entry_path).await.with_context(|| {
+            format!("failed to read cached artifact at {}", entry_path.display())
+        })?;
+        let newline = digest.iter().position(|b| *b == b'\n').with_context(|| {
+            format!("cached artifact at {} has no digest", entry_path.display())
+        })?;
+        let component_data = digest.split_off(newline + 1);
+        digest.truncate(newline);
+        let digest = String::from_utf8(digest).with_context(|| {
             format!(
-                "failed to read cached component at {}",
-                component_path.display()
+                "cached artifact at {} has an invalid digest",
+                entry_path.display()
             )
         })?;
 
-        let digest = tokio::fs::read_to_string(&digest_path)
-            .await
-            .with_context(|| {
-                format!("failed to read cached digest at {}", digest_path.display())
-            })?;
-
-        Ok((component_data, digest.trim().to_string()))
+        Ok((component_data, digest))
     }
 
     /// Write artifact and digest to cache
     async fn write_to_cache(&self, reference: &str, data: &[u8], digest: &str) -> Result<()> {
-        let component_path = self.get_component_path(reference);
-        let digest_path = self.get_digest_path(reference);
+        if digest.contains('\n') {
+            bail!("digest {digest:?} contains a newline");
+        }
+        let entry_path = self.get_entry_path(reference);
 
-        debug!(component_path = %component_path.display(), digest_path = %digest_path.display(), "writing to cache");
+        debug!(entry_path = %entry_path.display(), "writing to cache");
 
         // Create cache directory
         let cache_dir = self.get_cache_dir(reference);
@@ -493,25 +485,23 @@ impl CacheManager {
             .await
             .with_context(|| format!("failed to create cache directory {}", cache_dir.display()))?;
 
-        // Write component data
-        tokio::fs::write(&component_path, data)
+        // Write the whole entry beside its final name, then rename it over the
+        // old one: concurrent writers each publish a complete entry, and the
+        // last rename wins.
+        let mut entry = Vec::with_capacity(digest.len() + 1 + data.len());
+        entry.extend_from_slice(digest.as_bytes());
+        entry.push(b'\n');
+        entry.extend_from_slice(data);
+        let temp_path = cache_dir.join(format!("entry.{}.tmp", uuid::Uuid::new_v4()));
+        tokio::fs::write(&temp_path, &entry)
             .await
-            .with_context(|| {
-                format!(
-                    "failed to write component to cache at {}",
-                    component_path.display()
-                )
-            })?;
-
-        // Write digest
-        tokio::fs::write(&digest_path, digest)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to write digest to cache at {}",
-                    digest_path.display()
-                )
-            })?;
+            .with_context(|| format!("failed to write cache entry at {}", temp_path.display()))?;
+        if let Err(e) = tokio::fs::rename(&temp_path, &entry_path).await {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(e).with_context(|| {
+                format!("failed to publish cache entry at {}", entry_path.display())
+            });
+        }
 
         Ok(())
     }
@@ -1233,13 +1223,74 @@ mod tests {
         let cache_manager = CacheManager::new(temp_dir.path().to_path_buf());
 
         let reference = "localhost:5000/test:latest";
-        let component_path = cache_manager.get_component_path(reference);
-        let digest_path = cache_manager.get_digest_path(reference);
+        let entry_path = cache_manager.get_entry_path(reference);
 
-        assert!(component_path.starts_with(temp_dir.path()));
-        assert!(component_path.extension().unwrap() == "wasm");
-        assert!(digest_path.starts_with(temp_dir.path()));
-        assert!(digest_path.file_name().unwrap() == "digest");
+        assert!(entry_path.starts_with(cache_manager.get_cache_dir(reference)));
+        assert!(entry_path.file_name().unwrap() == "entry");
+    }
+
+    /// Writers racing on one reference each publish a whole entry, so every
+    /// read returns a digest with the bytes that were written with it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_cache_manager_concurrent_writes_keep_digest_with_bytes() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache_manager = std::sync::Arc::new(CacheManager::new(temp_dir.path().to_path_buf()));
+        let reference = "localhost:5000/test:moving";
+        let versions: [(&str, Vec<u8>); 2] = [
+            ("sha256:v1", vec![1u8; 256 * 1024]),
+            ("sha256:v2", vec![2u8; 256 * 1024]),
+        ];
+
+        let mut writers = tokio::task::JoinSet::new();
+        for round in 0..64 {
+            let cache_manager = std::sync::Arc::clone(&cache_manager);
+            let (digest, data) = versions[round % 2].clone();
+            writers.spawn(async move {
+                cache_manager
+                    .write_to_cache(reference, &data, digest)
+                    .await
+                    .unwrap();
+            });
+        }
+        while !writers.is_empty() {
+            if cache_manager.is_cached(reference).await {
+                let (data, digest) = cache_manager.read_cached(reference).await.unwrap();
+                let expected = versions.iter().find(|(d, _)| *d == digest).unwrap();
+                assert!(
+                    data == expected.1,
+                    "{digest} was read with another pull's bytes"
+                );
+            }
+            if let Some(joined) = writers.try_join_next() {
+                joined.unwrap();
+            } else {
+                tokio::task::yield_now().await;
+            }
+        }
+        let (data, digest) = cache_manager.read_cached(reference).await.unwrap();
+        let expected = versions.iter().find(|(d, _)| *d == digest).unwrap();
+        assert!(data == expected.1);
+        let leftovers: Vec<_> = std::fs::read_dir(cache_manager.get_cache_dir(reference))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name != "entry")
+            .collect();
+        assert!(leftovers.is_empty(), "temporary files left: {leftovers:?}");
+    }
+
+    /// A cache directory in the old layout, a `.wasm` file beside a `digest`
+    /// file, is not read: its two files may come from different pulls.
+    #[tokio::test]
+    async fn test_cache_manager_ignores_the_two_file_layout() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache_manager = CacheManager::new(temp_dir.path().to_path_buf());
+        let reference = "localhost:5000/test:v1.0.0";
+        let dir = cache_manager.get_cache_dir(reference);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("test_v1.0.0.wasm"), b"old bytes").unwrap();
+        std::fs::write(dir.join("digest"), "sha256:other").unwrap();
+
+        assert!(!cache_manager.is_cached(reference).await);
     }
 
     #[tokio::test]
