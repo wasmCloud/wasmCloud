@@ -407,6 +407,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
     let mut running = Vec::new();
     let mut next_index = 0;
     let mut per_workload_core_instances = None;
+    let mut serving = bench_tools::density::ServingEvidence::default();
     let stop = loop {
         if settings.max_components.is_some_and(|cap| started >= cap) {
             break Stop::Cap;
@@ -462,7 +463,11 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         let footprint = process_footprint().unwrap_or(0);
         let usage = engine.pool_usage();
         let in_use = usage.map_or(0, |u| u.core_instances.in_use);
-        if flavour == Flavour::Warm && per_workload_core_instances.is_none() && started > 0 {
+        if flavour == Flavour::Warm
+            && per_workload_core_instances.is_none()
+            && started > 0
+            && warm_failed == 0
+        {
             per_workload_core_instances =
                 Some(in_use.saturating_sub(baseline_in_use) / started as u64).filter(|n| *n > 0);
         }
@@ -518,13 +523,8 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
             guard.refused_starts(),
         );
         let mut step = step;
-        step.clean = refusals_now == refusals_before
-            && starts.first_error.is_none()
-            && bench_tools::density::served_sample(
-                step.requests_ok,
-                step.requests_failed,
-                warm_failed,
-            );
+        let served = serving.observe(step.requests_ok, step.requests_failed, warm_failed);
+        step.clean = refusals_now == refusals_before && starts.first_error.is_none() && served;
         refusals_before = refusals_now;
         steps.push(step);
         let so_far = Limits::from_steps(&settings, cpu.cores, baseline, &pool_baseline, &steps);
@@ -551,7 +551,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         if let Some(message) = starts.first_error {
             break Stop::StartRefused(message);
         }
-        if warm_failed > newly / 2 {
+        if warm_failed > 0 {
             break Stop::Requests(format!(
                 "{warm_failed} of {newly} new warm workloads failed"
             ));

@@ -125,7 +125,7 @@ pub enum Stop {
         footprint_bytes: u64,
         limit_bytes: u64,
     },
-    /// More than half the requests to workloads failed.
+    /// A warm-up failed, or more than half the sampled requests failed.
     Requests {
         stage: &'static str,
         failed: usize,
@@ -846,7 +846,7 @@ async fn measure_flavour(
                 example: example.clone(),
             };
         }
-        if warmup.failed * 2 > warmup.ok + warmup.failed {
+        if warmup.failed > 0 {
             break Stop::Requests {
                 stage: "warm-up",
                 failed: warmup.failed,
@@ -876,11 +876,10 @@ async fn measure_flavour(
     }
     drop(watch);
 
+    let mut serving = bench_tools::density::ServingEvidence::default();
     let served = steps
         .iter()
-        .filter(|s| {
-            bench_tools::density::served_sample(s.requests_ok, s.requests_failed, s.warmup_failed)
-        })
+        .filter(|s| serving.observe(s.requests_ok, s.requests_failed, s.warmup_failed))
         .map(|s| s.workloads)
         .max()
         .unwrap_or(0);
