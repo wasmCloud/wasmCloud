@@ -110,6 +110,16 @@ where
             .len()
     }
 
+    /// Callers sharing the request in flight for `key`, for tests.
+    #[cfg(test)]
+    pub(super) fn waiters(&self, key: &K) -> usize {
+        self.in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(key)
+            .map_or(0, |entry| entry.waiters)
+    }
+
     /// Join the identical request in flight, or start one. With
     /// `reuse_finished` false a finished result is never returned, and none is
     /// kept: nothing could reuse it.
