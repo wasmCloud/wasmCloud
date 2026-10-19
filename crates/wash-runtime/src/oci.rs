@@ -334,7 +334,9 @@ pub struct OciConfig {
     pub insecure: bool,
     /// Cache directory override. Entries are scoped to the resolved credentials;
     /// changing credentials requires fetching the artifact again. Legacy cache
-    /// entries without this scope are not reused.
+    /// entries without this scope are not reused, and [`cleanup_cache`] removes
+    /// them. Entry names are keyed with a random secret the cache creates in
+    /// `cache.key` (owner-only on Unix); removing it orphans every entry.
     pub cache_dir: Option<PathBuf>,
     /// Timeout for OCI operations (pull, push, etc.)
     /// If None, uses default timeout from oci-client
@@ -643,10 +645,14 @@ async fn pull_uncoalesced(
     trust: &TrustSnapshot,
 ) -> Result<Arc<Pulled>> {
     // Initialize cache manager
-    let cache_manager = config
-        .cache_dir
-        .as_ref()
-        .map(|dir| CacheManager::new(dir.clone(), auth));
+    let cache_manager = match &config.cache_dir {
+        Some(dir) => Some(
+            CacheManager::open(dir.clone(), auth)
+                .await
+                .context("failed to open the OCI cache")?,
+        ),
+        None => None,
+    };
     if let Some(cache_manager) = &cache_manager {
         // Check cache first
         if *pull_policy != OciPullPolicy::Always && cache_manager.is_cached(reference).await {
@@ -892,7 +898,9 @@ pub async fn push_component(
     };
     // Cache the pushed component with its digest
     if let Some(cache_dir) = config.cache_dir {
-        let cache_manager = CacheManager::new(cache_dir, &auth);
+        let cache_manager = CacheManager::open(cache_dir, &auth)
+            .await
+            .context("failed to open the OCI cache")?;
         cache_manager
             .write_to_cache(reference, component_data, &digest)
             .await
@@ -935,9 +943,7 @@ pub async fn validate_component(data: &[u8]) -> Result<()> {
 /// Cleanup cached OCI artifacts
 #[instrument(skip(cache_dir))]
 pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result<()> {
-    let cache_manager =
-        CacheManager::new(cache_dir.as_ref().to_path_buf(), &RegistryAuth::Anonymous);
-    cache_manager.expire_artifacts(age).await
+    disk_cache::expire_artifacts(cache_dir.as_ref(), age).await
 }
 
 #[cfg(test)]
@@ -1207,10 +1213,12 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let digest = format!("sha256:{}", "ab".repeat(32));
         let reference = format!("registry.invalid/ns/component@{digest}");
-        CacheManager::new(
+        CacheManager::open(
             temp_dir.path().to_path_buf(),
             &RegistryAuth::Basic("user".into(), "secret".into()),
         )
+        .await
+        .unwrap()
         .write_to_cache(&reference, b"cached bytes", &digest)
         .await
         .unwrap();
@@ -1486,11 +1494,13 @@ mod tests {
         assert!(config.insecure);
     }
 
-    #[test]
-    fn test_cache_manager_path_generation() {
+    #[tokio::test]
+    async fn test_cache_manager_path_generation() {
         let temp_dir = TempDir::new().unwrap();
         let cache_manager =
-            CacheManager::new(temp_dir.path().to_path_buf(), &RegistryAuth::Anonymous);
+            CacheManager::open(temp_dir.path().to_path_buf(), &RegistryAuth::Anonymous)
+                .await
+                .unwrap();
 
         let reference = "localhost:5000/test:latest";
         let component_path = cache_manager.get_component_path(reference);
@@ -1506,7 +1516,9 @@ mod tests {
     async fn test_cache_manager_operations() {
         let temp_dir = TempDir::new().unwrap();
         let cache_manager =
-            CacheManager::new(temp_dir.path().to_path_buf(), &RegistryAuth::Anonymous);
+            CacheManager::open(temp_dir.path().to_path_buf(), &RegistryAuth::Anonymous)
+                .await
+                .unwrap();
 
         let reference = "localhost:5000/test:v1.0.0";
         let test_data = b"test component data";
