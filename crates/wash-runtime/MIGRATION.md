@@ -1,38 +1,35 @@
 # Runtime scaling changes
 
-These changes affect embedders and operators upgrading the runtime.
+## OCI pulls and caches
 
-## OCI pulls and caching
+Disk entries now use a `v3-` layout scoped by resolved credentials, HTTP/HTTPS
+transport and the trust snapshot used to fetch or push the artifact. Older
+unscoped and credential-only entries are ignored and must be fetched again.
+Removing a CA or requiring HTTPS prevents reuse of an incompatible disk entry,
+including a reference pinned by digest. `cleanup_cache` removes the old
+`<sanitized reference>_<hash>` entries; the washlet calls it periodically.
+`wash dev` and `wash oci` do not clean their cache, so remove old directories
+under `<wash cache dir>/oci` manually when no longer needed.
 
-- OCI disk entries are scoped by the resolved credentials. Existing unscoped
-  entries are ignored and will need to be fetched again. `cleanup_cache` (the
-  washlet's periodic cache cleanup) removes them; `wash dev` and `wash oci`
-  never clean their cache, so delete the old `<sanitized reference>_<hash>`
-  directories under `<wash cache dir>/oci` by hand.
-- Entry names are keyed with a random secret the cache creates once as
-  `cache.key` in the cache root, readable only by its owner on Unix. Keep it
-  with the cache: removing it, or copying a cache without it, means every
-  entry is fetched again.
-- `Never` no longer contacts the registry on a cache hit, so it now works
-  offline, but only within the same credential context. An air-gapped host
-  upgrading with a pre-populated cache fails every `Never` start until it has
-  re-pulled once with `IfNotPresent`, under the credentials it will use,
-  before switching back to `Never`.
-- A credential rotation (a new image pull secret, a refreshed ECR token) is a
-  new credential context: images are fetched again after each rotation, and
-  `Never` workloads that restart after it fail until they are re-pulled.
-  Entries for the old credentials stay on disk until age-based cleanup
-  removes them.
-- Concurrent pulls of the same reference with the same credentials and
-  settings are folded into one. A finished `IfNotPresent` or `Never` result
-  answers identical requests for 5 seconds without checking the tag's digest
-  again. `Always` resolves the registry afresh after any prior pull has
-  completed; only pulls genuinely in flight together are coalesced.
-- Changes to `SSL_CERT_FILE` / `SSL_CERT_DIR` and their bundles apply to
-  subsequent pulls and invalidate client and finished-result reuse.
-- Docker credential helper results are reused for 30 seconds per registry. A
-  helper lookup that takes longer than 30 seconds fails, and the pull proceeds
-  anonymously.
+Entry names are keyed with a random secret created once as `cache.key` in the
+cache root, readable only by its owner on Unix. Keep it with the cache: removing
+it, or copying a cache without it, orphans its entries. A credential rotation is
+a new scope: fetch the image under the new credentials before using `Never`.
+Entries for the old credentials remain until age-based cleanup removes them.
 
-The OCI implementation separates disk-cache policy, credential resolution,
-client/trust snapshots, and coalescing into `src/oci/`.
+`Never` remains offline: it returns a cached artifact only inside the same
+credential, transport and trust scope, and otherwise returns a cache-miss error.
+Populate that scope before switching to `Never`. It cannot check whether the
+registry has subsequently revoked credentials.
+
+`Always` resolves the registry afresh after a prior pull has completed;
+concurrent identical requests can share an active pull. Other policies reuse a
+successful identical result for five seconds, so tag updates may take that long
+to appear. Failed results are retried by the next caller.
+
+Changes to `SSL_CERT_FILE`, `SSL_CERT_DIR` and their loaded certificate contents
+apply to subsequent pulls, separating client, completed-result and disk reuse.
+Explicit credentials bypass Docker credential-helper caching; successful helper
+results, including anonymous resolution, can be reused for 30 seconds. Helper
+errors are not cached. A helper lookup exceeding 30 seconds fails and the pull
+proceeds anonymously, as for other helper failures.

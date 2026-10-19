@@ -29,6 +29,9 @@ use tokio_rustls::rustls::ServerConfig;
 use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use wash_runtime::oci::{OciConfig, OciPullPolicy, pull_component, set_extra_ca_certificates};
 
+#[path = "common/oci_registry.rs"]
+mod cache_registry;
+
 struct Ca(CertifiedIssuer<'static, KeyPair>);
 
 impl Ca {
@@ -233,6 +236,55 @@ async fn oci_pulls_trust_ssl_cert_env_and_ca_paths() -> Result<()> {
     assert_untrusted(
         pull_reaches(&registry_a, false).await,
         "a CA rotated out of SSL_CERT_FILE is no longer trusted",
+    );
+
+    // Populate a pinned disk entry under CA A, then remove that CA. Both the
+    // completed-result cache and the disk cache must honor the new snapshot.
+    let cached_registry =
+        cache_registry::Registry::start_with_tls(Some(ca_a.server_config())).await;
+    let cache = TempDir::new()?;
+    let config = OciConfig {
+        credentials: Some(("user".into(), "secret".into())),
+        cache_dir: Some(cache.path().to_path_buf()),
+        timeout: Some(Duration::from_secs(5)),
+        ..Default::default()
+    };
+    let cached_reference = cached_registry.reference();
+    write(&bundle, &ca_a.pem());
+    pull_component(
+        &cached_reference,
+        config.clone(),
+        OciPullPolicy::IfNotPresent,
+    )
+    .await?;
+    let fetched = cached_registry.requests.load(Ordering::SeqCst);
+    write(&bundle, &ca_b.pem());
+    assert!(
+        pull_component(&cached_reference, config.clone(), OciPullPolicy::Never)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        cached_registry.requests.load(Ordering::SeqCst),
+        fetched,
+        "Never stays offline on a trust-scope miss"
+    );
+    assert_untrusted(
+        pull_component(
+            &cached_reference,
+            config.clone(),
+            OciPullPolicy::IfNotPresent,
+        )
+        .await
+        .map(|_| true),
+        "a pinned disk entry cannot outlive the CA that authorized its fetch",
+    );
+    write(&bundle, &ca_a.pem());
+    pull_component(&cached_reference, config, OciPullPolicy::Never).await?;
+    assert_eq!(
+        cached_registry.requests.load(Ordering::SeqCst),
+        fetched,
+        "Never reuses the matching trust scope offline"
     );
 
     // An `insecure` pull keeps speaking plain HTTP with extra roots set.
