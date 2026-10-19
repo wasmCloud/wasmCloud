@@ -360,8 +360,8 @@ struct Starter<'a> {
     journal: &'a crate::lifecycle::Journal,
 }
 
-fn host_header(flavour: Flavour, index: usize) -> String {
-    format!("w{index}.{}.scale.test", flavour.name())
+fn host_header(run_id: &str, flavour: Flavour, index: usize) -> String {
+    format!("w{index}.{}.{run_id}.scale.test", flavour.name())
 }
 
 fn workload_id(run_id: &str, flavour: Flavour, index: usize) -> String {
@@ -386,7 +386,7 @@ impl Starter<'_> {
             &format!("w{index}"),
             self.image,
             self.flavour.pool_size(),
-            &host_header(self.flavour, index),
+            &host_header(self.run_id, self.flavour, index),
         );
         self.journal.submitted(&id);
         let began = Instant::now();
@@ -548,6 +548,7 @@ async fn drain_response(mut response: reqwest::Response) -> Result<(), String> {
 async fn requests(
     http: &reqwest::Client,
     url: &str,
+    run_id: &str,
     flavour: Flavour,
     indices: Vec<usize>,
     concurrency: usize,
@@ -557,7 +558,7 @@ async fn requests(
             let began = Instant::now();
             let response = http
                 .get(url)
-                .header(reqwest::header::HOST, host_header(flavour, index))
+                .header(reqwest::header::HOST, host_header(run_id, flavour, index))
                 .send()
                 .await
                 .map_err(|e| format!("{e}"))?;
@@ -738,6 +739,7 @@ async fn measure_flavour(
             requests(
                 &http,
                 &url,
+                run.run_id,
                 flavour,
                 batch.started.clone(),
                 settings.request_concurrency,
@@ -757,6 +759,7 @@ async fn measure_flavour(
         let answers = requests(
             &http,
             &url,
+            run.run_id,
             flavour,
             sample.clone(),
             settings.request_concurrency,
@@ -959,6 +962,13 @@ mod tests {
                     header.push(socket.read_u8().await.unwrap());
                     assert!(header.len() <= 4096);
                 }
+                assert!(
+                    String::from_utf8(header)
+                        .unwrap()
+                        .to_ascii_lowercase()
+                        .lines()
+                        .any(|line| line == "host: w0.warm.response-test.scale.test")
+                );
                 let head = format!(
                     "HTTP/1.1 {status}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
                 );
@@ -980,7 +990,7 @@ mod tests {
                 .timeout(Duration::from_secs(5))
                 .build()
                 .unwrap();
-            let answers = requests(&client, &url, Flavour::Warm, vec![0], 1).await;
+            let answers = requests(&client, &url, "response-test", Flavour::Warm, vec![0], 1).await;
             server.await.unwrap();
             assert_eq!(answers.ok, usize::from(success));
             assert_eq!(answers.failed, usize::from(!success));
@@ -1081,7 +1091,7 @@ mod tests {
     #[test]
     fn names_are_rfc_1123() {
         for flavour in [Flavour::Warm, Flavour::ScaleToZero] {
-            let name = host_header(flavour, 12345);
+            let name = host_header("0123456789abcdef0123456789abcdef", flavour, usize::MAX);
             assert!(name.len() <= 253);
             for label in name.split('.') {
                 assert!(!label.is_empty() && label.len() <= 63);
@@ -1092,6 +1102,22 @@ mod tests {
                 );
                 assert!(!label.starts_with('-') && !label.ends_with('-'));
             }
+        }
+    }
+
+    #[test]
+    fn simultaneous_runs_have_distinct_workloads_and_http_routes() {
+        let first = "0123456789abcdef0123456789abcdef";
+        let second = "fedcba9876543210fedcba9876543210";
+        for flavour in [Flavour::Warm, Flavour::ScaleToZero] {
+            assert_ne!(
+                workload_id(first, flavour, 0),
+                workload_id(second, flavour, 0)
+            );
+            assert_ne!(
+                host_header(first, flavour, 0),
+                host_header(second, flavour, 0)
+            );
         }
     }
 }

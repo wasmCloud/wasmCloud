@@ -36,6 +36,7 @@ sysinfo = { workspace = true }
 tar = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
+uuid = { workspace = true, features = ["v4"] }
 wit-component = { workspace = true }
 wasi-preview1-component-adapter-provider = "46"
 

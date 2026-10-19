@@ -233,6 +233,10 @@ fn delta(before: Option<RegistryCounts>, after: Option<RegistryCounts>) -> Optio
     })
 }
 
+fn new_run_id() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
 async fn run(args: Args, cancel: &tokio_util::sync::CancellationToken) -> Result<u8> {
     let loud = args.report;
     use lifecycle::cancellable;
@@ -258,7 +262,7 @@ async fn run(args: Args, cancel: &tokio_util::sync::CancellationToken) -> Result
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    let run_id = format!("{:x}", now.as_millis());
+    let run_id = new_run_id();
     let workspace = provision::workspace_dir();
     let cache = args
         .cache_dir
@@ -267,7 +271,7 @@ async fn run(args: Args, cancel: &tokio_util::sync::CancellationToken) -> Result
     let run_dir = args
         .run_dir
         .clone()
-        .unwrap_or_else(|| cache.join("runs").join(now.as_secs().to_string()));
+        .unwrap_or_else(|| cache.join("runs").join(&run_id));
     std::fs::create_dir_all(&run_dir).with_context(|| format!("creating {}", run_dir.display()))?;
 
     // NATS: an existing server, or one of our own.
@@ -442,6 +446,21 @@ async fn run(args: Args, cancel: &tokio_util::sync::CancellationToken) -> Result
 #[cfg(test)]
 mod settings_tests {
     use super::*;
+
+    #[test]
+    fn run_ids_do_not_depend_on_clock_resolution() {
+        let first = new_run_id();
+        let second = new_run_id();
+        assert_ne!(first, second);
+        for id in [first, second] {
+            assert_eq!(id.len(), 32);
+            assert!(id.bytes().all(|b| b.is_ascii_hexdigit()));
+            assert_eq!(
+                uuid::Uuid::parse_str(&id).unwrap().get_version(),
+                Some(uuid::Version::Random)
+            );
+        }
+    }
 
     #[test]
     fn an_existing_host_id_cannot_be_mistaken_for_a_spawned_host() -> Result<()> {

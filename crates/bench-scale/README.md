@@ -113,6 +113,8 @@ and the `SSL_CERT_*` variables (on Windows also `SystemRoot`, `SystemDrive`, `wi
 `TEMP`, `TMP`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `PATHEXT` and `ComSpec`),
 with `RUST_LOG` from `--host-log` (default `warn`).
 Its stdout and stderr go to `host-<flavour>.log` in the run directory.
+Each run has a random UUID in its workload IDs, HTTP hostnames, and default run
+directory, so concurrent runs do not share routes or overwrite each other's logs.
 
 All child processes are killed when the bench exits, errors, panics or is interrupted.
 

@@ -442,6 +442,7 @@ dependencies = [
  "tar",
  "tokio",
  "tokio-util",
+ "uuid",
  "wasi-preview1-component-adapter-provider",
  "wit-component 0.259.0",
 ]
