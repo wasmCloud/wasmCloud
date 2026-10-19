@@ -11,6 +11,10 @@ until measured. The `WASH_SCALE_REPORT_JSON` output writes the unknowns as
 `null`, the CPU capacity as `"idle-unbounded"`, and each step's warm-up
 failures beside its request failures.
 
+If a baseline or step process-footprint reading is unavailable, the runtime
+benchmark stops with a measurement error instead of recording 0 B or making a
+capacity claim from it.
+
 Warm runs need the P3 fixture. `WASH_SCALE_FIXTURE=p2` runs scale-to-zero
 only, because a P2 HTTP instance cannot stay warm.
 

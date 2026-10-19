@@ -39,6 +39,24 @@ pub async fn cancellable<T>(
     }
 }
 
+/// Signal delivery cancels work but preserves the future that owns cleanup.
+pub async fn until_shutdown<T>(
+    cancel: &CancellationToken,
+    shutdown: impl Future<Output = std::io::Result<()>>,
+    work: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    tokio::pin!(work);
+    tokio::select! {
+        result = &mut work => result,
+        signal = shutdown => {
+            cancel.cancel();
+            let result = work.await;
+            signal.map_err(|e| anyhow::anyhow!("waiting for shutdown signal: {e}"))?;
+            result
+        }
+    }
+}
+
 pub trait Control {
     async fn stop(&self, id: &str) -> Result<WorkloadState>;
     async fn status(&self, id: &str) -> Result<WorkloadState>;
@@ -172,6 +190,36 @@ mod tests {
                 WorkloadState::NotFound
             })
         }
+    }
+
+    #[tokio::test]
+    async fn shutdown_signal_waits_for_attached_cleanup() {
+        let host = Host {
+            running: AtomicBool::new(false),
+            fail_stops: AtomicUsize::new(0),
+        };
+        let journal = Journal::default();
+        let cancel = CancellationToken::new();
+        let (started, when_started) = tokio::sync::oneshot::channel();
+        let result: Result<()> = until_shutdown(
+            &cancel,
+            async {
+                when_started.await.unwrap();
+                Ok(())
+            },
+            with_cleanup(&cancel, &host, &journal, true, 1, async {
+                journal.submitted("interrupted");
+                host.running.store(true, Ordering::SeqCst);
+                started.send(()).unwrap();
+                std::future::pending().await
+            }),
+        )
+        .await;
+        assert_eq!(result.unwrap_err().to_string(), "interrupted");
+        assert!(
+            !host.running.load(Ordering::SeqCst),
+            "cleanup must finish before returning"
+        );
     }
 
     #[tokio::test(start_paused = true)]

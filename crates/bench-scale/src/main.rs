@@ -49,16 +49,8 @@ fn main() -> ExitCode {
     };
     let result = runtime.block_on(async {
         let cancel = tokio_util::sync::CancellationToken::new();
-        let run = run(args, &cancel);
-        tokio::pin!(run);
-        tokio::select! {
-            result = &mut run => result,
-            _ = tokio::signal::ctrl_c() => {
-                cancel.cancel();
-                // The run owns cleanup. Do not drop it when attached workloads exist.
-                run.await
-            },
-        }
+        let shutdown = shutdown_signal()?;
+        lifecycle::until_shutdown(&cancel, shutdown, run(args, &cancel)).await
     });
     match result {
         Ok(code) => ExitCode::from(code),
@@ -69,7 +61,25 @@ fn main() -> ExitCode {
     }
 }
 
+fn shutdown_signal() -> std::io::Result<impl std::future::Future<Output = std::io::Result<()>>> {
+    // Register SIGTERM before starting any work: job runners and containers use it.
+    #[cfg(unix)]
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    Ok(async move {
+        #[cfg(unix)]
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+        #[cfg(not(unix))]
+        tokio::signal::ctrl_c().await
+    })
+}
+
 fn resolve_settings(args: &Args, machine: &Machine) -> Result<Settings> {
+    if args.host_id.is_some() && !args.host_nats_only {
+        bail!("--host-id selects an existing host; use it with --host-nats-only");
+    }
     if args.image.is_some() && args.flavour != FlavourArg::ScaleToZero {
         bail!(
             "warm runs must verify the component's P3 HTTP export; use --wasm instead of --image, or select --flavour scale-to-zero"
@@ -158,17 +168,9 @@ async fn prepare_target(plan: &HostPlan<'_>, flavour: Flavour) -> Result<Target>
                 &host_name,
                 &args.host_args,
             );
+            let pick = host::spawned_host_pick(&command, args.nats_url.is_some())?;
             let log = plan.run_dir.join(format!("host-{}.log", flavour.name()));
             let mut guard = host::spawn_host(binary, &command, &args.host_log, &log)?;
-            let pick = match (&args.host_id, &command.host_name, args.nats_url.is_some()) {
-                (Some(id), _, _) => Pick::Id(id),
-                (None, Some(name), _) => Pick::Name(name),
-                // A NATS of our own has no other host on it.
-                (None, None, false) => Pick::Any,
-                (None, None, true) => bail!(
-                    "on a shared NATS, a host without --host-name needs --host-id to be told apart"
-                ),
-            };
             let heartbeat = heartbeats
                 .wait(pick, timeout, Some((&mut guard, &log)))
                 .await?;
@@ -231,6 +233,10 @@ fn delta(before: Option<RegistryCounts>, after: Option<RegistryCounts>) -> Optio
     })
 }
 
+fn new_run_id() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
 async fn run(args: Args, cancel: &tokio_util::sync::CancellationToken) -> Result<u8> {
     let loud = args.report;
     use lifecycle::cancellable;
@@ -256,7 +262,7 @@ async fn run(args: Args, cancel: &tokio_util::sync::CancellationToken) -> Result
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    let run_id = format!("{:x}", now.as_millis());
+    let run_id = new_run_id();
     let workspace = provision::workspace_dir();
     let cache = args
         .cache_dir
@@ -265,7 +271,7 @@ async fn run(args: Args, cancel: &tokio_util::sync::CancellationToken) -> Result
     let run_dir = args
         .run_dir
         .clone()
-        .unwrap_or_else(|| cache.join("runs").join(now.as_secs().to_string()));
+        .unwrap_or_else(|| cache.join("runs").join(&run_id));
     std::fs::create_dir_all(&run_dir).with_context(|| format!("creating {}", run_dir.display()))?;
 
     // NATS: an existing server, or one of our own.
@@ -440,6 +446,45 @@ async fn run(args: Args, cancel: &tokio_util::sync::CancellationToken) -> Result
 #[cfg(test)]
 mod settings_tests {
     use super::*;
+
+    #[test]
+    fn run_ids_do_not_depend_on_clock_resolution() {
+        let first = new_run_id();
+        let second = new_run_id();
+        assert_ne!(first, second);
+        for id in [first, second] {
+            assert_eq!(id.len(), 32);
+            assert!(id.bytes().all(|b| b.is_ascii_hexdigit()));
+            assert_eq!(
+                uuid::Uuid::parse_str(&id).unwrap().get_version(),
+                Some(uuid::Version::Random)
+            );
+        }
+    }
+
+    #[test]
+    fn an_existing_host_id_cannot_be_mistaken_for_a_spawned_host() -> Result<()> {
+        let machine = Machine::detect();
+        let args = Args::try_parse_from([
+            "bench-scale",
+            "--nats-url",
+            "nats://shared:4222",
+            "--host-id",
+            "existing",
+        ])?;
+        assert!(
+            resolve_settings(&args, &machine)
+                .unwrap_err()
+                .to_string()
+                .contains("--host-nats-only")
+        );
+        let attached = Args {
+            host_nats_only: true,
+            ..args
+        };
+        resolve_settings(&attached, &machine)?;
+        Ok(())
+    }
 
     #[test]
     fn zero_samples_are_rejected_before_any_host_is_started() -> Result<()> {

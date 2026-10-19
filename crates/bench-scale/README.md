@@ -50,8 +50,11 @@ and the theoretical limit so far.
 
 The **theoretical limit** is `(memory limit − baseline footprint) / bytes per workload`,
 and for warm also `core instances / core instances per workload` when that is known
-(from `--core-instances-per-workload`,
-or inferred from a "maximum concurrent limit of N for core instances" refusal).
+(from `--core-instances-per-workload`). A pool refusal can report the total
+slot count, but cannot establish how many slots each fully warmed workload needs.
+Only steps with successful starts, warm-ups, and a positive error-free request
+sample contribute estimates. A failed final step leaves the last verified
+estimate and automatic cap unchanged; its own estimate fields are unknown.
 
 A flavour stops at the first of:
 
@@ -113,6 +116,8 @@ and the `SSL_CERT_*` variables (on Windows also `SystemRoot`, `SystemDrive`, `wi
 `TEMP`, `TMP`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `PATHEXT` and `ComSpec`),
 with `RUST_LOG` from `--host-log` (default `warn`).
 Its stdout and stderr go to `host-<flavour>.log` in the run directory.
+Each run has a random UUID in its workload IDs, HTTP hostnames, and default run
+directory, so concurrent runs do not share routes or overwrite each other's logs.
 
 All child processes are killed when the bench exits, errors, panics or is interrupted.
 
@@ -136,7 +141,10 @@ cargo xtask bench-scale --image registry.example.com/team/http-handler:1.0.0 --f
 ```
 
 Raw placeholders are `{nats_url}`, `{memory_limit}` and `{guest_memory}` (bytes),
-`{core_instances}` and `{http_addr}`.
+`{core_instances}`, `{http_addr}` and `{host_name}`.
+On shared NATS, a spawned host must advertise the generated `{host_name}` in its
+heartbeat; wash gets it through `--host-name`, and raw hosts must receive it in a
+`--host-arg`. `--host-id` selects an existing host only with `--host-nats-only`.
 The host must publish heartbeats on `runtime.operator.heartbeat.<id>`,
 answer `runtime.host.<id>.{heartbeat,workload.start,workload.status,workload.stop}`,
 and report its HTTP port in the heartbeat (or pass `--host-http`).
@@ -162,7 +170,7 @@ except the repeatable `--host-arg`.
 | `--request-timeout` | `30` | seconds before a request counts as failed |
 | `--spin-down-wait` | `3000` | scale-to-zero: ms to wait for the footprint to settle |
 | `--core-instances` | derived | pool slots passed to the host; default min(usable address space / 2 / (4 GiB + 32 MiB), `vm.max_map_count` / 5) |
-| `--core-instances-per-workload` | inferred | for the pool's share of the warm theoretical limit |
+| `--core-instances-per-workload` | unknown | for the pool's share of the warm theoretical limit |
 | `--min-components` | `1` | exit 2 if a flavour served fewer |
 | `--report` | off (`BENCH_SCALE_REPORT=1`) | print the human report; otherwise the run is silent |
 | `--json <path>` | none | write full results as JSON, report or not |
@@ -235,7 +243,7 @@ Unmeasured values are `null` there.
 - Attached to a running host (`--host-nats-only`), memory is unknown without `--host-pid`,
   and the run then needs `--max-components` to bound it.
   Every submitted workload ID is journaled, including unanswered starts. Normal
-  completion, errors, and Ctrl-C all run a cleanup phase with a 60-second budget.
+  completion, errors, Ctrl-C, and Unix SIGTERM all run a cleanup phase with a 60-second budget.
   Stops are retried and removal is checked. Unconfirmed IDs are printed as an
   error and the next flavour is not started. An unanswered start that remains
   absent is still reported as uncertain because it could be queued at the host.
