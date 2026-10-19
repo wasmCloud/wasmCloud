@@ -137,3 +137,35 @@ async fn a_plain_http_cache_hit_cannot_satisfy_an_https_pull() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn a_pinned_disk_hit_still_validates_the_registry() {
+    wash_runtime::init_crypto();
+    let registry = Registry::start().await;
+    let cache = tempfile::tempdir().unwrap();
+    let config = OciConfig {
+        credentials: Some(("user".into(), "secret".into())),
+        cache_dir: Some(cache.path().to_owned()),
+        insecure: true,
+        timeout: Some(Duration::from_secs(5)),
+    };
+    let reference = registry.reference();
+    // Always has a different completed-result key, so the subsequent
+    // IfNotPresent request must inspect the persistent entry.
+    pull_component(&reference, config.clone(), OciPullPolicy::Always)
+        .await
+        .unwrap();
+    let fetched = registry.requests.load(Ordering::SeqCst);
+    registry.unavailable.store(true, Ordering::SeqCst);
+    pull_component(&reference, config.clone(), OciPullPolicy::Never)
+        .await
+        .unwrap();
+    assert_eq!(registry.requests.load(Ordering::SeqCst), fetched);
+    assert!(
+        pull_component(&reference, config, OciPullPolicy::IfNotPresent)
+            .await
+            .is_err(),
+        "a pinned disk hit cannot bypass the current registry check"
+    );
+    assert!(registry.requests.load(Ordering::SeqCst) > fetched);
+}

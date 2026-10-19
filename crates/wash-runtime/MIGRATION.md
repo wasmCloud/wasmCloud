@@ -3,9 +3,10 @@
 ## OCI pulls and caches
 
 Disk entries now use a `v3-` layout scoped by resolved credentials, HTTP/HTTPS
-transport and the trust snapshot used to fetch or push the artifact. Older
-unscoped and credential-only entries are ignored and must be fetched again.
-Removing a CA or requiring HTTPS prevents reuse of an incompatible disk entry,
+transport and the configured extra-root snapshot used to fetch or push the
+artifact. Older unscoped and credential-only entries are ignored and must be
+fetched again. Removing an extra CA or requiring HTTPS prevents reuse of an
+incompatible disk entry,
 including a reference pinned by digest. `cleanup_cache` removes the old
 `<sanitized reference>_<hash>` entries; the washlet calls it periodically.
 `wash dev` and `wash oci` do not clean their cache, so remove old directories
@@ -20,7 +21,12 @@ Entries for the old credentials remain until age-based cleanup removes them.
 `Never` remains offline: it returns a cached artifact only inside the same
 credential, transport and trust scope, and otherwise returns a cache-miss error.
 Populate that scope before switching to `Never`. It cannot check whether the
-registry has subsequently revoked credentials.
+registry has subsequently revoked credentials or whether native OS trust policy
+has changed; the disk scope cannot represent every platform trust decision.
+
+`IfNotPresent` revalidates a disk entry's manifest digest with the registry,
+including references pinned by digest. This applies the caller's TLS and registry
+authorization policy instead of treating persistent bytes as fresh authorization.
 
 `Always` resolves the registry afresh after a prior pull has completed;
 concurrent identical requests can share an active pull. Other policies reuse a
@@ -39,3 +45,9 @@ Each entry serves one registry/repository and security scope, including its
 authentication-token state. Tags and digests in that repository share a client;
 different repositories do not. Active callers may hold an evicted client until
 their requests finish.
+
+Native OS trust-store changes are not part of the extra-root snapshot. In a
+running process, successful-result reuse may delay revalidation by five seconds,
+and a reused client's platform verifier may retain its native roots for up to
+five minutes. Restart the process to apply native trust-store changes immediately;
+requests already in flight can continue with the client they acquired.
