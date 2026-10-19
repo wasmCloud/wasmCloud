@@ -1,7 +1,8 @@
 use super::{AuthId, TrustId};
 use anyhow::{Context, Result, bail};
+use hmac::{Hmac, Mac};
 use oci_client::secrets::RegistryAuth;
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use std::{
     io::Write as _,
     path::{Path, PathBuf},
@@ -20,7 +21,8 @@ pub(super) struct CacheManager {
     auth: AuthId,
     insecure: bool,
     trust: TrustId,
-    key: [u8; 32],
+    /// HMAC-SHA256 keyed with the cache root's secret, cloned per entry name.
+    mac: Hmac<Sha256>,
 }
 
 impl CacheManager {
@@ -40,12 +42,13 @@ impl CacheManager {
         })
         .await
         .context("OCI cache key task failed")??;
+        let mac = Hmac::<Sha256>::new_from_slice(&key).context("invalid OCI cache key")?;
         Ok(Self {
             cache_dir,
             auth: AuthId::of(auth),
             insecure,
             trust,
-            key,
+            mac,
         })
     }
 
@@ -55,16 +58,13 @@ impl CacheManager {
     /// from the credentials, and an unkeyed hash of them would let anyone who
     /// can list the directory test password guesses offline.
     pub(super) fn get_cache_dir(&self, reference: &str) -> PathBuf {
-        let hash = hmac_sha256(
-            &self.key,
-            &[
-                b"wash-oci-cache-v3\0".as_slice(),
-                self.auth.0.as_slice(),
-                &[u8::from(self.insecure)],
-                self.trust.0.as_slice(),
-                reference.as_bytes(),
-            ],
-        );
+        let mut mac = self.mac.clone();
+        mac.update(b"wash-oci-cache-v3\0");
+        mac.update(&self.auth.0);
+        mac.update(&[u8::from(self.insecure)]);
+        mac.update(&self.trust.0);
+        mac.update(reference.as_bytes());
+        let hash = mac.finalize().into_bytes();
         self.cache_dir.join(format!("{ENTRY_PREFIX}{hash:x}"))
     }
 
@@ -277,38 +277,9 @@ fn parse_key(path: &Path, bytes: &[u8]) -> Result<[u8; 32]> {
     }
 }
 
-/// HMAC-SHA256 (RFC 2104) of `parts`, concatenated, under a 32-byte key.
-fn hmac_sha256(key: &[u8; 32], parts: &[&[u8]]) -> sha2::digest::Output<Sha256> {
-    let mut inner_pad = [0x36u8; 64];
-    let mut outer_pad = [0x5cu8; 64];
-    for ((inner, outer), byte) in inner_pad.iter_mut().zip(outer_pad.iter_mut()).zip(key) {
-        *inner ^= byte;
-        *outer ^= byte;
-    }
-    let mut inner = Sha256::new();
-    inner.update(inner_pad);
-    for part in parts {
-        inner.update(part);
-    }
-    let mut outer = Sha256::new();
-    outer.update(outer_pad);
-    outer.update(inner.finalize());
-    outer.finalize()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// RFC 4231 test case 1's message under a 32-byte key, as
-    /// `openssl dgst -sha256 -mac HMAC -macopt hexkey:0b...` computes it.
-    #[test]
-    fn hmac_matches_a_known_answer() {
-        let key = [0x0bu8; 32];
-        let mac = hmac_sha256(&key, &[b"Hi ".as_slice(), b"There".as_slice()]);
-        assert_eq!(format!("{mac:x}"), KNOWN_MAC);
-    }
-    const KNOWN_MAC: &str = "198a607eb44bfbc69903a0f1cf2bbdc5ba0aa3f3d9ae3c1c7a3b1696a0b68cf7";
 
     #[tokio::test]
     async fn the_key_is_created_once_and_reused() {

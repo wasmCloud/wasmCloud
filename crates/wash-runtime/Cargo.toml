@@ -33,7 +33,7 @@ workspace = true
 
 [features]
 default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel", "wasi-webgpu", "wasm_component_model_implements", "wasmcloud-nats"]
-oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:sha2", "dep:wit-component"]
+oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:hmac", "dep:sha2", "dep:wit-component"]
 wasi-otel = []
 washlet = ["oci"]
 wasi-config = []
@@ -72,6 +72,7 @@ chrono = { workspace = true }
 etcetera = { workspace = true }
 fastrand = { workspace = true }
 futures = { workspace = true }
+hmac = { workspace = true, optional = true }
 hostname = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
