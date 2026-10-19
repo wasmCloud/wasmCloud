@@ -238,7 +238,7 @@ Unmeasured values are `null` there.
 - Attached to a running host (`--host-nats-only`), memory is unknown without `--host-pid`,
   and the run then needs `--max-components` to bound it.
   Every submitted workload ID is journaled, including unanswered starts. Normal
-  completion, errors, and Ctrl-C all run a cleanup phase with a 60-second budget.
+  completion, errors, Ctrl-C, and Unix SIGTERM all run a cleanup phase with a 60-second budget.
   Stops are retried and removal is checked. Unconfirmed IDs are printed as an
   error and the next flavour is not started. An unanswered start that remains
   absent is still reported as uncertain because it could be queued at the host.

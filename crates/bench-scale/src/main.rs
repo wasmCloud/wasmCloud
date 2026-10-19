@@ -49,16 +49,8 @@ fn main() -> ExitCode {
     };
     let result = runtime.block_on(async {
         let cancel = tokio_util::sync::CancellationToken::new();
-        let run = run(args, &cancel);
-        tokio::pin!(run);
-        tokio::select! {
-            result = &mut run => result,
-            _ = tokio::signal::ctrl_c() => {
-                cancel.cancel();
-                // The run owns cleanup. Do not drop it when attached workloads exist.
-                run.await
-            },
-        }
+        let shutdown = shutdown_signal()?;
+        lifecycle::until_shutdown(&cancel, shutdown, run(args, &cancel)).await
     });
     match result {
         Ok(code) => ExitCode::from(code),
@@ -67,6 +59,21 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn shutdown_signal() -> std::io::Result<impl std::future::Future<Output = std::io::Result<()>>> {
+    // Register SIGTERM before starting any work: job runners and containers use it.
+    #[cfg(unix)]
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    Ok(async move {
+        #[cfg(unix)]
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+        #[cfg(not(unix))]
+        tokio::signal::ctrl_c().await
+    })
 }
 
 fn resolve_settings(args: &Args, machine: &Machine) -> Result<Settings> {
