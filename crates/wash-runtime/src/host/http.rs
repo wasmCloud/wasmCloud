@@ -2616,18 +2616,25 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
             // A wasip2 incoming-handler instance serves one request, so HTTP
             // never reuses one; asking for a pool there would otherwise look
             // like it worked while every request still paid for a cold store.
-            if pool.is_some()
-                && !targets_p3
-                && let Some(suppressed) = P2_POOL_WARN.admit()
-            {
-                warn!(
-                    workload_id = resolved_handle.id(),
-                    component_id,
-                    suppressed,
-                    "poolSize is set on a wasip2 HTTP handler, which serves one request per \
-                     instance: HTTP requests to it are not pooled. Build it for wasip3 to keep \
-                     instances warm"
-                );
+            // Rate-limited at `warn` across workloads, and logged at `debug`
+            // when suppressed, so every workload that does this is named.
+            if pool.is_some() && !targets_p3 {
+                match P2_POOL_WARN.admit() {
+                    Some(suppressed) => warn!(
+                        workload_id = resolved_handle.id(),
+                        component_id,
+                        suppressed,
+                        "poolSize is set on a wasip2 HTTP handler, which serves one request per \
+                         instance: HTTP requests to it are not pooled. Build it for wasip3 to \
+                         keep instances warm"
+                    ),
+                    None => debug!(
+                        workload_id = resolved_handle.id(),
+                        component_id,
+                        "poolSize is set on a wasip2 HTTP handler, which serves one request per \
+                         instance: HTTP requests to it are not pooled (warning rate-limited)"
+                    ),
+                }
             }
             let handle = ComponentHandle {
                 workload: resolved_handle.clone(),
@@ -3259,7 +3266,8 @@ fn ended_in_timeout(e: &(dyn std::error::Error + 'static)) -> bool {
 const INGRESS_WARN_INTERVAL: Duration = Duration::from_secs(10);
 static INVALID_AUTHORITY_WARN: RateLimitedWarn = RateLimitedWarn::new(INGRESS_WARN_INTERVAL);
 static ROUTE_FAILURE_WARN: RateLimitedWarn = RateLimitedWarn::new(INGRESS_WARN_INTERVAL);
-/// `poolSize` on a wasip2 HTTP handler, once per interval however many bind.
+/// `poolSize` on a wasip2 HTTP handler at `warn`, once per interval however
+/// many bind; the rest are logged at `debug`.
 static P2_POOL_WARN: RateLimitedWarn = RateLimitedWarn::new(INGRESS_WARN_INTERVAL);
 static UNBOUND_HOST_WARN: RateLimitedWarn = RateLimitedWarn::new(INGRESS_WARN_INTERVAL);
 
