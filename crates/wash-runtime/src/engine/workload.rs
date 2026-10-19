@@ -4886,7 +4886,6 @@ mod tests {
                 .get_typed_func::<(), (u32,)>(&mut store, "call")
                 .unwrap();
             let (value,) = func.call(&mut store, ()).unwrap();
-            func.post_return(&mut store).unwrap();
             value
         };
         assert_eq!(call(&a), 1);
