@@ -46,11 +46,11 @@ pub(super) async fn pull_client(
 const CLIENT_REUSE: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) struct TrustId([u8; 32]);
+pub(super) struct TrustId(pub(super) [u8; 32]);
 
 pub(super) struct TrustSnapshot {
     pub(super) id: TrustId,
-    roots: Vec<Certificate>,
+    pub(super) roots: Vec<Certificate>,
 }
 
 impl TrustSnapshot {

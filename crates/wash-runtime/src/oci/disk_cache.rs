@@ -1,4 +1,4 @@
-use super::AuthId;
+use super::{AuthId, TrustId};
 use anyhow::{Context, Result, bail};
 use oci_client::secrets::RegistryAuth;
 use sha2::{Digest, Sha256};
@@ -12,22 +12,28 @@ use tracing::debug;
 /// The random secret entry names are keyed with, in the cache root.
 const KEY_FILE: &str = "cache.key";
 /// Prefix of every entry this version reads and writes.
-const ENTRY_PREFIX: &str = "v2-";
+const ENTRY_PREFIX: &str = "v3-";
 
 /// Cache manager for OCI artifacts
 pub(super) struct CacheManager {
     cache_dir: PathBuf,
     auth: AuthId,
+    insecure: bool,
+    trust: TrustId,
     key: [u8; 32],
 }
 
 impl CacheManager {
-    /// Offline reuse is confined to the credentials that populated the entry.
-    /// Legacy entries without an authentication context are intentionally not
-    /// reused: their contents cannot establish who was authorized to fetch them.
+    /// Offline reuse requires the credentials, transport and extra roots that
+    /// populated the entry. Older layouts cannot establish that provenance.
     ///
     /// Creates the cache root's key on first use.
-    pub(super) async fn open(cache_dir: PathBuf, auth: &RegistryAuth) -> Result<Self> {
+    pub(super) async fn open(
+        cache_dir: PathBuf,
+        auth: &RegistryAuth,
+        insecure: bool,
+        trust: TrustId,
+    ) -> Result<Self> {
         let key = tokio::task::spawn_blocking({
             let cache_dir = cache_dir.clone();
             move || load_or_create_key(&cache_dir)
@@ -37,6 +43,8 @@ impl CacheManager {
         Ok(Self {
             cache_dir,
             auth: AuthId::of(auth),
+            insecure,
+            trust,
             key,
         })
     }
@@ -50,8 +58,10 @@ impl CacheManager {
         let hash = hmac_sha256(
             &self.key,
             &[
-                b"wash-oci-cache-v2\0".as_slice(),
+                b"wash-oci-cache-v3\0".as_slice(),
                 self.auth.0.as_slice(),
+                &[u8::from(self.insecure)],
+                self.trust.0.as_slice(),
                 reference.as_bytes(),
             ],
         );
@@ -304,10 +314,10 @@ mod tests {
     async fn the_key_is_created_once_and_reused() {
         let dir = tempfile::TempDir::new().unwrap();
         let auth = RegistryAuth::Anonymous;
-        let first = CacheManager::open(dir.path().to_path_buf(), &auth)
+        let first = CacheManager::open(dir.path().to_path_buf(), &auth, false, TrustId([0; 32]))
             .await
             .unwrap();
-        let second = CacheManager::open(dir.path().to_path_buf(), &auth)
+        let second = CacheManager::open(dir.path().to_path_buf(), &auth, false, TrustId([0; 32]))
             .await
             .unwrap();
         assert_eq!(first.get_cache_dir("r"), second.get_cache_dir("r"));
@@ -324,7 +334,7 @@ mod tests {
         // Another cache root has its own key, so the same reference and
         // credentials name a different entry.
         let other = tempfile::TempDir::new().unwrap();
-        let other = CacheManager::open(other.path().to_path_buf(), &auth)
+        let other = CacheManager::open(other.path().to_path_buf(), &auth, false, TrustId([0; 32]))
             .await
             .unwrap();
         assert_ne!(
@@ -336,9 +346,14 @@ mod tests {
     #[tokio::test]
     async fn cleanup_removes_legacy_entries_and_keeps_the_key() {
         let dir = tempfile::TempDir::new().unwrap();
-        let manager = CacheManager::open(dir.path().to_path_buf(), &RegistryAuth::Anonymous)
-            .await
-            .unwrap();
+        let manager = CacheManager::open(
+            dir.path().to_path_buf(),
+            &RegistryAuth::Anonymous,
+            false,
+            TrustId([0; 32]),
+        )
+        .await
+        .unwrap();
         manager
             .write_to_cache("registry/ns/c:1", b"bytes", "sha256:aa")
             .await

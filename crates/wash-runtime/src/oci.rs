@@ -332,8 +332,9 @@ pub struct OciConfig {
     pub credentials: Option<(String, String)>,
     /// Whether to allow insecure registries (HTTP instead of HTTPS)
     pub insecure: bool,
-    /// Cache directory override. Entries are scoped to the resolved credentials;
-    /// changing credentials requires fetching the artifact again. Legacy cache
+    /// Cache directory override. Entries are scoped to resolved credentials,
+    /// HTTP/HTTPS and configured extra roots; changing that scope requires
+    /// fetching the artifact again. Legacy cache
     /// entries without this scope are not reused, and [`cleanup_cache`] removes
     /// them. Entry names are keyed with a random secret the cache creates in
     /// `cache.key` (owner-only on Unix); removing it orphans every entry.
@@ -647,7 +648,7 @@ async fn pull_uncoalesced(
     // Initialize cache manager
     let cache_manager = match &config.cache_dir {
         Some(dir) => Some(
-            CacheManager::open(dir.clone(), auth)
+            CacheManager::open(dir.clone(), auth, config.insecure, trust.id)
                 .await
                 .context("failed to open the OCI cache")?,
         ),
@@ -659,9 +660,9 @@ async fn pull_uncoalesced(
             debug!("Found cached artifact");
             let (component_data, digest) = cache_manager.read_cached(reference).await?;
 
-            // The cache is scoped to the resolved credentials. A pinned hit
-            // identifies the same content; Never explicitly requests offline
-            // reuse and must not contact the registry even for a tag.
+            // The cache is scoped to the resolved credentials, transport and
+            // trust roots. Never stays offline even for a tag, but cannot use
+            // an entry fetched under a different security policy.
             if *pull_policy == OciPullPolicy::Never
                 || cached_digest_is_pinned(reference_parsed, &digest)
             {
@@ -810,14 +811,15 @@ pub async fn push_component(
         .resolve_credentials(reference_parsed.registry())
         .await;
 
-    // Configure OCI client
+    // Use one trust snapshot for the client and any disk entry it publishes.
+    let trust = TrustSnapshot::load().await?;
     let client_config = ClientConfig {
         protocol: if config.insecure {
             ClientProtocol::Http
         } else {
             ClientProtocol::Https
         },
-        extra_root_certificates: extra_ca_certificates(),
+        extra_root_certificates: trust.roots,
         ..Default::default()
     };
 
@@ -898,7 +900,7 @@ pub async fn push_component(
     };
     // Cache the pushed component with its digest
     if let Some(cache_dir) = config.cache_dir {
-        let cache_manager = CacheManager::open(cache_dir, &auth)
+        let cache_manager = CacheManager::open(cache_dir, &auth, config.insecure, trust.id)
             .await
             .context("failed to open the OCI cache")?;
         cache_manager
@@ -1216,6 +1218,8 @@ mod tests {
         CacheManager::open(
             temp_dir.path().to_path_buf(),
             &RegistryAuth::Basic("user".into(), "secret".into()),
+            false,
+            TrustSnapshot::load().await.unwrap().id,
         )
         .await
         .unwrap()
@@ -1497,10 +1501,14 @@ mod tests {
     #[tokio::test]
     async fn test_cache_manager_path_generation() {
         let temp_dir = TempDir::new().unwrap();
-        let cache_manager =
-            CacheManager::open(temp_dir.path().to_path_buf(), &RegistryAuth::Anonymous)
-                .await
-                .unwrap();
+        let cache_manager = CacheManager::open(
+            temp_dir.path().to_path_buf(),
+            &RegistryAuth::Anonymous,
+            false,
+            TrustSnapshot::load().await.unwrap().id,
+        )
+        .await
+        .unwrap();
 
         let reference = "localhost:5000/test:latest";
         let component_path = cache_manager.get_component_path(reference);
@@ -1515,10 +1523,14 @@ mod tests {
     #[tokio::test]
     async fn test_cache_manager_operations() {
         let temp_dir = TempDir::new().unwrap();
-        let cache_manager =
-            CacheManager::open(temp_dir.path().to_path_buf(), &RegistryAuth::Anonymous)
-                .await
-                .unwrap();
+        let cache_manager = CacheManager::open(
+            temp_dir.path().to_path_buf(),
+            &RegistryAuth::Anonymous,
+            false,
+            TrustSnapshot::load().await.unwrap().id,
+        )
+        .await
+        .unwrap();
 
         let reference = "localhost:5000/test:v1.0.0";
         let test_data = b"test component data";
