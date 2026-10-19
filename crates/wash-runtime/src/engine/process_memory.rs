@@ -63,6 +63,16 @@
 //! after [`MAX_FAILED_READS`] failed samples in a row the guard goes back to
 //! normal and says the limit is not being enforced until a reading returns.
 
+mod footprint;
+mod metrics;
+mod sampling;
+#[cfg(test)]
+use footprint::FootprintReader;
+#[cfg(test)]
+use footprint::linux_footprint;
+pub use footprint::process_footprint;
+use sampling::{SAMPLED, live_guards, lock_ignoring_poison, refresh_reading, sample_forever};
+
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -137,111 +147,6 @@ impl ProcessMemoryState {
             _ => Self::Normal,
         }
     }
-}
-
-/// This process's memory footprint, in bytes, counting pages the kernel has
-/// swapped or compressed. `None` where it cannot be read.
-pub fn process_footprint() -> Option<u64> {
-    FootprintReader::new().read()
-}
-
-/// Reads the footprint over and over without paying to set up each reading.
-///
-/// On Linux it keeps `/proc/self/status` open and re-reads it from the start
-/// into one buffer: no open, and so no `EMFILE` on a host at its descriptor
-/// limit, and no allocation per sample.
-///
-/// Elsewhere `sysinfo` keeps one `System` for the life of the reader rather
-/// than building one per sample.
-struct FootprintReader {
-    #[cfg(target_os = "linux")]
-    status: Option<std::fs::File>,
-    #[cfg(target_os = "linux")]
-    buf: String,
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    system: sysinfo::System,
-}
-
-impl FootprintReader {
-    fn new() -> Self {
-        Self {
-            #[cfg(target_os = "linux")]
-            status: None,
-            #[cfg(target_os = "linux")]
-            buf: String::with_capacity(2048),
-            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-            system: sysinfo::System::new_with_specifics(sysinfo::RefreshKind::new()),
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn read(&mut self) -> Option<u64> {
-        use std::io::{Read as _, Seek as _};
-
-        let status = match &mut self.status {
-            Some(status) => status,
-            None => self
-                .status
-                .insert(std::fs::File::open("/proc/self/status").ok()?),
-        };
-        self.buf.clear();
-        if status.rewind().is_err() || status.read_to_string(&mut self.buf).is_err() {
-            // Reopened next time rather than trusted again.
-            self.status = None;
-            return None;
-        }
-        linux_footprint(&self.buf)
-    }
-
-    #[cfg(target_os = "macos")]
-    fn read(&mut self) -> Option<u64> {
-        read_footprint()
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    fn read(&mut self) -> Option<u64> {
-        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
-
-        let pid = sysinfo::get_current_pid().ok()?;
-        self.system.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[pid]),
-            false,
-            ProcessRefreshKind::new().with_memory(),
-        );
-        self.system.process(pid).map(|process| process.memory())
-    }
-}
-
-#[cfg(target_os = "macos")]
-#[allow(unsafe_code)]
-fn read_footprint() -> Option<u64> {
-    let pid = libc::c_int::try_from(std::process::id()).ok()?;
-    let mut info = std::mem::MaybeUninit::<libc::rusage_info_v2>::zeroed();
-    // SAFETY: `RUSAGE_INFO_V2` tells the kernel to write one
-    // `rusage_info_v2`, which is exactly what the buffer holds, for a pid that
-    // is our own and therefore alive.
-    let rc = unsafe { libc::proc_pid_rusage(pid, libc::RUSAGE_INFO_V2, info.as_mut_ptr().cast()) };
-    if rc != 0 {
-        return None;
-    }
-    // SAFETY: a zero return means the kernel filled the buffer, and it was
-    // zeroed before that, so every field is initialised either way.
-    Some(unsafe { info.assume_init() }.ri_phys_footprint)
-}
-
-/// `VmRSS + VmSwap` out of `/proc/self/status`, in bytes.
-#[cfg(any(target_os = "linux", test))]
-fn linux_footprint(status: &str) -> Option<u64> {
-    let kib = |name: &str| {
-        status
-            .lines()
-            .find_map(|line| line.strip_prefix(name))
-            .and_then(|rest| rest.trim().strip_suffix("kB"))
-            .and_then(|n| n.trim().parse::<u64>().ok())
-    };
-    // Swap is absent on kernels built without it, which means none.
-    let kib_total = kib("VmRSS:")?.saturating_add(kib("VmSwap:").unwrap_or(0));
-    Some(kib_total.saturating_mul(1024))
 }
 
 /// The process's footprint against `max_process_memory`, shared by the
@@ -592,141 +497,11 @@ impl ProcessMemoryGuard {
         sampled.running = true;
         Ok(())
     }
-
-    /// Publish the process's memory as OpenTelemetry gauges, read on the
-    /// exporter's own schedule like the guest memory budget's.
-    ///
-    /// Register with the current provider, including after a provider is
-    /// installed or replaced. A process-wide Once would bind these gauges to
-    /// the first provider forever, even if it was a no-op. Identical gauges
-    /// share a stream within the provider; callbacks report process-wide
-    /// values without engine-specific attributes.
-    pub(crate) fn register_metrics(meter: &opentelemetry::metrics::Meter) {
-        macro_rules! observe {
-            ($name:literal, $doc:literal, $read:expr) => {{
-                let _ = meter
-                    .u64_observable_gauge($name)
-                    .with_description($doc)
-                    .with_unit("By")
-                    .with_callback(|observer| {
-                        #[allow(clippy::redundant_closure_call)]
-                        let value = $read();
-                        if let Some(value) = value {
-                            observer.observe(value, &[]);
-                        }
-                    })
-                    .build();
-            }};
-        }
-        observe!(
-            "process_memory.footprint",
-            "This process's memory footprint, counting swapped and compressed pages",
-            || live_guards(|guards| guards.map(|g| g.footprint_bytes()).max())
-        );
-        observe!(
-            "process_memory.high_water",
-            "The largest memory footprint sampled since this host started",
-            || live_guards(|guards| guards.map(|g| g.high_water_bytes()).max())
-        );
-        observe!(
-            "process_memory.limit",
-            "This host's max-process-memory",
-            || live_guards(|guards| guards.map(|g| g.limit_bytes()).min())
-        );
-    }
-}
-
-/// Every guard in the process, and whether a thread is sampling for them.
-struct Sampled {
-    guards: Vec<std::sync::Weak<ProcessMemoryGuard>>,
-    running: bool,
-}
-
-static SAMPLED: Mutex<Sampled> = Mutex::new(Sampled {
-    guards: Vec::new(),
-    running: false,
-});
-
-/// A poisoned lock here only means a panic elsewhere mid-update of plain data.
-fn lock_ignoring_poison<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// `read` over the live guards, under the registry's lock.
-fn live_guards<R>(read: impl FnOnce(&mut dyn Iterator<Item = Arc<ProcessMemoryGuard>>) -> R) -> R {
-    let sampled = lock_ignoring_poison(&SAMPLED);
-    read(&mut sampled.guards.iter().filter_map(std::sync::Weak::upgrade))
 }
 
 /// Lets a refused start through at `warn` a few times a minute.
 static START_REFUSAL_WARN: crate::observability::rate_limit::RateLimitedWarn =
     crate::observability::rate_limit::RateLimitedWarn::new(Duration::from_secs(10));
-
-/// A reading for [`ProcessMemoryGuard::refresh`], or `None` when one was taken
-/// within [`REFRESH_INTERVAL`] (or is being taken now) and the last stands.
-///
-/// One caller per interval wins the clock and reads; the rest return at once,
-/// without waiting on the reader or each other.
-fn refresh_reading() -> Option<u64> {
-    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    static NEXT_MS: AtomicU64 = AtomicU64::new(0);
-    static READER: Mutex<Option<FootprintReader>> = Mutex::new(None);
-
-    let now = u64::try_from(
-        START
-            .get_or_init(std::time::Instant::now)
-            .elapsed()
-            .as_millis(),
-    )
-    .unwrap_or(u64::MAX);
-    let next = NEXT_MS.load(Ordering::Relaxed);
-    if now < next
-        || NEXT_MS
-            .compare_exchange(
-                next,
-                now.saturating_add(REFRESH_INTERVAL.as_millis() as u64),
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            )
-            .is_err()
-    {
-        return None;
-    }
-    let mut reader = READER.try_lock().ok()?;
-    reader.get_or_insert_with(FootprintReader::new).read()
-}
-
-/// The process's one sampler: reads the footprint every [`SAMPLE_INTERVAL`]
-/// and hands it to every live guard, until none is left.
-fn sample_forever() {
-    let mut reader = FootprintReader::new();
-    let mut failed_reads = 0_u32;
-    loop {
-        std::thread::sleep(SAMPLE_INTERVAL);
-        let reading = reader.read();
-        // Decided under the lock `spawn_sampler` takes, so a guard registered
-        // as this thread gives up finds `running` cleared and starts another.
-        let mut sampled = lock_ignoring_poison(&SAMPLED);
-        sampled.guards.retain(|guard| guard.strong_count() > 0);
-        if sampled.guards.is_empty() {
-            sampled.running = false;
-            return;
-        }
-        match reading {
-            Some(_) => failed_reads = 0,
-            None => failed_reads = failed_reads.saturating_add(1),
-        }
-        for guard in sampled.guards.iter().filter_map(std::sync::Weak::upgrade) {
-            match reading {
-                Some(footprint) => guard.observe(footprint),
-                None if failed_reads >= MAX_FAILED_READS => guard.lose_reading(),
-                None => {}
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
