@@ -37,7 +37,11 @@
 //! rather than offering a way to shrink it; the slot count is what sizes the
 //! pool.
 
-use std::fmt;
+use std::{
+    collections::BTreeSet,
+    fmt,
+    path::{Component, Path, PathBuf},
+};
 
 use super::pool_usage::PoolTotals;
 
@@ -634,21 +638,69 @@ fn max_map_count() -> Option<u64> {
 
 /// The memory limit this process is really subject to.
 ///
-/// cgroup first, because in Kubernetes that is the number behind an OOMKill and
-/// the machine's total is irrelevant to a container limited well below it. Both
-/// cgroup revisions are read; v2 spells "no limit" as the literal string `max`.
+/// The smallest readable limit for this process's cgroup and its ancestors,
+/// capped at physical RAM. Membership comes from `/proc/self/cgroup`, using
+/// the conventional v2 `/sys/fs/cgroup` and v1 `/sys/fs/cgroup/memory` mounts.
+/// Mount-root limits are checked even when membership cannot be resolved.
 ///
 /// A cgroup limit is never taken above physical memory: cgroup v1 spells
 /// "unlimited" as `PAGE_COUNTER_MAX * PAGE_SIZE`, a number just under
 /// `i64::MAX`, and a limit past RAM can't be reached before the machine runs out.
 pub(crate) fn detected_memory_limit() -> Option<u64> {
-    fn read_cgroup(path: &str) -> Option<u64> {
-        parse_cgroup_limit(&std::fs::read_to_string(path).ok()?)
+    detected_memory_limit_with(system_total_memory(), |path| {
+        std::fs::read_to_string(path).ok()
+    })
+}
+
+fn detected_memory_limit_with(
+    physical: Option<u64>,
+    read: impl Fn(&Path) -> Option<String>,
+) -> Option<u64> {
+    let membership = read(Path::new("/proc/self/cgroup")).unwrap_or_default();
+    let mut paths = BTreeSet::from([
+        PathBuf::from("/sys/fs/cgroup/memory.max"),
+        PathBuf::from("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+    ]);
+    for line in membership.lines() {
+        let mut parts = line.splitn(3, ':');
+        let (Some(_), Some(controllers), Some(path)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let (root, file) = if controllers.is_empty() {
+            (Path::new("/sys/fs/cgroup"), "memory.max")
+        } else if controllers.split(',').any(|c| c == "memory") {
+            (Path::new("/sys/fs/cgroup/memory"), "memory.limit_in_bytes")
+        } else {
+            continue;
+        };
+        let Some(relative) = path.strip_prefix('/') else {
+            continue;
+        };
+        let relative = Path::new(relative);
+        // Membership outside the visible cgroup namespace can contain '..'.
+        // Keep the mount-root fallback, but never walk outside that mount.
+        if relative
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+        {
+            continue;
+        }
+        let mut directory = root.join(relative);
+        while directory.starts_with(root) {
+            paths.insert(directory.join(file));
+            if directory == root || !directory.pop() {
+                break;
+            }
+        }
     }
 
-    let cgroup = read_cgroup("/sys/fs/cgroup/memory.max")
-        .or_else(|| read_cgroup("/sys/fs/cgroup/memory/memory.limit_in_bytes"));
-    effective_memory_limit(cgroup, system_total_memory())
+    let cgroup = paths
+        .iter()
+        .filter_map(|path| read(path))
+        .filter_map(|raw| parse_cgroup_limit(&raw))
+        .min();
+    effective_memory_limit(cgroup, physical)
 }
 
 /// A cgroup memory limit file's value, or `None` when it sets no limit.
@@ -669,8 +721,8 @@ fn effective_memory_limit(cgroup: Option<u64>, physical: Option<u64>) -> Option<
     cgroup.into_iter().chain(physical).min()
 }
 
-/// Total physical memory, for a host with no cgroup to read — a developer's
-/// laptop, or a bare-metal deployment.
+/// Total physical memory, capping cgroup limits and providing the fallback
+/// where no cgroup limit is readable.
 ///
 /// Refreshes RAM only. [`SystemMonitor`] samples every CPU core for the host's
 /// periodic reporting, which this path would pay on every engine build.
@@ -838,6 +890,98 @@ mod tests {
             Some(container)
         );
         assert_eq!(effective_memory_limit(None, None), None);
+    }
+
+    /// Fake Linux files use `/` even when these tests run on Windows.
+    fn cgroup_fixture_path(path: &Path) -> Option<String> {
+        Some(path.to_str()?.replace('\\', "/"))
+    }
+
+    #[test]
+    fn automatic_process_limit_honors_service_and_parent_cgroups() {
+        // These are complete detector inputs, including the unbounded mount
+        // root that previously hid every service/parent limit below it.
+        for (parent, expected, process_limit) in [
+            (None, 1024 * MIB, 966_367_620),
+            (Some("536870912"), 512 * MIB, 483_183_810),
+        ] {
+            let read = |path: &Path| match cgroup_fixture_path(path)?.as_str() {
+                "/proc/self/cgroup" => Some("0::/system.slice/wash.service\n".into()),
+                "/sys/fs/cgroup/memory.max" => Some("max\n".into()),
+                "/sys/fs/cgroup/system.slice/memory.max" => parent.map(str::to_owned),
+                "/sys/fs/cgroup/system.slice/wash.service/memory.max" => {
+                    Some("1073741824\n".into())
+                }
+                _ => None,
+            };
+            let limit = detected_memory_limit_with(Some(16 * 1024 * MIB), read);
+            assert_eq!(limit, Some(expected));
+            assert_eq!(derive_max_process_memory_bytes_within(limit), process_limit);
+            assert_eq!(
+                detected_memory_limit_with(None, read),
+                Some(expected),
+                "readable cgroup limits still work without physical RAM"
+            );
+            assert_eq!(
+                detected_memory_limit_with(Some(256 * MIB), read),
+                Some(256 * MIB),
+                "cgroup limits never override a smaller physical limit"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_memory_membership_checks_ancestors_and_ignores_other_controllers() {
+        let read = |path: &Path| match cgroup_fixture_path(path)?.as_str() {
+            "/proc/self/cgroup" => Some("3:cpu,cpuacct:/unrelated\n4:memory:/tenant/wash\n".into()),
+            "/sys/fs/cgroup/memory/memory.limit_in_bytes" => Some("9223372036854771712\n".into()),
+            "/sys/fs/cgroup/memory/tenant/memory.limit_in_bytes" => Some("536870912".into()),
+            "/sys/fs/cgroup/memory/tenant/wash/memory.limit_in_bytes" => Some("1073741824".into()),
+            "/sys/fs/cgroup/memory/unrelated/memory.limit_in_bytes" => {
+                panic!("a non-memory controller must not supply a memory limit")
+            }
+            _ => None,
+        };
+        let limit = detected_memory_limit_with(Some(16 * 1024 * MIB), read);
+        assert_eq!(limit, Some(512 * MIB));
+        assert_eq!(derive_max_process_memory_bytes_within(limit), 483_183_810);
+    }
+
+    #[test]
+    fn namespace_root_and_unresolvable_membership_keep_mount_root_limits() {
+        for membership in [
+            "0::/\n",
+            "0::/../outside\n",
+            "0::/tenant/../../outside\n",
+            "0::relative\n",
+            "malformed\n",
+        ] {
+            let read = |path: &Path| match cgroup_fixture_path(path)?.as_str() {
+                "/proc/self/cgroup" => Some(membership.into()),
+                "/sys/fs/cgroup/memory.max" => Some("1073741824".into()),
+                "/sys/fs/cgroup/memory/memory.limit_in_bytes" => None,
+                unexpected => panic!("unexpected cgroup lookup {unexpected:?} for {membership:?}"),
+            };
+            let limit = detected_memory_limit_with(Some(16 * 1024 * MIB), read);
+            assert_eq!(limit, Some(1024 * MIB));
+            assert_eq!(derive_max_process_memory_bytes_within(limit), 966_367_620);
+        }
+    }
+
+    #[test]
+    fn missing_membership_and_unlimited_root_still_fall_back_to_physical_ram() {
+        let read = |path: &Path| match cgroup_fixture_path(path)?.as_str() {
+            "/sys/fs/cgroup/memory.max" => Some("max".into()),
+            "/sys/fs/cgroup/memory/memory.limit_in_bytes" => Some("9223372036854771712".into()),
+            _ => None,
+        };
+        let limit = detected_memory_limit_with(Some(16 * 1024 * MIB), read);
+        assert_eq!(limit, Some(16 * 1024 * MIB));
+        assert_eq!(
+            derive_max_process_memory_bytes_within(limit),
+            15_461_882_190
+        );
+        assert_eq!(detected_memory_limit_with(None, |_| None), None);
     }
 
     #[test]

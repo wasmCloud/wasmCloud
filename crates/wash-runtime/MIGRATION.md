@@ -54,6 +54,12 @@ to DEBUG. Run with `RUST_LOG=wash_runtime=debug` to see them again.
   `--max-process-memory off` (`WASH_HOST_MAX_PROCESS_MEMORY=off`) to
   `wash host`, to turn it off. `with_max_process_memory_bytes` sets a limit of
   your own instead of the derived one.
+- Automatic guest and process limits use the smallest readable cgroup limit
+  for the process and its visible ancestors, capped at physical RAM. This
+  includes systemd service and parent-slice limits, rather than only the
+  mount-root limit. Detection uses `/proc/self/cgroup` with the conventional
+  `/sys/fs/cgroup` (v2) and `/sys/fs/cgroup/memory` (v1) mounts. Use explicit
+  limits for other mount layouts or limits hidden outside the cgroup namespace.
 - A configured process-memory limit is enforced even when guest memory is in
   `count` mode. Use `--max-process-memory off` to disable that separate policy.
   The process guard is sampled admission control: it cannot cap allocations
