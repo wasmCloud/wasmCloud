@@ -6,6 +6,21 @@ pub fn served_sample(successes: usize, failures: usize, warmup_failures: usize) 
     successes > 0 && failures == 0 && warmup_failures == 0
 }
 
+/// A later sample may omit a workload whose initial warm-up failed. Such a
+/// sample cannot establish warm capacity until that workload is verified; the
+/// density runners stop instead of silently forgetting the failed warm-up.
+#[derive(Default)]
+pub struct ServingEvidence {
+    warmup_failed: bool,
+}
+
+impl ServingEvidence {
+    pub fn observe(&mut self, successes: usize, failures: usize, warmup_failures: usize) -> bool {
+        self.warmup_failed |= warmup_failures > 0;
+        served_sample(successes, failures, usize::from(self.warmup_failed))
+    }
+}
+
 /// Validate the sample size before allocating workloads.
 pub fn sample_size(value: usize) -> Result<usize, &'static str> {
     if value == 0 {
@@ -53,6 +68,23 @@ mod tests {
         assert!(!served_sample(1, 1, 0));
         assert!(!served_sample(100, 0, 1));
         assert!(served_sample(1, 0, 0));
+    }
+
+    #[test]
+    fn a_later_sample_cannot_clear_an_unverified_warmup() {
+        // One failed warm-up can be missed by both the current and next
+        // sample, so checking only the current batch would claim 500 warm
+        // workloads even though workload 4 never parked an instance.
+        assert!(!spread(250, 200).contains(&4));
+        assert!(!spread(500, 200).contains(&4));
+        let mut evidence = ServingEvidence::default();
+        assert!(!evidence.observe(200, 0, 1));
+        assert!(!evidence.observe(200, 0, 0));
+
+        let mut evidence = ServingEvidence::default();
+        assert!(evidence.observe(200, 0, 0));
+        assert!(!evidence.observe(200, 0, 1));
+        assert!(!evidence.observe(200, 0, 0));
     }
 
     #[test]

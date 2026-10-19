@@ -2,6 +2,7 @@
 //! on NATS by its heartbeat.
 
 use std::collections::HashSet;
+use std::io::{Read as _, Seek as _, SeekFrom};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -17,15 +18,18 @@ use crate::cli::HostCli;
 /// bench: not on error, not on panic, not on Ctrl-C (which unwinds the run).
 pub struct ChildGuard {
     child: Child,
+    tree: crate::process::ProcessTree,
     exited: Option<ExitStatus>,
 }
 
 impl ChildGuard {
-    fn new(child: Child) -> Self {
-        Self {
+    pub(crate) fn spawn(command: &mut Command) -> Result<Self> {
+        let (child, tree) = crate::process::spawn(command)?;
+        Ok(Self {
             child,
+            tree,
             exited: None,
-        }
+        })
     }
 
     pub fn pid(&self) -> u32 {
@@ -36,6 +40,9 @@ impl ChildGuard {
     pub fn exited(&mut self) -> Option<ExitStatus> {
         if self.exited.is_none() {
             self.exited = self.child.try_wait().ok().flatten();
+            if self.exited.is_some() {
+                self.tree.kill();
+            }
         }
         self.exited
     }
@@ -44,6 +51,7 @@ impl ChildGuard {
 impl ChildGuard {
     /// Kill the process unless it already ended, and reap it.
     pub fn kill(&mut self) {
+        self.tree.kill();
         if self.exited().is_none() {
             let _ = self.child.kill();
             self.exited = self.child.wait().ok();
@@ -57,19 +65,62 @@ impl Drop for ChildGuard {
     }
 }
 
-/// The last `lines` lines of a log file, for a stop report.
+const LOG_TAIL_BYTES: usize = 64 * 1024;
+const TRUNCATED_LOG: &str = "[log truncated]\n";
+
+/// The last `lines` lines from a bounded suffix, for a stop report.
 pub fn log_tail(path: &Path, lines: usize) -> String {
-    let Ok(body) = std::fs::read(path) else {
+    if lines == 0 {
+        return String::new();
+    }
+    let Ok(mut file) = std::fs::File::open(path) else {
         return String::new();
     };
-    let body = String::from_utf8_lossy(&body);
-    let all: Vec<&str> = body.lines().collect();
-    let skip = all.len().saturating_sub(lines);
-    all.iter()
-        .skip(skip)
-        .copied()
+    let Ok(len) = file.metadata().map(|m| m.len()) else {
+        return String::new();
+    };
+    let offset = len.saturating_sub(LOG_TAIL_BYTES as u64);
+    if file.seek(SeekFrom::Start(offset)).is_err() {
+        return String::new();
+    }
+    let mut bytes = Vec::new();
+    if file
+        .take(LOG_TAIL_BYTES as u64)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return String::new();
+    }
+    // Prefer complete lines, but retain a suffix when even one line is oversized.
+    let bytes = if offset > 0 {
+        bytes
+            .iter()
+            .position(|b| *b == b'\n')
+            .filter(|i| i + 1 < bytes.len())
+            .map_or(bytes.as_slice(), |i| &bytes[i + 1..])
+    } else {
+        bytes.as_slice()
+    };
+    let body = String::from_utf8_lossy(bytes);
+    // Replacement characters can expand malformed UTF-8; cap the rendered text too.
+    let mut start = body.len().saturating_sub(LOG_TAIL_BYTES);
+    while !body.is_char_boundary(start) {
+        start += 1;
+    }
+    let tail = body[start..]
+        .lines()
+        .rev()
+        .take(lines)
         .collect::<Vec<_>>()
-        .join("\n")
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+    if offset > 0 || start > 0 {
+        format!("{TRUNCATED_LOG}{tail}")
+    } else {
+        tail
+    }
 }
 
 fn log_file(path: &Path) -> Result<(Stdio, Stdio)> {
@@ -128,14 +179,13 @@ pub async fn spawn_nats(binary: &Path, run_dir: &Path) -> Result<(ChildGuard, St
     let (stdout, stderr) = log_file(&log)?;
     let mut command = Command::new(binary);
     isolated(&mut command);
-    let child = command
+    command
         .args(["-a", "127.0.0.1", "-p", &port.to_string()])
         .stdin(Stdio::null())
         .stdout(stdout)
-        .stderr(stderr)
-        .spawn()
-        .with_context(|| format!("running {}", binary.display()))?;
-    let mut guard = ChildGuard::new(child);
+        .stderr(stderr);
+    let mut guard =
+        ChildGuard::spawn(&mut command).with_context(|| format!("running {}", binary.display()))?;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
@@ -228,12 +278,16 @@ pub fn host_command(
             .replace("{guest_memory}", &limits.guest_memory.to_string())
             .replace("{core_instances}", &limits.core_instances.to_string())
             .replace("{http_addr}", "127.0.0.1:0")
+            .replace("{host_name}", host_name)
     };
     if cli == HostCli::Raw {
         return HostCommand {
             args: extra.iter().map(|a| substitute(a)).collect(),
             unsupported_flags: Vec::new(),
-            host_name: None,
+            host_name: extra
+                .iter()
+                .any(|arg| arg.contains("{host_name}"))
+                .then(|| host_name.to_string()),
         };
     }
     let wanted: Vec<(&str, Option<String>)> = vec![
@@ -278,15 +332,13 @@ pub fn spawn_host(
     let (stdout, stderr) = log_file(log)?;
     let mut command = Command::new(binary);
     isolated(&mut command);
-    let child = command
+    command
         .args(&command_line.args)
         .env("RUST_LOG", log_level)
         .stdin(Stdio::null())
         .stdout(stdout)
-        .stderr(stderr)
-        .spawn()
-        .with_context(|| format!("running {}", binary.display()))?;
-    Ok(ChildGuard::new(child))
+        .stderr(stderr);
+    ChildGuard::spawn(&mut command).with_context(|| format!("running {}", binary.display()))
 }
 
 /// Which heartbeat is the host under test.
@@ -294,6 +346,17 @@ pub enum Pick<'a> {
     Id(&'a str),
     Name(&'a str),
     Any,
+}
+
+/// A spawned host on shared NATS must identify itself with this run's name.
+pub fn spawned_host_pick(command: &HostCommand, shared_nats: bool) -> Result<Pick<'_>> {
+    match (&command.host_name, shared_nats) {
+        (Some(name), _) => Ok(Pick::Name(name)),
+        (None, false) => Ok(Pick::Any),
+        (None, true) => bail!(
+            "a spawned host on shared NATS needs --host-name support or a raw {{host_name}} argument; otherwise use --host-nats-only"
+        ),
+    }
 }
 
 impl Pick<'_> {
@@ -361,6 +424,83 @@ impl Heartbeats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
+
+    #[test]
+    fn spawned_hosts_on_shared_nats_require_their_own_name() {
+        let mut command = HostCommand {
+            args: vec![],
+            unsupported_flags: vec![],
+            host_name: None,
+        };
+        assert!(spawned_host_pick(&command, true).is_err());
+        assert!(spawned_host_pick(&command, false).is_ok());
+        command.host_name = Some("this-run".into());
+        let pick = spawned_host_pick(&command, true).unwrap();
+        assert!(!pick.matches(&HostHeartbeat {
+            id: "existing".into(),
+            hostname: "other-run".into(),
+            ..Default::default()
+        }));
+        assert!(pick.matches(&HostHeartbeat {
+            id: "spawned".into(),
+            friendly_name: "this-run".into(),
+            ..Default::default()
+        }));
+    }
+
+    #[test]
+    fn raw_hosts_can_advertise_the_generated_run_name() {
+        let command = host_command(
+            HostCli::Raw,
+            &HashSet::new(),
+            "nats://localhost:4222",
+            &HostLimits {
+                memory_limit: 100,
+                guest_memory: 75,
+                core_instances: 1,
+            },
+            Path::new("cache"),
+            "this-run",
+            &["--name={host_name}".into()],
+        );
+        assert_eq!(command.args, ["--name=this-run"]);
+        assert_eq!(command.host_name.as_deref(), Some("this-run"));
+        assert!(spawned_host_pick(&command, true).is_ok());
+    }
+
+    #[test]
+    fn log_tails_bound_large_files_and_single_lines() -> Result<()> {
+        let path = std::env::temp_dir().join(format!("bench-log-tail-{}", std::process::id()));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        struct Remove(PathBuf);
+        impl Drop for Remove {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let _remove = Remove(path.clone());
+        file.set_len(32 * 1024 * 1024)?;
+        file.seek(SeekFrom::End(0))?;
+        file.write_all(b"partial\nlast but one\nlast\n")?;
+        assert_eq!(
+            log_tail(&path, 2),
+            format!("{TRUNCATED_LOG}last but one\nlast")
+        );
+
+        file.set_len(0)?;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&vec![0xff; LOG_TAIL_BYTES * 2])?;
+        let tail = log_tail(&path, 30);
+        assert!(tail.starts_with(TRUNCATED_LOG));
+        assert!(tail.len() <= LOG_TAIL_BYTES + TRUNCATED_LOG.len());
+        assert!(log_tail(&path, 0).is_empty());
+        drop(file);
+        Ok(())
+    }
 
     const HELP: &str = "Usage: wash host [OPTIONS]\n\nOptions:\n      --scheduler-nats-url <SCHEDULER_NATS_URL>\n          The URL\n      --data-nats-url <DATA_NATS_URL>\n      --http-addr <HTTP_ADDR>\n      --allow-insecure-registries\n      --core-instances <CORE_INSTANCES>\n          [env: WASH_CORE_INSTANCES=]\n      --max-guest-memory <MAX_GUEST_MEMORY>\n      --host-name <HOST_NAME>\n  -h, --help\n          Print help (see `--max-process-memory`)\n";
 

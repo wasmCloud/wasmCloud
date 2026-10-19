@@ -88,7 +88,7 @@ pub struct Args {
     pub core_instances: Option<u32>,
 
     /// Core instances one warm workload holds, for the pool's share of the
-    /// theoretical limit. Otherwise inferred from a pool refusal.
+    /// theoretical limit. Omit to leave the pool's contribution unknown.
     #[arg(long, env = "BENCH_SCALE_CORE_INSTANCES_PER_WORKLOAD")]
     pub core_instances_per_workload: Option<u32>,
 
@@ -138,7 +138,7 @@ pub struct Args {
     #[arg(long, alias = "attach", env = "BENCH_SCALE_HOST_NATS_ONLY")]
     pub host_nats_only: bool,
 
-    /// Which host to use when several heartbeat on the same NATS.
+    /// Which existing host to use with --host-nats-only.
     #[arg(long, env = "BENCH_SCALE_HOST_ID")]
     pub host_id: Option<String>,
 

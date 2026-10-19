@@ -276,6 +276,14 @@ pub struct Registry {
 
 impl Registry {
     pub async fn serve(image: Arc<Image>) -> Result<Self> {
+        Self::serve_with_limits(image, 256, std::time::Duration::from_secs(120)).await
+    }
+
+    async fn serve_with_limits(
+        image: Arc<Image>,
+        max_connections: usize,
+        lifetime: std::time::Duration,
+    ) -> Result<Self> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .context("binding the registry")?;
@@ -284,10 +292,23 @@ impl Registry {
         let accept = tokio::spawn({
             let counters = Arc::clone(&counters);
             async move {
-                while let Ok((stream, _)) = listener.accept().await {
+                // The set bounds admission and owns every accepted connection.
+                // Aborting this accept task drops the set, closing its sockets too.
+                let mut connections = tokio::task::JoinSet::new();
+                loop {
+                    let stream = tokio::select! {
+                        Some(_) = connections.join_next(), if !connections.is_empty() => continue,
+                        accepted = listener.accept() => match accepted {
+                            Ok((stream, _)) => stream,
+                            Err(_) => break,
+                        },
+                    };
+                    if connections.len() >= max_connections {
+                        continue;
+                    }
                     let image = Arc::clone(&image);
                     let counters = Arc::clone(&counters);
-                    tokio::spawn(async move {
+                    connections.spawn(async move {
                         let service =
                             hyper::service::service_fn(move |request: Request<Incoming>| {
                                 let response = respond(
@@ -299,9 +320,15 @@ impl Registry {
                                 async move { Ok::<_, Infallible>(response) }
                             });
                         // A pull that hangs up early is the client's business.
-                        let _ = hyper::server::conn::http1::Builder::new()
-                            .serve_connection(hyper_util::rt::TokioIo::new(stream), service)
-                            .await;
+                        let mut builder = hyper::server::conn::http1::Builder::new();
+                        builder
+                            .timer(hyper_util::rt::TokioTimer::new())
+                            .header_read_timeout(std::time::Duration::from_secs(10));
+                        let _ = tokio::time::timeout(
+                            lifetime,
+                            builder.serve_connection(hyper_util::rt::TokioIo::new(stream), service),
+                        )
+                        .await;
                     });
                 }
             }
@@ -332,6 +359,56 @@ impl Drop for Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    async fn connected_registry(addr: SocketAddr) -> tokio::net::TcpStream {
+        let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+        socket
+            .write_all(b"GET /v2/ HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        while !response.ends_with(b"\r\n\r\n{}") {
+            response.push(socket.read_u8().await.unwrap());
+            assert!(response.len() < 4096);
+        }
+        socket
+    }
+
+    async fn assert_closed(mut socket: tokio::net::TcpStream) {
+        let read = tokio::time::timeout(std::time::Duration::from_secs(5), socket.read_u8())
+            .await
+            .expect("registry connection must close");
+        assert!(read.is_err(), "expected EOF or a connection reset");
+    }
+
+    #[tokio::test]
+    async fn connections_are_bounded_and_closed_when_registry_drops() {
+        let registry =
+            Registry::serve_with_limits(Arc::new(image()), 2, std::time::Duration::from_secs(120))
+                .await
+                .unwrap();
+        let first = connected_registry(registry.addr).await;
+        let second = connected_registry(registry.addr).await;
+        let excess = tokio::net::TcpStream::connect(registry.addr).await.unwrap();
+        assert_closed(excess).await;
+        drop(registry);
+        assert_closed(first).await;
+        assert_closed(second).await;
+    }
+
+    #[tokio::test]
+    async fn accepted_connections_have_a_finite_lifetime() {
+        let registry =
+            Registry::serve_with_limits(Arc::new(image()), 1, std::time::Duration::from_secs(60))
+                .await
+                .unwrap();
+        let socket = connected_registry(registry.addr).await;
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(61)).await;
+        tokio::time::resume();
+        assert_closed(socket).await;
+    }
 
     fn image() -> Image {
         Image::new(

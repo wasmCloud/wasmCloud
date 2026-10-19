@@ -36,8 +36,12 @@ sysinfo = { workspace = true }
 tar = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
+uuid = { workspace = true, features = ["v4"] }
 wit-component = { workspace = true }
 wasi-preview1-component-adapter-provider = "46"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

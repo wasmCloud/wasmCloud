@@ -117,6 +117,7 @@ pub enum Stop {
     /// The host answered a start with WORKLOAD_STATE_ERROR.
     StartRefused {
         class: RefusalClass,
+        #[serde(serialize_with = "crate::report::serialize_diagnostic")]
         message: String,
     },
     /// The host's footprint reached the memory limit.
@@ -124,19 +125,32 @@ pub enum Stop {
         footprint_bytes: u64,
         limit_bytes: u64,
     },
-    /// More than half the requests to workloads failed.
+    /// A warm-up failed, or more than half the sampled requests failed.
     Requests {
         stage: &'static str,
         failed: usize,
         total: usize,
+        #[serde(serialize_with = "crate::report::serialize_optional_diagnostic")]
         example: Option<String>,
     },
     /// The host process ended.
-    HostExited { status: String, log_tail: String },
+    HostExited {
+        status: String,
+        #[serde(serialize_with = "crate::report::serialize_diagnostic")]
+        log_tail: String,
+    },
     /// Starts got no answer even after retries.
-    StartsUnanswered { count: usize, example: String },
+    StartsUnanswered {
+        count: usize,
+        #[serde(serialize_with = "crate::report::serialize_diagnostic")]
+        example: String,
+    },
     /// Starts failed for reasons other than a refusal.
-    StartsFailed { count: usize, example: String },
+    StartsFailed {
+        count: usize,
+        #[serde(serialize_with = "crate::report::serialize_diagnostic")]
+        example: String,
+    },
     /// The component cap was reached.
     Cap { cap: usize },
 }
@@ -144,8 +158,13 @@ pub enum Stop {
 impl std::fmt::Display for Stop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::StartRefused { class, message } => {
-                write!(f, "start refused ({}): {message}", class.describe())
+            Self::StartRefused { class, .. } => {
+                write!(
+                    f,
+                    "start refused ({}): {}",
+                    class.describe(),
+                    crate::report::OMITTED_DIAGNOSTIC
+                )
             }
             Self::MemoryLimit {
                 footprint_bytes,
@@ -163,16 +182,24 @@ impl std::fmt::Display for Stop {
                 example,
             } => {
                 write!(f, "requests failing: {failed} of {total} {stage} requests")?;
-                if let Some(example) = example {
-                    write!(f, " (e.g. {example})")?;
+                if example.is_some() {
+                    write!(f, " {}", crate::report::OMITTED_DIAGNOSTIC)?;
                 }
                 Ok(())
             }
             Self::HostExited { status, .. } => write!(f, "host exited: {status}"),
-            Self::StartsUnanswered { count, example } => {
-                write!(f, "{count} starts unanswered: {example}")
+            Self::StartsUnanswered { count, .. } => {
+                write!(
+                    f,
+                    "{count} starts unanswered: {}",
+                    crate::report::OMITTED_DIAGNOSTIC
+                )
             }
-            Self::StartsFailed { count, example } => write!(f, "{count} starts failed: {example}"),
+            Self::StartsFailed { count, .. } => write!(
+                f,
+                "{count} starts failed: {}",
+                crate::report::OMITTED_DIAGNOSTIC
+            ),
             Self::Cap { cap } => write!(f, "cap of {cap} workloads reached"),
         }
     }
@@ -229,6 +256,7 @@ pub struct HostInfo {
     pub id: String,
     pub version: String,
     pub hostname: String,
+    #[serde(serialize_with = "crate::report::serialize_http_address")]
     pub http: String,
     pub pid: Option<u32>,
     pub log: Option<String>,
@@ -332,8 +360,8 @@ struct Starter<'a> {
     journal: &'a crate::lifecycle::Journal,
 }
 
-fn host_header(flavour: Flavour, index: usize) -> String {
-    format!("w{index}.{}.scale.test", flavour.name())
+fn host_header(run_id: &str, flavour: Flavour, index: usize) -> String {
+    format!("w{index}.{}.{run_id}.scale.test", flavour.name())
 }
 
 fn workload_id(run_id: &str, flavour: Flavour, index: usize) -> String {
@@ -358,7 +386,7 @@ impl Starter<'_> {
             &format!("w{index}"),
             self.image,
             self.flavour.pool_size(),
-            &host_header(self.flavour, index),
+            &host_header(self.run_id, self.flavour, index),
         );
         self.journal.submitted(&id);
         let began = Instant::now();
@@ -489,10 +517,38 @@ struct Answers {
     example_error: Option<String>,
 }
 
+const ERROR_BODY_LIMIT: usize = 16 * 1024;
+
+/// Measure the whole response without retaining a guest-controlled body.
+/// Keep only a bounded diagnostic prefix when the response is unsuccessful.
+async fn drain_response(mut response: reqwest::Response) -> Result<(), String> {
+    let status = response.status();
+    let mut diagnostic = Vec::new();
+    let mut truncated = false;
+    while let Some(chunk) = response.chunk().await.map_err(|e| format!("{e}"))? {
+        if !status.is_success() {
+            let retain = chunk
+                .len()
+                .min(ERROR_BODY_LIMIT.saturating_sub(diagnostic.len()));
+            diagnostic.extend_from_slice(&chunk[..retain]);
+            truncated |= retain < chunk.len();
+        }
+    }
+    if !status.is_success() {
+        return Err(format!(
+            "{status}: {}{}",
+            String::from_utf8_lossy(&diagnostic),
+            if truncated { " [truncated]" } else { "" },
+        ));
+    }
+    Ok(())
+}
+
 /// One GET to each workload, from outside the host, routed by Host header.
 async fn requests(
     http: &reqwest::Client,
     url: &str,
+    run_id: &str,
     flavour: Flavour,
     indices: Vec<usize>,
     concurrency: usize,
@@ -502,15 +558,11 @@ async fn requests(
             let began = Instant::now();
             let response = http
                 .get(url)
-                .header(reqwest::header::HOST, host_header(flavour, index))
+                .header(reqwest::header::HOST, host_header(run_id, flavour, index))
                 .send()
                 .await
                 .map_err(|e| format!("{e}"))?;
-            let status = response.status();
-            let body = response.bytes().await.map_err(|e| format!("{e}"))?;
-            if !status.is_success() {
-                return Err(format!("{status}: {}", String::from_utf8_lossy(&body)));
-            }
+            drain_response(response).await?;
             Ok(millis(began.elapsed()))
         })
         .buffer_unordered(concurrency.max(1))
@@ -554,6 +606,92 @@ pub fn theoretical_limit(
 /// theoretical limit, so the run sees how the host fails there.
 pub fn dynamic_cap(theoretical: u64, overshoot: f64) -> usize {
     (theoretical as f64 * overshoot.max(1.0)).ceil() as usize
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CapacityEstimate {
+    bytes_per_workload: Option<u64>,
+    theoretical_limit: Option<u64>,
+}
+
+impl CapacityEstimate {
+    fn from_step(
+        step: &Step,
+        flavour: Flavour,
+        memory_limit: u64,
+        baseline: Option<u64>,
+        by_pool: Option<u64>,
+    ) -> Option<Self> {
+        if step.workloads == 0
+            || step.started != step.attempted
+            || step.start_refused > 0
+            || step.start_unanswered > 0
+            || step.start_failed > 0
+            || step.requests_ok == 0
+            || step.requests_failed > 0
+            || step.warmup_failed > 0
+            || (flavour == Flavour::Warm && step.warmup_ok != step.started)
+        {
+            return None;
+        }
+        let bytes_per_workload = match (step.footprint_bytes, baseline) {
+            (Some(now), Some(base)) => Some(now.saturating_sub(base) / step.workloads as u64),
+            _ => None,
+        };
+        let theoretical_limit =
+            theoretical_limit(memory_limit, baseline, bytes_per_workload, by_pool);
+        (bytes_per_workload.is_some() || theoretical_limit.is_some()).then_some(Self {
+            bytes_per_workload,
+            theoretical_limit,
+        })
+    }
+}
+
+struct CapacityTracker {
+    latest: Option<CapacityEstimate>,
+    cap: Option<usize>,
+}
+
+impl CapacityTracker {
+    fn observe(
+        &mut self,
+        step: &mut Step,
+        flavour: Flavour,
+        settings: &Settings,
+        baseline: Option<u64>,
+        by_pool: Option<u64>,
+    ) {
+        let Some(estimate) = CapacityEstimate::from_step(
+            step,
+            flavour,
+            settings.memory_limit_bytes,
+            baseline,
+            by_pool,
+        ) else {
+            return;
+        };
+        step.bytes_per_workload = estimate.bytes_per_workload;
+        step.theoretical_limit = estimate.theoretical_limit;
+        self.latest = Some(estimate);
+        if settings.max_components.is_none()
+            && let Some(theoretical) = estimate.theoretical_limit
+        {
+            self.cap = Some(dynamic_cap(theoretical, settings.overshoot));
+        }
+    }
+}
+
+fn checked_footprint(
+    footprint: Option<u64>,
+    max_components: Option<usize>,
+    phase: &str,
+) -> Result<Option<u64>> {
+    anyhow::ensure!(
+        footprint.is_some() || max_components.is_some(),
+        "process footprint unavailable {phase}; an uncapped run requires a readable host PID, \
+         or set --max-components to bound a run without memory measurements"
+    );
+    Ok(footprint)
 }
 
 /// Wait for the footprint to settle back near `before`; how long that took.
@@ -609,7 +747,11 @@ async fn measure_flavour(
 
     // Let the host's startup allocations land before taking the baseline.
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let baseline = target.sampler.footprint();
+    let baseline = checked_footprint(
+        target.sampler.footprint(),
+        settings.max_components,
+        "at baseline",
+    )?;
     let halt = Arc::new(AtomicBool::new(false));
     let watch = Watch::spawn(
         Arc::clone(&target.sampler),
@@ -641,7 +783,7 @@ async fn measure_flavour(
         journal,
     };
     let mut pool_total = target.core_instances.map(u64::from);
-    let mut per_workload = settings.core_instances_per_workload.map(u64::from);
+    let per_workload = settings.core_instances_per_workload.map(u64::from);
     let pool_bound = |total: Option<u64>, per: Option<u64>| match (flavour, total, per) {
         (Flavour::Warm, Some(total), Some(per)) if per > 0 => Some(total / per),
         _ => None,
@@ -651,7 +793,10 @@ async fn measure_flavour(
     let mut running: Vec<usize> = Vec::new();
     let mut next_index = 0usize;
     let mut steps: Vec<Step> = Vec::new();
-    let mut cap = settings.max_components;
+    let mut capacity = CapacityTracker {
+        latest: None,
+        cap: settings.max_components,
+    };
     let mut all_start_latencies = Vec::new();
     let mut all_warmup_latencies = Vec::new();
     let mut all_request_latencies = Vec::new();
@@ -661,12 +806,19 @@ async fn measure_flavour(
         if let Some(stop) = target.exited() {
             break stop;
         }
-        if let Some(cap) = cap
+        if let Some(cap) = capacity.cap
             && running.len() >= cap
         {
             break Stop::Cap { cap };
         }
-        let room = cap.map_or(settings.step, |cap| cap.saturating_sub(running.len()));
+        checked_footprint(
+            target.sampler.footprint(),
+            settings.max_components,
+            "before starting another batch",
+        )?;
+        let room = capacity
+            .cap
+            .map_or(settings.step, |cap| cap.saturating_sub(running.len()));
         let attempted = settings.step.min(room).max(1);
         let step_began = Instant::now();
         let batch = start_batch(
@@ -687,6 +839,7 @@ async fn measure_flavour(
             requests(
                 &http,
                 &url,
+                run.run_id,
                 flavour,
                 batch.started.clone(),
                 settings.request_concurrency,
@@ -706,6 +859,7 @@ async fn measure_flavour(
         let answers = requests(
             &http,
             &url,
+            run.run_id,
             flavour,
             sample.clone(),
             settings.request_concurrency,
@@ -729,30 +883,16 @@ async fn measure_flavour(
         };
 
         let heartbeat = target.client.heartbeat(Duration::from_secs(5)).await.ok();
-        let footprint = target.sampler.footprint();
-        let bytes_per_workload = match (footprint, baseline) {
-            (Some(now), Some(base)) if !running.is_empty() => {
-                Some(now.saturating_sub(base) / running.len() as u64)
-            }
-            _ => None,
-        };
+        let footprint = checked_footprint(
+            target.sampler.footprint(),
+            settings.max_components,
+            "after measuring a batch",
+        )?;
         if let Some(limit) = batch.refused.iter().find_map(|m| core_instance_limit(m)) {
             pool_total = Some(limit);
-            if per_workload.is_none() && !running.is_empty() {
-                per_workload = Some((limit / running.len() as u64).max(1));
-            }
-        }
-        let theoretical = theoretical_limit(
-            settings.memory_limit_bytes,
-            baseline,
-            bytes_per_workload,
-            pool_bound(pool_total, per_workload),
-        );
-        if settings.max_components.is_none() {
-            cap = theoretical.map(|t| dynamic_cap(t, settings.overshoot));
         }
 
-        let step = Step {
+        let mut step = Step {
             workloads: running.len(),
             attempted,
             started: batch.started.len(),
@@ -773,7 +913,7 @@ async fn measure_flavour(
             warmup_p99_ms: percentile(&warmup.latencies, 0.99),
             footprint_bytes: footprint,
             peak_footprint_bytes: watch.peak(),
-            bytes_per_workload,
+            bytes_per_workload: None,
             heartbeat_workloads: heartbeat.as_ref().map(|h| h.workload_count),
             heartbeat_components: heartbeat.as_ref().map(|h| h.component_count),
             requests_ok: answers.ok,
@@ -783,8 +923,15 @@ async fn measure_flavour(
             request_p99_ms: percentile(&answers.latencies, 0.99),
             sample_growth_bytes: sample_growth,
             spin_down_ms,
-            theoretical_limit: theoretical,
+            theoretical_limit: None,
         };
+        capacity.observe(
+            &mut step,
+            flavour,
+            settings,
+            baseline,
+            pool_bound(pool_total, per_workload),
+        );
         (run.on_step)(&step, steps.is_empty());
         steps.push(step);
 
@@ -818,7 +965,7 @@ async fn measure_flavour(
                 example: example.clone(),
             };
         }
-        if warmup.failed * 2 > warmup.ok + warmup.failed {
+        if warmup.failed > 0 {
             break Stop::Requests {
                 stage: "warm-up",
                 failed: warmup.failed,
@@ -848,20 +995,18 @@ async fn measure_flavour(
     }
     drop(watch);
 
+    let mut serving = bench_tools::density::ServingEvidence::default();
     let served = steps
         .iter()
-        .filter(|s| {
-            bench_tools::density::served_sample(s.requests_ok, s.requests_failed, s.warmup_failed)
-        })
+        .filter(|s| serving.observe(s.requests_ok, s.requests_failed, s.warmup_failed))
         .map(|s| s.workloads)
         .max()
         .unwrap_or(0);
-    let last = steps.last();
     let summary = Summary {
         achieved: running.len(),
         served,
-        theoretical_limit: last.and_then(|s| s.theoretical_limit),
-        bytes_per_workload: last.and_then(|s| s.bytes_per_workload),
+        theoretical_limit: capacity.latest.and_then(|s| s.theoretical_limit),
+        bytes_per_workload: capacity.latest.and_then(|s| s.bytes_per_workload),
         peak_footprint_bytes: steps.iter().filter_map(|s| s.peak_footprint_bytes).max(),
         starts_per_sec: running.len() as f64 / total_start_secs.max(f64::EPSILON),
         start_p50_ms: percentile(&all_start_latencies, 0.50),
@@ -890,6 +1035,65 @@ async fn measure_flavour(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn response_bodies_are_drained_with_bounded_error_examples() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        for (status, complete, success) in [
+            ("200 OK", true, true),
+            ("500 Internal Server Error", true, false),
+            ("200 OK", false, false),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut header = Vec::new();
+                while !header.ends_with(b"\r\n\r\n") {
+                    header.push(socket.read_u8().await.unwrap());
+                    assert!(header.len() <= 4096);
+                }
+                assert!(
+                    String::from_utf8(header)
+                        .unwrap()
+                        .to_ascii_lowercase()
+                        .lines()
+                        .any(|line| line == "host: w0.warm.response-test.scale.test")
+                );
+                let head = format!(
+                    "HTTP/1.1 {status}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                );
+                socket.write_all(head.as_bytes()).await.unwrap();
+                // A body much larger than the retained error prefix, emitted
+                // incrementally so the server need not buffer it either.
+                let chunk = vec![b'x'; 4096];
+                for _ in 0..128 {
+                    socket.write_all(b"1000\r\n").await.unwrap();
+                    socket.write_all(&chunk).await.unwrap();
+                    socket.write_all(b"\r\n").await.unwrap();
+                }
+                if complete {
+                    socket.write_all(b"0\r\n\r\n").await.unwrap();
+                }
+            });
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap();
+            let answers = requests(&client, &url, "response-test", Flavour::Warm, vec![0], 1).await;
+            server.await.unwrap();
+            assert_eq!(answers.ok, usize::from(success));
+            assert_eq!(answers.failed, usize::from(!success));
+            if status.starts_with("500") {
+                let example = answers.example_error.unwrap();
+                assert!(example.len() <= ERROR_BODY_LIMIT + 100);
+                assert!(example.starts_with("500 Internal Server Error: "));
+                assert!(example.ends_with(" [truncated]"));
+            }
+        }
+    }
 
     #[test]
     fn classifies_refusals() {
@@ -960,6 +1164,130 @@ mod tests {
     }
 
     #[test]
+    fn failed_terminal_steps_preserve_the_verified_estimate_and_cap() {
+        let settings = Settings {
+            memory_limit_bytes: 2100,
+            max_components: None,
+            overshoot: 1.1,
+            step: 250,
+            start_concurrency: 10,
+            start_timeout_secs: 30,
+            start_retries: 0,
+            sample: 200,
+            request_concurrency: 10,
+            request_timeout_secs: 5,
+            spin_down_wait_ms: 0,
+            core_instances: 10_000,
+            core_instances_per_workload: None,
+            min_components: 0,
+        };
+        let measured_step = || Step {
+            workloads: 250,
+            attempted: 250,
+            started: 250,
+            elapsed_secs: 1.0,
+            start_secs: 1.0,
+            starts_per_sec: 250.0,
+            start_p50_ms: None,
+            start_p99_ms: None,
+            start_refused: 0,
+            start_timeouts: 0,
+            start_no_responders: 0,
+            start_retries: 0,
+            start_unanswered: 0,
+            start_failed: 0,
+            warmup_ok: 250,
+            warmup_failed: 0,
+            warmup_p50_ms: None,
+            warmup_p99_ms: None,
+            footprint_bytes: Some(1100),
+            peak_footprint_bytes: Some(1100),
+            bytes_per_workload: None,
+            heartbeat_workloads: None,
+            heartbeat_components: None,
+            requests_ok: 200,
+            requests_failed: 0,
+            requests_per_sec: 200.0,
+            request_p50_ms: None,
+            request_p99_ms: None,
+            sample_growth_bytes: None,
+            spin_down_ms: None,
+            theoretical_limit: None,
+        };
+        let failures: [fn(&mut Step); 8] = [
+            |step| step.warmup_failed = 1,
+            |step| step.warmup_ok -= 1,
+            |step| step.requests_failed = 1,
+            |step| step.requests_ok = 0,
+            |step| step.start_refused = 1,
+            |step| step.start_unanswered = 1,
+            |step| step.start_failed = 1,
+            |step| step.started -= 1,
+        ];
+        for fail in failures {
+            let mut capacity = CapacityTracker {
+                latest: None,
+                cap: None,
+            };
+            let mut first = measured_step();
+            capacity.observe(&mut first, Flavour::Warm, &settings, Some(100), None);
+            let verified = CapacityEstimate {
+                bytes_per_workload: Some(4),
+                theoretical_limit: Some(500),
+            };
+            assert_eq!(capacity.latest, Some(verified));
+            assert_eq!(capacity.cap, Some(550));
+
+            // The new batch reports started workloads without paying all of
+            // their expected memory costs. Its unverified slope would double
+            // both the predicted capacity and the automatic stopping cap.
+            let mut terminal = measured_step();
+            terminal.workloads = 500;
+            fail(&mut terminal);
+            capacity.observe(&mut terminal, Flavour::Warm, &settings, Some(100), None);
+            assert_eq!(terminal.bytes_per_workload, None);
+            assert_eq!(terminal.theoretical_limit, None);
+            assert_eq!(capacity.latest, Some(verified));
+            assert_eq!(capacity.cap, Some(550));
+        }
+    }
+
+    #[test]
+    fn uncapped_runs_require_initial_and_subsequent_memory_readings() {
+        for phase in [
+            "at baseline",
+            "before starting another batch",
+            "after measuring a batch",
+        ] {
+            let error = checked_footprint(None, None, phase).unwrap_err();
+            assert!(error.to_string().contains(phase));
+            assert!(error.to_string().contains("--max-components"));
+        }
+
+        // Losing a PID after a valid baseline must stop an uncapped run,
+        // even if earlier samples could have supplied an automatic cap.
+        assert_eq!(
+            checked_footprint(Some(1024), None, "at baseline").unwrap(),
+            Some(1024)
+        );
+        assert!(checked_footprint(None, None, "before starting another batch").is_err());
+        // An explicit workload count bounds an intentionally unmeasured run.
+        assert_eq!(
+            checked_footprint(None, Some(10), "at baseline").unwrap(),
+            None
+        );
+        assert_eq!(
+            checked_footprint(None, Some(10), "after measuring a batch").unwrap(),
+            None
+        );
+        // Zero is a measurement, not a missing-value sentinel.
+        assert_eq!(
+            checked_footprint(Some(0), None, "at baseline").unwrap(),
+            Some(0)
+        );
+    }
+
+    #[test]
     fn stop_reasons_serialize_with_a_tag() {
         let stop = Stop::StartRefused {
             class: RefusalClass::PoolExhausted,
@@ -979,7 +1307,7 @@ mod tests {
     #[test]
     fn names_are_rfc_1123() {
         for flavour in [Flavour::Warm, Flavour::ScaleToZero] {
-            let name = host_header(flavour, 12345);
+            let name = host_header("0123456789abcdef0123456789abcdef", flavour, usize::MAX);
             assert!(name.len() <= 253);
             for label in name.split('.') {
                 assert!(!label.is_empty() && label.len() <= 63);
@@ -990,6 +1318,22 @@ mod tests {
                 );
                 assert!(!label.starts_with('-') && !label.ends_with('-'));
             }
+        }
+    }
+
+    #[test]
+    fn simultaneous_runs_have_distinct_workloads_and_http_routes() {
+        let first = "0123456789abcdef0123456789abcdef";
+        let second = "fedcba9876543210fedcba9876543210";
+        for flavour in [Flavour::Warm, Flavour::ScaleToZero] {
+            assert_ne!(
+                workload_id(first, flavour, 0),
+                workload_id(second, flavour, 0)
+            );
+            assert_ne!(
+                host_header(first, flavour, 0),
+                host_header(second, flavour, 0)
+            );
         }
     }
 }
