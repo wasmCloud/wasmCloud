@@ -2,6 +2,7 @@
 //! on NATS by its heartbeat.
 
 use std::collections::HashSet;
+use std::io::{Read as _, Seek as _, SeekFrom};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -57,19 +58,62 @@ impl Drop for ChildGuard {
     }
 }
 
-/// The last `lines` lines of a log file, for a stop report.
+const LOG_TAIL_BYTES: usize = 64 * 1024;
+const TRUNCATED_LOG: &str = "[log truncated]\n";
+
+/// The last `lines` lines from a bounded suffix, for a stop report.
 pub fn log_tail(path: &Path, lines: usize) -> String {
-    let Ok(body) = std::fs::read(path) else {
+    if lines == 0 {
+        return String::new();
+    }
+    let Ok(mut file) = std::fs::File::open(path) else {
         return String::new();
     };
-    let body = String::from_utf8_lossy(&body);
-    let all: Vec<&str> = body.lines().collect();
-    let skip = all.len().saturating_sub(lines);
-    all.iter()
-        .skip(skip)
-        .copied()
+    let Ok(len) = file.metadata().map(|m| m.len()) else {
+        return String::new();
+    };
+    let offset = len.saturating_sub(LOG_TAIL_BYTES as u64);
+    if file.seek(SeekFrom::Start(offset)).is_err() {
+        return String::new();
+    }
+    let mut bytes = Vec::new();
+    if file
+        .take(LOG_TAIL_BYTES as u64)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return String::new();
+    }
+    // Prefer complete lines, but retain a suffix when even one line is oversized.
+    let bytes = if offset > 0 {
+        bytes
+            .iter()
+            .position(|b| *b == b'\n')
+            .filter(|i| i + 1 < bytes.len())
+            .map_or(bytes.as_slice(), |i| &bytes[i + 1..])
+    } else {
+        bytes.as_slice()
+    };
+    let body = String::from_utf8_lossy(bytes);
+    // Replacement characters can expand malformed UTF-8; cap the rendered text too.
+    let mut start = body.len().saturating_sub(LOG_TAIL_BYTES);
+    while !body.is_char_boundary(start) {
+        start += 1;
+    }
+    let tail = body[start..]
+        .lines()
+        .rev()
+        .take(lines)
         .collect::<Vec<_>>()
-        .join("\n")
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+    if offset > 0 || start > 0 {
+        format!("{TRUNCATED_LOG}{tail}")
+    } else {
+        tail
+    }
 }
 
 fn log_file(path: &Path) -> Result<(Stdio, Stdio)> {
@@ -361,6 +405,40 @@ impl Heartbeats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
+
+    #[test]
+    fn log_tails_bound_large_files_and_single_lines() -> Result<()> {
+        let path = std::env::temp_dir().join(format!("bench-log-tail-{}", std::process::id()));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        struct Remove(PathBuf);
+        impl Drop for Remove {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let _remove = Remove(path.clone());
+        file.set_len(32 * 1024 * 1024)?;
+        file.seek(SeekFrom::End(0))?;
+        file.write_all(b"partial\nlast but one\nlast\n")?;
+        assert_eq!(
+            log_tail(&path, 2),
+            format!("{TRUNCATED_LOG}last but one\nlast")
+        );
+
+        file.set_len(0)?;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&vec![0xff; LOG_TAIL_BYTES * 2])?;
+        let tail = log_tail(&path, 30);
+        assert!(tail.starts_with(TRUNCATED_LOG));
+        assert!(tail.len() <= LOG_TAIL_BYTES + TRUNCATED_LOG.len());
+        assert!(log_tail(&path, 0).is_empty());
+        drop(file);
+        Ok(())
+    }
 
     const HELP: &str = "Usage: wash host [OPTIONS]\n\nOptions:\n      --scheduler-nats-url <SCHEDULER_NATS_URL>\n          The URL\n      --data-nats-url <DATA_NATS_URL>\n      --http-addr <HTTP_ADDR>\n      --allow-insecure-registries\n      --core-instances <CORE_INSTANCES>\n          [env: WASH_CORE_INSTANCES=]\n      --max-guest-memory <MAX_GUEST_MEMORY>\n      --host-name <HOST_NAME>\n  -h, --help\n          Print help (see `--max-process-memory`)\n";
 
