@@ -316,6 +316,13 @@ The playbook installs (as `root` on the bench host):
   copy (e.g. a Dependabot bump), `run-bench.sh` installs the matching
   runner under `~/.cache/wasmcloud-bench/` and sets `GUNGRAUN_RUNNER`,
   so the bench keeps working until the next Ansible run.
+- **`wasm-component-ld`** in `/usr/local/bin`, pinned by `provision.yml`.
+  `run-bench.sh` selects this binary with
+  `CARGO_TARGET_WASM32_WASIP2_LINKER` and logs its version before building.
+  This also covers existing runners whose Cargo config predates the linker
+  setup. An explicit `CARGO_TARGET_WASM32_WASIP2_LINKER` is preserved. To
+  install or repair the shared binary, run
+  `ansible-playbook provision.yml --tags wasm-component-ld`.
 - **Node.js (current LTS)** from NodeSource's apt repo. The CI
   workflow runs `.github/scripts/*.mjs` via `run: node …`, which
   needs an OS-level `node` on `PATH` (self-hosted runners do not

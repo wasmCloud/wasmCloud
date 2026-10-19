@@ -30,6 +30,16 @@ bench="${1:?bench name required}"
 # shellcheck disable=SC1091
 . "$HOME/.cargo/env"
 
+# Use the linker installed by provision.yml for every nested fixture build,
+# including on runners registered before install-runner.sh configured Cargo.
+# An explicit caller override still wins. Installing a binary on PATH alone
+# does not replace Rust's older bundled wasm32-wasip2 linker.
+export CARGO_TARGET_WASM32_WASIP2_LINKER="${CARGO_TARGET_WASM32_WASIP2_LINKER:-/usr/local/bin/wasm-component-ld}"
+if ! linker_version=$("$CARGO_TARGET_WASM32_WASIP2_LINKER" --version); then
+  echo "cannot run the fixture linker at ${CARGO_TARGET_WASM32_WASIP2_LINKER}; run ansible-playbook provision.yml --tags wasm-component-ld" >&2
+  exit 1
+fi
+
 : "${CARGO_TARGET_DIR:=/var/lib/bench/target}"
 mkdir -p "$CARGO_TARGET_DIR"
 
@@ -53,6 +63,7 @@ log="${CARGO_TARGET_DIR}/run-${bench}-${GITHUB_RUN_ID:-local}.log"
   # dispatch ref, so this log header agrees with the emitted data rows.
   echo "ref:    ${WASMCLOUD_BENCH_REF:-${GITHUB_REF_NAME:-?}}"
   echo "ts:     $(date -u +%FT%TZ)"
+  echo "linker: ${linker_version} (${CARGO_TARGET_WASM32_WASIP2_LINKER})"
   echo
 } | tee "$log"
 
