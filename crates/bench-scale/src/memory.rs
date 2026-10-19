@@ -255,8 +255,19 @@ mod tests {
                 Arc::clone(&halt),
                 required,
             );
-            tokio::time::sleep(Duration::from_millis(101)).await;
-            assert_eq!(halt.load(Ordering::Relaxed), required);
+            if required {
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while !halt.load(Ordering::Relaxed) {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                })
+                .await
+                .expect("a lost required measurement halts the batch");
+            } else {
+                // Paused time: run several sampling intervals without a halt.
+                tokio::time::sleep(Duration::from_millis(350)).await;
+                assert!(!halt.load(Ordering::Relaxed));
+            }
             assert_eq!(watch.check_available().is_err(), required);
             assert!(!watch.over.load(Ordering::Relaxed));
         }
