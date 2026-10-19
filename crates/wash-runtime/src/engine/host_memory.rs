@@ -39,6 +39,8 @@
 
 use std::fmt;
 
+use super::pool_usage::PoolTotals;
+
 /// One mebibyte.
 pub const MIB: u64 = 1024 * 1024;
 
@@ -437,7 +439,7 @@ impl HostMemoryBudgets {
     }
 }
 
-/// What to say about an installed pool of `memories` slots, each sized for a
+/// What to say about an installed pool, with memories sized for a
 /// `max_memory_size` heap, at startup: each check that has something to say,
 /// independently, so one finding never hides the other.
 ///
@@ -445,11 +447,11 @@ impl HostMemoryBudgets {
 /// enforces it: it is a product of two knobs an operator sets independently,
 /// and the failure it causes — the engine or instantiation refusing, with
 /// neither number in the message — is unpleasant to diagnose.
-pub(crate) fn pool_advisories(memories: u32, max_memory_size: u64) -> Vec<String> {
+pub(crate) fn pool_advisories(totals: &PoolTotals, max_memory_size: u64) -> Vec<String> {
     [
         pool_heap_ceiling_advisory(max_memory_size),
-        pool_reservation_advisory(memories, max_memory_size, usable_address_space()),
-        max_map_count().and_then(|limit| pool_map_count_advisory(memories, limit)),
+        pool_reservation_advisory(totals.memories, max_memory_size, usable_address_space()),
+        max_map_count().and_then(|limit| pool_map_count_advisory(totals, limit)),
     ]
     .into_iter()
     .flatten()
@@ -479,24 +481,28 @@ fn pool_heap_ceiling_advisory(max_memory_size: u64) -> Option<String> {
 /// What to say when the pool would use up the kernel's per-process limit
 /// on memory mappings, if anything.
 ///
-/// Address space is not the only ceiling on Linux: every slot also costs
-/// mappings ([`MAPPINGS_PER_SLOT`]), and past `vm.max_map_count` an
-/// `mmap` or `mprotect` fails however much address space is left. At the
-/// kernel's default of 65530 that is about 13,000 slots — well before the
-/// address space runs out.
-fn pool_map_count_advisory(memories: u32, max_map_count: u64) -> Option<String> {
-    let needed = u64::from(memories).saturating_mul(MAPPINGS_PER_SLOT);
+/// Stack guards split mappings when the engine is built; live memories split
+/// their accessible pages from their reservations later. Allow an additional
+/// mapping per table for fragmentation and slack. These are independent pool
+/// totals, so overrides must not be estimated from the memory count alone.
+fn pool_map_count_advisory(totals: &PoolTotals, max_map_count: u64) -> Option<String> {
+    let PoolTotals {
+        memories,
+        stacks,
+        tables,
+        ..
+    } = *totals;
+    let needed = u64::from(memories) * 2 + u64::from(stacks) * 2 + u64::from(tables);
     (needed > max_map_count).then(|| {
         format!(
-            "a pool of {memories} memories (core-instances, or \
-             WASMTIME_POOLING_TOTAL_MEMORIES) needs about {needed} memory mappings once it \
-             is in use, past this kernel's vm.max_map_count of {max_map_count}. \
-             Instantiation will start failing before the pool is full. Raise \
-             vm.max_map_count (sysctl) or lower core-instances to about {}, which leaves \
-             room for the rest of the process's mappings.",
-            // 90% of what the slots alone could take: libraries, thread
-            // stacks, allocator arenas and compiled code map too.
-            max_map_count / MAPPINGS_PER_SLOT / 10 * 9,
+            "a pool of {memories} memories, {stacks} stacks and {tables} tables needs about \
+             {needed} memory mappings, past this kernel's vm.max_map_count of \
+             {max_map_count}. Engine startup or later instantiation may fail. Raise \
+             vm.max_map_count (sysctl), reduce the installed WASMTIME_POOLING_TOTAL_MEMORIES, \
+             WASMTIME_POOLING_TOTAL_STACKS and WASMTIME_POOLING_TOTAL_TABLES overrides, or \
+             lower core-instances when no overrides are set. Aim for fewer than {} pool \
+             mappings to leave room for libraries, thread stacks and compiled code.",
+            max_map_count / 10 * 9,
         )
     })
 }
@@ -609,13 +615,6 @@ fn soft_address_space_limit(limits: &str) -> Option<u64> {
         .parse()
         .ok()
 }
-
-/// Memory mappings a pool slot can cost: wasmtime's stack pool splits each
-/// stack's guard page off its stack (2), and a live linear memory is split
-/// into its accessible part and the rest of its reservation (about 2), plus
-/// one for tables and slack. Rounded up rather than measured exactly, so the
-/// advisory errs towards speaking early.
-const MAPPINGS_PER_SLOT: u64 = 5;
 
 /// The kernel's per-process limit on memory mappings, where there is one to
 /// read.
@@ -766,7 +765,11 @@ mod tests {
     }
 
     fn map_count_advisory(budgets: &HostMemoryBudgets, max_map_count: u64) -> Option<String> {
-        pool_map_count_advisory(budgets.core_instances, max_map_count)
+        let mut config = wasmtime::PoolingAllocationConfig::default();
+        config.total_memories(budgets.core_instances);
+        config.total_stacks(budgets.core_instances);
+        config.total_tables(budgets.core_instances);
+        pool_map_count_advisory(&PoolTotals::of(&config), max_map_count)
     }
 
     #[test]
@@ -1028,12 +1031,40 @@ mod tests {
             map_count_advisory(&resolved, 65_530).expect("100,000 mappings are past 65530");
         assert!(advisory.contains("vm.max_map_count"), "{advisory}");
         assert!(
-            advisory.contains("11790"),
-            "names the count that fits: {advisory}"
+            advisory.contains("58977"),
+            "names a mapping target with headroom: {advisory}"
         );
         assert_eq!(map_count_advisory(&resolved, 1_048_576), None);
         let stock = HostMemoryBudgets::resolve(None, None, None).unwrap();
         assert_eq!(map_count_advisory(&stock, 65_530), None);
+    }
+
+    #[test]
+    fn mapping_advisories_use_independent_installed_pool_totals() {
+        let mut config = wasmtime::PoolingAllocationConfig::default();
+        config.total_memories(1000);
+        config.total_stacks(40_000);
+        config.total_tables(1000);
+        let advisory = pool_map_count_advisory(&PoolTotals::of(&config), 65_530)
+            .expect("stack guard mappings alone exceed the kernel limit");
+        assert!(advisory.contains("83000 memory mappings"), "{advisory}");
+        assert!(advisory.contains("40000 stacks"), "{advisory}");
+        assert!(advisory.contains("Engine startup"), "{advisory}");
+        assert!(
+            advisory.contains("WASMTIME_POOLING_TOTAL_STACKS"),
+            "{advisory}"
+        );
+
+        config.total_stacks(1000);
+        assert!(pool_map_count_advisory(&PoolTotals::of(&config), 65_530).is_none());
+        config.total_tables(70_000);
+        let advisory = pool_map_count_advisory(&PoolTotals::of(&config), 65_530)
+            .expect("the table allowance uses its own installed count");
+        assert!(advisory.contains("74000 memory mappings"), "{advisory}");
+        assert!(
+            advisory.contains("WASMTIME_POOLING_TOTAL_TABLES"),
+            "{advisory}"
+        );
     }
 
     #[test]
