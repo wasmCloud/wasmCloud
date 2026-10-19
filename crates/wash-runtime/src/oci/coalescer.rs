@@ -29,6 +29,34 @@ pub(super) type CoalescedCell<V> =
 struct InFlight<V> {
     started: Instant,
     cell: Weak<CoalescedCell<V>>,
+    waiters: usize,
+}
+
+/// Remove a cancelled flight when its last caller leaves, without needing
+/// another request to sweep dead keys. Count owners under the same lock as
+/// registration so concurrent drops cannot both miss being the last owner.
+struct InFlightGuard<'a, K: std::hash::Hash + Eq, V> {
+    in_flight: &'a Mutex<HashMap<K, InFlight<V>>>,
+    key: K,
+    cell: Arc<CoalescedCell<V>>,
+}
+
+impl<K: std::hash::Hash + Eq, V> Drop for InFlightGuard<'_, K, V> {
+    fn drop(&mut self) {
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(entry) = in_flight.get_mut(&self.key)
+            && std::ptr::eq(entry.cell.as_ptr(), Arc::as_ptr(&self.cell))
+        {
+            if entry.waiters > 1 {
+                entry.waiters -= 1;
+            } else {
+                in_flight.remove(&self.key);
+            }
+        }
+    }
 }
 
 impl<K, V> Coalescer<K, V>
@@ -95,7 +123,8 @@ where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<V>>,
     {
-        let cell = self.join_or_start(&key, reuse_finished);
+        let flight = self.join_or_start(&key, reuse_finished);
+        let cell = &flight.cell;
         let mut ran = false;
         let result = cell
             .get_or_init(|| {
@@ -115,7 +144,7 @@ where
             // join window. Do not overwrite its work with an older result.
             if in_flight
                 .get(&key)
-                .is_some_and(|entry| std::ptr::eq(entry.cell.as_ptr(), Arc::as_ptr(&cell)))
+                .is_some_and(|entry| std::ptr::eq(entry.cell.as_ptr(), Arc::as_ptr(cell)))
             {
                 in_flight.remove(&key);
                 if reuse_finished && let Ok(value) = &result {
@@ -128,7 +157,12 @@ where
         result.map_err(|err| anyhow::Error::new(crate::engine::SharedError(err)))
     }
 
-    fn join_or_start(&self, key: &K, reuse_finished: bool) -> Arc<CoalescedCell<V>> {
+    fn join_or_start(&self, key: &K, reuse_finished: bool) -> InFlightGuard<'_, K, V> {
+        let guard = |cell| InFlightGuard {
+            in_flight: &self.in_flight,
+            key: key.clone(),
+            cell,
+        };
         let mut in_flight = self
             .in_flight
             .lock()
@@ -136,9 +170,9 @@ where
         // Looked up under the lock, so a result moved here by a leader that
         // just finished is not missed.
         if reuse_finished && let Some(value) = self.finished.get(key) {
-            return Arc::new(CoalescedCell::new_with(Some(Ok(value))));
+            return guard(Arc::new(CoalescedCell::new_with(Some(Ok(value)))));
         }
-        let joinable = in_flight.get(key).and_then(|entry| {
+        let joinable = in_flight.get_mut(key).and_then(|entry| {
             if entry.started.elapsed() >= self.join {
                 return None;
             }
@@ -149,23 +183,91 @@ where
             match cell.get() {
                 Some(Err(_)) => None,
                 Some(Ok(_)) if !reuse_finished => None,
-                _ => Some(cell),
+                _ => {
+                    entry.waiters += 1;
+                    Some(cell)
+                }
             }
         });
         if let Some(cell) = joinable {
-            return cell;
+            return guard(cell);
         }
-        // Entries whose callers were all cancelled are dropped here, so the map
-        // holds no more than the requests actually in flight.
-        in_flight.retain(|_, entry| entry.cell.strong_count() > 0);
         let cell = Arc::new(CoalescedCell::default());
         in_flight.insert(
             key.clone(),
             InFlight {
                 started: Instant::now(),
                 cell: Arc::downgrade(&cell),
+                waiters: 1,
             },
         );
-        cell
+        guard(cell)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cancelling_a_burst_releases_keys_without_another_request() {
+        let cache = Arc::new(Coalescer::new(
+            16,
+            Duration::from_secs(60),
+            Duration::from_secs(5),
+            |_: &u32| 1,
+        ));
+        let (started, mut ready) = tokio::sync::mpsc::channel(32);
+        let mut callers = tokio::task::JoinSet::new();
+        for key in 0..32 {
+            let cache = cache.clone();
+            let started = started.clone();
+            callers.spawn(async move {
+                cache
+                    .run(key, || async {
+                        started.send(()).await.unwrap();
+                        std::future::pending().await
+                    })
+                    .await
+            });
+        }
+        for _ in 0..32 {
+            ready.recv().await.unwrap();
+        }
+        assert_eq!(cache.in_flight_count(), 32);
+        callers.abort_all();
+        while let Some(result) = callers.join_next().await {
+            assert!(result.unwrap_err().is_cancelled());
+        }
+        assert_eq!(cache.in_flight_count(), 0);
+    }
+
+    #[test]
+    fn only_the_last_waiter_removes_its_flight() {
+        let cache = Coalescer::new(
+            16,
+            Duration::from_secs(60),
+            Duration::from_secs(5),
+            |_: &u32| 1,
+        );
+        let first = cache.join_or_start(&"image", false);
+        let second = cache.join_or_start(&"image", false);
+        assert!(Arc::ptr_eq(&first.cell, &second.cell));
+        drop(first);
+        assert_eq!(cache.in_flight_count(), 1);
+        drop(second);
+        assert_eq!(cache.in_flight_count(), 0);
+    }
+
+    #[test]
+    fn cancelling_an_expired_flight_keeps_its_replacement() {
+        let cache = Coalescer::new(16, Duration::ZERO, Duration::from_secs(5), |_: &u32| 1);
+        let old = cache.join_or_start(&"image", false);
+        let replacement = cache.join_or_start(&"image", false);
+        assert!(!Arc::ptr_eq(&old.cell, &replacement.cell));
+        drop(old);
+        assert_eq!(cache.in_flight_count(), 1);
+        drop(replacement);
+        assert_eq!(cache.in_flight_count(), 0);
     }
 }
