@@ -1605,8 +1605,18 @@ impl EngineBuilder {
 
         // The pool maps its whole slab here, so a pool too large for the
         // address space fails now, with wasmtime naming only the mapping. Say
-        // which numbers produced it.
+        // which numbers produced it. A heap ceiling past the reservation is
+        // refused here too, whatever the slot count, so that is named instead.
         let inner = wasmtime::Engine::new(&config).map_err(|e| match installed_pool {
+            Some(pool) if pool.max_memory_size > host_memory::WASMTIME_MEMORY_RESERVATION => e
+                .context(format!(
+                    "building the engine failed with a pooling allocator whose heap ceiling \
+                     (default-heap-memory) of {} is past wasmtime's {} memory reservation, \
+                     which the pooling allocator refuses; set default-heap-memory to {} or less",
+                    host_memory::render_bytes(pool.max_memory_size),
+                    host_memory::render_bytes(host_memory::WASMTIME_MEMORY_RESERVATION),
+                    host_memory::render_bytes(host_memory::WASMTIME_MEMORY_RESERVATION),
+                )),
             Some(pool) => e.context(format!(
                 "building the engine failed with a pooling allocator reserving {} of address \
                  space ({} memories of {} each) out of the {} this process can map; if the \
