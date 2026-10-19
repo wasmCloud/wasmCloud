@@ -1529,13 +1529,10 @@ mod tests {
         .unwrap();
 
         let reference = "localhost:5000/test:latest";
-        let component_path = cache_manager.get_component_path(reference);
-        let digest_path = cache_manager.get_digest_path(reference);
+        let entry_path = cache_manager.get_entry_path(reference);
 
-        assert!(component_path.starts_with(temp_dir.path()));
-        assert!(component_path.extension().unwrap() == "wasm");
-        assert!(digest_path.starts_with(temp_dir.path()));
-        assert!(digest_path.file_name().unwrap() == "digest");
+        assert!(entry_path.starts_with(cache_manager.get_cache_dir(reference)));
+        assert!(entry_path.file_name().unwrap() == "entry");
     }
 
     #[tokio::test]

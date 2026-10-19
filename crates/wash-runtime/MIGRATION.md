@@ -12,6 +12,14 @@ including a reference pinned by digest. `cleanup_cache` removes the old
 `wash dev` and `wash oci` do not clean their cache, so remove old directories
 under `<wash cache dir>/oci` manually when no longer needed.
 
+Each scoped directory stores the digest and component together in one `entry`
+file, published by an atomic rename. Older `component.wasm`/`digest` pairs are
+ignored because concurrent pulls could have mixed their versions. Fetch them
+again before using `Never`, even if they already have a `v3-` directory name.
+Old files remain until age-based cleanup removes the directory, or can be
+removed manually. Cancelling a write can leave a temporary file in the directory;
+temporary files are never read as entries and expire with that directory.
+
 Entry names are keyed with a random secret created once as `cache.key` in the
 cache root, readable only by its owner on Unix. Keep it with the cache: removing
 it, or copying a cache without it, orphans its entries. A credential rotation is
