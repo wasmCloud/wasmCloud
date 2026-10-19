@@ -63,7 +63,7 @@ A flavour stops at the first of:
 | `start-refused` | a start came back `WORKLOAD_STATE_ERROR`; classified as pool exhausted, memory limit, or other |
 | `memory-limit` | the host's footprint reached `--memory-limit` (checked every 100 ms, so a step halts mid-way) |
 | `requests` | more than half the warm-up or sampled requests failed |
-| `host-exited` | the host process ended; its exit status and log tail are kept |
+| `host-exited` | the host process ended; its exit status is kept, with raw diagnostics omitted from reports |
 | `starts-unanswered` | a start got no answer even after retries |
 | `starts-failed` | most of a step's starts failed for another reason |
 | `cap` | `--max-components`, or the theoretical limit × `--overshoot`, was reached |
@@ -119,7 +119,11 @@ Its stdout and stderr go to `host-<flavour>.log` in the run directory.
 Each run has a random UUID in its workload IDs, HTTP hostnames, and default run
 directory, so concurrent runs do not share routes or overwrite each other's logs.
 
-All child processes are killed when the bench exits, errors, panics or is interrupted.
+Spawned processes and their descendants are stopped when the bench exits, errors,
+panics, receives Ctrl-C, or receives SIGTERM on Unix. Compiler subprocesses and
+host wrappers use process groups on Unix and kill-on-close jobs on Windows;
+Windows children are assigned to their job before they run. The cleanup regression
+tests exercise both cancelled setup commands and wrappers that exit before their children.
 
 ## Other hosts
 
@@ -174,7 +178,7 @@ except the repeatable `--host-arg`.
 | `--min-components` | `1` | exit 2 if a flavour served fewer |
 | `--report` | off (`BENCH_SCALE_REPORT=1`) | print the human report; otherwise the run is silent |
 | `--json <path>` | none | write full results as JSON, report or not |
-| `--run-dir` | `<cache>/runs/<unix time>` | host and NATS logs, OCI caches |
+| `--run-dir` | `<cache>/runs/<run UUID>` | host and NATS logs, OCI caches |
 | `--cache-dir` | `target/bench-scale` | downloads |
 | `--host-bin` | released wash | host binary |
 | `--host-cli` | `wash` | `wash` (flags probed from `host --help`) or `raw` |
@@ -226,6 +230,15 @@ whether or not `--report` is set,
 so runs against different host binaries can be compared.
 Unmeasured values are `null` there.
 
+HTTP and NATS endpoint credentials are redacted in text and JSON reports. Raw
+host/RPC/HTTP diagnostic text and log tails are replaced with an omission marker,
+because those messages may echo credentials. Local host log files remain unchanged.
+Reading a log tail for a local error is limited to a 64 KiB suffix.
+
+The local registry admits at most 256 connections, with a 10-second header timeout
+and a 120-second connection lifetime. Shutdown closes existing connections as well
+as the listener.
+
 ## Caveats
 
 - CPU cannot be limited from inside the process.
@@ -240,6 +253,14 @@ Unmeasured values are `null` there.
   `phys_footprint` on macOS (including compressed pages), and sysinfo's resident
   size elsewhere (which misses compressed and swapped pages).
   The report says which.
+  On Linux this includes resident file-backed pages, while the new wash host's
+  process admission guard uses `RssAnon + VmSwap`, excluding resident file-backed
+  and shared-memory pages (`VmRSS + VmSwap` when `RssAnon` is unavailable).
+  The bench can therefore reach its own ceiling before
+  the host refuses starts; the two limits intentionally measure different footprints.
+- Without `--max-components`, a valid process footprint is required at baseline
+  and throughout the run. An unavailable reading aborts the experiment and runs
+  cleanup. An explicit component cap permits unknown footprint values in the report.
 - Attached to a running host (`--host-nats-only`), memory is unknown without `--host-pid`,
   and the run then needs `--max-components` to bound it.
   Every submitted workload ID is journaled, including unanswered starts. Normal
