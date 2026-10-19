@@ -42,7 +42,8 @@ impl CacheManager {
         })
         .await
         .context("OCI cache key task failed")??;
-        let mac = Hmac::<Sha256>::new_from_slice(&key).context("invalid OCI cache key")?;
+        let mac = Hmac::<Sha256>::new_from_slice(&key)
+            .map_err(|err| anyhow::anyhow!("invalid OCI cache key: {err}"))?;
         Ok(Self {
             cache_dir,
             auth: AuthId::of(auth),
@@ -280,6 +281,28 @@ fn parse_key(path: &Path, bytes: &[u8]) -> Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A known answer for the whole disk-key message, generated independently
+    /// with Python's hmac/hashlib. Opening the cache also exercises HMAC setup
+    /// with the dependency's default features disabled, as in normal builds.
+    #[tokio::test]
+    async fn cache_names_match_the_keyed_v3_scope() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join(KEY_FILE), [0x0b; 32]).unwrap();
+        let cache = CacheManager::open(
+            dir.path().to_path_buf(),
+            &RegistryAuth::Basic("user".into(), "secret".into()),
+            true,
+            TrustId([0x11; 32]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            cache.get_cache_dir("registry.invalid/ns/component:v1"),
+            dir.path()
+                .join("v3-0d1b26c905bf9add4300c5afdff9ee3afedf8ae92ff2d556afe5949808d14897")
+        );
+    }
 
     #[tokio::test]
     async fn the_key_is_created_once_and_reused() {
