@@ -92,6 +92,8 @@ so a second run downloads and builds nothing.
   which is wrapped with the WASI reactor adapter. Install the `wasm32-wasip1` Rust target first.
   Warm runs require a verified P3 HTTP export; an external OCI reference cannot
   establish that, so use `--wasm` for a custom warm experiment.
+  A `--wasm` component without a `wasi:http/handler@0.3.0` export (a P2 handler, say)
+  is rejected for either flavour.
   The component is served from a read-only OCI registry inside the bench,
   tagged by its content hash: `127.0.0.1:<port>/bench/http-handler:<hash>`.
   The registry answers exactly what the host's OCI client (oci-client 0.17) asks in a pull:
@@ -207,9 +209,14 @@ Table columns:
 | `down ms` | scale-to-zero: footprint settle time after the sample |
 | `limit` | theoretical limit so far |
 
+`-` marks a value that was not measured, or a limit with too little evidence to estimate.
+It never means the capacity is unbounded.
+
 `--json` writes everything (settings, machine, image, every step, stop reasons,
-registry request counts) whether or not `--report` is set,
+registry request counts, warm-up failures beside request failures)
+whether or not `--report` is set,
 so runs against different host binaries can be compared.
+Unmeasured values are `null` there.
 
 ## Caveats
 
