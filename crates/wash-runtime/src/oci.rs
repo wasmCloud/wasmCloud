@@ -675,7 +675,7 @@ async fn pull_uncoalesced(
             // Fetched only now: the pinned hit above needs no client, and a
             // host restoring from its cache would otherwise build or look one
             // up per workload for nothing.
-            let fetched_digest = pull_client(config.insecure, auth, trust)
+            let fetched_digest = pull_client(reference_parsed, config.insecure, auth, trust)
                 .await?
                 .fetch_manifest_digest(reference_parsed, auth)
                 .await?;
@@ -695,7 +695,7 @@ async fn pull_uncoalesced(
         bail!("component not found in cache and pull policy is 'Never'");
     }
 
-    let client = pull_client(config.insecure, auth, trust).await?;
+    let client = pull_client(reference_parsed, config.insecure, auth, trust).await?;
 
     // Pull the component using oci-client. Boxed: its future is large, and
     // would otherwise sit inline in the coalesced pull's.
