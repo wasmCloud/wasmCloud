@@ -578,7 +578,8 @@ fn pull_coalescer() -> &'static Coalescer<PullKey, Arc<Pulled>> {
     static PULLS: OnceLock<Coalescer<PullKey, Arc<Pulled>>> = OnceLock::new();
     // Bounded by the bytes finished pulls hold, not their count: each keeps
     // its whole component for the reuse window, and a burst of large images
-    // would otherwise all stay resident.
+    // would otherwise all stay resident. Pulls in flight are not counted and
+    // never refused: they hold only what their callers are waiting on.
     PULLS.get_or_init(|| {
         Coalescer::with_min_weight(
             PULL_REUSE_BYTES,
@@ -596,8 +597,8 @@ fn pull_coalescer() -> &'static Coalescer<PullKey, Arc<Pulled>> {
 
 /// The most component bytes finished pulls hold for reuse at once.
 const PULL_REUSE_BYTES: u64 = 256 * 1024 * 1024;
-/// Account for keys, cells and error chains even when no bytes were pulled.
-/// This also limits the cache to about 16k small/pending/failed entries. Moka's
+/// Account for keys and bookkeeping even when a result holds few bytes.
+/// This also limits the cache to about 16k small results. Moka's
 /// maintenance is eventual; this is a retention target, not a strict RSS cap.
 const PULL_ENTRY_WEIGHT: u32 = 16 * 1024;
 
@@ -950,8 +951,9 @@ mod tests {
                     .is_err()
             );
         }
-        cache.cells.run_pending_tasks();
-        assert!(cache.cells.entry_count() <= 16);
+        cache.finished.run_pending_tasks();
+        assert_eq!(cache.finished.entry_count(), 0);
+        assert_eq!(cache.in_flight_count(), 0);
         assert_eq!(
             cache
                 .run("oversized".into(), || async { Ok(u32::MAX) })
@@ -959,8 +961,33 @@ mod tests {
                 .unwrap(),
             u32::MAX
         );
-        cache.cells.run_pending_tasks();
-        assert!(!cache.cells.contains_key("oversized"));
+        cache.finished.run_pending_tasks();
+        assert!(!cache.finished.contains_key("oversized"));
+        assert_eq!(cache.in_flight_count(), 0);
+    }
+
+    /// Requests in flight are never refused for space: a full reuse cache,
+    /// here one too small to hold any result, must not stop coalescing.
+    #[tokio::test]
+    async fn a_full_reuse_cache_still_coalesces() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let coalescer: Coalescer<&str, u32> =
+            Coalescer::new(1, Duration::from_secs(60), Duration::from_secs(60), |_| {
+                u32::MAX
+            });
+        let runs = AtomicUsize::new(0);
+        let work = || async {
+            runs.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Ok(1)
+        };
+        let (a, b, c) = tokio::join!(
+            coalescer.run("ref", work),
+            coalescer.run("ref", work),
+            coalescer.run("ref", work),
+        );
+        assert_eq!((a.unwrap(), b.unwrap(), c.unwrap()), (1, 1, 1));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -1056,6 +1083,10 @@ mod tests {
             coalescer.run_with_reuse("ref", false, work).await.unwrap(),
             1
         );
+        // Nothing could reuse an `Always` result, so none is kept.
+        coalescer.finished.run_pending_tasks();
+        assert_eq!(coalescer.finished.entry_count(), 0);
+        assert_eq!(coalescer.in_flight_count(), 0);
     }
     use tempfile::TempDir;
 
@@ -1095,11 +1126,11 @@ mod tests {
         for key in ["a", "b", "c"] {
             assert_eq!(coalescer.run(key, || async { Ok(8) }).await.unwrap(), 8);
         }
-        coalescer.cells.run_pending_tasks();
+        coalescer.finished.run_pending_tasks();
         assert!(
-            coalescer.cells.weighted_size() <= 10,
+            coalescer.finished.weighted_size() <= 10,
             "three results of 8 cannot all fit in 10: {}",
-            coalescer.cells.weighted_size()
+            coalescer.finished.weighted_size()
         );
     }
 
