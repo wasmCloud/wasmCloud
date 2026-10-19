@@ -602,13 +602,25 @@ const PULL_REUSE_BYTES: u64 = 256 * 1024 * 1024;
 /// maintenance is eventual; this is a retention target, not a strict RSS cap.
 const PULL_ENTRY_WEIGHT: u32 = 16 * 1024;
 
-/// Bound synchronous helper and trust-store work without blocking Tokio's
+/// Bound synchronous client and trust-store work without blocking Tokio's
 /// worker threads. A cancelled caller does not release a running task's permit.
+///
+/// Docker credential helpers run on their own limiter (see
+/// `credentials.rs`), so a helper that hangs cannot hold these permits.
 async fn blocking_io<T: Send + 'static>(
     work: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T> {
     static LIMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(8);
-    let permit = LIMIT
+    blocking_on(&LIMIT, work).await
+}
+
+/// Run `work` on Tokio's blocking pool once `limit` grants a permit, which the
+/// task holds until `work` returns.
+async fn blocking_on<T: Send + 'static>(
+    limit: &'static tokio::sync::Semaphore,
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let permit = limit
         .acquire()
         .await
         .context("OCI blocking-work limiter closed")?;
@@ -993,11 +1005,16 @@ mod tests {
     #[tokio::test]
     async fn credential_misses_coalesce_without_blocking_the_runtime() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let cache = moka::sync::Cache::new(16);
+        let cache: &'static Coalescer<String, RegistryAuth> = Box::leak(Box::new(Coalescer::new(
+            16,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            |_| 1,
+        )));
         let runs = Arc::new(AtomicUsize::new(0));
         let (started, ready) = tokio::sync::oneshot::channel();
         let (release, wait) = std::sync::mpsc::channel();
-        let first = tokio::spawn(cached_credentials(cache.clone(), "registry".into(), {
+        let first = tokio::spawn(cached_credentials(cache, "registry".into(), {
             let runs = Arc::clone(&runs);
             move || {
                 runs.fetch_add(1, Ordering::SeqCst);
@@ -1007,7 +1024,7 @@ mod tests {
             }
         }));
         ready.await.unwrap();
-        let second = tokio::spawn(cached_credentials(cache.clone(), "registry".into(), {
+        let second = tokio::spawn(cached_credentials(cache, "registry".into(), {
             let runs = Arc::clone(&runs);
             move || {
                 runs.fetch_add(1, Ordering::SeqCst);
@@ -1023,7 +1040,7 @@ mod tests {
         assert_eq!(runs.load(Ordering::SeqCst), 1);
 
         assert!(
-            cached_credentials(cache.clone(), "broken".into(), || bail!("bad config"))
+            cached_credentials(cache, "broken".into(), || bail!("bad config"))
                 .await
                 .is_err()
         );
