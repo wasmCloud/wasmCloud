@@ -33,3 +33,9 @@ Explicit credentials bypass Docker credential-helper caching; successful helper
 results, including anonymous resolution, can be reused for 30 seconds. Helper
 errors are not cached. A helper lookup exceeding 30 seconds fails and the pull
 proceeds anonymously, as for other helper failures.
+
+Shared clients are retained for at most five minutes in a 256-entry cache.
+Each entry serves one registry/repository and security scope, including its
+authentication-token state. Tags and digests in that repository share a client;
+different repositories do not. Active callers may hold an evicted client until
+their requests finish.
