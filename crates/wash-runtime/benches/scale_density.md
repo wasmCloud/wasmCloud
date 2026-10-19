@@ -3,7 +3,16 @@
 `scale_density` ramps HTTP workloads onto one host until something refuses
 them, and prints, beside what it served, the count each constraint predicts.
 How to run it and every knob are in the module docs of `scale_density.rs`.
-`?` means there is not enough measurement evidence to estimate a constraint. CPU idle capacity is reported explicitly as unbounded; CPU throughput remains unknown until measured.
+In the text report, `?` means there is not enough measurement evidence to
+estimate a limit or a CPU rate, and `-` means a reading was not taken (a
+spin-down, a CPU share). Neither means the capacity is infinite. CPU idle
+capacity is reported explicitly as unbounded; CPU throughput remains unknown
+until measured. The `WASH_SCALE_REPORT_JSON` output writes the unknowns as
+`null`, the CPU capacity as `"idle-unbounded"`, and each step's warm-up
+failures beside its request failures.
+
+Warm runs need the P3 fixture. `WASH_SCALE_FIXTURE=p2` runs scale-to-zero
+only, because a P2 HTTP instance cannot stay warm.
 
 ## What a workload costs
 
