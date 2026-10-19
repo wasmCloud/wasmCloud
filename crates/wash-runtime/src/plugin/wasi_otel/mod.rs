@@ -279,7 +279,14 @@ impl<'a> bindings::wasi::otel::logs::Host for ActiveCtx<'a> {
         &mut self,
         data: bindings::wasi::otel::logs::LogRecord,
     ) -> wasmtime::Result<()> {
-        tracing::debug!(?data, "emitting log record");
+        // Guest warnings and errors stay visible in the host log even with no
+        // OTel logs exporter; lower severities are per-request noise. The
+        // ranges match the severity mapping in `convert_wasi_log_record`.
+        match data.severity_number {
+            Some(17..=24) => tracing::error!(?data, "emitting log record"),
+            Some(13..=16) => tracing::warn!(?data, "emitting log record"),
+            _ => tracing::debug!(?data, "emitting log record"),
+        }
         if let Ok(plugin) = self.ctx.try_get_plugin::<WasiOtel>(WASI_OTEL_ID) {
             let service_name = plugin.config.service_name.clone();
             let provider = plugin.logger_provider.read().await;
