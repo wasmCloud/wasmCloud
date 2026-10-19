@@ -293,6 +293,8 @@ pub struct FlavourReport {
     pub stop: Stop,
     pub summary: Summary,
     pub registry_requests: Option<RegistryCounts>,
+    /// Why cleanup could not confirm removal on an attached host; `None` when it did.
+    pub cleanup_error: Option<String>,
 }
 
 /// A host ready to bench: its API, where its HTTP listens, its process.
@@ -721,7 +723,7 @@ pub async fn run_flavour(
     target: &Target,
 ) -> Result<FlavourReport> {
     let journal = crate::lifecycle::Journal::default();
-    crate::lifecycle::with_cleanup(
+    let (mut report, cleanup_error) = crate::lifecycle::with_cleanup(
         run.cancel,
         &target.client,
         &journal,
@@ -729,7 +731,9 @@ pub async fn run_flavour(
         run.settings.start_concurrency,
         measure_flavour(run, flavour, target, &journal),
     )
-    .await
+    .await?;
+    report.cleanup_error = cleanup_error;
+    Ok(report)
 }
 
 async fn measure_flavour(
@@ -1032,6 +1036,7 @@ async fn measure_flavour(
         stop,
         summary,
         registry_requests: None,
+        cleanup_error: None,
     })
 }
 

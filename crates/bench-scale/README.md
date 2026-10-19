@@ -198,7 +198,8 @@ except the repeatable `--host-arg`.
 ## Output
 
 Without `--report` the bench prints nothing and only its exit code speaks:
-0 on success, 2 when a flavour served fewer than `--min-components`, 1 on error.
+0 on success, 2 when a flavour served fewer than `--min-components`, 1 on error
+(including cleanup that could not confirm removal; the report is still written).
 
 With `--report` it prints a header
 (machine cores, RAM and OS, limits, image, NATS, run directory),
@@ -273,8 +274,9 @@ as the listener.
   and the run then needs `--max-components` to bound it.
   Every submitted workload ID is journaled, including unanswered starts. Normal
   completion, errors, Ctrl-C, and Unix SIGTERM all run a cleanup phase with a 60-second budget.
-  Stops are retried and removal is checked. Unconfirmed IDs are printed as an
-  error and the next flavour is not started. An unanswered start that remains
+  Stops are retried and removal is checked. Unconfirmed IDs are printed to stderr,
+  recorded as the flavour's `cleanup_error` and exit 1; the measured report is still written
+  and the next flavour is not started. An unanswered start that remains
   absent is still reported as uncertain because it could be queued at the host.
 - The released wash is what runs by default.
   To bench a local build, pass `--host-bin target/release/wash`.

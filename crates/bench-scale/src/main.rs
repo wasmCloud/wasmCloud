@@ -34,6 +34,8 @@ use crate::report::{ImageInfo, Machine, Report};
 
 /// Exit status when a flavour served fewer than --min-components.
 const EXIT_TOO_FEW: u8 = 2;
+/// Exit status when cleanup left workloads on an attached host (the error status).
+const EXIT_CLEANUP_FAILED: u8 = 1;
 
 fn main() -> ExitCode {
     let args = Args::parse();
@@ -408,14 +410,29 @@ async fn run(args: Args, cancel: &tokio_util::sync::CancellationToken) -> Result
         if args.report {
             report::print_flavour_summary(&flavour_report);
         }
+        let cleanup_failed = flavour_report.cleanup_error.is_some();
+        if let Some(e) = &flavour_report.cleanup_error {
+            eprintln!("bench-scale: {}: {e}", flavour.name());
+        }
         reports.push(flavour_report);
         target.shutdown();
+        if cleanup_failed {
+            // Workloads left on the host would skew the next flavour; report what ran.
+            break;
+        }
     }
 
     let too_few = reports
         .iter()
         .any(|r| r.summary.served < settings.min_components);
-    let exit_code = if too_few { EXIT_TOO_FEW } else { 0 };
+    let cleanup_failed = reports.iter().any(|r| r.cleanup_error.is_some());
+    let exit_code = if cleanup_failed {
+        EXIT_CLEANUP_FAILED
+    } else if too_few {
+        EXIT_TOO_FEW
+    } else {
+        0
+    };
     if args.report {
         report::print_comparison(&reports);
         if too_few {
