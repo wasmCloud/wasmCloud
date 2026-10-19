@@ -97,7 +97,8 @@ pub fn log_tail(path: &Path, lines: usize) -> String {
             .iter()
             .position(|b| *b == b'\n')
             .filter(|i| i + 1 < bytes.len())
-            .map_or(bytes.as_slice(), |i| &bytes[i + 1..])
+            .and_then(|i| bytes.get(i + 1..))
+            .unwrap_or(bytes.as_slice())
     } else {
         bytes.as_slice()
     };
@@ -107,7 +108,9 @@ pub fn log_tail(path: &Path, lines: usize) -> String {
     while !body.is_char_boundary(start) {
         start += 1;
     }
-    let tail = body[start..]
+    let tail = body
+        .get(start..)
+        .unwrap_or_default()
         .lines()
         .rev()
         .take(lines)

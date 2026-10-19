@@ -44,7 +44,7 @@ impl ProcessTree {
             use std::os::windows::io::AsRawHandle as _;
             self.job
                 .as_ref()
-                .unwrap()
+                .context("process job was already closed")?
                 .assign_and_resume(child.id(), child.as_raw_handle())?;
         }
         Ok(())
@@ -56,12 +56,15 @@ impl ProcessTree {
             self.group = child.id();
         }
         #[cfg(windows)]
-        self.job.as_ref().unwrap().assign_and_resume(
-            child.id().context("new child has no process id")?,
-            child
-                .raw_handle()
-                .context("new child has no process handle")?,
-        )?;
+        self.job
+            .as_ref()
+            .context("process job was already closed")?
+            .assign_and_resume(
+                child.id().context("new child has no process id")?,
+                child
+                    .raw_handle()
+                    .context("new child has no process handle")?,
+            )?;
         Ok(())
     }
 

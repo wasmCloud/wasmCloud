@@ -530,7 +530,7 @@ async fn drain_response(mut response: reqwest::Response) -> Result<(), String> {
             let retain = chunk
                 .len()
                 .min(ERROR_BODY_LIMIT.saturating_sub(diagnostic.len()));
-            diagnostic.extend_from_slice(&chunk[..retain]);
+            diagnostic.extend_from_slice(chunk.get(..retain).unwrap_or_default());
             truncated |= retain < chunk.len();
         }
     }
