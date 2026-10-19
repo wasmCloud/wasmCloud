@@ -32,6 +32,12 @@ mod coalescer;
 use client::{TrustId, TrustSnapshot, pull_client};
 mod credentials;
 mod disk_cache;
+#[cfg(test)]
+#[path = "../tests/common/oci_ca.rs"]
+mod test_ca;
+#[cfg(test)]
+#[path = "../tests/common/oci_registry.rs"]
+mod test_registry;
 use coalescer::Coalescer;
 use credentials::CredentialResolver;
 #[cfg(test)]
@@ -805,17 +811,7 @@ pub async fn push_component(
 
     // Use one trust snapshot for the client and any disk entry it publishes.
     let trust = TrustSnapshot::load().await?;
-    let client_config = ClientConfig {
-        protocol: if config.insecure {
-            ClientProtocol::Http
-        } else {
-            ClientProtocol::Https
-        },
-        extra_root_certificates: trust.roots,
-        ..Default::default()
-    };
-
-    let client = oci_client(client_config)?;
+    let client = oci_client(trust.client_config(config.insecure)?)?;
 
     // Create the WebAssembly configuration and layer using oci-wasm
     let (wasm_config, image_layer) = WasmConfig::from_raw_component(component_data.to_vec(), None)

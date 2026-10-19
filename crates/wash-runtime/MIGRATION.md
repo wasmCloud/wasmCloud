@@ -35,6 +35,11 @@ to appear. Failed results are retried by the next caller.
 
 Changes to `SSL_CERT_FILE`, `SSL_CERT_DIR` and their loaded certificate contents
 apply to subsequent pulls, separating client, completed-result and disk reuse.
+On Linux and other Unix platforms using PEM native roots, clients use the
+captured environment root set even if a bundle rotates while construction is
+queued. This preserves the native loader's fallback when no certificate paths
+are configured; macOS and Windows retain their platform verification policies.
+Environment-scoped entries from the earlier merged-root layout are fetched again.
 Explicit credentials bypass Docker credential-helper caching; successful helper
 results, including anonymous resolution, can be reused for 30 seconds. Helper
 errors are not cached. A helper lookup exceeding 30 seconds fails and the pull
