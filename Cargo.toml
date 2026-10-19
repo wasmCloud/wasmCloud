@@ -68,6 +68,7 @@ fastrand = { version = "2", default-features = false, features = ["std"] }
 figment = { version = "0.10.19", default-features = false }
 futures = { version = "0.3", default-features = false }
 flate2 = { version = "1.0", default-features = false }
+hmac = { version = "0.12.1", default-features = false }
 http = { version = "1", default-features = false }
 humansize = { version = "2.1", default-features = false }
 hyper = { version = "1.11.1", default-features = false }
