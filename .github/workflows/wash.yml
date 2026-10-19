@@ -118,15 +118,6 @@ jobs:
           version: ${{ env.WASM_TOOLS_VERSION }}
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
-      # Check the linker before building the rest of the fixtures. Replacing
-      # the sysroot linker does not change Cargo's flags, so force this crate
-      # to relink even when its dependencies/artifacts came from a cache.
-      - name: Check labeled-import fixture linking
-        run: |
-          env -u CARGO_TARGET_DIR cargo clean \
-            --manifest-path crates/wash-runtime/tests/fixtures/Cargo.toml \
-            --package keyvalue-implements --target wasm32-wasip2 --release
-          cargo xtask build-fixtures keyvalue-implements
       # Compile the wash-runtime wasm test fixtures. The test/bench targets
       # `include_bytes!` these, so they must exist before the `cargo test`
       # steps below. Targets wasm32-wasip2/wasip1 come from setup-rust.

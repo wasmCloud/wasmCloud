@@ -147,8 +147,7 @@ runs:
     # `(implements ..)` imports that wit-bindgen now emits — linking such a
     # component fails with "decoding custom section ... invalid leading byte".
     # Keep the default version aligned with scripts/bench/ansible/provision.yml.
-    # Drop the override once the pinned Rust toolchain can build the labeled
-    # imports fixture checked by wash.yml.
+    # Drop the override once the pinned Rust toolchain can build all wasm fixtures.
     - name: Install wasm-component-ld
       uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
       with:
