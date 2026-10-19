@@ -59,10 +59,28 @@ pub struct Report {
 /// Reports retain endpoints, never URL credentials, query tokens or fragments.
 /// Unparseable values are omitted rather than risking a partial credential leak.
 pub fn redact_url(value: &str) -> String {
+    redact_endpoint(value, "nats")
+}
+
+/// HTTP overrides may include URL userinfo for Basic authentication.
+pub fn redact_http_address(value: &str) -> String {
+    let redacted = redact_endpoint(value, "http");
+    if value.contains("://") {
+        redacted
+    } else {
+        redacted
+            .strip_prefix("http://")
+            .unwrap_or(&redacted)
+            .trim_end_matches('/')
+            .to_string()
+    }
+}
+
+fn redact_endpoint(value: &str, scheme: &str) -> String {
     let normalized = if value.contains("://") {
         value.to_string()
     } else {
-        format!("nats://{value}")
+        format!("{scheme}://{value}")
     };
     let Ok(mut url) = reqwest::Url::parse(&normalized) else {
         return "[redacted address]".to_string();
@@ -90,11 +108,17 @@ pub fn redact_args(args: &[String]) -> Vec<String> {
         let (flag, inline) = arg
             .split_once('=')
             .map_or((arg.as_str(), None), |(k, v)| (k, Some(v)));
+        if flag == "--allow-insecure-registries" {
+            output.push(match inline {
+                None | Some("true" | "false") => arg.clone(),
+                Some(_) => "[redacted argument]".to_string(),
+            });
+            continue;
+        }
         let safe = matches!(
             flag,
             "--host-name"
                 | "--http-addr"
-                | "--allow-insecure-registries"
                 | "--oci-cache-dir"
                 | "--max-process-memory"
                 | "--max-guest-memory"
@@ -113,6 +137,8 @@ pub fn redact_args(args: &[String]) -> Vec<String> {
             if let Some(value) = value {
                 output.push(if url {
                     redact_url(value)
+                } else if flag == "--http-addr" {
+                    redact_http_address(value)
                 } else {
                     value.to_string()
                 });
@@ -126,6 +152,34 @@ pub fn redact_args(args: &[String]) -> Vec<String> {
 
 pub fn serialize_url<S: serde::Serializer>(value: &str, serializer: S) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(&redact_url(value))
+}
+
+pub fn serialize_http_address<S: serde::Serializer>(
+    value: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&redact_http_address(value))
+}
+
+/// Host errors and logs are arbitrary text and may echo passwords or tokens.
+/// Keep them out of shareable reports; the local host log remains available.
+pub const OMITTED_DIAGNOSTIC: &str = "[diagnostic omitted; inspect the local host log]";
+
+pub fn serialize_diagnostic<S: serde::Serializer>(
+    _value: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(OMITTED_DIAGNOSTIC)
+}
+
+pub fn serialize_optional_diagnostic<S: serde::Serializer>(
+    value: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    value
+        .as_ref()
+        .map(|_| OMITTED_DIAGNOSTIC)
+        .serialize(serializer)
 }
 
 pub fn serialize_args<S: serde::Serializer>(
@@ -195,7 +249,7 @@ pub fn print_flavour_header(flavour: Flavour, report_host: &crate::bench::HostIn
             &report_host.version
         },
         report_host.id,
-        report_host.http,
+        redact_http_address(&report_host.http),
     );
     if !report_host.args.is_empty() {
         println!("args:     {}", redact_args(&report_host.args).join(" "));
@@ -275,7 +329,7 @@ pub fn print_flavour_summary(report: &FlavourReport) {
     if let crate::bench::Stop::HostExited { log_tail, .. } = &report.stop
         && !log_tail.is_empty()
     {
-        println!("host log tail:\n{log_tail}");
+        println!("host log tail: {OMITTED_DIAGNOSTIC}");
     }
 }
 
@@ -379,7 +433,7 @@ mod tests {
             id: String::new(),
             version: String::new(),
             hostname: String::new(),
-            http: String::new(),
+            http: "SENTINEL_HTTP_USER:SENTINEL_HTTP_PASSWORD@localhost:8080?token=SENTINEL_HTTP_QUERY#SENTINEL_HTTP_FRAGMENT".into(),
             pid: None,
             log: None,
             args: [
@@ -397,9 +451,10 @@ mod tests {
             .collect(),
         };
         let text = format!(
-            "{} {}",
+            "{} {} {}",
             redact_url(&report.nats_url),
-            redact_args(&host.args).join(" ")
+            redact_args(&host.args).join(" "),
+            redact_http_address(&host.http),
         );
         let json = serde_json::to_string(&(report, host))?;
         for rendered in [text, json] {
@@ -409,6 +464,60 @@ mod tests {
         }
         assert_eq!(redact_url("nats://bad SENTINEL@"), "[redacted address]");
         assert_eq!(redact_url("localhost:4222"), "nats://localhost:4222");
+        Ok(())
+    }
+
+    #[test]
+    fn boolean_flags_do_not_disclose_the_next_positional_argument() {
+        for boolean in [
+            "--allow-insecure-registries",
+            "--allow-insecure-registries=true",
+            "--allow-insecure-registries=false",
+            "--allow-insecure-registries=SENTINEL_INLINE",
+        ] {
+            let args =
+                [boolean, "SENTINEL_POSITIONAL", "--max-process-memory=2GiB"].map(str::to_string);
+            let redacted = redact_args(&args).join(" ");
+            assert!(!redacted.contains("SENTINEL"), "{redacted}");
+            assert!(redacted.contains("2GiB"));
+        }
+    }
+
+    #[test]
+    fn stop_reports_omit_untrusted_diagnostics() -> anyhow::Result<()> {
+        use crate::bench::{RefusalClass, Stop};
+        let secret = "nats://user:SENTINEL_PASSWORD@localhost:4222 --token SENTINEL_TOKEN";
+        let stops = [
+            Stop::StartRefused {
+                class: RefusalClass::Other,
+                message: secret.into(),
+            },
+            Stop::Requests {
+                stage: "sampled",
+                failed: 1,
+                total: 1,
+                example: Some(secret.into()),
+            },
+            Stop::HostExited {
+                status: "exit status: 1".into(),
+                log_tail: secret.into(),
+            },
+            Stop::StartsUnanswered {
+                count: 1,
+                example: secret.into(),
+            },
+            Stop::StartsFailed {
+                count: 1,
+                example: secret.into(),
+            },
+        ];
+        for stop in stops {
+            let json = serde_json::to_string(&stop)?;
+            assert!(!json.contains("SENTINEL"), "{json}");
+            assert!(json.contains(OMITTED_DIAGNOSTIC));
+            let text = stop.to_string();
+            assert!(!text.contains("SENTINEL"), "{text}");
+        }
         Ok(())
     }
 

@@ -117,6 +117,7 @@ pub enum Stop {
     /// The host answered a start with WORKLOAD_STATE_ERROR.
     StartRefused {
         class: RefusalClass,
+        #[serde(serialize_with = "crate::report::serialize_diagnostic")]
         message: String,
     },
     /// The host's footprint reached the memory limit.
@@ -129,14 +130,27 @@ pub enum Stop {
         stage: &'static str,
         failed: usize,
         total: usize,
+        #[serde(serialize_with = "crate::report::serialize_optional_diagnostic")]
         example: Option<String>,
     },
     /// The host process ended.
-    HostExited { status: String, log_tail: String },
+    HostExited {
+        status: String,
+        #[serde(serialize_with = "crate::report::serialize_diagnostic")]
+        log_tail: String,
+    },
     /// Starts got no answer even after retries.
-    StartsUnanswered { count: usize, example: String },
+    StartsUnanswered {
+        count: usize,
+        #[serde(serialize_with = "crate::report::serialize_diagnostic")]
+        example: String,
+    },
     /// Starts failed for reasons other than a refusal.
-    StartsFailed { count: usize, example: String },
+    StartsFailed {
+        count: usize,
+        #[serde(serialize_with = "crate::report::serialize_diagnostic")]
+        example: String,
+    },
     /// The component cap was reached.
     Cap { cap: usize },
 }
@@ -144,8 +158,13 @@ pub enum Stop {
 impl std::fmt::Display for Stop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::StartRefused { class, message } => {
-                write!(f, "start refused ({}): {message}", class.describe())
+            Self::StartRefused { class, .. } => {
+                write!(
+                    f,
+                    "start refused ({}): {}",
+                    class.describe(),
+                    crate::report::OMITTED_DIAGNOSTIC
+                )
             }
             Self::MemoryLimit {
                 footprint_bytes,
@@ -163,16 +182,24 @@ impl std::fmt::Display for Stop {
                 example,
             } => {
                 write!(f, "requests failing: {failed} of {total} {stage} requests")?;
-                if let Some(example) = example {
-                    write!(f, " (e.g. {example})")?;
+                if example.is_some() {
+                    write!(f, " {}", crate::report::OMITTED_DIAGNOSTIC)?;
                 }
                 Ok(())
             }
             Self::HostExited { status, .. } => write!(f, "host exited: {status}"),
-            Self::StartsUnanswered { count, example } => {
-                write!(f, "{count} starts unanswered: {example}")
+            Self::StartsUnanswered { count, .. } => {
+                write!(
+                    f,
+                    "{count} starts unanswered: {}",
+                    crate::report::OMITTED_DIAGNOSTIC
+                )
             }
-            Self::StartsFailed { count, example } => write!(f, "{count} starts failed: {example}"),
+            Self::StartsFailed { count, .. } => write!(
+                f,
+                "{count} starts failed: {}",
+                crate::report::OMITTED_DIAGNOSTIC
+            ),
             Self::Cap { cap } => write!(f, "cap of {cap} workloads reached"),
         }
     }
@@ -229,6 +256,7 @@ pub struct HostInfo {
     pub id: String,
     pub version: String,
     pub hostname: String,
+    #[serde(serialize_with = "crate::report::serialize_http_address")]
     pub http: String,
     pub pid: Option<u32>,
     pub log: Option<String>,
