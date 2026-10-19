@@ -18,15 +18,18 @@ use crate::cli::HostCli;
 /// bench: not on error, not on panic, not on Ctrl-C (which unwinds the run).
 pub struct ChildGuard {
     child: Child,
+    tree: crate::process::ProcessTree,
     exited: Option<ExitStatus>,
 }
 
 impl ChildGuard {
-    fn new(child: Child) -> Self {
-        Self {
+    pub(crate) fn spawn(command: &mut Command) -> Result<Self> {
+        let (child, tree) = crate::process::spawn(command)?;
+        Ok(Self {
             child,
+            tree,
             exited: None,
-        }
+        })
     }
 
     pub fn pid(&self) -> u32 {
@@ -37,6 +40,9 @@ impl ChildGuard {
     pub fn exited(&mut self) -> Option<ExitStatus> {
         if self.exited.is_none() {
             self.exited = self.child.try_wait().ok().flatten();
+            if self.exited.is_some() {
+                self.tree.kill();
+            }
         }
         self.exited
     }
@@ -45,6 +51,7 @@ impl ChildGuard {
 impl ChildGuard {
     /// Kill the process unless it already ended, and reap it.
     pub fn kill(&mut self) {
+        self.tree.kill();
         if self.exited().is_none() {
             let _ = self.child.kill();
             self.exited = self.child.wait().ok();
@@ -172,14 +179,13 @@ pub async fn spawn_nats(binary: &Path, run_dir: &Path) -> Result<(ChildGuard, St
     let (stdout, stderr) = log_file(&log)?;
     let mut command = Command::new(binary);
     isolated(&mut command);
-    let child = command
+    command
         .args(["-a", "127.0.0.1", "-p", &port.to_string()])
         .stdin(Stdio::null())
         .stdout(stdout)
-        .stderr(stderr)
-        .spawn()
-        .with_context(|| format!("running {}", binary.display()))?;
-    let mut guard = ChildGuard::new(child);
+        .stderr(stderr);
+    let mut guard =
+        ChildGuard::spawn(&mut command).with_context(|| format!("running {}", binary.display()))?;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
@@ -326,15 +332,13 @@ pub fn spawn_host(
     let (stdout, stderr) = log_file(log)?;
     let mut command = Command::new(binary);
     isolated(&mut command);
-    let child = command
+    command
         .args(&command_line.args)
         .env("RUST_LOG", log_level)
         .stdin(Stdio::null())
         .stdout(stdout)
-        .stderr(stderr)
-        .spawn()
-        .with_context(|| format!("running {}", binary.display()))?;
-    Ok(ChildGuard::new(child))
+        .stderr(stderr);
+    ChildGuard::spawn(&mut command).with_context(|| format!("running {}", binary.display()))
 }
 
 /// Which heartbeat is the host under test.
