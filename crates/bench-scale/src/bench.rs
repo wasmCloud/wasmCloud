@@ -681,6 +681,19 @@ impl CapacityTracker {
     }
 }
 
+fn checked_footprint(
+    footprint: Option<u64>,
+    max_components: Option<usize>,
+    phase: &str,
+) -> Result<Option<u64>> {
+    anyhow::ensure!(
+        footprint.is_some() || max_components.is_some(),
+        "process footprint unavailable {phase}; an uncapped run requires a readable host PID, \
+         or set --max-components to bound a run without memory measurements"
+    );
+    Ok(footprint)
+}
+
 /// Wait for the footprint to settle back near `before`; how long that took.
 async fn spin_down(sampler: &Sampler, before: u64, wait: Duration) -> Option<f64> {
     let tolerance = (before / 100).max(1 << 20);
@@ -734,7 +747,11 @@ async fn measure_flavour(
 
     // Let the host's startup allocations land before taking the baseline.
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let baseline = target.sampler.footprint();
+    let baseline = checked_footprint(
+        target.sampler.footprint(),
+        settings.max_components,
+        "at baseline",
+    )?;
     let halt = Arc::new(AtomicBool::new(false));
     let watch = Watch::spawn(
         Arc::clone(&target.sampler),
@@ -794,6 +811,11 @@ async fn measure_flavour(
         {
             break Stop::Cap { cap };
         }
+        checked_footprint(
+            target.sampler.footprint(),
+            settings.max_components,
+            "before starting another batch",
+        )?;
         let room = capacity
             .cap
             .map_or(settings.step, |cap| cap.saturating_sub(running.len()));
@@ -861,7 +883,11 @@ async fn measure_flavour(
         };
 
         let heartbeat = target.client.heartbeat(Duration::from_secs(5)).await.ok();
-        let footprint = target.sampler.footprint();
+        let footprint = checked_footprint(
+            target.sampler.footprint(),
+            settings.max_components,
+            "after measuring a batch",
+        )?;
         if let Some(limit) = batch.refused.iter().find_map(|m| core_instance_limit(m)) {
             pool_total = Some(limit);
         }
@@ -1224,6 +1250,41 @@ mod tests {
             assert_eq!(capacity.latest, Some(verified));
             assert_eq!(capacity.cap, Some(550));
         }
+    }
+
+    #[test]
+    fn uncapped_runs_require_initial_and_subsequent_memory_readings() {
+        for phase in [
+            "at baseline",
+            "before starting another batch",
+            "after measuring a batch",
+        ] {
+            let error = checked_footprint(None, None, phase).unwrap_err();
+            assert!(error.to_string().contains(phase));
+            assert!(error.to_string().contains("--max-components"));
+        }
+
+        // Losing a PID after a valid baseline must stop an uncapped run,
+        // even if earlier samples could have supplied an automatic cap.
+        assert_eq!(
+            checked_footprint(Some(1024), None, "at baseline").unwrap(),
+            Some(1024)
+        );
+        assert!(checked_footprint(None, None, "before starting another batch").is_err());
+        // An explicit workload count bounds an intentionally unmeasured run.
+        assert_eq!(
+            checked_footprint(None, Some(10), "at baseline").unwrap(),
+            None
+        );
+        assert_eq!(
+            checked_footprint(None, Some(10), "after measuring a batch").unwrap(),
+            None
+        );
+        // Zero is a measurement, not a missing-value sentinel.
+        assert_eq!(
+            checked_footprint(Some(0), None, "at baseline").unwrap(),
+            Some(0)
+        );
     }
 
     #[test]
