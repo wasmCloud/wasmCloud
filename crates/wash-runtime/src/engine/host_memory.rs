@@ -492,8 +492,11 @@ fn pool_map_count_advisory(memories: u32, max_map_count: u64) -> Option<String> 
              WASMTIME_POOLING_TOTAL_MEMORIES) needs about {needed} memory mappings once it \
              is in use, past this kernel's vm.max_map_count of {max_map_count}. \
              Instantiation will start failing before the pool is full. Raise \
-             vm.max_map_count (sysctl) or lower core-instances to {}.",
-            max_map_count / MAPPINGS_PER_SLOT,
+             vm.max_map_count (sysctl) or lower core-instances to about {}, which leaves \
+             room for the rest of the process's mappings.",
+            // 90% of what the slots alone could take: libraries, thread
+            // stacks, allocator arenas and compiled code map too.
+            max_map_count / MAPPINGS_PER_SLOT / 10 * 9,
         )
     })
 }
@@ -610,8 +613,8 @@ fn soft_address_space_limit(limits: &str) -> Option<u64> {
 /// Memory mappings a pool slot can cost: wasmtime's stack pool splits each
 /// stack's guard page off its stack (2), and a live linear memory is split
 /// into its accessible part and the rest of its reservation (about 2), plus
-/// one for tables and slack. The same figure Cosmonic Control sizes its
-/// default pool by.
+/// one for tables and slack. Rounded up rather than measured exactly, so the
+/// advisory errs towards speaking early.
 const MAPPINGS_PER_SLOT: u64 = 5;
 
 /// The kernel's per-process limit on memory mappings, where there is one to
@@ -1025,7 +1028,7 @@ mod tests {
             map_count_advisory(&resolved, 65_530).expect("100,000 mappings are past 65530");
         assert!(advisory.contains("vm.max_map_count"), "{advisory}");
         assert!(
-            advisory.contains("13106"),
+            advisory.contains("11790"),
             "names the count that fits: {advisory}"
         );
         assert_eq!(map_count_advisory(&resolved, 1_048_576), None);
