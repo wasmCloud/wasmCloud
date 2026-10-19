@@ -33,7 +33,7 @@ inputs:
   wasm-component-ld-version:
     description: "Version of standalone wasm-component-ld to install"
     required: false
-    default: "0.5.24"
+    default: "0.5.26"
 
 runs:
   using: "composite"
@@ -146,7 +146,9 @@ runs:
     # standalone crate and is too old to decode the component-model
     # `(implements ..)` imports that wit-bindgen now emits — linking such a
     # component fails with "decoding custom section ... invalid leading byte".
-    # Drop once a Rust release bundles wasm-component-ld >= 0.5.23.
+    # Keep the default version aligned with scripts/bench/ansible/provision.yml.
+    # Drop the override once the pinned Rust toolchain can build the labeled
+    # imports fixture checked by wash.yml.
     - name: Install wasm-component-ld
       uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
       with:
