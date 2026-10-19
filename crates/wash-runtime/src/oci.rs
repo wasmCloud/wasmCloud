@@ -461,7 +461,11 @@ pub(crate) async fn pull_component_bytes(
     config: OciConfig,
     pull_policy: OciPullPolicy,
 ) -> Result<(bytes::Bytes, String)> {
-    with_pull_timeout(reference, config.timeout, async {
+    // Boxed so the pull's state machine (credentials, trust, the coalescer and
+    // the registry client) lives on the heap rather than in every caller's
+    // future. A CLI's `async fn main` holds all of its subcommands' futures at
+    // once, on a main thread whose stack is 1 MiB on Windows.
+    Box::pin(with_pull_timeout(reference, config.timeout, async {
         let reference_parsed = Reference::try_from(reference)
             .with_context(|| format!("invalid OCI reference: {reference}"))?;
 
@@ -484,18 +488,18 @@ pub(crate) async fn pull_component_bytes(
         };
         let pulled = pull_coalescer()
             .run_with_reuse(key, pull_policy != OciPullPolicy::Always, || {
-                pull_uncoalesced(
+                Box::pin(pull_uncoalesced(
                     reference,
                     &reference_parsed,
                     &config,
                     &auth,
                     &pull_policy,
                     &trust,
-                )
+                ))
             })
             .await?;
         Ok((pulled.bytes.clone(), pulled.digest.clone()))
-    })
+    }))
     .await
 }
 
@@ -673,8 +677,9 @@ async fn pull_uncoalesced(
 
     let client = pull_client(config.insecure, auth, trust).await?;
 
-    // Pull the component using oci-client
-    let pull_future = client.pull(
+    // Pull the component using oci-client. Boxed: its future is large, and
+    // would otherwise sit inline in the coalesced pull's.
+    let pull_future = Box::pin(client.pull(
         reference_parsed,
         auth,
         vec![
@@ -682,7 +687,7 @@ async fn pull_uncoalesced(
             #[allow(deprecated)]
             WASMCLOUD_MEDIA_TYPE,
         ],
-    );
+    ));
 
     let image_data = pull_future
         .await
