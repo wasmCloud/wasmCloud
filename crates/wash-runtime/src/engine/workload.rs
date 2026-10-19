@@ -4829,27 +4829,69 @@ mod tests {
     /// the write lands on a copy of that one component's own.
     #[test]
     fn a_shared_linker_is_copied_only_when_written() {
-        let mut a = component_from_wat("a", "(component)");
+        let mut a = component_from_wat(
+            "a",
+            r#"(component
+                (import "test:cow/iface" (instance $iface
+                    (export "f" (func (result u32)))))
+                (alias export $iface "f" (func $f))
+                (export "call" (func $f))
+            )"#,
+        );
         let shared = Arc::clone(&a.metadata.linker);
         let mut b = a.clone();
         assert!(Arc::ptr_eq(&a.metadata.linker, &b.metadata.linker));
+        assert!(a.pre_instantiate_ref().is_err());
 
         b.metadata
             .linker()
             .instance("test:cow/iface")
             .unwrap()
-            .func_wrap("f", |_, (): ()| Ok(()))
+            .func_wrap("f", |_, (): ()| Ok((2_u32,)))
             .unwrap();
+        assert!(b.pre_instantiate_ref().is_ok());
+        assert!(
+            a.pre_instantiate_ref().is_err(),
+            "binding one component must not satisfy another component's import"
+        );
+        assert!(
+            shared.instantiate_pre(a.metadata.component()).is_err(),
+            "the shared base must not inherit a component's binding"
+        );
         assert!(!Arc::ptr_eq(&a.metadata.linker, &b.metadata.linker));
         assert!(
             Arc::ptr_eq(&a.metadata.linker, &shared),
             "the component not written to keeps the shared linker"
         );
-        let _ = a.metadata.linker();
+        a.metadata
+            .linker()
+            .instance("test:cow/iface")
+            .unwrap()
+            .func_wrap("f", |_, (): ()| Ok((1_u32,)))
+            .unwrap();
         assert!(
             !Arc::ptr_eq(&a.metadata.linker, &shared),
             "taking it mutably while shared copies it"
         );
+
+        let call = |component: &WorkloadComponent| {
+            let ctx = crate::engine::ctx::Ctx::builder("cow", component.id()).build();
+            let mut store = wasmtime::Store::new(component.metadata.engine(), SharedCtx::new(ctx));
+            let instance = component
+                .pre_instantiate_ref()
+                .unwrap()
+                .instantiate(&mut store)
+                .unwrap();
+            let func = instance
+                .get_typed_func::<(), (u32,)>(&mut store, "call")
+                .unwrap();
+            let (value,) = func.call(&mut store, ()).unwrap();
+            func.post_return(&mut store).unwrap();
+            value
+        };
+        assert_eq!(call(&a), 1);
+        assert_eq!(call(&b), 2, "the first component's binding must survive");
+        assert!(shared.instantiate_pre(a.metadata.component()).is_err());
     }
 
     fn marker_importer(id: &str) -> WorkloadComponent {
