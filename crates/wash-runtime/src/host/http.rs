@@ -3262,8 +3262,12 @@ impl RateLimitedWarn {
     /// how many were held back since the last warning; `None` when it is one
     /// of those.
     fn admit(&self) -> Option<u64> {
+        self.admit_at(warn_clock_ms())
+    }
+
+    /// [`Self::admit`] at `now`, in milliseconds on the [`warn_clock_ms`] clock.
+    fn admit_at(&self, now: u64) -> Option<u64> {
         use std::sync::atomic::Ordering::Relaxed;
-        let now = warn_clock_ms();
         let next = self.next_ms.load(Relaxed);
         if now >= next
             && self
@@ -6357,12 +6361,12 @@ mod tests {
     #[test]
     fn a_rate_limited_warning_counts_what_it_held_back() {
         let limiter = RateLimitedWarn::new(Duration::from_millis(50));
-        assert_eq!(limiter.admit(), Some(0));
-        assert_eq!(limiter.admit(), None);
-        assert_eq!(limiter.admit(), None);
-        std::thread::sleep(Duration::from_millis(60));
-        assert_eq!(limiter.admit(), Some(2));
-        assert_eq!(limiter.admit(), None);
+        assert_eq!(limiter.admit_at(0), Some(0));
+        assert_eq!(limiter.admit_at(10), None);
+        assert_eq!(limiter.admit_at(49), None);
+        assert_eq!(limiter.admit_at(50), Some(2));
+        assert_eq!(limiter.admit_at(60), None);
+        assert_eq!(limiter.admit_at(1_000), Some(1));
     }
 
     /// A body error a local dispatch already produced reaches the guest as
