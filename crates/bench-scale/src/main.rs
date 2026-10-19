@@ -70,6 +70,9 @@ fn main() -> ExitCode {
 }
 
 fn resolve_settings(args: &Args, machine: &Machine) -> Result<Settings> {
+    if args.host_id.is_some() && !args.host_nats_only {
+        bail!("--host-id selects an existing host; use it with --host-nats-only");
+    }
     if args.image.is_some() && args.flavour != FlavourArg::ScaleToZero {
         bail!(
             "warm runs must verify the component's P3 HTTP export; use --wasm instead of --image, or select --flavour scale-to-zero"
@@ -158,17 +161,9 @@ async fn prepare_target(plan: &HostPlan<'_>, flavour: Flavour) -> Result<Target>
                 &host_name,
                 &args.host_args,
             );
+            let pick = host::spawned_host_pick(&command, args.nats_url.is_some())?;
             let log = plan.run_dir.join(format!("host-{}.log", flavour.name()));
             let mut guard = host::spawn_host(binary, &command, &args.host_log, &log)?;
-            let pick = match (&args.host_id, &command.host_name, args.nats_url.is_some()) {
-                (Some(id), _, _) => Pick::Id(id),
-                (None, Some(name), _) => Pick::Name(name),
-                // A NATS of our own has no other host on it.
-                (None, None, false) => Pick::Any,
-                (None, None, true) => bail!(
-                    "on a shared NATS, a host without --host-name needs --host-id to be told apart"
-                ),
-            };
             let heartbeat = heartbeats
                 .wait(pick, timeout, Some((&mut guard, &log)))
                 .await?;
@@ -440,6 +435,30 @@ async fn run(args: Args, cancel: &tokio_util::sync::CancellationToken) -> Result
 #[cfg(test)]
 mod settings_tests {
     use super::*;
+
+    #[test]
+    fn an_existing_host_id_cannot_be_mistaken_for_a_spawned_host() -> Result<()> {
+        let machine = Machine::detect();
+        let args = Args::try_parse_from([
+            "bench-scale",
+            "--nats-url",
+            "nats://shared:4222",
+            "--host-id",
+            "existing",
+        ])?;
+        assert!(
+            resolve_settings(&args, &machine)
+                .unwrap_err()
+                .to_string()
+                .contains("--host-nats-only")
+        );
+        let attached = Args {
+            host_nats_only: true,
+            ..args
+        };
+        resolve_settings(&attached, &machine)?;
+        Ok(())
+    }
 
     #[test]
     fn zero_samples_are_rejected_before_any_host_is_started() -> Result<()> {

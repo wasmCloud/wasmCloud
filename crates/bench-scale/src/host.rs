@@ -272,12 +272,16 @@ pub fn host_command(
             .replace("{guest_memory}", &limits.guest_memory.to_string())
             .replace("{core_instances}", &limits.core_instances.to_string())
             .replace("{http_addr}", "127.0.0.1:0")
+            .replace("{host_name}", host_name)
     };
     if cli == HostCli::Raw {
         return HostCommand {
             args: extra.iter().map(|a| substitute(a)).collect(),
             unsupported_flags: Vec::new(),
-            host_name: None,
+            host_name: extra
+                .iter()
+                .any(|arg| arg.contains("{host_name}"))
+                .then(|| host_name.to_string()),
         };
     }
     let wanted: Vec<(&str, Option<String>)> = vec![
@@ -338,6 +342,17 @@ pub enum Pick<'a> {
     Id(&'a str),
     Name(&'a str),
     Any,
+}
+
+/// A spawned host on shared NATS must identify itself with this run's name.
+pub fn spawned_host_pick(command: &HostCommand, shared_nats: bool) -> Result<Pick<'_>> {
+    match (&command.host_name, shared_nats) {
+        (Some(name), _) => Ok(Pick::Name(name)),
+        (None, false) => Ok(Pick::Any),
+        (None, true) => bail!(
+            "a spawned host on shared NATS needs --host-name support or a raw {{host_name}} argument; otherwise use --host-nats-only"
+        ),
+    }
 }
 
 impl Pick<'_> {
@@ -406,6 +421,49 @@ impl Heartbeats {
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    #[test]
+    fn spawned_hosts_on_shared_nats_require_their_own_name() {
+        let mut command = HostCommand {
+            args: vec![],
+            unsupported_flags: vec![],
+            host_name: None,
+        };
+        assert!(spawned_host_pick(&command, true).is_err());
+        assert!(spawned_host_pick(&command, false).is_ok());
+        command.host_name = Some("this-run".into());
+        let pick = spawned_host_pick(&command, true).unwrap();
+        assert!(!pick.matches(&HostHeartbeat {
+            id: "existing".into(),
+            hostname: "other-run".into(),
+            ..Default::default()
+        }));
+        assert!(pick.matches(&HostHeartbeat {
+            id: "spawned".into(),
+            friendly_name: "this-run".into(),
+            ..Default::default()
+        }));
+    }
+
+    #[test]
+    fn raw_hosts_can_advertise_the_generated_run_name() {
+        let command = host_command(
+            HostCli::Raw,
+            &HashSet::new(),
+            "nats://localhost:4222",
+            &HostLimits {
+                memory_limit: 100,
+                guest_memory: 75,
+                core_instances: 1,
+            },
+            Path::new("cache"),
+            "this-run",
+            &["--name={host_name}".into()],
+        );
+        assert_eq!(command.args, ["--name=this-run"]);
+        assert_eq!(command.host_name.as_deref(), Some("this-run"));
+        assert!(spawned_host_pick(&command, true).is_ok());
+    }
 
     #[test]
     fn log_tails_bound_large_files_and_single_lines() -> Result<()> {

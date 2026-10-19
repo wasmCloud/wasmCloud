@@ -136,7 +136,10 @@ cargo xtask bench-scale --image registry.example.com/team/http-handler:1.0.0 --f
 ```
 
 Raw placeholders are `{nats_url}`, `{memory_limit}` and `{guest_memory}` (bytes),
-`{core_instances}` and `{http_addr}`.
+`{core_instances}`, `{http_addr}` and `{host_name}`.
+On shared NATS, a spawned host must advertise the generated `{host_name}` in its
+heartbeat; wash gets it through `--host-name`, and raw hosts must receive it in a
+`--host-arg`. `--host-id` selects an existing host only with `--host-nats-only`.
 The host must publish heartbeats on `runtime.operator.heartbeat.<id>`,
 answer `runtime.host.<id>.{heartbeat,workload.start,workload.status,workload.stop}`,
 and report its HTTP port in the heartbeat (or pass `--host-http`).

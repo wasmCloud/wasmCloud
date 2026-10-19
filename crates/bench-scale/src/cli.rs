@@ -138,7 +138,7 @@ pub struct Args {
     #[arg(long, alias = "attach", env = "BENCH_SCALE_HOST_NATS_ONLY")]
     pub host_nats_only: bool,
 
-    /// Which host to use when several heartbeat on the same NATS.
+    /// Which existing host to use with --host-nats-only.
     #[arg(long, env = "BENCH_SCALE_HOST_ID")]
     pub host_id: Option<String>,
 
