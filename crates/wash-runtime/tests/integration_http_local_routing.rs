@@ -480,7 +480,8 @@ async fn test_local_routes_are_not_reachable_from_the_network() -> Result<()> {
 /// rather than served for free.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_local_dispatch_draws_on_the_outbound_http_quota() -> Result<()> {
-    // One permit, held for the life of each locally dispatched response.
+    // One permit, held until both the locally dispatched response and the
+    // callee's request body are dropped.
     let (addr, host) = start_host_with_quota(true, Some(1)).await?;
 
     host.workload_start(http_workload(
