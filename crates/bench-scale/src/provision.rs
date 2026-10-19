@@ -37,6 +37,7 @@ fn wash_target_for(arch: &str, os: &str, musl: bool) -> Result<&'static str> {
         ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
         ("aarch64", "linux") if musl => "aarch64-unknown-linux-musl",
         ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
+        ("s390x", "linux") if !musl => "s390x-unknown-linux-gnu",
         ("x86_64", "macos") => "x86_64-apple-darwin",
         ("aarch64", "macos") => "aarch64-apple-darwin",
         ("x86_64", "windows") => "x86_64-pc-windows-msvc",
@@ -362,14 +363,19 @@ mod tests {
             ("x86_64", "linux", true, "x86_64-unknown-linux-musl"),
             ("aarch64", "linux", false, "aarch64-unknown-linux-gnu"),
             ("aarch64", "linux", true, "aarch64-unknown-linux-musl"),
+            ("s390x", "linux", false, "s390x-unknown-linux-gnu"),
             ("x86_64", "macos", false, "x86_64-apple-darwin"),
             ("aarch64", "macos", false, "aarch64-apple-darwin"),
             ("x86_64", "windows", false, "x86_64-pc-windows-msvc"),
         ] {
             assert_eq!(wash_target_for(arch, os, musl)?, expected);
         }
-        for (arch, os) in [("aarch64", "windows"), ("s390x", "linux")] {
-            let error = wash_target_for(arch, os, false).expect_err("no download is supported");
+        for (arch, os, musl) in [
+            ("aarch64", "windows", false),
+            ("s390x", "linux", true),
+            ("riscv64", "linux", false),
+        ] {
+            let error = wash_target_for(arch, os, musl).expect_err("no download is supported");
             assert!(error.to_string().contains("--host-bin"));
         }
         Ok(())
