@@ -904,6 +904,41 @@ pub struct WorkloadClients {
     release_pending: Arc<std::sync::atomic::AtomicUsize>,
 }
 
+/// Owns maintenance before it is queued, including if the runtime cancels it
+/// before the blocking closure starts. Cancellation still drains the pending
+/// invalidations, so their clients do not wait for another cache access.
+struct ReleaseOwner {
+    clients: moka::sync::Cache<String, PooledClient>,
+    pending: Arc<std::sync::atomic::AtomicUsize>,
+    armed: bool,
+}
+
+impl ReleaseOwner {
+    fn release(&mut self) {
+        use std::sync::atomic::Ordering;
+        while self.armed {
+            let seen = self.pending.load(Ordering::Acquire);
+            self.clients.run_pending_tasks();
+            // An unbind during this pass left its invalidation to us. Keep
+            // ownership until a complete pass has caught up with every one.
+            if self
+                .pending
+                .compare_exchange(seen, 0, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                // A new owner can start immediately after the exchange.
+                self.armed = false;
+            }
+        }
+    }
+}
+
+impl Drop for ReleaseOwner {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
 impl WorkloadClients {
     /// Create a per-workload client cache using the given TLS configuration
     /// for HTTPS and a private quota registry of default size.
@@ -1033,7 +1068,7 @@ impl WorkloadClients {
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .remove(workload_id);
-        self.release_invalidated();
+        drop(self.release_invalidated());
     }
 
     /// Drop invalidated clients now rather than on the next cache access.
@@ -1043,34 +1078,27 @@ impl WorkloadClients {
     /// pin. Running that pass inline put the whole cache's pending work on
     /// every unbind, so it runs off the caller's thread, on one task at a time
     /// that keeps passing until no unbind arrived during its last pass.
-    fn release_invalidated(&self) {
+    fn release_invalidated(&self) -> Option<tokio::task::JoinHandle<()>> {
         use std::sync::atomic::Ordering;
         // Only the unbind that finds nothing pending starts a task: a burst
         // otherwise spawned one blocking task per unbind, each queueing on
         // moka's maintenance lock behind the last.
         if self.release_pending.fetch_add(1, Ordering::AcqRel) != 0 {
-            return;
+            return None;
         }
-        let clients = self.clients.clone();
-        let pending = Arc::clone(&self.release_pending);
-        let release = move || {
-            loop {
-                let seen = pending.load(Ordering::Acquire);
-                clients.run_pending_tasks();
-                // An unbind that landed during the pass found the count
-                // non-zero and left its invalidation to this task, so go round
-                // again for it rather than stopping.
-                if pending
-                    .compare_exchange(seen, 0, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok()
-                {
-                    break;
-                }
-            }
+        let mut owner = ReleaseOwner {
+            clients: self.clients.clone(),
+            pending: Arc::clone(&self.release_pending),
+            armed: true,
         };
+        let release = move || owner.release();
         match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => drop(runtime.spawn_blocking(release)),
-            Err(_) => release(),
+            Ok(runtime) => Some(runtime.spawn_blocking(release)),
+            Err(_) => {
+                let mut release = release;
+                release();
+                None
+            }
         }
     }
 
@@ -1467,6 +1495,81 @@ fn classify_client_error(err: &hyper_util::client::legacy::Error) -> HttpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_release_drains_clients_and_allows_another_runtime() {
+        use std::sync::atomic::Ordering;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        let (started, ready) = std::sync::mpsc::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let busy = runtime.spawn_blocking(move || {
+            started.send(()).unwrap();
+            let _ = blocked.recv();
+        });
+        ready.recv().unwrap();
+
+        let clients = WorkloadClients::new(default_client_tls_config());
+        clients.clients.insert(
+            "workload".into(),
+            PooledClient::new(default_client_tls_config()),
+        );
+        clients.clients.insert(
+            "another-workload".into(),
+            PooledClient::new(default_client_tls_config()),
+        );
+        clients.clients.run_pending_tasks();
+        assert_eq!(clients.clients.entry_count(), 2);
+        clients.clients.invalidate("workload");
+        let queued = {
+            let _entered = runtime.enter();
+            let queued = clients.release_invalidated().unwrap();
+            // Coalesced unbinds must also be drained on cancellation.
+            clients.invalidate("another-workload");
+            queued
+        };
+        assert_eq!(clients.release_pending.load(Ordering::Acquire), 2);
+
+        // Rebinding the ID must survive the old task's cleanup.
+        let new_tls = Arc::new((*default_client_tls_config()).clone());
+        clients
+            .clients
+            .insert("workload".into(), PooledClient::new(Arc::clone(&new_tls)));
+        queued.abort();
+        release.send(()).unwrap();
+        runtime.block_on(async {
+            busy.await.unwrap();
+            assert!(queued.await.unwrap_err().is_cancelled());
+        });
+        assert_eq!(clients.release_pending.load(Ordering::Acquire), 0);
+        assert_eq!(
+            clients.clients.entry_count(),
+            1,
+            "cancelled maintenance must drain"
+        );
+        assert!(
+            Arc::ptr_eq(&clients.clients.get("workload").unwrap().tls, &new_tls,),
+            "the rebound client must survive"
+        );
+        drop(runtime);
+
+        let next_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let next = {
+            let _entered = next_runtime.enter();
+            clients.clients.invalidate("workload");
+            clients.release_invalidated().unwrap()
+        };
+        next_runtime.block_on(next).unwrap();
+        assert_eq!(clients.release_pending.load(Ordering::Acquire), 0);
+        assert_eq!(clients.clients.entry_count(), 0);
+    }
 
     /// Shorter than the production [`PERMIT_WAIT`]: the connection-bound tests
     /// deliberately wait out abandoned connect attempts parked on the
