@@ -362,20 +362,20 @@ pub struct HostCommand {
     /// wasmtime's own default of 4 GiB — which is what every host has run to
     /// date, and why an instance count has never implied a byte count.
     ///
-    /// Every slot reserves address space for this whether or not anything
-    /// grows into it, and never less than wasmtime's 4 GiB reservation plus a
-    /// 32 MiB guard. Raising it past 4 GiB raises the pool's whole
-    /// address-space reservation; lowering it below 4 GiB caps guest heaps but
-    /// does not shrink the reservation.
+    /// Every slot reserves wasmtime's 4 GiB plus a 32 MiB guard whether or
+    /// not anything grows into it. Lowering this below 4 GiB caps guest heaps
+    /// but does not shrink the reservation. It cannot go past 4 GiB: the
+    /// pooling allocator refuses a ceiling larger than its reservation, and
+    /// the host will not start.
     #[arg(long = "default-heap-memory", env = "WASH_DEFAULT_HEAP_MEMORY")]
     pub default_heap_memory: Option<String>,
 
     /// Instance slots the pooling allocator keeps.
     ///
     /// Unset, this stays wasmtime's default of 1000. Multiplied by the slot
-    /// size (the larger of `--default-heap-memory` and 4 GiB, plus a 32 MiB
-    /// guard) it is the pool's address-space reservation, so it is the knob
-    /// that sizes the pool.
+    /// size (4 GiB plus a 32 MiB guard, whatever `--default-heap-memory` is)
+    /// it is the pool's address-space reservation, so it is the knob that
+    /// sizes the pool.
     #[arg(long = "core-instances", env = "WASH_CORE_INSTANCES")]
     pub core_instances: Option<u32>,
 
