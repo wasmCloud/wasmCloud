@@ -75,16 +75,22 @@ and no failed warm-up requests. Zero samples are rejected.
 
 Everything is cached under `--cache-dir` (default `target/bench-scale/` in the workspace),
 so a second run downloads and builds nothing.
+Every download is checked against a sha256 before it is installed, and a cached
+binary is hashed again before each run; one that no longer matches is downloaded again.
 
 - **Host**: `--host-bin <path>`, or by default the released `wash` for `--wash-version`
   (default: this workspace's version),
   downloaded from `https://github.com/wasmCloud/wasmCloud/releases/download/v<version>/wash-<target>`
-  the way `install.sh` does.
+  the way `install.sh` does,
+  and checked against the sha256 that release's `wash.sigstore.json` provenance records.
+  The bundle's signature is not checked; `gh attestation verify <binary> --repo wasmCloud/wasmCloud` does that.
   The bench never builds wash.
   `cargo binstall wash` does not work for this:
   wash 2.x is not on crates.io, and its binstall metadata points at stale tags.
 - **NATS**: `--nats-url`, or a `nats-server` (`--nats-version`, default 2.12.8)
   downloaded from its GitHub release and run on a free loopback port.
+  The archive is checked against a sha256 pinned in the bench for the default version,
+  or against the release's `SHA256SUMS` for any other.
 - **Component**: `--image <oci ref> --flavour scale-to-zero` for an image the host can already pull,
   `--wasm <path>` for a P3 HTTP component to inspect and serve,
   or by default the `http-handler-p3` test fixture
@@ -149,6 +155,8 @@ Raw placeholders are `{nats_url}`, `{memory_limit}` and `{guest_memory}` (bytes)
 On shared NATS, a spawned host must advertise the generated `{host_name}` in its
 heartbeat; wash gets it through `--host-name`, and raw hosts must receive it in a
 `--host-arg`. `--host-id` selects an existing host only with `--host-nats-only`.
+Without it, an attached run listens for a full heartbeat interval (15s) and stops
+if more than one host heartbeats, rather than benching whichever spoke first.
 The host must publish heartbeats on `runtime.operator.heartbeat.<id>`,
 answer `runtime.host.<id>.{heartbeat,workload.start,workload.status,workload.stop}`,
 and report its HTTP port in the heartbeat (or pass `--host-http`).
@@ -186,7 +194,7 @@ except the repeatable `--host-arg`.
 | `--host-log` | `warn` | `RUST_LOG` for the host |
 | `--wash-version` | workspace version | released wash to download |
 | `--host-nats-only` (`--attach`) | off | spawn no host; use one on `--nats-url` |
-| `--host-id` | first heartbeat | pick a host when several share NATS |
+| `--host-id` | the only host | pick a host when several share NATS |
 | `--host-pid` | none | attached host's pid, for memory sampling |
 | `--host-http` | `127.0.0.1:<httpPort>` | where to send HTTP requests |
 | `--heartbeat-timeout` | `60` | seconds to wait for the host's first heartbeat |
@@ -198,7 +206,8 @@ except the repeatable `--host-arg`.
 ## Output
 
 Without `--report` the bench prints nothing and only its exit code speaks:
-0 on success, 2 when a flavour served fewer than `--min-components`, 1 on error.
+0 on success, 2 when a flavour served fewer than `--min-components`, 1 on error
+(including cleanup that could not confirm removal; the report is still written).
 
 With `--report` it prints a header
 (machine cores, RAM and OS, limits, image, NATS, run directory),
@@ -252,7 +261,14 @@ as the listener.
 - Footprint is `VmRSS + VmSwap` from `/proc/<pid>/status` on Linux,
   `phys_footprint` on macOS (including compressed pages), and sysinfo's resident
   size elsewhere (which misses compressed and swapped pages).
-  The report says which.
+  The report says which. For an owned host, it sums every process in the owned
+  Unix process group or Windows job, so a wrapper's child cannot escape the
+  memory check. This can count shared pages more than once and is conservative.
+  Attached hosts still sample only the explicitly supplied PID.
+  A missing owned member reading makes the measurement unknown; groups or jobs
+  with more than 4096 members are likewise unmeasurable rather than truncated.
+  Owned-process measurement is supported on Linux, macOS, and Windows; other
+  platforms require an explicit component cap.
   On Linux this includes resident file-backed pages, while the new wash host's
   process admission guard uses `RssAnon + VmSwap`, excluding resident file-backed
   and shared-memory pages (`VmRSS + VmSwap` when `RssAnon` is unavailable).
@@ -260,13 +276,15 @@ as the listener.
   the host refuses starts; the two limits intentionally measure different footprints.
 - Without `--max-components`, a valid process footprint is required at baseline
   and throughout the run. An unavailable reading aborts the experiment and runs
-  cleanup. An explicit component cap permits unknown footprint values in the report.
+  cleanup. The background watcher also halts new starts if a reading disappears
+  mid-batch. An explicit component cap permits unknown footprint values in the report.
 - Attached to a running host (`--host-nats-only`), memory is unknown without `--host-pid`,
   and the run then needs `--max-components` to bound it.
   Every submitted workload ID is journaled, including unanswered starts. Normal
   completion, errors, Ctrl-C, and Unix SIGTERM all run a cleanup phase with a 60-second budget.
-  Stops are retried and removal is checked. Unconfirmed IDs are printed as an
-  error and the next flavour is not started. An unanswered start that remains
+  Stops are retried and removal is checked. Unconfirmed IDs are printed to stderr,
+  recorded as the flavour's `cleanup_error` and exit 1; the measured report is still written
+  and the next flavour is not started. An unanswered start that remains
   absent is still reported as uncertain because it could be queued at the host.
 - The released wash is what runs by default.
   To bench a local build, pass `--host-bin target/release/wash`.

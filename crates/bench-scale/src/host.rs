@@ -36,6 +36,10 @@ impl ChildGuard {
         self.child.id()
     }
 
+    pub(crate) fn process_ids(&self) -> Option<Vec<u32>> {
+        self.tree.members()
+    }
+
     /// The exit status if the process has ended on its own.
     pub fn exited(&mut self) -> Option<ExitStatus> {
         if self.exited.is_none() {
@@ -97,7 +101,8 @@ pub fn log_tail(path: &Path, lines: usize) -> String {
             .iter()
             .position(|b| *b == b'\n')
             .filter(|i| i + 1 < bytes.len())
-            .map_or(bytes.as_slice(), |i| &bytes[i + 1..])
+            .and_then(|i| bytes.get(i + 1..))
+            .unwrap_or(bytes.as_slice())
     } else {
         bytes.as_slice()
     };
@@ -107,7 +112,9 @@ pub fn log_tail(path: &Path, lines: usize) -> String {
     while !body.is_char_boundary(start) {
         start += 1;
     }
-    let tail = body[start..]
+    let tail = body
+        .get(start..)
+        .unwrap_or_default()
         .lines()
         .rev()
         .take(lines)
@@ -419,12 +426,105 @@ impl Heartbeats {
             }
         }
     }
+
+    /// The one host heartbeating on this NATS server, for an attached run
+    /// that names none. The first heartbeat alone would be whichever host
+    /// spoke first on a shared server, so heartbeats are read for a full
+    /// interval after it, and any other host fails the run instead of being
+    /// benched by accident.
+    pub async fn wait_for_only_host(&mut self, limit: Duration) -> Result<HostHeartbeat> {
+        let first = self.wait(Pick::Any, limit, None).await?;
+        let payloads = (&mut self.0).map(|message| message.payload);
+        only_host(first, payloads, HEARTBEAT_INTERVAL + HEARTBEAT_SLACK).await
+    }
+}
+
+/// How often a wash host heartbeats by default: within one interval, every
+/// such host on the server has been heard from.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+/// Allowance for a heartbeat published just after the interval ends.
+const HEARTBEAT_SLACK: Duration = Duration::from_secs(2);
+
+/// `first`, unless another host heartbeats on `payloads` within `window`.
+async fn only_host(
+    first: HostHeartbeat,
+    mut payloads: impl futures::Stream<Item = bytes::Bytes> + Unpin,
+    window: Duration,
+) -> Result<HostHeartbeat> {
+    let until = tokio::time::Instant::now() + window;
+    let mut others = std::collections::BTreeSet::new();
+    loop {
+        match tokio::time::timeout_at(until, payloads.next()).await {
+            Ok(Some(payload)) => {
+                if let Ok(heartbeat) = serde_json::from_slice::<HostHeartbeat>(&payload)
+                    && heartbeat.id != first.id
+                {
+                    others.insert(heartbeat.id);
+                }
+            }
+            Ok(None) => bail!("the heartbeat subscription closed"),
+            Err(_) => break,
+        }
+    }
+    if !others.is_empty() {
+        let others: Vec<_> = others.into_iter().collect();
+        bail!(
+            "several hosts heartbeat on this NATS server ({}, {}); pass --host-id to pick one",
+            first.id,
+            others.join(", ")
+        );
+    }
+    Ok(first)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    fn heartbeat(id: &str) -> bytes::Bytes {
+        serde_json::to_vec(&HostHeartbeat {
+            id: id.into(),
+            ..Default::default()
+        })
+        .unwrap()
+        .into()
+    }
+
+    fn first() -> HostHeartbeat {
+        HostHeartbeat {
+            id: "first".into(),
+            ..Default::default()
+        }
+    }
+
+    /// An attached run without --host-id takes a host only once a whole
+    /// interval has passed with no other host heard from.
+    #[tokio::test(start_paused = true)]
+    async fn an_attached_run_takes_the_only_host() {
+        let (send, receive) = futures::channel::mpsc::unbounded();
+        send.unbounded_send(heartbeat("first")).unwrap();
+        let picked = only_host(first(), receive, Duration::from_secs(17))
+            .await
+            .unwrap();
+        assert_eq!(picked.id, "first");
+        drop(send);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_attached_run_refuses_to_guess_between_hosts() {
+        let (send, receive) = futures::channel::mpsc::unbounded();
+        let (_, error) = tokio::join!(
+            async {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                send.unbounded_send(heartbeat("second")).unwrap();
+            },
+            only_host(first(), receive, Duration::from_secs(17)),
+        );
+        let error = error.unwrap_err().to_string();
+        assert!(error.contains("first, second"), "{error}");
+        assert!(error.contains("--host-id"), "{error}");
+    }
 
     #[test]
     fn spawned_hosts_on_shared_nats_require_their_own_name() {

@@ -326,6 +326,9 @@ pub fn print_flavour_summary(report: &FlavourReport) {
         ms(s.request_p99_ms),
     );
     println!("stopped:  {}", report.stop);
+    if let Some(e) = &report.cleanup_error {
+        println!("FAIL:     {e}");
+    }
     if let crate::bench::Stop::HostExited { log_tail, .. } = &report.stop
         && !log_tail.is_empty()
     {

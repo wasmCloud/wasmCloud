@@ -155,7 +155,8 @@ pub struct Args {
     pub heartbeat_timeout: u64,
 
     /// Use this NATS server instead of downloading and running one.
-    #[arg(long, env = "BENCH_SCALE_NATS_URL")]
+    // The URL can carry credentials, so `--help` names the variable only.
+    #[arg(long, env = "BENCH_SCALE_NATS_URL", hide_env_values = true)]
     pub nats_url: Option<String>,
 
     /// nats-server release to download.
@@ -171,4 +172,22 @@ pub struct Args {
     /// Serve this P3 HTTP component instead of building the http-handler-p3 fixture.
     #[arg(long, env = "BENCH_SCALE_WASM", conflicts_with = "image")]
     pub wasm: Option<PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory as _;
+
+    /// `--help` prints each variable's current value unless told not to, and
+    /// a NATS URL can carry a user and password.
+    #[test]
+    fn help_never_prints_the_nats_url() {
+        let command = Args::command();
+        let nats_url = command
+            .get_arguments()
+            .find(|arg| arg.get_id() == "nats_url")
+            .expect("the --nats-url argument");
+        assert!(nats_url.is_hide_env_values_set());
+    }
 }

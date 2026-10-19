@@ -293,6 +293,8 @@ pub struct FlavourReport {
     pub stop: Stop,
     pub summary: Summary,
     pub registry_requests: Option<RegistryCounts>,
+    /// Why cleanup could not confirm removal on an attached host; `None` when it did.
+    pub cleanup_error: Option<String>,
 }
 
 /// A host ready to bench: its API, where its HTTP listens, its process.
@@ -530,7 +532,7 @@ async fn drain_response(mut response: reqwest::Response) -> Result<(), String> {
             let retain = chunk
                 .len()
                 .min(ERROR_BODY_LIMIT.saturating_sub(diagnostic.len()));
-            diagnostic.extend_from_slice(&chunk[..retain]);
+            diagnostic.extend_from_slice(chunk.get(..retain).unwrap_or_default());
             truncated |= retain < chunk.len();
         }
     }
@@ -721,7 +723,7 @@ pub async fn run_flavour(
     target: &Target,
 ) -> Result<FlavourReport> {
     let journal = crate::lifecycle::Journal::default();
-    crate::lifecycle::with_cleanup(
+    let (mut report, cleanup_error) = crate::lifecycle::with_cleanup(
         run.cancel,
         &target.client,
         &journal,
@@ -729,7 +731,9 @@ pub async fn run_flavour(
         run.settings.start_concurrency,
         measure_flavour(run, flavour, target, &journal),
     )
-    .await
+    .await?;
+    report.cleanup_error = cleanup_error;
+    Ok(report)
 }
 
 async fn measure_flavour(
@@ -757,6 +761,7 @@ async fn measure_flavour(
         Arc::clone(&target.sampler),
         settings.memory_limit_bytes,
         Arc::clone(&halt),
+        settings.max_components.is_none(),
     );
     let exit_watch = target.guard.as_ref().map(|guard| {
         let guard = Arc::clone(guard);
@@ -811,6 +816,7 @@ async fn measure_flavour(
         {
             break Stop::Cap { cap };
         }
+        watch.check_available()?;
         checked_footprint(
             target.sampler.footprint(),
             settings.max_components,
@@ -883,6 +889,7 @@ async fn measure_flavour(
         };
 
         let heartbeat = target.client.heartbeat(Duration::from_secs(5)).await.ok();
+        watch.check_available()?;
         let footprint = checked_footprint(
             target.sampler.footprint(),
             settings.max_components,
@@ -1029,6 +1036,7 @@ async fn measure_flavour(
         stop,
         summary,
         registry_requests: None,
+        cleanup_error: None,
     })
 }
 

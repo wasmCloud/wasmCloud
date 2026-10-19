@@ -79,6 +79,10 @@ impl Control for HostClient {
     }
 }
 
+/// Run `work`, then (when attached) remove every journaled workload.
+///
+/// A measurement that completed is kept even if cleanup cannot confirm removal:
+/// the cleanup failure comes back beside it so the caller can still report it.
 pub async fn with_cleanup<T>(
     cancel: &CancellationToken,
     client: &impl Control,
@@ -86,29 +90,36 @@ pub async fn with_cleanup<T>(
     attached: bool,
     concurrency: usize,
     work: impl Future<Output = Result<T>>,
-) -> Result<T> {
+) -> Result<(T, Option<String>)> {
     let result = cancellable(cancel, work).await;
-    if attached {
+    let residual = if attached {
         // Cleanup deliberately ignores cancellation and has its own finite deadline.
-        let residual = cleanup(
+        cleanup(
             client,
             journal.entries(),
             concurrency,
             Duration::from_secs(60),
         )
-        .await;
-        if !residual.is_empty() {
-            bail!(
-                "cleanup could not confirm removal of workload IDs: {}; run result: {}",
-                residual.join(", "),
-                result
-                    .as_ref()
-                    .err()
-                    .map_or_else(|| "completed".into(), |e| format!("{e:#}"))
-            );
-        }
+        .await
+    } else {
+        Vec::new()
+    };
+    settle(result, &residual)
+}
+
+/// Combine the run's result with the IDs cleanup could not confirm removed.
+fn settle<T>(result: Result<T>, residual: &[String]) -> Result<(T, Option<String>)> {
+    let cleanup_error = (!residual.is_empty()).then(|| {
+        format!(
+            "cleanup could not confirm removal of workload IDs: {}",
+            residual.join(", ")
+        )
+    });
+    match (result, cleanup_error) {
+        (Ok(value), cleanup_error) => Ok((value, cleanup_error)),
+        (Err(e), Some(cleanup_error)) => bail!("{cleanup_error}; run result: {e:#}"),
+        (Err(e), None) => Err(e),
     }
-    result
 }
 
 async fn cleanup(
@@ -201,7 +212,7 @@ mod tests {
         let journal = Journal::default();
         let cancel = CancellationToken::new();
         let (started, when_started) = tokio::sync::oneshot::channel();
-        let result: Result<()> = until_shutdown(
+        let result: Result<((), Option<String>)> = until_shutdown(
             &cancel,
             async {
                 when_started.await.unwrap();
@@ -230,13 +241,14 @@ mod tests {
         };
         let journal = Journal::default();
         let cancel = CancellationToken::new();
-        let result: Result<()> = with_cleanup(&cancel, &host, &journal, true, 2, async {
-            journal.submitted("lost-reply");
-            host.running.store(true, Ordering::SeqCst);
-            cancel.cancel();
-            std::future::pending().await
-        })
-        .await;
+        let result: Result<((), Option<String>)> =
+            with_cleanup(&cancel, &host, &journal, true, 2, async {
+                journal.submitted("lost-reply");
+                host.running.store(true, Ordering::SeqCst);
+                cancel.cancel();
+                std::future::pending().await
+            })
+            .await;
         assert_eq!(result.unwrap_err().to_string(), "interrupted");
         assert!(!host.running.load(Ordering::SeqCst));
     }
@@ -250,7 +262,7 @@ mod tests {
         let journal = Journal::default();
         journal.submitted("started");
         journal.acknowledged("started");
-        let result: Result<()> =
+        let result: Result<((), Option<String>)> =
             with_cleanup(&CancellationToken::new(), &host, &journal, true, 1, async {
                 bail!("measurement failed")
             })
@@ -308,6 +320,28 @@ mod tests {
             )
             .await,
             ["stuck"]
+        );
+    }
+
+    #[test]
+    fn a_completed_run_keeps_its_result_when_cleanup_fails() {
+        let residual = ["a".to_string(), "b".to_string()];
+        let (value, cleanup_error) = settle(Ok(7), &residual).unwrap();
+        assert_eq!(value, 7);
+        assert_eq!(
+            cleanup_error.as_deref(),
+            Some("cleanup could not confirm removal of workload IDs: a, b")
+        );
+        assert_eq!(settle(Ok(7), &[]).unwrap(), (7, None));
+
+        let failed = || -> Result<u8> { bail!("measurement failed") };
+        assert_eq!(
+            settle(failed(), &residual).unwrap_err().to_string(),
+            "cleanup could not confirm removal of workload IDs: a, b; run result: measurement failed"
+        );
+        assert_eq!(
+            settle(failed(), &[]).unwrap_err().to_string(),
+            "measurement failed"
         );
     }
 }

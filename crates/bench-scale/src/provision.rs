@@ -49,6 +49,14 @@ pub fn wash_url(version: &str, target: &str) -> String {
     format!("https://github.com/wasmCloud/wasmCloud/releases/download/v{version}/wash-{target}")
 }
 
+/// The release's sigstore bundle, whose provenance statement records the
+/// sha256 of every `wash-<target>` asset.
+pub fn wash_bundle_url(version: &str) -> String {
+    format!(
+        "https://github.com/wasmCloud/wasmCloud/releases/download/v{version}/wash.sigstore.json"
+    )
+}
+
 /// The `{os}-{arch}` nats-server names its release archives by.
 pub fn nats_platform() -> Result<String> {
     let os = match std::env::consts::OS {
@@ -64,10 +72,94 @@ pub fn nats_platform() -> Result<String> {
     Ok(format!("{os}-{arch}"))
 }
 
+pub fn nats_archive(version: &str, platform: &str) -> String {
+    format!("nats-server-v{version}-{platform}.tar.gz")
+}
+
 pub fn nats_url(version: &str, platform: &str) -> String {
     format!(
-        "https://github.com/nats-io/nats-server/releases/download/v{version}/nats-server-v{version}-{platform}.tar.gz"
+        "https://github.com/nats-io/nats-server/releases/download/v{version}/{}",
+        nats_archive(version, platform)
     )
+}
+
+pub fn nats_sums_url(version: &str) -> String {
+    format!("https://github.com/nats-io/nats-server/releases/download/v{version}/SHA256SUMS")
+}
+
+/// The sha256 of the archives the default `--nats-version` downloads, from
+/// that release's `SHA256SUMS`. Other versions are checked against the
+/// `SHA256SUMS` of their own release.
+const PINNED_NATS_ARCHIVES: &[(&str, &str)] = &[
+    (
+        "nats-server-v2.12.8-darwin-amd64.tar.gz",
+        "8880e133f45c6974468d351425db9a73ffe3b569850cad2bfbaa349d80939a7f",
+    ),
+    (
+        "nats-server-v2.12.8-darwin-arm64.tar.gz",
+        "4556a7f617eb532587790344629a6a95261099b236524b764d1f10d6c14aba1a",
+    ),
+    (
+        "nats-server-v2.12.8-linux-amd64.tar.gz",
+        "6abc397684567e133649688a13564ad6de786d64e88253fbb4f6a3aa8c2fca63",
+    ),
+    (
+        "nats-server-v2.12.8-linux-arm64.tar.gz",
+        "7d20e93c23924cdd5cb6ec51c92f9478c97f9c8a0dbe049dd7ab88af115d622c",
+    ),
+];
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest as _, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+/// Fail unless `bytes`, downloaded from `url`, hash to `expected`.
+fn verify_sha256(url: &str, bytes: &[u8], expected: &str) -> Result<()> {
+    let actual = sha256_hex(bytes);
+    if !actual.eq_ignore_ascii_case(expected) {
+        bail!("{url} has sha256 {actual}, but its release says {expected}");
+    }
+    Ok(())
+}
+
+/// The digest a `SHA256SUMS` file gives `name`.
+fn digest_in_sums(sums: &str, name: &str) -> Option<String> {
+    sums.lines().find_map(|line| {
+        let (digest, file) = line.split_once(char::is_whitespace)?;
+        // `sha256sum` marks binary-mode entries with a leading '*'.
+        let file = file.trim_start().trim_start_matches('*');
+        (file == name).then(|| digest.to_owned())
+    })
+}
+
+/// The sha256 a wash release's sigstore bundle records for `asset`, read out
+/// of the in-toto provenance statement it carries.
+///
+/// Only the digest is used: the bundle's signature is not checked here.
+/// `gh attestation verify <binary> --repo wasmCloud/wasmCloud` checks it.
+fn digest_in_bundle(bundle: &[u8], asset: &str) -> Result<String> {
+    use base64::Engine as _;
+    let bundle: serde_json::Value = serde_json::from_slice(bundle).context("parsing the bundle")?;
+    let payload = bundle
+        .pointer("/dsseEnvelope/payload")
+        .and_then(|payload| payload.as_str())
+        .context("the bundle has no DSSE payload")?;
+    let statement = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .context("decoding the bundle's payload")?;
+    let statement: serde_json::Value =
+        serde_json::from_slice(&statement).context("parsing the provenance statement")?;
+    statement
+        .get("subject")
+        .and_then(|subjects| subjects.as_array())
+        .context("the provenance statement has no subjects")?
+        .iter()
+        .find(|subject| subject.get("name").and_then(|name| name.as_str()) == Some(asset))
+        .and_then(|subject| subject.pointer("/digest/sha256"))
+        .and_then(|digest| digest.as_str())
+        .map(str::to_owned)
+        .with_context(|| format!("the provenance statement records no sha256 for {asset}"))
 }
 
 fn http_client() -> Result<reqwest::Client> {
@@ -97,11 +189,45 @@ async fn download(url: &str) -> Result<Vec<u8>> {
     Ok(body)
 }
 
+/// The file beside a cached binary holding the sha256 it was installed with.
+fn digest_path(dest: &Path) -> PathBuf {
+    let mut name = dest.as_os_str().to_owned();
+    name.push(".sha256");
+    PathBuf::from(name)
+}
+
+/// Whether `dest` is cached and still hashes to the digest recorded when it
+/// was verified and installed. A binary that does not, or has no record, is
+/// downloaded and verified again rather than run.
+fn cached_intact(dest: &Path, say: &dyn Fn(&str)) -> bool {
+    let Ok(bytes) = std::fs::read(dest) else {
+        return false;
+    };
+    let recorded = std::fs::read_to_string(digest_path(dest)).unwrap_or_default();
+    if !recorded.trim().is_empty() && sha256_hex(&bytes).eq_ignore_ascii_case(recorded.trim()) {
+        return true;
+    }
+    say(&format!(
+        "{} does not match its recorded sha256; downloading it again",
+        dest.display()
+    ));
+    false
+}
+
 /// Write `bytes` to `dest` as an executable, through a temporary file so an
-/// interrupted run never leaves a truncated binary in the cache.
+/// interrupted run never leaves a truncated binary in the cache, and record
+/// its sha256 for [`cached_intact`]. The record goes first: a run interrupted
+/// between the two leaves a binary that fails the check, never one that
+/// passes it unverified.
 fn install_executable(dest: &Path, bytes: &[u8]) -> Result<()> {
     let dir = dest.parent().context("install path has no parent")?;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let record = digest_path(dest);
+    let partial_record = record.with_extension(format!("partial-{}", std::process::id()));
+    std::fs::write(&partial_record, sha256_hex(bytes))
+        .with_context(|| format!("creating {}", partial_record.display()))?;
+    std::fs::rename(&partial_record, &record)
+        .with_context(|| format!("installing {}", record.display()))?;
     let partial = dest.with_extension(format!("partial-{}", std::process::id()));
     {
         let mut file = std::fs::File::create(&partial)
@@ -118,32 +244,55 @@ fn install_executable(dest: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// The released wash binary for `version`, downloaded once.
+/// The released wash binary for `version`, downloaded once and checked
+/// against the sha256 its release's provenance statement records.
 pub async fn ensure_wash(cache: &Path, version: &str, say: &dyn Fn(&str)) -> Result<PathBuf> {
     let target = wash_target()?;
     let dest = cache
         .join("wash")
         .join(version)
         .join(format!("wash-{target}{}", std::env::consts::EXE_SUFFIX));
-    if dest.exists() {
+    if cached_intact(&dest, say) {
         return Ok(dest);
     }
+    let bundle_url = wash_bundle_url(version);
+    let expected = digest_in_bundle(&download(&bundle_url).await?, &format!("wash-{target}"))
+        .with_context(|| format!("reading {bundle_url}"))?;
     let url = wash_url(version, target);
     say(&format!("downloading {url}"));
     let bytes = download(&url).await?;
+    verify_sha256(&url, &bytes, &expected)?;
     install_executable(&dest, &bytes)?;
     Ok(dest)
 }
 
-/// nats-server `version`, downloaded and unpacked once.
+/// nats-server `version`, downloaded and unpacked once. The archive is checked
+/// against the sha256 pinned here for the default version, or else against
+/// its release's `SHA256SUMS`.
 pub async fn ensure_nats(cache: &Path, version: &str, say: &dyn Fn(&str)) -> Result<PathBuf> {
     let dest = cache.join("nats-server").join(version).join("nats-server");
-    if dest.exists() {
+    if cached_intact(&dest, say) {
         return Ok(dest);
     }
-    let url = nats_url(version, &nats_platform()?);
+    let platform = nats_platform()?;
+    let name = nats_archive(version, &platform);
+    let expected = match PINNED_NATS_ARCHIVES
+        .iter()
+        .find(|(pinned, _)| *pinned == name)
+    {
+        Some((_, digest)) => (*digest).to_owned(),
+        None => {
+            let sums_url = nats_sums_url(version);
+            let sums = String::from_utf8(download(&sums_url).await?)
+                .with_context(|| format!("reading {sums_url}"))?;
+            digest_in_sums(&sums, &name)
+                .with_context(|| format!("{sums_url} lists no sha256 for {name}"))?
+        }
+    };
+    let url = nats_url(version, &platform);
     say(&format!("downloading {url}"));
     let archive = download(&url).await?;
+    verify_sha256(&url, &archive, &expected)?;
     let binary = extract_nats_server(&archive).with_context(|| format!("unpacking {url}"))?;
     install_executable(&dest, &binary)?;
     Ok(dest)
@@ -354,6 +503,97 @@ mod tests {
             nats_url("2.12.8", "linux-amd64"),
             "https://github.com/nats-io/nats-server/releases/download/v2.12.8/nats-server-v2.12.8-linux-amd64.tar.gz"
         );
+    }
+
+    #[test]
+    fn reads_the_asset_digest_from_a_release_bundle() -> Result<()> {
+        use base64::Engine as _;
+        let statement = serde_json::json!({
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [
+                {"name": "wash-x86_64-unknown-linux-gnu", "digest": {"sha256": "aa"}},
+                {"name": "wash-x86_64-unknown-linux-musl", "digest": {"sha256": "bb"}},
+            ],
+        });
+        let bundle = serde_json::json!({
+            "dsseEnvelope": {
+                "payloadType": "application/vnd.in-toto+json",
+                "payload": base64::engine::general_purpose::STANDARD
+                    .encode(serde_json::to_vec(&statement)?),
+            },
+        });
+        let bundle = serde_json::to_vec(&bundle)?;
+        assert_eq!(
+            digest_in_bundle(&bundle, "wash-x86_64-unknown-linux-musl")?,
+            "bb"
+        );
+        assert!(digest_in_bundle(&bundle, "wash-aarch64-apple-darwin").is_err());
+        assert!(digest_in_bundle(b"{}", "wash-x86_64-unknown-linux-gnu").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn reads_the_archive_digest_from_sha256sums() {
+        let sums = "aa  nats-server-v1-linux-amd64.tar.gz\n\
+                    bb *nats-server-v1-linux-arm64.tar.gz\n\
+                    cc  nats-server-v1-linux-amd64.zip\n";
+        assert_eq!(
+            digest_in_sums(sums, "nats-server-v1-linux-amd64.tar.gz").as_deref(),
+            Some("aa")
+        );
+        assert_eq!(
+            digest_in_sums(sums, "nats-server-v1-linux-arm64.tar.gz").as_deref(),
+            Some("bb")
+        );
+        assert_eq!(
+            digest_in_sums(sums, "nats-server-v1-darwin-arm64.tar.gz"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_download_must_match_its_release_digest() {
+        let digest = sha256_hex(b"binary");
+        assert!(verify_sha256("url", b"binary", &digest).is_ok());
+        assert!(verify_sha256("url", b"binary", &digest.to_uppercase()).is_ok());
+        assert!(verify_sha256("url", b"tampered", &digest).is_err());
+    }
+
+    #[test]
+    fn the_default_nats_version_is_pinned_on_every_download_platform() {
+        use clap::Parser as _;
+        let default = crate::cli::Args::parse_from(["bench-scale"]).nats_version;
+        for platform in ["linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"] {
+            let name = nats_archive(&default, platform);
+            assert!(
+                PINNED_NATS_ARCHIVES
+                    .iter()
+                    .any(|(pinned, _)| *pinned == name),
+                "{name} is not pinned"
+            );
+        }
+    }
+
+    /// A cached binary runs only while it still hashes to what was installed.
+    #[test]
+    fn a_changed_cached_binary_is_not_reused() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("bench-scale-{}", uuid::Uuid::new_v4()));
+        let dest = dir.join("nats-server");
+        let quiet = |_: &str| {};
+        assert!(!cached_intact(&dest, &quiet));
+
+        install_executable(&dest, b"verified")?;
+        assert!(cached_intact(&dest, &quiet));
+
+        std::fs::write(&dest, b"replaced")?;
+        assert!(!cached_intact(&dest, &quiet));
+
+        install_executable(&dest, b"verified")?;
+        std::fs::remove_file(digest_path(&dest))?;
+        assert!(!cached_intact(&dest, &quiet));
+
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
     }
 
     #[test]
