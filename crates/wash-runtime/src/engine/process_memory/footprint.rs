@@ -90,7 +90,17 @@ fn read_footprint() -> Option<u64> {
     Some(unsafe { info.assume_init() }.ri_phys_footprint)
 }
 
-/// `VmRSS + VmSwap` out of `/proc/self/status`, in bytes.
+/// `RssAnon + VmSwap` out of `/proc/self/status`, in bytes, or
+/// `VmRSS + VmSwap` on a kernel too old (before 4.5) to report `RssAnon`.
+///
+/// `VmRSS` counts a shared page once for every mapping that has it faulted
+/// in, and wasmtime maps each instance's copy-on-write initial-memory image
+/// separately, so a pool of warm instances of one snapshotted component would
+/// read as one copy of its image per instance though memory holds one. Image
+/// pages a guest writes become anonymous, so they are still counted. Shmem
+/// (`RssShmem`) is left out along with file pages: wasmtime's images are
+/// memfds, which the kernel reports as shmem, so counting it would bring the
+/// same per-mapping overcount back.
 #[cfg(any(target_os = "linux", test))]
 pub(super) fn linux_footprint(status: &str) -> Option<u64> {
     let kib = |name: &str| {
@@ -100,7 +110,8 @@ pub(super) fn linux_footprint(status: &str) -> Option<u64> {
             .and_then(|rest| rest.trim().strip_suffix("kB"))
             .and_then(|n| n.trim().parse::<u64>().ok())
     };
+    let resident = kib("RssAnon:").or_else(|| kib("VmRSS:"))?;
     // Swap is absent on kernels built without it, which means none.
-    let kib_total = kib("VmRSS:")?.saturating_add(kib("VmSwap:").unwrap_or(0));
+    let kib_total = resident.saturating_add(kib("VmSwap:").unwrap_or(0));
     Some(kib_total.saturating_mul(1024))
 }
