@@ -180,6 +180,11 @@ struct OverEpisode {
     baseline: u64,
     /// Samples since the footprint last grew past `baseline`.
     flat_samples: u32,
+    /// Whether this flat stretch is within the limit rather than past it.
+    /// Crossing either way starts a new stretch, so refusals lift only after
+    /// a whole period within the limit, not on the first sample after a
+    /// period past it.
+    within: bool,
 }
 
 impl ProcessMemoryGuard {
@@ -356,21 +361,25 @@ impl ProcessMemoryGuard {
     }
 
     /// Whether this sample ends [`OVER_RECHECK_SAMPLES`] of being over without
-    /// growing. Restarts the count when it does, so the reconsideration comes
-    /// round once per period rather than on every sample after the first.
+    /// growing, all on the same side of the limit (see `OverEpisode::within`).
+    /// Restarts the count when it does, so the reconsideration comes round
+    /// once per period rather than on every sample after the first.
     fn over_without_growing(&self, footprint: u64) -> bool {
         let mut over = self
             .over
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if footprint
-            > over
-                .baseline
-                .saturating_add(self.share(OVER_GROWTH_PERCENT))
+        let within = footprint <= self.limit;
+        if within != over.within
+            || footprint
+                > over
+                    .baseline
+                    .saturating_add(self.share(OVER_GROWTH_PERCENT))
         {
             *over = OverEpisode {
                 baseline: footprint,
                 flat_samples: 0,
+                within,
             };
             return false;
         }
@@ -711,7 +720,9 @@ mod tests {
         let guard = ProcessMemoryGuard::new(1000 * MIB);
         guard.observe(1001 * MIB);
         assert!(guard.is_over());
-        for _ in 1..OVER_RECHECK_SAMPLES {
+        // The first sample within the limit starts the stretch; the period
+        // runs from there.
+        for _ in 0..OVER_RECHECK_SAMPLES {
             guard.observe(980 * MIB);
             assert!(guard.is_over());
         }
@@ -721,6 +732,18 @@ mod tests {
         assert_eq!(guard.state(), ProcessMemoryState::High);
         guard.observe(1001 * MIB);
         assert!(guard.is_over(), "crossing the limit refuses again");
+    }
+
+    /// Time spent flat past the limit does not count towards time within it.
+    #[test]
+    fn a_flat_stretch_past_the_limit_does_not_lift_refusals_within_it() {
+        let guard = ProcessMemoryGuard::new(1000 * MIB);
+        guard.observe(1002 * MIB);
+        for _ in 1..OVER_RECHECK_SAMPLES {
+            guard.observe(1002 * MIB);
+        }
+        guard.observe(990 * MIB);
+        assert!(guard.is_over());
     }
 
     #[test]
