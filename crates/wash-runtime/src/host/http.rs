@@ -520,7 +520,7 @@ pub struct DynamicRouter {
 ///
 /// Cloning a shard shares its root. Mutations copy tree paths and the edited
 /// hostname's bucket vector; replica sets share their unchanged tree nodes.
-type HostBuckets = im::HashMap<Arc<str>, Arc<Vec<PathBucket>>>;
+type HostBuckets = imbl::HashMap<Arc<str>, Arc<Vec<PathBucket>>>;
 
 /// A shard on its own cache line pair, so a writer storing one shard does not
 /// invalidate the line readers of its neighbours load from.
@@ -551,7 +551,7 @@ impl Default for DynamicRouter {
 struct PathBucket {
     prefix: NormalizedPathPrefix,
     scope: RouteScope,
-    workloads: im::OrdSet<String>,
+    workloads: imbl::OrdSet<String>,
 }
 
 /// Most-specific-first: a longer prefix sorts before a shorter one, and the
@@ -667,7 +667,7 @@ impl DynamicRouter {
                     buckets.push(PathBucket {
                         prefix: route.path_prefix.clone(),
                         scope: route.scope,
-                        workloads: im::OrdSet::unit(workload_id.to_string()),
+                        workloads: imbl::OrdSet::unit(workload_id.to_string()),
                     });
                     // Most specific first — see `PathBucket`'s `Ord`.
                     buckets.sort();
@@ -5885,7 +5885,7 @@ mod tests {
         let bucket = |prefix: &str| PathBucket {
             prefix: NormalizedPathPrefix::new(prefix),
             scope: RouteScope::Local,
-            workloads: im::OrdSet::new(),
+            workloads: imbl::OrdSet::new(),
         };
         let mut buckets = [
             bucket(""),
