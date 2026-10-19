@@ -353,6 +353,14 @@ struct Report {
     steps: Vec<Step>,
 }
 
+// A missing reading cannot support either a capacity estimate or the guard's
+// overshoot check. End the run rather than report it as a measured zero.
+fn measured_footprint(reading: Option<u64>, phase: &str) -> Result<u64> {
+    reading.with_context(|| {
+        format!("process footprint unavailable during {phase}; density run stopped")
+    })
+}
+
 async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) -> Result<Report> {
     settings.validate_flavour(flavour)?;
     let wasm = fixture_bytes(settings.fixture)?;
@@ -390,7 +398,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         .context("host should start")?;
 
     let concurrency = settings.start_concurrency.unwrap_or(cpu.cores);
-    let baseline = process_footprint().unwrap_or(0);
+    let baseline = measured_footprint(process_footprint(), "baseline")?;
     let (cpu_baseline, cpu_host_only) = host_cpu(&load.threads);
     let mut cpu_before = cpu_baseline;
     let pool_baseline = engine.pool_usage();
@@ -460,7 +468,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
             Flavour::ScaleToZero => Some(wait_for_spin_down(&engine, baseline_in_use).await),
         };
 
-        let footprint = process_footprint().unwrap_or(0);
+        let footprint = measured_footprint(process_footprint(), "step")?;
         let usage = engine.pool_usage();
         let in_use = usage.map_or(0, |u| u.core_instances.in_use);
         if flavour == Flavour::Warm
@@ -746,6 +754,18 @@ mod tests {
     // which leaves the import unused there.
     #[allow(unused_imports)]
     use super::*;
+
+    #[test]
+    fn missing_memory_readings_stop_instead_of_claiming_zero() -> Result<()> {
+        for phase in ["baseline", "step"] {
+            let error = measured_footprint(None, phase).unwrap_err().to_string();
+            assert!(error.contains(phase), "{error}");
+            assert!(error.contains("density run stopped"), "{error}");
+        }
+        assert_eq!(measured_footprint(Some(1024), "baseline")?, 1024);
+        assert_eq!(measured_footprint(Some(0), "step")?, 0);
+        Ok(())
+    }
 
     #[test]
     fn fixture_binding_matches_the_selected_http_version() {
