@@ -250,6 +250,7 @@ mod tests {
             previous.push(weak);
         }
         server.abort();
+        let _ = server.await;
         assert_eq!(
             authenticated.load(Ordering::SeqCst),
             32,
@@ -257,13 +258,28 @@ mod tests {
         );
         clients.run_pending_tasks();
         assert!(clients.entry_count() <= 4);
-        assert!(
+        // Moka removes entries before epoch reclamation drops their values.
+        // Keep driving maintenance until those retired clients are reclaimed.
+        let live_clients = || {
             previous
                 .iter()
                 .filter(|client| client.upgrade().is_some())
                 .count()
-                <= 4,
-            "eviction must release the clients and their internal token maps"
+        };
+        let reclaimed = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                clients.run_pending_tasks();
+                if live_clients() <= 4 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+        assert!(
+            reclaimed.is_ok(),
+            "eviction must release the clients and their internal token maps: {} clients remain",
+            live_clients()
         );
     }
 }
