@@ -43,3 +43,22 @@ to DEBUG. Run with `RUST_LOG=wash_runtime=debug` to see them again.
   a `suppressed` count. Repeats in between are logged at DEBUG.
 
 "Starting workload" and "Stopping workload" stay at INFO.
+
+## Process memory limit
+
+- The process-memory limit is now on by default for every `EngineBuilder`
+  embedder, not only `wash host`. Unset, it is 90% of the cgroup memory limit,
+  or of physical memory where there is no cgroup. Past it, guest memory growth
+  (including the initial memory of new instances) and new workload starts are
+  refused. Call `EngineBuilder::without_max_process_memory()`, or pass
+  `--max-process-memory off` (`WASH_HOST_MAX_PROCESS_MEMORY=off`) to
+  `wash host`, to turn it off. `with_max_process_memory_bytes` sets a limit of
+  your own instead of the derived one.
+- A configured process-memory limit is enforced even when guest memory is in
+  `count` mode. Use `--max-process-memory off` to disable that separate policy.
+  The process guard is sampled admission control: it cannot cap allocations
+  already in flight, writes into committed guest memory, or arbitrary plugin
+  buffers. Leave headroom and use OS/container limits for a hard boundary.
+
+Process-footprint readers and metric registration live in
+`src/engine/process_memory/`.
