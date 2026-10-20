@@ -1,0 +1,5 @@
+[advisories]
+# webpki-roots 0.26.11 stays in Cargo.lock only through async-nats's
+# `websockets` feature (tokio-websockets 0.10), which this workspace never
+# enables, and 0.26.11 is a shim over webpki-roots 1.0.10, the patched release.
+ignore = ["RUSTSEC-2026-0381"]
