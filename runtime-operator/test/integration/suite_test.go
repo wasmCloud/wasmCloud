@@ -73,9 +73,9 @@ var _ = BeforeSuite(func() {
 
 	// fakeHost's Host, in the Environment of the Workloads pinned to it.
 	Expect(k8sClient.Create(context.Background(), &runtimev1alpha1.Host{
-		ObjectMeta:  metav1.ObjectMeta{Name: testHostID, Namespace: "default"},
+		ObjectMeta:  metav1.ObjectMeta{Name: testHostID, Namespace: testNamespace},
 		HostID:      testHostID,
-		Environment: "default",
+		Environment: testNamespace,
 	})).To(Succeed())
 
 	var mgrCtx context.Context

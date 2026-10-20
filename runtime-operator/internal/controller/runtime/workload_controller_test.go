@@ -169,7 +169,7 @@ func newWorkloadClient(t *testing.T, objs ...client.Object) client.Client {
 
 func placedWorkload() *runtimev1alpha1.Workload {
 	w := &runtimev1alpha1.Workload{
-		ObjectMeta: metav1.ObjectMeta{Name: "placed"},
+		ObjectMeta: metav1.ObjectMeta{Name: placedName},
 	}
 	w.Status.HostID = testHeartbeatHostID
 	w.Status.WorkloadID = "workload-id"
@@ -278,7 +278,7 @@ func TestHostSelectionWaitsOnPinnedHostBeingDeleted(t *testing.T) {
 		OperatorNamespace: testNamespace,
 	}
 	workload := &runtimev1alpha1.Workload{
-		ObjectMeta: metav1.ObjectMeta{Name: "pinned"},
+		ObjectMeta: metav1.ObjectMeta{Name: pinnedName},
 	}
 	workload.Spec.HostID = testHeartbeatHostID
 	workload.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadConditionConfig))
@@ -302,15 +302,15 @@ func TestHostSelectionHoldsPinnedHostToEnvironment(t *testing.T) {
 		wantPlaced  bool
 		wantEvent   string
 	}{
-		{name: "other tenant", environment: "tenant-b", registered: true, wantEvent: "CrossEnvironmentSchedulingDenied"},
-		{name: "own tenant", environment: "tenant-a", registered: true, wantPlaced: true},
-		{name: "unregistered", environment: "tenant-a", wantEvent: "PinnedHostNotRegistered"},
-		{name: "shared hosts", shared: true, environment: "tenant-b", registered: true, wantPlaced: true},
+		{name: "other tenant", environment: otherTenant, registered: true, wantEvent: "CrossEnvironmentSchedulingDenied"},
+		{name: "own tenant", environment: testTenant, registered: true, wantPlaced: true},
+		{name: "unregistered", environment: testTenant, wantEvent: "PinnedHostNotRegistered"},
+		{name: "shared hosts", shared: true, environment: otherTenant, registered: true, wantPlaced: true},
 	} {
 		var objs []client.Object
 		if tc.registered {
 			objs = append(objs, &runtimev1alpha1.Host{
-				ObjectMeta:  metav1.ObjectMeta{Name: "pinned", Namespace: testNamespace},
+				ObjectMeta:  metav1.ObjectMeta{Name: pinnedName, Namespace: testNamespace},
 				HostID:      testHeartbeatHostID,
 				Environment: tc.environment,
 			})
@@ -323,7 +323,7 @@ func TestHostSelectionHoldsPinnedHostToEnvironment(t *testing.T) {
 			AllowSharedHosts:  tc.shared,
 		}
 		workload := &runtimev1alpha1.Workload{
-			ObjectMeta: metav1.ObjectMeta{Name: "pinned", Namespace: "tenant-a"},
+			ObjectMeta: metav1.ObjectMeta{Name: pinnedName, Namespace: testTenant},
 		}
 		workload.Spec.HostID = testHeartbeatHostID
 		workload.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadConditionConfig))
@@ -366,14 +366,14 @@ func TestHostSelectionEvictsPlacedWorkloadOutsideEnvironment(t *testing.T) {
 		wantEvicted bool
 		wantStop    bool
 	}{
-		{name: "other tenant", environment: "tenant-b", wantEvicted: true, wantStop: true},
-		{name: "stop fails", environment: "tenant-b", stopErr: errors.New("nats: timeout"), wantStop: true},
-		{name: "paced", environment: "tenant-b", limited: true},
-		{name: "own tenant", environment: "tenant-a"},
-		{name: "shared hosts", shared: true, environment: "tenant-b"},
+		{name: "other tenant", environment: otherTenant, wantEvicted: true, wantStop: true},
+		{name: "stop fails", environment: otherTenant, stopErr: errors.New("nats: timeout"), wantStop: true},
+		{name: "paced", environment: otherTenant, limited: true},
+		{name: "own tenant", environment: testTenant},
+		{name: "shared hosts", shared: true, environment: otherTenant},
 	} {
 		host := &runtimev1alpha1.Host{
-			ObjectMeta:  metav1.ObjectMeta{Name: "placed", Namespace: testNamespace},
+			ObjectMeta:  metav1.ObjectMeta{Name: placedName, Namespace: testNamespace},
 			HostID:      testHeartbeatHostID,
 			Environment: tc.environment,
 		}
@@ -391,7 +391,7 @@ func TestHostSelectionEvictsPlacedWorkloadOutsideEnvironment(t *testing.T) {
 			r.EvictionLimiter = rate.NewLimiter(0, 0)
 		}
 		workload := &runtimev1alpha1.Workload{
-			ObjectMeta: metav1.ObjectMeta{Name: "placed", Namespace: "tenant-a", UID: testWorkloadUID},
+			ObjectMeta: metav1.ObjectMeta{Name: placedName, Namespace: testTenant, UID: testWorkloadUID},
 		}
 		workload.Status.HostID = testHeartbeatHostID
 		workload.Status.WorkloadID = testWorkloadUID
@@ -556,7 +556,7 @@ func TestStalledHostsBackOff(t *testing.T) {
 	if s.stalled("h") {
 		t.Fatal("a host that never failed is stalled")
 	}
-	waits := []time.Duration{}
+	waits := make([]time.Duration, 0, 5)
 	for range 5 {
 		s.failed("h")
 		waits = append(waits, time.Until(s.stalls["h"].until).Round(time.Second))
@@ -599,14 +599,14 @@ func TestEvictionGivesUpOnlyOnFailedHost(t *testing.T) {
 		host := &runtimev1alpha1.Host{
 			ObjectMeta:  metav1.ObjectMeta{Name: "quiet", Namespace: testNamespace},
 			HostID:      testHeartbeatHostID,
-			Environment: "tenant-b",
+			Environment: otherTenant,
 		}
 		host.Status.SetConditions(tc.ready)
 		bus := &mockBus{err: errors.New("nats: no responders available for request")}
 		r := &WorkloadReconciler{Client: newWorkloadClient(t, host), Bus: bus, OperatorNamespace: testNamespace}
 		placed := func(name string) *runtimev1alpha1.Workload {
 			w := &runtimev1alpha1.Workload{
-				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-a", UID: types.UID(name)},
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testTenant, UID: types.UID(name)},
 			}
 			w.Status.HostID = testHeartbeatHostID
 			return w
@@ -633,7 +633,7 @@ func TestEvictionGivesUpOnlyOnFailedHost(t *testing.T) {
 func TestPinnedHostNotRegisteredRecordedOnce(t *testing.T) {
 	recorder := events.NewFakeRecorder(4)
 	r := &WorkloadReconciler{Client: newWorkloadClient(t), Recorder: recorder, OperatorNamespace: testNamespace}
-	workload := &runtimev1alpha1.Workload{ObjectMeta: metav1.ObjectMeta{Name: "pinned", Namespace: "tenant-a"}}
+	workload := &runtimev1alpha1.Workload{ObjectMeta: metav1.ObjectMeta{Name: pinnedName, Namespace: testTenant}}
 	workload.Spec.HostID = testHeartbeatHostID
 	workload.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadConditionConfig))
 

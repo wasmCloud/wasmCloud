@@ -23,7 +23,10 @@ import (
 )
 
 const (
-	testHostID = "host-1"
+	// testNamespace holds the Workloads, and is the Environment of the hosts
+	// they are pinned to.
+	testNamespace = "default"
+	testHostID    = "host-1"
 	// Each eviction spec has its own host, so moving one to another
 	// Environment, or the controller's memory of one that did not answer a
 	// stop, reaches no other spec.
@@ -176,7 +179,7 @@ func newPinnedWorkload(ctx context.Context, name string) *runtimev1alpha1.Worklo
 func newPinnedWorkloadOn(ctx context.Context, name, hostID string) *runtimev1alpha1.Workload {
 	GinkgoHelper()
 	w := &runtimev1alpha1.Workload{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
 		Spec: runtimev1alpha1.WorkloadSpec{
 			HostID: hostID,
 			Components: []runtimev1alpha1.WorkloadComponent{{
@@ -225,7 +228,7 @@ var _ = Describe("Workload finalizer", func() {
 	It("stops a workload whose Workload was deleted while its start was in flight", func() {
 		ctx := context.Background()
 		const name = "deleted-mid-start"
-		key := types.NamespacedName{Namespace: "default", Name: name}
+		key := types.NamespacedName{Namespace: testNamespace, Name: name}
 		gone := func() bool {
 			return apierrors.IsNotFound(k8sClient.Get(ctx, key, &runtimev1alpha1.Workload{}))
 		}
@@ -304,9 +307,9 @@ var _ = Describe("Workload eviction", func() {
 	It("stops a workload whose host is outside its Environment", func() {
 		ctx := context.Background()
 		host := &runtimev1alpha1.Host{
-			ObjectMeta:  metav1.ObjectMeta{Name: evictHostID, Namespace: "default"},
+			ObjectMeta:  metav1.ObjectMeta{Name: evictHostID, Namespace: testNamespace},
 			HostID:      evictHostID,
-			Environment: "default",
+			Environment: testNamespace,
 		}
 		Expect(k8sClient.Create(ctx, host)).To(Succeed())
 		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, host)).To(Succeed()) })
@@ -321,7 +324,7 @@ var _ = Describe("Workload eviction", func() {
 		}).Should(Succeed())
 		Expect(testHost.isRunning(string(w.UID))).To(BeTrue())
 
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: "default", Name: evictHostID}, host)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: evictHostID}, host)).To(Succeed())
 		host.Environment = "elsewhere"
 		Expect(k8sClient.Update(ctx, host)).To(Succeed())
 		touchWorkload(ctx, key, "1")
@@ -349,9 +352,9 @@ var _ = Describe("Workload eviction from a host that does not answer", func() {
 	It("keeps the workload until the host has failed", func() {
 		ctx := context.Background()
 		host := &runtimev1alpha1.Host{
-			ObjectMeta:  metav1.ObjectMeta{Name: unansweredHostID, Namespace: "default"},
+			ObjectMeta:  metav1.ObjectMeta{Name: unansweredHostID, Namespace: testNamespace},
 			HostID:      unansweredHostID,
-			Environment: "default",
+			Environment: testNamespace,
 		}
 		Expect(k8sClient.Create(ctx, host)).To(Succeed())
 		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, host)).To(Succeed()) })
@@ -367,7 +370,7 @@ var _ = Describe("Workload eviction from a host that does not answer", func() {
 		// Ready is Unknown: the Host has never been judged.
 		testHost.answerStops(unansweredHostID, false)
 		DeferCleanup(testHost.answerStops, unansweredHostID, true)
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: "default", Name: unansweredHostID}, host)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: unansweredHostID}, host)).To(Succeed())
 		host.Environment = "elsewhere"
 		Expect(k8sClient.Update(ctx, host)).To(Succeed())
 		asked := testHost.stopsAsked()

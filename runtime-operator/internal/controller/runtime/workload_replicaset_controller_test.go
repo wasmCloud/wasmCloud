@@ -21,7 +21,7 @@ func TestScaleUpRecordsRefusedWorkloadCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gvk: %v", err)
 	}
-	rs := unavailableReplicaSet(testReplicaSetName)
+	rs := unavailableReplicaSet()
 	recorder := events.NewFakeRecorder(4)
 	r := &WorkloadReplicaSetReconciler{
 		Client: fake.NewClientBuilder().

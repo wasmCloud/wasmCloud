@@ -249,7 +249,7 @@ func TestHostApply_UpsertIsIdempotent(t *testing.T) {
 	const name = "ssa-host"
 
 	// First apply: object does not exist yet -> SSA creates it.
-	if err := applyHost(ctx, c, ns, name, testHeartbeatHostID, "node-a", 8080, "tenant-a",
+	if err := applyHost(ctx, c, ns, name, testHeartbeatHostID, "node-a", 8080, testTenant,
 		map[string]string{testHostGroupLabel: testHostGroup}); err != nil {
 		t.Fatalf("first apply (create) failed: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestHostApply_UpsertIsIdempotent(t *testing.T) {
 
 	// Second apply with changed fields: object exists -> SSA updates in place,
 	// with no client-side Get and so no possibility of AlreadyExists.
-	if err := applyHost(ctx, c, ns, name, testHeartbeatHostID, "node-a-renamed", 9090, "tenant-a",
+	if err := applyHost(ctx, c, ns, name, testHeartbeatHostID, "node-a-renamed", 9090, testTenant,
 		map[string]string{testHostGroupLabel: testHostGroup}); err != nil {
 		t.Fatalf("second apply (update) failed: %v", err)
 	}
@@ -299,7 +299,7 @@ func hostWith(hostID, hostname string, httpPort uint32, env string, labels map[s
 // case that must not register as a change.
 func TestHostSpecChanged(t *testing.T) {
 	base := func() *runtimev1alpha1.Host {
-		return hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", map[string]string{testHostGroupLabel: testHostGroup})
+		return hostWith(testHeartbeatHostID, "node-a", 8080, testTenant, map[string]string{testHostGroupLabel: testHostGroup})
 	}
 
 	tests := []struct {
@@ -308,13 +308,13 @@ func TestHostSpecChanged(t *testing.T) {
 		want bool
 	}{
 		{"identical", base(), false},
-		{"hostID changed", hostWith("host-id-2", "node-a", 8080, "tenant-a", map[string]string{testHostGroupLabel: testHostGroup}), true},
-		{"hostname changed", hostWith(testHeartbeatHostID, "node-b", 8080, "tenant-a", map[string]string{testHostGroupLabel: testHostGroup}), true},
-		{"httpPort changed", hostWith(testHeartbeatHostID, "node-a", 9090, "tenant-a", map[string]string{testHostGroupLabel: testHostGroup}), true},
-		{"environment changed", hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-b", map[string]string{testHostGroupLabel: testHostGroup}), true},
-		{"label value changed", hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", map[string]string{testHostGroupLabel: "other"}), true},
-		{"label added", hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", map[string]string{testHostGroupLabel: testHostGroup, "extra": "x"}), true},
-		{"label removed", hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", nil), true},
+		{"hostID changed", hostWith("host-id-2", "node-a", 8080, testTenant, map[string]string{testHostGroupLabel: testHostGroup}), true},
+		{"hostname changed", hostWith(testHeartbeatHostID, "node-b", 8080, testTenant, map[string]string{testHostGroupLabel: testHostGroup}), true},
+		{"httpPort changed", hostWith(testHeartbeatHostID, "node-a", 9090, testTenant, map[string]string{testHostGroupLabel: testHostGroup}), true},
+		{"environment changed", hostWith(testHeartbeatHostID, "node-a", 8080, otherTenant, map[string]string{testHostGroupLabel: testHostGroup}), true},
+		{"label value changed", hostWith(testHeartbeatHostID, "node-a", 8080, testTenant, map[string]string{testHostGroupLabel: "other"}), true},
+		{"label added", hostWith(testHeartbeatHostID, "node-a", 8080, testTenant, map[string]string{testHostGroupLabel: testHostGroup, "extra": "x"}), true},
+		{"label removed", hostWith(testHeartbeatHostID, "node-a", 8080, testTenant, nil), true},
 	}
 
 	for _, tt := range tests {
@@ -328,8 +328,8 @@ func TestHostSpecChanged(t *testing.T) {
 	// A nil label map and an empty one are equivalent and must not be reported
 	// as a change: req.GetLabels() yields nil when the heartbeat carries none.
 	t.Run("nil vs empty labels", func(t *testing.T) {
-		existing := hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", nil)
-		next := hostWith(testHeartbeatHostID, "node-a", 8080, "tenant-a", map[string]string{})
+		existing := hostWith(testHeartbeatHostID, "node-a", 8080, testTenant, nil)
+		next := hostWith(testHeartbeatHostID, "node-a", 8080, testTenant, map[string]string{})
 		if hostSpecChanged(existing, next) {
 			t.Errorf("nil and empty label maps must compare equal")
 		}
@@ -675,7 +675,7 @@ func newHostFinalizeClient(t *testing.T, objs ...client.Object) client.Client {
 
 func workloadForHost(name, hostID string) *runtimev1alpha1.Workload {
 	w := &runtimev1alpha1.Workload{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-a"},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testTenant},
 	}
 	w.Status.HostID = hostID
 	return w

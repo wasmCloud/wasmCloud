@@ -118,8 +118,8 @@ func availableReplicaSet(name string) *runtimev1alpha1.WorkloadReplicaSet {
 // unavailableReplicaSet returns an RS that has been reconciled at least once
 // but whose workloads are not yet running (Status.Replicas reports
 // Unavailable, Ready condition is absent).
-func unavailableReplicaSet(name string) *runtimev1alpha1.WorkloadReplicaSet {
-	rs := baseReplicaSet(name)
+func unavailableReplicaSet() *runtimev1alpha1.WorkloadReplicaSet {
+	rs := baseReplicaSet(testReplicaSetName)
 	rs.Status.Replicas = &runtimev1alpha1.ReplicaSetStatus{
 		Expected:    testReplicas,
 		Current:     testReplicas,
@@ -184,7 +184,7 @@ func TestReconcileScale_FreshDeploy_RSNotAvailable_ReturnsUnknown(t *testing.T) 
 	// the underlying Workload was still unplaced. Lock in that an RS
 	// with Unavailable=1 keeps reconcileScale in the Unknown path.
 	wd := readyDeployment("" /* no previous RS */)
-	rs := unavailableReplicaSet(testReplicaSetName)
+	rs := unavailableReplicaSet()
 	r := newScaleReconciler(t, wd, rs)
 
 	err := r.reconcileScale(context.Background(), wd)
@@ -262,7 +262,7 @@ func TestReconcileScale_RollingUpdate_CurrentNotAvailable_ReturnsUnknown(t *test
 	// running, causing the downtime that RollingUpdate is supposed to
 	// prevent.
 	wd := readyDeployment(testPrevSetName)
-	current := unavailableReplicaSet(testReplicaSetName)
+	current := unavailableReplicaSet()
 	prev := availableReplicaSet(testPrevSetName)
 	r := newScaleReconciler(t, wd, current, prev)
 
@@ -315,7 +315,7 @@ func TestReconcileScale_RollingUpdate_CurrentAvailable_DeletesPrev(t *testing.T)
 // reason lands on the deployment's Scale and Ready conditions.
 func TestDeploymentConditionsCarryReplicaSetFailure(t *testing.T) {
 	wd := readyDeployment("")
-	rs := unavailableReplicaSet(testReplicaSetName)
+	rs := unavailableReplicaSet()
 	rs.Status.SetConditions(condition.ErrorCondition(runtimev1alpha1.WorkloadReplicaSetConditionScaleUp,
 		"Reconcile", errors.New("creating Workload: denied by policy require-team-label")))
 	r := newScaleReconciler(t, wd, rs)
