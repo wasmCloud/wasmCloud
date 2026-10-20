@@ -139,15 +139,17 @@ func NewEmbeddedOperator(
 	}
 
 	if err = (&runtime_controllers.WorkloadReplicaSetReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("workload-replicaset-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
 
 	if err = (&runtime_controllers.WorkloadDeploymentReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("workload-deployment-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
