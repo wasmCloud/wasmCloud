@@ -44,6 +44,29 @@ use crate::wit::WitInterface;
 /// `redis`, `nats`, `filesystem`). Shared by every multiplexed builtin.
 pub const BACKEND_CONFIG_KEY: &str = "backend";
 
+/// The keys that decide what a keyvalue backend reaches: its address (`url`,
+/// `root`) and the slice of a shared redis it reads (`prefix`). Each package
+/// claims only the keys its providers read; all are the operator's under
+/// `workloadConfig: deny`. `backend` stays the workload's, and an operator can
+/// lock it with `hostOwnedKeys`.
+///
+/// A value on a plugin entry's own `config` is shared by every workload that
+/// binds that label; per-label `bindings` are what keep tenants apart.
+pub const KEYVALUE_HOST_OWNED_KEYS: &[&str] = &["url", "root", "prefix"];
+
+/// The blobstore providers' address keys. See [`KEYVALUE_HOST_OWNED_KEYS`].
+pub const BLOBSTORE_HOST_OWNED_KEYS: &[&str] = &["url", "root"];
+
+/// The messaging providers' address key. See [`KEYVALUE_HOST_OWNED_KEYS`].
+pub const MESSAGING_HOST_OWNED_KEYS: &[&str] = &["url"];
+
+/// The [`crate::plugin::HostPlugin::binding_schema`] of a multiplexed builtin
+/// whose providers read `keys`.
+#[must_use]
+pub fn backend_binding_schema(keys: &[&str]) -> crate::plugin::BindingSchema {
+    crate::plugin::BindingSchema::with_host_owned_keys(keys)
+}
+
 /// Default ceiling on pooled (cached) connections, *per backend type* per
 /// multiplexer — so e.g. redis and NATS are capped independently (a multiplexer
 /// can hold up to this many of each). Counts distinct backend endpoints kept
@@ -508,6 +531,37 @@ mod tests {
 
     fn mux() -> Multiplexer<i32> {
         Multiplexer::new("wasi", "keyvalue", "in-memory")
+    }
+
+    #[test]
+    fn every_multiplexed_builtin_keeps_backend_addresses_from_workloads() {
+        use crate::plugin::KeyOwnership;
+
+        let plugins = crate::plugin::multiplexed_plugins();
+        assert!(!plugins.is_empty());
+        for plugin in plugins {
+            let id = plugin.id();
+            let claimed = match id {
+                _ if id.contains("keyvalue") => KEYVALUE_HOST_OWNED_KEYS,
+                _ if id.contains("blobstore") => BLOBSTORE_HOST_OWNED_KEYS,
+                _ if id.contains("messaging") => MESSAGING_HOST_OWNED_KEYS,
+                _ => panic!("unexpected multiplexed plugin {id}"),
+            };
+            let schema = plugin.binding_schema();
+            for key in ["url", "root", "prefix"] {
+                let expected = if claimed.contains(&key) {
+                    KeyOwnership::Host
+                } else {
+                    KeyOwnership::Workload
+                };
+                assert_eq!(schema.ownership(key), expected, "{id} {key}");
+            }
+            assert_eq!(
+                schema.ownership(BACKEND_CONFIG_KEY),
+                KeyOwnership::Workload,
+                "{id}"
+            );
+        }
     }
 
     #[test]

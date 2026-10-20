@@ -702,10 +702,19 @@ runtime:
       #                   how you rehearse a flip to `deny` without breaking a
       #                   workload mid-flight.
       #
-      #                   `deny` refuses nothing where nothing is declared, so
-      #                   it is safe as the default: a plugin that names no
-      #                   keys of its own, under an entry that sets none, owns
-      #                   none.
+      #                   `deny` refuses only the keys a plugin claims or this
+      #                   entry sets. The built-ins claim the keys that decide
+      #                   what a binding reaches: `wasmcloud-nats` its servers,
+      #                   credentials, and grants; the multiplexed keyvalue
+      #                   plugins `url`, `root`, and `prefix`, blobstore `url`
+      #                   and `root`, messaging `url`; `wasmcloud-postgres` a
+      #                   named import's `url`, and the databases the unnamed
+      #                   import may select as a comma-separated `database`.
+      #
+      #                   A value on the entry's own `config` is shared by every
+      #                   workload binding that label: one `root` or redis
+      #                   `prefix` there is one store for all of them. Declare
+      #                   `bindings` per label to keep workloads apart.
       #   hostOwnedKeys   extra keys claimed for the host under `deny`, on top
       #                   of the ones the plugin declares in code and the ones
       #                   this entry sets. The point is the keys left *unset* —

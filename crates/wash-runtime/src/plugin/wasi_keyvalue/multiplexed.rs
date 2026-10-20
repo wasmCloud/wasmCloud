@@ -382,6 +382,12 @@ impl HostPlugin for MultiplexedKeyValue {
         self.mux.configure_egress_policy(policy)
     }
 
+    fn binding_schema(&self) -> crate::plugin::BindingSchema {
+        crate::plugin::multiplex::backend_binding_schema(
+            crate::plugin::multiplex::KEYVALUE_HOST_OWNED_KEYS,
+        )
+    }
+
     fn world(&self) -> WitWorld {
         WitWorld {
             imports: HashSet::from([WitInterface::from(

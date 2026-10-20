@@ -49,6 +49,15 @@ runtime:
       # non-TLS registries.
       extraArgs:
         - "--allow-insecure-registries"
+      # Where the oci-registry workload's filesystem blobstore lives. Under the
+      # default `workloadConfig: deny` a workload cannot choose its own `root`.
+      # /tmp is a writable emptyDir in the host pod: it survives workload
+      # restarts, but not pod restarts — fine for a demo registry, don't keep
+      # anything precious in it.
+      plugins:
+        - id: wasmcloud-blobstore-multiplexed
+          config:
+            root: /tmp/oci-registry
       resources:
         requests:
           memory: "64Mi"

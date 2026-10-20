@@ -1157,9 +1157,13 @@ async fn link_native_imports(
         UnresolvedWorkload::new(id, id, id, None, [plugin_component], native_imports);
     // No operator bindings: a plugin's own native imports are configured by the
     // plugin entry's `config`, delivered through `on-workload-bind`, not by a
-    // workload naming a binding.
+    // workload naming a binding. That config is the operator's, so it may set
+    // the keys a native plugin keeps from workloads under `deny`. It is also
+    // shared by every import, so no one native's closed schema can judge it.
+    let operator_config = crate::plugin::PluginBindings::new()
+        .with_default_workload_config(crate::plugin::WorkloadConfigPolicy::Allow);
     synthetic
-        .bind_plugins(native_plugins, &crate::plugin::PluginBindings::new())
+        .bind_plugins(native_plugins, &operator_config)
         .await
         .with_context(|| {
             format!("failed to resolve native capability imports for plugin '{id}'")
@@ -2408,6 +2412,40 @@ mod tests {
         }
     }
 
+    /// Claims `url` for the operator, as the multiplexed builtins do, and
+    /// records the config it was bound with.
+    #[derive(Default)]
+    struct HostOwnedUrlPlugin {
+        seen_config: Mutex<Option<HashMap<String, String>>>,
+    }
+
+    #[async_trait]
+    impl HostPlugin for HostOwnedUrlPlugin {
+        fn id(&self) -> &'static str {
+            "host-owned-url-test-plugin"
+        }
+
+        fn world(&self) -> WitWorld {
+            WitWorld {
+                imports: HashSet::from([WitInterface::from("test:probe/marker@0.1.0")]),
+                exports: HashSet::new(),
+            }
+        }
+
+        fn binding_schema(&self) -> crate::plugin::BindingSchema {
+            crate::plugin::BindingSchema::with_host_owned_keys(["url"])
+        }
+
+        async fn on_workload_item_bind<'a>(
+            &self,
+            _item: &mut WorkloadItem<'a>,
+            interfaces: WitInterfaces<'_>,
+        ) -> anyhow::Result<()> {
+            *self.seen_config.lock().unwrap() = interfaces.iter().next().map(|i| i.config.clone());
+            Ok(())
+        }
+    }
+
     /// `wasmcloud:secrets/store@2.1.0` under `label` (`None` for plain).
     fn secrets_store(label: Option<&str>) -> WitInterface {
         let mut wit = WitInterface::from("wasmcloud:secrets/store@2.1.0");
@@ -2848,5 +2886,38 @@ mod tests {
             Some(plugin_id),
             "native plugin must see the plugin's own id, not a synthetic bind-time UUID"
         );
+    }
+
+    /// A plugin entry's `config` is the operator's, so it reaches a native
+    /// import even where that native keeps the key from workloads.
+    #[tokio::test]
+    async fn a_plugins_own_config_sets_keys_a_native_keeps_from_workloads() {
+        let wat = r#"
+            (component
+                (import "test:probe/marker@0.1.0" (instance))
+            )
+        "#;
+        let wasm = wat::parse_str(wat).expect("failed to parse WAT");
+        let engine = Engine::builder().build().expect("failed to build engine");
+        let component = Component::new(engine.inner(), &wasm).expect("failed to compile");
+
+        let native = Arc::new(HostOwnedUrlPlugin::default());
+        let native_plugins: HashMap<&'static str, Arc<dyn HostPlugin>> =
+            HashMap::from([(native.id(), Arc::clone(&native) as Arc<dyn HostPlugin>)]);
+        let config = HashMap::from([("url".to_string(), "redis://cache:6379".to_string())]);
+
+        link_native_imports(
+            &engine,
+            "host-owned-url-test-plugin-instance",
+            &component,
+            Linker::new(engine.inner()),
+            &HashSet::new(),
+            &native_plugins,
+            &config,
+        )
+        .await
+        .expect("the plugin's own config is operator config");
+
+        assert_eq!(native.seen_config.lock().unwrap().as_ref(), Some(&config));
     }
 }

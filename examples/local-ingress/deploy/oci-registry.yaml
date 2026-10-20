@@ -56,9 +56,8 @@ spec:
             # Laptop-facing hostname, routed in by the Traefik Ingress below.
             host: registry.localhost.cosmonic.sh
         # Async blobstore backing the registry's blobs, manifests, and tags.
-        # The filesystem backend rooted under /tmp (a writable emptyDir in the
-        # host pod) survives workload restarts, but not pod restarts — fine
-        # for a demo registry, don't keep anything precious in it.
+        # The filesystem backend's `root` is the operator's, declared on the
+        # host group in deploy/values.local-ingress.yaml.
         - namespace: wasmcloud
           package: blobstore
           version: 0.1.0
@@ -68,7 +67,6 @@ spec:
             - types
           config:
             backend: filesystem
-            root: /tmp/oci-registry
       components:
         - name: oci-registry
           # Deliberately the 0.1.x line: it has no auth, which this plain-HTTP
