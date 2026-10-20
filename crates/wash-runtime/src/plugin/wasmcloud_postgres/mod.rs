@@ -250,6 +250,37 @@ fn extract_pool_size(url: &Url) -> usize {
         .unwrap_or(DEFAULT_POOL_SIZE)
 }
 
+/// Check every address `config` would dial, as `tokio_postgres` picks them: a
+/// `hostaddr` is dialed in place of its `host`, and a single port applies to
+/// every host. A unix socket has no host for `allowedHosts` to name.
+fn check_egress(
+    config: &tokio_postgres::Config,
+    policy: &crate::plugin::PluginEgressPolicy,
+) -> anyhow::Result<()> {
+    let hosts = config.get_hosts();
+    let hostaddrs = config.get_hostaddrs();
+    let ports = config.get_ports();
+    for i in 0..hosts.len().max(hostaddrs.len()) {
+        let port = ports
+            .get(i)
+            .or_else(|| ports.first())
+            .copied()
+            .unwrap_or(5432);
+        match (hostaddrs.get(i), hosts.get(i)) {
+            (Some(addr), _) => policy.check_host_port("postgres", &addr.to_string(), port)?,
+            (None, Some(tokio_postgres::config::Host::Tcp(host))) => {
+                policy.check_host_port("postgres", host, port)?
+            }
+            #[cfg(unix)]
+            (None, Some(tokio_postgres::config::Host::Unix(path))) => bail!(
+                "postgres endpoint {path:?} is a unix socket, which allowedHosts cannot permit"
+            ),
+            (None, None) => {}
+        }
+    }
+    Ok(())
+}
+
 /// Determine whether TLS is required based on the sslmode URL parameter.
 fn extract_tls_requirement(url: &Url) -> bool {
     url.query_pairs()
@@ -528,6 +559,18 @@ impl HostPlugin for WasmcloudPostgres {
         true
     }
 
+    /// Checks the operator's base url now, and retains the ceiling for the
+    /// url each named import brings.
+    fn configure_egress_policy(
+        &self,
+        policy: Arc<crate::plugin::PluginEgressPolicy>,
+    ) -> anyhow::Result<()> {
+        check_egress(&self.base_config, &policy).context("the base postgres url")?;
+        #[cfg(feature = "wasm_component_model_implements")]
+        self.mux.configure_egress_policy(policy)?;
+        Ok(())
+    }
+
     async fn start(&self) -> anyhow::Result<()> {
         let pools = Arc::clone(&self.pools);
         let component_databases = Arc::clone(&self.component_databases);
@@ -732,6 +775,68 @@ impl HostPlugin for WasmcloudPostgres {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn check(url: &str, hosts: &[&str]) -> anyhow::Result<()> {
+        check_egress(
+            &url.parse().unwrap(),
+            &crate::plugin::PluginEgressPolicy::allowing(hosts),
+        )
+    }
+
+    /// Every address tokio-postgres would dial is checked, including the ones
+    /// a query parameter names instead of the url's authority.
+    #[test]
+    fn egress_is_checked_at_every_address_postgres_dials() {
+        let hosts = ["postgres://db.internal:5432", "10.0.0.7:5432"];
+        check("postgres://u:p@db.internal/app", &hosts).expect("the default port is 5432");
+        check("postgres://u:p@db.internal/app?hostaddr=10.0.0.7", &hosts)
+            .expect("hostaddr is dialed in place of the name");
+
+        let err = check("postgres://u:p@evil.example/app", &hosts).unwrap_err();
+        assert!(format!("{err:#}").contains("evil.example"), "{err:#}");
+        for url in [
+            "postgres://u:p@db.internal/app?hostaddr=10.0.0.9",
+            "postgres://u:p@db.internal/app?host=evil.example",
+            "postgres://u:p@db.internal,evil.example/app",
+            "postgres://u:p@db.internal:6432/app",
+            "postgres://u:p@db.internal/app?host=/var/run/postgresql",
+        ] {
+            assert!(check(url, &hosts).is_err(), "{url}");
+        }
+    }
+
+    /// `postgres` and `postgresql` name one protocol, on either side.
+    #[test]
+    fn either_postgres_scheme_spelling_permits_the_other() {
+        check(
+            "postgres://u:p@db.internal/app",
+            &["postgresql://db.internal:5432"],
+        )
+        .unwrap();
+        check(
+            "postgresql://u:p@db.internal/app",
+            &["postgres://db.internal:5432"],
+        )
+        .unwrap();
+    }
+
+    /// The operator's base url is checked when the ceiling is installed, so a
+    /// ceiling that does not cover it fails startup rather than a later query.
+    #[test]
+    fn the_base_url_is_checked_when_the_ceiling_is_installed() {
+        let pg =
+            WasmcloudPostgres::new(&Url::parse("postgres://u:p@db.internal/").unwrap()).unwrap();
+        pg.configure_egress_policy(crate::plugin::PluginEgressPolicy::allowing(&[
+            "postgres://db.internal:5432",
+        ]))
+        .unwrap();
+        assert!(
+            pg.configure_egress_policy(crate::plugin::PluginEgressPolicy::allowing(&[
+                "postgres://other.internal:5432",
+            ]))
+            .is_err()
+        );
+    }
 
     fn entry(workload_id: &str) -> PreparedEntry {
         PreparedEntry {

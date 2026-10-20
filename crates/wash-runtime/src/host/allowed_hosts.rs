@@ -251,6 +251,17 @@ impl AllowedHost {
     /// The port is [`Self::socket_port`].
     #[must_use]
     pub fn permits_addr(&self, addr: SocketAddr) -> bool {
+        self.permits_addr_on(addr, self.socket_port())
+    }
+
+    /// [`Self::permits_addr`] for a native plugin's client: a port-less entry
+    /// means [`Self::client_port`].
+    #[must_use]
+    pub fn permits_client_addr(&self, addr: SocketAddr) -> bool {
+        self.permits_addr_on(addr, self.client_port())
+    }
+
+    fn permits_addr_on(&self, addr: SocketAddr, permitted_port: Option<u16>) -> bool {
         let host = match self {
             AllowedHost::Any => return true,
             AllowedHost::Authority(authority) => authority.host(),
@@ -260,7 +271,7 @@ impl AllowedHost {
             },
             AllowedHost::SuffixWildcard { .. } => return false,
         };
-        host_is_addr(host, addr.ip()) && self.socket_port_matches(addr.port())
+        host_is_addr(host, addr.ip()) && port_matches(permitted_port, addr.port())
     }
 
     /// Returns `true` if this entry names `name` and permits `port` on it.
@@ -275,7 +286,18 @@ impl AllowedHost {
     /// permits every address through [`Self::permits_addr`].
     #[must_use]
     pub fn permits_name(&self, name: &str, port: u16) -> bool {
-        let named = match self {
+        self.names(name) && port_matches(self.socket_port(), port)
+    }
+
+    /// [`Self::permits_name`] for a native plugin's client: a port-less entry
+    /// means [`Self::client_port`].
+    #[must_use]
+    pub fn permits_client_name(&self, name: &str, port: u16) -> bool {
+        self.names(name) && port_matches(self.client_port(), port)
+    }
+
+    fn names(&self, name: &str) -> bool {
+        match self {
             AllowedHost::Any => false,
             AllowedHost::Authority(authority) => same_name(authority.host(), name),
             AllowedHost::Url(url) => url.host_str().is_some_and(|host| same_name(host, name)),
@@ -286,8 +308,7 @@ impl AllowedHost {
                         .get(name.len() - suffix.len()..)
                         .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
             }
-        };
-        named && self.socket_port_matches(port)
+        }
     }
 
     /// Returns `true` if this entry permits resolving `host`.
@@ -344,29 +365,76 @@ impl AllowedHost {
         }
     }
 
-    fn socket_port_matches(&self, port: u16) -> bool {
-        match self.socket_port() {
-            Some(permitted) => permitted == port,
-            None => true,
+    /// [`Self::socket_port`] as a native plugin's client reads the entry: a
+    /// port-less redis, valkey, postgres or NATS scheme means that client's
+    /// default port (`redis://cache` is 6379), where a raw socket's is open.
+    #[must_use]
+    pub fn client_port(&self) -> Option<u16> {
+        match self {
+            AllowedHost::Url(url) => url
+                .port_or_known_default()
+                .or_else(|| client_default_port(url.scheme())),
+            AllowedHost::SuffixWildcard { scheme, port, .. } => port.or_else(|| {
+                scheme
+                    .as_ref()
+                    .and_then(|s| client_default_port(s.as_str()))
+            }),
+            AllowedHost::Any | AllowedHost::Authority(_) => self.socket_port(),
         }
     }
 }
 
-/// The default port of a scheme, for the schemes [`Url::port_or_known_default`]
-/// knows. The one table for it: `wasi:http` routing reads it too.
-pub(crate) fn default_port(scheme: &str) -> Option<u16> {
-    // Compared in place: this runs per request and per connect.
-    const PORTS: [(&str, u16); 5] = [
-        ("http", 80),
-        ("https", 443),
-        ("ws", 80),
-        ("wss", 443),
-        ("ftp", 21),
-    ];
-    PORTS
+fn port_matches(permitted: Option<u16>, port: u16) -> bool {
+    match permitted {
+        Some(permitted) => permitted == port,
+        None => true,
+    }
+}
+
+/// Who reads a scheme's default port.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PortDefault {
+    /// Known to [`Url::port_or_known_default`]: read by `wasi:http` routing
+    /// and every socket.
+    Url,
+    /// Read only by the native plugins' clients (`tls://` is NATS over TLS).
+    Client,
+}
+
+/// The one table of default ports. Compared in place: it is read per request
+/// and per connect.
+const DEFAULT_PORTS: [(&str, u16, PortDefault); 13] = [
+    ("http", 80, PortDefault::Url),
+    ("https", 443, PortDefault::Url),
+    ("ws", 80, PortDefault::Url),
+    ("wss", 443, PortDefault::Url),
+    ("ftp", 21, PortDefault::Url),
+    ("redis", 6379, PortDefault::Client),
+    ("rediss", 6379, PortDefault::Client),
+    ("valkey", 6379, PortDefault::Client),
+    ("valkeys", 6379, PortDefault::Client),
+    ("postgres", 5432, PortDefault::Client),
+    ("postgresql", 5432, PortDefault::Client),
+    ("nats", 4222, PortDefault::Client),
+    ("tls", 4222, PortDefault::Client),
+];
+
+fn lookup_default_port(scheme: &str, read: impl Fn(PortDefault) -> bool) -> Option<u16> {
+    DEFAULT_PORTS
         .iter()
-        .find(|(known, _)| scheme.eq_ignore_ascii_case(known))
-        .map(|(_, port)| *port)
+        .find(|(known, _, by)| read(*by) && scheme.eq_ignore_ascii_case(known))
+        .map(|(_, port, _)| *port)
+}
+
+/// The default port of a scheme, for the schemes [`Url::port_or_known_default`]
+/// knows. `wasi:http` routing reads it too.
+pub(crate) fn default_port(scheme: &str) -> Option<u16> {
+    lookup_default_port(scheme, |by| by == PortDefault::Url)
+}
+
+/// The port a native plugin's client dials for `scheme` when none is given.
+fn client_default_port(scheme: &str) -> Option<u16> {
+    lookup_default_port(scheme, |_| true)
 }
 
 /// Whether a policy entry's host text is the normalized `name`, ignoring case
@@ -1039,10 +1107,20 @@ mod tests {
         assert!(literal.permits_addr("10.0.0.5:443".parse().unwrap()));
         assert!(!literal.permits_addr("10.0.0.5:5432".parse().unwrap()));
 
-        // An explicit port wins, and a scheme with no known default leaves the
-        // port open.
+        // An explicit port wins, and a scheme with no known default leaves a
+        // raw socket's port open.
         assert!(entry("https://10.0.0.5:8443").permits_addr("10.0.0.5:8443".parse().unwrap()));
         assert_eq!(entry("postgres://db.internal").socket_port(), None);
+        assert_eq!(entry("tls://api.example.com").socket_port(), None);
+        assert!(entry("redis://cache.internal").permits_name("cache.internal", 8080));
+        // A native plugin's client reads the same entry at its own default.
+        assert_eq!(entry("postgres://db.internal").client_port(), Some(5432));
+        assert_eq!(entry("redis://cache.internal").client_port(), Some(6379));
+        assert_eq!(entry("nats://nats.internal").client_port(), Some(4222));
+        assert_eq!(entry("https://vault.internal").client_port(), Some(443));
+        assert!(!entry("redis://cache.internal").permits_client_name("cache.internal", 8080));
+        assert!(!entry("redis://10.0.0.5").permits_client_addr("10.0.0.5:8080".parse().unwrap()));
+        assert_eq!(entry("mqtt://broker.internal").client_port(), None);
         assert!(entry("postgres://10.0.0.5").permits_addr("10.0.0.5:5432".parse().unwrap()));
         assert!(entry("postgres://db.internal:5432").permits_name("db.internal", 5432));
         assert!(!entry("postgres://db.internal:5432").permits_name("db.internal", 5433));

@@ -21,6 +21,7 @@ use tokio::sync::RwLock;
 use url::Url;
 
 use crate::engine::ctx::ActiveCtx;
+use crate::plugin::PluginEgressPolicy;
 use crate::plugin::multiplex::{BackendProvider, Multiplexer};
 use crate::wit::WitInterface;
 
@@ -202,13 +203,30 @@ impl BackendProvider<PgId> for PostgresProvider {
         config.get("url").cloned()
     }
 
-    async fn instantiate(&self, config: &HashMap<String, String>) -> anyhow::Result<PgId> {
+    async fn instantiate(
+        &self,
+        config: &HashMap<String, String>,
+        _egress: Option<&PluginEgressPolicy>,
+    ) -> anyhow::Result<PgId> {
         let url = config.get("url").ok_or_else(|| {
             anyhow::anyhow!("named wasmcloud:postgres interface requires a 'url' config")
         })?;
         Ok(PgId {
             pool: build_pool_from_url(url)?,
         })
+    }
+
+    fn check_egress(
+        &self,
+        config: &HashMap<String, String>,
+        policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()> {
+        let Some(url) = config.get("url") else {
+            return Ok(());
+        };
+        let pg_config: tokio_postgres::Config =
+            url.parse().context("failed to parse postgres config")?;
+        super::check_egress(&pg_config, policy)
     }
 }
 

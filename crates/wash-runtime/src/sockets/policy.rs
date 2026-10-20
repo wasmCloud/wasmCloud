@@ -321,8 +321,10 @@ impl SocketPolicy {
         }
 
         // 2. The guest's own virtual network. Reaches nothing outside this
-        //    process, so no egress policy applies.
-        if addr.ip().to_canonical().is_loopback() {
+        //    process, so no egress policy applies. The unspecified address
+        //    names this machine too, so it never reaches the host plane.
+        let ip = addr.ip().to_canonical();
+        if ip.is_loopback() || ip.is_unspecified() {
             return Ok(Route::standing(addr, Plane::Virtual));
         }
 
@@ -681,6 +683,22 @@ mod tests {
         // `allowed_hosts` is empty, yet the guest's own network is reachable.
         let decision = policy.decide(SocketAddrUse::TcpConnect, addr("127.0.0.1:6432"));
         assert_eq!(plane_of(&decision), Some(Plane::Virtual));
+    }
+
+    /// `0.0.0.0` and `::` name this machine, so they stay on the guest's own
+    /// network even where `*` and a permissive range policy would admit them.
+    #[test]
+    fn the_unspecified_address_never_reaches_the_host() {
+        let policy = SocketPolicy {
+            allowed_hosts: Arc::from(["*".parse().unwrap()]),
+            egress_mode: EgressMode::Count,
+            egress_addrs: EgressAddressPolicy::permissive(),
+            ..SocketPolicy::for_kind(GuestKind::Component)
+        };
+        for a in ["0.0.0.0:6379", "[::]:6379", "[::ffff:0.0.0.0]:6379"] {
+            let decision = policy.decide(SocketAddrUse::TcpConnect, addr(a));
+            assert_eq!(plane_of(&decision), Some(Plane::Virtual), "{a}");
+        }
     }
 
     #[test]
