@@ -59,6 +59,50 @@ async fn private_cached_images_do_not_cross_credentials() {
     }
 }
 
+/// A rotated password keeps the user's disk entries: one revalidation with
+/// the registry, not a download, makes them usable offline again.
+#[tokio::test]
+async fn a_password_rotation_revalidates_instead_of_downloading() {
+    wash_runtime::init_crypto();
+    let registry = Registry::start().await;
+    let cache = tempfile::tempdir().unwrap();
+    let config = |password: &str| OciConfig {
+        credentials: Some(("user".into(), password.into())),
+        cache_dir: Some(cache.path().to_owned()),
+        insecure: true,
+        timeout: Some(Duration::from_secs(5)),
+    };
+    let reference = format!("{}/private/component:v1", registry.addr);
+    pull_component(&reference, config("secret"), OciPullPolicy::IfNotPresent)
+        .await
+        .unwrap();
+    let download = registry.requests.load(Ordering::SeqCst);
+
+    *registry.authorization.write().unwrap() = "Basic dXNlcjpyb3RhdGVk".into(); // user:rotated
+    assert!(
+        pull_component(&reference, config("rotated"), OciPullPolicy::Never)
+            .await
+            .is_err(),
+        "Never cannot know the registry accepts the new password"
+    );
+    let before = registry.requests.load(Ordering::SeqCst);
+    let (bytes, _) = pull_component(&reference, config("rotated"), OciPullPolicy::IfNotPresent)
+        .await
+        .unwrap();
+    assert_eq!(bytes, registry.image.read().unwrap().wasm);
+    let revalidation = registry.requests.load(Ordering::SeqCst) - before;
+    assert!(
+        revalidation < download,
+        "revalidating took {revalidation} requests, as many as the {download} of a download"
+    );
+
+    let before = registry.requests.load(Ordering::SeqCst);
+    pull_component(&reference, config("rotated"), OciPullPolicy::Never)
+        .await
+        .unwrap();
+    assert_eq!(registry.requests.load(Ordering::SeqCst), before);
+}
+
 #[tokio::test]
 async fn always_resolves_repushed_tags_and_retries_completed_failures() {
     wash_runtime::init_crypto();

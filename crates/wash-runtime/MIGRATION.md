@@ -2,7 +2,7 @@
 
 ## OCI pulls and caches
 
-Disk entries now use a `v3-` layout scoped by resolved credentials, HTTP/HTTPS
+Disk entries now use a `v3-` layout scoped by the resolved registry user, HTTP/HTTPS
 transport and the configured extra-root snapshot used to fetch or push the
 artifact. Older unscoped and credential-only entries are ignored and must be
 fetched again. Removing an extra CA or requiring HTTPS prevents reuse of an
@@ -24,14 +24,20 @@ temporary files are never read as entries and expire with that directory.
 
 Entry names are keyed with a random secret created once as `cache.key` in the
 cache root, readable only by its owner on Unix. Keep it with the cache: removing
-it, or copying a cache without it, orphans its entries. A credential rotation is
-a new scope: fetch the image under the new credentials before using `Never`.
-Entries for the old credentials remain until age-based cleanup removes them.
+it, or copying a cache without it, orphans its entries. Entries are scoped by
+registry user, not password: rotating a password keeps them, while a different
+user, anonymous access or a new bearer token is a new scope. Fetch the image
+under that scope before using `Never`; entries for an earlier scope remain until
+age-based cleanup removes them.
 
 `Never` remains offline: it returns a cached artifact only inside the same
-credential, transport and trust scope, and otherwise returns a cache-miss error.
-Populate that scope before switching to `Never`. It cannot check whether the
-registry has subsequently revoked credentials or whether native OS trust policy
+user, transport and trust scope, and only with the password the registry last
+accepted for that entry, and otherwise returns an error. After a password
+rotation, one pull with another policy revalidates each entry's manifest with
+the new password, without downloading it again, and `Never` accepts the new
+password from then on. Each entry keeps a keyed verifier of that password in a
+`credential` file beside it. `Never` cannot check whether the registry has
+subsequently revoked credentials or whether native OS trust policy
 has changed; the disk scope cannot represent every platform trust decision.
 
 `IfNotPresent` revalidates a disk entry's manifest digest with the registry,
