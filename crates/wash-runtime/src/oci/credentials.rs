@@ -1,8 +1,12 @@
-use super::{Coalescer, blocking_on, docker_config_path};
+use super::{Coalescer, docker_config_path};
 use anyhow::{Context, Result, anyhow, bail};
 use docker_credential::{CredentialRetrievalError, DockerCredential, get_credential};
 use oci_client::secrets::RegistryAuth;
-use std::{sync::OnceLock, time::Duration};
+use std::{
+    collections::BTreeSet,
+    sync::{Mutex, OnceLock, PoisonError},
+    time::Duration,
+};
 use tracing::{debug, instrument, warn};
 
 /// How long a docker credential lookup answers for its registry. A login or
@@ -105,22 +109,163 @@ impl CredentialResolver {
 /// permit, so a registry costs at most one blocking task at a time. Helpers
 /// run on their own limiter and under [`DOCKER_HELPER_TIMEOUT`]: one that hangs
 /// fails its lookup instead of stalling every pull, and cannot starve client
-/// builds of permits.
+/// builds or other registries' lookups of permits.
 pub(super) async fn cached_credentials(
     cache: &Coalescer<String, RegistryAuth>,
     registry: String,
     lookup: impl FnOnce() -> Result<RegistryAuth> + Send + 'static,
 ) -> Result<RegistryAuth> {
-    static HELPERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+    cached_credentials_within(cache, registry, DOCKER_HELPER_TIMEOUT, lookup).await
+}
+
+async fn cached_credentials_within(
+    cache: &Coalescer<String, RegistryAuth>,
+    registry: String,
+    timeout: Duration,
+    lookup: impl FnOnce() -> Result<RegistryAuth> + Send + 'static,
+) -> Result<RegistryAuth> {
     cache
-        .run_with_reuse(registry, true, || async move {
-            tokio::time::timeout(DOCKER_HELPER_TIMEOUT, blocking_on(&HELPERS, lookup))
+        .run_with_reuse(registry.clone(), true, || async move {
+            tokio::time::timeout(timeout, run_helper(registry, lookup))
                 .await
                 .with_context(|| {
-                    format!(
-                        "docker credential lookup did not finish within {DOCKER_HELPER_TIMEOUT:?}"
-                    )
+                    format!("docker credential lookup did not finish within {timeout:?}")
                 })?
         })
         .await
+}
+
+/// Registries whose helper is still running. A lookup that times out cannot
+/// stop its helper, which runs on in the blocking pool; until it returns,
+/// further lookups for that registry fail at once instead of starting another.
+/// A hung helper costs one blocking thread per registry, not one per timeout.
+static RUNNING_HELPERS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// Run `lookup` for `registry` on Tokio's blocking pool.
+///
+/// The permit bounds the helpers callers are waiting on. The caller holds it,
+/// not the blocking task, so a lookup that times out releases it even though
+/// its helper runs on: hung helpers cannot exhaust the limiter.
+async fn run_helper(
+    registry: String,
+    lookup: impl FnOnce() -> Result<RegistryAuth> + Send + 'static,
+) -> Result<RegistryAuth> {
+    static HELPERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+    let _permit = HELPERS
+        .acquire()
+        .await
+        .context("docker credential helper limiter closed")?;
+    let running = HelperRunning::claim(registry)?;
+    tokio::task::spawn_blocking(move || {
+        let _running = running;
+        lookup()
+    })
+    .await
+    .context("docker credential helper task failed")?
+}
+
+/// Marks a registry's helper as running until the blocking task drops it.
+struct HelperRunning(String);
+
+impl HelperRunning {
+    fn claim(registry: String) -> Result<Self> {
+        let mut running = RUNNING_HELPERS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !running.insert(registry.clone()) {
+            bail!("an earlier docker credential helper for {registry} has not finished");
+        }
+        Ok(Self(registry))
+    }
+}
+
+impl Drop for HelperRunning {
+    fn drop(&mut self) {
+        RUNNING_HELPERS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    /// Helpers that never return time their lookups out without keeping the
+    /// limiter's permits, and are not started again while they run.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn hung_helpers_do_not_exhaust_the_limiter() {
+        let cache: &'static Coalescer<String, RegistryAuth> = Box::leak(Box::new(Coalescer::new(
+            16,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            |_| 1,
+        )));
+        let runs = Arc::new(AtomicUsize::new(0));
+        let mut releases = Vec::new();
+        // Twice the limiter's permits, each for a different registry. The
+        // helpers block until released, so each lookup must time out.
+        for n in 0..8 {
+            let (release, wait) = std::sync::mpsc::channel::<()>();
+            releases.push(release);
+            let runs = Arc::clone(&runs);
+            let err = cached_credentials_within(
+                cache,
+                format!("hung-{n}"),
+                Duration::from_millis(20),
+                move || {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    let _ = wait.recv();
+                    Ok(RegistryAuth::Anonymous)
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(err.to_string().contains("did not finish"), "{err:#}");
+        }
+        assert_eq!(runs.load(Ordering::SeqCst), 8);
+
+        // A registry whose helper still runs does not start another.
+        let again =
+            cached_credentials_within(cache, "hung-0".into(), Duration::from_secs(60), || {
+                unreachable!("a second helper started for hung-0")
+            })
+            .await
+            .unwrap_err();
+        assert!(again.to_string().contains("has not finished"), "{again:#}");
+
+        // Other registries still get a permit.
+        let auth =
+            cached_credentials_within(cache, "healthy".into(), Duration::from_secs(60), || {
+                Ok(RegistryAuth::Basic("user".into(), "secret".into()))
+            })
+            .await
+            .unwrap();
+        assert!(matches!(auth, RegistryAuth::Basic(..)));
+
+        // Once its helper returns, the registry can be looked up again.
+        drop(releases);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while RUNNING_HELPERS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .any(|registry| registry.starts_with("hung-"))
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("released helpers finish");
+        cached_credentials_within(cache, "hung-0".into(), Duration::from_secs(60), || {
+            Ok(RegistryAuth::Anonymous)
+        })
+        .await
+        .unwrap();
+    }
 }
