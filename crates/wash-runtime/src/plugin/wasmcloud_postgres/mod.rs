@@ -281,6 +281,22 @@ fn check_egress(
     Ok(())
 }
 
+/// The one database an unnamed import's resolved config selects. A workload
+/// that leaves `database` unset under `deny` takes the operator's whole
+/// ceiling, which names one database only when the operator listed one.
+fn component_database(config: &HashMap<String, String>) -> anyhow::Result<String> {
+    let Some(database) = config.get("database") else {
+        bail!("wasmcloud:postgres requires a 'database' config parameter")
+    };
+    if database.contains(',') {
+        bail!(
+            "wasmcloud:postgres `database` resolves to several databases ({database}); set \
+             `database` to one of them in the workload's config"
+        );
+    }
+    Ok(database.clone())
+}
+
 /// Determine whether TLS is required based on the sslmode URL parameter.
 fn extract_tls_requirement(url: &Url) -> bool {
     url.query_pairs()
@@ -542,6 +558,20 @@ impl HostPlugin for WasmcloudPostgres {
         PLUGIN_POSTGRES_ID
     }
 
+    /// A named import's `url` carries the role and password it connects
+    /// with, so it is the operator's under `workloadConfig: deny`. The unnamed
+    /// import's `database` is a ceiling: the operator lists the databases its
+    /// connection may select, and a workload names one of them.
+    fn binding_schema(&self) -> crate::plugin::BindingSchema {
+        crate::plugin::BindingSchema::with_host_owned_keys(["url"])
+            .and_host_ceiling_keys(["database"])
+    }
+
+    /// A workload's `database` is inside the operator's comma-separated list.
+    fn narrows(&self, key: &str, ceiling: &str, value: &str) -> bool {
+        key == "database" && ceiling.split(',').map(str::trim).any(|db| db == value)
+    }
+
     fn world(&self) -> WitWorld {
         WitWorld {
             imports: HashSet::from([
@@ -650,9 +680,7 @@ impl HostPlugin for WasmcloudPostgres {
             )?;
 
             if let Some(i) = unnamed {
-                let Some(database) = i.config.get("database").cloned() else {
-                    bail!("wasmcloud:postgres requires a 'database' config parameter")
-                };
+                let database = component_database(&i.config)?;
                 tracing::debug!(
                     component_id = %component_id,
                     database = %database,
@@ -712,9 +740,7 @@ impl HostPlugin for WasmcloudPostgres {
             // An unnamed import is the default, per-component-database path; a
             // `(implements ..)` import is a named one routed to its own pool.
             if let Some(i) = pg_async.iter().find(|i| i.name.is_none()).copied() {
-                let Some(database) = i.config.get("database").cloned() else {
-                    bail!("wasmcloud:postgres requires a 'database' config parameter")
-                };
+                let database = component_database(&i.config)?;
                 tracing::debug!(
                     component_id = %component_id,
                     database = %database,
@@ -803,6 +829,20 @@ mod tests {
         ] {
             assert!(check(url, &hosts).is_err(), "{url}");
         }
+    }
+
+    /// The operator lists databases; a workload names exactly one of them.
+    #[test]
+    fn database_is_a_ceiling_the_workload_narrows() {
+        let pg =
+            WasmcloudPostgres::new(&Url::parse("postgres://u:p@db.internal/").unwrap()).unwrap();
+        assert!(pg.narrows("database", "app, reports", "reports"));
+        assert!(!pg.narrows("database", "app, reports", "tenant_b"));
+        assert!(!pg.narrows("database", "app, reports", "app, reports"));
+        let config = |db: &str| HashMap::from([("database".to_string(), db.to_string())]);
+        assert_eq!(component_database(&config("app")).unwrap(), "app");
+        assert!(component_database(&config("app,reports")).is_err());
+        assert!(component_database(&HashMap::new()).is_err());
     }
 
     /// `postgres` and `postgresql` name one protocol, on either side.

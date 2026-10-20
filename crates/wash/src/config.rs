@@ -607,9 +607,9 @@ pub enum WorkloadConfigPolicy {
     Allow,
     /// Host-owned keys come only from the operator.
     ///
-    /// The default on `wash host`. It refuses nothing where nothing is declared
-    /// — a plugin that names no keys of its own, under an entry that sets none,
-    /// owns none — so it is the stricter default without being a breaking one.
+    /// The default on `wash host`. It refuses only the keys a plugin claims or
+    /// an entry sets: a plugin that names no keys of its own, under an entry
+    /// that sets none, owns none.
     #[default]
     Deny,
     /// `allow` plus diagnostics: nothing is refused, but everything `deny`
