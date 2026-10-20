@@ -142,6 +142,31 @@ type ConditionedReconciler[T ConditionedType] struct {
 	conditions    []conditionPair[T]
 	finalizerFunc func(context.Context, T) error
 	finalizerName string
+	// trackGeneration stamps each condition with the generation it was
+	// computed for. See TrackGeneration.
+	trackGeneration bool
+}
+
+// restampOnly reports whether next differs from current in its generation
+// alone.
+func restampOnly(current, next Condition) bool {
+	if current.ObservedGeneration == next.ObservedGeneration {
+		return false
+	}
+	next.ObservedGeneration = current.ObservedGeneration
+	return current.Equal(next)
+}
+
+// TrackGeneration stamps every condition this reconciler sets with the
+// object's generation. A pass stops at the first condition that changes, so
+// the ones after it can describe an older spec; the stamp lets a reader tell.
+//
+// A condition whose function returns ErrNoop is not set, so it keeps its old
+// stamp for as long as it does, and a reader waiting for the current one waits
+// that long. Conditions of a reconciler that tracks generations should not
+// return ErrNoop.
+func (r *ConditionedReconciler[T]) TrackGeneration() {
+	r.trackGeneration = true
 }
 
 // AddPreHook adds a function to be called before the conditions are evaluated.
@@ -259,23 +284,43 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 	for _, condEntry := range r.conditions {
 		currentCondition := conditions.GetCondition(condEntry.condition)
 
+		stamp := func(c Condition) Condition {
+			if !r.trackGeneration {
+				return c
+			}
+			c.ObservedGeneration = obj.GetGeneration()
+			// A restamp is not a transition.
+			if restampOnly(currentCondition, c) {
+				c.LastTransitionTime = currentCondition.LastTransitionTime
+			}
+			return c
+		}
+
 		condErr := condEntry.fn(condCtx, obj)
 		if condErr != nil {
 			if errors.Is(condErr, errStatusUnknown) {
-				conditions.SetConditions(UnknownCondition(condEntry.condition, "Reconcile", condErr.Error()))
+				conditions.SetConditions(stamp(UnknownCondition(condEntry.condition, "Reconcile", condErr.Error())))
 			} else if errors.Is(condErr, errNoop) {
 				// NOTE(lxf): if the condition function returns ErrNoop, we skip the condition.
 				// This is useful for cases where we need to wait for a resource to be ready.
 				continue
 			} else if errors.Is(condErr, errStatusSkip) {
 				// If the condition function returns ErrSkipReconciliation, we cut the reconciliation short.
-				conditions.SetConditions(ReadyCondition(condEntry.condition))
+				conditions.SetConditions(stamp(ReadyCondition(condEntry.condition)))
 				break
 			} else {
-				conditions.SetConditions(ErrorCondition(condEntry.condition, "Reconcile", condErr))
+				conditions.SetConditions(stamp(ErrorCondition(condEntry.condition, "Reconcile", condErr)))
 			}
 		} else {
-			conditions.SetConditions(ReadyCondition(condEntry.condition))
+			conditions.SetConditions(stamp(ReadyCondition(condEntry.condition)))
+		}
+
+		// A condition that only took the new generation still needs writing,
+		// but it has not changed state, so the pass goes on and every condition
+		// takes the new generation in one reconcile rather than one each.
+		if next := conditions.GetCondition(condEntry.condition); r.trackGeneration && restampOnly(currentCondition, next) {
+			reconcilerCtx.ForceUpdate = true
+			continue
 		}
 
 		// NOTE(lxf): we only update the status if the condition has changed.
