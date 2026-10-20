@@ -958,6 +958,11 @@ impl CliCommand for HostCommand {
             self.max_http_ingress_connections != Some(0),
             "max_http_ingress_connections must be at least 1"
         );
+        crate::config::within_max_permits(
+            self.max_http_ingress_connections,
+            "max_http_ingress_connections",
+        )?;
+        crate::config::within_max_permits(self.max_concurrent_starts, "max_concurrent_starts")?;
 
         // Installed before connect_nats so TLS-enabled NATS clusters have a
         // crypto provider available. Idempotent; also called by Ingress::new.
