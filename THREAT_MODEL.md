@@ -80,14 +80,18 @@ With its default settings, the host is built to uphold these goals. A breach of 
 6. **Resources.** One workload cannot exhaust the host's memory, connections or file descriptors beyond the limits the operator set.
 7. **Untrusted input.** No request, response, message or registry artifact from a peer can crash the host or corrupt its memory.
 
-## Settings that relax enforcement
+## Operator settings that weaken a goal
 
-Socket egress and guest memory enforce by default. Each also has a count mode for migrating a host, which reports what enforcement would refuse and allows it. Private address ranges (RFC 1918, ULA, CGNAT) are reachable unless the operator sets `--deny-private-ranges`, since reaching a sibling service on a private address is the ordinary in-cluster case.
+The two count modes exist for migrating a host: they report what enforcement would refuse, and allow it. Private address ranges (RFC 1918, ULA, CGNAT) are reachable unless the operator sets `--deny-private-ranges`, since reaching a sibling service on a private address is the ordinary in-cluster case.
 
-| Control | Default | Relaxed by |
+| Setting | Goal | Effect |
 | --- | --- | --- |
-| Raw socket egress | enforce | `--socket-egress=count` |
-| Total guest memory | enforce | `--guest-memory-mode=count` |
+| `--socket-egress=count` | 5 | Raw socket egress is counted, not enforced. |
+| `--guest-memory-mode=count` | 6 | Total guest memory is counted, not enforced. |
+| `--deny-special-ranges=false` | 5 | Loopback, link-local and metadata addresses become reachable. |
+| `--http-local-routing` | 3 | Any workload can claim a hostname and receive its neighbors' requests, in plaintext. |
+| `--wasi-webgpu` | 1 | The GPU and its driver sit outside wasmtime's isolation. |
+| `--allow-insecure-registries` | — | Pulls use plain HTTP, so registry credentials travel unencrypted. |
 
 The following are enforced in every mode:
 
