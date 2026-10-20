@@ -199,9 +199,16 @@ operator:
   # setting `spec.template.spec.environment: namespace-b`. If your install
   # relies on namespace boundaries for tenant isolation, set this to
   # `false`: scheduling will then be locked to the workload's own
-  # namespace, and any cross-tenant `environment` is rejected with a
+  # namespace, and any cross-tenant `environment` or a `hostId` pinning
+  # another tenant's host is rejected with a
   # `CrossEnvironmentSchedulingDenied` Warning Event and a
   # `HostSelection=False` condition on the Workload.
+  # Running workloads are held to the same rule: setting this to `false` on
+  # a live cluster stops each one placed outside its namespace's environment,
+  # ten a second, and schedules it again (a pinned one stays unscheduled).
+  # A workload pinned with `hostId` waits until that host has registered,
+  # with a `PinnedHostNotRegistered` Warning Event, since an unregistered
+  # host's environment cannot be checked.
   allowSharedHosts: true
   # -- Additional environment variables for the operator container, appended
   # after the chart-managed vars. Standard Kubernetes env shape (supports
