@@ -354,13 +354,6 @@ impl ComponentHostPlugin {
             Arc::clone(&allowed_host_loopback_ports),
             &socket_policy,
         );
-        if egress_policy.disabled_loopback_grants() {
-            warn!(
-                plugin_id = id,
-                "host component plugin declares allowedHostLoopbackPorts, but host-loopback \
-                 access is disabled; enable the host socket policy"
-            );
-        }
         // Each direct bind is claimed from the host's one port table as it is
         // collected, so two plugins declaring the same real address fail here,
         // with both holders named, rather than at the second plugin's bind with

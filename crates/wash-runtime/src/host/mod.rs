@@ -1952,6 +1952,13 @@ impl HostBuilder {
             let declared = self.plugin_bindings.for_plugin(id);
             declared.validate_declaration()?;
             if let Some(policy) = declared.egress_policy(&engine.socket_policy) {
+                if policy.disabled_loopback_grants() {
+                    warn!(
+                        plugin_id = id,
+                        "host plugin declares allowedHostLoopbackPorts, but host-loopback access \
+                         is disabled; enable the host socket policy"
+                    );
+                }
                 plugin
                     .configure_egress_policy(policy)
                     .with_context(|| format!("invalid egress policy for host plugin '{id}'"))?;
@@ -3528,6 +3535,73 @@ mod tests {
         let err =
             build("nats://other.example:4222").expect_err("an undeclared server must fail startup");
         assert!(format!("{err:#}").contains("allowedIpNameLookups"));
+    }
+
+    /// Every plugin that dials a backend takes a declared ceiling rather than
+    /// refusing it as unenforceable, so none falls back to the default refusal.
+    /// wasmcloud-postgres also checks its base url here, so the list names it.
+    #[cfg(all(
+        feature = "wasm_component_model_implements",
+        feature = "wasi-keyvalue",
+        feature = "wasi-blobstore",
+        feature = "wasmcloud-postgres"
+    ))]
+    #[test]
+    fn every_dialing_plugin_accepts_a_declared_egress_policy() {
+        use crate::plugin::wasi_blobstore::{MultiplexedAsyncBlobstore, MultiplexedBlobstore};
+        use crate::plugin::wasi_keyvalue::{MultiplexedAsyncKeyValue, MultiplexedKeyValue};
+        use crate::plugin::wasmcloud_messaging::{MultiplexedAsyncMessaging, MultiplexedMessaging};
+        use crate::plugin::wasmcloud_postgres::WasmcloudPostgres;
+        use std::collections::BTreeSet;
+
+        let postgres =
+            WasmcloudPostgres::new(&url::Url::parse("postgres://u:p@db.internal/").unwrap())
+                .unwrap();
+        let plugins: [Arc<dyn HostPlugin>; 7] = [
+            Arc::new(MultiplexedKeyValue::new()),
+            Arc::new(MultiplexedAsyncKeyValue::new()),
+            Arc::new(MultiplexedBlobstore::new()),
+            Arc::new(MultiplexedAsyncBlobstore::new()),
+            Arc::new(MultiplexedMessaging::new()),
+            Arc::new(MultiplexedAsyncMessaging::new()),
+            Arc::new(postgres),
+        ];
+        let ids: BTreeSet<&str> = plugins.iter().map(|plugin| plugin.id()).collect();
+        assert_eq!(ids.len(), 7, "seven distinct plugin ids: {ids:?}");
+        for plugin in plugins {
+            let declared = crate::plugin::PluginBindingSet::new(plugin.id()).with_egress_policy(
+                Arc::from([
+                    "redis://cache.internal:6379".parse().unwrap(),
+                    "postgres://db.internal:5432".parse().unwrap(),
+                ]),
+                Arc::from([]),
+                Arc::from([]),
+            );
+            let id = plugin.id();
+            Host::builder()
+                .with_plugin(plugin)
+                .unwrap()
+                .with_plugin_bindings(crate::plugin::PluginBindings::new().with_plugin(declared))
+                .build()
+                .unwrap_or_else(|err| panic!("{id}: {err:#}"));
+        }
+
+        // The base url the unnamed path dials is held to the same list.
+        let outside =
+            WasmcloudPostgres::new(&url::Url::parse("postgres://u:p@other.internal/").unwrap())
+                .unwrap();
+        let declared = crate::plugin::PluginBindingSet::new(outside.id()).with_egress_policy(
+            Arc::from(["postgres://db.internal:5432".parse().unwrap()]),
+            Arc::from([]),
+            Arc::from([]),
+        );
+        let err = Host::builder()
+            .with_plugin(Arc::new(outside))
+            .unwrap()
+            .with_plugin_bindings(crate::plugin::PluginBindings::new().with_plugin(declared))
+            .build()
+            .expect_err("a base url outside the list must fail startup");
+        assert!(format!("{err:#}").contains("other.internal"), "{err:#}");
     }
 
     /// A start that fails *after* its plugins bound must give the binding back.

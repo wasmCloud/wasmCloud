@@ -18,14 +18,26 @@
 //! eviction). The cap bounds *cached* connections; a connection still held by a
 //! live bind keeps working after eviction. Eviction only means a future bind
 //! re-instantiates it.
+//!
+//! ## Egress policy
+//!
+//! A plugin whose `host.plugins` entry declares `allowedHosts` hands the policy
+//! to [`Multiplexer::configure_egress_policy`]. Every bind then runs
+//! [`BackendProvider::check_egress`] on the resolved config *before* the pool
+//! is consulted, so a pooled connection is never handed to a binding whose url
+//! the policy refuses. A url naming a host is matched by name only: the client
+//! resolves it itself, so the host's egress address ranges hold only for a url
+//! that names an address.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use anyhow::Context as _;
 use tokio::sync::{Mutex, OnceCell};
 
+use crate::plugin::PluginEgressPolicy;
 use crate::wit::WitInterface;
 
 /// `config` key naming the backend type for a named host interface (e.g.
@@ -51,7 +63,22 @@ pub trait BackendProvider<Id>: Send + Sync {
     /// The `config.backend` discriminator this provider handles.
     fn backend_type(&self) -> &'static str;
     /// Build a backend from a named host interface's config.
-    async fn instantiate(&self, config: &HashMap<String, String>) -> anyhow::Result<Id>;
+    ///
+    /// `egress` is the plugin's declared ceiling, already checked against
+    /// `config` by [`BackendProvider::check_egress`]; a client that can learn
+    /// further endpoints on the wire should stay on the checked ones under it.
+    async fn instantiate(
+        &self,
+        config: &HashMap<String, String>,
+        egress: Option<&PluginEgressPolicy>,
+    ) -> anyhow::Result<Id>;
+    /// Check every endpoint `config` would dial against the plugin's declared
+    /// ceiling. A provider that does not connect out returns `Ok(())`.
+    fn check_egress(
+        &self,
+        config: &HashMap<String, String>,
+        policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()>;
     /// A pool key for connection reuse, or `None` to never pool.
     ///
     /// Providers backed by a shared external connection (redis, NATS) return
@@ -104,6 +131,8 @@ pub struct Multiplexer<Id> {
     /// plugin default without requiring a label. A `std::sync::Mutex` because the
     /// critical section is a tiny map touch with no `await` held across it.
     defaults: Arc<std::sync::Mutex<HashMap<Arc<str>, Id>>>,
+    /// The ceiling from the plugin's `host.plugins` entry, when it declared one.
+    egress: arc_swap::ArcSwapOption<PluginEgressPolicy>,
 }
 
 impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
@@ -125,7 +154,16 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
             idle_ttl: DEFAULT_IDLE_TTL,
             reaper_started: AtomicBool::new(false),
             defaults: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            egress: arc_swap::ArcSwapOption::empty(),
         }
+    }
+
+    /// Install the ceiling declared for the owning plugin, checked on every
+    /// later [`Multiplexer::instantiate`]. The whole of a multiplexed plugin's
+    /// [`crate::plugin::HostPlugin::configure_egress_policy`].
+    pub fn configure_egress_policy(&self, policy: Arc<PluginEgressPolicy>) -> anyhow::Result<()> {
+        self.egress.store(Some(policy));
+        Ok(())
     }
 
     /// Record the workload's default (unnamed `""`) backend from a built
@@ -214,10 +252,30 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
             )
         })?;
 
+        // Before the pool: a cached connection to a refused url must not be
+        // handed out just because some earlier bind opened it.
+        let egress = self.egress.load_full();
+        if let Some(policy) = &egress {
+            provider
+                .check_egress(&iface.config, policy)
+                .with_context(|| {
+                    format!(
+                        "{}:{} binding `{}` (backend '{backend_type}') is refused by the egress \
+                         policy declared for this plugin",
+                        self.namespace,
+                        self.package,
+                        crate::plugin::bindings::describe_binding(
+                            iface.name.as_deref().unwrap_or_default()
+                        )
+                    )
+                })?;
+        }
+        let egress = egress.as_deref();
+
         // Unpooled providers (in-memory, filesystem) always build a fresh,
         // isolated backend — nothing to share or reap.
         let Some(pool_key) = provider.pool_key(&iface.config) else {
-            return provider.instantiate(&iface.config).await;
+            return provider.instantiate(&iface.config, egress).await;
         };
         // `backend_type` is a fixed `&'static str` from a closed set with no
         // null byte, so the `\u{0}` separator makes cross-type collisions
@@ -245,7 +303,7 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
         // the cell is left empty, so a later bind retries rather than caching a
         // failed connection.
         let backend = cell
-            .get_or_try_init(|| provider.instantiate(&iface.config))
+            .get_or_try_init(|| provider.instantiate(&iface.config, egress))
             .await?
             .clone();
 
@@ -366,6 +424,35 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
             .keys()
             .filter(|k| k.starts_with(&prefix))
             .count()
+    }
+}
+
+/// Connect the client behind a multiplexed NATS backend.
+///
+/// Under a declared ceiling the client stays on `url`: a server a cluster
+/// advertises arrives on the wire, after [`BackendProvider::check_egress`] ran,
+/// so following it would leave the checked endpoint. That costs the failover
+/// an unlisted peer would have given, as it does for wasmcloud-nats.
+pub(crate) async fn connect_nats(
+    url: &str,
+    egress: Option<&PluginEgressPolicy>,
+) -> anyhow::Result<async_nats::Client> {
+    let options = match egress {
+        Some(_) => async_nats::ConnectOptions::new().ignore_discovered_servers(),
+        None => async_nats::ConnectOptions::new(),
+    };
+    Ok(options.connect(url).await?)
+}
+
+/// Check a multiplexed NATS backend's `url`, when the config names one. A
+/// config without one is left to `instantiate`, which refuses it.
+pub(crate) fn check_nats_url(
+    config: &HashMap<String, String>,
+    policy: &PluginEgressPolicy,
+) -> anyhow::Result<()> {
+    match config.get("url") {
+        Some(url) => policy.check_nats_server(url),
+        None => Ok(()),
     }
 }
 
@@ -497,11 +584,26 @@ mod tests {
         fn backend_type(&self) -> &'static str {
             self.backend
         }
-        async fn instantiate(&self, _: &HashMap<String, String>) -> anyhow::Result<Arc<usize>> {
+        async fn instantiate(
+            &self,
+            _: &HashMap<String, String>,
+            _: Option<&PluginEgressPolicy>,
+        ) -> anyhow::Result<Arc<usize>> {
             if !self.delay.is_zero() {
                 tokio::time::sleep(self.delay).await;
             }
             Ok(Arc::new(self.count.fetch_add(1, SeqCst)))
+        }
+        fn check_egress(
+            &self,
+            config: &HashMap<String, String>,
+            policy: &PluginEgressPolicy,
+        ) -> anyhow::Result<()> {
+            policy.check_url(
+                &config["url"],
+                crate::host::declared_port::Protocol::Tcp,
+                6379,
+            )
         }
         fn pool_key(&self, config: &HashMap<String, String>) -> Option<String> {
             self.pooled.then(|| config.get("url").cloned()).flatten()
@@ -668,5 +770,56 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(60)).await;
         let _b = mux.instantiate(&url_iface("redis://b")).await.unwrap();
         assert_eq!(mux.pool_len().await, 1, "idle 'a' should have been reaped");
+    }
+
+    /// The check runs on every bind, so a connection some earlier bind pooled
+    /// is not handed to a binding the policy refuses.
+    #[tokio::test]
+    async fn egress_is_checked_before_a_pooled_connection_is_reused() {
+        let provider = CountingProvider::new(true);
+        let mux = Multiplexer::new("wasi", "keyvalue", "test").with_provider(provider.clone());
+        mux.instantiate(&url_iface("redis://outside.example:6379"))
+            .await
+            .unwrap();
+
+        mux.configure_egress_policy(PluginEgressPolicy::allowing(&[
+            "redis://inside.example:6379",
+        ]))
+        .unwrap();
+        let err = mux
+            .instantiate(&url_iface("redis://outside.example:6379"))
+            .await
+            .expect_err("a pooled connection outside the policy must be refused");
+        assert!(
+            format!("{err:#}").contains("outside.example"),
+            "names the host: {err:#}"
+        );
+        mux.instantiate(&url_iface("redis://inside.example:6379"))
+            .await
+            .unwrap();
+        assert_eq!(provider.count.load(SeqCst), 2);
+    }
+
+    /// A malformed url is reported as malformed, not as a policy refusal.
+    #[test]
+    fn an_invalid_nats_url_is_not_reported_as_denied() {
+        let policy = PluginEgressPolicy::allowing(&["nats://nats.internal:4222"]);
+        let config = HashMap::from([("url".to_string(), "nats://host:42x2".to_string())]);
+        let err = format!("{:#}", check_nats_url(&config, &policy).unwrap_err());
+        assert!(
+            err.contains("is invalid") && !err.contains("is denied"),
+            "{err}"
+        );
+    }
+
+    /// A multiplexed NATS url is read as `async_nats` reads it.
+    #[test]
+    fn a_nats_url_is_checked_at_its_default_port() {
+        let policy = PluginEgressPolicy::allowing(&["nats://nats.internal:4222"]);
+        let config = |url: &str| HashMap::from([("url".to_string(), url.to_string())]);
+        check_nats_url(&config("nats.internal"), &policy).unwrap();
+        check_nats_url(&config("nats://nats.internal:4222"), &policy).unwrap();
+        assert!(check_nats_url(&config("nats://nats.internal:6222"), &policy).is_err());
+        assert!(check_nats_url(&config("nats://other.internal:4222"), &policy).is_err());
     }
 }

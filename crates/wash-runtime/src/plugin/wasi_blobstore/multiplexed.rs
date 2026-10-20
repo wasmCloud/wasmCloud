@@ -605,6 +605,15 @@ impl HostPlugin for MultiplexedBlobstore {
         MULTIPLEXED_BLOBSTORE_ID
     }
 
+    /// Retains the declared ceiling; each bind checks its backend's url
+    /// against it before a connection is opened or reused.
+    fn configure_egress_policy(
+        &self,
+        policy: Arc<crate::plugin::PluginEgressPolicy>,
+    ) -> anyhow::Result<()> {
+        self.mux.configure_egress_policy(policy)
+    }
+
     fn world(&self) -> WitWorld {
         WitWorld {
             imports: HashSet::from([WitInterface::from(
