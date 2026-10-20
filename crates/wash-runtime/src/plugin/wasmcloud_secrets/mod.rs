@@ -35,7 +35,7 @@ use zeroize::Zeroize;
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::WorkloadItem;
-use crate::plugin::{HostPlugin, WitInterfaces};
+use crate::plugin::{HostPlugin, SecretResolver, WitInterfaces};
 use crate::wit::{WitInterface, WitWorld};
 
 /// The resolved value behind one labeled `wasmcloud:secrets/secret` import,
@@ -223,10 +223,32 @@ impl<T: 'static + Send> bindings::named_imports::wasmcloud::secrets::secret::Hos
 
 impl bindings::named_imports::wasmcloud::secrets::secret::Host for ActiveCtx<'_> {}
 
+/// Resolves a key from the component's unlabeled `store` binding — exactly what
+/// the component's own `store.get` would return.
+#[async_trait::async_trait]
+impl SecretResolver for WasmcloudSecrets {
+    async fn resolve(
+        &self,
+        workload_id: &str,
+        component_id: &str,
+        key: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let binds = self.binds.read().await;
+        Ok(binds
+            .get(workload_id)
+            .and_then(|components| resolve(components, component_id))
+            .and_then(|config| config.get(key).cloned()))
+    }
+}
+
 #[async_trait::async_trait]
 impl HostPlugin for WasmcloudSecrets {
     fn id(&self) -> &'static str {
         WASMCLOUD_SECRETS_ID
+    }
+
+    fn secret_resolver(&self) -> Option<Arc<dyn SecretResolver>> {
+        Some(Arc::new(self.clone()))
     }
 
     fn world(&self) -> WitWorld {
