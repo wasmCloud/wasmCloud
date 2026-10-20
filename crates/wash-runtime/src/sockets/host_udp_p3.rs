@@ -574,7 +574,7 @@ mod tests {
                 .map(|entry| entry.parse().unwrap())
                 .collect(),
             resolved_names: ResolvedNameLimits {
-                lifetime: LIFETIME,
+                lifetime: Some(LIFETIME),
                 ..Default::default()
             },
             ..Default::default()

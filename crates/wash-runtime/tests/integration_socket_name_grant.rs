@@ -2,17 +2,18 @@
 //! that names a host.
 //!
 //! A real guest resolves a name through the system resolver and then opens a
-//! `wasi:sockets` TCP connection to the address it was handed, on both the
-//! p2 path (the lookup stream and `std`'s sockets) and the p3 path. Uses the
-//! http-ip-name-lookup fixtures: the request path is the name to resolve
-//! (`/-` resolves nothing), `?connect=<ip>:<port>` is where to connect, and
-//! the body reports `connect: denied` when the host's socket policy refused
-//! it, or `connect: failed: …` when the network answered instead.
+//! `wasi:sockets` TCP connection to the address it was handed, or sends it
+//! datagrams, on both the p2 path (the lookup stream and `std`'s sockets) and
+//! the p3 path. Uses the http-ip-name-lookup fixtures: the request path is
+//! the name to resolve (`/-` resolves nothing), the query is the steps to run
+//! after it (`connect=<ip>:<port>`, `send=<ip>:<port>`, `sleep=<ms>`, …), and
+//! the body reports each as `denied` when the host's socket policy refused
+//! it, or `failed: …` when the network answered instead.
 //!
 //! The destination is a closed port on this machine's own address, so a
 //! permitted connect fails at the network — refused, usually — and a refused
-//! one never leaves the host. No connection is ever accepted, which keeps
-//! the tests clear of local firewalls.
+//! one never leaves the host. No connection is ever accepted and no datagram
+//! has to arrive, which keeps the tests clear of local firewalls.
 //!
 //! The name has to resolve, through the system resolver, to an address that
 //! is not loopback: a loopback address is the guest's virtual network and
@@ -30,13 +31,19 @@ use anyhow::{Context, Result};
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, ToSocketAddrs},
+    sync::Arc,
     time::Duration,
 };
 use tokio::time::timeout;
 
 use common::{http_only_host_interfaces, start_host_with_p3_http_handler};
 use wash_runtime::{
-    host::HostApi,
+    engine::Engine,
+    host::{
+        HostApi, HostBuilder,
+        http::{DynamicRouter, Ingress},
+    },
+    sockets::{policy::SocketPolicy, resolved_names::ResolvedNameLimits},
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
 };
 
@@ -295,6 +302,100 @@ async fn an_entry_for_another_name_grants_nothing_on_p2_and_p3() -> Result<()> {
         let (status, body) = get(addr, &host_header, &path).await?;
         assert_eq!(status, 403, "{preview}: {body}");
         assert!(body.contains("denied by policy"), "{preview}: {body}");
+    }
+    Ok(())
+}
+
+/// The opt-in lifetime the test below gives one of its hosts.
+const GRANT_LIFETIME: Duration = Duration::from_secs(3);
+
+/// A host whose name grants last `lifetime`, or for as long as each store
+/// remembers its lookups.
+async fn start_host_with_grant_lifetime(
+    lifetime: Option<Duration>,
+) -> Result<(SocketAddr, impl HostApi)> {
+    let policy = SocketPolicy {
+        resolved_names: ResolvedNameLimits {
+            lifetime,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let engine = Engine::builder()
+        .with_socket_policy(Arc::new(policy))
+        .build()?;
+    let ingress = Ingress::new(DynamicRouter::default(), "127.0.0.1:0".parse()?).await?;
+    let addr = ingress.addr();
+    let host = HostBuilder::new()
+        .with_engine(engine)
+        .with_http_handler(Arc::new(ingress))
+        .build()?;
+    let host = host.start().await.context("Failed to start host")?;
+    Ok((addr, host))
+}
+
+/// A guest that resolves once and keeps the address (a metrics client, a
+/// connection pool) keeps reaching it, by datagram on an unconnected or a
+/// connected socket and by a later TCP connect. Only a host given a grant
+/// lifetime refuses it once that has passed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_guest_that_resolved_once_keeps_its_grant_unless_given_a_lifetime_on_p2_and_p3()
+-> Result<()> {
+    let Some(destination) = discover_or_explain("a_guest_that_resolved_once_keeps_its_grant")
+    else {
+        return Ok(());
+    };
+    let name = &destination.name;
+    // Somewhere for a permitted datagram to land, so sending one succeeds.
+    // Nothing reads it.
+    let receiver = std::net::UdpSocket::bind((destination.addr, 0))?;
+    let datagrams = receiver.local_addr()?;
+    let allowed_hosts = [format!("{name}:{}", datagrams.port()), destination.entry()];
+    let wait = format!(
+        "sleep={}",
+        (GRANT_LIFETIME + Duration::from_secs(1)).as_millis()
+    );
+
+    let (mut requests, mut hosts) = (Vec::new(), Vec::new());
+    for lifetime in [None, Some(GRANT_LIFETIME)] {
+        let (addr, host) = start_host_with_grant_lifetime(lifetime).await?;
+        let lapses = lifetime.is_some();
+        for (wasm, preview) in PREVIEWS {
+            for step in ["send", "send-connected", "connect"] {
+                let host_header = format!("{preview}-{step}-{lapses}");
+                host.workload_start(workload(wasm, &host_header, &allowed_hosts, &[]))
+                    .await?;
+                let target = match step {
+                    "connect" => destination.target(),
+                    _ => datagrams,
+                };
+                let path = format!("/{name}?{step}={target}&{wait}&{step}={target}");
+                requests.push(async move {
+                    let (status, body) = get(addr, &host_header, &path).await?;
+                    anyhow::Ok((host_header, step, lapses, status, body))
+                });
+            }
+        }
+        hosts.push(host);
+    }
+
+    for (what, step, lapses, status, body) in futures::future::try_join_all(requests).await? {
+        assert_eq!(status, 200, "{what}: {body}");
+        let mut outcomes = body.rsplit("; ");
+        let after = outcomes.next().unwrap_or_default();
+        let before = outcomes.next().unwrap_or_default();
+        let denied = format!("{step}: denied");
+        let permitted = |outcome: &str| match step {
+            // A permitted connect fails at the network: the port is closed.
+            "connect" => outcome.starts_with("connect: ") && outcome != denied,
+            _ => outcome == format!("{step}: ok"),
+        };
+        assert!(permitted(before), "{what}: before the wait: {body:?}");
+        if lapses {
+            assert_eq!(after, denied, "{what}: after the wait: {body:?}");
+        } else {
+            assert!(permitted(after), "{what}: after the wait: {body:?}");
+        }
     }
     Ok(())
 }

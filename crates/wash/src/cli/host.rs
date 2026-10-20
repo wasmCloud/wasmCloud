@@ -574,27 +574,34 @@ pub struct HostCommand {
     pub socket_egress: SocketEgressMode,
 
     /// How long an address a workload resolved stays connectable under an
-    /// `allowedHosts` entry naming the host it resolved.
+    /// `allowedHosts` entry naming the host it resolved. Unset (the default),
+    /// it stays connectable for as long as the workload's store remembers the
+    /// lookup, even after the name has moved off that address. Set one where
+    /// addresses are reused, such as pod IPs.
     ///
     /// A raw socket carries no name, so `allowedHosts: [db.internal:5432]`
     /// permits a socket only to an address a `wasi:sockets` lookup of
-    /// `db.internal` handed that workload, on that port, for this long after
-    /// the lookup. Not a DNS TTL — the resolver returns none. A workload that
-    /// caches an address longer must resolve again before a new connect; open
-    /// connections are unaffected. `0s` turns name entries off for sockets.
+    /// `db.internal` handed that workload, on that port. With a lifetime set,
+    /// only for this long after the lookup: not a DNS TTL, since the resolver
+    /// returns none. A workload that caches an address longer must then
+    /// resolve again before a new connect or datagram; open connections are
+    /// unaffected. `0s` turns name entries off for sockets.
     ///
     /// The grant is the address, not the server: two names behind one address
     /// are indistinguishable, and a name that resolves to another private
     /// service grants that service unless `--deny-private-ranges` is set.
     //
-    // A blank value counts as unset, as for `--guest-memory-mode`.
+    // A blank value counts as unset, as for `--guest-memory-mode`. The full
+    // path keeps clap from reading `Option` as "may be omitted": the parser
+    // itself turns a blank value into `None`.
     #[arg(
         long = "ip-name-lookup-grant-lifetime",
         env = "WASH_IP_NAME_LOOKUP_GRANT_LIFETIME",
         value_parser = parse_ip_name_lookup_grant_lifetime,
-        default_value = "60s"
+        default_value = "",
+        hide_default_value = true
     )]
-    pub ip_name_lookup_grant_lifetime: Duration,
+    pub ip_name_lookup_grant_lifetime: std::option::Option<Duration>,
 
     /// Deny outbound connections to loopback, link-local (including the cloud
     /// metadata address), multicast, and documentation ranges — including
@@ -1728,18 +1735,15 @@ mod policy_mode_tests {
     }
 
     #[test]
-    fn an_ip_name_lookup_grant_lasts_a_minute_unless_told_otherwise() {
-        assert_eq!(
-            parse(&[]).ip_name_lookup_grant_lifetime,
-            std::time::Duration::from_secs(60)
-        );
+    fn an_ip_name_lookup_grant_lapses_only_when_given_a_lifetime() {
+        assert_eq!(parse(&[]).ip_name_lookup_grant_lifetime, None);
         assert_eq!(
             parse(&["--ip-name-lookup-grant-lifetime=5m"]).ip_name_lookup_grant_lifetime,
-            std::time::Duration::from_secs(300)
+            Some(std::time::Duration::from_secs(300))
         );
         assert_eq!(
             parse(&["--ip-name-lookup-grant-lifetime="]).ip_name_lookup_grant_lifetime,
-            std::time::Duration::from_secs(60)
+            None
         );
     }
 
@@ -1789,11 +1793,13 @@ pub enum GuestMemoryMode {
 
 /// `--ip-name-lookup-grant-lifetime` from a flag or environment value, reading a
 /// blank one as unset.
-fn parse_ip_name_lookup_grant_lifetime(raw: &str) -> Result<Duration, String> {
+fn parse_ip_name_lookup_grant_lifetime(raw: &str) -> Result<Option<Duration>, String> {
     if raw.trim().is_empty() {
-        return Ok(wash_runtime::sockets::resolved_names::ResolvedNameLimits::default().lifetime);
+        return Ok(None);
     }
-    humantime::parse_duration(raw).map_err(|e| e.to_string())
+    humantime::parse_duration(raw)
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 
 /// The three distinct meanings of the process-memory flag.
