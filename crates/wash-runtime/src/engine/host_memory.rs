@@ -17,15 +17,33 @@
 //!
 //! # Why the budget is worth naming apart from enforcing it
 //!
-//! `default_heap_memory × core_instances` is what the pooling allocator
-//! reserves — every slot is sized for the largest memory it might hold, whether
-//! or not anything grows into it. Today a host claims 4 GiB × 1000 = 3.9 TiB of
-//! address space and nobody is told, which is close enough to the 4 TiB the
-//! allocator probes for that nudging either knob crosses it. Naming the budget
-//! lets the host say, at startup, whether the pool it is about to build is one
-//! the machine could actually back.
+//! Every pool slot reserves address space for the largest memory it might hold,
+//! whether or not anything grows into it: wasmtime's 4 GiB
+//! `memory_reservation`, plus a guard region (see [`pool_slot_bytes`]). A
+//! `default_heap_memory` past the reservation does not make the slot larger;
+//! wasmtime refuses to build that pool at all. Today a host claims 1000 such slots, 3.9 TiB of
+//! address space, and nobody is told; the 128 TiB a 64-bit process can map
+//! holds about 30,000 of them, so `core_instances` has a ceiling. Naming the
+//! budget lets the host say, at startup, whether the pool it is about to build
+//! is one the machine could actually back.
+//!
+//! # The reservation is not a knob
+//!
+//! Lowering `default_heap_memory` below 4 GiB caps how far a guest may grow,
+//! but it does not shrink the slot: wasmtime still reserves 4 GiB for it. That
+//! reservation, with its guard, is what lets wasmtime elide bounds checks on
+//! 32-bit memories and keeps one guest's out-of-bounds access from reaching
+//! another's slot. It is an isolation boundary, so the host accounts for it
+//! rather than offering a way to shrink it; the slot count is what sizes the
+//! pool.
 
-use std::fmt;
+use std::{
+    collections::BTreeSet,
+    fmt,
+    path::{Component, Path, PathBuf},
+};
+
+use super::pool_usage::PoolTotals;
 
 /// One mebibyte.
 pub const MIB: u64 = 1024 * 1024;
@@ -41,6 +59,54 @@ pub const WASMTIME_DEFAULT_HEAP_MEMORY: u64 = 4 * 1024 * MIB;
 /// [`crate::engine::EngineBuilder`] has always passed when `max_instances` is
 /// unset.
 pub const WASMTIME_DEFAULT_CORE_INSTANCES: u32 = 1000;
+
+/// wasmtime's default `memory_reservation`: the address space each pooled
+/// linear memory slot reserves, however low its heap ceiling.
+///
+/// Restated, not configured: the engine never changes it, and the module docs
+/// say why it is not a knob.
+#[cfg(target_pointer_width = "64")]
+pub const WASMTIME_MEMORY_RESERVATION: u64 = 4 * 1024 * MIB;
+#[cfg(not(target_pointer_width = "64"))]
+pub const WASMTIME_MEMORY_RESERVATION: u64 = 10 * MIB;
+
+/// wasmtime's default `memory_guard_size`: unmapped address space after each
+/// pooled memory, and once more before the first.
+#[cfg(target_pointer_width = "64")]
+pub const WASMTIME_MEMORY_GUARD: u64 = 32 * MIB;
+#[cfg(not(target_pointer_width = "64"))]
+pub const WASMTIME_MEMORY_GUARD: u64 = 64 * 1024;
+
+/// Address space one pooled memory slot reserves when the heap ceiling is
+/// `max_memory_size`: the larger of the ceiling and
+/// [`WASMTIME_MEMORY_RESERVATION`], plus [`WASMTIME_MEMORY_GUARD`].
+///
+/// wasmtime's own slab layout without memory protection keys, which it leaves
+/// off by default. It assumes the engine's reservation and guard are
+/// wasmtime's defaults; a caller-supplied base config that changes them makes
+/// this an estimate.
+///
+/// A ceiling above the reservation does not make a bigger slot in practice:
+/// wasmtime refuses to build a pool whose `max_memory_size` exceeds its
+/// `memory_reservation`, and the engine never raises the reservation (see
+/// [`pool_heap_ceiling_advisory`]). So every pool that builds has slots of
+/// exactly the reservation plus the guard; the larger figure is only what
+/// such a pool would have needed.
+pub fn pool_slot_bytes(max_memory_size: u64) -> u64 {
+    max_memory_size
+        .max(WASMTIME_MEMORY_RESERVATION)
+        .saturating_add(WASMTIME_MEMORY_GUARD)
+}
+
+/// Address space a pool of `slots` memories reserves: one [`pool_slot_bytes`]
+/// each, plus the guard wasmtime places before the first.
+///
+/// Saturating for the reason [`HostMemoryBudgets::pool_reservation`] gives.
+pub fn pool_slab_bytes(max_memory_size: u64, slots: u32) -> u64 {
+    pool_slot_bytes(max_memory_size)
+        .saturating_mul(u64::from(slots))
+        .saturating_add(WASMTIME_MEMORY_GUARD)
+}
 
 /// Share of the detected memory limit that guest work may use. The rest is for
 /// everything a guest is not: wasmtime itself, NATS, OCI pulls, host buffers.
@@ -215,7 +281,7 @@ pub fn render_bytes(bytes: u64) -> String {
 /// The host's resolved memory budgets.
 ///
 /// Every field bounds memory: `core_instances` is a count of WebAssembly
-/// *core* instances (pool slots), each sized for `default_heap_memory`, not a
+/// *core* instances (pool slots), each sized by [`pool_slot_bytes`], not a
 /// CPU-side knob. Compute is metered separately via
 /// [`EngineBuilder::with_fuel_consumption`].
 ///
@@ -233,8 +299,15 @@ pub struct HostMemoryBudgets {
 
 impl Default for HostMemoryBudgets {
     fn default() -> Self {
+        Self::derived_within(detected_memory_limit())
+    }
+}
+
+impl HostMemoryBudgets {
+    /// [`Self::default`] from a limit the caller already detected.
+    pub(crate) fn derived_within(memory_limit: Option<u64>) -> Self {
         Self {
-            max_guest_memory: derive_max_guest_memory(),
+            max_guest_memory: derive_max_guest_memory_within(memory_limit),
             default_heap_memory: WASMTIME_DEFAULT_HEAP_MEMORY,
             core_instances: WASMTIME_DEFAULT_CORE_INSTANCES,
         }
@@ -302,48 +375,33 @@ impl HostMemoryBudgets {
         )
     }
 
-    /// Address space the pooling allocator will reserve: every slot is sized
-    /// for the largest memory it might hold.
+    /// Address space the pooling allocator will reserve: wasmtime's 4 GiB
+    /// reservation and a guard for every slot, however small its heap (see
+    /// [`pool_slab_bytes`]).
     ///
     /// Saturating rather than checked because the answer to an overflow here is
     /// the same as the answer to a merely enormous number — refuse it — and a
     /// saturated `u64` is still comfortably past any real limit.
     pub fn pool_reservation(&self) -> u64 {
-        self.default_heap_memory
-            .saturating_mul(u64::from(self.core_instances))
+        pool_slab_bytes(self.default_heap_memory, self.core_instances)
     }
 
-    /// What the host should say about this combination at startup, if anything.
+    /// What the host should say about these knobs at startup, if anything.
     ///
-    /// This is the whole reason the budget is worth naming before anything
-    /// enforces it: the reservation is a product of two knobs an operator sets
-    /// independently, and the failure it causes — instantiation refusing, much
-    /// later, with neither number in the message — is unpleasant to diagnose.
+    /// Only what the knobs say on their own: a heap ceiling larger than the
+    /// whole budget. What the pool reserves is judged against the pool the
+    /// engine actually installs (see [`pool_advisories`]), which the
+    /// environment, a caller's own pooling config, or no pool at all can make
+    /// different from what these knobs ask for.
     pub fn advisory(&self) -> Option<String> {
-        // Reserving address space is not consuming memory: on 64-bit the kernel
-        // backs it only when written to. So a reservation past the budget is a
-        // warning about over-commitment, not an error — but past what the
-        // allocator can actually map, it will fail at the first instantiation.
-        if self.pool_reservation() > MAX_POOL_RESERVATION {
-            return Some(format!(
-                "default-heap-memory {} across core-instances {} would reserve {} of \
-                 address space, past the {} the pooling allocator is probed for at startup. \
-                 Instantiation will fail once the pool is exhausted. Lower one of the two.",
-                render_bytes(self.default_heap_memory),
-                self.core_instances,
-                render_bytes(self.pool_reservation()),
-                render_bytes(MAX_POOL_RESERVATION),
-            ));
-        }
-        if self.default_heap_memory > self.max_guest_memory {
-            return Some(format!(
+        (self.default_heap_memory > self.max_guest_memory).then(|| {
+            format!(
                 "default-heap-memory {} is larger than this host's whole memory budget \
                  ({}), so a single guest could exhaust the host on its own",
                 render_bytes(self.default_heap_memory),
                 render_bytes(self.max_guest_memory),
-            ));
-        }
-        None
+            )
+        })
     }
 
     /// What to say about enforcing this budget on this machine, if anything.
@@ -358,7 +416,13 @@ impl HostMemoryBudgets {
     /// or a manifest setting it to the pod's own `resources.limits.memory`.
     /// A *derived* budget is three quarters of that limit and never trips it.
     pub fn enforcement_advisory(&self) -> Option<String> {
-        let limit = detected_memory_limit()?;
+        self.enforcement_advisory_within(detected_memory_limit())
+    }
+
+    /// [`Self::enforcement_advisory`] against a limit the caller already
+    /// detected.
+    pub(crate) fn enforcement_advisory_within(&self, memory_limit: Option<u64>) -> Option<String> {
+        let limit = memory_limit?;
         if self.max_guest_memory.saturating_mul(100)
             <= limit.saturating_mul(MAX_ENFORCED_SHARE_PERCENT)
         {
@@ -379,6 +443,124 @@ impl HostMemoryBudgets {
     }
 }
 
+/// What to say about an installed pool, with memories sized for a
+/// `max_memory_size` heap, at startup: each check that has something to say,
+/// independently, so one finding never hides the other.
+///
+/// This is the whole reason the reservation is worth naming before anything
+/// enforces it: it is a product of two knobs an operator sets independently,
+/// and the failure it causes — the engine or instantiation refusing, with
+/// neither number in the message — is unpleasant to diagnose.
+pub(crate) fn pool_advisories(totals: &PoolTotals, max_memory_size: u64) -> Vec<String> {
+    [
+        pool_heap_ceiling_advisory(max_memory_size),
+        pool_reservation_advisory(totals.memories, max_memory_size, usable_address_space()),
+        max_map_count().and_then(|limit| pool_map_count_advisory(totals, limit)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// What to say when the heap ceiling is past wasmtime's memory reservation,
+/// if it is.
+///
+/// wasmtime refuses to build a pool whose `max_memory_size` exceeds its
+/// `memory_reservation`, and the engine leaves the reservation at wasmtime's
+/// default (see the module docs), so the engine will not start. The error
+/// wasmtime gives names neither knob.
+fn pool_heap_ceiling_advisory(max_memory_size: u64) -> Option<String> {
+    (max_memory_size > WASMTIME_MEMORY_RESERVATION).then(|| {
+        format!(
+            "default-heap-memory {} is past wasmtime's {} memory reservation, and the pooling \
+             allocator refuses a heap ceiling larger than the reservation, so the engine will \
+             fail to start. Set default-heap-memory to {} or less.",
+            render_bytes(max_memory_size),
+            render_bytes(WASMTIME_MEMORY_RESERVATION),
+            render_bytes(WASMTIME_MEMORY_RESERVATION),
+        )
+    })
+}
+
+/// What to say when the pool would use up the kernel's per-process limit
+/// on memory mappings, if anything.
+///
+/// Stack guards split mappings when the engine is built; live memories split
+/// their accessible pages from their reservations later. Allow an additional
+/// mapping per table for fragmentation and slack. These are independent pool
+/// totals, so overrides must not be estimated from the memory count alone.
+fn pool_map_count_advisory(totals: &PoolTotals, max_map_count: u64) -> Option<String> {
+    let PoolTotals {
+        memories,
+        stacks,
+        tables,
+        ..
+    } = *totals;
+    let needed = u64::from(memories) * 2 + u64::from(stacks) * 2 + u64::from(tables);
+    (needed > max_map_count).then(|| {
+        format!(
+            "a pool of {memories} memories, {stacks} stacks and {tables} tables needs about \
+             {needed} memory mappings, past this kernel's vm.max_map_count of \
+             {max_map_count}. Engine startup or later instantiation may fail. Raise \
+             vm.max_map_count (sysctl), reduce the installed WASMTIME_POOLING_TOTAL_MEMORIES, \
+             WASMTIME_POOLING_TOTAL_STACKS and WASMTIME_POOLING_TOTAL_TABLES overrides, or \
+             lower core-instances when no overrides are set. Aim for fewer than {} pool \
+             mappings to leave room for libraries, thread stacks and compiled code.",
+            max_map_count / 10 * 9,
+        )
+    })
+}
+
+/// What to say when the pool's reservation crowds or overflows
+/// `address_space`, the most this process can map. Taken as an argument so
+/// the threshold can be tested apart from the machine running it.
+fn pool_reservation_advisory(
+    memories: u32,
+    max_memory_size: u64,
+    address_space: u64,
+) -> Option<String> {
+    // Reserving address space is not consuming memory: on 64-bit the kernel
+    // backs it only when written to. So a reservation past the budget is a
+    // warning about over-commitment, not an error — but the pool maps its
+    // whole slab when the engine is built, so past what this process can
+    // map, the engine does not start.
+    // A ceiling past the reservation is a pool wasmtime will not build at
+    // all, which `pool_heap_ceiling_advisory` says; how much it would have
+    // reserved is beside the point.
+    if max_memory_size > WASMTIME_MEMORY_RESERVATION {
+        return None;
+    }
+    let reservation = pool_slab_bytes(max_memory_size, memories);
+    if reservation <= address_space / 100 * POOL_ADDRESS_SPACE_PERCENT {
+        return None;
+    }
+    // The heap ceiling does not size the slot, so advising an operator to
+    // lower it would change nothing.
+    let remedy = format!(
+        "Lower core-instances (or WASMTIME_POOLING_TOTAL_MEMORIES). Lowering \
+         default-heap-memory will not help: every slot reserves wasmtime's {} plus a {} \
+         guard however small its heap.",
+        render_bytes(WASMTIME_MEMORY_RESERVATION),
+        render_bytes(WASMTIME_MEMORY_GUARD),
+    );
+    let consequence = if reservation > address_space {
+        "The pool cannot be mapped, so the engine will fail to start."
+    } else {
+        "That leaves little for everything else the process maps, so the engine may fail \
+         to start, or later mappings may."
+    };
+    Some(format!(
+        "default-heap-memory {} across {memories} pool memories (core-instances, or \
+         WASMTIME_POOLING_TOTAL_MEMORIES) would reserve {} of address space ({} per slot), \
+         past {POOL_ADDRESS_SPACE_PERCENT}% of the {} this process can map. {consequence} \
+         {remedy}",
+        render_bytes(max_memory_size),
+        render_bytes(reservation),
+        render_bytes(pool_slot_bytes(max_memory_size)),
+        render_bytes(address_space),
+    ))
+}
+
 /// Share of the real memory limit an *enforced* guest budget may claim before
 /// the host says the number leaves it no room to be a host.
 ///
@@ -387,36 +569,160 @@ impl HostMemoryBudgets {
 /// `limits.memory` produces.
 const MAX_ENFORCED_SHARE_PERCENT: u64 = 90;
 
-/// What `is_pooling_allocator_supported` probes for at startup, and therefore
-/// the most address space the pool can be assumed to get.
-const MAX_POOL_RESERVATION: u64 = 4 * 1024 * 1024 * MIB;
+/// Address space a process can map with no `RLIMIT_AS`: the lower half of a
+/// 48-bit virtual address space, which is what Linux on x86_64 and aarch64
+/// (4-level page tables) and macOS give user space.
+///
+/// Not the 4 TiB that `is_pooling_allocator_supported` probes. That probe asks
+/// whether the pool is worth using at all; a host passes it and can then map
+/// a pool many times larger.
+#[cfg(target_pointer_width = "64")]
+const USER_ADDRESS_SPACE: u64 = 128 * 1024 * 1024 * MIB;
+#[cfg(not(target_pointer_width = "64"))]
+const USER_ADDRESS_SPACE: u64 = 2 * 1024 * MIB;
+
+/// Share of the usable address space the pool may reserve before the host
+/// says so. The rest is for everything else the process maps — heap, thread
+/// stacks, compiled code, libraries — small beside the pool, but not nothing.
+const POOL_ADDRESS_SPACE_PERCENT: u64 = 90;
+
+/// The most address space this process can map: [`USER_ADDRESS_SPACE`],
+/// lowered by `RLIMIT_AS` where one is set.
+///
+/// The limit is read on Linux only, from `/proc/self/limits`, which needs no
+/// FFI. Elsewhere it is rarely set, and a host that sets one is told by the
+/// engine failing to build.
+pub fn usable_address_space() -> u64 {
+    address_space_limit().map_or(USER_ADDRESS_SPACE, |limit| limit.min(USER_ADDRESS_SPACE))
+}
+
+#[cfg(target_os = "linux")]
+fn address_space_limit() -> Option<u64> {
+    let limits = std::fs::read_to_string("/proc/self/limits").ok()?;
+    soft_address_space_limit(&limits)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn address_space_limit() -> Option<u64> {
+    None
+}
+
+/// The soft `Max address space` out of `/proc/self/limits`, `None` when it is
+/// `unlimited`.
+#[cfg(any(target_os = "linux", test))]
+fn soft_address_space_limit(limits: &str) -> Option<u64> {
+    limits
+        .lines()
+        .find_map(|line| line.strip_prefix("Max address space"))?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// The kernel's per-process limit on memory mappings, where there is one to
+/// read.
+#[cfg(target_os = "linux")]
+fn max_map_count() -> Option<u64> {
+    std::fs::read_to_string("/proc/sys/vm/max_map_count")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn max_map_count() -> Option<u64> {
+    None
+}
 
 /// The memory limit this process is really subject to.
 ///
-/// cgroup first, because in Kubernetes that is the number behind an OOMKill and
-/// the machine's total is irrelevant to a container limited well below it. Both
-/// cgroup revisions are read; v2 spells "no limit" as the literal string `max`.
-fn detected_memory_limit() -> Option<u64> {
-    fn read_cgroup(path: &str) -> Option<u64> {
-        let raw = std::fs::read_to_string(path).ok()?;
-        let raw = raw.trim();
-        if raw == "max" {
-            return None;
-        }
-        let value: u64 = raw.parse().ok()?;
-        // cgroup v1 spells "unlimited" as a very large number rather than a
-        // word, so anything past what a machine could plausibly have is treated
-        // as absent rather than believed.
-        (value < u64::MAX / 2).then_some(value)
-    }
-
-    read_cgroup("/sys/fs/cgroup/memory.max")
-        .or_else(|| read_cgroup("/sys/fs/cgroup/memory/memory.limit_in_bytes"))
-        .or_else(system_total_memory)
+/// The smallest readable limit for this process's cgroup and its ancestors,
+/// capped at physical RAM. Membership comes from `/proc/self/cgroup`, using
+/// the conventional v2 `/sys/fs/cgroup` and v1 `/sys/fs/cgroup/memory` mounts.
+/// Mount-root limits are checked even when membership cannot be resolved.
+///
+/// A cgroup limit is never taken above physical memory: cgroup v1 spells
+/// "unlimited" as `PAGE_COUNTER_MAX * PAGE_SIZE`, a number just under
+/// `i64::MAX`, and a limit past RAM can't be reached before the machine runs out.
+pub(crate) fn detected_memory_limit() -> Option<u64> {
+    detected_memory_limit_with(system_total_memory(), |path| {
+        std::fs::read_to_string(path).ok()
+    })
 }
 
-/// Total physical memory, for a host with no cgroup to read — a developer's
-/// laptop, or a bare-metal deployment.
+fn detected_memory_limit_with(
+    physical: Option<u64>,
+    read: impl Fn(&Path) -> Option<String>,
+) -> Option<u64> {
+    let membership = read(Path::new("/proc/self/cgroup")).unwrap_or_default();
+    let mut paths = BTreeSet::from([
+        PathBuf::from("/sys/fs/cgroup/memory.max"),
+        PathBuf::from("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+    ]);
+    for line in membership.lines() {
+        let mut parts = line.splitn(3, ':');
+        let (Some(_), Some(controllers), Some(path)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let (root, file) = if controllers.is_empty() {
+            (Path::new("/sys/fs/cgroup"), "memory.max")
+        } else if controllers.split(',').any(|c| c == "memory") {
+            (Path::new("/sys/fs/cgroup/memory"), "memory.limit_in_bytes")
+        } else {
+            continue;
+        };
+        let Some(relative) = path.strip_prefix('/') else {
+            continue;
+        };
+        let relative = Path::new(relative);
+        // Membership outside the visible cgroup namespace can contain '..'.
+        // Keep the mount-root fallback, but never walk outside that mount.
+        if relative
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+        {
+            continue;
+        }
+        let mut directory = root.join(relative);
+        while directory.starts_with(root) {
+            paths.insert(directory.join(file));
+            if directory == root || !directory.pop() {
+                break;
+            }
+        }
+    }
+
+    let cgroup = paths
+        .iter()
+        .filter_map(|path| read(path))
+        .filter_map(|raw| parse_cgroup_limit(&raw))
+        .min();
+    effective_memory_limit(cgroup, physical)
+}
+
+/// A cgroup memory limit file's value, or `None` when it sets no limit.
+fn parse_cgroup_limit(raw: &str) -> Option<u64> {
+    let raw = raw.trim();
+    if raw == "max" {
+        return None;
+    }
+    let value: u64 = raw.parse().ok()?;
+    // cgroup v1 spells "unlimited" as a very large number rather than a word;
+    // anything this large is treated as absent rather than believed.
+    // [`effective_memory_limit`] also caps what gets through at physical RAM.
+    (value < u64::MAX / 2).then_some(value)
+}
+
+/// The smaller of a cgroup limit and physical memory, whichever are known.
+fn effective_memory_limit(cgroup: Option<u64>, physical: Option<u64>) -> Option<u64> {
+    cgroup.into_iter().chain(physical).min()
+}
+
+/// Total physical memory, capping cgroup limits and providing the fallback
+/// where no cgroup limit is readable.
 ///
 /// Refreshes RAM only. [`SystemMonitor`] samples every CPU core for the host's
 /// periodic reporting, which this path would pay on every engine build.
@@ -432,6 +738,49 @@ fn system_total_memory() -> Option<u64> {
     (total > 0).then_some(total)
 }
 
+/// Share of the detected memory limit the whole process may reach before it
+/// refuses guest growth. Above the guest share, because the process holds the
+/// guests and everything else; short of the whole, because past it the kernel
+/// is already deciding for the host — by OOM kill in a container, by swapping
+/// the machine to a halt on a laptop.
+const PROCESS_MEMORY_PERCENT: u64 = 90;
+
+/// `max_process_memory` when an operator names none: [`PROCESS_MEMORY_PERCENT`]
+/// of the cgroup limit, or of physical memory where there is no cgroup.
+/// `u64::MAX`, never enforced, where neither can be read.
+pub fn derive_max_process_memory_bytes() -> u64 {
+    derive_max_process_memory_bytes_within(detected_memory_limit())
+}
+
+/// [`derive_max_process_memory_bytes`] from a limit the caller already detected.
+pub(crate) fn derive_max_process_memory_bytes_within(memory_limit: Option<u64>) -> u64 {
+    memory_limit.map_or(u64::MAX, |limit| limit / 100 * PROCESS_MEMORY_PERCENT)
+}
+
+/// What to say about `max_process_memory` at startup, if anything: a limit
+/// past the memory this process can actually have is one the kernel enforces
+/// first, and on macOS that means the whole machine stalling.
+pub fn process_memory_advisory(max_process_memory_bytes: u64) -> Option<String> {
+    process_memory_advisory_within(max_process_memory_bytes, detected_memory_limit())
+}
+
+/// [`process_memory_advisory`] against a limit the caller already detected.
+pub(crate) fn process_memory_advisory_within(
+    max_process_memory_bytes: u64,
+    memory_limit: Option<u64>,
+) -> Option<String> {
+    let limit = memory_limit?;
+    (max_process_memory_bytes > limit).then(|| {
+        format!(
+            "max-process-memory {} is more than the {} this process can actually have, so it \
+             will never refuse anything; the kernel will get there first. Set it below {}",
+            render_bytes(max_process_memory_bytes),
+            render_bytes(limit),
+            render_bytes(limit),
+        )
+    })
+}
+
 /// The guest memory budget when an operator names none.
 ///
 /// A share of the limit that will actually kill the process, clamped. Mirrors
@@ -439,7 +788,12 @@ fn system_total_memory() -> Option<u64> {
 /// of a share of `RLIMIT_NOFILE`: an unset flag means the derived ceiling, never
 /// "unbounded".
 pub fn derive_max_guest_memory() -> u64 {
-    let Some(limit) = detected_memory_limit() else {
+    derive_max_guest_memory_within(detected_memory_limit())
+}
+
+/// [`derive_max_guest_memory`] from a limit the caller already detected.
+pub(crate) fn derive_max_guest_memory_within(memory_limit: Option<u64>) -> u64 {
+    let Some(limit) = memory_limit else {
         return MIN_DERIVED_MAX_GUEST_MEMORY;
     };
     limit
@@ -465,6 +819,24 @@ impl fmt::Display for HostMemoryBudgets {
 mod tests {
     use super::*;
 
+    /// The pool a host with these knobs and no environment overrides installs:
+    /// one memory per core instance.
+    fn reservation_advisory(budgets: &HostMemoryBudgets, address_space: u64) -> Option<String> {
+        pool_reservation_advisory(
+            budgets.core_instances,
+            budgets.default_heap_memory,
+            address_space,
+        )
+    }
+
+    fn map_count_advisory(budgets: &HostMemoryBudgets, max_map_count: u64) -> Option<String> {
+        let mut config = wasmtime::PoolingAllocationConfig::default();
+        config.total_memories(budgets.core_instances);
+        config.total_stacks(budgets.core_instances);
+        config.total_tables(budgets.core_instances);
+        pool_map_count_advisory(&PoolTotals::of(&config), max_map_count)
+    }
+
     #[test]
     fn sizes_parse_in_binary_units() {
         assert_eq!(parse_bytes("128MiB"), Ok(128 * MIB));
@@ -489,6 +861,127 @@ mod tests {
         assert_eq!(parse_bytes("12PiB"), Ok(12 * 1024 * 1024 * 1024 * MIB));
         assert!(parse_bytes("MiB").is_err());
         assert!(parse_bytes("").is_err());
+    }
+
+    /// cgroup v1's "unlimited" is just under `u64::MAX / 2`, so the parse
+    /// lets it through; the limit must still fall back to physical memory.
+    #[test]
+    fn an_unlimited_cgroup_v1_limit_falls_back_to_physical_memory() {
+        const CGROUP_V1_UNLIMITED: &str = "9223372036854771712\n";
+        let physical = 16 * 1024 * MIB;
+
+        let cgroup = parse_cgroup_limit(CGROUP_V1_UNLIMITED);
+        assert_eq!(
+            effective_memory_limit(cgroup, Some(physical)),
+            Some(physical)
+        );
+
+        assert_eq!(parse_cgroup_limit("max\n"), None);
+        assert_eq!(effective_memory_limit(None, Some(physical)), Some(physical));
+
+        let container = 512 * MIB;
+        assert_eq!(parse_cgroup_limit("536870912\n"), Some(container));
+        assert_eq!(
+            effective_memory_limit(Some(container), Some(physical)),
+            Some(container)
+        );
+        assert_eq!(
+            effective_memory_limit(Some(container), None),
+            Some(container)
+        );
+        assert_eq!(effective_memory_limit(None, None), None);
+    }
+
+    /// Fake Linux files use `/` even when these tests run on Windows.
+    fn cgroup_fixture_path(path: &Path) -> Option<String> {
+        Some(path.to_str()?.replace('\\', "/"))
+    }
+
+    #[test]
+    fn automatic_process_limit_honors_service_and_parent_cgroups() {
+        // These are complete detector inputs, including the unbounded mount
+        // root that previously hid every service/parent limit below it.
+        for (parent, expected, process_limit) in [
+            (None, 1024 * MIB, 966_367_620),
+            (Some("536870912"), 512 * MIB, 483_183_810),
+        ] {
+            let read = |path: &Path| match cgroup_fixture_path(path)?.as_str() {
+                "/proc/self/cgroup" => Some("0::/system.slice/wash.service\n".into()),
+                "/sys/fs/cgroup/memory.max" => Some("max\n".into()),
+                "/sys/fs/cgroup/system.slice/memory.max" => parent.map(str::to_owned),
+                "/sys/fs/cgroup/system.slice/wash.service/memory.max" => {
+                    Some("1073741824\n".into())
+                }
+                _ => None,
+            };
+            let limit = detected_memory_limit_with(Some(16 * 1024 * MIB), read);
+            assert_eq!(limit, Some(expected));
+            assert_eq!(derive_max_process_memory_bytes_within(limit), process_limit);
+            assert_eq!(
+                detected_memory_limit_with(None, read),
+                Some(expected),
+                "readable cgroup limits still work without physical RAM"
+            );
+            assert_eq!(
+                detected_memory_limit_with(Some(256 * MIB), read),
+                Some(256 * MIB),
+                "cgroup limits never override a smaller physical limit"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_memory_membership_checks_ancestors_and_ignores_other_controllers() {
+        let read = |path: &Path| match cgroup_fixture_path(path)?.as_str() {
+            "/proc/self/cgroup" => Some("3:cpu,cpuacct:/unrelated\n4:memory:/tenant/wash\n".into()),
+            "/sys/fs/cgroup/memory/memory.limit_in_bytes" => Some("9223372036854771712\n".into()),
+            "/sys/fs/cgroup/memory/tenant/memory.limit_in_bytes" => Some("536870912".into()),
+            "/sys/fs/cgroup/memory/tenant/wash/memory.limit_in_bytes" => Some("1073741824".into()),
+            "/sys/fs/cgroup/memory/unrelated/memory.limit_in_bytes" => {
+                panic!("a non-memory controller must not supply a memory limit")
+            }
+            _ => None,
+        };
+        let limit = detected_memory_limit_with(Some(16 * 1024 * MIB), read);
+        assert_eq!(limit, Some(512 * MIB));
+        assert_eq!(derive_max_process_memory_bytes_within(limit), 483_183_810);
+    }
+
+    #[test]
+    fn namespace_root_and_unresolvable_membership_keep_mount_root_limits() {
+        for membership in [
+            "0::/\n",
+            "0::/../outside\n",
+            "0::/tenant/../../outside\n",
+            "0::relative\n",
+            "malformed\n",
+        ] {
+            let read = |path: &Path| match cgroup_fixture_path(path)?.as_str() {
+                "/proc/self/cgroup" => Some(membership.into()),
+                "/sys/fs/cgroup/memory.max" => Some("1073741824".into()),
+                "/sys/fs/cgroup/memory/memory.limit_in_bytes" => None,
+                unexpected => panic!("unexpected cgroup lookup {unexpected:?} for {membership:?}"),
+            };
+            let limit = detected_memory_limit_with(Some(16 * 1024 * MIB), read);
+            assert_eq!(limit, Some(1024 * MIB));
+            assert_eq!(derive_max_process_memory_bytes_within(limit), 966_367_620);
+        }
+    }
+
+    #[test]
+    fn missing_membership_and_unlimited_root_still_fall_back_to_physical_ram() {
+        let read = |path: &Path| match cgroup_fixture_path(path)?.as_str() {
+            "/sys/fs/cgroup/memory.max" => Some("max".into()),
+            "/sys/fs/cgroup/memory/memory.limit_in_bytes" => Some("9223372036854771712".into()),
+            _ => None,
+        };
+        let limit = detected_memory_limit_with(Some(16 * 1024 * MIB), read);
+        assert_eq!(limit, Some(16 * 1024 * MIB));
+        assert_eq!(
+            derive_max_process_memory_bytes_within(limit),
+            15_461_882_190
+        );
+        assert_eq!(detected_memory_limit_with(None, |_| None), None);
     }
 
     #[test]
@@ -642,46 +1135,153 @@ mod tests {
     }
 
     #[test]
-    fn the_pool_reservation_is_the_product_of_the_two_pool_knobs() {
+    fn a_slot_is_never_smaller_than_the_reservation() {
+        // A 128 MiB heap ceiling still reserves 4 GiB per slot: multiplying
+        // the ceiling by the count would report 12.5 GiB for what is 403 GiB.
         let resolved =
             HostMemoryBudgets::resolve(Some(8 * 1024 * MIB), Some(128 * MIB), Some(100)).unwrap();
-        assert_eq!(resolved.pool_reservation(), 12800 * MIB);
+        assert_eq!(pool_slot_bytes(128 * MIB), 4096 * MIB + 32 * MIB);
+        assert_eq!(
+            resolved.pool_reservation(),
+            100 * (4096 * MIB + 32 * MIB) + 32 * MIB
+        );
         assert_eq!(resolved.advisory(), None, "a modest pool needs no advisory");
     }
 
     #[test]
-    fn the_stock_defaults_sit_just_under_the_probe() {
+    fn a_heap_ceiling_past_the_reservation_is_named_as_the_cause() {
+        // wasmtime refuses this pool outright, so the advice is about the
+        // ceiling, not about how much the pool would have reserved.
+        let resolved =
+            HostMemoryBudgets::resolve(None, Some(16 * 1024 * MIB), Some(10_000)).unwrap();
+        let advisory = pool_heap_ceiling_advisory(resolved.default_heap_memory)
+            .expect("16 GiB is past the 4 GiB reservation");
+        assert!(advisory.contains("default-heap-memory 16GiB"), "{advisory}");
+        assert!(advisory.contains("4GiB or less"), "{advisory}");
+        assert_eq!(reservation_advisory(&resolved, USER_ADDRESS_SPACE), None);
+        assert_eq!(pool_heap_ceiling_advisory(4 * 1024 * MIB), None);
+        assert_eq!(pool_heap_ceiling_advisory(128 * MIB), None);
+    }
+
+    #[test]
+    fn a_small_heap_over_the_address_space_is_told_to_lower_the_count() {
+        // The trap this is here for: lowering the heap ceiling to fit more
+        // slots, and finding the reservation unchanged.
+        let resolved = HostMemoryBudgets::resolve(None, Some(64 * MIB), Some(30_000)).unwrap();
+        let advisory = reservation_advisory(&resolved, USER_ADDRESS_SPACE)
+            .expect("30,000 slots of 4 GiB are 118.6 TiB, past 90% of 128 TiB");
+        assert!(advisory.contains("may fail"), "{advisory}");
+        assert!(advisory.contains("Lower core-instances"), "{advisory}");
+        assert!(
+            advisory.contains("Lowering default-heap-memory will not help"),
+            "{advisory}"
+        );
+        assert!(advisory.contains("per slot"), "{advisory}");
+    }
+
+    #[test]
+    fn the_stock_defaults_are_named_and_quiet() {
         // Worth pinning, because it is the number nobody is told today: 4 GiB
-        // per slot across 1000 slots is 3.9 TiB — close enough to the 4 TiB the
-        // allocator is probed for that raising either knob crosses it, which is
-        // exactly why both are worth naming.
+        // and a 32 MiB guard per slot across 1000 slots is 3.9 TiB.
         let stock = HostMemoryBudgets::resolve(None, None, None).unwrap();
-        assert_eq!(stock.pool_reservation(), 4000 * 1024 * MIB);
-        assert!(stock.pool_reservation() < MAX_POOL_RESERVATION);
+        assert_eq!(
+            stock.pool_reservation(),
+            1000 * (4096 * MIB + 32 * MIB) + 32 * MIB
+        );
         assert_eq!(render_bytes(stock.pool_reservation()), "3.9TiB");
         assert_eq!(
-            stock.advisory(),
+            reservation_advisory(&stock, USER_ADDRESS_SPACE),
             None,
             "the stock configuration must not warn — it is what every host runs today"
         );
     }
 
     #[test]
-    fn an_unreservable_combination_is_reported_with_both_numbers() {
-        let resolved = HostMemoryBudgets::resolve(None, Some(16 * 1024 * MIB), Some(1000)).unwrap();
-        let advisory = resolved.advisory().expect("15.6TiB is past the probe");
+    fn a_pool_well_past_the_old_probe_is_quiet_while_it_fits() {
+        // 20,000 slots is 78.8 TiB: far past the 4 TiB the support probe maps,
+        // and comfortably inside what the process can.
+        let resolved = HostMemoryBudgets::resolve(None, None, Some(20_000)).unwrap();
+        assert_eq!(reservation_advisory(&resolved, USER_ADDRESS_SPACE), None);
+        // Under an address-space limit of 64 TiB, the same pool cannot map.
+        let advisory = reservation_advisory(&resolved, 64 * 1024 * 1024 * MIB)
+            .expect("78.8 TiB does not fit in 64 TiB");
+        assert!(advisory.contains("cannot be mapped"), "{advisory}");
+    }
+
+    #[test]
+    fn a_pool_past_the_kernels_mapping_limit_is_called_out() {
+        // 20,000 slots fit the address space but not Linux's default 65530
+        // mappings.
+        let resolved = HostMemoryBudgets::resolve(None, None, Some(20_000)).unwrap();
+        let advisory =
+            map_count_advisory(&resolved, 65_530).expect("100,000 mappings are past 65530");
+        assert!(advisory.contains("vm.max_map_count"), "{advisory}");
         assert!(
-            advisory.contains("15.6TiB"),
+            advisory.contains("58977"),
+            "names a mapping target with headroom: {advisory}"
+        );
+        assert_eq!(map_count_advisory(&resolved, 1_048_576), None);
+        let stock = HostMemoryBudgets::resolve(None, None, None).unwrap();
+        assert_eq!(map_count_advisory(&stock, 65_530), None);
+    }
+
+    #[test]
+    fn mapping_advisories_use_independent_installed_pool_totals() {
+        let mut config = wasmtime::PoolingAllocationConfig::default();
+        config.total_memories(1000);
+        config.total_stacks(40_000);
+        config.total_tables(1000);
+        let advisory = pool_map_count_advisory(&PoolTotals::of(&config), 65_530)
+            .expect("stack guard mappings alone exceed the kernel limit");
+        assert!(advisory.contains("83000 memory mappings"), "{advisory}");
+        assert!(advisory.contains("40000 stacks"), "{advisory}");
+        assert!(advisory.contains("Engine startup"), "{advisory}");
+        assert!(
+            advisory.contains("WASMTIME_POOLING_TOTAL_STACKS"),
+            "{advisory}"
+        );
+
+        config.total_stacks(1000);
+        assert!(pool_map_count_advisory(&PoolTotals::of(&config), 65_530).is_none());
+        config.total_tables(70_000);
+        let advisory = pool_map_count_advisory(&PoolTotals::of(&config), 65_530)
+            .expect("the table allowance uses its own installed count");
+        assert!(advisory.contains("74000 memory mappings"), "{advisory}");
+        assert!(
+            advisory.contains("WASMTIME_POOLING_TOTAL_TABLES"),
+            "{advisory}"
+        );
+    }
+
+    #[test]
+    fn the_address_space_limit_is_read_from_proc_limits() {
+        let unlimited = "Limit                     Soft Limit           Hard Limit           Units\n\
+                         Max address space         unlimited            unlimited            bytes\n";
+        assert_eq!(soft_address_space_limit(unlimited), None);
+        let limited = "Max address space         8589934592           unlimited            bytes\n";
+        assert_eq!(soft_address_space_limit(limited), Some(8 * 1024 * MIB));
+        assert!(usable_address_space() <= USER_ADDRESS_SPACE);
+    }
+
+    #[test]
+    fn an_unreservable_combination_is_reported_with_both_numbers() {
+        let resolved = HostMemoryBudgets::resolve(None, None, Some(35_000)).unwrap();
+        let advisory = reservation_advisory(&resolved, USER_ADDRESS_SPACE)
+            .expect("137.8 TiB is past the 128 TiB a process can map");
+        assert!(advisory.contains("cannot be mapped"), "{advisory}");
+        assert!(
+            advisory.contains("137.8TiB"),
             "names the reservation, to one decimal because it is not a round unit: {advisory}"
         );
         assert!(
-            advisory.contains("1000"),
+            advisory.contains("35000"),
             "names the instance count: {advisory}"
         );
         assert!(
             advisory.contains("default-heap-memory") && advisory.contains("core-instances"),
             "names both knobs so it is actionable: {advisory}"
         );
+        assert!(advisory.contains("Lower core-instances"), "{advisory}");
     }
 
     /// A budget set to the pod's own `resources.limits.memory` is a ceiling
@@ -738,5 +1338,31 @@ mod tests {
             HostMemoryBudgets::resolve(Some(512 * MIB), Some(2 * 1024 * MIB), Some(4)).unwrap();
         let advisory = resolved.advisory().expect("a guest can exhaust the host");
         assert!(advisory.contains("2GiB") && advisory.contains("512MiB"));
+    }
+
+    /// The knobs alone say nothing about a reservation: whether there is a
+    /// pool, and how many memories it holds, is only known once it is built.
+    #[test]
+    fn the_knobs_advisory_leaves_the_reservation_to_the_installed_pool() {
+        let resolved = HostMemoryBudgets::resolve(None, None, Some(30_000)).unwrap();
+        assert_eq!(resolved.advisory(), None);
+        assert!(reservation_advisory(&resolved, USER_ADDRESS_SPACE).is_some());
+        assert!(map_count_advisory(&resolved, 65_530).is_some());
+    }
+
+    #[test]
+    fn the_derived_process_limit_fits_the_machine() {
+        let limit = detected_memory_limit().expect("a test machine has a readable memory limit");
+        let derived = derive_max_process_memory_bytes();
+        assert!(derived < limit, "{derived} must leave room under {limit}");
+        assert_eq!(process_memory_advisory(derived), None);
+    }
+
+    #[test]
+    fn a_process_limit_past_the_machine_is_called_out() {
+        let limit = detected_memory_limit().expect("a test machine has a readable memory limit");
+        let advisory = process_memory_advisory(limit.saturating_mul(2))
+            .expect("twice the machine can never be reached");
+        assert!(advisory.contains(&render_bytes(limit)), "{advisory}");
     }
 }

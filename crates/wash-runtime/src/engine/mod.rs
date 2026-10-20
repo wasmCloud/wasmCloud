@@ -244,6 +244,8 @@ pub mod stream_payload;
 pub use instance_pool::{InstancePolicy, ReclaimPolicy};
 pub mod host_memory;
 pub(crate) mod linked_call;
+pub mod pool_usage;
+pub mod process_memory;
 mod scratch;
 pub(crate) mod store;
 pub(crate) mod trap_remediation;
@@ -269,14 +271,14 @@ struct InstalledPool {
     core_instances: u32,
     memories: u32,
     max_memory_size: u64,
+    totals: pool_usage::PoolTotals,
 }
 
 impl InstalledPool {
     /// Address space the pool reserves. Keyed on the memory count, not the
-    /// instance count.
+    /// instance count, and never less than wasmtime's reservation per slot.
     fn reservation(&self) -> u64 {
-        self.max_memory_size
-            .saturating_mul(u64::from(self.memories))
+        host_memory::pool_slab_bytes(self.max_memory_size, self.memories)
     }
 }
 
@@ -316,8 +318,8 @@ pub struct Engine {
     // wasmtime engine
     pub(crate) inner: wasmtime::Engine,
     pub(crate) cache: Cache<CacheKey, CacheValue>,
-    /// Compiles running workloads hold, consulted before the cache so a
-    /// digest still in use is never compiled twice. See [`LiveCompiles`].
+    /// Compiles running workloads hold, consulted before the cache so a live
+    /// compile can be reused after cache eviction. See [`LiveCompiles`].
     live_compiles: Arc<LiveCompiles>,
     /// Compiles that actually ran on this engine.
     ///
@@ -342,6 +344,10 @@ pub struct Engine {
     /// [`host_memory::HostMemoryBudgets::max_guest_memory`] is the cap on.
     /// Every store this engine builds carries a limiter drawing on it.
     pub(crate) guest_memory: Arc<guest_memory::GuestMemoryBudget>,
+    /// The whole process's footprint against `max_process_memory`, sampled on
+    /// its own thread. The guest budget refuses growth while it is over.
+    /// `None` when the guard was switched off.
+    process_memory: Option<Arc<process_memory::ProcessMemoryGuard>>,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
@@ -365,6 +371,9 @@ pub struct Engine {
     /// replaces it outright. Quoting the flag in a refusal that the installed
     /// ceiling caused produces advice that cannot work.
     installed_heap_memory: Option<u64>,
+    /// Every total the installed pool was built with, for
+    /// [`Engine::pool_usage`]. `None` when pooling is off.
+    pool_totals: Option<pool_usage::PoolTotals>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -526,6 +535,25 @@ impl Engine {
         &self.guest_memory
     }
 
+    /// The process's memory footprint against `max_process_memory`, for an
+    /// embedder to report, or to stop taking on work while
+    /// [`process_memory::ProcessMemoryGuard::is_over`].
+    /// `None` when the engine was built
+    /// [`without_max_process_memory`](EngineBuilder::without_max_process_memory).
+    pub fn process_memory(&self) -> Option<&Arc<process_memory::ProcessMemoryGuard>> {
+        self.process_memory.as_ref()
+    }
+
+    /// Inject admission state without the process sampler overwriting it.
+    #[cfg(all(test, feature = "washlet"))]
+    pub(crate) fn with_unsampled_admission_guard(
+        mut self,
+        guard: Arc<process_memory::ProcessMemoryGuard>,
+    ) -> Self {
+        self.process_memory = Some(guard);
+        self
+    }
+
     /// Core instances the pooling allocator was configured to admit, captured
     /// from the [`PoolingAllocationConfig`] actually installed — so it reflects
     /// the `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` override and a
@@ -537,6 +565,16 @@ impl Engine {
     /// [`new_pooling_config`]) and drift the moment either side changed.
     pub fn total_core_instances(&self) -> Option<u32> {
         self.total_core_instances
+    }
+
+    /// Every pooling allocator total against what is in use now, so an
+    /// embedder can report a host whose pool is full: its workloads still say
+    /// running while every instantiation is refused. `None` when pooling is
+    /// off. See [`pool_usage::pool_refusals`] for refusals between readings.
+    pub fn pool_usage(&self) -> Option<pool_usage::PoolUsage> {
+        let totals = self.pool_totals.as_ref()?;
+        let metrics = self.inner.pooling_allocator_metrics()?;
+        Some(pool_usage::PoolUsage::read(&metrics, totals))
     }
 
     /// Creates a new [`EngineBuilder`] for configuring an engine.
@@ -1143,6 +1181,8 @@ pub struct EngineBuilder {
     allowed_host_paths: Vec<PathBuf>,
     scratch_root: Option<PathBuf>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
+    max_process_memory_bytes: Option<u64>,
+    max_process_memory_off: bool,
     guest_memory_mode: guest_memory::GuestMemoryMode,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
@@ -1196,6 +1236,34 @@ impl EngineBuilder {
     #[must_use]
     pub fn with_socket_policy(mut self, policy: Arc<crate::sockets::policy::SocketPolicy>) -> Self {
         self.socket_policy = Some(policy);
+        self
+    }
+
+    /// Cap the whole process's memory footprint, guests and host together.
+    ///
+    /// Past it, guest memory growth and new instances are refused until the
+    /// footprint falls back (see [`process_memory`]). Unset, it is derived:
+    /// 90% of the cgroup limit, or of physical memory where there is none, so
+    /// a host never sets out to use more memory than the machine has.
+    ///
+    /// Overrides an earlier [`Self::without_max_process_memory`].
+    #[must_use]
+    pub fn with_max_process_memory_bytes(mut self, bytes: u64) -> Self {
+        self.max_process_memory_bytes = Some(bytes);
+        self.max_process_memory_off = false;
+        self
+    }
+
+    /// Hold the process to no footprint at all: no sampler runs, and only the
+    /// guest budget and the kernel limit memory. For an embedder that bounds
+    /// the process some other way, or a host whose footprint reading cannot
+    /// be trusted.
+    ///
+    /// Overrides an earlier [`Self::with_max_process_memory_bytes`].
+    #[must_use]
+    pub fn without_max_process_memory(mut self) -> Self {
+        self.max_process_memory_bytes = None;
+        self.max_process_memory_off = true;
         self
     }
 
@@ -1390,20 +1458,42 @@ impl EngineBuilder {
             .or_else(|| getenv::<bool>("WASMTIME_POOLING"))
             .unwrap_or(!has_custom_config);
 
+        // Read once: each of the derivations and checks below needs it, and
+        // where there is no cgroup it means asking the OS for physical memory.
+        let memory_limit = host_memory::detected_memory_limit();
         // Resolved before the pooling config, which both of its knobs feed.
-        let host_memory = self.host_memory.unwrap_or_default();
+        let host_memory = self
+            .host_memory
+            .unwrap_or_else(|| host_memory::HostMemoryBudgets::derived_within(memory_limit));
         // Reads the resolved budgets, not the installed pool: it advises on the
-        // knobs as configured.
+        // knobs as configured. What the pool reserves is judged below, once
+        // the pool that is actually installed is known.
         if let Some(advisory) = host_memory.advisory() {
             tracing::warn!("{advisory}");
         }
         // Only when the budget is a real ceiling: an over-large budget the host
         // merely counts against costs nothing.
         if self.guest_memory_mode == guest_memory::GuestMemoryMode::Enforce
-            && let Some(advisory) = host_memory.enforcement_advisory()
+            && let Some(advisory) = host_memory.enforcement_advisory_within(memory_limit)
         {
             tracing::warn!("{advisory}");
         }
+        let max_process_memory_bytes = (!self.max_process_memory_off).then(|| {
+            self.max_process_memory_bytes.unwrap_or_else(|| {
+                host_memory::derive_max_process_memory_bytes_within(memory_limit)
+            })
+        });
+        // Only for a limit the operator named: a derived one is a share of the
+        // very limit this checks against.
+        if !self.max_process_memory_off
+            && let Some(bytes) = self.max_process_memory_bytes
+            && let Some(advisory) = host_memory::process_memory_advisory_within(bytes, memory_limit)
+        {
+            tracing::warn!("{advisory}");
+        }
+        // What the startup line says the process is held to.
+        let max_process_memory =
+            max_process_memory_bytes.map_or_else(|| "off".to_string(), host_memory::render_bytes);
 
         // The pooling allocator can be more efficient for workloads with many short-lived instances.
         // Read back from the installed pool: the environment and a
@@ -1421,6 +1511,7 @@ impl EngineBuilder {
                 core_instances: pooling.get_total_core_instances(),
                 memories: pooling.get_total_memories(),
                 max_memory_size: u64::try_from(pooling.get_max_memory_size()).unwrap_or(u64::MAX),
+                totals: pool_usage::PoolTotals::of(&pooling),
             });
             config.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pooling));
         } else if use_pooling_allocator {
@@ -1428,21 +1519,34 @@ impl EngineBuilder {
         }
         let total_core_instances = installed_pool.map(|pool| pool.core_instances);
         let installed_heap_memory = installed_pool.map(|pool| pool.max_memory_size);
+        let pool_totals = installed_pool.map(|pool| pool.totals);
+        // Against the pool that was installed, not the knobs: the environment
+        // or a caller's own pooling config can move its memory count and slot
+        // size, and with no pool there is no reservation to warn about.
+        if let Some(pool) = installed_pool {
+            for advisory in host_memory::pool_advisories(&pool.totals, pool.max_memory_size) {
+                tracing::warn!("{advisory}");
+            }
+        }
 
         // Reported here so every embedder says what it built. The reservation
-        // is `total_memories x max_memory_size`, not the instance count.
+        // is `total_memories x slot_size`, not the instance count, and the slot
+        // does not shrink with the heap ceiling.
         match installed_pool {
             Some(pool) => tracing::info!(
+                %max_process_memory,
                 max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
                 guest_memory_mode = self.guest_memory_mode.as_str(),
                 default_heap_memory = %host_memory::render_bytes(pool.max_memory_size),
                 core_instances = pool.core_instances,
                 memories = pool.memories,
+                slot_size = %host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size)),
                 pool_reservation = %host_memory::render_bytes(pool.reservation()),
                 "host memory resolved"
             ),
             // No pool, so no reservation and no installed ceiling to name.
             None => tracing::info!(
+                %max_process_memory,
                 max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
                 guest_memory_mode = self.guest_memory_mode.as_str(),
                 pooling = false,
@@ -1508,8 +1612,43 @@ impl EngineBuilder {
             proposal.apply(&mut config);
         }
 
-        let inner = wasmtime::Engine::new(&config)?;
+        // The pool maps its whole slab here, so a pool too large for the
+        // address space fails now, with wasmtime naming only the mapping. Say
+        // which numbers produced it. A heap ceiling past the reservation is
+        // refused here too, whatever the slot count, so that is named instead.
+        let inner = wasmtime::Engine::new(&config).map_err(|e| match installed_pool {
+            Some(pool) if pool.max_memory_size > host_memory::WASMTIME_MEMORY_RESERVATION => e
+                .context(format!(
+                    "building the engine failed with a pooling allocator whose heap ceiling \
+                     (default-heap-memory) of {} is past wasmtime's {} memory reservation, \
+                     which the pooling allocator refuses; set default-heap-memory to {} or less",
+                    host_memory::render_bytes(pool.max_memory_size),
+                    host_memory::render_bytes(host_memory::WASMTIME_MEMORY_RESERVATION),
+                    host_memory::render_bytes(host_memory::WASMTIME_MEMORY_RESERVATION),
+                )),
+            Some(pool) => e.context(format!(
+                "building the engine failed with a pooling allocator reserving {} of address \
+                 space ({} memories of {} each) out of the {} this process can map; if the \
+                 pool is the cause, lower core-instances or WASMTIME_POOLING_TOTAL_MEMORIES",
+                host_memory::render_bytes(pool.reservation()),
+                pool.memories,
+                host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size)),
+                host_memory::render_bytes(host_memory::usable_address_space()),
+            )),
+            None => e,
+        })?;
         spawn_epoch_ticker(&inner)?;
+        let process_memory = match max_process_memory_bytes {
+            Some(limit) => {
+                let guard = Arc::new(process_memory::ProcessMemoryGuard::new(limit));
+                guard.spawn_sampler()?;
+                process_memory::ProcessMemoryGuard::register_metrics(
+                    &opentelemetry::global::meter("wash-runtime"),
+                );
+                Some(guard)
+            }
+            None => None,
+        };
         let cache = Cache::builder()
             .max_capacity(self.compilation_cache_size.unwrap_or(100))
             .time_to_idle(
@@ -1552,16 +1691,22 @@ impl EngineBuilder {
                 // asked for it: the budget must not charge for growth the pool
                 // is going to refuse. The same figure `explain_compile_failure`
                 // measures against, so they cannot drift apart.
-                match installed_heap_memory {
+                let budget = match installed_heap_memory {
                     Some(ceiling) => budget.with_heap_ceiling(ceiling),
+                    None => budget,
+                };
+                match &process_memory {
+                    Some(guard) => budget.with_process_guard(Arc::clone(guard)),
                     None => budget,
                 }
                 .into_metered()
             },
+            process_memory,
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
             total_core_instances,
             installed_heap_memory,
+            pool_totals,
         })
     }
 }

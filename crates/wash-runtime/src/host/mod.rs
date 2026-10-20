@@ -983,11 +983,20 @@ impl Host {
         Ok(monitor.cpu_usage().global_usage)
     }
 
+    /// Recheck after queued work obtains a permit and before expensive phases.
+    /// Reserving an ID earlier is still necessary for stop/status correctness.
+    pub(crate) fn check_start_memory(&self) -> Result<(), String> {
+        self.engine
+            .process_memory()
+            .map_or(Ok(()), |guard| guard.admit_start())
+    }
+
     async fn workload_start_inner(
         &self,
         request: WorkloadStartRequest,
         cleanup: &crate::engine::workload::WorkloadResources,
     ) -> anyhow::Result<ResolvedWorkload> {
+        self.check_start_memory().map_err(anyhow::Error::msg)?;
         let service_present = request.workload.service.is_some();
         let workload_id = request.workload_id.clone();
 
@@ -1003,6 +1012,10 @@ impl Host {
         let span = tracing::Span::current();
         let unresolved_workload = tokio::task::spawn_blocking(move || {
             let _entered = span.enter();
+            // The blocking executor can queue this after the check above.
+            if let Some(guard) = engine.process_memory() {
+                guard.admit_start().map_err(anyhow::Error::msg)?;
+            }
             engine.initialize_workload(&init_id, workload)
         })
         .await
@@ -1055,6 +1068,11 @@ impl HostApi for Host {
         // different questions: the monitor says how much memory this process
         // holds, the budget says how much of it guests asked for.
         self.engine.guest_memory().report();
+        // RSS from the monitor understates a process under pressure; this
+        // counts swapped and compressed pages too.
+        if let Some(process_memory) = self.engine.process_memory() {
+            process_memory.report();
+        }
 
         let (os_arch, os_name, os_kernel) = self.get_system_info().await;
         let (system_memory_total, system_memory_free) = self
@@ -1414,6 +1432,13 @@ impl WorkloadReservation for Host {
             // the caller as an error.
             debug!(workload_id, reason = message, "refused to start workload");
             return Err(message);
+        }
+        // After the duplicate check, so a replayed start still reads as the
+        // workload already running rather than as a refusal. The guard logs
+        // its own refusals, rate-limited: a host past its limit can be asked
+        // for thousands of starts a second.
+        if let Some(guard) = self.engine.process_memory() {
+            guard.admit_start()?;
         }
         workloads.insert(workload_id.to_string(), HostWorkload::Starting(reservation));
         Ok(reservation)

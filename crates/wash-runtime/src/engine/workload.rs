@@ -976,7 +976,10 @@ impl ResolvedWorkload {
             .await?
             .build()
             .await?;
-        let instance = pre.instantiate_async(&mut store).await?;
+        let instance = pre
+            .instantiate_async(&mut store)
+            .await
+            .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e))?;
         let handle = tokio::spawn(async move {
             loop {
                 if let Err(e) = instance.wasi_cli_run().call_run(&mut store).await {
@@ -1023,7 +1026,9 @@ impl ResolvedWorkload {
             let mut store = recipe.build().await?;
             let handle = tokio::spawn(async move {
                 loop {
-                    let instance = match pre.instantiate_async(&mut store).await {
+                    let instance = match pre.instantiate_async(&mut store).await.map_err(|e| {
+                        crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                    }) {
                         Ok(i) => i,
                         Err(e) => {
                             error!(err = %e, "failed to instantiate P3 service");
