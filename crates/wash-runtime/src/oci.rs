@@ -669,7 +669,16 @@ async fn pull_uncoalesced(
             // Never explicitly requests offline reuse. The cache key covers
             // configured extra roots, but cannot encode all native trust-store
             // policies or changes to the registry's authorization decisions.
+            // Entries are shared by user, so the password must be the one the
+            // registry last accepted for this entry.
             if *pull_policy == OciPullPolicy::Never {
+                if !cache_manager.credential_matches(reference).await {
+                    bail!(
+                        "component is cached for this user under other credentials, and pull \
+                         policy 'Never' cannot check these with the registry; pull it once \
+                         with another policy"
+                    );
+                }
                 return Ok(Arc::new(Pulled {
                     bytes: component_data.into(),
                     digest,
@@ -684,6 +693,13 @@ async fn pull_uncoalesced(
                 .await?;
 
             if digest == fetched_digest {
+                // The registry has just accepted these credentials, e.g. a
+                // rotated password: let Never reuse the entry with them.
+                if !cache_manager.credential_matches(reference).await
+                    && let Err(error) = cache_manager.record_credential(reference).await
+                {
+                    warn!(%error, "failed to record revalidated OCI cache credentials");
+                }
                 return Ok(Arc::new(Pulled {
                     bytes: component_data.into(),
                     digest,

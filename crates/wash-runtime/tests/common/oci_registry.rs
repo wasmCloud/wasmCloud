@@ -64,6 +64,8 @@ pub struct Registry {
     pub image: Arc<RwLock<Image>>,
     pub unavailable: Arc<AtomicBool>,
     pub requests: Arc<AtomicUsize>,
+    /// The `authorization` header the registry accepts.
+    pub authorization: Arc<RwLock<String>>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -79,24 +81,30 @@ impl Registry {
         let image = Arc::new(RwLock::new(Image::new("(component)")));
         let unavailable = Arc::new(AtomicBool::new(false));
         let requests = Arc::new(AtomicUsize::new(0));
+        let authorization = Arc::new(RwLock::new(String::from("Basic dXNlcjpzZWNyZXQ=")));
         let task = tokio::spawn({
             let image = Arc::clone(&image);
             let requests = Arc::clone(&requests);
             let unavailable = Arc::clone(&unavailable);
+            let authorization = Arc::clone(&authorization);
             async move {
                 while let Ok((stream, _)) = listener.accept().await {
                     let image = Arc::clone(&image);
                     let requests = Arc::clone(&requests);
                     let unavailable = Arc::clone(&unavailable);
+                    let authorization = Arc::clone(&authorization);
                     let acceptor = acceptor.clone();
                     tokio::spawn(async move {
                         match acceptor {
                             Some(acceptor) => {
                                 if let Ok(stream) = acceptor.accept(stream).await {
-                                    serve(stream, image, requests, unavailable).await;
+                                    serve(stream, image, requests, unavailable, authorization)
+                                        .await;
                                 }
                             }
-                            None => serve(stream, image, requests, unavailable).await,
+                            None => {
+                                serve(stream, image, requests, unavailable, authorization).await
+                            }
                         }
                     });
                 }
@@ -107,6 +115,7 @@ impl Registry {
             image,
             unavailable,
             requests,
+            authorization,
             task,
         }
     }
@@ -131,6 +140,7 @@ async fn serve(
     image: Arc<RwLock<Image>>,
     requests: Arc<AtomicUsize>,
     unavailable: Arc<AtomicBool>,
+    authorization: Arc<RwLock<String>>,
 ) {
     let service = service_fn(move |req| {
         requests.fetch_add(1, Ordering::SeqCst);
@@ -140,7 +150,7 @@ async fn serve(
                 .body(Full::new(Bytes::new()))
                 .unwrap()
         } else {
-            answer(req, &image.read().unwrap())
+            answer(req, &image.read().unwrap(), &authorization.read().unwrap())
         };
         std::future::ready(Ok::<_, Infallible>(response))
     });
@@ -149,13 +159,13 @@ async fn serve(
         .await;
 }
 
-fn answer(req: Request<Incoming>, image: &Image) -> Response<Full<Bytes>> {
+fn answer(req: Request<Incoming>, image: &Image, authorization: &str) -> Response<Full<Bytes>> {
     let mut response = Response::builder().header("connection", "close");
     if req
         .headers()
         .get("authorization")
         .and_then(|v| v.to_str().ok())
-        != Some("Basic dXNlcjpzZWNyZXQ=")
+        != Some(authorization)
     {
         return response
             .status(StatusCode::UNAUTHORIZED)

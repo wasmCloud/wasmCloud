@@ -2,7 +2,7 @@ use super::{AuthId, TrustId};
 use anyhow::{Context, Result, bail};
 use hmac::{Hmac, Mac};
 use oci_client::secrets::RegistryAuth;
-use sha2::Sha256;
+use sha2::{Digest as _, Sha256};
 use std::{
     io::Write as _,
     path::{Path, PathBuf},
@@ -16,10 +16,43 @@ const KEY_FILE: &str = "cache.key";
 /// Prefix of every entry this version reads and writes.
 const ENTRY_PREFIX: &str = "v3-";
 
+/// Who an entry was fetched as: the registry user, not the password that
+/// proved it, so rotating a password keeps the user's entries. `Never` also
+/// needs the password that last authenticated them: see
+/// [`CacheManager::credential_matches`].
+/// A different user, or anonymous access, has its own entries. A bearer
+/// token names no user, so the token is its own scope.
+struct Principal([u8; 32]);
+
+impl Principal {
+    fn of(auth: &RegistryAuth) -> Self {
+        let mut hasher = Sha256::new();
+        // Length-prefixed, so no two different principals hash the same bytes.
+        let mut field = |bytes: &[u8]| {
+            hasher.update((bytes.len() as u64).to_le_bytes());
+            hasher.update(bytes);
+        };
+        match auth {
+            RegistryAuth::Anonymous => field(b"anonymous"),
+            RegistryAuth::Basic(user, _password) => {
+                field(b"basic");
+                field(user.as_bytes());
+            }
+            RegistryAuth::Bearer(token) => {
+                field(b"bearer");
+                field(token.as_bytes());
+            }
+        }
+        Self(hasher.finalize().into())
+    }
+}
+
 /// Cache manager for OCI artifacts
 pub(super) struct CacheManager {
     cache_dir: PathBuf,
-    auth: AuthId,
+    principal: Principal,
+    /// The full credentials, password included, for [`Self::credential_proof`].
+    credential: AuthId,
     insecure: bool,
     trust: TrustId,
     /// HMAC-SHA256 keyed with the cache root's secret, cloned per entry name.
@@ -27,7 +60,7 @@ pub(super) struct CacheManager {
 }
 
 impl CacheManager {
-    /// Offline reuse requires the credentials, transport and extra roots that
+    /// Offline reuse requires the registry user, transport and extra roots that
     /// populated the entry. Older layouts cannot establish that provenance.
     ///
     /// Creates the cache root's key on first use.
@@ -47,7 +80,8 @@ impl CacheManager {
             .map_err(|err| anyhow::anyhow!("invalid OCI cache key: {err}"))?;
         Ok(Self {
             cache_dir,
-            auth: AuthId::of(auth),
+            principal: Principal::of(auth),
+            credential: AuthId::of(auth),
             insecure,
             trust,
             mac,
@@ -57,12 +91,12 @@ impl CacheManager {
     /// Get the cache directory for a given OCI reference
     ///
     /// Named by an HMAC keyed with the cache root's secret: the name derives
-    /// from the credentials, and an unkeyed hash of them would let anyone who
-    /// can list the directory test password guesses offline.
+    /// from the registry user or bearer token, and an unkeyed hash would let
+    /// anyone who can list the directory test guesses at them offline.
     pub(super) fn get_cache_dir(&self, reference: &str) -> PathBuf {
         let mut mac = self.mac.clone();
         mac.update(b"wash-oci-cache-v3\0");
-        mac.update(&self.auth.0);
+        mac.update(&self.principal.0);
         mac.update(&[u8::from(self.insecure)]);
         mac.update(&self.trust.0);
         mac.update(reference.as_bytes());
@@ -74,6 +108,41 @@ impl CacheManager {
     /// a reader cannot pair different pulls. Older two-file entries are ignored.
     pub(super) fn get_entry_path(&self, reference: &str) -> PathBuf {
         self.get_cache_dir(reference).join("entry")
+    }
+
+    /// Keyed like entry names, so the file holding it does not let anyone who
+    /// can read the cache test password guesses offline.
+    fn credential_proof(&self) -> String {
+        let mut mac = self.mac.clone();
+        mac.update(b"wash-oci-cache-credential-v1\0");
+        mac.update(&self.credential.0);
+        format!("{:x}", mac.finalize().into_bytes())
+    }
+
+    fn get_credential_path(&self, reference: &str) -> PathBuf {
+        self.get_cache_dir(reference).join("credential")
+    }
+
+    /// Whether these credentials, password included, are the ones that last
+    /// fetched or revalidated the entry. Entries are shared by everyone
+    /// presenting the same user, so `Never`, which cannot ask the registry,
+    /// needs this to refuse a wrong password. A rotated password passes once a
+    /// pull that asks the registry has revalidated the entry with it.
+    pub(super) async fn credential_matches(&self, reference: &str) -> bool {
+        tokio::fs::read_to_string(self.get_credential_path(reference))
+            .await
+            .is_ok_and(|proof| proof == self.credential_proof())
+    }
+
+    /// Record that these credentials have just been accepted by the registry
+    /// for the entry, without rewriting its bytes.
+    pub(super) async fn record_credential(&self, reference: &str) -> Result<()> {
+        write_replacing(
+            &self.get_cache_dir(reference),
+            "credential",
+            self.credential_proof().into_bytes(),
+        )
+        .await
     }
 
     /// Check if an artifact is cached.
@@ -120,7 +189,8 @@ impl CacheManager {
         entry.extend_from_slice(digest.as_bytes());
         entry.push(b'\n');
         entry.extend_from_slice(data);
-        write_replacing(&cache_dir, "entry", entry).await
+        write_replacing(&cache_dir, "entry", entry).await?;
+        self.record_credential(reference).await
     }
 }
 
@@ -373,7 +443,7 @@ mod tests {
         let leftovers: Vec<_> = std::fs::read_dir(cache.get_cache_dir(reference))
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
-            .filter(|name| name != "entry")
+            .filter(|name| name != "entry" && name != "credential")
             .collect();
         assert!(leftovers.is_empty(), "temporary files left: {leftovers:?}");
     }
@@ -460,7 +530,7 @@ mod tests {
     }
 
     /// A known answer for the whole disk-key message, generated independently
-    /// with Python's hmac/hashlib. Opening the cache also exercises HMAC setup
+    /// with OpenSSL. Opening the cache also exercises HMAC setup
     /// with the dependency's default features disabled, as in normal builds.
     #[tokio::test]
     async fn cache_names_match_the_keyed_v3_scope() {
@@ -477,7 +547,58 @@ mod tests {
         assert_eq!(
             cache.get_cache_dir("registry.invalid/ns/component:v1"),
             dir.path()
-                .join("v3-0d1b26c905bf9add4300c5afdff9ee3afedf8ae92ff2d556afe5949808d14897")
+                .join("v3-932821c7eb947a9643db96c9af9777d2429bbb1586b727d77bda39c0c45672cd")
+        );
+    }
+
+    /// A password rotation keeps the user's entries; another user, or
+    /// anonymous access, never reads them.
+    #[tokio::test]
+    async fn entries_are_scoped_by_user_not_password() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let open = |auth: RegistryAuth| {
+            let dir = dir.path().to_path_buf();
+            async move {
+                CacheManager::open(dir, &auth, false, TrustId([0; 32]))
+                    .await
+                    .unwrap()
+            }
+        };
+        let basic = |user: &str, password: &str| RegistryAuth::Basic(user.into(), password.into());
+        let reference = "registry/ns/c:1";
+        open(basic("alice", "old"))
+            .await
+            .write_to_cache(reference, b"bytes", "sha256:aa")
+            .await
+            .unwrap();
+
+        let rotated = open(basic("alice", "rotated")).await;
+        assert!(rotated.is_cached(reference).await);
+        // Only the password the registry last accepted passes offline.
+        assert!(!rotated.credential_matches(reference).await);
+        rotated.record_credential(reference).await.unwrap();
+        assert!(rotated.credential_matches(reference).await);
+        assert!(
+            !open(basic("alice", "old"))
+                .await
+                .credential_matches(reference)
+                .await
+        );
+        let proof = std::fs::read_to_string(rotated.get_credential_path(reference)).unwrap();
+        assert!(!proof.contains("rotated"));
+
+        assert!(!open(basic("bob", "old")).await.is_cached(reference).await);
+        assert!(
+            !open(RegistryAuth::Anonymous)
+                .await
+                .is_cached(reference)
+                .await
+        );
+        assert!(
+            !open(RegistryAuth::Bearer("alice".into()))
+                .await
+                .is_cached(reference)
+                .await
         );
     }
 
