@@ -133,6 +133,7 @@ func NewEmbeddedOperator(
 		Recorder:          mgr.GetEventRecorder("workload-controller"),
 		OperatorNamespace: cfg.Namespace,
 		AllowSharedHosts:  cfg.AllowSharedHosts,
+		EvictionLimiter:   runtime_controllers.NewEvictionLimiter(),
 	}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}

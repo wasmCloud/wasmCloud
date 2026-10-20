@@ -7,6 +7,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -64,8 +65,18 @@ var _ = BeforeSuite(func() {
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Bus:    testHost,
+		// Isolation on, the strictest mode: placement and eviction both check
+		// Environments, which is why fakeHost is registered below.
+		AllowSharedHosts: false,
 	}).SetupWithManager(mgr)).To(Succeed())
 	testCache = mgr.GetCache()
+
+	// fakeHost's Host, in the Environment of the Workloads pinned to it.
+	Expect(k8sClient.Create(context.Background(), &runtimev1alpha1.Host{
+		ObjectMeta:  metav1.ObjectMeta{Name: testHostID, Namespace: "default"},
+		HostID:      testHostID,
+		Environment: "default",
+	})).To(Succeed())
 
 	var mgrCtx context.Context
 	mgrCtx, cancelMgr = context.WithCancel(context.Background())

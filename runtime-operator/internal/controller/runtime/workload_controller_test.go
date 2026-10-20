@@ -3,12 +3,16 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/encoding/protojson"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -287,6 +291,151 @@ func TestHostSelectionWaitsOnPinnedHostBeingDeleted(t *testing.T) {
 	}
 }
 
+// Pinning skips findFreeHost, so it must apply the Environment rule itself:
+// with sharing disabled, spec.hostId cannot reach another tenant's host.
+func TestHostSelectionHoldsPinnedHostToEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		shared      bool
+		environment string
+		registered  bool
+		wantPlaced  bool
+		wantEvent   string
+	}{
+		{name: "other tenant", environment: "tenant-b", registered: true, wantEvent: "CrossEnvironmentSchedulingDenied"},
+		{name: "own tenant", environment: "tenant-a", registered: true, wantPlaced: true},
+		{name: "unregistered", environment: "tenant-a", wantEvent: "PinnedHostNotRegistered"},
+		{name: "shared hosts", shared: true, environment: "tenant-b", registered: true, wantPlaced: true},
+	} {
+		var objs []client.Object
+		if tc.registered {
+			objs = append(objs, &runtimev1alpha1.Host{
+				ObjectMeta:  metav1.ObjectMeta{Name: "pinned", Namespace: testNamespace},
+				HostID:      testHeartbeatHostID,
+				Environment: tc.environment,
+			})
+		}
+		recorder := events.NewFakeRecorder(4)
+		r := &WorkloadReconciler{
+			Client:            newWorkloadClient(t, objs...),
+			Recorder:          recorder,
+			OperatorNamespace: testNamespace,
+			AllowSharedHosts:  tc.shared,
+		}
+		workload := &runtimev1alpha1.Workload{
+			ObjectMeta: metav1.ObjectMeta{Name: "pinned", Namespace: "tenant-a"},
+		}
+		workload.Spec.HostID = testHeartbeatHostID
+		workload.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadConditionConfig))
+
+		err := r.reconcileHostSelection(context.Background(), workload)
+		if placed := workload.Status.HostID == testHeartbeatHostID; placed != tc.wantPlaced {
+			t.Errorf("%s: placed = %v (err %v), want %v", tc.name, placed, err, tc.wantPlaced)
+		}
+		if tc.wantPlaced && workload.Status.Environment != tc.environment {
+			t.Errorf("%s: Environment = %q, want %q", tc.name, workload.Status.Environment, tc.environment)
+		}
+		select {
+		case event := <-recorder.Events:
+			if tc.wantEvent == "" || !strings.Contains(event, tc.wantEvent) {
+				t.Errorf("%s: unexpected event %q", tc.name, event)
+			}
+		default:
+			if tc.wantEvent != "" {
+				t.Errorf("%s: no %s event", tc.name, tc.wantEvent)
+			}
+		}
+	}
+}
+
+// A workload placed before the Environment rule covered it, pinned or before
+// allowSharedHosts was turned off, is stopped there and selected again.
+func TestHostSelectionEvictsPlacedWorkloadOutsideEnvironment(t *testing.T) {
+	stopped, err := protojson.Marshal(&runtimev2.WorkloadStopResponse{
+		WorkloadStatus: &runtimev2.WorkloadStatus{WorkloadId: testWorkloadUID},
+	})
+	if err != nil {
+		t.Fatalf("marshal stop response: %v", err)
+	}
+	for _, tc := range []struct {
+		name        string
+		shared      bool
+		environment string
+		stopErr     error
+		limited     bool
+		wantEvicted bool
+		wantStop    bool
+	}{
+		{name: "other tenant", environment: "tenant-b", wantEvicted: true, wantStop: true},
+		{name: "stop fails", environment: "tenant-b", stopErr: errors.New("nats: timeout"), wantStop: true},
+		{name: "paced", environment: "tenant-b", limited: true},
+		{name: "own tenant", environment: "tenant-a"},
+		{name: "shared hosts", shared: true, environment: "tenant-b"},
+	} {
+		host := &runtimev1alpha1.Host{
+			ObjectMeta:  metav1.ObjectMeta{Name: "placed", Namespace: testNamespace},
+			HostID:      testHeartbeatHostID,
+			Environment: tc.environment,
+		}
+		host.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
+		bus := &mockBus{reply: &wasmbus.Message{Data: stopped}, err: tc.stopErr}
+		recorder := events.NewFakeRecorder(4)
+		r := &WorkloadReconciler{
+			Client:            newWorkloadClient(t, host),
+			Bus:               bus,
+			Recorder:          recorder,
+			OperatorNamespace: testNamespace,
+			AllowSharedHosts:  tc.shared,
+		}
+		if tc.limited {
+			r.EvictionLimiter = rate.NewLimiter(0, 0)
+		}
+		workload := &runtimev1alpha1.Workload{
+			ObjectMeta: metav1.ObjectMeta{Name: "placed", Namespace: "tenant-a", UID: testWorkloadUID},
+		}
+		workload.Status.HostID = testHeartbeatHostID
+		workload.Status.WorkloadID = testWorkloadUID
+		workload.Status.SetConditions(
+			condition.ReadyCondition(runtimev1alpha1.WorkloadConditionPlacement),
+			condition.ReadyCondition(runtimev1alpha1.WorkloadConditionSync),
+			condition.ReadyCondition(condition.TypeReady),
+		)
+
+		err := r.reconcileHostSelection(context.Background(), workload)
+		if evicted := workload.Status.HostID == ""; evicted != tc.wantEvicted {
+			t.Errorf("%s: evicted = %v (err %v), want %v", tc.name, evicted, err, tc.wantEvicted)
+		}
+		if tc.wantEvicted && workload.Status.WorkloadID != "" {
+			t.Errorf("%s: kept WorkloadID %q after eviction", tc.name, workload.Status.WorkloadID)
+		}
+		// Nothing after HostSelection may still say the stopped workload runs.
+		if tc.wantEvicted && !workload.Status.AnyUnknown(condition.TypeReady) {
+			t.Errorf("%s: Ready = %s after eviction", tc.name, workload.Status.GetCondition(condition.TypeReady).Status)
+		}
+		if tc.limited && err == nil {
+			t.Errorf("%s: a paced eviction reported nothing", tc.name)
+		}
+		if stopSent := bus.gotSubject != ""; stopSent != tc.wantStop {
+			t.Errorf("%s: stop sent = %v, want %v", tc.name, stopSent, tc.wantStop)
+		}
+		if (err != nil) != (tc.wantStop || tc.limited) {
+			t.Errorf("%s: err = %v", tc.name, err)
+		}
+		// A host that did not answer is not asked again within the interval.
+		if tc.stopErr != nil {
+			bus.gotSubject = ""
+			again := r.reconcileHostSelection(context.Background(), workload)
+			if bus.gotSubject != "" || !condition.IsStatusUnknown(again) {
+				t.Errorf("%s: retried the stop at once (sent %q, err %v)", tc.name, bus.gotSubject, again)
+			}
+		}
+		// Recorded once the stop goes through, not on each failed attempt.
+		if got := drainEvents(recorder); tc.wantEvicted != (len(got) == 1 && strings.Contains(got[0], "CrossEnvironmentSchedulingDenied")) {
+			t.Errorf("%s: events = %q", tc.name, got)
+		}
+	}
+}
+
 func deletingHost(hostID string) *runtimev1alpha1.Host {
 	return &runtimev1alpha1.Host{
 		ObjectMeta: metav1.ObjectMeta{
@@ -397,5 +546,116 @@ func TestFinalizeGivesUpFailedStopWhenHostIsGone(t *testing.T) {
 
 	if err := r.finalize(context.Background(), placedWorkload()); err != nil {
 		t.Fatalf("finalize: %v", err)
+	}
+}
+
+// A blip stalls a host's evictions for one stop timeout; only failures in a row
+// stretch it, up to a reconcile interval, and an answer clears it.
+func TestStalledHostsBackOff(t *testing.T) {
+	var s stalledHosts
+	if s.stalled("h") {
+		t.Fatal("a host that never failed is stalled")
+	}
+	waits := []time.Duration{}
+	for range 5 {
+		s.failed("h")
+		waits = append(waits, time.Until(s.stalls["h"].until).Round(time.Second))
+	}
+	want := []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second, 30 * time.Second, 30 * time.Second}
+	for i := range want {
+		if waits[i] != want[i] {
+			t.Fatalf("waits = %v, want %v", waits, want)
+		}
+	}
+	if !s.stalled("h") {
+		t.Fatal("a failing host is not stalled")
+	}
+	s.answered("h")
+	if s.stalled("h") {
+		t.Fatal("an answer did not clear the stall")
+	}
+	// A host whose stall ended long ago, such as one since removed, is
+	// forgotten the next time any host fails.
+	s.stalls["removed"] = hostStall{failures: 3, until: time.Now().Add(-2 * workloadReconcileInterval)}
+	s.failed("other")
+	if _, kept := s.stalls["removed"]; kept {
+		t.Error("a long-expired stall was kept")
+	}
+}
+
+// Eviction gives up on a stop only for a host known to have failed, and only
+// the first workload there spends a stop timeout: the rest are dropped without
+// asking. A host that is merely not reporting may still run its workloads, so
+// they are kept until a stop goes through.
+func TestEvictionGivesUpOnlyOnFailedHost(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		ready       condition.Condition
+		wantDropped bool
+	}{
+		{name: "failed", ready: condition.ErrorCondition(condition.TypeReady, "Reconcile", errors.New("host has not reported recently")), wantDropped: true},
+		{name: "not reporting", ready: condition.UnknownCondition(condition.TypeReady, "Reconcile", "host is not reporting")},
+	} {
+		host := &runtimev1alpha1.Host{
+			ObjectMeta:  metav1.ObjectMeta{Name: "quiet", Namespace: testNamespace},
+			HostID:      testHeartbeatHostID,
+			Environment: "tenant-b",
+		}
+		host.Status.SetConditions(tc.ready)
+		bus := &mockBus{err: errors.New("nats: no responders available for request")}
+		r := &WorkloadReconciler{Client: newWorkloadClient(t, host), Bus: bus, OperatorNamespace: testNamespace}
+		placed := func(name string) *runtimev1alpha1.Workload {
+			w := &runtimev1alpha1.Workload{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-a", UID: types.UID(name)},
+			}
+			w.Status.HostID = testHeartbeatHostID
+			return w
+		}
+
+		first := placed("first")
+		_ = r.reconcileHostSelection(context.Background(), first)
+		if dropped := first.Status.HostID == ""; dropped != tc.wantDropped || bus.gotSubject == "" {
+			t.Errorf("%s: first dropped = %v, stop sent %q; want dropped = %v after one try",
+				tc.name, dropped, bus.gotSubject, tc.wantDropped)
+		}
+
+		bus.gotSubject = ""
+		second := placed("second")
+		_ = r.reconcileHostSelection(context.Background(), second)
+		if dropped := second.Status.HostID == ""; dropped != tc.wantDropped || bus.gotSubject != "" {
+			t.Errorf("%s: second dropped = %v, stop sent %q; want dropped = %v without asking",
+				tc.name, dropped, bus.gotSubject, tc.wantDropped)
+		}
+	}
+}
+
+// The wait for an unregistered pinned host is recorded once, when it begins.
+func TestPinnedHostNotRegisteredRecordedOnce(t *testing.T) {
+	recorder := events.NewFakeRecorder(4)
+	r := &WorkloadReconciler{Client: newWorkloadClient(t), Recorder: recorder, OperatorNamespace: testNamespace}
+	workload := &runtimev1alpha1.Workload{ObjectMeta: metav1.ObjectMeta{Name: "pinned", Namespace: "tenant-a"}}
+	workload.Spec.HostID = testHeartbeatHostID
+	workload.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadConditionConfig))
+
+	for pass := range 4 {
+		err := r.reconcileHostSelection(context.Background(), workload)
+		// What the conditioned reconciler records from the returned error.
+		workload.Status.SetConditions(condition.UnknownCondition(
+			runtimev1alpha1.WorkloadConditionHostSelection, "Reconcile", err.Error()))
+		// A pass that failed another way in between does not restart the wait.
+		if pass == 1 {
+			workload.Status.SetConditions(condition.ErrorCondition(
+				runtimev1alpha1.WorkloadConditionHostSelection, "Reconcile", errors.New("list hosts: timeout")))
+		}
+	}
+	if got := drainEvents(recorder); len(got) != 1 {
+		t.Fatalf("events = %q, want one when the wait began", got)
+	}
+
+	// Pinned to another unregistered host, it is a new wait.
+	workload.Spec.HostID = "another-host"
+	_ = r.reconcileHostSelection(context.Background(), workload)
+	if got := drainEvents(recorder); len(got) != 1 || !strings.Contains(got[0], "another-host") {
+		t.Errorf("events = %q, want one for the new host", got)
 	}
 }

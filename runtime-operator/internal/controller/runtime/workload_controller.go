@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"strings"
+	"sync"
 	"time"
 
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
@@ -21,10 +23,13 @@ import (
 )
 
 const (
-	workloadReconcileInterval     = 30 * time.Second
-	workloadStartTimeout          = 60 * time.Second
-	workloadStatusTimeout         = 5 * time.Second
-	workloadStopTimeout           = 30 * time.Second
+	workloadReconcileInterval = 30 * time.Second
+	workloadStartTimeout      = 60 * time.Second
+	workloadStatusTimeout     = 5 * time.Second
+	workloadStopTimeout       = 30 * time.Second
+	// workloadEvictionStopTimeout bounds how long one eviction holds the
+	// controller's worker on a host that is not answering.
+	workloadEvictionStopTimeout   = 5 * time.Second
 	workloadFinalizerName         = "runtime.wasmcloud.dev/workload-finalizer"
 	workloadSchedulableHostsIndex = "spec.isSchedulable"
 	// hostEnvironmentIndex indexes Hosts by their Environment field for
@@ -50,7 +55,70 @@ type WorkloadReconciler struct {
 	// Spec.Environment). When false, cross-tenant scheduling is rejected
 	// and a Warning Event is recorded on the Workload.
 	AllowSharedHosts bool
-	reconciler       condition.AnyConditionedReconciler
+	// EvictionLimiter paces stopping workloads placed outside the
+	// Environment they may run in. Nil stops them all as they are found.
+	EvictionLimiter *rate.Limiter
+	// stalledHosts and pinnedWaits are this process's memory only. A restart
+	// or a new leader starts them empty: each stalled host gets one fresh stop
+	// attempt, and each pinned wait still under way is recorded once more.
+	stalledHosts stalledHosts
+	// pinnedWaits maps the UID of a Workload waiting for its pinned host to
+	// register to that host's ID, once the wait has been recorded.
+	pinnedWaits sync.Map
+	reconciler  condition.AnyConditionedReconciler
+}
+
+// stalledHosts remembers hosts that did not answer an eviction's stop, so the
+// workloads still to be evicted from them wait rather than each spending a
+// stop timeout. The wait doubles with each consecutive failure, from one
+// eviction stop timeout up to a reconcile interval, so a single blip costs
+// the rest of the host's evictions only seconds. A host whose stall ended a
+// reconcile interval ago is forgotten, so the map holds only recent failures.
+type stalledHosts struct {
+	mu     sync.Mutex
+	stalls map[string]hostStall
+}
+
+type hostStall struct {
+	failures int
+	until    time.Time
+}
+
+func (s *stalledHosts) failed(hostID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stalls == nil {
+		s.stalls = make(map[string]hostStall)
+	}
+	now := time.Now()
+	for id, stall := range s.stalls {
+		if now.Sub(stall.until) > workloadReconcileInterval {
+			delete(s.stalls, id)
+		}
+	}
+	stall := s.stalls[hostID]
+	stall.failures++
+	wait := workloadEvictionStopTimeout << min(stall.failures-1, 8)
+	stall.until = now.Add(min(wait, workloadReconcileInterval))
+	s.stalls[hostID] = stall
+}
+
+func (s *stalledHosts) answered(hostID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.stalls, hostID)
+}
+
+func (s *stalledHosts) stalled(hostID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return time.Now().Before(s.stalls[hostID].until)
+}
+
+// NewEvictionLimiter allows ten evictions a second, the rate at which a
+// cluster that turns allowSharedHosts off moves its cross-tenant workloads.
+func NewEvictionLimiter() *rate.Limiter {
+	return rate.NewLimiter(10, 10)
 }
 
 func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -88,9 +156,8 @@ func (r *WorkloadReconciler) reconcileConfig(ctx context.Context, workload *runt
 }
 
 func (r *WorkloadReconciler) reconcileHostSelection(ctx context.Context, workload *runtimev1alpha1.Workload) error {
-	// If the workload is already assigned to a host, there's nothing to do.
 	if workload.Status.HostID != "" {
-		return nil
+		return r.evictOutsideEnvironment(ctx, workload)
 	}
 
 	if !workload.Status.AllTrue(runtimev1alpha1.WorkloadConditionConfig) {
@@ -102,7 +169,35 @@ func (r *WorkloadReconciler) reconcileHostSelection(ctx context.Context, workloa
 	// overwrite the first after the start already went to it.
 	condition.RequireOptimisticLock(ctx)
 	if workload.Spec.HostID != "" {
+		environment, err := r.allowedEnvironment(workload)
+		if err != nil {
+			return r.denyEnvironment(workload, "Reject", err)
+		}
 		host, err := r.lookupHostByID(ctx, workload.Spec.HostID)
+		if environment != "" {
+			// Isolation needs the pinned host's Environment, so a host that
+			// cannot be read or is not registered yet is waited on.
+			switch {
+			case err != nil:
+				return err
+			case host == nil:
+				waiting := condition.ErrStatusUnknown(fmt.Errorf(
+					"pinned host %s is not registered, so its Environment cannot be checked", workload.Spec.HostID))
+				// Once when the wait begins, not on every pass of it, nor again
+				// after a pass that failed some other way.
+				if waitedOn, _ := r.pinnedWaits.Swap(workload.UID, workload.Spec.HostID); waitedOn != workload.Spec.HostID && r.Recorder != nil {
+					r.Recorder.Eventf(workload, nil, corev1.EventTypeWarning,
+						"PinnedHostNotRegistered", "Wait",
+						"Pinned host %q has no Host object; placement waits for one so its Environment can be checked",
+						workload.Spec.HostID)
+				}
+				return waiting
+			case host.Environment != environment:
+				r.pinnedWaits.Delete(workload.UID)
+				return r.denyHost(workload, host, environment, "Reject")
+			}
+			r.pinnedWaits.Delete(workload.UID)
+		}
 		if err == nil && host != nil && !host.DeletionTimestamp.IsZero() {
 			return condition.ErrStatusUnknown(fmt.Errorf("pinned host %s is being deleted", workload.Spec.HostID))
 		}
@@ -117,6 +212,7 @@ func (r *WorkloadReconciler) reconcileHostSelection(ctx context.Context, workloa
 		return condition.ErrSkipReconciliation()
 	}
 
+	r.pinnedWaits.Delete(workload.UID)
 	selectedHost, err := r.findFreeHost(ctx, workload)
 	if err != nil {
 		return err
@@ -141,37 +237,10 @@ func (r *WorkloadReconciler) findFreeHost(ctx context.Context, workload *runtime
 		},
 	}
 
-	// Resolve which Environment value the scheduler accepts per the
-	// AllowSharedHosts × Spec.Environment matrix in namespace-host.md.
-	// Default mode (AllowSharedHosts=true, Environment unset) imposes no
-	// Environment filter — every matching host is fair game, exactly
-	// preserving the legacy Cluster-scope scheduling behavior.
-	var environmentFilter string
-	switch {
-	case workload.Spec.Environment != "" && workload.Spec.Environment != workload.Namespace:
-		// Explicit cross-tenant target.
-		if !r.AllowSharedHosts {
-			if r.Recorder != nil {
-				r.Recorder.Eventf(workload, nil, corev1.EventTypeWarning,
-					"CrossEnvironmentSchedulingDenied", "Reject",
-					"Environment %q is outside %q and operator has allowSharedHosts=false",
-					workload.Spec.Environment, workload.Namespace,
-				)
-			}
-			return nil, fmt.Errorf(
-				"workload targets Environment %q but operator has allowSharedHosts=false",
-				workload.Spec.Environment,
-			)
-		}
-		environmentFilter = workload.Spec.Environment
-	case workload.Spec.Environment != "":
-		// Environment explicitly set to the workload's own namespace.
-		environmentFilter = workload.Namespace
-	case !r.AllowSharedHosts:
-		// No Environment, sharing disabled — lock to the workload's namespace.
-		environmentFilter = workload.Namespace
+	environmentFilter, err := r.allowedEnvironment(workload)
+	if err != nil {
+		return nil, r.denyEnvironment(workload, "Reject", err)
 	}
-
 	if environmentFilter != "" {
 		listOpts = append(listOpts, client.MatchingFields{
 			hostEnvironmentIndex: environmentFilter,
@@ -194,6 +263,141 @@ func (r *WorkloadReconciler) findFreeHost(ctx context.Context, workload *runtime
 	}
 
 	return nil, fmt.Errorf("no suitable host found")
+}
+
+// denyHost records that host's Environment is outside the one the workload may
+// be placed in, and returns the error for its condition.
+func (r *WorkloadReconciler) denyHost(workload *runtimev1alpha1.Workload, host *runtimev1alpha1.Host, environment, action string) error {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(workload, nil, corev1.EventTypeWarning,
+			"CrossEnvironmentSchedulingDenied", action,
+			"Host %q is in Environment %q; this workload in %q may only be placed in %q",
+			host.HostID, host.Environment, workload.Namespace, environment,
+		)
+	}
+	return fmt.Errorf("host %s is in Environment %q, but the workload may only be placed in %q",
+		host.HostID, host.Environment, environment)
+}
+
+// evictOutsideEnvironment stops a placed workload whose host the Environment
+// rule does not admit, such as one placed before allowSharedHosts was turned
+// off, and clears its placement so host selection runs again under the rule.
+//
+// Stops are paced by EvictionLimiter, and a heartbeating host that did not
+// answer one is skipped for a while (see stalledHosts), so a mass eviction
+// neither restarts every workload at once nor holds the controller on a host
+// that is not answering.
+func (r *WorkloadReconciler) evictOutsideEnvironment(ctx context.Context, workload *runtimev1alpha1.Workload) error {
+	hostID := workload.Status.HostID
+	environment, denied := r.allowedEnvironment(workload)
+	if denied == nil && environment == "" {
+		return nil
+	}
+	host, err := r.lookupHostByID(ctx, hostID)
+	if err != nil {
+		return err
+	}
+	// A host that is gone is left to placement and sync.
+	if denied == nil && (host == nil || host.Environment == environment) {
+		return nil
+	}
+
+	// Unknown, not an error: the reconcile interval is the retry, rather than
+	// a requeue a second later for every workload waiting its turn.
+	//
+	// Eviction drops a workload it could not stop only from a host known to
+	// have failed. One that is merely not reporting, as after a missed
+	// heartbeat, may still be running it, and a workload dropped there would
+	// keep running on the wrong tenant's host with nothing tracking it.
+	failed := hostFailed(host)
+	stalled := r.stalledHosts.stalled(hostID)
+	if stalled && !failed {
+		return condition.ErrStatusUnknown(fmt.Errorf(
+			"host %s is outside the allowed Environment and did not answer a stop; retrying", hostID))
+	}
+	if r.EvictionLimiter != nil && !r.EvictionLimiter.Allow() {
+		return condition.ErrStatusUnknown(fmt.Errorf(
+			"host %s is outside the allowed Environment; waiting to stop the workload there", hostID))
+	}
+	switch {
+	case stalled:
+		// Failed, and it did not answer the last stop: stopOnHost would only
+		// spend its timeout to give up on it again.
+		ctrl.LoggerFrom(ctx).Info("dropping a workload from a failed host that did not answer a stop",
+			"hostID", hostID, "workloadID", string(workload.GetUID()))
+	default:
+		answered, err := r.stopOnHost(ctx, workload, workloadEvictionStopTimeout, hostFailed)
+		if err != nil || !answered {
+			r.stalledHosts.failed(hostID)
+		} else {
+			r.stalledHosts.answered(hostID)
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	// Recorded once the stop has gone through, not on every pass before it.
+	var reason error
+	if denied == nil {
+		reason = fmt.Errorf("stopped: %w", r.denyHost(workload, host, environment, "Evict"))
+	} else {
+		reason = fmt.Errorf("stopped on host %s: %w", hostID, r.denyEnvironment(workload, "Evict", denied))
+	}
+	workload.Status.HostID = ""
+	workload.Status.WorkloadID = ""
+	workload.Status.Environment = ""
+	// The loop stops at this condition's change, so the ones after it would
+	// otherwise still say the workload is placed, synced and ready.
+	for _, ct := range []condition.ConditionType{
+		runtimev1alpha1.WorkloadConditionPlacement,
+		runtimev1alpha1.WorkloadConditionSync,
+		condition.TypeReady,
+	} {
+		workload.Status.SetConditions(condition.UnknownCondition(ct, "Evicted", reason.Error()))
+	}
+	condition.ForceStatusUpdate(ctx)
+	condition.RequireOptimisticLock(ctx)
+	return condition.ErrStatusUnknown(reason)
+}
+
+// denyEnvironment records that the workload's own spec.environment is refused,
+// and returns err for its condition.
+func (r *WorkloadReconciler) denyEnvironment(workload *runtimev1alpha1.Workload, action string, err error) error {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(workload, nil, corev1.EventTypeWarning,
+			"CrossEnvironmentSchedulingDenied", action,
+			"Environment %q is outside %q and operator has allowSharedHosts=false",
+			workload.Spec.Environment, workload.Namespace,
+		)
+	}
+	return err
+}
+
+// allowedEnvironment resolves the Host.Environment a workload may be placed in,
+// per the AllowSharedHosts × Spec.Environment matrix in namespace-host.md, for
+// both a chosen and a pinned host. Empty allows any: the default mode
+// (AllowSharedHosts=true, Environment unset) keeps Cluster-scope scheduling.
+func (r *WorkloadReconciler) allowedEnvironment(workload *runtimev1alpha1.Workload) (string, error) {
+	switch {
+	case workload.Spec.Environment != "" && workload.Spec.Environment != workload.Namespace:
+		// Explicit cross-tenant target.
+		if !r.AllowSharedHosts {
+			return "", fmt.Errorf(
+				"workload targets Environment %q but operator has allowSharedHosts=false",
+				workload.Spec.Environment,
+			)
+		}
+		return workload.Spec.Environment, nil
+	case workload.Spec.Environment != "":
+		// Environment explicitly set to the workload's own namespace.
+		return workload.Namespace, nil
+	case !r.AllowSharedHosts:
+		// No Environment, sharing disabled — lock to the workload's namespace.
+		return workload.Namespace, nil
+	default:
+		return "", nil
+	}
 }
 
 // isSchedulable reports whether new workloads may be placed on host. A Host
@@ -497,6 +701,7 @@ func (r *WorkloadReconciler) reconcileReady(_ context.Context, workload *runtime
 }
 
 func (r *WorkloadReconciler) finalize(ctx context.Context, workload *runtimev1alpha1.Workload) error {
+	r.pinnedWaits.Delete(workload.UID)
 	// Don't gate on Placement: it is recorded only after the start returns, so a
 	// Workload deleted mid-start would skip the stop and stay running on the host.
 	// HostID is set before any start is sent.
@@ -504,7 +709,27 @@ func (r *WorkloadReconciler) finalize(ctx context.Context, workload *runtimev1al
 		// nothing to do, no start was ever sent
 		return nil
 	}
+	// Deletion gives up sooner than eviction, on any host not heartbeating:
+	// waiting for its Host to be reaped could block the deletion for good.
+	_, err := r.stopOnHost(ctx, workload, workloadStopTimeout, hostUnavailable)
+	return err
+}
 
+// hostUnavailable reports whether host is gone or not heartbeating.
+func hostUnavailable(host *runtimev1alpha1.Host) bool {
+	return host == nil || !host.Status.IsAvailable()
+}
+
+// hostFailed reports whether host is gone or known to have failed, rather
+// than only not reporting for now.
+func hostFailed(host *runtimev1alpha1.Host) bool {
+	return host == nil || host.Status.GetCondition(condition.TypeReady).Status == condition.ConditionFalse
+}
+
+// stopOnHost stops the workload on the host it was placed on. A stop that
+// fails is returned for a retry unless giveUp says the host is past waiting
+// for; answered is false when it gave up on the host that way.
+func (r *WorkloadReconciler) stopOnHost(ctx context.Context, workload *runtimev1alpha1.Workload, timeout time.Duration, giveUp func(*runtimev1alpha1.Host) bool) (answered bool, err error) {
 	workloadID := string(workload.GetUID())
 
 	client := NewWashHostClient(r.Bus, workload.Status.HostID)
@@ -512,26 +737,23 @@ func (r *WorkloadReconciler) finalize(ctx context.Context, workload *runtimev1al
 		WorkloadId: workloadID,
 	}
 
-	stopCtx, cancel := context.WithTimeout(ctx, workloadStopTimeout)
+	stopCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	_, err := client.Stop(stopCtx, req)
-	if err == nil {
-		return nil
+	if _, err = client.Stop(stopCtx, req); err == nil {
+		return true, nil
 	}
-	// A host that is still heartbeating may well be running the workload,
-	// so keep the finalizer and retry. Give up once it stops heartbeating:
-	// waiting for its Host to be reaped could block the deletion for good.
+	// A host that may be running the workload is asked again.
 	host, lookupErr := r.lookupHostByID(ctx, workload.Status.HostID)
 	if lookupErr != nil {
-		return lookupErr
+		return false, lookupErr
 	}
-	if host != nil && host.Status.IsAvailable() {
-		return fmt.Errorf("stop workload on host %s: %w", workload.Status.HostID, err)
+	if !giveUp(host) {
+		return false, fmt.Errorf("stop workload on host %s: %w", workload.Status.HostID, err)
 	}
 	ctrl.LoggerFrom(ctx).Error(err, "failed to stop workload on an unavailable host, dropping it",
 		"hostID", workload.Status.HostID, "workloadID", workloadID)
-	return nil
+	return false, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
