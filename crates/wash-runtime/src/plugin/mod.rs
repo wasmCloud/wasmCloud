@@ -351,10 +351,10 @@ impl WorkloadFailureSink {
 /// interface config can take a value by reference — `secret:<key>`, a
 /// `wasmcloud:secrets` key — instead of carrying it.
 ///
-/// Served by whichever plugin answers a plain `wasmcloud:secrets` import
-/// ([`HostPlugin::secret_resolver`], chosen by [`select_secret_resolver`]).
-/// The lookup is the one the workload itself would get from `store.get` +
-/// `reveal`: same scope, same backend.
+/// Served by the plugin the referencing item's own plain `wasmcloud:secrets`
+/// import bound to ([`HostPlugin::secret_resolver`]). The lookup is the one
+/// the item itself would get from `store.get` + `reveal`: same plugin, same
+/// scope, same backend.
 #[async_trait::async_trait]
 pub trait SecretResolver: Send + Sync {
     /// The value at `key` in the secrets scope of `component_id` in
@@ -382,31 +382,13 @@ pub(crate) fn serves_secrets(world: &WitWorld) -> bool {
 /// at bind: `password: "secret:pg-password"`.
 pub(crate) const SECRET_REF_PREFIX: &str = "secret:";
 
-/// The [`SecretResolver`] secret references resolve through: the one belonging
-/// to the plugin a plain `wasmcloud:secrets` import routes to. That is a
-/// plugin that does not defer unnamed imports (a host component plugin) when
-/// one is loaded, else the native plugin it would defer to. Ties go to the
-/// lowest id, the order plugins bind in.
-pub(crate) fn select_secret_resolver(
-    plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
-) -> Option<Arc<dyn SecretResolver>> {
-    let mut candidates: Vec<_> = plugins
-        .iter()
-        .filter_map(|(id, p)| Some((p.defers_unnamed_instances(), *id, p.secret_resolver()?)))
-        .collect();
-    candidates.sort_by_key(|(defers, id, _)| (*defers, *id));
-    candidates
-        .into_iter()
-        .next()
-        .map(|(_, _, resolver)| resolver)
-}
-
 /// `interfaces` with every `secret:<key>` config value replaced by that
 /// secret, resolved for `component_id` of `workload_id`.
 ///
 /// Returns the input untouched (and needs no resolver) when nothing refers to
-/// a secret. A reference with no resolver, an empty key, or a key the scope
-/// lacks fails the bind. Errors name the interface, config key and secret key,
+/// a secret. A reference with no resolver (the item has no plain
+/// `wasmcloud:secrets` binding), an empty key, or a key the scope lacks fails
+/// the bind. Errors name the interface, config key and secret key,
 /// never a value.
 pub(crate) async fn resolve_secret_refs(
     resolver: Option<&dyn SecretResolver>,
@@ -434,8 +416,9 @@ pub(crate) async fn resolve_secret_refs(
             );
             let resolver = resolver.ok_or_else(|| {
                 anyhow::anyhow!(
-                    "config '{config_key}' refers to secret '{secret_key}', but no plugin on this \
-                     host serves wasmcloud:secrets"
+                    "config '{config_key}' refers to secret '{secret_key}', but this component \
+                     has no wasmcloud:secrets binding to resolve it through; declare a \
+                     wasmcloud:secrets host interface (with its scope) and import it"
                 )
             })?;
             *value = resolver
@@ -693,9 +676,9 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
 
     /// This plugin's [`SecretResolver`], if it serves `wasmcloud:secrets`.
     ///
-    /// The host resolves every `secret:<key>` config reference through one
-    /// resolver: the one belonging to the plugin a workload's plain
-    /// `wasmcloud:secrets` import routes to. The default resolves nothing.
+    /// The host resolves an item's `secret:<key>` config references through
+    /// the plugin its plain `wasmcloud:secrets` import bound to. The default
+    /// resolves nothing.
     fn secret_resolver(&self) -> Option<Arc<dyn SecretResolver>> {
         None
     }
@@ -1184,12 +1167,12 @@ mod secret_ref_tests {
     }
 
     #[tokio::test]
-    async fn a_reference_without_a_secrets_plugin_fails() {
+    async fn a_reference_without_a_secrets_binding_fails() {
         let err = resolve_secret_refs(None, "w", "c", &postgres(&[("url", "secret:pg-url")]))
             .await
             .unwrap_err();
         assert!(
-            err.to_string().contains("serves wasmcloud:secrets"),
+            err.to_string().contains("no wasmcloud:secrets binding"),
             "{err}"
         );
     }
