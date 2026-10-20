@@ -347,6 +347,142 @@ impl WorkloadFailureSink {
     }
 }
 
+/// Resolves a secret on a workload's behalf at bind time, so any plugin's
+/// interface config can take a value by reference — `secret:<key>`, a
+/// `wasmcloud:secrets` key — instead of carrying it.
+///
+/// Served by whichever plugin answers a plain `wasmcloud:secrets` import
+/// ([`HostPlugin::secret_resolver`], chosen by [`select_secret_resolver`]).
+/// The lookup is the one the workload itself would get from `store.get` +
+/// `reveal`: same scope, same backend.
+#[async_trait::async_trait]
+pub trait SecretResolver: Send + Sync {
+    /// The value at `key` in the secrets scope of `component_id` in
+    /// `workload_id`, or `None` when that scope has no such key.
+    ///
+    /// The returned value is a credential: never log it.
+    async fn resolve(
+        &self,
+        workload_id: &str,
+        component_id: &str,
+        key: &str,
+    ) -> anyhow::Result<Option<String>>;
+}
+
+/// Whether `world` serves `wasmcloud:secrets` — the plugins that resolve
+/// secrets for other plugins, and so bind to a workload before them.
+pub(crate) fn serves_secrets(world: &WitWorld) -> bool {
+    world
+        .imports
+        .iter()
+        .any(|i| i.namespace == "wasmcloud" && i.package == "secrets")
+}
+
+/// Prefix marking an interface config value as a secret reference, resolved
+/// at bind: `password: "secret:pg-password"`.
+pub(crate) const SECRET_REF_PREFIX: &str = "secret:";
+
+/// The [`SecretResolver`] secret references resolve through: the one belonging
+/// to the plugin a plain `wasmcloud:secrets` import routes to. That is a
+/// plugin that does not defer unnamed imports (a host component plugin) when
+/// one is loaded, else the native plugin it would defer to. Ties go to the
+/// lowest id, the order plugins bind in.
+pub(crate) fn select_secret_resolver(
+    plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
+) -> Option<Arc<dyn SecretResolver>> {
+    let mut candidates: Vec<_> = plugins
+        .iter()
+        .filter_map(|(id, p)| Some((p.defers_unnamed_instances(), *id, p.secret_resolver()?)))
+        .collect();
+    candidates.sort_by_key(|(defers, id, _)| (*defers, *id));
+    candidates
+        .into_iter()
+        .next()
+        .map(|(_, _, resolver)| resolver)
+}
+
+/// `interfaces` with every `secret:<key>` config value replaced by that
+/// secret, resolved for `component_id` of `workload_id`.
+///
+/// Returns the input untouched (and needs no resolver) when nothing refers to
+/// a secret. A reference with no resolver, an empty key, or a key the scope
+/// lacks fails the bind. Errors name the interface, config key and secret key,
+/// never a value.
+pub(crate) async fn resolve_secret_refs(
+    resolver: Option<&dyn SecretResolver>,
+    workload_id: &str,
+    component_id: &str,
+    interfaces: &std::collections::HashSet<WitInterface>,
+) -> anyhow::Result<std::collections::HashSet<WitInterface>> {
+    use anyhow::Context as _;
+    let mut out = std::collections::HashSet::with_capacity(interfaces.len());
+    for interface in interfaces {
+        let mut interface = interface.clone();
+        for (config_key, value) in interface.config.iter_mut() {
+            let Some(secret_key) = value.strip_prefix(SECRET_REF_PREFIX) else {
+                continue;
+            };
+            let secret_key = secret_key.trim().to_string();
+            anyhow::ensure!(
+                !secret_key.is_empty(),
+                "config '{config_key}' of {interface_name} is an empty secret reference",
+                interface_name = interface_label(
+                    &interface.namespace,
+                    &interface.package,
+                    interface.name.as_deref()
+                ),
+            );
+            let resolver = resolver.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "config '{config_key}' refers to secret '{secret_key}', but no plugin on this \
+                     host serves wasmcloud:secrets"
+                )
+            })?;
+            *value = resolver
+                .resolve(workload_id, component_id, &secret_key)
+                .await
+                .with_context(|| {
+                    format!("failed to resolve secret '{secret_key}' for config '{config_key}'")
+                })?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "secret '{secret_key}' for config '{config_key}' was not found in this \
+                         workload's secrets scope"
+                    )
+                })?;
+        }
+        out.insert(interface);
+    }
+    Ok(out)
+}
+
+fn interface_label(namespace: &str, package: &str, name: Option<&str>) -> String {
+    match name {
+        Some(name) => format!("{namespace}:{package} '{name}'"),
+        None => format!("{namespace}:{package}"),
+    }
+}
+
+/// Whether any config value in `interfaces` is a secret reference.
+pub(crate) fn has_secret_refs<'a>(interfaces: impl IntoIterator<Item = &'a WitInterface>) -> bool {
+    interfaces
+        .into_iter()
+        .any(|i| i.config.values().any(|v| v.starts_with(SECRET_REF_PREFIX)))
+}
+
+/// `interfaces` with every config value hidden, for logging a bind whose
+/// config may hold resolved secrets.
+pub(crate) fn redacted<'a>(interfaces: impl IntoIterator<Item = &'a WitInterface>) -> Vec<String> {
+    interfaces
+        .into_iter()
+        .map(|i| {
+            let mut keys: Vec<&str> = i.config.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            format!("{} config_keys={keys:?}", i.instance())
+        })
+        .collect()
+}
+
 /// The [`HostPlugin`] trait provides an interface for implementing built-in plugins for the host.
 /// A plugin is primarily responsible for implementing a specific [`WitWorld`] as a collection of
 /// imports and exports that will be directly linked to the workload's [`wasmtime::component::Linker`].
@@ -545,6 +681,15 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// override this if it can fail a workload asynchronously (e.g. a host
     /// component plugin evicting a workload whose lifecycle bind crash-loops).
     fn set_workload_failure_sink(&self, _sink: WorkloadFailureSink) {}
+
+    /// This plugin's [`SecretResolver`], if it serves `wasmcloud:secrets`.
+    ///
+    /// The host resolves every `secret:<key>` config reference through one
+    /// resolver: the one belonging to the plugin a workload's plain
+    /// `wasmcloud:secrets` import routes to. The default resolves nothing.
+    fn secret_resolver(&self) -> Option<Arc<dyn SecretResolver>> {
+        None
+    }
 
     /// Called when the plugin is started during host initialization.
     ///
@@ -936,4 +1081,117 @@ pub fn multiplexed_plugins() -> Vec<std::sync::Arc<dyn HostPlugin>> {
     ));
 
     plugins
+}
+
+#[cfg(test)]
+mod secret_ref_tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    /// Answers from a fixed map, recording which caller asked.
+    struct Fixed(
+        HashMap<&'static str, &'static str>,
+        std::sync::Mutex<Vec<String>>,
+    );
+
+    #[async_trait::async_trait]
+    impl SecretResolver for Fixed {
+        async fn resolve(
+            &self,
+            workload_id: &str,
+            component_id: &str,
+            key: &str,
+        ) -> anyhow::Result<Option<String>> {
+            self.1
+                .lock()
+                .unwrap()
+                .push(format!("{workload_id}/{component_id}"));
+            Ok(self.0.get(key).map(|v| v.to_string()))
+        }
+    }
+
+    fn fixed() -> Fixed {
+        Fixed(
+            HashMap::from([("pg-url", "postgres://app:pw@db/app")]),
+            Default::default(),
+        )
+    }
+
+    fn postgres(config: &[(&str, &str)]) -> HashSet<WitInterface> {
+        let mut i = WitInterface::from("wasmcloud:postgres/query@0.2.0");
+        i.name = Some("app-db".to_string());
+        i.config = config
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        HashSet::from([i])
+    }
+
+    fn config(set: &HashSet<WitInterface>) -> HashMap<String, String> {
+        set.iter().next().unwrap().config.clone()
+    }
+
+    #[tokio::test]
+    async fn references_resolve_as_the_bound_item() {
+        let resolver = fixed();
+        let resolved = resolve_secret_refs(
+            Some(&resolver),
+            "workload-1",
+            "component-1",
+            &postgres(&[("url", "secret:pg-url"), ("pool", "4")]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            config(&resolved),
+            HashMap::from([
+                ("url".to_string(), "postgres://app:pw@db/app".to_string()),
+                ("pool".to_string(), "4".to_string()),
+            ])
+        );
+        assert_eq!(*resolver.1.lock().unwrap(), ["workload-1/component-1"]);
+    }
+
+    #[tokio::test]
+    async fn a_missing_secret_fails_naming_keys_not_values() {
+        let err = resolve_secret_refs(
+            Some(&fixed()),
+            "w",
+            "c",
+            &postgres(&[("url", "secret:nope")]),
+        )
+        .await
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("'nope'") && msg.contains("'url'"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn a_reference_without_a_secrets_plugin_fails() {
+        let err = resolve_secret_refs(None, "w", "c", &postgres(&[("url", "secret:pg-url")]))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("serves wasmcloud:secrets"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_config_needs_no_resolver() {
+        let plain = postgres(&[("url", "postgres://u:p@db/app")]);
+        assert!(!has_secret_refs(&plain));
+        let resolved = resolve_secret_refs(None, "w", "c", &plain).await.unwrap();
+        assert_eq!(resolved, plain);
+    }
+
+    #[test]
+    fn redaction_keeps_keys_and_drops_values() {
+        let logged = redacted(&postgres(&[("url", "postgres://app:pw@db/app")])).join(" ");
+        assert!(
+            logged.contains("url") && !logged.contains("pw@"),
+            "{logged}"
+        );
+    }
 }

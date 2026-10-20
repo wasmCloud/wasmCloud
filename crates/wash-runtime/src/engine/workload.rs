@@ -3242,11 +3242,22 @@ impl UnresolvedWorkload {
         // differently across process restarts — and with a plugin that *calls*
         // an interface rather than serving it, one of those outcomes fails the
         // deploy. A deterministic order at least makes the result reproducible.
-        // Plugins that override WASI bind after the rest, so that nothing binds
-        // over a redefinition and shadowing is on only while they bind.
+        //
+        // Plugins serving `wasmcloud:secrets` go first: another plugin may
+        // resolve a secret reference in its config at its own bind
+        // ([`crate::plugin::SecretResolver`]), and a secrets plugin only knows
+        // the workload's scope once the workload has bound to it. Plugins that
+        // override WASI bind after the rest, so that nothing binds over a
+        // redefinition and shadowing is on only while they bind.
         let mut plugins_in_order: Vec<(&&'static str, &Arc<dyn HostPlugin>)> =
             plugins.iter().collect();
-        plugins_in_order.sort_by_key(|(id, p)| (!p.wasi_overrides().imports.is_empty(), **id));
+        plugins_in_order.sort_by_cached_key(|(id, p)| {
+            (
+                !p.wasi_overrides().imports.is_empty(),
+                !crate::plugin::serves_secrets(&p.world()),
+                **id,
+            )
+        });
         for (plugin_id, p) in plugins_in_order {
             let plugin_interfaces = p.world();
             trace!(plugin_id = plugin_id, plugin_interfaces = ?plugin_interfaces, "checking plugin interfaces");
@@ -3361,13 +3372,55 @@ impl UnresolvedWorkload {
                         }
                     };
 
-                let resolved_component_bindings: Vec<HashSet<WitInterface>> =
+                let mut resolved_component_bindings: Vec<HashSet<WitInterface>> =
                     plugin_component_bindings
                         .iter()
                         .map(|(_, interfaces)| {
                             declared.apply_resolved(interfaces, &resolved_by_name)
                         })
                         .collect();
+
+                // `secret:<key>` config values resolve last, per item (the
+                // secrets scope belongs to the calling item), through the
+                // plugin serving the workload's `wasmcloud:secrets` — already
+                // bound, since secrets plugins bind first. A secrets plugin's
+                // own config is never resolved through itself.
+                let has_refs = !crate::plugin::serves_secrets(&plugin_interfaces)
+                    && crate::plugin::has_secret_refs(resolved_component_bindings.iter().flatten());
+                if has_refs {
+                    let resolver = crate::plugin::select_secret_resolver(plugins);
+                    for ((id, _), interfaces) in plugin_component_bindings
+                        .iter()
+                        .zip(resolved_component_bindings.iter_mut())
+                    {
+                        let item_id = match id {
+                            IdFlavor::Component(id) | IdFlavor::Service(id) => id.as_ref(),
+                        };
+                        match crate::plugin::resolve_secret_refs(
+                            resolver.as_deref(),
+                            self.id(),
+                            item_id,
+                            interfaces,
+                        )
+                        .await
+                        {
+                            Ok(resolved) => *interfaces = resolved,
+                            Err(e) => {
+                                unbind_all(
+                                    self.id(),
+                                    &bound_plugins_with_interfaces,
+                                    "secret reference",
+                                    cleanup,
+                                )
+                                .await;
+                                bail!(e.context(format!(
+                                    "workload {} cannot bind plugin '{plugin_id}'",
+                                    self.id()
+                                )))
+                            }
+                        }
+                    }
+                }
 
                 // Collect all unique interfaces across all component bindings for on_workload_bind
                 let plugin_matched_interfaces: HashSet<WitInterface> = resolved_component_bindings
@@ -3421,7 +3474,8 @@ impl UnresolvedWorkload {
 
                 debug!(
                     plugin_id = plugin_id,
-                    interfaces = ?plugin_matched_interfaces,
+                    // Config may hold resolved secrets: log only its keys.
+                    interfaces = ?crate::plugin::redacted(&plugin_matched_interfaces),
                     "binding plugin to workload"
                 );
 
@@ -3496,7 +3550,7 @@ impl UnresolvedWorkload {
                     debug!(
                         plugin_id = plugin_id,
                         component_id = workload_item.id(),
-                        interfaces = ?matching_interfaces,
+                        interfaces = ?crate::plugin::redacted(&matching_interfaces),
                         "binding plugin to workload item"
                     );
 
