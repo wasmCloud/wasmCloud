@@ -160,10 +160,6 @@ pub(super) async fn expire_artifacts(cache_dir: &Path, age: Duration) -> Result<
         .await
         .context("failed to read cache entry")?
     {
-        // Removing the key would orphan every entry keyed with it.
-        if entry.file_name() == KEY_FILE {
-            continue;
-        }
         let metadata = entry
             .metadata()
             .await
@@ -173,6 +169,17 @@ pub(super) async fn expire_artifacts(cache_dir: &Path, age: Duration) -> Result<
             tokio::fs::remove_dir_all(entry.path())
                 .await
                 .context("failed to remove legacy cache entry")?;
+            continue;
+        }
+        // The cache root may be a directory the operator also uses, so only
+        // what this cache writes is expired. The key itself never is: that
+        // would orphan every entry keyed with it.
+        let ours = if metadata.is_dir() {
+            is_entry_name(&entry.file_name())
+        } else {
+            is_key_temp_name(&entry.file_name())
+        };
+        if !ours {
             continue;
         }
         if let Ok(modified) = metadata.modified() {
@@ -196,6 +203,26 @@ pub(super) async fn expire_artifacts(cache_dir: &Path, age: Duration) -> Result<
     }
 
     Ok(())
+}
+
+/// A directory [`CacheManager::get_cache_dir`] names: the prefix and a
+/// lowercase hex HMAC-SHA256.
+fn is_entry_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .and_then(|name| name.strip_prefix(ENTRY_PREFIX))
+        .is_some_and(|hash| hash.len() == 64 && is_lower_hex(hash))
+}
+
+/// A key file [`load_or_create_key`] left behind, e.g. after a crash.
+fn is_key_temp_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .and_then(|name| name.strip_prefix(KEY_FILE)?.strip_prefix('.'))
+        .and_then(|rest| rest.strip_suffix(".tmp"))
+        .is_some_and(|uuid| uuid.len() == 32 && is_lower_hex(uuid))
+}
+
+fn is_lower_hex(s: &str) -> bool {
+    s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// An entry in the layout before entries were scoped by credentials:
@@ -515,5 +542,51 @@ mod tests {
         assert!(unrelated.exists());
         assert!(dir.path().join(KEY_FILE).exists());
         assert!(manager.is_cached("registry/ns/c:1").await);
+    }
+
+    /// Expiry removes only what this cache writes, however old the operator's
+    /// own files in the same directory are.
+    #[tokio::test]
+    async fn expiry_leaves_files_the_cache_did_not_write() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let manager = anonymous_cache(dir.path()).await;
+        manager
+            .write_to_cache("registry/ns/c:1", b"bytes", "sha256:aa")
+            .await
+            .unwrap();
+        let entry = manager.get_cache_dir("registry/ns/c:1");
+        let key_temp = dir
+            .path()
+            .join(format!("{KEY_FILE}.{}.tmp", uuid::Uuid::new_v4().simple()));
+        std::fs::write(&key_temp, b"partial").unwrap();
+        let operator_dir = dir.path().join("operator-data");
+        std::fs::create_dir_all(&operator_dir).unwrap();
+        let operator_file = dir.path().join("notes.txt");
+        std::fs::write(&operator_file, b"keep me").unwrap();
+        let lookalike = dir.path().join(format!("{ENTRY_PREFIX}not-a-hash"));
+        std::fs::create_dir_all(&lookalike).unwrap();
+
+        // With a zero age everything counts as old once its timestamp is in
+        // the past, which a coarse filesystem clock may take a moment to show.
+        let paths = [&entry, &key_temp, &operator_dir, &operator_file, &lookalike];
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while paths.iter().any(|path| {
+                std::fs::metadata(path)
+                    .and_then(|m| m.modified())
+                    .is_ok_and(|modified| modified.elapsed().unwrap_or_default().is_zero())
+            }) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("timestamps fall into the past");
+
+        expire_artifacts(dir.path(), Duration::ZERO).await.unwrap();
+        assert!(!entry.exists());
+        assert!(!key_temp.exists());
+        assert!(operator_dir.exists());
+        assert!(operator_file.exists());
+        assert!(lookalike.exists());
+        assert!(dir.path().join(KEY_FILE).exists());
     }
 }

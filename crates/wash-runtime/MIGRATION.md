@@ -9,6 +9,8 @@ fetched again. Removing an extra CA or requiring HTTPS prevents reuse of an
 incompatible disk entry,
 including a reference pinned by digest. `cleanup_cache` removes the old
 `<sanitized reference>_<hash>` entries; the washlet calls it periodically.
+Age-based cleanup expires only the `v3-` entry directories and leftover key
+files this cache writes; anything else in the cache root is left alone.
 `wash dev` and `wash oci` do not clean their cache, so remove old directories
 under `<wash cache dir>/oci` manually when no longer needed.
 
