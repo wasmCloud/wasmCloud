@@ -51,7 +51,9 @@ Environment-scoped entries from the earlier merged-root layout are fetched again
 Explicit credentials bypass Docker credential-helper caching; successful helper
 results, including anonymous resolution, can be reused for 30 seconds. Helper
 errors are not cached. A helper lookup exceeding 30 seconds fails and the pull
-proceeds anonymously, as for other helper failures.
+proceeds anonymously, as for other helper failures. The helper itself cannot be
+stopped; until it exits, lookups for that registry fail at once instead of
+starting another, and it holds none of the four helper slots.
 
 Shared clients are retained for at most five minutes in a 256-entry cache.
 Each entry serves one registry/repository and security scope, including its
