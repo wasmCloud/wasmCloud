@@ -188,7 +188,7 @@ jobs:
           rust-toolchain: nightly
           rust-components: rustfmt
       - name: Install cargo-machete
-        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         env:
           # Authenticate the action's GitHub API calls so they aren't throttled
           # by the 60/hr anonymous per-IP limit shared across hosted runners.
