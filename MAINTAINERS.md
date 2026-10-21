@@ -72,6 +72,10 @@ Name: Pavel Agafonov
 GitHub: @if0ne
 Organization: T-Bank
 
+Name: Jeremy Fleitz
+GitHub: @jfleitz
+Organization: Cosmonic
+
 ## @wasmCloud/go-maintainers
 
 _Covers Go SDK and Go-based tooling, including the runtime gateway, runtime operator, and proto
@@ -92,10 +96,6 @@ Organization: Helmet Security
 Name: Jordan Rash
 GitHub: @jordan-rash
 Organization: Synadia
-
-Name: Lucas Fontes
-GitHub: @lxfontes
-Organization: Independent
 
 Name: Eric Gregory
 GitHub: @ericgregory
@@ -161,10 +161,6 @@ Organization: Helmet Security
 Name: Victor Adossi
 GitHub: @vados-cosmonic
 Organization: Cosmonic
-
-Name: Lucas Fontes
-GitHub: @lxfontes
-Organization: Independent
 
 Name: Eric Gregory
 GitHub: @ericgregory
@@ -237,3 +233,6 @@ GitHub: @mattwilkinsonn
 
 Name: Ashe Rillan
 GitHub: @asherillan
+
+Name: Lucas Fontes
+GitHub: @lxfontes
