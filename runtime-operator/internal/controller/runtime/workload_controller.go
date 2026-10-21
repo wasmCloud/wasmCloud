@@ -51,7 +51,20 @@ type WorkloadReconciler struct {
 	// Spec.Environment). When false, cross-tenant scheduling is rejected
 	// and a Warning Event is recorded on the Workload.
 	AllowSharedHosts bool
-	reconciler       condition.AnyConditionedReconciler
+	// ClusterDomain is the cluster's DNS domain, used to build the
+	// fully-qualified Service DNS alias. Empty means DefaultClusterDomain.
+	ClusterDomain string
+	reconciler    condition.AnyConditionedReconciler
+}
+
+// DefaultClusterDomain is the Kubernetes default cluster DNS domain.
+const DefaultClusterDomain = "cluster.local"
+
+func (r *WorkloadReconciler) clusterDomain() string {
+	if d := strings.Trim(r.ClusterDomain, "."); d != "" {
+		return d
+	}
+	return DefaultClusterDomain
 }
 
 func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -263,14 +276,11 @@ func materializeLocalResources(ctx context.Context, c client.Client, namespace s
 	return lr, nil
 }
 
-// withServiceDNSAliases appends the Service's namespace-qualified DNS names to
-// config's `host-aliases`, keeping any aliases the user set, so the
-// wash-runtime DynamicRouter accepts requests arriving via Service DNS.
-func withServiceDNSAliases(config map[string]string, svcName, namespace string) map[string]string {
-	if config == nil {
-		config = make(map[string]string)
-	}
-
+// addServiceDNSAliases appends the Service's namespace-qualified DNS names to
+// config's `host-aliases` in place, keeping any aliases the user set, so the
+// wash-runtime DynamicRouter accepts requests arriving via Service DNS. config
+// must be non-nil.
+func addServiceDNSAliases(config map[string]string, svcName, namespace, clusterDomain string) {
 	var aliases []string
 	for _, alias := range strings.Split(config["host-aliases"], ",") {
 		if alias = strings.TrimSpace(alias); alias != "" && !slices.Contains(aliases, alias) {
@@ -280,7 +290,7 @@ func withServiceDNSAliases(config map[string]string, svcName, namespace string) 
 	for _, alias := range []string{
 		fmt.Sprintf("%s.%s", svcName, namespace),
 		fmt.Sprintf("%s.%s.svc", svcName, namespace),
-		fmt.Sprintf("%s.%s.svc.cluster.local", svcName, namespace),
+		fmt.Sprintf("%s.%s.svc.%s", svcName, namespace, clusterDomain),
 	} {
 		if !slices.Contains(aliases, alias) {
 			aliases = append(aliases, alias)
@@ -288,7 +298,6 @@ func withServiceDNSAliases(config map[string]string, svcName, namespace string) 
 	}
 
 	config["host-aliases"] = strings.Join(aliases, ",")
-	return config
 }
 
 func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *runtimev1alpha1.Workload) error {
@@ -348,7 +357,7 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 			return fmt.Errorf("materializing host interface config for %s/%s: %w", hi.Namespace, hi.Package, err)
 		}
 		if k8s := workload.Spec.Kubernetes; k8s != nil && k8s.Service != nil && hi.IsHTTPEntrypoint() {
-			hiConfig = withServiceDNSAliases(hiConfig, k8s.Service.Name, workload.Namespace)
+			addServiceDNSAliases(hiConfig, k8s.Service.Name, workload.Namespace, r.clusterDomain())
 		}
 		witWorld.HostInterfaces = append(witWorld.HostInterfaces, &runtimev2.WitInterface{
 			Namespace:  hi.Namespace,

@@ -470,7 +470,9 @@ spec:
                               maintain an EndpointSlice for, pointing to the host pods running this
                               workload. When set, the operator also registers the namespace-qualified
                               DNS names of the service (service-name.namespace,
-                              service-name.namespace.svc and service-name.namespace.svc.cluster.local)
+                              service-name.namespace.svc and service-name.namespace.svc.<domain>,
+                              where <domain> is the operator's --cluster-domain, cluster.local by
+                              default)
                               with the host so cluster-internal callers can reach the workload via
                               Service DNS without going through an external gateway. The bare
                               service-name is not registered: it would collide with a same-named
