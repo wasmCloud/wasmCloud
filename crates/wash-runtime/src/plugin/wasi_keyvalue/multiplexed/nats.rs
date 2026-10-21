@@ -7,7 +7,8 @@ use bytes::{Buf, Bytes};
 use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::RwLock;
 
-use crate::plugin::multiplex::BackendProvider;
+use crate::plugin::PluginEgressPolicy;
+use crate::plugin::multiplex::{BackendProvider, check_nats_url, connect_nats};
 
 use super::{
     CasGuard, CasOutcome, KeyResponse, KvBackend, KvId, LIST_KEYS_BATCH_SIZE, StoreError, Versioned,
@@ -330,15 +331,27 @@ impl BackendProvider<KvId> for NatsProvider {
         "nats"
     }
 
-    async fn instantiate(&self, config: &HashMap<String, String>) -> anyhow::Result<KvId> {
+    async fn instantiate(
+        &self,
+        config: &HashMap<String, String>,
+        egress: Option<&PluginEgressPolicy>,
+    ) -> anyhow::Result<KvId> {
         let url = config
             .get("url")
             .ok_or_else(|| anyhow::anyhow!("nats keyvalue backend requires a 'url' config"))?;
-        let client = async_nats::connect(url).await?;
+        let client = connect_nats(url, egress).await?;
         let context = async_nats::jetstream::new(client);
         Ok(Arc::new(NatsBackend {
             context: Arc::new(context),
             stores: RwLock::new(HashMap::new()),
         }))
+    }
+
+    fn check_egress(
+        &self,
+        config: &HashMap<String, String>,
+        policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()> {
+        check_nats_url(config, policy)
     }
 }

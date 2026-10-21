@@ -51,10 +51,13 @@ async fn redis_backend_interops_with_a_raw_keyspace() -> Result<()> {
 
     // The multiplexed backend pointed at the same redis (no prefix => flat).
     let backend: wash_runtime::plugin::wasi_keyvalue::KvId = RedisProvider
-        .instantiate(&HashMap::from([
-            ("backend".to_string(), "redis".to_string()),
-            ("url".to_string(), url.clone()),
-        ]))
+        .instantiate(
+            &HashMap::from([
+                ("backend".to_string(), "redis".to_string()),
+                ("url".to_string(), url.clone()),
+            ]),
+            None,
+        )
         .await
         .context("failed to instantiate redis backend")?;
 
@@ -103,11 +106,14 @@ async fn redis_backend_interops_with_a_raw_keyspace() -> Result<()> {
     // backend maps logical key `k` to redis key `app1:k`, and isolates from the
     // flat keys written above.
     let prefixed: wash_runtime::plugin::wasi_keyvalue::KvId = RedisProvider
-        .instantiate(&HashMap::from([
-            ("backend".to_string(), "redis".to_string()),
-            ("url".to_string(), url.clone()),
-            ("prefix".to_string(), "app1:".to_string()),
-        ]))
+        .instantiate(
+            &HashMap::from([
+                ("backend".to_string(), "redis".to_string()),
+                ("url".to_string(), url.clone()),
+                ("prefix".to_string(), "app1:".to_string()),
+            ]),
+            None,
+        )
         .await
         .context("failed to instantiate prefixed redis backend")?;
 

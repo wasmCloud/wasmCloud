@@ -289,6 +289,9 @@ pub struct HostCommand {
     /// where there is no cgroup, clamped to 256 MiB..1 TiB. An unset flag means
     /// the derived number, never "unbounded".
     ///
+    /// Swap is not part of the derived number. To let guests use swap, set this
+    /// (and `--max-process-memory`) explicitly.
+    ///
     /// What this bounds is the *total* of every guest's linear memory, which
     /// no other knob does: `--default-heap-memory` bounds one memory and
     /// `--core-instances` bounds a count of slots. Whether it is enforced or
@@ -321,6 +324,10 @@ pub struct HostCommand {
     /// the machine has. That matters most where nothing else stops it: macOS
     /// does not OOM-kill an ordinary process, it swaps until the machine
     /// stalls. `off` (or `none`) holds the process to no limit at all.
+    ///
+    /// Swap is not part of the derived limit, though the footprint counts
+    /// swapped pages. To let the host use swap before refusing guests, set
+    /// this explicitly, e.g. to RAM plus the share of swap it may take.
     #[arg(long = "max-process-memory", env = "WASH_HOST_MAX_PROCESS_MEMORY")]
     pub max_process_memory: Option<String>,
 

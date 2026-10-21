@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
+use crate::plugin::PluginEgressPolicy;
 use crate::plugin::multiplex::BackendProvider;
 
 use super::{
@@ -263,8 +264,21 @@ impl BackendProvider<KvId> for InMemoryProvider {
         DEFAULT_BACKEND
     }
 
-    async fn instantiate(&self, _config: &HashMap<String, String>) -> anyhow::Result<KvId> {
+    async fn instantiate(
+        &self,
+        _config: &HashMap<String, String>,
+        _egress: Option<&PluginEgressPolicy>,
+    ) -> anyhow::Result<KvId> {
         Ok(Arc::new(InMemoryBackend::new()))
+    }
+
+    /// Does not connect out.
+    fn check_egress(
+        &self,
+        _config: &HashMap<String, String>,
+        _policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 

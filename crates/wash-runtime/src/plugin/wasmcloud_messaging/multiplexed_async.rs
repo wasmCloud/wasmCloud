@@ -239,6 +239,21 @@ impl HostPlugin for MultiplexedAsyncMessaging {
         MULTIPLEXED_ASYNC_MESSAGING_ID
     }
 
+    /// Retains the declared ceiling; each bind checks its backend's url
+    /// against it before a connection is opened or reused.
+    fn configure_egress_policy(
+        &self,
+        policy: Arc<crate::plugin::PluginEgressPolicy>,
+    ) -> anyhow::Result<()> {
+        self.mux.configure_egress_policy(policy)
+    }
+
+    fn binding_schema(&self) -> crate::plugin::BindingSchema {
+        crate::plugin::multiplex::backend_binding_schema(
+            crate::plugin::multiplex::MESSAGING_HOST_OWNED_KEYS,
+        )
+    }
+
     fn world(&self) -> WitWorld {
         WitWorld {
             imports: HashSet::from([WitInterface::from(

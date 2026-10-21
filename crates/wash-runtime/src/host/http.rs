@@ -20,7 +20,7 @@
 
 use std::sync::atomic::AtomicBool;
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::HashMap,
     net::SocketAddr,
     path::Path,
     sync::{Arc, OnceLock},
@@ -496,21 +496,13 @@ pub trait Router: Send + Sync + 'static {
 
 /// Router that routes requests by 'Host' header, configured via WitInterface config
 ///
-/// Requests never lock and never write shared memory to read the table: each
-/// shard is an [`ArcSwap`](arc_swap::ArcSwap) snapshot, and a lookup matches
-/// inside a borrowed guard. Register and unbind therefore never make a request
-/// wait; a request in flight keeps matching against the snapshot it loaded.
-///
-/// A writer copies only the shards its workload's routes hash to, once each,
-/// and that copy is a shallow one (an `Arc` clone per hostname in the shard)
-/// plus a deep copy of just the hostnames it edits. A host holding 100k
-/// workloads cannot afford to copy a whole table on every start and stop
-/// (loading N workloads would cost O(N²)), and many shards keep each copy
-/// small.
+/// Requests read an ArcSwap snapshot without taking the writers' mutex.
+/// Persistent maps and replica sets share unchanged nodes between snapshots,
+/// so an update copies paths through those structures instead of the entire
+/// touched shard or replica set. Path buckets remain a small ordered vector.
 pub struct DynamicRouter {
     /// Maps a hostname to the path-scoped buckets registered under it, split
-    /// across shards by hostname so one write copies a small slice of the
-    /// table.
+    /// across shards by hostname. Updates copy persistent tree paths.
     hosts: Box<[RouteShard; ROUTE_SHARDS]>,
     /// Maps workload_id -> every route (primary + aliases, each with its path
     /// prefix) registered for it, so `on_workload_unbind` can remove all
@@ -526,9 +518,9 @@ pub struct DynamicRouter {
 /// ordered scan that stops at the first match. One hostname carries few
 /// prefixes in practice, so this stays cheaper than a trie.
 ///
-/// Keys and each hostname's buckets sit behind their own `Arc`s so copying a
-/// shard to edit it clones pointers, not strings and buckets.
-type HostBuckets = HashMap<Arc<str>, Arc<Vec<PathBucket>>>;
+/// Cloning a shard shares its root. Mutations copy tree paths and the edited
+/// hostname's bucket vector; replica sets share their unchanged tree nodes.
+type HostBuckets = imbl::HashMap<Arc<str>, Arc<Vec<PathBucket>>>;
 
 /// A shard on its own cache line pair, so a writer storing one shard does not
 /// invalidate the line readers of its neighbours load from.
@@ -536,8 +528,14 @@ type HostBuckets = HashMap<Arc<str>, Arc<Vec<PathBucket>>>;
 #[derive(Default)]
 struct RouteShard(arc_swap::ArcSwap<HostBuckets>);
 
-/// Enough shards that a write copies a small slice of a large table, few
-/// enough that an empty router stays small (32 KiB of shards).
+/// Bound each snapshot publication to one hostname shard.
+///
+/// An edit copies one persistent-tree path whatever the shard count, so the
+/// shards no longer bound how much a write copies. They keep a writer's store
+/// off the `ArcSwap` and cache lines that requests for other hostnames load,
+/// and keep each shard's tree a level or two shallower. 256 keeps an empty
+/// router small: 32 KiB of 128-byte shards, plus one ~48-byte `Arc` per shard
+/// for its empty map (an empty `imbl::HashMap` allocates no root node).
 const ROUTE_SHARDS: usize = 256;
 
 impl Default for DynamicRouter {
@@ -550,7 +548,7 @@ impl Default for DynamicRouter {
 }
 
 /// Every workload replica serving one `(hostname, path_prefix, scope)` triple.
-/// A `BTreeSet` keeps membership ordered and deterministic; a request picks one
+/// A persistent ordered set keeps membership deterministic; a request picks one
 /// replica at random (see [`DynamicRouter::select_workload`]).
 ///
 /// `scope` is part of the key, not a property of the bucket: the same
@@ -560,7 +558,7 @@ impl Default for DynamicRouter {
 struct PathBucket {
     prefix: NormalizedPathPrefix,
     scope: RouteScope,
-    workloads: BTreeSet<String>,
+    workloads: imbl::OrdSet<String>,
 }
 
 /// Most-specific-first: a longer prefix sorts before a shorter one, and the
@@ -605,7 +603,8 @@ impl PartialEq for PathBucket {
 impl Eq for PathBucket {}
 
 /// Take the writers' lock whether or not a writer panicked holding it: no
-/// write can panic halfway through, so a poisoned table is still a whole one.
+/// snapshots already published remain valid. An interrupted multi-shard update
+/// can be partial; poisoning alone must not make unrelated routes unavailable.
 fn lock_routes<G>(result: std::sync::LockResult<G>) -> G {
     result.unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -675,7 +674,7 @@ impl DynamicRouter {
                     buckets.push(PathBucket {
                         prefix: route.path_prefix.clone(),
                         scope: route.scope,
-                        workloads: BTreeSet::from([workload_id.to_string()]),
+                        workloads: imbl::OrdSet::unit(workload_id.to_string()),
                     });
                     // Most specific first — see `PathBucket`'s `Ord`.
                     buckets.sort();
@@ -769,8 +768,8 @@ impl DynamicRouter {
         } else {
             host.into()
         };
-        // Matched inside the guard: loading it writes nothing shared, where
-        // cloning the `Arc` out would bump a count every request shares.
+        // Keep the ArcSwap guard while matching to avoid an explicit Arc clone
+        // for the common lookup path.
         let table = self.shard(shard_index(&host)).load();
         let Some(buckets) = table.get(&*host) else {
             return Err(RouteError::NoWorkloadForHost(host.into_owned()));
@@ -3137,7 +3136,12 @@ async fn run_http_server<T: Router>(
                                     let remote_context =
                                         opentelemetry::global::get_text_map_propagator(|propagator| propagator.extract(&extractor));
 
-                                    handle_http_request(handler, req, scheme, handles, service_handlers, guest_meter).with_context(remote_context).await
+                                    // Defer `#[instrument]` until the propagated parent is active.
+                                    async move {
+                                        handle_http_request(handler, req, scheme, handles, service_handlers, guest_meter).await
+                                    }
+                                    .with_context(remote_context)
+                                    .await
                                 }
                             });
 
@@ -3293,6 +3297,11 @@ fn error_response(status: u16) -> hyper::Response<WasiBody> {
 ///   collectors can break down requests by 2xx/4xx/5xx.
 /// - `otel.status_code` is set to `ERROR` for 5xx; 4xx stays UNSET per semconv.
 #[instrument(skip_all, fields(
+    // There are no path-based route templates, so the OTel HTTP server span
+    // name falls back to the request method. Keep the static tracing name for
+    // human-readable runtime logs while overriding the exported span name.
+    otel.name = %req.method(),
+    otel.kind = "server",
     // Legacy (pre-semconv) attribute names retained so dashboards built against
     // them keep resolving.
     http.method = %req.method(),
@@ -3421,12 +3430,11 @@ async fn handle_http_request<T: Router>(
 
     let response = match workload_handle {
         Some(handle) => {
-            let req_span = tracing::span!(
-                tracing::Level::INFO,
-                "invoke_component_handler",
-                workload.name = handle.workload.name(),
-                workload.namespace = handle.workload.namespace(),
-                workload.id = handle.workload.id(),
+            let req_span = component_handler_span(
+                &method,
+                handle.workload.name(),
+                handle.workload.namespace(),
+                handle.workload.id(),
             );
             match invoke_component_handler(&handle, req, guest_meter)
                 .instrument(req_span)
@@ -3466,6 +3474,21 @@ async fn handle_http_request<T: Router>(
     Ok(response)
 }
 
+fn component_handler_span(
+    method: &hyper::Method,
+    workload_name: &str,
+    workload_namespace: &str,
+    workload_id: &str,
+) -> tracing::Span {
+    tracing::info_span!(
+        "invoke_component_handler",
+        otel.name = %method,
+        workload.name = workload_name,
+        workload.namespace = workload_namespace,
+        workload.id = workload_id,
+    )
+}
+
 /// Record the response's status on the current span as the OTel HTTP semconv
 /// attribute `http.response.status_code`. 5xx flips `otel.status_code` to
 /// `ERROR` per the HTTP semconv (4xx is a client error and stays UNSET).
@@ -3489,6 +3512,7 @@ fn record_response_status<B>(response: &hyper::Response<B>) {
 fn outbound_client_span(method: &hyper::Method, uri: &hyper::Uri) -> tracing::Span {
     let span = tracing::info_span!(
         "outbound_http_request",
+        otel.name = %method,
         otel.kind = "client",
         { HTTP_REQUEST_METHOD } = %method,
         { URL_FULL } = %uri,
@@ -4264,6 +4288,32 @@ async fn send_grpc_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use opentelemetry::trace::{SpanKind, TracerProvider as _};
+    use opentelemetry_sdk::{
+        error::OTelSdkResult,
+        trace::{SdkTracerProvider, SpanData, SpanExporter},
+    };
+    use std::collections::BTreeSet;
+    use std::sync::Mutex;
+    use tracing_subscriber::prelude::*;
+
+    #[derive(Clone, Debug, Default)]
+    struct RecordingSpanExporter {
+        spans: Arc<Mutex<Vec<SpanData>>>,
+    }
+
+    impl SpanExporter for RecordingSpanExporter {
+        fn export(
+            &self,
+            batch: Vec<SpanData>,
+        ) -> impl std::future::Future<Output = OTelSdkResult> + Send {
+            self.spans
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend(batch);
+            std::future::ready(Ok(()))
+        }
+    }
 
     fn build_request(uri: &str) -> hyper::Request<WasiBody> {
         hyper::Request::builder()
@@ -4298,6 +4348,36 @@ mod tests {
             &mut req,
             &hyper::http::uri::Scheme::HTTP
         ));
+    }
+
+    #[test]
+    fn component_handler_span_exports_method_name() {
+        let exporter = RecordingSpanExporter::default();
+        let spans = exporter.spans.clone();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter)
+            .build();
+        let tracer = provider.tracer("http-span-name-test");
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+
+        tracing::subscriber::with_default(subscriber, || {
+            let invocation =
+                component_handler_span(&hyper::Method::PATCH, "workload", "namespace", "id");
+            assert_eq!(
+                invocation.metadata().unwrap().name(),
+                "invoke_component_handler"
+            );
+            drop(invocation);
+        });
+
+        provider.force_flush().unwrap();
+        let spans = spans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(spans.len(), 1, "exported spans: {spans:#?}");
+        assert!(spans.iter().all(|span| span.name == "PATCH"));
+        assert_eq!(spans[0].span_kind, SpanKind::Internal);
     }
 
     /// `with_quotas` rebuilds an eagerly-configured client cache and must
@@ -5892,7 +5972,7 @@ mod tests {
         let bucket = |prefix: &str| PathBucket {
             prefix: NormalizedPathPrefix::new(prefix),
             scope: RouteScope::Local,
-            workloads: BTreeSet::new(),
+            workloads: imbl::OrdSet::new(),
         };
         let mut buckets = [
             bucket(""),
@@ -6332,6 +6412,76 @@ mod tests {
             .flat_map(|b| b.workloads.iter().cloned())
             .collect();
         assert_eq!(now, ["b"]);
+    }
+
+    #[test]
+    fn concurrent_route_churn_preserves_shared_replicas_and_held_snapshots() {
+        let router = Arc::new(DynamicRouter::default());
+        let shared = IngressRoute::ingress("shared.example.com");
+        router.register_routes("anchor", std::slice::from_ref(&shared));
+        let held = router.host_buckets("shared.example.com").unwrap();
+        std::thread::scope(|scope| {
+            for worker in 0..4 {
+                let router = &router;
+                let shared = &shared;
+                scope.spawn(move || {
+                    for index in 0..1000 {
+                        let id = format!("worker-{worker}-{index}");
+                        let distinct =
+                            IngressRoute::ingress(format!("w{worker}-{index}.example.com"));
+                        router.register_routes(&id, &[shared.clone(), distinct.clone()]);
+                        assert_eq!(
+                            router
+                                .select_workload(&distinct.host, "/", RouteScope::Ingress)
+                                .unwrap(),
+                            id
+                        );
+                        assert!(
+                            router
+                                .select_workload(&shared.host, "/", RouteScope::Ingress)
+                                .is_ok()
+                        );
+                        router.unregister_routes(&id);
+                    }
+                });
+            }
+        });
+        assert_eq!(
+            held[0].workloads.iter().cloned().collect::<Vec<_>>(),
+            ["anchor"]
+        );
+        assert_eq!(
+            router
+                .select_workload(&shared.host, "/", RouteScope::Ingress)
+                .unwrap(),
+            "anchor"
+        );
+    }
+
+    #[test]
+    #[ignore = "100k-route scaling probe; run explicitly with --ignored --nocapture"]
+    fn routing_write_scaling() {
+        for replicas in [false, true] {
+            let router = DynamicRouter::default();
+            let began = std::time::Instant::now();
+            for index in 0..100_000 {
+                let host = if replicas {
+                    "shared.scale.test".to_string()
+                } else {
+                    format!("w{index}.scale.test")
+                };
+                router.register_routes(&format!("w{index}"), &[IngressRoute::ingress(host)]);
+            }
+            let registered = began.elapsed();
+            for index in 0..100_000 {
+                router.unregister_routes(&format!("w{index}"));
+            }
+            assert!(lock_routes(router.workload_to_host.lock()).is_empty());
+            eprintln!(
+                "replicas={replicas}: register={registered:?}, register+remove={:?}",
+                began.elapsed()
+            );
+        }
     }
 
     /// A body error a local dispatch already produced reaches the guest as

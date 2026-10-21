@@ -320,6 +320,30 @@ pub(crate) struct InstancePool {
     sweeping: AtomicBool,
 }
 
+/// Own the armed bit even before Tokio first polls the task. Runtime shutdown
+/// drops this owner, allowing a retained pool to rearm on another runtime.
+struct SweepOwner {
+    pool: std::sync::Weak<InstancePool>,
+    armed: bool,
+}
+
+impl SweepOwner {
+    fn disarmed(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SweepOwner {
+    fn drop(&mut self) {
+        if self.armed
+            && let Some(pool) = self.pool.upgrade()
+        {
+            let _state = pool.lock_state();
+            pool.sweeping.store(false, Ordering::SeqCst);
+        }
+    }
+}
+
 /// What the pool's lock guards: the warm instances, and the measurement the
 /// sweep sizes them by.
 struct PoolState {
@@ -579,6 +603,10 @@ impl InstancePool {
         // Weak, so a stopped workload's pool is not kept alive by its own
         // timer.
         let pool = Arc::downgrade(self);
+        let mut owner = SweepOwner {
+            pool: pool.clone(),
+            armed: true,
+        };
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(reclaim.window);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -599,6 +627,9 @@ impl InstancePool {
                     return;
                 }
                 if !alive.sweep() {
+                    // sweep disarmed under the state lock. A new task may now
+                    // own the bit, so this owner's Drop must leave it alone.
+                    owner.disarmed();
                     return;
                 }
             }
@@ -1109,6 +1140,24 @@ mod tests {
             pool.sweeping.load(Ordering::SeqCst),
             "a parked instance arms it again"
         );
+    }
+
+    #[test]
+    fn shutdown_before_first_poll_releases_the_sweep_owner() {
+        let (pool, _channels) = warm_pool(2, &limits(4, 0, 1, 60, 0));
+        for _ in 0..2 {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            {
+                let _entered = runtime.enter();
+                pool.start_sweeping();
+                assert!(pool.sweeping.load(Ordering::SeqCst));
+            }
+            drop(runtime);
+            assert!(!pool.sweeping.load(Ordering::SeqCst));
+        }
     }
 
     /// At its floor, with nothing running, a pool has nothing a sweep could

@@ -724,6 +724,12 @@ fn effective_memory_limit(cgroup: Option<u64>, physical: Option<u64>) -> Option<
 /// Total physical memory, capping cgroup limits and providing the fallback
 /// where no cgroup limit is readable.
 ///
+/// Swap is left out on purpose. Counting it would let the derived limits wait
+/// until the machine is already swapping hard before refusing anything, and
+/// on macOS the swap total grows and shrinks with load. An operator who wants
+/// the host to use swap sets `max_process_memory` and `max_guest_memory`
+/// explicitly.
+///
 /// Refreshes RAM only. [`SystemMonitor`] samples every CPU core for the host's
 /// periodic reporting, which this path would pay on every engine build.
 ///

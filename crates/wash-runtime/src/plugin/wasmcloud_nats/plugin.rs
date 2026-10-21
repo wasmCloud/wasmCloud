@@ -10,7 +10,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use futures::StreamExt as _;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::engine::workload::{ResolvedWorkload, UnresolvedWorkload, WorkloadItem};
 use crate::observability::{MeterKind, Meters};
@@ -129,16 +129,7 @@ impl WasmcloudNats {
             return Ok(());
         };
         for server in &config.servers {
-            let server = server
-                .parse::<async_nats::ServerAddr>()
-                .with_context(|| format!("NATS server {server:?} is invalid"))?;
-            policy
-                .check_url(
-                    server.as_url_str(),
-                    crate::host::declared_port::Protocol::Tcp,
-                    4222,
-                )
-                .with_context(|| format!("NATS server {server:?} is denied"))?;
+            policy.check_nats_server(server)?;
         }
         Ok(())
     }
@@ -644,13 +635,6 @@ impl HostPlugin for WasmcloudNats {
     /// failover an unlisted peer would have given, which is why it is said here
     /// rather than left to be found when a node goes down.
     fn configure_egress_policy(&self, policy: Arc<PluginEgressPolicy>) -> anyhow::Result<()> {
-        if policy.disabled_loopback_grants() {
-            warn!(
-                plugin_id = self.id(),
-                "native plugin declares allowedHostLoopbackPorts, but host-loopback access is \
-                 disabled"
-            );
-        }
         info!(
             plugin_id = self.id(),
             "wasmcloud:nats connections are limited to the declared `servers`; cluster-advertised \
