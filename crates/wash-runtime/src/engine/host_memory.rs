@@ -646,7 +646,7 @@ fn max_map_count() -> Option<u64> {
 /// A cgroup limit is never taken above physical memory: cgroup v1 spells
 /// "unlimited" as `PAGE_COUNTER_MAX * PAGE_SIZE`, a number just under
 /// `i64::MAX`, and a limit past RAM can't be reached before the machine runs out.
-pub(crate) fn detected_memory_limit() -> Option<u64> {
+pub fn detected_memory_limit() -> Option<u64> {
     detected_memory_limit_with(system_total_memory(), |path| {
         std::fs::read_to_string(path).ok()
     })

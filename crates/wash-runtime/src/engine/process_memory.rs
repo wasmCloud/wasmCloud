@@ -75,7 +75,7 @@ mod sampling;
 use footprint::FootprintReader;
 #[cfg(test)]
 use footprint::linux_footprint;
-pub use footprint::process_footprint;
+pub use footprint::{pid_footprint, process_footprint};
 use sampling::{SAMPLED, live_guards, lock_ignoring_poison, sample_forever};
 
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
@@ -596,6 +596,13 @@ mod tests {
             footprint > MIB,
             "a test binary is larger than 1 MiB: {footprint}"
         );
+    }
+
+    #[test]
+    fn another_process_reads_like_this_one() {
+        let by_pid = pid_footprint(std::process::id()).expect("this process is readable");
+        assert!(by_pid > MIB, "a test binary is larger than 1 MiB: {by_pid}");
+        assert_eq!(pid_footprint(u32::MAX), None);
     }
 
     #[test]
