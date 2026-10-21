@@ -11,35 +11,13 @@ use wash_runtime::{
     wit::WitInterface,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Flavour {
-    Warm,
-    ScaleToZero,
-}
+pub(super) use bench_tools::density::Flavour;
 
-impl Flavour {
-    pub(super) const ALL: [Self; 2] = [Self::Warm, Self::ScaleToZero];
-
-    pub(super) fn name(self) -> &'static str {
-        match self {
-            Self::Warm => "warm",
-            Self::ScaleToZero => "scale-to-zero",
-        }
-    }
-
-    pub(super) fn parse(name: &str) -> Result<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|f| f.name() == name)
-            .with_context(|| format!("unknown flavour {name}"))
-    }
-
-    pub(super) fn pool_size(self) -> i32 {
-        match self {
-            Self::Warm => 1,
-            Self::ScaleToZero => 0,
-        }
-    }
+pub(super) fn parse_flavour(name: &str) -> Result<Flavour> {
+    Flavour::ALL
+        .into_iter()
+        .find(|f| f.name() == name)
+        .with_context(|| format!("unknown flavour {name}"))
 }
 
 /// What a run was told, from the environment.
@@ -134,11 +112,7 @@ impl Settings {
 }
 
 pub(super) fn effective_memory() -> Result<u64> {
-    use sysinfo::{MemoryRefreshKind, RefreshKind, System};
-    let system = System::new_with_specifics(
-        RefreshKind::new().with_memory(MemoryRefreshKind::new().with_ram()),
-    );
-    bench_tools::memory::memory_budget(system.total_memory()).context(
+    host_memory::detected_memory_limit().context(
         "cannot detect a memory budget; set WASH_SCALE_MEMORY_LIMIT and WASH_SCALE_GUEST_MEMORY",
     )
 }

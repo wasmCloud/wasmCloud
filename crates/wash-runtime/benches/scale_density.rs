@@ -71,8 +71,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result, bail};
 use futures::{StreamExt as _, stream};
 
+use bench_tools::density::{Report, Step, percentile, print_comparison, print_step, spread};
 use wash_runtime::engine::Engine;
-use wash_runtime::engine::host_memory::HostMemoryBudgets;
+use wash_runtime::engine::host_memory::{HostMemoryBudgets, render_bytes};
 use wash_runtime::engine::pool_usage::{PoolUsage, pool_refusals};
 use wash_runtime::engine::process_memory::process_footprint;
 use wash_runtime::host::http::{DynamicRouter, Ingress};
@@ -85,13 +86,10 @@ use wash_runtime::types::{
 mod estimate;
 #[path = "scale_density/load.rs"]
 mod load;
-#[path = "scale_density/report.rs"]
-mod report;
 #[path = "scale_density/settings.rs"]
 mod settings;
 use estimate::*;
 use load::*;
-use report::*;
 use settings::*;
 
 /// Set on a child process: the flavour it runs, its CPU limit, and where it
@@ -106,7 +104,7 @@ const GUARD_SLACK_PERCENT: u64 = 125;
 
 fn main() -> Result<()> {
     if let Ok(flavour) = std::env::var(CHILD_FLAVOUR) {
-        return child_main(Flavour::parse(&flavour)?);
+        return child_main(parse_flavour(&flavour)?);
     }
 
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -141,7 +139,7 @@ fn main() -> Result<()> {
             reports.push(run_child(flavour, cpus)?);
         }
     }
-    print_comparison(&settings, &reports);
+    print_comparison(&reports);
     if let Some(path) = &settings.report_json {
         std::fs::write(path, serde_json::to_vec_pretty(&reports)?)
             .with_context(|| format!("writing {path}"))?;
@@ -275,84 +273,6 @@ impl std::fmt::Display for Stop {
     }
 }
 
-/// One measurement, taken after a step of starts.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct Step {
-    workloads: usize,
-    elapsed_secs: f64,
-    starts_per_sec: f64,
-    footprint_bytes: u64,
-    bytes_per_workload: u64,
-    /// The engine's guard state: normal, high or over.
-    guard: String,
-    core_instances_in_use: u64,
-    core_instances_total: u64,
-    memories_in_use: u64,
-    memories_total: u64,
-    /// Workloads this step started, and the requests its sample sent.
-    started_in_step: usize,
-    sample_requests: usize,
-    requests_ok: usize,
-    requests_failed: usize,
-    warmup_failed: usize,
-    requests_per_sec: f64,
-    latency_p50_ms: Option<f64>,
-    latency_p99_ms: Option<f64>,
-    /// Scale-to-zero only: how long until instances made by the sample were
-    /// gone again.
-    spin_down_ms: Option<f64>,
-    /// Growths refused for the process limit, and instantiations refused by
-    /// the pool, so far.
-    memory_refusals: u64,
-    pool_refusals: u64,
-    /// Guest memory charged now, and growths the guest budget refused so far.
-    guest_memory_bytes: u64,
-    guest_refusals: u64,
-    /// Workload starts the memory guard refused so far.
-    refused_starts: u64,
-    /// Nothing was refused during this step and its new workloads served:
-    /// only clean steps say what a workload costs (see [`Limits`]).
-    clean: bool,
-    /// CPU the host used during the step, and that as a share of the cores
-    /// it may use over the step's wall time.
-    cpu_secs: Option<f64>,
-    cpu_percent: Option<f64>,
-    /// Of that, starting the step's workloads (with a warm one's first
-    /// request), and serving its sample (with a scale-to-zero spin-down).
-    start_cpu_secs: Option<f64>,
-    sample_cpu_secs: Option<f64>,
-    /// The workload count the measurements so far say this host can hold,
-    /// the lowest measured bound in [`Limits`]; `None` when no bound is known.
-    theoretical_limit: Option<u64>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct Report {
-    flavour: String,
-    /// The flavour and its CPU limit, as the comparison heads its column.
-    label: String,
-    fixture: String,
-    /// Cores the host may use: the CPU limit, or every core.
-    cores: usize,
-    cpu_limit: Option<usize>,
-    /// Whether the limit was held by affinity, not just tokio's worker count.
-    cpu_pinned: bool,
-    /// Whether CPU figures leave out the load generator.
-    cpu_host_only: bool,
-    cpu_secs_total: Option<f64>,
-    memory_limit_bytes: u64,
-    guest_memory_bytes: u64,
-    core_instances: u32,
-    baseline_footprint_bytes: u64,
-    core_instances_per_workload: Option<u64>,
-    /// Workloads at the last clean step: every one started and served, and
-    /// nothing refused.
-    served: usize,
-    limits: Limits,
-    stop: Stop,
-    steps: Vec<Step>,
-}
-
 // A missing reading cannot support either a capacity estimate or the guard's
 // overshoot check. End the run rather than report it as a measured zero.
 fn measured_footprint(reading: Option<u64>, phase: &str) -> Result<u64> {
@@ -414,7 +334,6 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
     let mut started = 0usize;
     let mut running = Vec::new();
     let mut next_index = 0;
-    let mut per_workload_core_instances = None;
     let mut serving = bench_tools::density::ServingEvidence::default();
     let stop = loop {
         if settings.max_components.is_some_and(|cap| started >= cap) {
@@ -471,14 +390,6 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         let footprint = measured_footprint(process_footprint(), "step")?;
         let usage = engine.pool_usage();
         let in_use = usage.map_or(0, |u| u.core_instances.in_use);
-        if flavour == Flavour::Warm
-            && per_workload_core_instances.is_none()
-            && started > 0
-            && warm_failed == 0
-        {
-            per_workload_core_instances =
-                Some(in_use.saturating_sub(baseline_in_use) / started as u64).filter(|n| *n > 0);
-        }
         let bytes_per_workload = footprint.saturating_sub(baseline) / started.max(1) as u64;
         let memory_refused = engine.guest_memory().process_refused() - memory_refusals_baseline;
         let guest_refused = engine.guest_memory().refused() - guest_refusals_baseline;
@@ -492,53 +403,53 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         let sample_cpu_secs = between(cpu_started, cpu_now);
         cpu_before = cpu_now;
         let wall_secs = step_started.elapsed().as_secs_f64().max(f64::EPSILON);
-        let step = Step {
-            workloads: started,
-            elapsed_secs: run_started.elapsed().as_secs_f64(),
-            starts_per_sec: newly as f64 / step_secs.max(f64::EPSILON),
-            footprint_bytes: footprint,
-            bytes_per_workload,
-            guard: guard.state().as_str().to_string(),
-            core_instances_in_use: in_use,
-            core_instances_total: usage.map_or(0, |u| u.core_instances.total),
-            memories_in_use: usage.map_or(0, |u| u.memories.in_use),
-            memories_total: usage.map_or(0, |u| u.memories.total),
-            started_in_step: newly,
-            sample_requests: sample.len(),
-            requests_ok: answered.ok,
-            requests_failed: answered.failed,
-            warmup_failed: warm_failed,
-            requests_per_sec: answered.ok as f64 / sample_secs.max(f64::EPSILON),
-            latency_p50_ms: percentile(&answered.latencies, 0.50),
-            latency_p99_ms: percentile(&answered.latencies, 0.99),
-            spin_down_ms,
-            memory_refusals: memory_refused,
-            pool_refusals: pool_refusals() - pool_refusals_baseline,
-            guest_memory_bytes: engine.guest_memory().in_use(),
-            guest_refusals: guest_refused,
-            refused_starts: guard.refused_starts(),
-            clean: false,
-            cpu_secs,
-            cpu_percent: cpu_secs.map(|secs| secs / (wall_secs * cpu.cores as f64) * 100.0),
-            start_cpu_secs,
-            sample_cpu_secs,
-            theoretical_limit: None,
-        };
         let refusals_now = (
             memory_refused,
             guest_refused,
             pool_refusals() - pool_refusals_baseline,
             guard.refused_starts(),
         );
-        let mut step = step;
-        let served = serving.observe(step.requests_ok, step.requests_failed, warm_failed);
-        step.clean = refusals_now == refusals_before && starts.first_error.is_none() && served;
+        let refused_in_step = [
+            refusals_now.0 - refusals_before.0,
+            refusals_now.1 - refusals_before.1,
+            refusals_now.2 - refusals_before.2,
+            refusals_now.3 - refusals_before.3,
+        ]
+        .iter()
+        .sum::<u64>()
+            + u64::from(starts.first_error.is_some());
         refusals_before = refusals_now;
-        steps.push(step);
-        let so_far = Limits::from_steps(&settings, cpu.cores, baseline, &pool_baseline, &steps);
+        let served = serving.observe(answered.ok, answered.failed, warm_failed);
+        steps.push(Step {
+            workloads: started,
+            started: newly,
+            starts_per_sec: newly as f64 / step_secs.max(f64::EPSILON),
+            start_p99_ms: None,
+            refused: refused_in_step,
+            footprint_bytes: Some(footprint),
+            bytes_per_workload: Some(bytes_per_workload),
+            guest_memory_bytes: Some(engine.guest_memory().in_use()),
+            core_instances_in_use: Some(in_use),
+            core_instances_total: usage.map(|u| u.core_instances.total),
+            memories_in_use: usage.map(|u| u.memories.in_use),
+            memories_total: usage.map(|u| u.memories.total),
+            requests_ok: answered.ok,
+            requests_failed: answered.failed,
+            warmup_failed: warm_failed,
+            requests_per_sec: answered.ok as f64 / sample_secs.max(f64::EPSILON),
+            request_p50_ms: percentile(&answered.latencies, 0.50),
+            request_p99_ms: percentile(&answered.latencies, 0.99),
+            spin_down_ms,
+            cpu_percent: cpu_secs.map(|secs| secs / (wall_secs * cpu.cores as f64) * 100.0),
+            start_cpu_secs,
+            sample_cpu_secs,
+            clean: refused_in_step == 0 && served,
+            theoretical_limit: None,
+        });
+        let so_far = Estimate::from_steps(&settings, cpu.cores, baseline, &pool_baseline, &steps);
         let first = steps.len() == 1;
         let step = steps.last_mut().expect("just pushed");
-        step.theoretical_limit = so_far.binding().1;
+        step.theoretical_limit = so_far.binding();
         print_step(first, step);
 
         // The guard first: a run it ends is the one this bench is for, and
@@ -573,34 +484,42 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         }
     };
 
-    let served = steps
-        .iter()
-        .rev()
-        .find(|s| s.clean)
-        .map_or(0, |s| s.workloads);
+    let estimate = Estimate::from_steps(&settings, cpu.cores, baseline, &pool_baseline, &steps);
     let report = Report {
-        flavour: flavour.name().to_string(),
+        bench: "scale_density".into(),
+        flavour: Some(flavour),
         label: label(flavour.name(), cpu.limit),
-        fixture: settings.fixture.to_string(),
+        subject: format!(
+            "{}, max-guest-memory {}, pool {} core instances, {}{}",
+            settings.fixture,
+            render_bytes(settings.guest_memory),
+            settings.core_instances,
+            match (cpu.limit, cpu.pinned) {
+                (Some(n), true) => format!("{n} pinned cores"),
+                (Some(n), false) => format!("{n} workers"),
+                (None, _) => format!("{} cores", cpu.cores),
+            },
+            if cpu_host_only {
+                ""
+            } else {
+                ", CPU includes the load generator's"
+            },
+        ),
         cores: cpu.cores,
-        cpu_limit: cpu.limit,
-        cpu_pinned: cpu.pinned,
-        cpu_host_only,
+        memory_limit_bytes: settings.memory_limit,
+        baseline_footprint_bytes: Some(baseline),
+        limits: estimate.limits,
+        marginal_bytes_per_workload: estimate.marginal_bytes_per_workload,
+        cpu_max_starts_per_sec: estimate.max_starts_per_sec,
+        cpu_max_requests_per_sec: estimate.max_requests_per_sec,
         cpu_secs_total: host_cpu(&load.threads)
             .0
             .zip(cpu_baseline)
             .map(|(now, before)| now.saturating_sub(before).as_secs_f64()),
-        memory_limit_bytes: settings.memory_limit,
-        guest_memory_bytes: settings.guest_memory,
-        core_instances: settings.core_instances,
-        baseline_footprint_bytes: baseline,
-        core_instances_per_workload: per_workload_core_instances,
-        served,
-        limits: Limits::from_steps(&settings, cpu.cores, baseline, &pool_baseline, &steps),
-        stop,
+        stop: stop.to_string(),
         steps,
     };
-    eprintln!("stopped at {} workloads: {}", started, report.stop);
+    eprintln!("stopped at {started} workloads: {}", report.stop);
     // Not stopping the host: thousands of workload stops would only measure
     // teardown, and the child exits next.
     drop(host);
@@ -729,8 +648,6 @@ async fn requests(
     }
 }
 
-use bench_tools::density::{percentile, spread};
-
 /// How long until the pool is back to the instances it held before the
 /// sample, in milliseconds; capped at ten seconds.
 async fn wait_for_spin_down(engine: &Engine, floor: u64) -> f64 {
@@ -784,12 +701,6 @@ mod tests {
         assert_eq!(
             measured_rate(2, [(None, 1000), (Some(2.0), 10)].into_iter()),
             Some(10.0)
-        );
-        assert_eq!(or_unknown(None), "?");
-        assert_eq!(percentile(&[], 0.5), None);
-        assert_eq!(
-            serde_json::to_value(CpuCapacity::IdleUnbounded).unwrap(),
-            "idle-unbounded"
         );
     }
 
