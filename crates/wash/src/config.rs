@@ -559,6 +559,13 @@ pub struct HostPluginConfig {
     /// against the same top-level `configs:`/`secrets:` catalogs.
     #[serde(flatten)]
     pub environment: EnvironmentLayer,
+    /// Config keys whose values come from a secrets plugin, as
+    /// `key: <plugin-id>/<secret-key>`. The host resolves each at bind through
+    /// the named plugin, as the host rather than any workload, and hands the
+    /// value to this plugin under `key`. A key set here may not also come from
+    /// `config`/`configFrom`/`secretFrom`. Bindings layer their own over these.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secret: BTreeMap<String, String>,
     /// Hosts this plugin may reach. Component plugins are gated at their WASI
     /// sockets and HTTP interfaces. Native plugins must enforce this against
     /// their client endpoints or fail host startup. Empty denies all.
@@ -595,6 +602,10 @@ pub struct PluginBindingConfig {
     /// through the same `configs:`/`secrets:` catalogs as everything else.
     #[serde(flatten)]
     pub environment: EnvironmentLayer,
+    /// This binding's keys from a secrets plugin, `key: <plugin-id>/<secret-key>`,
+    /// layered over the entry's `secret`. See [`HostPluginConfig::secret`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secret: BTreeMap<String, String>,
 }
 
 /// Config-file spelling of
@@ -712,6 +723,7 @@ impl HostPluginConfig {
         let owner = format!("host.plugins '{}'", self.id);
         let mut set = wash_runtime::plugin::PluginBindingSet::new(self.id.clone())
             .with_base(resolve(&self.environment, &owner)?)
+            .with_secret_base(self.secret.clone().into_iter().collect())
             .with_host_owned_keys(&self.host_owned_keys)
             .with_workload_config(self.workload_config.unwrap_or(default_policy).into());
         // Declared only when the operator wrote one of the lists. An entry that
@@ -736,10 +748,12 @@ impl HostPluginConfig {
                     self.id
                 );
             }
-            set = set.with_binding(
-                name.clone(),
-                resolve(&binding.environment, &format!("{owner} binding '{name}'"))?,
-            );
+            set = set
+                .with_binding(
+                    name.clone(),
+                    resolve(&binding.environment, &format!("{owner} binding '{name}'"))?,
+                )
+                .with_binding_secret(name.clone(), binding.secret.clone().into_iter().collect());
         }
         Ok(set)
     }
@@ -2944,6 +2958,49 @@ host:
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
         let err = config.host().all_plugins().unwrap_err().to_string();
         assert!(err.contains("more than once"), "got: {err}");
+    }
+
+    #[test]
+    fn plugin_secret_maps_parse_on_the_entry_and_each_binding() {
+        let yaml = r#"
+host:
+  plugins:
+    - id: wasmcloud-postgres
+      secret:
+        password: pragma-secrets/pg-password
+      bindings:
+        app-db:
+          secret:
+            url: pragma-secrets/pg-url-app
+          config:
+            other: hello
+        reports-db:
+          secret:
+            url: pragma-secrets-new/pg-url-reports
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let entry = &config.host().plugins[0];
+        assert_eq!(entry.secret["password"], "pragma-secrets/pg-password");
+        assert_eq!(
+            entry.bindings["app-db"].secret["url"],
+            "pragma-secrets/pg-url-app"
+        );
+
+        let set = entry
+            .to_binding_set(&config, Path::new("."), None, WorkloadConfigPolicy::Deny)
+            .unwrap();
+        let app = set.secret_refs(Some("app-db"));
+        assert_eq!(app["url"], "pragma-secrets/pg-url-app");
+        assert_eq!(app["password"], "pragma-secrets/pg-password");
+        assert_eq!(
+            set.secret_refs(Some("reports-db"))["url"],
+            "pragma-secrets-new/pg-url-reports"
+        );
+        assert_eq!(set.host_layer("app-db")["other"], "hello");
+        assert!(
+            !set.host_layer("app-db").contains_key("url"),
+            "a secret is never written into the plain config"
+        );
     }
 
     #[test]

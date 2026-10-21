@@ -3093,9 +3093,6 @@ impl UnresolvedWorkload {
         crate::plugin::check_wasi_overrides(plugins)?;
         // Track bound plugins with their matched interfaces for cleanup on failure
         let mut bound_plugins_with_interfaces: Vec<BoundPluginWithInterfaces> = Vec::new();
-        // Item id -> the plugin its plain `wasmcloud:secrets` import bound to:
-        // the one its `secret:<key>` config references resolve through.
-        let mut secrets_bound_by: HashMap<String, &'static str> = HashMap::new();
         let mut bound_plugins: Vec<(Arc<dyn HostPlugin + 'static>, Vec<String>)> = Vec::new();
 
         // Collect all component's required (unmatched) host interfaces
@@ -3254,22 +3251,11 @@ impl UnresolvedWorkload {
         // differently across process restarts — and with a plugin that *calls*
         // an interface rather than serving it, one of those outcomes fails the
         // deploy. A deterministic order at least makes the result reproducible.
-        //
-        // Plugins serving `wasmcloud:secrets` go first: another plugin may
-        // resolve a secret reference in its config at its own bind
-        // ([`crate::plugin::SecretResolver`]), and a secrets plugin only knows
-        // the workload's scope once the workload has bound to it. Plugins that
-        // override WASI bind after the rest, so that nothing binds over a
-        // redefinition and shadowing is on only while they bind.
+        // Plugins that override WASI bind after the rest, so that nothing binds
+        // over a redefinition and shadowing is on only while they bind.
         let mut plugins_in_order: Vec<(&&'static str, &Arc<dyn HostPlugin>)> =
             plugins.iter().collect();
-        plugins_in_order.sort_by_cached_key(|(id, p)| {
-            (
-                !p.wasi_overrides().imports.is_empty(),
-                !crate::plugin::serves_secrets(&p.world()),
-                **id,
-            )
-        });
+        plugins_in_order.sort_by_key(|(id, p)| (!p.wasi_overrides().imports.is_empty(), **id));
         for (plugin_id, p) in plugins_in_order {
             let plugin_interfaces = p.world();
             trace!(plugin_id = plugin_id, plugin_interfaces = ?plugin_interfaces, "checking plugin interfaces");
@@ -3392,50 +3378,33 @@ impl UnresolvedWorkload {
                         })
                         .collect();
 
-                // `secret:<key>` config values resolve last, per item (the
-                // secrets scope belongs to the calling item), through the
-                // plugin that item's own plain `wasmcloud:secrets` import
-                // bound to — already bound, since secrets plugins bind first.
-                // Following the binding, rather than choosing a provider here,
-                // keeps one answer to "who serves this workload's secrets".
-                // A secrets plugin's own config is never resolved through
-                // itself.
-                let has_refs = !crate::plugin::serves_secrets(&plugin_interfaces)
-                    && crate::plugin::has_secret_refs(resolved_component_bindings.iter().flatten());
-                if has_refs {
-                    for ((id, _), interfaces) in plugin_component_bindings
-                        .iter()
-                        .zip(resolved_component_bindings.iter_mut())
+                // The operator's `secret:` maps resolve last, through the
+                // secrets plugin each value names, as the host rather than as
+                // this workload: they read the plugin's host scope, never the
+                // workload's, and only the operator can write them.
+                for ((_, requested), interfaces) in plugin_component_bindings
+                    .iter()
+                    .zip(resolved_component_bindings.iter_mut())
+                    .filter(|_| declared.has_secret_refs())
+                {
+                    match crate::plugin::resolve_operator_secret_refs(
+                        plugins, plugin_id, &declared, requested, interfaces,
+                    )
+                    .await
                     {
-                        let item_id = match id {
-                            IdFlavor::Component(id) | IdFlavor::Service(id) => id.as_ref(),
-                        };
-                        let resolver = secrets_bound_by
-                            .get(item_id)
-                            .and_then(|by| plugins.get(by))
-                            .and_then(|p| p.secret_resolver());
-                        match crate::plugin::resolve_secret_refs(
-                            resolver.as_deref(),
-                            self.id(),
-                            item_id,
-                            interfaces,
-                        )
-                        .await
-                        {
-                            Ok(resolved) => *interfaces = resolved,
-                            Err(e) => {
-                                unbind_all(
-                                    self.id(),
-                                    &bound_plugins_with_interfaces,
-                                    "secret reference",
-                                    cleanup,
-                                )
-                                .await;
-                                bail!(e.context(format!(
-                                    "workload {} cannot bind plugin '{plugin_id}'",
-                                    self.id()
-                                )))
-                            }
+                        Ok(resolved) => *interfaces = resolved,
+                        Err(e) => {
+                            unbind_all(
+                                self.id(),
+                                &bound_plugins_with_interfaces,
+                                "secret reference",
+                                cleanup,
+                            )
+                            .await;
+                            bail!(e.context(format!(
+                                "workload {} cannot bind plugin '{plugin_id}'",
+                                self.id()
+                            )))
                         }
                     }
                 }
@@ -3631,9 +3600,6 @@ impl UnresolvedWorkload {
                             "successfully bound plugin to component"
                         );
                         workload_item.add_plugin(plugin_id, p.clone());
-                        if matching_interfaces.iter().any(is_plain_secrets_store) {
-                            secrets_bound_by.insert(workload_item.id().to_string(), plugin_id);
-                        }
                         workload_item.plugin_bound_instances.extend(
                             matching_interfaces
                                 .iter()
@@ -4191,16 +4157,6 @@ fn served_by_host(entry: &WitInterface, world: &WitWorld) -> bool {
             .all(|used| used.name.is_none() && used.is_host_builtin())
 }
 
-/// Whether `iface` is a plain (unlabeled) `wasmcloud:secrets` store binding:
-/// the one an item's `store.get` calls, and so the one its `secret:<key>`
-/// config references resolve through.
-fn is_plain_secrets_store(iface: &WitInterface) -> bool {
-    iface.name.is_none()
-        && iface.namespace == "wasmcloud"
-        && iface.package == "secrets"
-        && iface.interfaces.contains("store")
-}
-
 /// Unbind every plugin already bound for `workload_id`, newest first.
 ///
 /// The rollback every bind failure performs: without it a plugin that bound
@@ -4461,7 +4417,7 @@ mod tests {
         bound_interfaces: Arc<Mutex<Vec<WitInterface>>>,
         /// WASI interfaces this plugin claims to redefine.
         wasi_overrides: WitWorld,
-        /// Resolves `secret:<key>` references for the items bound to it.
+        /// Resolves operator `secret:<plugin-id>/<key>` references naming it.
         secret_resolver: Option<Arc<dyn crate::plugin::SecretResolver>>,
     }
 
@@ -4497,8 +4453,8 @@ mod tests {
             self
         }
 
-        /// Resolve `secret:<key>` references through `resolver`, the way a
-        /// plugin serving `wasmcloud:secrets` does.
+        /// Resolve references naming this plugin through `resolver`, the way a
+        /// host component plugin serving `wasmcloud:secrets` does.
         fn resolving(mut self, resolver: Arc<dyn crate::plugin::SecretResolver>) -> Self {
             self.secret_resolver = Some(resolver);
             self
@@ -5036,56 +4992,25 @@ mod tests {
             .collect()
     }
 
-    /// Answers every key with `value`, recording the items it resolved for.
+    /// Answers every key with `<prefix>:<key>`, recording the keys asked.
     struct EchoResolver(&'static str, Arc<Mutex<Vec<String>>>);
 
     #[async_trait::async_trait]
     impl crate::plugin::SecretResolver for EchoResolver {
-        async fn resolve(
-            &self,
-            _workload_id: &str,
-            component_id: &str,
-            key: &str,
-        ) -> anyhow::Result<Option<String>> {
-            self.1.lock().unwrap().push(component_id.to_string());
-            Ok(Some(format!("{}:{key}", self.0)))
+        async fn resolve(&self, key: &str) -> anyhow::Result<Option<String>> {
+            self.1.lock().unwrap().push(key.to_string());
+            Ok((key != "absent").then(|| format!("{}:{key}", self.0)))
         }
     }
 
-    const SECRETS_STORE: &str = "wasmcloud:secrets/store@2.1.0";
+    type PluginMap = HashMap<&'static str, Arc<dyn HostPlugin>>;
 
-    /// A workload whose marker entry carries `cred: secret:db-password`, plus
-    /// a plain `wasmcloud:secrets` entry.
-    fn secret_ref_workload(components: Vec<WorkloadComponent>) -> UnresolvedWorkload {
-        let mut marker = WitInterface::from(MARKER);
-        marker
-            .config
-            .insert("cred".to_string(), "secret:db-password".to_string());
-        UnresolvedWorkload::new(
-            "local-first".to_string(),
-            "local-first".to_string(),
-            "test-namespace".to_string(),
-            None,
-            components,
-            vec![marker, WitInterface::from(SECRETS_STORE)],
-        )
-    }
-
-    /// A `secret:` reference resolves through the plugin the item's own
-    /// `wasmcloud:secrets` import bound to — which binds first even though its
-    /// id sorts after the consumer's — and the consumer sees only the value.
-    #[tokio::test]
-    async fn secret_refs_resolve_through_the_items_secrets_binding() {
-        let component = component_from_wat(
-            "app",
-            &format!(
-                r#"(component (import "{MARKER}" (instance)) (import "{SECRETS_STORE}" (instance)))"#
-            ),
-        );
-        let component_id = component.id().to_string();
+    /// A marker consumer plus a `z-secrets` plugin that resolves for the host
+    /// (and serves nothing the workload imports).
+    fn secret_ref_plugins() -> (Arc<MockPlugin>, Arc<Mutex<Vec<String>>>, PluginMap) {
         let asked = Arc::new(Mutex::new(Vec::new()));
         let secrets = Arc::new(
-            MockPlugin::new("z-secrets", vec![WitInterface::from(SECRETS_STORE)], vec![])
+            MockPlugin::new("z-secrets", vec![], vec![])
                 .resolving(Arc::new(EchoResolver("from-z", asked.clone()))),
         );
         let consumer = Arc::new(MockPlugin::new(
@@ -5093,53 +5018,95 @@ mod tests {
             vec![WitInterface::from(MARKER)],
             vec![],
         ));
-        let plugins: HashMap<&'static str, Arc<dyn HostPlugin>> = HashMap::from([
-            (secrets.id(), secrets.clone() as Arc<dyn HostPlugin>),
-            (consumer.id(), consumer.clone() as Arc<dyn HostPlugin>),
-        ]);
-
-        secret_ref_workload(vec![component])
-            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
-            .await
-            .unwrap();
-
-        let seen = consumer.bound_interfaces.lock().unwrap();
-        assert!(
-            seen.iter()
-                .all(|i| i.config.get("cred").map(String::as_str) == Some("from-z:db-password")),
-            "{seen:?}"
-        );
-        assert_eq!(*asked.lock().unwrap(), [component_id]);
-    }
-
-    /// An item with no `wasmcloud:secrets` binding has nothing to resolve a
-    /// reference through, so the bind fails instead of choosing a provider.
-    #[tokio::test]
-    async fn a_secret_ref_without_a_secrets_binding_fails_the_bind() {
-        let component = marker_importer("app");
-        let secrets = Arc::new(
-            MockPlugin::new("z-secrets", vec![WitInterface::from(SECRETS_STORE)], vec![])
-                .resolving(Arc::new(EchoResolver("from-z", Arc::default()))),
-        );
-        let consumer = Arc::new(MockPlugin::new(
-            "a-consumer",
-            vec![WitInterface::from(MARKER)],
-            vec![],
-        ));
-        let plugins: HashMap<&'static str, Arc<dyn HostPlugin>> = HashMap::from([
+        let plugins: PluginMap = HashMap::from([
             (secrets.id(), secrets as Arc<dyn HostPlugin>),
             (consumer.id(), consumer.clone() as Arc<dyn HostPlugin>),
         ]);
+        (consumer, asked, plugins)
+    }
 
-        let Err(err) = secret_ref_workload(vec![component])
-            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+    /// The operator's `secret:` map for the consumer's plain binding.
+    fn operator_secret(value: &str) -> crate::plugin::PluginBindings {
+        crate::plugin::PluginBindings::new().with_plugin(
+            crate::plugin::PluginBindingSet::new("a-consumer")
+                .with_secret_base([("cred".to_string(), value.to_string())].into()),
+        )
+    }
+
+    fn seen_cred(consumer: &MockPlugin) -> Vec<Option<String>> {
+        consumer
+            .bound_interfaces
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|i| i.config.get("cred").cloned())
+            .collect()
+    }
+
+    /// The operator's `secret:` map resolves through the named plugin at bind;
+    /// the consumer sees only the value, and the workload needs no
+    /// `wasmcloud:secrets` binding of its own.
+    #[tokio::test]
+    async fn an_operator_secret_resolves_through_the_named_plugin() {
+        let (consumer, asked, plugins) = secret_ref_plugins();
+        marker_workload(vec![marker_importer("app")])
+            .bind_plugins(&plugins, &operator_secret("z-secrets/db-password"))
+            .await
+            .unwrap();
+        let seen = seen_cred(&consumer);
+        assert!(!seen.is_empty());
+        assert!(
+            seen.iter()
+                .all(|c| c.as_deref() == Some("from-z:db-password")),
+            "{seen:?}"
+        );
+        assert_eq!(*asked.lock().unwrap(), ["db-password"]);
+    }
+
+    /// A key the workload set keeps the workload's value, exactly as it would
+    /// over the operator's `config` (the policy refuses it first when the key
+    /// is the operator's), and nothing is resolved for it.
+    #[tokio::test]
+    async fn a_workload_set_key_keeps_its_value_and_is_not_resolved() {
+        let (consumer, asked, plugins) = secret_ref_plugins();
+        let mut entry = WitInterface::from(MARKER);
+        entry
+            .config
+            .insert("cred".to_string(), "z-secrets/db-password".to_string());
+        UnresolvedWorkload::new(
+            "local-first".to_string(),
+            "local-first".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![marker_importer("app")],
+            vec![entry],
+        )
+        .bind_plugins(&plugins, &operator_secret("z-secrets/other"))
+        .await
+        .unwrap();
+        assert!(
+            seen_cred(&consumer)
+                .iter()
+                .all(|c| c.as_deref() == Some("z-secrets/db-password"))
+        );
+        assert!(asked.lock().unwrap().is_empty(), "nothing may be resolved");
+    }
+
+    /// A missing secret fails the bind before the consumer is item-bound, and
+    /// the error names the key, not a value.
+    #[tokio::test]
+    async fn a_missing_operator_secret_fails_the_bind() {
+        let (consumer, _, plugins) = secret_ref_plugins();
+        let Err(err) = marker_workload(vec![marker_importer("app")])
+            .bind_plugins(&plugins, &operator_secret("z-secrets/absent"))
             .await
         else {
-            panic!("a reference with no secrets binding must fail the bind");
+            panic!("a missing secret must fail the bind");
         };
+        let msg = format!("{err:#}");
         assert!(
-            format!("{err:#}").contains("no wasmcloud:secrets binding"),
-            "{err:#}"
+            msg.contains("'absent'") && msg.contains("'z-secrets'"),
+            "{msg}"
         );
         assert_eq!(consumer.get_call_count("on_workload_item_bind"), 0);
     }

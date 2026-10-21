@@ -1951,6 +1951,14 @@ impl HostBuilder {
             };
             let declared = self.plugin_bindings.for_plugin(id);
             declared.validate_declaration()?;
+            // A `secret:` reference that could never resolve fails the host
+            // now, not the first workload that binds the entry.
+            crate::plugin::validate_secret_refs(
+                id,
+                &declared,
+                &plugin.binding_schema(),
+                &self.plugins,
+            )?;
             if let Some(policy) = declared.egress_policy(&engine.socket_policy) {
                 if policy.disabled_loopback_grants() {
                     warn!(
