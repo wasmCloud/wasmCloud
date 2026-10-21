@@ -3,13 +3,15 @@
 `scale_density` ramps HTTP workloads onto one host until something refuses
 them, and prints, beside what it served, the count each constraint predicts.
 How to run it and every knob are in the module docs of `scale_density.rs`.
-In the text report, `?` means there is not enough measurement evidence to
-estimate a limit or a CPU rate, and `-` means a reading was not taken (a
-spin-down, a CPU share). Neither means the capacity is infinite. CPU idle
-capacity is reported explicitly as unbounded; CPU throughput remains unknown
-until measured. The `WASH_SCALE_REPORT_JSON` output writes the unknowns as
-`null`, the CPU capacity as `"idle-unbounded"`, and each step's warm-up
-failures beside its request failures.
+The report is a `bench_tools::density::Report` per flavour, shared with
+`bench-scale`. In the text report, `?` means there is not enough measurement
+evidence to estimate a limit, and `-` means a reading was not taken (a
+spin-down, a CPU share). Neither means the capacity is infinite: an idle
+workload uses no CPU, so CPU bounds rates, not counts. `WASH_SCALE_REPORT_JSON`
+writes the reports, with unknowns as `null`; in CI (`bench.yml`, bench
+`scale_density`) it is `<target>/density/scale_density.json`, which `bench-tools
+jsonl` publishes to the trend site as `served_workloads`, `binding_limit`,
+`marginal_bytes_per_workload` and the other figures `Report::metrics` names.
 
 If a baseline or step process-footprint reading is unavailable, the runtime
 benchmark stops with a measurement error instead of recording 0 B or making a
