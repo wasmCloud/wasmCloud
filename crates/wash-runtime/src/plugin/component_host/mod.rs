@@ -1826,11 +1826,11 @@ async fn dispatch_capability_call(
         })?
 }
 
-/// Resolves secrets through a host component plugin's exported
-/// `wasmcloud:secrets` `store.get` + `reveal`, called from the host as the
-/// workload being bound — so the plugin scopes the lookup exactly as it would
-/// the workload's own call. The `secret` handle `get` returns stays in the
-/// plugin store and is released once revealed.
+/// Resolves secrets for the host through a host component plugin's exported
+/// `wasmcloud:secrets` `store.get` + `reveal`. The calls carry no workload
+/// identity, so the plugin answers from its host-level secrets rather than any
+/// workload's scope. The `secret` handle `get` returns stays in the plugin
+/// store and is released once revealed.
 struct ComponentSecretResolver {
     state: Arc<ComponentHostPluginState>,
     store: Arc<str>,
@@ -1907,15 +1907,12 @@ impl ComponentSecretResolver {
 
 #[async_trait]
 impl crate::plugin::SecretResolver for ComponentSecretResolver {
-    async fn resolve(
-        &self,
-        workload_id: &str,
-        component_id: &str,
-        key: &str,
-    ) -> anyhow::Result<Option<String>> {
+    async fn resolve(&self, key: &str) -> anyhow::Result<Option<String>> {
+        // The host itself, not a workload: `wasmcloud:host/identity` reports
+        // an empty workload id, so the plugin reads its host-level secrets.
         let caller = CallerIdentity {
-            workload_id: Arc::from(workload_id),
-            component_id: Some(Arc::from(component_id)),
+            workload_id: Arc::from(""),
+            component_id: None,
             binding: None,
         };
         let got = dispatch_capability_call(

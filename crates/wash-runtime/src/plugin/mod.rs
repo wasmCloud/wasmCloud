@@ -347,92 +347,185 @@ impl WorkloadFailureSink {
     }
 }
 
-/// Resolves a secret on a workload's behalf at bind time, so any plugin's
-/// interface config can take a value by reference — `secret:<key>`, a
-/// `wasmcloud:secrets` key — instead of carrying it.
+/// Resolves a secret for the host itself, so an operator's plugin config can
+/// take a value from a secrets backend instead of carrying it: a `host.plugins`
+/// entry's (or binding's) `secret:` map, `url: <plugin-id>/<key>`.
 ///
-/// Served by the plugin the referencing item's own plain `wasmcloud:secrets`
-/// import bound to ([`HostPlugin::secret_resolver`]). The lookup is the one
-/// the item itself would get from `store.get` + `reveal`: same plugin, same
-/// scope, same backend.
+/// Served by the plugin the reference names ([`HostPlugin::secret_resolver`]).
+/// The lookup is made as the host, not as any workload, so a backend scopes it
+/// to its host-level secrets rather than to the binding workload's.
 #[async_trait::async_trait]
 pub trait SecretResolver: Send + Sync {
-    /// The value at `key` in the secrets scope of `component_id` in
-    /// `workload_id`, or `None` when that scope has no such key.
+    /// The host-level value at `key`, or `None` when there is no such key.
     ///
     /// The returned value is a credential: never log it.
-    async fn resolve(
-        &self,
-        workload_id: &str,
-        component_id: &str,
-        key: &str,
-    ) -> anyhow::Result<Option<String>>;
+    async fn resolve(&self, key: &str) -> anyhow::Result<Option<String>>;
 }
 
-/// Whether `world` serves `wasmcloud:secrets` — the plugins that resolve
-/// secrets for other plugins, and so bind to a workload before them.
-pub(crate) fn serves_secrets(world: &WitWorld) -> bool {
-    world
-        .imports
-        .iter()
-        .any(|i| i.namespace == "wasmcloud" && i.package == "secrets")
+/// One `secret:` map value, `<plugin-id>/<key>`: the secrets plugin to ask
+/// and the key to ask it for.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct SecretRef<'a> {
+    pub plugin: &'a str,
+    pub key: &'a str,
 }
 
-/// Prefix marking an interface config value as a secret reference, resolved
-/// at bind: `password: "secret:pg-password"`.
-pub(crate) const SECRET_REF_PREFIX: &str = "secret:";
+/// Parse a `secret:` map value as `<plugin-id>/<key>`.
+pub(crate) fn parse_secret_ref(value: &str) -> anyhow::Result<SecretRef<'_>> {
+    match value.split_once('/') {
+        Some((plugin, key)) if !plugin.is_empty() && !key.is_empty() && !key.contains('/') => {
+            Ok(SecretRef { plugin, key })
+        }
+        _ => anyhow::bail!(
+            "'{value}' is not a valid secret reference; write `<plugin-id>/<key>`, naming the \
+             secrets plugin and the key to read from it"
+        ),
+    }
+}
 
-/// `interfaces` with every `secret:<key>` config value replaced by that
-/// secret, resolved for `component_id` of `workload_id`.
+/// Check the operator's `secret:` maps for `plugin_id` at host start. Each
+/// value must be `<plugin-id>/<key>` naming another registered plugin that
+/// resolves secrets; its key must not also come from `config`/`configFrom`/
+/// `secretFrom` at the same level, and must not be a ceiling key (a ceiling is
+/// checked against its declared value, which a secret never is).
+pub(crate) fn validate_secret_refs(
+    plugin_id: &str,
+    declared: &PluginBindingSet,
+    schema: &BindingSchema,
+    plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
+) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    if let Some(name) = declared.undeclared_secret_bindings().next() {
+        anyhow::bail!(
+            "`host.plugins` entry `{plugin_id}` has a `secret:` map for binding `{name}`, which \
+             the entry does not declare"
+        );
+    }
+    for (binding, config_keys, refs) in declared.declared_levels() {
+        let place = match binding {
+            Some(name) => format!("binding `{name}`"),
+            None => "entry".to_string(),
+        };
+        let mut refs: Vec<_> = refs.into_iter().collect();
+        refs.sort_unstable();
+        for (key, value) in &refs {
+            let context = || format!("`host.plugins` entry `{plugin_id}` {place}, secret `{key}`");
+            let reference = parse_secret_ref(value).with_context(context)?;
+            anyhow::ensure!(
+                !config_keys.contains(key.as_str()),
+                "{}: `{key}` is also set by `config`/`configFrom`/`secretFrom`; set it in one place",
+                context()
+            );
+            anyhow::ensure!(
+                reference.plugin != plugin_id,
+                "{}: a plugin cannot resolve its own secrets",
+                context()
+            );
+            anyhow::ensure!(
+                plugins
+                    .get(reference.plugin)
+                    .is_some_and(|p| p.secret_resolver().is_some()),
+                "{}: `{}` is not a registered plugin that serves wasmcloud:secrets",
+                context(),
+                reference.plugin
+            );
+            anyhow::ensure!(
+                declared.ownership_of(key, schema) != KeyOwnership::HostCeiling,
+                "{}: a ceiling key is checked against its declared value, so it cannot come from \
+                 a secret",
+                context()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `interfaces` (one item's resolved bindings for `plugin_id`) with the keys
+/// of the operator's `secret:` maps filled in.
 ///
-/// Returns the input untouched (and needs no resolver) when nothing refers to
-/// a secret. A reference with no resolver (the item has no plain
-/// `wasmcloud:secrets` binding), an empty key, or a key the scope lacks fails
-/// the bind. Errors name the interface, config key and secret key,
-/// never a value.
-pub(crate) async fn resolve_secret_refs(
-    resolver: Option<&dyn SecretResolver>,
-    workload_id: &str,
-    component_id: &str,
+/// Each interface gets the map of its own binding (`declared.secret_refs`),
+/// resolved as the host through the plugin each value names. `requested` is
+/// what the workload itself declared for the same item: a key the workload set
+/// keeps the workload's value, exactly as it would over the operator's
+/// `config` (under `deny`, the policy has already refused it if the key is the
+/// operator's).
+///
+/// Each reference is resolved once per call. A missing key or an unavailable
+/// plugin fails the bind; errors name keys and plugins, never values.
+pub(crate) async fn resolve_operator_secret_refs(
+    plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
+    plugin_id: &str,
+    declared: &PluginBindingSet,
+    requested: &std::collections::HashSet<WitInterface>,
     interfaces: &std::collections::HashSet<WitInterface>,
 ) -> anyhow::Result<std::collections::HashSet<WitInterface>> {
     use anyhow::Context as _;
+    let mut resolved_values: HashMap<String, String> = HashMap::new();
     let mut out = std::collections::HashSet::with_capacity(interfaces.len());
     for interface in interfaces {
+        let refs = declared.secret_refs(binding_of(plugin_id, interface.name.as_deref()));
+        if refs.is_empty() {
+            out.insert(interface.clone());
+            continue;
+        }
+        let workload_keys: std::collections::HashSet<&str> = requested
+            .iter()
+            .filter(|r| {
+                r.namespace == interface.namespace
+                    && r.package == interface.package
+                    && r.name == interface.name
+            })
+            .flat_map(|r| r.config.keys().map(String::as_str))
+            .collect();
         let mut interface = interface.clone();
-        for (config_key, value) in interface.config.iter_mut() {
-            let Some(secret_key) = value.strip_prefix(SECRET_REF_PREFIX) else {
+        let label = interface_label(
+            &interface.namespace,
+            &interface.package,
+            interface.name.as_deref(),
+        );
+        let mut refs: Vec<_> = refs.into_iter().collect();
+        refs.sort_unstable();
+        for (config_key, value) in refs {
+            if workload_keys.contains(config_key.as_str()) {
                 continue;
+            }
+            let reference = parse_secret_ref(&value)
+                .with_context(|| format!("secret '{config_key}' of {label}"))?;
+            let secret = match resolved_values.get(&value) {
+                Some(secret) => secret.clone(),
+                None => {
+                    let resolver = plugins
+                        .get(reference.plugin)
+                        .and_then(|p| p.secret_resolver())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "secret '{config_key}' of {label} refers to plugin '{}', which \
+                                 does not serve wasmcloud:secrets on this host",
+                                reference.plugin
+                            )
+                        })?;
+                    let secret = resolver
+                        .resolve(reference.key)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to resolve '{}' from '{}' for secret '{config_key}' of \
+                                 {label}",
+                                reference.key, reference.plugin
+                            )
+                        })?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "'{}' from '{}' for secret '{config_key}' of {label} was not found",
+                                reference.key,
+                                reference.plugin
+                            )
+                        })?;
+                    resolved_values.insert(value.clone(), secret.clone());
+                    secret
+                }
             };
-            let secret_key = secret_key.trim().to_string();
-            anyhow::ensure!(
-                !secret_key.is_empty(),
-                "config '{config_key}' of {interface_name} is an empty secret reference",
-                interface_name = interface_label(
-                    &interface.namespace,
-                    &interface.package,
-                    interface.name.as_deref()
-                ),
-            );
-            let resolver = resolver.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "config '{config_key}' refers to secret '{secret_key}', but this component \
-                     has no wasmcloud:secrets binding to resolve it through; declare a \
-                     wasmcloud:secrets host interface (with its scope) and import it"
-                )
-            })?;
-            *value = resolver
-                .resolve(workload_id, component_id, &secret_key)
-                .await
-                .with_context(|| {
-                    format!("failed to resolve secret '{secret_key}' for config '{config_key}'")
-                })?
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "secret '{secret_key}' for config '{config_key}' was not found in this \
-                         workload's secrets scope"
-                    )
-                })?;
+            interface.config.insert(config_key, secret);
         }
         out.insert(interface);
     }
@@ -444,13 +537,6 @@ fn interface_label(namespace: &str, package: &str, name: Option<&str>) -> String
         Some(name) => format!("{namespace}:{package} '{name}'"),
         None => format!("{namespace}:{package}"),
     }
-}
-
-/// Whether any config value in `interfaces` is a secret reference.
-pub(crate) fn has_secret_refs<'a>(interfaces: impl IntoIterator<Item = &'a WitInterface>) -> bool {
-    interfaces
-        .into_iter()
-        .any(|i| i.config.values().any(|v| v.starts_with(SECRET_REF_PREFIX)))
 }
 
 /// `interfaces` with every config value hidden, for logging a bind whose
@@ -674,11 +760,9 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// component plugin evicting a workload whose lifecycle bind crash-loops).
     fn set_workload_failure_sink(&self, _sink: WorkloadFailureSink) {}
 
-    /// This plugin's [`SecretResolver`], if it serves `wasmcloud:secrets`.
-    ///
-    /// The host resolves an item's `secret:<key>` config references through
-    /// the plugin its plain `wasmcloud:secrets` import bound to. The default
-    /// resolves nothing.
+    /// This plugin's [`SecretResolver`], if it can resolve secrets for the
+    /// host: what an operator's `secret:` map value `<plugin-id>/<key>` naming
+    /// this plugin is resolved through. The default resolves nothing.
     fn secret_resolver(&self) -> Option<Arc<dyn SecretResolver>> {
         None
     }
@@ -1088,77 +1172,187 @@ mod secret_ref_tests {
 
     use super::*;
 
-    /// Answers from a fixed map, recording which caller asked.
-    struct Fixed(
-        HashMap<&'static str, &'static str>,
-        std::sync::Mutex<Vec<String>>,
-    );
+    /// Answers from a fixed map, counting lookups.
+    struct Fixed(HashMap<&'static str, &'static str>, std::sync::Mutex<usize>);
 
     #[async_trait::async_trait]
     impl SecretResolver for Fixed {
-        async fn resolve(
-            &self,
-            workload_id: &str,
-            component_id: &str,
-            key: &str,
-        ) -> anyhow::Result<Option<String>> {
-            self.1
-                .lock()
-                .unwrap()
-                .push(format!("{workload_id}/{component_id}"));
+        async fn resolve(&self, key: &str) -> anyhow::Result<Option<String>> {
+            *self.1.lock().unwrap() += 1;
             Ok(self.0.get(key).map(|v| v.to_string()))
         }
     }
 
-    fn fixed() -> Fixed {
-        Fixed(
-            HashMap::from([("pg-url", "postgres://app:pw@db/app")]),
-            Default::default(),
-        )
+    /// A plugin that serves nothing but may resolve secrets for the host.
+    struct Stub(&'static str, Option<Arc<Fixed>>);
+
+    #[async_trait::async_trait]
+    impl HostPlugin for Stub {
+        fn id(&self) -> &'static str {
+            self.0
+        }
+        fn world(&self) -> WitWorld {
+            WitWorld::default()
+        }
+        fn secret_resolver(&self) -> Option<Arc<dyn SecretResolver>> {
+            self.1.clone().map(|r| r as Arc<dyn SecretResolver>)
+        }
     }
 
-    fn postgres(config: &[(&str, &str)]) -> HashSet<WitInterface> {
+    fn plugins(resolver: Arc<Fixed>) -> HashMap<&'static str, Arc<dyn HostPlugin>> {
+        HashMap::from([
+            (
+                "pragma-secrets",
+                Arc::new(Stub("pragma-secrets", Some(resolver))) as Arc<dyn HostPlugin>,
+            ),
+            (
+                "wasmcloud-postgres",
+                Arc::new(Stub("wasmcloud-postgres", None)) as Arc<dyn HostPlugin>,
+            ),
+        ])
+    }
+
+    fn fixed() -> Arc<Fixed> {
+        Arc::new(Fixed(
+            HashMap::from([
+                ("pg-url-app", "postgres://app:pw@db/app"),
+                ("pg-url-reports", "postgres://reports:pw@db/app"),
+            ]),
+            Default::default(),
+        ))
+    }
+
+    fn postgres(name: &str, config: &[(&str, &str)]) -> WitInterface {
         let mut i = WitInterface::from("wasmcloud:postgres/query@0.2.0");
-        i.name = Some("app-db".to_string());
-        i.config = config
+        i.name = Some(name.to_string());
+        i.config = map(config);
+        i
+    }
+
+    fn url_of(set: &HashSet<WitInterface>, name: &str) -> Option<String> {
+        set.iter()
+            .find(|i| i.name.as_deref() == Some(name))
+            .unwrap()
+            .config
+            .get("url")
+            .cloned()
+    }
+
+    fn map(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        HashSet::from([i])
+            .collect()
     }
 
-    fn config(set: &HashSet<WitInterface>) -> HashMap<String, String> {
-        set.iter().next().unwrap().config.clone()
+    /// Two bindings with their own `secret:` maps, as an operator writes them.
+    fn declared() -> PluginBindingSet {
+        PluginBindingSet::new("wasmcloud-postgres")
+            .with_binding("app-db", HashMap::new())
+            .with_binding_secret("app-db", map(&[("url", "pragma-secrets/pg-url-app")]))
+            .with_binding("reports-db", map(&[("other", "hello")]))
+            .with_binding_secret(
+                "reports-db",
+                map(&[("url", "pragma-secrets/pg-url-reports")]),
+            )
+            .with_binding("plain-db", map(&[("url", "postgres://plain@db/app")]))
     }
 
+    #[test]
+    fn references_name_a_plugin_and_a_key() {
+        assert_eq!(
+            parse_secret_ref("pragma-secrets/pg-url").unwrap(),
+            SecretRef {
+                plugin: "pragma-secrets",
+                key: "pg-url"
+            }
+        );
+        for bad in ["pg-url", "/pg-url", "p/", "p/a/b"] {
+            assert!(parse_secret_ref(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_bindings_secret_map_layers_over_the_entrys() {
+        let set = PluginBindingSet::new("wasmcloud-postgres")
+            .with_secret_base(map(&[
+                ("url", "pragma-secrets/base"),
+                ("pw", "pragma-secrets/pw"),
+            ]))
+            .with_binding("app-db", HashMap::new())
+            .with_binding_secret("app-db", map(&[("url", "pragma-secrets/app")]));
+        let app = set.secret_refs(Some("app-db"));
+        assert_eq!(app["url"], "pragma-secrets/app");
+        assert_eq!(app["pw"], "pragma-secrets/pw");
+        assert_eq!(set.secret_refs(None)["url"], "pragma-secrets/base");
+    }
+
+    /// Each binding's `secret:` map fills its own keys; a binding with none is
+    /// untouched; a key the workload set keeps its value; one lookup per key.
     #[tokio::test]
-    async fn references_resolve_as_the_bound_item() {
+    async fn secret_maps_resolve_per_binding() {
         let resolver = fixed();
-        let resolved = resolve_secret_refs(
-            Some(&resolver),
-            "workload-1",
-            "component-1",
-            &postgres(&[("url", "secret:pg-url"), ("pool", "4")]),
+        let plugins = plugins(resolver.clone());
+        let requested = HashSet::from([
+            postgres("app-db", &[]),
+            postgres("reports-db", &[]),
+            postgres("plain-db", &[]),
+        ]);
+        let resolved = HashSet::from([
+            postgres("app-db", &[]),
+            postgres("reports-db", &[("other", "hello")]),
+            postgres("plain-db", &[("url", "postgres://plain@db/app")]),
+        ]);
+        let out = resolve_operator_secret_refs(
+            &plugins,
+            "wasmcloud-postgres",
+            &declared(),
+            &requested,
+            &resolved,
         )
         .await
         .unwrap();
         assert_eq!(
-            config(&resolved),
-            HashMap::from([
-                ("url".to_string(), "postgres://app:pw@db/app".to_string()),
-                ("pool".to_string(), "4".to_string()),
-            ])
+            url_of(&out, "app-db").as_deref(),
+            Some("postgres://app:pw@db/app")
         );
-        assert_eq!(*resolver.1.lock().unwrap(), ["workload-1/component-1"]);
+        assert_eq!(
+            url_of(&out, "reports-db").as_deref(),
+            Some("postgres://reports:pw@db/app")
+        );
+        assert_eq!(
+            url_of(&out, "plain-db").as_deref(),
+            Some("postgres://plain@db/app")
+        );
+        assert_eq!(*resolver.1.lock().unwrap(), 2);
+
+        // The workload set `url` on app-db itself: its value stands.
+        let requested = HashSet::from([postgres("app-db", &[("url", "mine")])]);
+        let resolved = HashSet::from([postgres("app-db", &[("url", "mine")])]);
+        let out = resolve_operator_secret_refs(
+            &plugins,
+            "wasmcloud-postgres",
+            &declared(),
+            &requested,
+            &resolved,
+        )
+        .await
+        .unwrap();
+        assert_eq!(url_of(&out, "app-db").as_deref(), Some("mine"));
     }
 
     #[tokio::test]
-    async fn a_missing_secret_fails_naming_keys_not_values() {
-        let err = resolve_secret_refs(
-            Some(&fixed()),
-            "w",
-            "c",
-            &postgres(&[("url", "secret:nope")]),
+    async fn a_missing_secret_names_the_key_not_a_value() {
+        let plugins = plugins(fixed());
+        let set = PluginBindingSet::new("wasmcloud-postgres")
+            .with_binding("app-db", HashMap::new())
+            .with_binding_secret("app-db", map(&[("url", "pragma-secrets/nope")]));
+        let err = resolve_operator_secret_refs(
+            &plugins,
+            "wasmcloud-postgres",
+            &set,
+            &HashSet::new(),
+            &HashSet::from([postgres("app-db", &[])]),
         )
         .await
         .unwrap_err();
@@ -1166,28 +1360,87 @@ mod secret_ref_tests {
         assert!(msg.contains("'nope'") && msg.contains("'url'"), "{msg}");
     }
 
-    #[tokio::test]
-    async fn a_reference_without_a_secrets_binding_fails() {
-        let err = resolve_secret_refs(None, "w", "c", &postgres(&[("url", "secret:pg-url")]))
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("no wasmcloud:secrets binding"),
-            "{err}"
-        );
-    }
+    #[test]
+    fn host_start_validates_secret_maps() {
+        let plugins = plugins(fixed());
+        let schema =
+            BindingSchema::with_host_owned_keys(["url"]).and_host_ceiling_keys(["database"]);
+        let check = |id: &str, config: &[(&str, &str)], secret: &[(&str, &str)]| {
+            let declared = PluginBindingSet::new(id)
+                .with_binding("app-db", map(config))
+                .with_binding_secret("app-db", map(secret));
+            validate_secret_refs(id, &declared, &schema, &plugins)
+        };
 
-    #[tokio::test]
-    async fn plain_config_needs_no_resolver() {
-        let plain = postgres(&[("url", "postgres://u:p@db/app")]);
-        assert!(!has_secret_refs(&plain));
-        let resolved = resolve_secret_refs(None, "w", "c", &plain).await.unwrap();
-        assert_eq!(resolved, plain);
+        check(
+            "wasmcloud-postgres",
+            &[("other", "hello")],
+            &[("url", "pragma-secrets/pg-url-app")],
+        )
+        .unwrap();
+
+        type Pairs<'a> = &'a [(&'a str, &'a str)];
+        let refused: [(&str, Pairs, Pairs, &str); 6] = [
+            (
+                "wasmcloud-postgres",
+                &[],
+                &[("url", "pg-url-app")],
+                "not a valid secret reference",
+            ),
+            (
+                "wasmcloud-postgres",
+                &[],
+                &[("url", "vault/pg-url")],
+                "not a registered plugin",
+            ),
+            (
+                "wasmcloud-postgres",
+                &[],
+                &[("url", "wasmcloud-postgres/x")],
+                "its own secrets",
+            ),
+            (
+                "pragma-secrets",
+                &[],
+                &[("url", "pragma-secrets/x")],
+                "its own secrets",
+            ),
+            (
+                "wasmcloud-postgres",
+                &[],
+                &[("database", "pragma-secrets/db")],
+                "ceiling",
+            ),
+            (
+                "wasmcloud-postgres",
+                &[("url", "postgres://db/app")],
+                &[("url", "pragma-secrets/pg-url-app")],
+                "set it in one place",
+            ),
+        ];
+        for (id, config, secret, expect) in refused {
+            let err = format!("{:#}", check(id, config, secret).unwrap_err());
+            assert!(
+                err.contains(expect) && err.contains("`app-db`"),
+                "{secret:?}: {err}"
+            );
+        }
+
+        // A binding's secret against the entry's config is the same clash.
+        let declared = PluginBindingSet::new("wasmcloud-postgres")
+            .with_base(map(&[("url", "postgres://db/app")]))
+            .with_binding("app-db", HashMap::new())
+            .with_binding_secret("app-db", map(&[("url", "pragma-secrets/pg-url-app")]));
+        let err = validate_secret_refs("wasmcloud-postgres", &declared, &schema, &plugins)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("set it in one place"), "{err}");
     }
 
     #[test]
     fn redaction_keeps_keys_and_drops_values() {
-        let logged = redacted(&postgres(&[("url", "postgres://app:pw@db/app")])).join(" ");
+        let logged =
+            redacted(&[postgres("app-db", &[("url", "postgres://app:pw@db/app")])]).join(" ");
         assert!(
             logged.contains("url") && !logged.contains("pw@"),
             "{logged}"

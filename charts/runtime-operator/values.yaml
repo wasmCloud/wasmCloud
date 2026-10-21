@@ -799,6 +799,13 @@ runtime:
       #   secretFrom      names of Secrets (same namespace), merged in last
       #                   (wins over `config`/`configFrom`). Same
       #                   host-only-reads-the-mount posture.
+      #   secret          config keys whose values come from a secrets
+      #                   plugin on this host group: `key: <plugin-id>/<key>`.
+      #                   The host resolves each at bind through the named
+      #                   plugin (as the host, not as a workload) and hands
+      #                   the value to this plugin under `key`. Also allowed
+      #                   per binding under `bindings.<name>.secret`. A key
+      #                   may not also come from config/configFrom/secretFrom.
       #   allowedHosts    endpoints this plugin may reach. Component plugins
       #                   are gated at WASI; native plugins must check their
       #                   client endpoints. Omitted/empty denies all.
