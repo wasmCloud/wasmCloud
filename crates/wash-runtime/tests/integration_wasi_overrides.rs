@@ -6,8 +6,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 use wash_runtime::{
-    engine::{Engine, workload::WorkloadItem},
-    host::HostRef,
+    engine::{
+        Engine,
+        workload::{UnresolvedWorkload, WorkloadItem},
+    },
+    host::{HostBuilder, HostRef},
     plugin::{HostPlugin, WitInterfaces},
     types::{LocalResources, Service, Workload},
     wit::WitWorld,
@@ -113,7 +116,7 @@ async fn service_using_only_wasi_receives_its_opted_in_override() -> Result<()> 
     Ok(())
 }
 
-struct Declarations(&'static str, &'static [&'static str]);
+struct Declarations(&'static str, Vec<&'static str>);
 
 #[async_trait::async_trait]
 impl HostPlugin for Declarations {
@@ -134,7 +137,7 @@ impl HostPlugin for Declarations {
 fn overlapping_declarations() -> Arc<dyn HostPlugin> {
     Arc::new(Declarations(
         "clock-a",
-        &[
+        vec![
             "wasi:clocks/monotonic-clock@0.2.0",
             "wasi:clocks/monotonic-clock,wall-clock@0.2.12",
         ],
@@ -150,8 +153,10 @@ fn compatible_overlapping_declarations_from_one_plugin_are_allowed() -> Result<(
 #[test]
 fn overlapping_declarations_still_conflict_with_another_plugin() -> Result<()> {
     let a = overlapping_declarations();
-    let b: Arc<dyn HostPlugin> =
-        Arc::new(Declarations("clock-b", &["wasi:clocks/wall-clock@0.2.0"]));
+    let b: Arc<dyn HostPlugin> = Arc::new(Declarations(
+        "clock-b",
+        vec!["wasi:clocks/wall-clock@0.2.0"],
+    ));
     let Err(error) =
         wash_runtime::plugin::check_wasi_overrides(&HashMap::from([(a.id(), a), (b.id(), b)]))
     else {
@@ -162,5 +167,89 @@ fn overlapping_declarations_still_conflict_with_another_plugin() -> Result<()> {
         message.contains("clock-a") && message.contains("clock-b"),
         "{message}"
     );
+    Ok(())
+}
+
+const INVALID_OVERRIDES: &[&str] = &[
+    "wasi:otel/tracing@0.2.0-rc.2",
+    "wasi:blobstore/blobstore@0.2.0-draft",
+    "wasi:keyvalue",
+    "wasi:config",
+    "wasi:logging",
+    "test:override/opt-in",
+    "wasi:clocks/monotonic-clock@0.4.0",
+    "wasi:io/streams@0.3.0",
+];
+
+const VALID_OVERRIDES: &[&str] = &[
+    "wasi:filesystem/types@0.2.0",
+    "wasi:clocks/monotonic-clock@0.3.0",
+];
+
+fn assert_unsupported_override(error: anyhow::Error, interface: &str) {
+    let message = error.to_string();
+    for expected in [
+        "override-plugin",
+        interface,
+        "plugin-served",
+        "another plugin",
+    ] {
+        assert!(
+            message.contains(expected),
+            "missing {expected:?} in {message:?}"
+        );
+    }
+}
+
+#[test]
+fn unsupported_wasi_overrides_are_refused_at_registration() -> Result<()> {
+    for interface in INVALID_OVERRIDES {
+        let plugin = Arc::new(Declarations("override-plugin", vec![interface]));
+        let Err(error) = HostBuilder::new().with_plugin(plugin) else {
+            anyhow::bail!("registration accepted unsupported override {interface}");
+        };
+        assert_unsupported_override(error, interface);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unsupported_wasi_overrides_are_refused_at_bind() -> Result<()> {
+    for interface in INVALID_OVERRIDES {
+        let plugin: Arc<dyn HostPlugin> =
+            Arc::new(Declarations("override-plugin", vec![interface]));
+        // Bypass HostBuilder to exercise bind-time validation independently,
+        // even when no workload item would bind the plugin.
+        let mut workload = UnresolvedWorkload::new("test", "test", "test", None, vec![], vec![]);
+        let Err(error) = workload
+            .bind_plugins(&HashMap::from([(plugin.id(), plugin)]), &Default::default())
+            .await
+        else {
+            anyhow::bail!("binding accepted unsupported override {interface}");
+        };
+        assert_unsupported_override(error, interface);
+    }
+    Ok(())
+}
+
+#[test]
+fn host_builtin_wasi_overrides_are_allowed_at_registration() -> Result<()> {
+    for interface in VALID_OVERRIDES {
+        HostBuilder::new()
+            .with_plugin(Arc::new(Declarations("override-plugin", vec![interface])))?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_builtin_wasi_overrides_are_allowed_at_bind() -> Result<()> {
+    for interface in VALID_OVERRIDES {
+        let plugin: Arc<dyn HostPlugin> =
+            Arc::new(Declarations("override-plugin", vec![interface]));
+        let mut workload = UnresolvedWorkload::new("test", "test", "test", None, vec![], vec![]);
+        workload
+            .bind_plugins(&HashMap::from([(plugin.id(), plugin)]), &Default::default())
+            .await?;
+    }
     Ok(())
 }

@@ -401,10 +401,19 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// The host-linked WASI interfaces this plugin redefines, wholly or in
     /// part, on the linker of every item it binds. Default: none.
     ///
-    /// The host links WASI into every component itself, so a plugin that
+    /// Only interfaces from the seven host-linked packages are supported:
+    /// `wasi:io`, `wasi:filesystem`, `wasi:clocks`, `wasi:random`, `wasi:cli`,
+    /// `wasi:sockets`, and `wasi:http`, at compatible host-linked versions.
+    /// Plugin-served `wasi:*` packages (such as `wasi:otel`, `wasi:blobstore`,
+    /// `wasi:keyvalue`, `wasi:config`, and `wasi:logging`) are out of scope:
+    /// replace them with another plugin serving the interface through plugin
+    /// precedence, not linker shadowing. Unsupported declarations are rejected
+    /// at registration and again before a workload binds.
+    ///
+    /// The host links these packages into every component itself, so a plugin that
     /// changes what components see through it — a filesystem view, an
     /// environment, a clock — cannot be matched by what it serves: nothing
-    /// imports a WASI interface *from a plugin*. Declaring the interfaces it
+    /// imports these WASI interfaces *from a plugin*. Declaring the interfaces it
     /// overrides lets the host do three things it otherwise could not:
     ///
     /// - bind the plugin to every item of an opted-in workload that imports
@@ -686,8 +695,8 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     }
 }
 
-/// Refuses a set of plugins in which two declare overrides
-/// ([`HostPlugin::wasi_overrides`]) of the same WASI interface.
+/// Refuses overrides ([`HostPlugin::wasi_overrides`]) of interfaces the host
+/// does not link itself, or two plugins overriding the same WASI interface.
 ///
 /// Two redefinitions of one interface cannot both take effect: whichever
 /// bound last would silently win. Until the host can compose such plugins,
@@ -704,6 +713,13 @@ pub fn check_wasi_overrides(
             continue;
         };
         for interface in plugin.wasi_overrides().imports {
+            anyhow::ensure!(
+                interface.is_host_builtin(),
+                "plugin '{id}' declares WASI override '{interface}', which is not a \
+                 host-linked WASI interface at a supported version; plugin-served \
+                 interfaces must be replaced by another plugin serving them through \
+                 plugin precedence, not wasi_overrides()"
+            );
             if let Some((other, theirs)) = declared
                 .iter()
                 .find(|(other, theirs)| *other != *id && overrides_overlap(theirs, &interface))
