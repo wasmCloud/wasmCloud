@@ -1,11 +1,13 @@
-//! Attached workloads outlive a dropped RPC future. Keep their IDs until removal
-//! is confirmed, including starts whose reply was lost.
+//! Workloads outlive a dropped RPC future, and the bench does not own the
+//! host. Keep their IDs until removal is confirmed, including starts whose
+//! reply was lost.
 
-use crate::api::{HostClient, WorkloadState};
+use crate::api::HostClient;
 use anyhow::{Result, bail};
 use futures::{StreamExt as _, stream};
 use std::{collections::BTreeMap, future::Future, sync::Mutex, time::Duration};
 use tokio_util::sync::CancellationToken;
+use wash_runtime::washlet::types::v2::WorkloadState;
 
 #[derive(Default)]
 pub struct Journal(Mutex<BTreeMap<String, bool>>);
@@ -67,19 +69,19 @@ impl Control for HostClient {
         Ok(self
             .stop(id, Duration::from_secs(5))
             .await
-            .map_err(|e| anyhow::anyhow!("{e:?}"))?
-            .workload_state)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .state)
     }
     async fn status(&self, id: &str) -> Result<WorkloadState> {
         Ok(self
             .status(id, Duration::from_secs(5))
             .await
-            .map_err(|e| anyhow::anyhow!("{e:?}"))?
-            .workload_state)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .state)
     }
 }
 
-/// Run `work`, then (when attached) remove every journaled workload.
+/// Run `work`, then remove every journaled workload.
 ///
 /// A measurement that completed is kept even if cleanup cannot confirm removal:
 /// the cleanup failure comes back beside it so the caller can still report it.
@@ -87,23 +89,18 @@ pub async fn with_cleanup<T>(
     cancel: &CancellationToken,
     client: &impl Control,
     journal: &Journal,
-    attached: bool,
     concurrency: usize,
     work: impl Future<Output = Result<T>>,
 ) -> Result<(T, Option<String>)> {
     let result = cancellable(cancel, work).await;
-    let residual = if attached {
-        // Cleanup deliberately ignores cancellation and has its own finite deadline.
-        cleanup(
-            client,
-            journal.entries(),
-            concurrency,
-            Duration::from_secs(60),
-        )
-        .await
-    } else {
-        Vec::new()
-    };
+    // Cleanup deliberately ignores cancellation and has its own finite deadline.
+    let residual = cleanup(
+        client,
+        journal.entries(),
+        concurrency,
+        Duration::from_secs(60),
+    )
+    .await;
     settle(result, &residual)
 }
 
@@ -218,7 +215,7 @@ mod tests {
                 when_started.await.unwrap();
                 Ok(())
             },
-            with_cleanup(&cancel, &host, &journal, true, 1, async {
+            with_cleanup(&cancel, &host, &journal, 1, async {
                 journal.submitted("interrupted");
                 host.running.store(true, Ordering::SeqCst);
                 started.send(()).unwrap();
@@ -242,7 +239,7 @@ mod tests {
         let journal = Journal::default();
         let cancel = CancellationToken::new();
         let result: Result<((), Option<String>)> =
-            with_cleanup(&cancel, &host, &journal, true, 2, async {
+            with_cleanup(&cancel, &host, &journal, 2, async {
                 journal.submitted("lost-reply");
                 host.running.store(true, Ordering::SeqCst);
                 cancel.cancel();
@@ -263,7 +260,7 @@ mod tests {
         journal.submitted("started");
         journal.acknowledged("started");
         let result: Result<((), Option<String>)> =
-            with_cleanup(&CancellationToken::new(), &host, &journal, true, 1, async {
+            with_cleanup(&CancellationToken::new(), &host, &journal, 1, async {
                 bail!("measurement failed")
             })
             .await;

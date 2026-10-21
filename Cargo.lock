@@ -421,32 +421,20 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bench-scale"
-version = "2.10.3"
+version = "2.11.0"
 dependencies = [
  "anyhow",
  "async-nats",
- "base64 0.22.1",
  "bench-tools",
- "bytes",
  "clap",
- "flate2",
  "futures",
- "http-body-util",
- "hyper",
- "hyper-util",
- "libc",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "sha2 0.10.9",
- "sysinfo",
- "tar",
  "tokio",
  "tokio-util",
  "uuid",
- "wasi-preview1-component-adapter-provider",
- "windows-sys 0.61.2",
- "wit-component 0.259.0",
+ "wash-runtime",
 ]
 
 [[package]]
