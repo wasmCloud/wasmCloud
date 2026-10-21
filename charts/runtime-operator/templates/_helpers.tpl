@@ -190,7 +190,7 @@ into file-backed entries vs plain CLI-only entries, and collects the deduped
 configFrom/secretFrom names referenced across the file-backed set.
 
 An entry is file-backed when it sets anything `--host-plugin` cannot express —
-config/configFrom/secretFrom/allowedHosts/allowedIpNameLookups/
+config/configFrom/secretFrom/secret/allowedHosts/allowedIpNameLookups/
 allowedHostLoopbackPorts/ports, or any binding field
 (workloadConfig/hostOwnedKeys/bindings). A secret must never
 land on the command line, and a native entry (no image/file) has nothing to put
@@ -220,7 +220,7 @@ and parses the result with `fromJson`.
 {{- $fileBacked := list }}
 {{- $cli := list }}
 {{- range concat (default list .plugins) (default list .hostPlugins) }}
-{{- if or .config .configFrom .secretFrom .allowedHosts .allowedIpNameLookups .allowedHostLoopbackPorts .ports .workloadConfig .hostOwnedKeys .bindings (not (or .image .file)) }}
+{{- if or .config .configFrom .secretFrom .secret .allowedHosts .allowedIpNameLookups .allowedHostLoopbackPorts .ports .workloadConfig .hostOwnedKeys .bindings (not (or .image .file)) }}
 {{- $fileBacked = append $fileBacked . }}
 {{- else }}
 {{- $cli = append $cli . }}
@@ -319,6 +319,10 @@ host:
       {{- end }}
       {{- with .secretFrom }}
       secretFrom:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .secret }}
+      secret:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .allowedHosts }}
