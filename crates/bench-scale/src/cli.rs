@@ -3,7 +3,9 @@
 
 use std::path::PathBuf;
 
+use anyhow::{Context as _, Result, bail};
 use clap::{Parser, ValueEnum};
+use wash_runtime::engine::host_memory::{detected_memory_limit, parse_bytes};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum FlavourArg {
@@ -12,28 +14,41 @@ pub enum FlavourArg {
     Both,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum HostCli {
-    /// `<bin> host …` with the wash flags the binary's `host --help` lists.
-    Wash,
-    /// Only the `--host-arg`s, with `{nats_url}`, `{memory_limit}`,
-    /// `{guest_memory}`, `{core_instances}` and `{http_addr}` substituted.
-    Raw,
-}
-
-/// How many HTTP workloads one host holds, warm and scaled to zero, talking to
-/// it only over its NATS API and HTTP.
+/// How many HTTP workloads one running host holds, warm and scaled to zero,
+/// talking to it only over its NATS API and HTTP.
 #[derive(Debug, Clone, Parser)]
 #[command(name = "bench-scale", version)]
 pub struct Args {
-    /// Which flavour to run; `both` runs each against a fresh host.
+    /// NATS server the host is connected to.
+    // The URL can carry credentials, so `--help` names the variable only.
+    #[arg(long, env = "BENCH_SCALE_NATS_URL", hide_env_values = true)]
+    pub nats_url: String,
+
+    /// The host to bench, by the id it heartbeats with.
+    #[arg(long, env = "BENCH_SCALE_HOST_ID")]
+    pub host_id: String,
+
+    /// The host's HTTP listener (`addr:port`); requests are routed by Host header.
+    #[arg(long, env = "BENCH_SCALE_HOST_HTTP")]
+    pub host_http: String,
+
+    /// The host's process id, for memory readings. Without it nothing
+    /// bounds the run but --max-components.
+    #[arg(long, env = "BENCH_SCALE_HOST_PID")]
+    pub host_pid: Option<u32>,
+
+    /// The P3 HTTP component image the host pulls for every workload. Warm
+    /// runs need one exporting `wasi:http/handler@0.3.0`; a P2 instance
+    /// cannot stay warm, and its failed warm-ups stop the run.
+    #[arg(long, env = "BENCH_SCALE_IMAGE")]
+    pub image: String,
+
+    /// Which flavour to run; `both` runs warm, then scale-to-zero.
     #[arg(long, value_enum, default_value = "both", env = "BENCH_SCALE_FLAVOUR")]
     pub flavour: FlavourArg,
 
-    /// The host's memory budget (e.g. 4GiB): passed to the host where it
-    /// takes one, and the footprint at which the bench stops. Default: half
-    /// of the smaller of physical memory and the cgroup limit, leaving room
-    /// for the benchmark, registry, and NATS processes.
+    /// The footprint at which the bench stops (e.g. 4GiB). Default: half
+    /// this machine's memory limit (the smaller of RAM and the cgroup's).
     #[arg(long, env = "BENCH_SCALE_MEMORY_LIMIT")]
     pub memory_limit: Option<String>,
 
@@ -46,8 +61,7 @@ pub struct Args {
     #[arg(long, default_value_t = 1.1, env = "BENCH_SCALE_OVERSHOOT")]
     pub overshoot: f64,
 
-    /// Workloads started between measurements. Also bounds how far one step
-    /// can overshoot the memory limit.
+    /// Workloads started between measurements.
     #[arg(long, default_value_t = 250, env = "BENCH_SCALE_STEP")]
     pub step: usize,
 
@@ -81,103 +95,69 @@ pub struct Args {
     #[arg(long, default_value_t = 3000, env = "BENCH_SCALE_SPIN_DOWN_WAIT")]
     pub spin_down_wait: u64,
 
-    /// Pool slots passed to the host. Default: what a large host would
-    /// derive: min(usable address space / 2 / (4 GiB + 32 MiB),
-    /// vm.max_map_count / 5).
-    #[arg(long, env = "BENCH_SCALE_CORE_INSTANCES")]
-    pub core_instances: Option<u32>,
-
-    /// Core instances one warm workload holds, for the pool's share of the
-    /// theoretical limit. Omit to leave the pool's contribution unknown.
-    #[arg(long, env = "BENCH_SCALE_CORE_INSTANCES_PER_WORKLOAD")]
-    pub core_instances_per_workload: Option<u32>,
-
     /// Exit with status 2 if a flavour served fewer workloads than this.
     #[arg(long, default_value_t = 1, env = "BENCH_SCALE_MIN_COMPONENTS")]
     pub min_components: usize,
 
-    /// Print the human report (otherwise the run is silent).
+    /// Print each step and the comparison on stderr (otherwise silent).
     #[arg(long, env = "BENCH_SCALE_REPORT")]
     pub report: bool,
 
-    /// Write the full results as JSON here, report or not.
+    /// Write the results here as a list of `bench_tools::density::Report`,
+    /// which `bench-tools jsonl` publishes when it is
+    /// `<target>/density/bench-scale.json`.
     #[arg(long, env = "BENCH_SCALE_JSON")]
     pub json: Option<PathBuf>,
+}
 
-    /// Where host and NATS logs go. Default: <cache-dir>/runs/<unix time>.
-    #[arg(long, env = "BENCH_SCALE_RUN_DIR")]
-    pub run_dir: Option<PathBuf>,
-
-    /// Downloads and other reusable state. Default: target/bench-scale in
-    /// the workspace.
-    #[arg(long, env = "BENCH_SCALE_CACHE_DIR")]
-    pub cache_dir: Option<PathBuf>,
-
-    /// Host binary to run. Default: the released wash for --wash-version.
-    #[arg(long, env = "BENCH_SCALE_HOST_BIN")]
-    pub host_bin: Option<PathBuf>,
-
-    /// How to build the host's command line.
-    #[arg(long, value_enum, default_value = "wash", env = "BENCH_SCALE_HOST_CLI")]
-    pub host_cli: HostCli,
-
-    /// Extra argument for the host command (repeatable).
-    #[arg(long = "host-arg", allow_hyphen_values = true, value_name = "ARG")]
-    pub host_args: Vec<String>,
-
-    /// RUST_LOG for a spawned host.
-    #[arg(long, default_value = "warn", env = "BENCH_SCALE_HOST_LOG")]
-    pub host_log: String,
-
-    /// Released wash to download when no --host-bin is given.
-    /// Default: this workspace's version.
-    #[arg(long, env = "BENCH_SCALE_WASH_VERSION")]
-    pub wash_version: Option<String>,
-
-    /// Spawn no host: bench one already connected to --nats-url.
-    #[arg(long, alias = "attach", env = "BENCH_SCALE_HOST_NATS_ONLY")]
-    pub host_nats_only: bool,
-
-    /// Which existing host to use with --host-nats-only.
-    #[arg(long, env = "BENCH_SCALE_HOST_ID")]
-    pub host_id: Option<String>,
-
-    /// The attached host's process id, for memory sampling.
-    #[arg(long, env = "BENCH_SCALE_HOST_PID")]
-    pub host_pid: Option<u32>,
-
-    /// Where to send HTTP requests, overriding 127.0.0.1:<heartbeat httpPort>.
-    #[arg(long, env = "BENCH_SCALE_HOST_HTTP")]
-    pub host_http: Option<String>,
-
-    /// Seconds to wait for the host's first heartbeat.
-    #[arg(long, default_value_t = 60, env = "BENCH_SCALE_HEARTBEAT_TIMEOUT")]
-    pub heartbeat_timeout: u64,
-
-    /// Use this NATS server instead of downloading and running one.
-    // The URL can carry credentials, so `--help` names the variable only.
-    #[arg(long, env = "BENCH_SCALE_NATS_URL", hide_env_values = true)]
-    pub nats_url: Option<String>,
-
-    /// nats-server release to download.
-    #[arg(long, default_value = "2.12.8", env = "BENCH_SCALE_NATS_VERSION")]
-    pub nats_version: String,
-
-    /// Component image to start instead of serving the built fixture.
-    /// Only scale-to-zero accepts an uninspected image; warm runs use --wasm
-    /// so the benchmark can verify its poolable P3 HTTP export.
-    #[arg(long, env = "BENCH_SCALE_IMAGE")]
-    pub image: Option<String>,
-
-    /// Serve this P3 HTTP component instead of building the http-handler-p3 fixture.
-    #[arg(long, env = "BENCH_SCALE_WASM", conflicts_with = "image")]
-    pub wasm: Option<PathBuf>,
+impl Args {
+    /// Reject settings that cannot measure anything, before touching the
+    /// host, and resolve the memory limit.
+    pub fn memory_limit_bytes(&self) -> Result<u64> {
+        bench_tools::density::sample_size(self.sample).map_err(anyhow::Error::msg)?;
+        if self.step == 0 || self.start_concurrency == 0 || self.request_concurrency == 0 {
+            bail!("--step, --start-concurrency and --request-concurrency must be at least 1");
+        }
+        if self.overshoot.is_nan() || self.overshoot < 1.0 {
+            bail!("--overshoot must be at least 1.0");
+        }
+        if self.host_pid.is_none() && self.max_components.is_none() {
+            bail!(
+                "without --host-pid the bench cannot see memory, so nothing bounds the run; \
+                 pass --host-pid or --max-components"
+            );
+        }
+        match &self.memory_limit {
+            Some(limit) => parse_bytes(limit)
+                .map_err(anyhow::Error::msg)
+                .context("--memory-limit"),
+            None => Ok(detected_memory_limit()
+                .context("cannot detect a memory limit; pass --memory-limit")?
+                / 2),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::CommandFactory as _;
+
+    const REQUIRED: [&str; 9] = [
+        "bench-scale",
+        "--nats-url",
+        "nats://127.0.0.1:4222",
+        "--host-id",
+        "NABC",
+        "--host-http",
+        "127.0.0.1:8080",
+        "--image",
+        "localhost:5000/http:v1",
+    ];
+
+    fn args(extra: &[&str]) -> Args {
+        Args::try_parse_from(REQUIRED.iter().chain(extra)).unwrap()
+    }
 
     /// `--help` prints each variable's current value unless told not to, and
     /// a NATS URL can carry a user and password.
@@ -189,5 +169,26 @@ mod tests {
             .find(|arg| arg.get_id() == "nats_url")
             .expect("the --nats-url argument");
         assert!(nats_url.is_hide_env_values_set());
+    }
+
+    #[test]
+    fn unmeasurable_runs_are_rejected_before_touching_the_host() {
+        assert!(
+            args(&["--host-pid", "1", "--sample", "0"])
+                .memory_limit_bytes()
+                .is_err()
+        );
+        // Without a PID only a cap bounds the run.
+        assert!(
+            args(&["--memory-limit", "1GiB"])
+                .memory_limit_bytes()
+                .is_err()
+        );
+        assert_eq!(
+            args(&["--max-components", "10", "--memory-limit", "1GiB"])
+                .memory_limit_bytes()
+                .unwrap(),
+            1 << 30
+        );
     }
 }

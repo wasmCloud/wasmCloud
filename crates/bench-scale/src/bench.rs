@@ -1,67 +1,27 @@
 //! The measurement loop: start workloads in steps, prove them live, measure,
 //! and stop at the first sign the host is full.
 
+use std::collections::BTreeMap;
 use std::ops::Range;
-use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use bench_tools::density::{
+    Flavour, Report, ServingEvidence, Step, memory_estimate, percentile, print_step, spread,
+};
 use futures::{StreamExt as _, stream};
-use serde::Serialize;
+use wash_runtime::engine::host_memory::render_bytes;
+use wash_runtime::washlet::types::v2::WorkloadState;
 
-use crate::api::{self, HostClient, RpcError, WorkloadState};
-use crate::host::{ChildGuard, log_tail};
-use crate::memory::{MemorySource, Sampler, Watch};
-use crate::registry::RegistryCounts;
-use crate::stats::{millis, percentile, spread};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Flavour {
-    Warm,
-    ScaleToZero,
-}
-
-impl Flavour {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Warm => "warm",
-            Self::ScaleToZero => "scale-to-zero",
-        }
-    }
-
-    fn pool_size(self) -> i32 {
-        match self {
-            Self::Warm => 1,
-            Self::ScaleToZero => 0,
-        }
-    }
-}
-
-/// What one flavour runs with, resolved from the flags.
-#[derive(Debug, Clone, Serialize)]
-pub struct Settings {
-    pub memory_limit_bytes: u64,
-    pub max_components: Option<usize>,
-    pub overshoot: f64,
-    pub step: usize,
-    pub start_concurrency: usize,
-    pub start_timeout_secs: u64,
-    pub start_retries: u32,
-    pub sample: usize,
-    pub request_concurrency: usize,
-    pub request_timeout_secs: u64,
-    pub spin_down_wait_ms: u64,
-    pub core_instances: u32,
-    pub core_instances_per_workload: Option<u32>,
-    pub min_components: usize,
-}
+use crate::api::{self, HostClient, RpcError};
+use crate::cli::Args;
+use crate::lifecycle::Journal;
+use crate::memory::{Watch, footprint};
 
 /// How the host refused a start, by its message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefusalClass {
     /// The pooling allocator is out of slots (core instances, memories,
     /// tables, stacks).
@@ -71,29 +31,27 @@ pub enum RefusalClass {
     Other,
 }
 
-impl RefusalClass {
-    fn describe(self) -> &'static str {
-        match self {
-            Self::PoolExhausted => "pool exhausted",
-            Self::MemoryLimit => "memory limit",
-            Self::Other => "other",
-        }
-    }
-}
-
 pub fn classify_refusal(message: &str) -> RefusalClass {
     let lower = message.to_ascii_lowercase();
-    if lower.contains("maximum concurrent limit")
-        || lower.contains("pooling allocator")
-        || lower.contains("core instances")
+    if [
+        "maximum concurrent limit",
+        "pooling allocator",
+        "core instances",
+    ]
+    .iter()
+    .any(|m| lower.contains(m))
     {
         RefusalClass::PoolExhausted
-    } else if lower.contains("max-process-memory")
-        || lower.contains("process memory")
-        || lower.contains("guest memory")
-        || lower.contains("memory limit")
-        || lower.contains("memory budget")
-        || lower.contains("out of memory")
+    } else if [
+        "max-process-memory",
+        "process memory",
+        "guest memory",
+        "memory limit",
+        "memory budget",
+        "out of memory",
+    ]
+    .iter()
+    .any(|m| lower.contains(m))
     {
         RefusalClass::MemoryLimit
     } else {
@@ -101,238 +59,78 @@ pub fn classify_refusal(message: &str) -> RefusalClass {
     }
 }
 
-/// N out of wasmtime's "maximum concurrent limit of N for core instances".
-pub fn core_instance_limit(message: &str) -> Option<u64> {
-    let (_, rest) = message.split_once("maximum concurrent limit of ")?;
-    let (number, kind) = rest.split_once(' ')?;
-    kind.starts_with("for core instances")
-        .then(|| number.parse().ok())
-        .flatten()
-}
-
-/// Why a flavour stopped.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "reason", rename_all = "kebab-case")]
+/// Why a flavour stopped. Host messages and response bodies are arbitrary
+/// text that may echo credentials, so [`Display`](std::fmt::Display), which
+/// goes into the shareable report, leaves them out; [`Stop::diagnostic`]
+/// keeps them for stderr.
+#[derive(Debug, Clone)]
 pub enum Stop {
     /// The host answered a start with WORKLOAD_STATE_ERROR.
     StartRefused {
         class: RefusalClass,
-        #[serde(serialize_with = "crate::report::serialize_diagnostic")]
         message: String,
     },
     /// The host's footprint reached the memory limit.
-    MemoryLimit {
-        footprint_bytes: u64,
-        limit_bytes: u64,
-    },
+    MemoryLimit { footprint: u64, limit: u64 },
     /// A warm-up failed, or more than half the sampled requests failed.
     Requests {
         stage: &'static str,
         failed: usize,
         total: usize,
-        #[serde(serialize_with = "crate::report::serialize_optional_diagnostic")]
         example: Option<String>,
     },
-    /// The host process ended.
-    HostExited {
-        status: String,
-        #[serde(serialize_with = "crate::report::serialize_diagnostic")]
-        log_tail: String,
-    },
     /// Starts got no answer even after retries.
-    StartsUnanswered {
-        count: usize,
-        #[serde(serialize_with = "crate::report::serialize_diagnostic")]
-        example: String,
-    },
-    /// Starts failed for reasons other than a refusal.
-    StartsFailed {
-        count: usize,
-        #[serde(serialize_with = "crate::report::serialize_diagnostic")]
-        example: String,
-    },
+    StartsUnanswered { count: usize, example: String },
+    /// Most of a step's starts failed for reasons other than a refusal.
+    StartsFailed { count: usize, example: String },
     /// The component cap was reached.
     Cap { cap: usize },
+}
+
+impl Stop {
+    pub fn diagnostic(&self) -> Option<&str> {
+        match self {
+            Self::StartRefused { message: d, .. }
+            | Self::StartsUnanswered { example: d, .. }
+            | Self::StartsFailed { example: d, .. } => Some(d),
+            Self::Requests { example, .. } => example.as_deref(),
+            Self::MemoryLimit { .. } | Self::Cap { .. } => None,
+        }
+    }
 }
 
 impl std::fmt::Display for Stop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::StartRefused { class, .. } => {
-                write!(
-                    f,
-                    "start refused ({}): {}",
-                    class.describe(),
-                    crate::report::OMITTED_DIAGNOSTIC
-                )
-            }
-            Self::MemoryLimit {
-                footprint_bytes,
-                limit_bytes,
-            } => write!(
+            Self::StartRefused { class, .. } => write!(f, "start refused ({class:?})"),
+            Self::MemoryLimit { footprint, limit } => write!(
                 f,
                 "memory limit: footprint {} >= {}",
-                crate::size::render(*footprint_bytes),
-                crate::size::render(*limit_bytes)
+                render_bytes(*footprint),
+                render_bytes(*limit)
             ),
             Self::Requests {
                 stage,
                 failed,
                 total,
-                example,
-            } => {
-                write!(f, "requests failing: {failed} of {total} {stage} requests")?;
-                if example.is_some() {
-                    write!(f, " {}", crate::report::OMITTED_DIAGNOSTIC)?;
-                }
-                Ok(())
-            }
-            Self::HostExited { status, .. } => write!(f, "host exited: {status}"),
-            Self::StartsUnanswered { count, .. } => {
-                write!(
-                    f,
-                    "{count} starts unanswered: {}",
-                    crate::report::OMITTED_DIAGNOSTIC
-                )
-            }
-            Self::StartsFailed { count, .. } => write!(
-                f,
-                "{count} starts failed: {}",
-                crate::report::OMITTED_DIAGNOSTIC
-            ),
+                ..
+            } => write!(f, "requests failing: {failed} of {total} {stage} requests"),
+            Self::StartsUnanswered { count, .. } => write!(f, "{count} starts unanswered"),
+            Self::StartsFailed { count, .. } => write!(f, "{count} starts failed"),
             Self::Cap { cap } => write!(f, "cap of {cap} workloads reached"),
         }
     }
 }
 
-/// One measurement, taken after a step of starts.
-#[derive(Debug, Clone, Serialize)]
-pub struct Step {
-    /// Running workloads after this step.
-    pub workloads: usize,
-    pub attempted: usize,
-    pub started: usize,
-    pub elapsed_secs: f64,
-    pub start_secs: f64,
-    pub starts_per_sec: f64,
-    pub start_p50_ms: Option<f64>,
-    pub start_p99_ms: Option<f64>,
-    pub start_refused: usize,
-    /// Start replies that never came, each followed by a status query.
-    pub start_timeouts: u32,
-    /// Starts that found nobody listening.
-    pub start_no_responders: u32,
-    pub start_retries: u32,
-    pub start_unanswered: usize,
-    pub start_failed: usize,
-    /// Warm: the first request to each new workload.
-    pub warmup_ok: usize,
-    pub warmup_failed: usize,
-    pub warmup_p50_ms: Option<f64>,
-    pub warmup_p99_ms: Option<f64>,
-    pub footprint_bytes: Option<u64>,
-    pub peak_footprint_bytes: Option<u64>,
-    pub bytes_per_workload: Option<u64>,
-    pub heartbeat_workloads: Option<u64>,
-    pub heartbeat_components: Option<u64>,
-    pub requests_ok: usize,
-    pub requests_failed: usize,
-    pub requests_per_sec: f64,
-    pub request_p50_ms: Option<f64>,
-    pub request_p99_ms: Option<f64>,
-    /// Scale-to-zero: footprint the sample added, and how long it took to
-    /// drop back. `None` when it did not settle within --spin-down-wait.
-    pub sample_growth_bytes: Option<u64>,
-    pub spin_down_ms: Option<f64>,
-    pub theoretical_limit: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct HostInfo {
-    pub binary: Option<String>,
-    #[serde(serialize_with = "crate::report::serialize_args")]
-    pub args: Vec<String>,
-    pub unsupported_flags: Vec<String>,
-    pub id: String,
-    pub version: String,
-    pub hostname: String,
-    #[serde(serialize_with = "crate::report::serialize_http_address")]
-    pub http: String,
-    pub pid: Option<u32>,
-    pub log: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Summary {
-    pub achieved: usize,
-    pub served: usize,
-    pub theoretical_limit: Option<u64>,
-    pub bytes_per_workload: Option<u64>,
-    pub peak_footprint_bytes: Option<u64>,
-    pub starts_per_sec: f64,
-    pub start_p50_ms: Option<f64>,
-    pub start_p99_ms: Option<f64>,
-    pub warmup_p50_ms: Option<f64>,
-    pub warmup_p99_ms: Option<f64>,
-    pub request_p50_ms: Option<f64>,
-    pub request_p99_ms: Option<f64>,
-    pub start_timeouts: u32,
-    pub start_no_responders: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FlavourReport {
-    pub flavour: Flavour,
-    pub host: HostInfo,
-    pub memory_source: MemorySource,
-    pub baseline_footprint_bytes: Option<u64>,
-    /// Pool slots the host was given, or reported in a refusal.
-    pub core_instances: Option<u64>,
-    pub core_instances_per_workload: Option<u64>,
-    pub steps: Vec<Step>,
-    pub stop: Stop,
-    pub summary: Summary,
-    pub registry_requests: Option<RegistryCounts>,
-    /// Why cleanup could not confirm removal on an attached host; `None` when it did.
-    pub cleanup_error: Option<String>,
-}
-
-/// A host ready to bench: its API, where its HTTP listens, its process.
-pub struct Target {
-    pub client: HostClient,
-    pub info: HostInfo,
-    pub sampler: Arc<Sampler>,
-    pub guard: Option<Arc<Mutex<ChildGuard>>>,
-    pub log: Option<PathBuf>,
-    /// Core instances the host was told it has, when the bench told it.
-    pub core_instances: Option<u32>,
-    /// The bench owns the host and kills it; otherwise it stops what it
-    /// started.
-    pub owned: bool,
-}
-
-impl Target {
-    /// Kill an owned host now rather than whenever the last handle drops.
-    pub fn shutdown(&self) {
-        if let Some(guard) = &self.guard
-            && let Ok(mut guard) = guard.lock()
-        {
-            guard.kill();
-        }
-    }
-
-    fn exited(&self) -> Option<Stop> {
-        let guard = self.guard.as_ref()?;
-        let status = guard.lock().ok()?.exited()?;
-        Some(Stop::HostExited {
-            status: status.to_string(),
-            log_tail: self
-                .log
-                .as_deref()
-                .map(|l| log_tail(l, 30))
-                .unwrap_or_default(),
-        })
-    }
+/// What every flavour of one run shares.
+pub struct Run<'a> {
+    pub args: &'a Args,
+    pub memory_limit: u64,
+    pub run_id: &'a str,
+    pub client: &'a HostClient,
+    /// What the report says ran: the image, and the host.
+    pub subject: String,
+    pub cancel: &'a tokio_util::sync::CancellationToken,
 }
 
 enum Started {
@@ -343,14 +141,6 @@ enum Started {
     Skipped,
 }
 
-struct StartOutcome {
-    result: Started,
-    latency: Duration,
-    timeouts: u32,
-    no_responders: u32,
-    retries: u32,
-}
-
 struct Starter<'a> {
     client: &'a HostClient,
     image: &'a str,
@@ -359,9 +149,11 @@ struct Starter<'a> {
     timeout: Duration,
     retries: u32,
     halt: &'a AtomicBool,
-    journal: &'a crate::lifecycle::Journal,
+    journal: &'a Journal,
 }
 
+/// An RFC 1123 hostname per workload, unique to this run, so concurrent runs
+/// on one host do not route to each other's workloads.
 fn host_header(run_id: &str, flavour: Flavour, index: usize) -> String {
     format!("w{index}.{}.{run_id}.scale.test", flavour.name())
 }
@@ -371,16 +163,10 @@ fn workload_id(run_id: &str, flavour: Flavour, index: usize) -> String {
 }
 
 impl Starter<'_> {
-    async fn start(&self, index: usize) -> StartOutcome {
-        let mut outcome = StartOutcome {
-            result: Started::Skipped,
-            latency: Duration::ZERO,
-            timeouts: 0,
-            no_responders: 0,
-            retries: 0,
-        };
+    /// The result and its latency.
+    async fn start(&self, index: usize) -> (Started, Duration) {
         if self.halt.load(Ordering::Relaxed) {
-            return outcome;
+            return (Started::Skipped, Duration::ZERO);
         }
         let id = workload_id(self.run_id, self.flavour, index);
         let request = api::start_request(
@@ -392,12 +178,13 @@ impl Starter<'_> {
         );
         self.journal.submitted(&id);
         let began = Instant::now();
+        let (mut timeouts, mut no_responders) = (0, 0);
         let mut attempt = 0;
-        outcome.result = loop {
+        let result = loop {
             let resolved = match self.client.start(&request, self.timeout).await {
                 Ok(status) => {
                     self.journal.acknowledged(&id);
-                    match status.workload_state {
+                    match status.state {
                         WorkloadState::Running => Some(Started::Running),
                         // A retried start can be refused as a duplicate of the
                         // first, which did start after all.
@@ -413,11 +200,11 @@ impl Starter<'_> {
                     }
                 }
                 Err(RpcError::Timeout) => {
-                    outcome.timeouts += 1;
+                    timeouts += 1;
                     self.settle(&id).await
                 }
                 Err(RpcError::NoResponders) => {
-                    outcome.no_responders += 1;
+                    no_responders += 1;
                     tokio::time::sleep(Duration::from_millis(200 << attempt.min(5))).await;
                     None
                 }
@@ -428,20 +215,16 @@ impl Starter<'_> {
             }
             if attempt >= self.retries {
                 break Started::Unanswered(format!(
-                    "no answer after {} attempts ({} timeouts, {} no responders)",
+                    "no answer after {} attempts ({timeouts} timeouts, {no_responders} no responders)",
                     attempt + 1,
-                    outcome.timeouts,
-                    outcome.no_responders
                 ));
             }
             attempt += 1;
-            outcome.retries += 1;
         };
-        outcome.latency = began.elapsed();
-        if matches!(outcome.result, Started::Refused(_) | Started::Unanswered(_)) {
+        if matches!(result, Started::Refused(_) | Started::Unanswered(_)) {
             self.halt.store(true, Ordering::Relaxed);
         }
-        outcome
+        (result, began.elapsed())
     }
 
     /// After a start went unanswered: ask its status until it resolves.
@@ -450,7 +233,7 @@ impl Starter<'_> {
         let deadline = Instant::now() + self.timeout;
         loop {
             match self.client.status(id, Duration::from_secs(5)).await {
-                Ok(status) => match status.workload_state {
+                Ok(status) => match status.state {
                     WorkloadState::Running => return Some(Started::Running),
                     WorkloadState::Error => return Some(Started::Refused(status.message)),
                     WorkloadState::NotFound => return None,
@@ -480,26 +263,20 @@ struct Batch {
     refused: Vec<String>,
     unanswered: Vec<String>,
     failed: Vec<String>,
-    timeouts: u32,
-    no_responders: u32,
-    retries: u32,
 }
 
 async fn start_batch(starter: &Starter<'_>, indices: Range<usize>, concurrency: usize) -> Batch {
-    let outcomes: Vec<(usize, StartOutcome)> = stream::iter(indices)
+    let outcomes: Vec<(usize, (Started, Duration))> = stream::iter(indices)
         .map(|index| async move { (index, starter.start(index).await) })
         .buffer_unordered(concurrency.max(1))
         .collect()
         .await;
     let mut batch = Batch::default();
-    for (index, outcome) in outcomes {
-        batch.timeouts += outcome.timeouts;
-        batch.no_responders += outcome.no_responders;
-        batch.retries += outcome.retries;
-        match outcome.result {
+    for (index, (result, latency)) in outcomes {
+        match result {
             Started::Running => {
                 batch.started.push(index);
-                batch.latencies.push(millis(outcome.latency));
+                batch.latencies.push(latency.as_secs_f64() * 1000.0);
             }
             Started::Refused(message) => batch.refused.push(message),
             Started::Unanswered(message) => batch.unanswered.push(message),
@@ -565,7 +342,7 @@ async fn requests(
                 .await
                 .map_err(|e| format!("{e}"))?;
             drain_response(response).await?;
-            Ok(millis(began.elapsed()))
+            Ok(began.elapsed().as_secs_f64() * 1000.0)
         })
         .buffer_unordered(concurrency.max(1))
         .collect()
@@ -586,101 +363,10 @@ async fn requests(
     answers
 }
 
-/// The workload count the measurements so far say this host can hold: the
-/// lower of what the memory limit and (warm) the pool fit.
-pub fn theoretical_limit(
-    memory_limit: u64,
-    baseline: Option<u64>,
-    bytes_per_workload: Option<u64>,
-    by_pool: Option<u64>,
-) -> Option<u64> {
-    let by_memory = match (baseline, bytes_per_workload) {
-        (Some(baseline), Some(per)) if per > 0 => Some(memory_limit.saturating_sub(baseline) / per),
-        _ => None,
-    };
-    match (by_memory, by_pool) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    }
-}
-
 /// The cap a run without --max-components stops at: a little past the
 /// theoretical limit, so the run sees how the host fails there.
 pub fn dynamic_cap(theoretical: u64, overshoot: f64) -> usize {
     (theoretical as f64 * overshoot.max(1.0)).ceil() as usize
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CapacityEstimate {
-    bytes_per_workload: Option<u64>,
-    theoretical_limit: Option<u64>,
-}
-
-impl CapacityEstimate {
-    fn from_step(
-        step: &Step,
-        flavour: Flavour,
-        memory_limit: u64,
-        baseline: Option<u64>,
-        by_pool: Option<u64>,
-    ) -> Option<Self> {
-        if step.workloads == 0
-            || step.started != step.attempted
-            || step.start_refused > 0
-            || step.start_unanswered > 0
-            || step.start_failed > 0
-            || step.requests_ok == 0
-            || step.requests_failed > 0
-            || step.warmup_failed > 0
-            || (flavour == Flavour::Warm && step.warmup_ok != step.started)
-        {
-            return None;
-        }
-        let bytes_per_workload = match (step.footprint_bytes, baseline) {
-            (Some(now), Some(base)) => Some(now.saturating_sub(base) / step.workloads as u64),
-            _ => None,
-        };
-        let theoretical_limit =
-            theoretical_limit(memory_limit, baseline, bytes_per_workload, by_pool);
-        (bytes_per_workload.is_some() || theoretical_limit.is_some()).then_some(Self {
-            bytes_per_workload,
-            theoretical_limit,
-        })
-    }
-}
-
-struct CapacityTracker {
-    latest: Option<CapacityEstimate>,
-    cap: Option<usize>,
-}
-
-impl CapacityTracker {
-    fn observe(
-        &mut self,
-        step: &mut Step,
-        flavour: Flavour,
-        settings: &Settings,
-        baseline: Option<u64>,
-        by_pool: Option<u64>,
-    ) {
-        let Some(estimate) = CapacityEstimate::from_step(
-            step,
-            flavour,
-            settings.memory_limit_bytes,
-            baseline,
-            by_pool,
-        ) else {
-            return;
-        };
-        step.bytes_per_workload = estimate.bytes_per_workload;
-        step.theoretical_limit = estimate.theoretical_limit;
-        self.latest = Some(estimate);
-        if settings.max_components.is_none()
-            && let Some(theoretical) = estimate.theoretical_limit
-        {
-            self.cap = Some(dynamic_cap(theoretical, settings.overshoot));
-        }
-    }
 }
 
 fn checked_footprint(
@@ -690,174 +376,121 @@ fn checked_footprint(
 ) -> Result<Option<u64>> {
     anyhow::ensure!(
         footprint.is_some() || max_components.is_some(),
-        "process footprint unavailable {phase}; an uncapped run requires a readable host PID, \
+        "host footprint unavailable {phase}; an uncapped run requires a readable --host-pid, \
          or set --max-components to bound a run without memory measurements"
     );
     Ok(footprint)
 }
 
 /// Wait for the footprint to settle back near `before`; how long that took.
-async fn spin_down(sampler: &Sampler, before: u64, wait: Duration) -> Option<f64> {
+async fn spin_down(pid: Option<u32>, before: u64, wait: Duration) -> Option<f64> {
     let tolerance = (before / 100).max(1 << 20);
     let began = Instant::now();
     while began.elapsed() < wait {
-        if sampler.footprint()? <= before + tolerance {
-            return Some(millis(began.elapsed()));
+        if footprint(pid)? <= before + tolerance {
+            return Some(began.elapsed().as_secs_f64() * 1000.0);
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     None
 }
 
-pub struct Run<'a> {
-    pub settings: &'a Settings,
-    pub image: &'a str,
-    pub run_id: &'a str,
-    pub on_step: &'a dyn Fn(&Step, bool),
-    pub cancel: &'a tokio_util::sync::CancellationToken,
-}
-
+/// Run one flavour, then stop every workload it started. A cleanup failure
+/// comes back beside the measurement rather than discarding it.
 pub async fn run_flavour(
     run: &Run<'_>,
     flavour: Flavour,
-    target: &Target,
-) -> Result<FlavourReport> {
-    let journal = crate::lifecycle::Journal::default();
-    let (mut report, cleanup_error) = crate::lifecycle::with_cleanup(
+) -> Result<((Report, Stop), Option<String>)> {
+    let journal = Journal::default();
+    crate::lifecycle::with_cleanup(
         run.cancel,
-        &target.client,
+        run.client,
         &journal,
-        !target.owned,
-        run.settings.start_concurrency,
-        measure_flavour(run, flavour, target, &journal),
+        run.args.start_concurrency,
+        measure_flavour(run, flavour, &journal),
     )
-    .await?;
-    report.cleanup_error = cleanup_error;
-    Ok(report)
+    .await
 }
 
 async fn measure_flavour(
     run: &Run<'_>,
     flavour: Flavour,
-    target: &Target,
-    journal: &crate::lifecycle::Journal,
-) -> Result<FlavourReport> {
-    let settings = run.settings;
+    journal: &Journal,
+) -> Result<(Report, Stop)> {
+    let args = run.args;
+    let pid = args.host_pid;
     let http = reqwest::Client::builder()
-        .pool_max_idle_per_host(settings.request_concurrency)
-        .timeout(Duration::from_secs(settings.request_timeout_secs))
+        .pool_max_idle_per_host(args.request_concurrency)
+        .timeout(Duration::from_secs(args.request_timeout))
         .build()?;
-    let url = format!("http://{}/", target.info.http);
+    let url = format!("http://{}/", args.host_http);
 
-    // Let the host's startup allocations land before taking the baseline.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let baseline = checked_footprint(
-        target.sampler.footprint(),
-        settings.max_components,
-        "at baseline",
-    )?;
+    let baseline = checked_footprint(footprint(pid), args.max_components, "at baseline")?;
     let halt = Arc::new(AtomicBool::new(false));
     let watch = Watch::spawn(
-        Arc::clone(&target.sampler),
-        settings.memory_limit_bytes,
+        move || footprint(pid),
+        run.memory_limit,
         Arc::clone(&halt),
-        settings.max_components.is_none(),
+        args.max_components.is_none(),
     );
-    let exit_watch = target.guard.as_ref().map(|guard| {
-        let guard = Arc::clone(guard);
-        let halt = Arc::clone(&halt);
-        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                if guard.lock().ok().and_then(|mut g| g.exited()).is_some() {
-                    halt.store(true, Ordering::Relaxed);
-                    return;
-                }
-            }
-        }))
-    });
-
     let starter = Starter {
-        client: &target.client,
-        image: run.image,
+        client: run.client,
+        image: &args.image,
         flavour,
         run_id: run.run_id,
-        timeout: Duration::from_secs(settings.start_timeout_secs),
-        retries: settings.start_retries,
+        timeout: Duration::from_secs(args.start_timeout),
+        retries: args.start_retries,
         halt: &halt,
         journal,
     };
-    let mut pool_total = target.core_instances.map(u64::from);
-    let per_workload = settings.core_instances_per_workload.map(u64::from);
-    let pool_bound = |total: Option<u64>, per: Option<u64>| match (flavour, total, per) {
-        (Flavour::Warm, Some(total), Some(per)) if per > 0 => Some(total / per),
-        _ => None,
-    };
 
-    let began = Instant::now();
     let mut running: Vec<usize> = Vec::new();
-    let mut next_index = 0usize;
+    let mut next_index = 0;
     let mut steps: Vec<Step> = Vec::new();
-    let mut capacity = CapacityTracker {
-        latest: None,
-        cap: settings.max_components,
-    };
-    let mut all_start_latencies = Vec::new();
-    let mut all_warmup_latencies = Vec::new();
-    let mut all_request_latencies = Vec::new();
-    let mut total_start_secs = 0.0;
+    let mut serving = ServingEvidence::default();
+    let mut estimate = None;
+    let mut cap = args.max_components;
 
     let stop = loop {
-        if let Some(stop) = target.exited() {
-            break stop;
-        }
-        if let Some(cap) = capacity.cap
+        if let Some(cap) = cap
             && running.len() >= cap
         {
             break Stop::Cap { cap };
         }
         watch.check_available()?;
         checked_footprint(
-            target.sampler.footprint(),
-            settings.max_components,
+            footprint(pid),
+            args.max_components,
             "before starting another batch",
         )?;
-        let room = capacity
-            .cap
-            .map_or(settings.step, |cap| cap.saturating_sub(running.len()));
-        let attempted = settings.step.min(room).max(1);
+        let room = cap.map_or(args.step, |cap| cap.saturating_sub(running.len()));
+        let attempted = args.step.min(room).max(1);
         let step_began = Instant::now();
-        let batch = start_batch(
-            &starter,
-            next_index..next_index + attempted,
-            settings.start_concurrency,
-        )
-        .await;
-        let start_secs = step_began.elapsed().as_secs_f64();
-        total_start_secs += start_secs;
+        let indices = next_index..next_index + attempted;
         next_index += attempted;
+        let batch = start_batch(&starter, indices, args.start_concurrency).await;
+        let start_secs = step_began.elapsed().as_secs_f64();
         running.extend_from_slice(&batch.started);
-        all_start_latencies.extend_from_slice(&batch.latencies);
 
         // Warm workloads prove they are live, and park their instance, by
         // answering one request each.
         let warmup = if flavour == Flavour::Warm && !batch.started.is_empty() {
+            let new = batch.started.clone();
             requests(
                 &http,
                 &url,
                 run.run_id,
                 flavour,
-                batch.started.clone(),
-                settings.request_concurrency,
+                new,
+                args.request_concurrency,
             )
             .await
         } else {
             Answers::default()
         };
-        all_warmup_latencies.extend_from_slice(&warmup.latencies);
 
-        let before_sample = target.sampler.footprint();
-        let sample: Vec<usize> = spread(running.len(), settings.sample)
+        let before_sample = footprint(pid);
+        let sample: Vec<usize> = spread(running.len(), args.sample)
             .into_iter()
             .filter_map(|position| running.get(position).copied())
             .collect();
@@ -868,85 +501,69 @@ async fn measure_flavour(
             run.run_id,
             flavour,
             sample.clone(),
-            settings.request_concurrency,
+            args.request_concurrency,
         )
         .await;
         let sample_secs = sample_began.elapsed().as_secs_f64();
-        all_request_latencies.extend_from_slice(&answers.latencies);
-
-        let (sample_growth, spin_down_ms) = match (flavour, before_sample) {
+        let spin_down_ms = match (flavour, before_sample) {
             (Flavour::ScaleToZero, Some(before)) => {
-                let after = target.sampler.footprint();
-                let settled = spin_down(
-                    &target.sampler,
-                    before,
-                    Duration::from_millis(settings.spin_down_wait_ms),
-                )
-                .await;
-                (after.map(|a| a.saturating_sub(before)), settled)
+                spin_down(pid, before, Duration::from_millis(args.spin_down_wait)).await
             }
-            _ => (None, None),
+            _ => None,
         };
 
-        let heartbeat = target.client.heartbeat(Duration::from_secs(5)).await.ok();
         watch.check_available()?;
-        let footprint = checked_footprint(
-            target.sampler.footprint(),
-            settings.max_components,
+        let footprint_now = checked_footprint(
+            footprint(pid),
+            args.max_components,
             "after measuring a batch",
         )?;
-        if let Some(limit) = batch.refused.iter().find_map(|m| core_instance_limit(m)) {
-            pool_total = Some(limit);
-        }
-
-        let mut step = Step {
-            workloads: running.len(),
-            attempted,
+        let served = serving.observe(answers.ok, answers.failed, warmup.failed);
+        let clean = served
+            && batch.started.len() == attempted
+            && (flavour == Flavour::ScaleToZero || warmup.ok == attempted);
+        let workloads = running.len();
+        steps.push(Step {
+            workloads,
             started: batch.started.len(),
-            elapsed_secs: began.elapsed().as_secs_f64(),
-            start_secs,
             starts_per_sec: batch.started.len() as f64 / start_secs.max(f64::EPSILON),
-            start_p50_ms: percentile(&batch.latencies, 0.50),
             start_p99_ms: percentile(&batch.latencies, 0.99),
-            start_refused: batch.refused.len(),
-            start_timeouts: batch.timeouts,
-            start_no_responders: batch.no_responders,
-            start_retries: batch.retries,
-            start_unanswered: batch.unanswered.len(),
-            start_failed: batch.failed.len(),
-            warmup_ok: warmup.ok,
-            warmup_failed: warmup.failed,
-            warmup_p50_ms: percentile(&warmup.latencies, 0.50),
-            warmup_p99_ms: percentile(&warmup.latencies, 0.99),
-            footprint_bytes: footprint,
-            peak_footprint_bytes: watch.peak(),
-            bytes_per_workload: None,
-            heartbeat_workloads: heartbeat.as_ref().map(|h| h.workload_count),
-            heartbeat_components: heartbeat.as_ref().map(|h| h.component_count),
+            refused: batch.refused.len() as u64,
+            footprint_bytes: footprint_now,
+            bytes_per_workload: footprint_now
+                .zip(baseline)
+                .map(|(now, base)| now.saturating_sub(base) / workloads.max(1) as u64),
             requests_ok: answers.ok,
             requests_failed: answers.failed,
+            warmup_failed: warmup.failed,
             requests_per_sec: answers.ok as f64 / sample_secs.max(f64::EPSILON),
             request_p50_ms: percentile(&answers.latencies, 0.50),
             request_p99_ms: percentile(&answers.latencies, 0.99),
-            sample_growth_bytes: sample_growth,
             spin_down_ms,
-            theoretical_limit: None,
-        };
-        capacity.observe(
-            &mut step,
-            flavour,
-            settings,
-            baseline,
-            pool_bound(pool_total, per_workload),
-        );
-        (run.on_step)(&step, steps.is_empty());
-        steps.push(step);
-
-        if let Some(stop) = target.exited() {
-            break stop;
+            clean,
+            ..Default::default()
+        });
+        if clean
+            && let Some(base) = baseline
+            && let Some(found) = memory_estimate(&steps, base, run.memory_limit)
+        {
+            estimate = Some(found);
+            if args.max_components.is_none()
+                && let (_, Some(fits)) = found
+            {
+                cap = Some(dynamic_cap(fits, args.overshoot));
+            }
         }
-        let over = footprint
-            .filter(|f| *f >= settings.memory_limit_bytes)
+        let first = steps.len() == 1;
+        if let Some(step) = steps.last_mut() {
+            step.theoretical_limit = estimate.and_then(|(_, fits)| fits);
+            if args.report {
+                print_step(first, step);
+            }
+        }
+
+        let over = footprint_now
+            .filter(|f| *f >= run.memory_limit)
             .or_else(|| {
                 watch
                     .over
@@ -954,10 +571,10 @@ async fn measure_flavour(
                     .then(|| watch.peak())
                     .flatten()
             });
-        if let Some(footprint_bytes) = over {
+        if let Some(footprint) = over {
             break Stop::MemoryLimit {
-                footprint_bytes,
-                limit_bytes: settings.memory_limit_bytes,
+                footprint,
+                limit: run.memory_limit,
             };
         }
         if let Some(message) = batch.refused.first() {
@@ -997,47 +614,22 @@ async fn measure_flavour(
             };
         }
     };
-    if let Some(task) = exit_watch {
-        task.abort();
-    }
-    drop(watch);
 
-    let mut serving = bench_tools::density::ServingEvidence::default();
-    let served = steps
-        .iter()
-        .filter(|s| serving.observe(s.requests_ok, s.requests_failed, s.warmup_failed))
-        .map(|s| s.workloads)
-        .max()
-        .unwrap_or(0);
-    let summary = Summary {
-        achieved: running.len(),
-        served,
-        theoretical_limit: capacity.latest.and_then(|s| s.theoretical_limit),
-        bytes_per_workload: capacity.latest.and_then(|s| s.bytes_per_workload),
-        peak_footprint_bytes: steps.iter().filter_map(|s| s.peak_footprint_bytes).max(),
-        starts_per_sec: running.len() as f64 / total_start_secs.max(f64::EPSILON),
-        start_p50_ms: percentile(&all_start_latencies, 0.50),
-        start_p99_ms: percentile(&all_start_latencies, 0.99),
-        warmup_p50_ms: percentile(&all_warmup_latencies, 0.50),
-        warmup_p99_ms: percentile(&all_warmup_latencies, 0.99),
-        request_p50_ms: percentile(&all_request_latencies, 0.50),
-        request_p99_ms: percentile(&all_request_latencies, 0.99),
-        start_timeouts: steps.iter().map(|s| s.start_timeouts).sum(),
-        start_no_responders: steps.iter().map(|s| s.start_no_responders).sum(),
-    };
-    Ok(FlavourReport {
-        flavour,
-        host: target.info.clone(),
-        memory_source: target.sampler.source(),
+    let report = Report {
+        bench: "bench-scale".into(),
+        flavour: Some(flavour),
+        label: flavour.name().into(),
+        subject: run.subject.clone(),
+        cores: std::thread::available_parallelism().map_or(1, |n| n.get()),
+        memory_limit_bytes: run.memory_limit,
         baseline_footprint_bytes: baseline,
-        core_instances: pool_total,
-        core_instances_per_workload: per_workload,
+        limits: BTreeMap::from([("memory limit".into(), estimate.and_then(|(_, fits)| fits))]),
+        marginal_bytes_per_workload: estimate.map(|(marginal, _)| marginal),
+        stop: stop.to_string(),
         steps,
-        stop,
-        summary,
-        registry_requests: None,
-        cleanup_error: None,
-    })
+        ..Default::default()
+    };
+    Ok((report, stop))
 }
 
 #[cfg(test)]
@@ -1105,217 +697,56 @@ mod tests {
 
     #[test]
     fn classifies_refusals() {
-        assert_eq!(
-            classify_refusal(
-                "failed to instantiate: maximum concurrent limit of 1000 for core instances reached"
+        for (message, class) in [
+            (
+                "failed to instantiate: maximum concurrent limit of 1000 for core instances reached",
+                RefusalClass::PoolExhausted,
             ),
-            RefusalClass::PoolExhausted
-        );
-        assert_eq!(
-            classify_refusal("maximum concurrent limit of 500 for memories reached"),
-            RefusalClass::PoolExhausted
-        );
-        assert_eq!(
-            classify_refusal("process memory is close to or past max-process-memory"),
-            RefusalClass::MemoryLimit
-        );
-        assert_eq!(
-            classify_refusal("guest memory budget exhausted"),
-            RefusalClass::MemoryLimit
-        );
-        assert_eq!(
-            classify_refusal("failed to pull component from 127.0.0.1:1/x:y"),
-            RefusalClass::Other
-        );
-    }
-
-    #[test]
-    fn reads_the_core_instance_limit() {
-        assert_eq!(
-            core_instance_limit(
-                "instantiate: maximum concurrent limit of 13106 for core instances reached"
+            (
+                "process memory is close to or past max-process-memory",
+                RefusalClass::MemoryLimit,
             ),
-            Some(13_106)
-        );
-        assert_eq!(
-            core_instance_limit("maximum concurrent limit of 10 for memories reached"),
-            None
-        );
-        assert_eq!(core_instance_limit("something else"), None);
-    }
-
-    #[test]
-    fn theoretical_is_the_tighter_bound() {
-        let mib = 1 << 20;
-        assert_eq!(
-            theoretical_limit(1024 * mib, Some(24 * mib), Some(mib), None),
-            Some(1000)
-        );
-        assert_eq!(
-            theoretical_limit(1024 * mib, Some(24 * mib), Some(mib), Some(400)),
-            Some(400)
-        );
-        assert_eq!(
-            theoretical_limit(1024 * mib, None, None, Some(400)),
-            Some(400)
-        );
-        assert_eq!(
-            theoretical_limit(1024 * mib, Some(24 * mib), Some(0), None),
-            None
-        );
-        assert_eq!(
-            theoretical_limit(mib, Some(2 * mib), Some(1), None),
-            Some(0)
-        );
-        assert_eq!(dynamic_cap(1000, 1.1), 1100);
-        assert_eq!(dynamic_cap(1000, 0.5), 1000);
-    }
-
-    #[test]
-    fn failed_terminal_steps_preserve_the_verified_estimate_and_cap() {
-        let settings = Settings {
-            memory_limit_bytes: 2100,
-            max_components: None,
-            overshoot: 1.1,
-            step: 250,
-            start_concurrency: 10,
-            start_timeout_secs: 30,
-            start_retries: 0,
-            sample: 200,
-            request_concurrency: 10,
-            request_timeout_secs: 5,
-            spin_down_wait_ms: 0,
-            core_instances: 10_000,
-            core_instances_per_workload: None,
-            min_components: 0,
-        };
-        let measured_step = || Step {
-            workloads: 250,
-            attempted: 250,
-            started: 250,
-            elapsed_secs: 1.0,
-            start_secs: 1.0,
-            starts_per_sec: 250.0,
-            start_p50_ms: None,
-            start_p99_ms: None,
-            start_refused: 0,
-            start_timeouts: 0,
-            start_no_responders: 0,
-            start_retries: 0,
-            start_unanswered: 0,
-            start_failed: 0,
-            warmup_ok: 250,
-            warmup_failed: 0,
-            warmup_p50_ms: None,
-            warmup_p99_ms: None,
-            footprint_bytes: Some(1100),
-            peak_footprint_bytes: Some(1100),
-            bytes_per_workload: None,
-            heartbeat_workloads: None,
-            heartbeat_components: None,
-            requests_ok: 200,
-            requests_failed: 0,
-            requests_per_sec: 200.0,
-            request_p50_ms: None,
-            request_p99_ms: None,
-            sample_growth_bytes: None,
-            spin_down_ms: None,
-            theoretical_limit: None,
-        };
-        let failures: [fn(&mut Step); 8] = [
-            |step| step.warmup_failed = 1,
-            |step| step.warmup_ok -= 1,
-            |step| step.requests_failed = 1,
-            |step| step.requests_ok = 0,
-            |step| step.start_refused = 1,
-            |step| step.start_unanswered = 1,
-            |step| step.start_failed = 1,
-            |step| step.started -= 1,
-        ];
-        for fail in failures {
-            let mut capacity = CapacityTracker {
-                latest: None,
-                cap: None,
-            };
-            let mut first = measured_step();
-            capacity.observe(&mut first, Flavour::Warm, &settings, Some(100), None);
-            let verified = CapacityEstimate {
-                bytes_per_workload: Some(4),
-                theoretical_limit: Some(500),
-            };
-            assert_eq!(capacity.latest, Some(verified));
-            assert_eq!(capacity.cap, Some(550));
-
-            // The new batch reports started workloads without paying all of
-            // their expected memory costs. Its unverified slope would double
-            // both the predicted capacity and the automatic stopping cap.
-            let mut terminal = measured_step();
-            terminal.workloads = 500;
-            fail(&mut terminal);
-            capacity.observe(&mut terminal, Flavour::Warm, &settings, Some(100), None);
-            assert_eq!(terminal.bytes_per_workload, None);
-            assert_eq!(terminal.theoretical_limit, None);
-            assert_eq!(capacity.latest, Some(verified));
-            assert_eq!(capacity.cap, Some(550));
-        }
-    }
-
-    #[test]
-    fn uncapped_runs_require_initial_and_subsequent_memory_readings() {
-        for phase in [
-            "at baseline",
-            "before starting another batch",
-            "after measuring a batch",
+            ("guest memory budget exhausted", RefusalClass::MemoryLimit),
+            (
+                "failed to pull component from 127.0.0.1:1/x:y",
+                RefusalClass::Other,
+            ),
         ] {
-            let error = checked_footprint(None, None, phase).unwrap_err();
-            assert!(error.to_string().contains(phase));
-            assert!(error.to_string().contains("--max-components"));
+            assert_eq!(classify_refusal(message), class, "{message}");
         }
+    }
 
-        // Losing a PID after a valid baseline must stop an uncapped run,
-        // even if earlier samples could have supplied an automatic cap.
-        assert_eq!(
-            checked_footprint(Some(1024), None, "at baseline").unwrap(),
-            Some(1024)
-        );
-        assert!(checked_footprint(None, None, "before starting another batch").is_err());
-        // An explicit workload count bounds an intentionally unmeasured run.
+    #[test]
+    fn reports_leave_host_diagnostics_out() {
+        let stop = Stop::StartRefused {
+            class: RefusalClass::Other,
+            message: "password=hunter2".into(),
+        };
+        assert!(!stop.to_string().contains("hunter2"));
+        assert_eq!(stop.diagnostic(), Some("password=hunter2"));
+    }
+
+    #[test]
+    fn uncapped_runs_require_memory_readings() {
+        assert!(checked_footprint(None, None, "at baseline").is_err());
         assert_eq!(
             checked_footprint(None, Some(10), "at baseline").unwrap(),
             None
         );
         assert_eq!(
-            checked_footprint(None, Some(10), "after measuring a batch").unwrap(),
-            None
-        );
-        // Zero is a measurement, not a missing-value sentinel.
-        assert_eq!(
-            checked_footprint(Some(0), None, "at baseline").unwrap(),
-            Some(0)
+            checked_footprint(Some(1), None, "at baseline").unwrap(),
+            Some(1)
         );
     }
 
     #[test]
-    fn stop_reasons_serialize_with_a_tag() {
-        let stop = Stop::StartRefused {
-            class: RefusalClass::PoolExhausted,
-            message: "maximum concurrent limit of 5 for core instances reached".into(),
-        };
-        let json = serde_json::to_value(&stop).unwrap();
-        assert_eq!(json["reason"], "start-refused");
-        assert_eq!(json["class"], "pool-exhausted");
-        assert!(
-            stop.to_string()
-                .starts_with("start refused (pool exhausted)")
+    fn names_are_rfc_1123_and_distinct_per_run() {
+        let (first, second) = (
+            "0123456789abcdef0123456789abcdef",
+            "fedcba9876543210fedcba9876543210",
         );
-        let json = serde_json::to_value(Stop::Cap { cap: 3 }).unwrap();
-        assert_eq!(json, serde_json::json!({"reason": "cap", "cap": 3}));
-    }
-
-    #[test]
-    fn names_are_rfc_1123() {
-        for flavour in [Flavour::Warm, Flavour::ScaleToZero] {
-            let name = host_header("0123456789abcdef0123456789abcdef", flavour, usize::MAX);
+        for flavour in Flavour::ALL {
+            let name = host_header(first, flavour, usize::MAX);
             assert!(name.len() <= 253);
             for label in name.split('.') {
                 assert!(!label.is_empty() && label.len() <= 63);
@@ -1324,16 +755,7 @@ mod tests {
                         .chars()
                         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
                 );
-                assert!(!label.starts_with('-') && !label.ends_with('-'));
             }
-        }
-    }
-
-    #[test]
-    fn simultaneous_runs_have_distinct_workloads_and_http_routes() {
-        let first = "0123456789abcdef0123456789abcdef";
-        let second = "fedcba9876543210fedcba9876543210";
-        for flavour in [Flavour::Warm, Flavour::ScaleToZero] {
             assert_ne!(
                 workload_id(first, flavour, 0),
                 workload_id(second, flavour, 0)

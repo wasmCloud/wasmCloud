@@ -1,6 +1,6 @@
 [package]
 name = "bench-scale"
-description = "Host density benchmark: how many HTTP workloads one wasmCloud host holds, over its NATS API."
+description = "Host density benchmark: how many HTTP workloads a running wasmCloud host holds, over its NATS API."
 edition.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -14,35 +14,22 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
-# Deliberately no wash-runtime: the bench talks to whatever host it is given
-# over NATS and HTTP only, so it can compare host binaries.
+# wash-runtime for the generated host API types and the guard's own footprint
+# accounting only: the bench drives whatever host it is given over NATS and
+# HTTP, so it can compare host binaries.
 [dependencies]
 bench-tools = { path = "../bench-tools" }
+wash-runtime = { workspace = true, features = ["washlet"] }
 anyhow = { workspace = true, features = ["std"] }
 async-nats = { workspace = true }
-base64 = { workspace = true }
-bytes = { workspace = true }
 clap = { workspace = true, features = ["std"] }
-flate2 = { workspace = true, features = ["rust_backend"] }
-libc = { workspace = true }
 futures = { workspace = true, features = ["std"] }
-http-body-util = { workspace = true }
-hyper = { workspace = true, features = ["server", "http1"] }
-hyper-util = { workspace = true, features = ["tokio"] }
 reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
-sha2 = { workspace = true }
-sysinfo = { workspace = true }
-tar = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 uuid = { workspace = true, features = ["v4"] }
-wit-component = { workspace = true }
-wasi-preview1-component-adapter-provider = "46"
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
