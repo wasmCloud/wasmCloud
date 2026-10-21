@@ -96,11 +96,13 @@ jobs:
         with:
           name: bench-${{ inputs.bench }}-${{ github.run_id }}
           # criterion benches write to target/criterion/, gungraun benches
-          # (gungraun) write to target/gungraun/. A genuinely-empty run is
-          # a bug worth flagging loudly — fail rather than warn.
+          # (gungraun) write to target/gungraun/, density benches to
+          # target/density/. A genuinely-empty run is a bug worth flagging
+          # loudly — fail rather than warn.
           path: |
             ${{ env.CARGO_TARGET_DIR }}/criterion/
             ${{ env.CARGO_TARGET_DIR }}/gungraun/
+            ${{ env.CARGO_TARGET_DIR }}/density/
           retention-days: 90
           if-no-files-found: error
 

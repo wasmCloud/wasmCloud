@@ -14,6 +14,7 @@ on:
           - wasmtime_baseline
           - wasmtime_serve
           - gungraun_plugin
+          - scale_density
       ref:
         description: "git ref to bench (branch, tag, sha, or #PR; default = the workflow ref)"
         type: string
