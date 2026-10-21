@@ -1,0 +1,35 @@
+[package]
+name = "bench-scale"
+description = "Host density benchmark: how many HTTP workloads a running wasmCloud host holds, over its NATS API."
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "bench-scale"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+# wash-runtime for the generated host API types and the guard's own footprint
+# accounting only: the bench drives whatever host it is given over NATS and
+# HTTP, so it can compare host binaries.
+[dependencies]
+bench-tools = { path = "../bench-tools" }
+wash-runtime = { workspace = true, features = ["washlet"] }
+anyhow = { workspace = true, features = ["std"] }
+async-nats = { workspace = true }
+clap = { workspace = true, features = ["std"] }
+futures = { workspace = true, features = ["std"] }
+reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true }
+tokio-util = { workspace = true, features = ["rt"] }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

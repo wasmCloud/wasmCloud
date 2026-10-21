@@ -6,6 +6,34 @@ pub fn process_footprint() -> Option<u64> {
     FootprintReader::new().read()
 }
 
+/// Another process's footprint, counted the same way as
+/// [`process_footprint`], so an outside observer such as a benchmark compares
+/// like with like against the host's own guard. `None` where it cannot be
+/// read, including once the process has gone.
+pub fn pid_footprint(pid: u32) -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        linux_footprint(&std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        read_footprint(pid)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+
+        let pid = Pid::from_u32(pid);
+        let mut system = System::new_with_specifics(RefreshKind::new());
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            false,
+            ProcessRefreshKind::new().with_memory(),
+        );
+        system.process(pid).map(|process| process.memory())
+    }
+}
+
 /// Reads the footprint over and over without paying to set up each reading.
 ///
 /// On Linux it keeps `/proc/self/status` open and re-reads it from the start
@@ -56,7 +84,7 @@ impl FootprintReader {
 
     #[cfg(target_os = "macos")]
     pub(super) fn read(&mut self) -> Option<u64> {
-        read_footprint()
+        read_footprint(std::process::id())
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -75,12 +103,12 @@ impl FootprintReader {
 
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
-fn read_footprint() -> Option<u64> {
-    let pid = libc::c_int::try_from(std::process::id()).ok()?;
+fn read_footprint(pid: u32) -> Option<u64> {
+    let pid = libc::c_int::try_from(pid).ok()?;
     let mut info = std::mem::MaybeUninit::<libc::rusage_info_v2>::zeroed();
     // SAFETY: `RUSAGE_INFO_V2` tells the kernel to write one
-    // `rusage_info_v2`, which is exactly what the buffer holds, for a pid that
-    // is our own and therefore alive.
+    // `rusage_info_v2`, which is exactly what the buffer holds. A pid that is
+    // gone or not ours to read returns an error instead.
     let rc = unsafe { libc::proc_pid_rusage(pid, libc::RUSAGE_INFO_V2, info.as_mut_ptr().cast()) };
     if rc != 0 {
         return None;

@@ -43,6 +43,9 @@ pub fn run(args: Args) -> Result<()> {
     if crate::callgrind::is_instruction_bench(&args.bench) {
         return render_gungraun_stub(&mut out, &args.bench, &meta, &target_dir, &run_id);
     }
+    if let Some(reports) = crate::commands::jsonl::density_reports(&target_dir, &args.bench)? {
+        return render_density(&mut out, &args.bench, &meta, &reports);
+    }
 
     let crit_dir = criterion::dir_from_target(&target_dir);
     let marker = target_dir.join(format!(".bench-start-{}", args.bench));
@@ -143,6 +146,42 @@ fn render_gungraun_stub<W: Write>(
                 row.group,
                 row.param,
                 markdown::fmt_thousands(row.ir),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn render_density<W: Write>(
+    out: &mut W,
+    bench: &str,
+    meta: &Meta,
+    reports: &[bench_tools::density::Report],
+) -> Result<()> {
+    writeln!(out, "## bench: `{bench}` (density)")?;
+    writeln!(out)?;
+    writeln!(
+        out,
+        "_commit_ `{}` &middot; _ref_ `{}` &middot; _host_ `{}` &middot; _cpus_ {}",
+        meta.short_sha, meta.ref_name, meta.host, meta.cpus_online,
+    )?;
+    writeln!(out)?;
+    writeln!(
+        out,
+        "| flavour | metric | value | unit | better | stopped by |"
+    )?;
+    writeln!(out, "|---|---|---:|---|---|---|")?;
+    for report in reports {
+        for metric in report.metrics() {
+            writeln!(
+                out,
+                "| {} | {} | {:.2} | {} | {} | {} |",
+                report.label,
+                metric.name,
+                metric.value,
+                metric.unit,
+                metric.better.as_str(),
+                report.stop,
             )?;
         }
     }

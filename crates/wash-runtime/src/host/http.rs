@@ -558,6 +558,9 @@ impl Default for DynamicRouter {
 struct PathBucket {
     prefix: NormalizedPathPrefix,
     scope: RouteScope,
+    /// NOTE: we use imbl here on purpose; rpds's ordered set will heap-allocate
+    /// an iterator stack in every request's replica selection, which would
+    /// hurt performance.
     workloads: imbl::OrdSet<String>,
 }
 

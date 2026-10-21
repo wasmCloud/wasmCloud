@@ -420,6 +420,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bench-scale"
+version = "2.11.0"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "bench-tools",
+ "clap",
+ "futures",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "uuid",
+ "wash-runtime",
+]
+
+[[package]]
 name = "bench-tools"
 version = "2.11.0"
 dependencies = [
@@ -6208,6 +6226,7 @@ dependencies = [
  "arc-swap",
  "async-nats",
  "async-trait",
+ "bench-tools",
  "bigdecimal 0.4.10",
  "bit-vec 0.6.3",
  "bon",

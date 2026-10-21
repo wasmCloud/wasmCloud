@@ -1046,15 +1046,10 @@ pub fn connection_quotas(
     max_inbound_per_workload: Option<usize>,
     http_connection_wait: Option<std::time::Duration>,
 ) -> anyhow::Result<std::sync::Arc<wash_runtime::host::quota::QuotaRegistry>> {
-    const MAX_PERMITS: usize = tokio::sync::Semaphore::MAX_PERMITS;
     let checked = |value: Option<usize>, name: &str| -> anyhow::Result<Option<usize>> {
-        match value {
-            Some(0) => anyhow::bail!("{name} must be at least 1"),
-            Some(v) if v > MAX_PERMITS => anyhow::bail!(
-                "{name} must be at most {MAX_PERMITS} (the most a semaphore can hold), got {v}"
-            ),
-            other => Ok(other),
-        }
+        anyhow::ensure!(value != Some(0), "{name} must be at least 1");
+        within_max_permits(value, name)?;
+        Ok(value)
     };
     let defaults = wash_runtime::host::quota::QuotaLimits::default();
     let resolve = |value: Option<usize>, default: usize, name: &str| -> anyhow::Result<usize> {
@@ -1189,6 +1184,20 @@ pub fn wasmcloud_messaging_limits(
     );
 
     Ok(limits)
+}
+
+/// Rejects a ceiling above [`tokio::sync::Semaphore::MAX_PERMITS`], where
+/// `Semaphore::new` panics, so it fails at startup instead.
+pub fn within_max_permits(value: Option<usize>, name: &str) -> anyhow::Result<()> {
+    const MAX_PERMITS: usize = tokio::sync::Semaphore::MAX_PERMITS;
+    match value {
+        Some(v) if v > MAX_PERMITS => {
+            anyhow::bail!(
+                "{name} must be at most {MAX_PERMITS} (the most a semaphore can hold), got {v}"
+            )
+        }
+        _ => Ok(()),
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -2007,6 +2016,15 @@ mod tests {
         assert!(wasmcloud_messaging_limits(Some(too_big), None, None).is_err());
         assert!(wasmcloud_messaging_limits(None, Some(too_big), None).is_err());
         assert!(wasmcloud_messaging_limits(Some(usize::MAX), None, None).is_err());
+    }
+
+    #[test]
+    fn within_max_permits_rejects_only_what_a_semaphore_cannot_hold() {
+        let max = tokio::sync::Semaphore::MAX_PERMITS;
+        assert!(within_max_permits(None, "x").is_ok());
+        assert!(within_max_permits(Some(max), "x").is_ok());
+        assert!(within_max_permits(Some(max + 1), "x").is_err());
+        assert!(within_max_permits(Some(usize::MAX), "x").is_err());
     }
 
     #[test]
