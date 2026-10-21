@@ -1,0 +1,10 @@
+package acme:volumecaller@0.1.0;
+
+/// Workload component: HTTP ingress that, per request, exercises the imported
+/// `acme:volume/files` capability — which the host satisfies with the
+/// `volume-plugin` host component plugin running in its own store.
+world caller {
+    import wasi:http/types@0.3.0;
+    import acme:volume/files@0.1.0;
+    export wasi:http/handler@0.3.0;
+}
