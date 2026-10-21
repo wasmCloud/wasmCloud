@@ -810,6 +810,26 @@ gungraun row (`metric: "Ir"`):
 }
 ```
 
+Density row (`scale_density`, from `<target>/density/<bench>.json`): no
+`throughput`; like k6 rows, each carries its own `unit` and which way is
+`better`. Metrics are `served_workloads`, `binding_limit`,
+`marginal_bytes_per_workload`, `baseline_footprint_bytes`, `starts_per_sec`,
+`start_p99_ms`, `request_p99_ms`, `spin_down_ms` and `cpu_ms_per_start`, each
+present only when measured:
+
+```json
+{
+  "bench": "scale_density",
+  "group": "density",
+  "param": "warm",
+  "sha": "...", "ref": "main", "...": "...",
+  "metric": "served_workloads",
+  "value": 3250,
+  "unit": "workloads",
+  "better": "higher"
+}
+```
+
 The `throughput` field on criterion rows is captured from criterion's
 `benchmark.json` and tells the renderer whether to display this row as
 time (latency-style) or as ops/sec (throughput-style). gungraun rows have no

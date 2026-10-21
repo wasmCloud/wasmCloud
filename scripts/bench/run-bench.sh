@@ -6,6 +6,9 @@
 # Two harness types share this script:
 #   - criterion benches (http_invoke, service_http, wasmtime_baseline,
 #     wasmtime_serve) write to $CARGO_TARGET_DIR/criterion/.
+#   - density benches (scale_density) write a list of
+#     bench_tools::density::Report to $CARGO_TARGET_DIR/density/<bench>.json,
+#     which `bench-tools jsonl` and `summary` read.
 #   - gungraun benches (gungraun, gungraun_plugin) write to $CARGO_TARGET_DIR/gungraun/
 #     and are pinned to the isolated CPU (set by hetzner-postinstall.sh
 #     via isolcpus=) so that scheduler interference doesn't leak into
@@ -72,7 +75,7 @@ log="${CARGO_TARGET_DIR}/run-${bench}-${GITHUB_RUN_ID:-local}.log"
 # persistent (kept for the *build* cache, not the measurement output).
 # The build cache lives elsewhere in $CARGO_TARGET_DIR and is preserved.
 # Both criterion and gungraun keep "previous run" baseline data we don't use.
-rm -rf "${CARGO_TARGET_DIR}/criterion" "${CARGO_TARGET_DIR}/gungraun"
+rm -rf "${CARGO_TARGET_DIR}/criterion" "${CARGO_TARGET_DIR}/gungraun" "${CARGO_TARGET_DIR}/density"
 
 # Touch the run marker right before invoking cargo so `find -newer "$marker"`
 # in `bench-tools jsonl` picks up exactly the files this run produced.
@@ -126,6 +129,10 @@ fi
 # gungraun_plugin` behaves identically to CI.
 features=()
 case "$bench" in
+  scale_density)
+    mkdir -p "${CARGO_TARGET_DIR}/density"
+    export WASH_SCALE_REPORT_JSON="${CARGO_TARGET_DIR}/density/${bench}.json"
+    ;;
   gungraun_plugin)
     features=(--features host-component-plugins)
     echo "enabling features: ${features[*]}" | tee -a "$log"
