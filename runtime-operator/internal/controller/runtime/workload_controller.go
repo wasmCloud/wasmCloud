@@ -263,37 +263,32 @@ func materializeLocalResources(ctx context.Context, c client.Client, namespace s
 	return lr, nil
 }
 
-// injectServiceDNSAliases adds host-aliases to the wasi:http HostInterface
-// carrying the component's HTTP entrypoint so the wash-runtime DynamicRouter
-// accepts requests arriving via Kubernetes Service DNS.
-func injectServiceDNSAliases(hostInterfaces []*runtimev2.WitInterface, svcName, namespace string) {
-	aliases := strings.Join([]string{
+// withServiceDNSAliases appends the Service's namespace-qualified DNS names to
+// config's `host-aliases`, keeping any aliases the user set, so the
+// wash-runtime DynamicRouter accepts requests arriving via Service DNS.
+func withServiceDNSAliases(config map[string]string, svcName, namespace string) map[string]string {
+	if config == nil {
+		config = make(map[string]string)
+	}
+
+	var aliases []string
+	for _, alias := range strings.Split(config["host-aliases"], ",") {
+		if alias = strings.TrimSpace(alias); alias != "" && !slices.Contains(aliases, alias) {
+			aliases = append(aliases, alias)
+		}
+	}
+	for _, alias := range []string{
 		fmt.Sprintf("%s.%s", svcName, namespace),
 		fmt.Sprintf("%s.%s.svc", svcName, namespace),
-	}, ",")
-
-	for i, hi := range hostInterfaces {
-		if hi.Namespace != "wasi" || hi.Package != "http" {
-			continue
+		fmt.Sprintf("%s.%s.svc.cluster.local", svcName, namespace),
+	} {
+		if !slices.Contains(aliases, alias) {
+			aliases = append(aliases, alias)
 		}
-
-		// The entrypoint is advertised as either the p2 `incoming-handler` or
-		// the p3 `handler` interface; the host serves both (wash-runtime's
-		// is_incoming_http_handler accepts either), so the aliases have to be
-		// injected for either. Without the p3 case, a workload exporting only
-		// wasi:http/handler@0.3.0 reaches Ready and routes on its configured
-		// `host` while every call by Service DNS 404s.
-		if !slices.Contains(hi.Interfaces, "incoming-handler") &&
-			!slices.Contains(hi.Interfaces, "handler") {
-			continue
-		}
-
-		if hi.Config == nil {
-			hi.Config = make(map[string]string)
-		}
-		hi.Config["host-aliases"] = aliases
-		hostInterfaces[i] = hi
 	}
+
+	config["host-aliases"] = strings.Join(aliases, ",")
+	return config
 }
 
 func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *runtimev1alpha1.Workload) error {
@@ -352,6 +347,9 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 		if err != nil {
 			return fmt.Errorf("materializing host interface config for %s/%s: %w", hi.Namespace, hi.Package, err)
 		}
+		if k8s := workload.Spec.Kubernetes; k8s != nil && k8s.Service != nil && hi.IsHTTPEntrypoint() {
+			hiConfig = withServiceDNSAliases(hiConfig, k8s.Service.Name, workload.Namespace)
+		}
 		witWorld.HostInterfaces = append(witWorld.HostInterfaces, &runtimev2.WitInterface{
 			Namespace:  hi.Namespace,
 			Package:    hi.Package,
@@ -388,10 +386,6 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 			ReclaimMinInstances:  c.ReclaimMinInstances,
 			LocalResources:       localResources,
 		})
-	}
-
-	if workload.Spec.Kubernetes != nil && workload.Spec.Kubernetes.Service != nil {
-		injectServiceDNSAliases(witWorld.HostInterfaces, workload.Spec.Kubernetes.Service.Name, workload.Namespace)
 	}
 
 	var service *runtimev2.Service

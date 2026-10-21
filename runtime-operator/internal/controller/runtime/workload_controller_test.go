@@ -400,63 +400,45 @@ func TestFinalizeGivesUpFailedStopWhenHostIsGone(t *testing.T) {
 	}
 }
 
-// TestInjectServiceDNSAliases checks that a workload with `kubernetes.service`
-// set gets its Service DNS names written as `host-aliases` whichever spelling
-// of the HTTP entrypoint it exports.
-//
-// The host serves both the p2 `incoming-handler` and the p3 `handler`
-// interface (wash-runtime's is_incoming_http_handler accepts either), so the
-// operator has to inject into either. Matching only the p2 spelling leaves a
-// p3 workload Ready with a working `host` route and no aliases at all, and the
-// only sign of it is a routing WARN in the host log.
-func TestInjectServiceDNSAliases(t *testing.T) {
+// TestWithServiceDNSAliases checks that the Service DNS names are appended to
+// any `host-aliases` the user set rather than replacing them.
+func TestWithServiceDNSAliases(t *testing.T) {
 	const (
-		wantAliases = "my-svc.my-ns,my-svc.my-ns.svc"
-		wasi        = "wasi"
+		aliasesKey  = "host-aliases"
+		hostKey     = "host"
+		svcAliases  = "my-svc.my-ns,my-svc.my-ns.svc,my-svc.my-ns.svc.cluster.local"
+		userAliases = "api.example.com"
 	)
 
 	tests := []struct {
-		name  string
-		iface *runtimev2.WitInterface
-		want  string
+		name   string
+		config map[string]string
+		want   string
 	}{
 		{
-			name: "p2 incoming-handler",
-			iface: &runtimev2.WitInterface{
-				Namespace:  wasi,
-				Package:    "http",
-				Version:    "0.2.0",
-				Interfaces: []string{"incoming-handler"},
-			},
-			want: wantAliases,
+			name: "nil config",
+			want: svcAliases,
 		},
 		{
-			name: "p3 handler",
-			iface: &runtimev2.WitInterface{
-				Namespace:  wasi,
-				Package:    "http",
-				Version:    "0.3.0",
-				Interfaces: []string{"handler"},
-			},
-			want: wantAliases,
+			name:   "keeps user aliases",
+			config: map[string]string{hostKey: "my-app.local", aliasesKey: userAliases},
+			want:   userAliases + "," + svcAliases,
 		},
 		{
-			name: "non-http interface",
-			iface: &runtimev2.WitInterface{
-				Namespace:  wasi,
-				Package:    "keyvalue",
-				Interfaces: []string{"handler"},
-			},
-			want: "",
+			name:   "drops duplicates and blanks",
+			config: map[string]string{aliasesKey: " " + userAliases + ",,my-svc.my-ns.svc"},
+			want:   userAliases + ",my-svc.my-ns.svc,my-svc.my-ns,my-svc.my-ns.svc.cluster.local",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ifaces := []*runtimev2.WitInterface{tt.iface}
-			injectServiceDNSAliases(ifaces, "my-svc", "my-ns")
-			if got := ifaces[0].GetConfig()["host-aliases"]; got != tt.want {
-				t.Errorf("host-aliases = %q, want %q", got, tt.want)
+			got := withServiceDNSAliases(tt.config, "my-svc", "my-ns")
+			if got[aliasesKey] != tt.want {
+				t.Errorf("host-aliases = %q, want %q", got[aliasesKey], tt.want)
+			}
+			if host, ok := tt.config[hostKey]; ok && got[hostKey] != host {
+				t.Errorf("host = %q, want %q", got[hostKey], host)
 			}
 		})
 	}

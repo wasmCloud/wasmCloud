@@ -269,6 +269,14 @@ func (h *HostInterface) HasInterface(iface string) bool {
 	return false
 }
 
+// IsHTTPEntrypoint reports whether this is the wasi:http interface that
+// carries a component's HTTP entrypoint: the p2 `incoming-handler` or the p3
+// `handler`. It mirrors wash-runtime's `is_incoming_http_handler`.
+func (h *HostInterface) IsHTTPEntrypoint() bool {
+	return h.Namespace == "wasi" && h.Package == "http" &&
+		(h.HasInterface("incoming-handler") || h.HasInterface("handler"))
+}
+
 func (h *HostInterface) EnsureInterfaces(ifaces ...string) {
 	for _, iface := range ifaces {
 		if !h.HasInterface(iface) {
@@ -290,10 +298,13 @@ type KubernetesServiceRef struct {
 type KubernetesSpec struct {
 	// Service references an existing Kubernetes Service that the operator will
 	// maintain an EndpointSlice for, pointing to the host pods running this
-	// workload. When set, the operator also registers DNS aliases for the
-	// service (e.g. service-name, service-name.namespace.svc.cluster.local)
+	// workload. When set, the operator also registers the namespace-qualified
+	// DNS names of the service (service-name.namespace,
+	// service-name.namespace.svc and service-name.namespace.svc.cluster.local)
 	// with the host so cluster-internal callers can reach the workload via
-	// Service DNS without going through an external gateway.
+	// Service DNS without going through an external gateway. The bare
+	// service-name is not registered: it would collide with a same-named
+	// service in another namespace on a shared host.
 	// +kubebuilder:validation:Optional
 	Service *KubernetesServiceRef `json:"service,omitempty"`
 }

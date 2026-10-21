@@ -196,3 +196,23 @@ func TestMaxVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestIsHTTPEntrypoint(t *testing.T) {
+	const httpPackage = "http"
+
+	cases := []struct {
+		name  string
+		iface HostInterface
+		want  bool
+	}{
+		{"p2 incoming-handler", HostInterface{Namespace: wasiNamespace, Package: httpPackage, Interfaces: []string{"incoming-handler"}}, true},
+		{"p3 handler", HostInterface{Namespace: wasiNamespace, Package: httpPackage, Interfaces: []string{"handler"}}, true},
+		{"outgoing only", HostInterface{Namespace: wasiNamespace, Package: httpPackage, Interfaces: []string{"outgoing-handler"}}, false},
+		{"non-http handler", HostInterface{Namespace: wasiNamespace, Package: "keyvalue", Interfaces: []string{"handler"}}, false},
+	}
+	for _, c := range cases {
+		if got := c.iface.IsHTTPEntrypoint(); got != c.want {
+			t.Errorf("%s: IsHTTPEntrypoint() = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
