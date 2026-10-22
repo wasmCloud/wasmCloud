@@ -82,7 +82,11 @@ func readSecret(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	secret := strings.TrimSpace(string(contents))
+	// Strip one line ending; other whitespace belongs to the secret.
+	secret, hasNewline := strings.CutSuffix(string(contents), "\n")
+	if hasNewline {
+		secret = strings.TrimSuffix(secret, "\r")
+	}
 	if secret == "" {
 		return "", fmt.Errorf("%s is empty", path)
 	}
