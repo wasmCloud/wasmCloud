@@ -23,6 +23,30 @@ pub struct HostCommand {
     #[arg(long = "scheduler-nats-url", default_value = "nats://localhost:4222")]
     pub scheduler_nats_url: String,
 
+    /// NATS credentials file, reread on reconnect
+    #[arg(
+        long,
+        env = "WASH_SCHEDULER_NATS_CREDS",
+        conflicts_with = "scheduler_nats_nkey"
+    )]
+    pub scheduler_nats_creds: Option<PathBuf>,
+
+    /// NATS nkey seed file, reread on reconnect
+    #[arg(long, env = "WASH_SCHEDULER_NATS_NKEY")]
+    pub scheduler_nats_nkey: Option<PathBuf>,
+
+    /// NATS authentication token
+    #[arg(long, env = "WASH_SCHEDULER_NATS_TOKEN", hide_env_values = true, value_parser = SecretValueParser)]
+    pub scheduler_nats_token: Option<SecretValue>,
+
+    /// NATS username
+    #[arg(long, env = "WASH_SCHEDULER_NATS_USER")]
+    pub scheduler_nats_user: Option<String>,
+
+    /// NATS password
+    #[arg(long, env = "WASH_SCHEDULER_NATS_PASSWORD", hide_env_values = true, value_parser = SecretValueParser, requires = "scheduler_nats_user")]
+    pub scheduler_nats_password: Option<SecretValue>,
+
     /// How long to keep retrying NATS at startup before giving up, across both
     /// the scheduler and data connections together.
     ///
@@ -53,6 +77,26 @@ pub struct HostCommand {
     /// NATS URL for Data Plane communications
     #[arg(long = "data-nats-url", default_value = "nats://localhost:4222")]
     pub data_nats_url: String,
+
+    /// NATS credentials file, reread on reconnect
+    #[arg(long, env = "WASH_DATA_NATS_CREDS", conflicts_with = "data_nats_nkey")]
+    pub data_nats_creds: Option<PathBuf>,
+
+    /// NATS nkey seed file, reread on reconnect
+    #[arg(long, env = "WASH_DATA_NATS_NKEY")]
+    pub data_nats_nkey: Option<PathBuf>,
+
+    /// NATS authentication token
+    #[arg(long, env = "WASH_DATA_NATS_TOKEN", hide_env_values = true, value_parser = SecretValueParser)]
+    pub data_nats_token: Option<SecretValue>,
+
+    /// NATS username
+    #[arg(long, env = "WASH_DATA_NATS_USER")]
+    pub data_nats_user: Option<String>,
+
+    /// NATS password
+    #[arg(long, env = "WASH_DATA_NATS_PASSWORD", hide_env_values = true, value_parser = SecretValueParser, requires = "data_nats_user")]
+    pub data_nats_password: Option<SecretValue>,
 
     /// The path to TLS CA certificate file for NATS Data connection
     #[arg(long = "data-nats-tls-ca")]
@@ -724,6 +768,40 @@ pub struct HostCommand {
     pub host_plugin_registry_password: Option<String>,
 }
 
+/// A CLI secret whose debug output never includes its value.
+#[derive(Clone)]
+pub struct SecretValue(String);
+
+impl std::fmt::Debug for SecretValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+#[derive(Clone)]
+struct SecretValueParser;
+
+impl clap::builder::TypedValueParser for SecretValueParser {
+    type Value = SecretValue;
+
+    fn parse_ref(
+        &self,
+        _cmd: &clap::Command,
+        _arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        value
+            .to_str()
+            .map(|value| SecretValue(value.to_owned()))
+            .ok_or_else(|| {
+                clap::Error::raw(
+                    clap::error::ErrorKind::InvalidUtf8,
+                    "secret must be valid UTF-8",
+                )
+            })
+    }
+}
+
 /// clap value parser for `--host-plugin`: parse one spec, flattening the
 /// `anyhow` error chain into the `String` clap wants.
 /// Parses a URL that may carry credentials. clap's default parser error
@@ -779,9 +857,13 @@ impl HostCommand {
     fn reserved_paths(&self, config: &crate::config::Config, ctx: &CliContext) -> Vec<PathBuf> {
         let project_dir = ctx.project_dir();
         let mut paths: Vec<PathBuf> = [
+            &self.scheduler_nats_creds,
+            &self.scheduler_nats_nkey,
             &self.scheduler_nats_tls_ca,
             &self.scheduler_nats_tls_cert,
             &self.scheduler_nats_tls_key,
+            &self.data_nats_creds,
+            &self.data_nats_nkey,
             &self.data_nats_tls_ca,
             &self.data_nats_tls_cert,
             &self.data_nats_tls_key,
@@ -998,16 +1080,31 @@ impl CliCommand for HostCommand {
         let connect_retry =
             (!self.nats_connect_timeout.is_zero()).then_some(self.nats_connect_timeout);
 
+        let cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default();
         let scheduler_nats_client = wash_runtime::washlet::connect_nats(
             self.scheduler_nats_url.clone(),
             wash_runtime::washlet::NatsConnectionOptions {
                 request_timeout: None,
+                name: Some(format!("host:{}", cluster_host_builder.host_id())),
+                auth: wash_runtime::washlet::NatsAuth {
+                    credentials: self.scheduler_nats_creds.clone(),
+                    nkey: self.scheduler_nats_nkey.clone(),
+                    token: self
+                        .scheduler_nats_token
+                        .as_ref()
+                        .map(|value| value.0.clone()),
+                    user: self.scheduler_nats_user.clone(),
+                    password: self
+                        .scheduler_nats_password
+                        .as_ref()
+                        .map(|value| value.0.clone()),
+                    ..Default::default()
+                },
                 tls_ca: self.scheduler_nats_tls_ca.clone(),
                 tls_first: self.scheduler_nats_tls_first,
                 tls_cert: self.scheduler_nats_tls_cert.clone(),
                 tls_key: self.scheduler_nats_tls_key.clone(),
                 connect_retry,
-                ..Default::default()
             },
         )
         .await
@@ -1017,6 +1114,18 @@ impl CliCommand for HostCommand {
             self.data_nats_url.clone(),
             wash_runtime::washlet::NatsConnectionOptions {
                 request_timeout: None,
+                name: Some(format!("host:{}:data", cluster_host_builder.host_id())),
+                auth: wash_runtime::washlet::NatsAuth {
+                    credentials: self.data_nats_creds.clone(),
+                    nkey: self.data_nats_nkey.clone(),
+                    token: self.data_nats_token.as_ref().map(|value| value.0.clone()),
+                    user: self.data_nats_user.clone(),
+                    password: self
+                        .data_nats_password
+                        .as_ref()
+                        .map(|value| value.0.clone()),
+                    ..Default::default()
+                },
                 tls_ca: self.data_nats_tls_ca.clone(),
                 tls_first: self.data_nats_tls_first,
                 tls_cert: self.data_nats_tls_cert.clone(),
@@ -1029,7 +1138,6 @@ impl CliCommand for HostCommand {
                         connect_deadline.saturating_duration_since(tokio::time::Instant::now());
                     (!left.is_zero()).then_some(left)
                 }),
-                ..Default::default()
             },
         )
         .await
@@ -1165,7 +1273,7 @@ impl CliCommand for HostCommand {
             }
         }
 
-        let mut cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default()
+        let mut cluster_host_builder = cluster_host_builder
             .with_engine(engine.clone())
             .with_host_config(host_config)
             .with_nats_client(Arc::new(scheduler_nats_client))
@@ -1481,6 +1589,71 @@ mod nats_tests {
 
     fn parse(args: &[&str]) -> HostCommand {
         TestCli::parse_from(std::iter::once("wash-host").chain(args.iter().copied())).host
+    }
+
+    #[test]
+    fn host_nats_auth_flags_are_independent_and_redacted() {
+        let host = parse(&[
+            "--scheduler-nats-creds=scheduler.creds",
+            "--scheduler-nats-token=scheduler-secret",
+            "--data-nats-nkey=data.nk",
+            "--data-nats-user=data-user",
+            "--data-nats-password=data-secret",
+        ]);
+        assert_eq!(host.scheduler_nats_creds, Some("scheduler.creds".into()));
+        assert_eq!(host.data_nats_nkey, Some("data.nk".into()));
+        assert_eq!(
+            host.scheduler_nats_token.as_ref().map(|v| v.0.as_str()),
+            Some("scheduler-secret")
+        );
+        assert_eq!(
+            host.data_nats_password.as_ref().map(|v| v.0.as_str()),
+            Some("data-secret")
+        );
+        let debug = format!("{host:?}");
+        assert!(!debug.contains("scheduler-secret"), "{debug}");
+        assert!(!debug.contains("data-secret"), "{debug}");
+    }
+
+    #[test]
+    fn host_nats_auth_errors_do_not_echo_secrets() {
+        for plane in ["scheduler", "data"] {
+            for args in [
+                vec![
+                    format!("--{plane}-nats-creds=a.creds"),
+                    format!("--{plane}-nats-nkey=a.nk"),
+                    format!("--{plane}-nats-token=private-token"),
+                ],
+                vec![format!("--{plane}-nats-password=private-password")],
+                vec![
+                    format!("--{plane}-nats-token=private-token"),
+                    format!("--{plane}-nats-token=private-token"),
+                ],
+            ] {
+                let err =
+                    TestCli::try_parse_from(std::iter::once("wash-host".to_string()).chain(args))
+                        .unwrap_err();
+                let message = err.to_string();
+                assert!(!message.contains("private-token"), "{message}");
+                assert!(!message.contains("private-password"), "{message}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn host_nats_auth_files_are_reserved() -> anyhow::Result<()> {
+        let host = parse(&[
+            "--scheduler-nats-creds=scheduler.creds",
+            "--data-nats-nkey=data.nk",
+        ]);
+        let ctx = crate::cli::CliContextBuilder::default()
+            .keep_working_dir()
+            .build()
+            .await?;
+        let paths = host.reserved_paths(&crate::config::Config::default(), &ctx);
+        assert!(paths.contains(&std::path::PathBuf::from("scheduler.creds")));
+        assert!(paths.contains(&std::path::PathBuf::from("data.nk")));
+        Ok(())
     }
 
     fn config_from(yaml: &str) -> crate::config::Config {
