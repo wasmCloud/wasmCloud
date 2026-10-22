@@ -1,5 +1,47 @@
 # Runtime Operator
 
+## NATS authentication
+
+The operator and its hosts share one NATS control plane. On a NATS that
+requires authentication, the operator presents one of:
+
+| Flag | Credential |
+| --- | --- |
+| `-nats-creds` | a `.creds` file (user JWT and nkey seed) |
+| `-nats-nkey` | a file holding an nkey seed |
+| `-nats-token-file` | a file holding a token |
+| `-nats-user`, `-nats-password-file` | a user name, and a file holding its password |
+
+Credentials, token, and password files are reread on every connect.
+Restart the operator after replacing a bare nkey seed: the NATS client
+caches its public key when building the connection options.
+`-nats-name` sets the connection name, `runtime-operator` by default.
+
+### Permissions
+
+`<id>` is a host's id. The operator's replies arrive on its inbox prefix,
+`_INBOX` unless `-nats-inbox-prefix` sets another.
+
+| Client | Publish | Subscribe |
+| --- | --- | --- |
+| Operator | `runtime.host.>` | `runtime.operator.heartbeat.>`, `<inbox-prefix>.>` |
+| Host, scheduler connection | `runtime.host.<id>.__control.ready`, `runtime.operator.heartbeat.<id>`, and replies (`allow_responses` with `max: 1`, or `<inbox-prefix>.>`) | `runtime.host.<id>.>` |
+
+A host's scheduler connection must also receive its own messages, which is
+the NATS default. Its data connection carries workload traffic and needs
+none of the subjects above; deny it `runtime.>`.
+
+Any client that may subscribe to `_INBOX.>` can read the replies hosts send
+the operator, and any client that may publish there can forge one. On a NATS
+shared with other clients, set `-nats-inbox-prefix` to a subject only the
+operator may subscribe to, such as `runtime.operator.inbox`, and allow hosts
+to reply there or by `allow_responses`.
+
+A host id is chosen when the host process starts, so permissions that name
+`<id>` need a credential issued per host process. With one credential per
+host group, use `*` for `<id>`: those hosts can then read each other's
+commands, though only the operator can send them.
+
 ## Development
 
 You will need a local Kind cluster, NATS, and a Wash host.
