@@ -14,7 +14,10 @@ import (
 	"github.com/nats-io/nkeys"
 )
 
-const testOperatorUser = "operator"
+const (
+	testOperatorUser = "operator"
+	testTokenAuth    = "token"
+)
 
 // startNats starts an embedded NATS server configured by configure.
 func startNats(t *testing.T, configure func(*server.Options)) string {
@@ -87,7 +90,7 @@ func TestNatsClientAuthenticates(t *testing.T) {
 		flags     natsClientFlags
 	}{
 		{
-			name:      "token",
+			name:      testTokenAuth,
 			configure: func(o *server.Options) { o.Authorization = "s3cr3t" },
 			flags:     natsClientFlags{tokenFile: writeSecret(t, "token", "s3cr3t\n")},
 		},
@@ -187,6 +190,7 @@ func TestNatsInboxPrefixCarriesHostReplies(t *testing.T) {
 }
 
 func TestNatsClientFlagsRefuseContradictions(t *testing.T) {
+	const emptySecretError = "is empty"
 	for _, tc := range []struct {
 		name  string
 		flags natsClientFlags
@@ -195,7 +199,9 @@ func TestNatsClientFlagsRefuseContradictions(t *testing.T) {
 		{"creds and nkey", natsClientFlags{creds: "a.creds", nkey: "a.nk"}, "set one"},
 		{"password without user", natsClientFlags{passwordFile: "p"}, "requires -nats-user"},
 		{"missing token file", natsClientFlags{tokenFile: "/nonexistent/token"}, "-nats-token-file"},
-		{"empty token file", natsClientFlags{tokenFile: writeSecret(t, "empty", "\n")}, "is empty"},
+		{"empty token file", natsClientFlags{tokenFile: writeSecret(t, "empty", "\n")}, emptySecretError},
+		{"zero-byte token file", natsClientFlags{tokenFile: writeSecret(t, "empty", "")}, emptySecretError},
+		{"CRLF-only token file", natsClientFlags{tokenFile: writeSecret(t, "empty", "\r\n")}, emptySecretError},
 		{"wildcard inbox", natsClientFlags{inboxPrefix: "runtime.*"}, "wildcards"},
 		{"empty inbox token", natsClientFlags{inboxPrefix: "runtime..inbox"}, "empty subject token"},
 	} {
@@ -239,5 +245,45 @@ func TestNatsSecretFilesReload(t *testing.T) {
 	}
 	if user, pass := opts.UserInfo(); user != testOperatorUser || pass != "second-password" {
 		t.Fatal("password rotation was not loaded")
+	}
+}
+
+func TestNatsSecretFilesPreserveWhitespace(t *testing.T) {
+	const boundarySecret = " \tsecret\t "
+	cases := []struct {
+		name       string
+		secret     string
+		lineEnding string
+	}{
+		{"boundary whitespace", boundarySecret, ""},
+		{"whitespace only", " \t ", ""},
+		{"LF ending", boundarySecret, "\n"},
+		{"CRLF ending", boundarySecret, "\r\n"},
+		{"bare carriage return", "secret\r", ""},
+		{"one line ending", "secret\n", "\n"},
+	}
+	for _, method := range []string{testTokenAuth, "password"} {
+		t.Run(method, func(t *testing.T) {
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					url := startNats(t, func(o *server.Options) {
+						if method == testTokenAuth {
+							o.Authorization = tc.secret
+						} else {
+							o.Username = testOperatorUser
+							o.Password = tc.secret
+						}
+					})
+					path := writeSecret(t, method, tc.secret+tc.lineEnding)
+					flags := natsClientFlags{tokenFile: path}
+					if method == "password" {
+						flags = natsClientFlags{user: testOperatorUser, passwordFile: path}
+					}
+					if _, err := connect(t, url, flags); err != nil {
+						t.Fatalf("connect with whitespace-preserving secret file: %v", err)
+					}
+				})
+			}
+		})
 	}
 }

@@ -13,6 +13,8 @@ requires authentication, the operator presents one of:
 | `-nats-user`, `-nats-password-file` | a user name, and a file holding its password |
 
 Credentials, token, and password files are reread on every connect.
+Token and password files may end with one LF or CRLF line ending, which is
+removed. All other whitespace is preserved.
 Restart the operator after replacing a bare nkey seed: the NATS client
 caches its public key when building the connection options.
 `-nats-name` sets the connection name, `runtime-operator` by default.
