@@ -400,6 +400,17 @@ pub struct ClusterHostBuilder {
 }
 
 impl ClusterHostBuilder {
+    /// The host ID used in control subjects.
+    pub fn host_id(&self) -> &str {
+        self.host_builder.id()
+    }
+
+    /// Sets the host ID; see [`HostBuilder::with_id`](crate::host::HostBuilder::with_id).
+    pub fn with_host_id(mut self, id: impl Into<String>) -> anyhow::Result<Self> {
+        self.host_builder = self.host_builder.with_id(id)?;
+        Ok(self)
+    }
+
     /// The interval this host will actually heartbeat on, resolved.
     ///
     /// Public so a caller sizing a liveness bound reads the number the host was
@@ -2100,6 +2111,22 @@ mod tests {
     use super::*;
     use crate::host::allowed_hosts::AllowedHost;
     use crate::host::allowed_ip_name::AllowedIpName;
+
+    #[test]
+    fn cluster_host_id_matches_the_inner_builder() -> anyhow::Result<()> {
+        let host = crate::host::HostBuilder::default().with_id("host-test_1")?;
+        let cluster = ClusterHostBuilder::default().with_host_builder(host);
+        assert_eq!(cluster.host_id(), "host-test_1");
+        Ok(())
+    }
+
+    #[test]
+    fn cluster_host_id_is_validated() -> anyhow::Result<()> {
+        let cluster = ClusterHostBuilder::default().with_host_id("host-test_2")?;
+        assert_eq!(cluster.host_id(), "host-test_2");
+        assert!(ClusterHostBuilder::default().with_host_id("a.b").is_err());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn cancelled_and_concurrent_shutdowns_wait_for_the_same_task() -> anyhow::Result<()> {
