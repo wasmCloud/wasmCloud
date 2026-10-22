@@ -369,6 +369,10 @@ fn starts_for_cores(cores: usize) -> usize {
     cores.saturating_sub(1).clamp(1, MAX_CONCURRENT_STARTS)
 }
 
+mod nats_auth;
+
+pub use nats_auth::{AuthHook, NatsAuth};
+
 pub mod types {
     pub mod v2 {
         // Committed output of `cargo xtask generate-protos` — regenerate
@@ -1366,6 +1370,11 @@ pub struct NatsConnectionOptions {
     /// Left unset by a command run against a NATS the operator already has up
     /// (`wash dev`), where a refusal is the answer rather than a race.
     pub connect_retry: Option<Duration>,
+    /// The connection name sent in `CONNECT`, which the server shows in its
+    /// connection reports and hands an auth callout as `client_info.name`.
+    pub name: Option<String>,
+    /// What the connection presents to a server that requires authentication.
+    pub auth: NatsAuth,
 }
 
 #[instrument(skip_all)]
@@ -1373,7 +1382,11 @@ pub async fn connect_nats(
     addr: impl async_nats::ToServerAddrs,
     options: NatsConnectionOptions,
 ) -> Result<async_nats::Client, anyhow::Error> {
-    let mut opts = async_nats::ConnectOptions::new();
+    let mut opts = options.auth.connect_options()?;
+
+    if let Some(name) = options.name {
+        opts = opts.name(name);
+    }
 
     if let Some(timeout) = options.request_timeout {
         opts = opts.request_timeout(Some(timeout));
@@ -2939,9 +2952,9 @@ mod tests {
         // Polled rather than read once: a stalled loop never beats again, while
         // a healthy one on a loaded machine is merely late.
         tokio::time::timeout(Duration::from_secs(5), async {
-            while !liveness
+            while liveness
                 .silence()
-                .is_some_and(|silence| silence < Duration::from_millis(100))
+                .is_none_or(|silence| silence >= Duration::from_millis(100))
             {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
@@ -3005,6 +3018,116 @@ mod tests {
             "a refusal with no window took {:?}, so it was retried",
             started.elapsed()
         );
+    }
+
+    /// Answer one connection's handshake with `nonce` and hand back the
+    /// `CONNECT` it sent, then close it so the client has to reconnect.
+    async fn accept_connect(
+        listener: &tokio::net::TcpListener,
+        nonce: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+            let (socket, _) = listener.accept().await?;
+            let (reader, mut writer) = socket.into_split();
+            writer
+                .write_all(
+                    format!(
+                        "INFO {{\"max_payload\":1048576,\"auth_required\":true,\"nonce\":\"{nonce}\"}}\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await?;
+            let mut reader = BufReader::new(reader);
+            let mut connect = None;
+            loop {
+                let mut line = String::new();
+                anyhow::ensure!(reader.read_line(&mut line).await? > 0, "closed before PING");
+                if let Some(json) = line.strip_prefix("CONNECT ") {
+                    connect = Some(serde_json::from_str(json.trim())?);
+                } else if line.starts_with("PING") {
+                    writer.write_all(b"PONG\r\n").await?;
+                    break;
+                }
+            }
+            connect.context("no CONNECT before PING")
+        })
+        .await
+        .context("NATS handshake timed out")?
+    }
+
+    /// The credentials file is read on every connect, so a rotated one is what
+    /// the next reconnect presents, and the connection keeps its name.
+    #[tokio::test]
+    async fn a_rotated_credentials_file_is_presented_on_reconnect() -> anyhow::Result<()> {
+        use super::nats_auth::tests::creds_file;
+
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("host.creds");
+        let key = nkeys::KeyPair::new_user();
+        std::fs::write(&path, creds_file("first.jwt", &key.seed()?))?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+
+        let client = tokio::spawn(connect_nats(
+            format!("nats://{addr}"),
+            NatsConnectionOptions {
+                name: Some("host:test".into()),
+                auth: NatsAuth {
+                    credentials: Some(path.clone()),
+                    hook: Some(AuthHook::new(|auth| {
+                        auth.token = auth.jwt.clone();
+                        Ok(())
+                    })),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ));
+        let first = accept_connect(&listener, "first-nonce").await?;
+        let _client = client.await??;
+        assert_eq!(first["name"], "host:test");
+        assert_eq!(first["jwt"], "first.jwt");
+        assert_eq!(first["auth_token"], "first.jwt");
+        assert!(first["sig"].is_string(), "the nonce went unsigned: {first}");
+
+        std::fs::write(&path, creds_file("rotated.jwt", &key.seed()?))?;
+        let second = accept_connect(&listener, "second-nonce").await?;
+        assert_eq!(second["name"], "host:test");
+        assert_eq!(second["jwt"], "rotated.jwt");
+        assert_eq!(second["auth_token"], "rotated.jwt");
+        Ok(())
+    }
+
+    /// A credentials file that cannot be read reads the same on every attempt,
+    /// so it is reported at once rather than retried for the whole window.
+    #[tokio::test]
+    async fn an_unreadable_credentials_file_is_not_retried() -> anyhow::Result<()> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            loop {
+                let _ = accept_connect(&listener, "nonce").await;
+            }
+        }));
+
+        let started = std::time::Instant::now();
+        let err = connect_nats(
+            format!("nats://{addr}"),
+            NatsConnectionOptions {
+                connect_retry: Some(Duration::from_secs(30)),
+                auth: NatsAuth {
+                    credentials: Some("/nonexistent/host.creds".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("the credentials file does not exist");
+        assert!(format!("{err:#}").contains("host.creds"), "{err:#}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        Ok(())
     }
 
     /// A host always keeps a start it can run and a core it can serve on.

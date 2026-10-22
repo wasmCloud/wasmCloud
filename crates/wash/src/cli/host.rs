@@ -1007,6 +1007,7 @@ impl CliCommand for HostCommand {
                 tls_cert: self.scheduler_nats_tls_cert.clone(),
                 tls_key: self.scheduler_nats_tls_key.clone(),
                 connect_retry,
+                ..Default::default()
             },
         )
         .await
@@ -1028,6 +1029,7 @@ impl CliCommand for HostCommand {
                         connect_deadline.saturating_duration_since(tokio::time::Instant::now());
                     (!left.is_zero()).then_some(left)
                 }),
+                ..Default::default()
             },
         )
         .await
