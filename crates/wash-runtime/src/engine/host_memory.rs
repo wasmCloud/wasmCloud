@@ -40,9 +40,11 @@
 //! 4 GiB wasmtime emits an explicit bounds check on every access that the
 //! reservation and guard no longer cover, so a guest still cannot leave its
 //! own slot. What the host pays instead is speed, the cost of those checks,
-//! and a hard heap cap, since a pooled memory never moves and cannot grow past
-//! its reservation. `default_heap_memory` must then be no larger than the
-//! reservation, or wasmtime refuses to build the pool.
+//! and, with the pooling allocator, a hard heap cap, since a pooled memory
+//! never moves and cannot grow past its reservation. (Without a pool wasmtime
+//! moves a memory that outgrows its reservation, copying it.) With a pool,
+//! `default_heap_memory` must then be no larger than the reservation, or
+//! wasmtime refuses to build the pool.
 
 use std::{
     collections::BTreeSet,
@@ -132,8 +134,11 @@ impl MemoryLayout {
             .saturating_add(self.guard)
     }
 
-    /// Whether wasmtime must bounds-check memory accesses explicitly: on
-    /// 64-bit, any reservation below the 4 GiB a 32-bit index can reach.
+    /// Whether the reservation is too small for wasmtime to elide bounds
+    /// checks on 32-bit memories: on 64-bit, any reservation below the 4 GiB
+    /// a 32-bit index can reach. At or above 4 GiB most checks are elided,
+    /// though accesses with a constant offset past the guard are still
+    /// checked, so `false` does not mean no access is ever checked.
     pub fn bounds_checked(&self) -> bool {
         cfg!(target_pointer_width = "64") && self.reservation < 4 * 1024 * MIB
     }

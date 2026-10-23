@@ -394,8 +394,10 @@ pub struct HostCommand {
     /// 30,000 pool slots. Lowering it shrinks every slot, so far more fit:
     /// about 2,000,000 at 64 MiB. Two costs come with it: below 4 GiB
     /// wasmtime bounds-checks guest memory accesses explicitly (guests stay
-    /// isolated, but memory-heavy ones run slower), and no guest heap can
-    /// grow past it. `--default-heap-memory` must be set no larger than it.
+    /// isolated, but memory-heavy ones run slower), and, with the pooling
+    /// allocator this host uses, no guest heap can grow past it.
+    /// `--default-heap-memory` must be set no larger than it, or the host
+    /// will not start.
     /// A whole number of 64 KiB pages.
     #[arg(long = "memory-reservation", env = "WASH_MEMORY_RESERVATION")]
     pub memory_reservation: Option<String>,

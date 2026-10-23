@@ -432,7 +432,9 @@ runtime:
     # -- Instance slots the pooling allocator keeps. Empty leaves wasmtime's
     # default of 1000.
     coreInstances: ""
-    # -- Address space reserved for each guest linear memory, e.g. `64MiB`.
+    # -- Address space reserved for each guest linear memory, as a quoted size
+    # such as `"64MiB"` (a bare number renders in scientific notation, which
+    # the host still reads, but is hard to check).
     # Empty leaves wasmtime's 4GiB, which caps a host at about 30,000 slots.
     # Smaller fits far more slots, at the cost of explicit bounds checks and a
     # hard per-guest heap cap; set `defaultHeapMemory` no larger than it.
