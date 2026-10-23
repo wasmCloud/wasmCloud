@@ -594,15 +594,15 @@ pub(crate) use messaging_handler_dispatch;
 ///
 /// A messaging-triggered component that declared no `poolSize` gets a fresh
 /// instance per message, so for those this is equally a ceiling on instances.
-/// 32 of a Componentize-Go component (the worst measured shape, at 5 core
-/// instances each) is 160 core instances — a bound on one workload's blast
-/// radius. A component that *did* declare `poolSize` is bounded by that
+/// 32 instances is 32 of the pool's linear memories, fiber stacks and
+/// component instances — a bound on one workload's blast radius. A component
+/// that *did* declare `poolSize` is bounded by that
 /// instead: its deliveries run on warm instances, and only the ones arriving
 /// once every instance is busy build a store of their own.
 ///
 /// On a pooled host this constant does not apply: `per_component_ceiling`
 /// divides whatever host total is in force, so the number moves with the pool
-/// and with `--wasmcloud-messaging-max-in-flight`. The stock pool derives 33.
+/// and with `--wasmcloud-messaging-max-in-flight`. The stock pool derives 166.
 /// See [`DEFAULT_MAX_IN_FLIGHT_HOST`] for the arithmetic.
 pub const DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT: usize = 32;
 
@@ -610,22 +610,20 @@ pub const DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT: usize = 32;
 /// many messages *every* messaging component on this host may process at once,
 /// added together.
 ///
-/// The per-component ceiling alone does not bound the host — twenty components
-/// at 32 is 640 in flight, which at 5 core instances apiece is 3200 against a
-/// pool of 1000 ([`crate::engine`] sizes `total_core_instances` from
-/// `max_instances`, default 1000). Sizing against the worst measured component
-/// shape, 1000 / 5 = 200 is the real ceiling; 128 sits below it and keeps
-/// roughly a third of the pool for HTTP-triggered work, warm pools, and
-/// long-lived services — the workloads that otherwise fail to *start* when a
-/// messaging burst drains the pool.
+/// The per-component ceiling alone does not bound the host — forty components
+/// at 32 is 1280 in flight against a pool of 1000 linear memories
+/// ([`crate::engine`] sizes the pool from `max_instances`, default 1000; a
+/// message in flight holds one of them, with a fiber stack and a component
+/// instance from totals of the same size). 128 keeps most of
+/// the pool for HTTP-triggered work, warm pools, and long-lived services — the
+/// workloads that otherwise fail to *start* when a messaging burst drains the
+/// pool.
 ///
-/// With a pool to divide, `derive_host_ceiling` computes that same share from
-/// the pool the host actually has rather than from the stock one, so resizing
-/// `total_core_instances` resizes the ceiling with it. The stock pool of 1000
-/// derives 133 host-wide and 33 per component — close to these constants but
-/// not equal to them, because the derivation takes two-thirds of 200 rather
-/// than the round number below it. This constant is the fallback for the one
-/// case where there is no budget to divide.
+/// With a pool to divide, `derive_host_ceiling` takes two thirds of the linear
+/// memories the host actually has, so resizing the pool resizes the ceiling
+/// with it. The stock pool of 1000 derives 666 host-wide and 166 per component.
+/// This constant is the fallback for the one case where there is no budget to
+/// divide.
 ///
 /// `the_documented_defaults_are_what_the_host_uses` pins both pairs, so the
 /// numbers quoted here and in `--wasmcloud-messaging-max-in-flight`'s help
@@ -678,14 +676,6 @@ pub const DEFAULT_ADMISSION_WAIT: Duration = Duration::from_secs(30);
 /// manifest written for a different host should still run.
 pub const MAX_ADMISSION_WAIT: Duration = Duration::from_secs(600);
 
-/// Worst measured core-instance count for a single component: Componentize-Go,
-/// which compiles to `$main`, the `wasi_snapshot_preview1` adapter, and three
-/// glue modules. Rust p2 measures 3.
-///
-/// The pool is spent in *core* instances, so this is what converts "instances
-/// the pool can hold" into "messages we may admit".
-const WORST_CASE_CORE_INSTANCES_PER_COMPONENT: u32 = 5;
-
 /// Share of the pool's component capacity messaging may claim. The remainder is
 /// what HTTP-triggered work, warm pools, and long-lived services draw on — the
 /// workloads that otherwise fail to *start* when a messaging burst drains the
@@ -712,22 +702,25 @@ const SATURATED_COMPONENTS_PER_HOST: u32 = 4;
 const MIN_DERIVED_IN_FLIGHT: usize = 8;
 const MAX_DERIVED_IN_FLIGHT: usize = 4096;
 
-/// Derive the host-wide ceiling from the engine's core-instance budget.
+/// Derive the host-wide ceiling from the pool's linear-memory count.
 ///
-/// `total_core_instances` is [`crate::engine::Engine::total_core_instances`]:
-/// `None` when pooling is off, in which case there is no budget to divide and
-/// the pinned default stands. The §1 failure cannot happen without a pool, but
-/// the memory bound still applies, so a ceiling is still wanted.
-fn derive_host_ceiling(total_core_instances: Option<u32>) -> usize {
-    let Some(total) = total_core_instances else {
+/// `total_memories` is [`crate::engine::Engine::total_memories`]: how many
+/// linear memories the pool holds at once, and with them (from totals of the
+/// same size) how many fiber stacks and component instances, which is what a
+/// message in flight spends. The pool's core-instance
+/// total is deliberately not the budget: a component is several core instances
+/// and that total is sized so it never binds first. `None` when pooling is
+/// off, in which case there is no budget to divide and the pinned default
+/// stands. The §1 failure cannot happen without a pool, but the memory bound
+/// still applies, so a ceiling is still wanted.
+fn derive_host_ceiling(total_memories: Option<u32>) -> usize {
+    let Some(capacity) = total_memories else {
         return DEFAULT_MAX_IN_FLIGHT_HOST;
     };
     // Messages the pool could hold if messaging had all of it. `share` is what
     // messaging may actually claim; `capacity` is the hard wall behind it.
-    // No overflow: `capacity` is at most `u32::MAX / 5`, so the multiply stays
-    // inside `u32`.
-    let capacity = total / WORST_CASE_CORE_INSTANCES_PER_COMPONENT;
-    let share = capacity * MESSAGING_POOL_SHARE_NUM / MESSAGING_POOL_SHARE_DEN;
+    let share = u64::from(capacity) * u64::from(MESSAGING_POOL_SHARE_NUM)
+        / u64::from(MESSAGING_POOL_SHARE_DEN);
     let capacity = usize::try_from(capacity).unwrap_or(MAX_DERIVED_IN_FLIGHT);
     let share = usize::try_from(share).unwrap_or(MAX_DERIVED_IN_FLIGHT);
     // The floor may not raise the ceiling past what the pool actually holds.
@@ -785,7 +778,7 @@ pub struct MessagingLimits {
 /// deployment is a separate workload with its own `uuid::Uuid::now_v7()`
 /// component id, so keying by that gives each replica its own full ceiling:
 /// four replicas of a component at `max_in_flight: 32` could hold 128 messages
-/// on one host, against a stock host-wide total of 133. The per-component
+/// on one host, against a stock host-wide total of 666. The per-component
 /// ceiling exists to stop one workload taking the host, and per-replica gates
 /// let it do the opposite. Keyed by identity, `max_in_flight` means what a
 /// manifest author reads it to mean: a total for that component, however many
@@ -899,7 +892,7 @@ impl Default for MessagingLimits {
 
 impl MessagingLimits {
     /// Build the host's messaging ceilings, resolving whatever the operator did
-    /// not specify against the engine's core-instance budget.
+    /// not specify against the pool's linear-memory count.
     ///
     /// `None` for either ceiling means "the operator said nothing" — which is
     /// why the flags must not carry a `default_value_t`. A CLI-parse-time
@@ -916,9 +909,9 @@ impl MessagingLimits {
     pub fn resolve(
         host_total: Option<usize>,
         per_component_default: Option<usize>,
-        total_core_instances: Option<u32>,
+        total_memories: Option<u32>,
     ) -> Self {
-        let host_total = host_total.unwrap_or_else(|| derive_host_ceiling(total_core_instances));
+        let host_total = host_total.unwrap_or_else(|| derive_host_ceiling(total_memories));
         let per_component_default =
             per_component_default.unwrap_or_else(|| per_component_ceiling(host_total));
         Self::new(host_total, per_component_default)
@@ -1791,17 +1784,14 @@ mod tests {
     fn a_small_pool_is_not_floored_above_its_own_capacity() {
         // The floor exists to keep a tiny host usable, but clamping *up* past
         // what the pool holds admits work the pool cannot instantiate — the
-        // exact exhaustion these ceilings exist to prevent. A 16-instance pool
-        // holds 3 components at the worst-case 5 core instances each, so the
-        // ceiling may not be the unclamped floor of 8.
-        for total in [4u32, 5, 16, 32] {
-            let limits = MessagingLimits::resolve(None, None, Some(total));
-            let admitted_core_instances =
-                limits.host_total() * super::WORST_CASE_CORE_INSTANCES_PER_COMPONENT as usize;
+        // exact exhaustion these ceilings exist to prevent. A pool of 4 linear
+        // memories holds 4 components, so the ceiling may not be the unclamped
+        // floor of 8.
+        for memories in [1u32, 4, 5, 16, 32] {
+            let limits = MessagingLimits::resolve(None, None, Some(memories));
             assert!(
-                admitted_core_instances <= total as usize || limits.host_total() == 1,
-                "pool of {total} core instances derived a ceiling of {} messages, \
-                 which needs {admitted_core_instances} core instances",
+                limits.host_total() <= memories as usize,
+                "pool of {memories} linear memories derived a ceiling of {} messages",
                 limits.host_total()
             );
         }
@@ -1832,8 +1822,8 @@ mod tests {
         // wrong. Both are pinned here: changing the derivation, the pool share,
         // or either constant without rewriting the docs fails this test.
         let stock_pool = MessagingLimits::resolve(None, None, Some(1000));
-        assert_eq!(stock_pool.host_total(), 133);
-        assert_eq!(stock_pool.per_component_default(), 33);
+        assert_eq!(stock_pool.host_total(), 666);
+        assert_eq!(stock_pool.per_component_default(), 166);
 
         let unpooled = MessagingLimits::resolve(None, None, None);
         assert_eq!(unpooled.host_total(), 128);
@@ -2225,8 +2215,8 @@ mod tests {
         // The whole point of keying by manifest identity. Each replica is a
         // separate workload with its own uuid component id, so keying by that
         // gave each one a full ceiling of its own: `replicas: 4` at
-        // `max_in_flight: 32` could hold 128 messages on a host whose total is
-        // 133. `max_in_flight` has to be a total for the component, however
+        // `max_in_flight: 32` could hold 128 messages against one host-wide
+        // total. `max_in_flight` has to be a total for the component, however
         // many replicas of it happen to land here.
         let limits = MessagingLimits::new(64, 32);
         let identity = super::AdmissionIdentity::new("team-a", "ingester", "worker");
