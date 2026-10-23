@@ -730,8 +730,12 @@ runtime:
       #                   takes its own `config`/`configFrom`/`secretFrom`,
       #                   layered over the entry's.
       #
-      # Every entry here is file-backed (rendered into the `wash host` config
-      # file, never a CLI arg), since a binding can carry credentials.
+      # An entry renders as a plain `--host-plugin=...` CLI arg unless it sets
+      # something that flag can't carry: `config`, `configFrom`, `secretFrom`,
+      # `allowedHosts`, `allowedIpNameLookups`, `allowedHostLoopbackPorts`,
+      # `ports`, or any of the binding fields above. Such an entry, and every
+      # native entry, is file-backed instead: rendered into the `wash host`
+      # config file, so a credential never lands on the command line.
       #
       # Examples:
       #
