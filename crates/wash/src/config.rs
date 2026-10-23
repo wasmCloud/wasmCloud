@@ -1102,7 +1102,7 @@ pub fn connection_quotas(
 /// shape, and the same treatment of a zero.
 ///
 /// `None` for either ceiling means the operator said nothing, and the number is
-/// derived from `total_core_instances` — the engine's actual pool budget — so a
+/// derived from the pool's linear-memory count — the engine's actual budget — so a
 /// host told it is larger sizes its messaging ceiling to match instead of
 /// leaving a stock default silently binding. This is why the flags must not
 /// carry a `default_value_t`: a parse-time default is indistinguishable here
@@ -1121,7 +1121,7 @@ pub fn connection_quotas(
 pub fn wasmcloud_messaging_limits(
     max_in_flight: Option<usize>,
     max_in_flight_per_component: Option<usize>,
-    total_core_instances: Option<u32>,
+    total_memories: Option<u32>,
 ) -> anyhow::Result<wash_runtime::plugin::wasmcloud_messaging::MessagingLimits> {
     use wash_runtime::plugin::wasmcloud_messaging::MessagingLimits;
 
@@ -1146,7 +1146,7 @@ pub fn wasmcloud_messaging_limits(
             max_in_flight_per_component,
             "wasmcloud_messaging_max_in_flight_per_component",
         )?,
-        total_core_instances,
+        total_memories,
     );
 
     // Both numbers vary by host — pooling on or off, the size of the pool, and
@@ -1158,7 +1158,7 @@ pub fn wasmcloud_messaging_limits(
         per_component_default = limits.per_component_default(),
         host_total_source = if max_in_flight.is_some() {
             "flag"
-        } else if total_core_instances.is_some() {
+        } else if total_memories.is_some() {
             "derived from the instance pool"
         } else {
             "built-in default (pooling disabled)"
@@ -2062,14 +2062,13 @@ mod tests {
 
     #[test]
     fn wasmcloud_messaging_limits_do_not_over_commit_a_small_pool() {
-        // A pool of 16 core instances holds 3 worst-case components. The
-        // derived ceiling must not exceed that: admitting 8 would need 40 core
-        // instances and fail at instantiation, which is the exhaustion these
-        // ceilings exist to prevent.
-        let limits = wasmcloud_messaging_limits(None, None, Some(16)).expect("valid");
+        // A pool of 4 linear memories holds 4 components. The derived ceiling must not
+        // exceed that: admitting 8 would fail at instantiation, which is the
+        // exhaustion these ceilings exist to prevent.
+        let limits = wasmcloud_messaging_limits(None, None, Some(4)).expect("valid");
         assert!(
-            limits.host_total() <= 3,
-            "a 16-instance pool derived a ceiling of {} messages",
+            limits.host_total() <= 4,
+            "a pool of 4 linear memories derived a ceiling of {} messages",
             limits.host_total()
         );
     }
@@ -2082,7 +2081,7 @@ mod tests {
         let big = wasmcloud_messaging_limits(None, None, Some(8000)).expect("valid");
         assert!(
             big.host_total() > stock.host_total(),
-            "raising WASMTIME_POOLING_TOTAL_CORE_INSTANCES must raise the messaging ceiling: \
+            "raising --core-instances must raise the messaging ceiling: \
              {} vs {}",
             big.host_total(),
             stock.host_total()
