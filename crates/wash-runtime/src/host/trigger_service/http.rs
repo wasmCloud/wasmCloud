@@ -11,6 +11,7 @@ use wasmtime_wasi_http::p3::bindings::Service;
 use wasmtime_wasi_http::{Error, WasiBody};
 
 use crate::engine::ctx::SharedCtx;
+use crate::host::http::ResponseBodyCompletion;
 use crate::host::http_p3::DeliveredBody;
 
 /// Handles one inbound HTTP request on a shared instance: the workload's
@@ -64,6 +65,7 @@ impl AccessorTask<SharedCtx> for HttpTask {
         let _sample =
             crate::engine::instance_driver::InvocationSample::start(&executed, attributes);
 
+        let completion = ResponseBodyCompletion::for_request(&req);
         let (wasi_req, req_io) =
             accessor.with(|mut access| crate::host::http::p3_request(access.get(), req));
 
@@ -111,7 +113,7 @@ impl AccessorTask<SharedCtx> for HttpTask {
                 }
             };
             let (head, body) = http_response.into_parts();
-            let (body, mut delivery) = DeliveredBody::new(body);
+            let (body, mut delivery) = DeliveredBody::new(body, completion);
 
             // Deliver the head + streaming body to the HTTP server now. Wait for
             // the body only once it is the server's: a caller that dropped the
