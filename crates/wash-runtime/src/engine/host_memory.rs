@@ -485,27 +485,28 @@ fn pool_heap_ceiling_advisory(max_memory_size: u64) -> Option<String> {
 /// What to say when the pool would use up the kernel's per-process limit
 /// on memory mappings, if anything.
 ///
-/// Stack guards split mappings when the engine is built; live memories split
-/// their accessible pages from their reservations later. Allow an additional
-/// mapping per table for fragmentation and slack. These are independent pool
-/// totals, so overrides must not be estimated from the memory count alone.
+/// Each pooled stack's guard page splits the stack pool into two mappings when
+/// the engine is built. Each live linear memory splits its reservation into
+/// about four: the copy-on-write image, the rest of its accessible pages
+/// (measured as two mappings), and the inaccessible remainder. The core
+/// instance, component instance and table totals cost none: the first two are
+/// counters, and the table pool is one mapping that stays whole. Memories and
+/// stacks are independent pool totals, so the estimate reads each installed
+/// count rather than the knob they were derived from.
 fn pool_map_count_advisory(totals: &PoolTotals, max_map_count: u64) -> Option<String> {
     let PoolTotals {
-        memories,
-        stacks,
-        tables,
-        ..
+        memories, stacks, ..
     } = *totals;
-    let needed = u64::from(memories) * 2 + u64::from(stacks) * 2 + u64::from(tables);
+    let needed = u64::from(memories) * 4 + u64::from(stacks) * 2;
     (needed > max_map_count).then(|| {
         format!(
-            "a pool of {memories} memories, {stacks} stacks and {tables} tables needs about \
-             {needed} memory mappings, past this kernel's vm.max_map_count of \
+            "a pool of {memories} memories and {stacks} stacks needs about {needed} memory \
+             mappings once every memory is live, past this kernel's vm.max_map_count of \
              {max_map_count}. Engine startup or later instantiation may fail. Raise \
-             vm.max_map_count (sysctl), reduce the installed WASMTIME_POOLING_TOTAL_MEMORIES, \
-             WASMTIME_POOLING_TOTAL_STACKS and WASMTIME_POOLING_TOTAL_TABLES overrides, or \
-             lower core-instances when no overrides are set. Aim for fewer than {} pool \
-             mappings to leave room for libraries, thread stacks and compiled code.",
+             vm.max_map_count (sysctl), reduce the installed WASMTIME_POOLING_TOTAL_MEMORIES \
+             and WASMTIME_POOLING_TOTAL_STACKS overrides, or lower core-instances when no \
+             overrides are set. Aim for fewer than {} pool mappings to leave room for \
+             libraries, thread stacks and compiled code.",
             max_map_count / 10 * 9,
         )
     })
@@ -1217,10 +1218,11 @@ mod tests {
     #[test]
     fn a_pool_past_the_kernels_mapping_limit_is_called_out() {
         // 20,000 slots fit the address space but not Linux's default 65530
-        // mappings.
+        // mappings: 20,000 stack guards split 40,000 at startup and 20,000 live
+        // memories another 80,000.
         let resolved = HostMemoryBudgets::resolve(None, None, Some(20_000)).unwrap();
         let advisory =
-            map_count_advisory(&resolved, 65_530).expect("100,000 mappings are past 65530");
+            map_count_advisory(&resolved, 65_530).expect("120,000 mappings are past 65530");
         assert!(advisory.contains("vm.max_map_count"), "{advisory}");
         assert!(
             advisory.contains("58977"),
@@ -1239,7 +1241,7 @@ mod tests {
         config.total_tables(1000);
         let advisory = pool_map_count_advisory(&PoolTotals::of(&config), 65_530)
             .expect("stack guard mappings alone exceed the kernel limit");
-        assert!(advisory.contains("83000 memory mappings"), "{advisory}");
+        assert!(advisory.contains("84000 memory mappings"), "{advisory}");
         assert!(advisory.contains("40000 stacks"), "{advisory}");
         assert!(advisory.contains("Engine startup"), "{advisory}");
         assert!(
@@ -1249,12 +1251,15 @@ mod tests {
 
         config.total_stacks(1000);
         assert!(pool_map_count_advisory(&PoolTotals::of(&config), 65_530).is_none());
+        // Tables are one mapping however many there are.
         config.total_tables(70_000);
+        assert!(pool_map_count_advisory(&PoolTotals::of(&config), 65_530).is_none());
+        config.total_memories(20_000);
         let advisory = pool_map_count_advisory(&PoolTotals::of(&config), 65_530)
-            .expect("the table allowance uses its own installed count");
-        assert!(advisory.contains("74000 memory mappings"), "{advisory}");
+            .expect("the memory count uses its own installed total");
+        assert!(advisory.contains("82000 memory mappings"), "{advisory}");
         assert!(
-            advisory.contains("WASMTIME_POOLING_TOTAL_TABLES"),
+            advisory.contains("WASMTIME_POOLING_TOTAL_MEMORIES"),
             "{advisory}"
         );
     }
