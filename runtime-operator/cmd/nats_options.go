@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/nats-io/nats.go"
 )
@@ -25,45 +26,38 @@ type natsClientFlags struct {
 func (f natsClientFlags) options() ([]nats.Option, error) {
 	var opts []nats.Option
 
-	if f.creds != "" && f.nkey != "" {
-		return nil, errors.New("-nats-creds and -nats-nkey both sign the server nonce; set one")
+	if err := f.oneCredential(); err != nil {
+		return nil, err
 	}
-	if f.creds != "" {
+	switch {
+	case f.creds != "":
 		opts = append(opts, nats.UserCredentials(f.creds))
-	}
-	if f.nkey != "" {
+	case f.nkey != "":
 		opt, err := nats.NkeyOptionFromSeed(f.nkey)
 		if err != nil {
 			return nil, fmt.Errorf("-nats-nkey: %w", err)
 		}
 		opts = append(opts, opt)
-	}
-	if f.tokenFile != "" {
+	case f.tokenFile != "":
 		if _, err := readSecret(f.tokenFile); err != nil {
 			return nil, fmt.Errorf("-nats-token-file: %w", err)
 		}
-		opts = append(opts, nats.TokenHandler(func() string {
-			// A missing file leaves no token to present.
-			token, _ := readSecret(f.tokenFile)
-			return token
+		token := &secretFile{path: f.tokenFile}
+		opts = append(opts, nats.TokenHandler(token.read))
+	case f.user != "":
+		if _, err := readSecret(f.passwordFile); err != nil {
+			return nil, fmt.Errorf("-nats-password-file: %w", err)
+		}
+		password := &secretFile{path: f.passwordFile}
+		opts = append(opts, nats.UserInfoHandler(func() (string, string) {
+			return f.user, password.read()
 		}))
 	}
-	switch {
-	case f.passwordFile != "" && f.user == "":
-		return nil, errors.New("-nats-password-file requires -nats-user")
-	case f.user != "":
-		if f.passwordFile != "" {
-			if _, err := readSecret(f.passwordFile); err != nil {
-				return nil, fmt.Errorf("-nats-password-file: %w", err)
-			}
-		}
-		opts = append(opts, nats.UserInfoHandler(func() (string, string) {
-			if f.passwordFile == "" {
-				return f.user, ""
-			}
-			password, _ := readSecret(f.passwordFile)
-			return f.user, password
-		}))
+	// A rotated secret can reach the server before the kubelet refreshes the
+	// mounted file. Keep reconnecting through the rejections in between instead
+	// of closing once the same server rejects auth twice.
+	if f.creds != "" || f.nkey != "" || f.tokenFile != "" || f.user != "" {
+		opts = append(opts, nats.IgnoreAuthErrorAbort())
 	}
 	if f.name != "" {
 		opts = append(opts, nats.Name(f.name))
@@ -75,6 +69,57 @@ func (f natsClientFlags) options() ([]nats.Option, error) {
 		opts = append(opts, nats.CustomInboxPrefix(f.inboxPrefix))
 	}
 	return opts, nil
+}
+
+// oneCredential refuses more than one credential: the NATS client sends all
+// of them and the server authenticates with only one.
+func (f natsClientFlags) oneCredential() error {
+	switch {
+	case f.passwordFile != "" && f.user == "":
+		return errors.New("-nats-password-file requires -nats-user")
+	case f.user != "" && f.passwordFile == "":
+		return errors.New("-nats-user requires -nats-password-file")
+	}
+	var set []string
+	if f.creds != "" {
+		set = append(set, "-nats-creds")
+	}
+	if f.nkey != "" {
+		set = append(set, "-nats-nkey")
+	}
+	if f.tokenFile != "" {
+		set = append(set, "-nats-token-file")
+	}
+	if f.user != "" {
+		set = append(set, "-nats-user")
+	}
+	if len(set) > 1 {
+		return fmt.Errorf("%s each authenticate the operator; set one", strings.Join(set, " and "))
+	}
+	return nil
+}
+
+// secretFile rereads a secret on every connect. A failed read is logged once
+// per distinct error, which names the path and never the contents.
+type secretFile struct {
+	path    string
+	mu      sync.Mutex
+	lastErr string
+}
+
+func (s *secretFile) read() string {
+	secret, err := readSecret(s.path)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err == nil {
+		s.lastErr = ""
+		return secret
+	}
+	if err.Error() != s.lastErr {
+		s.lastErr = err.Error()
+		setupLog.Error(err, "unable to read NATS secret file", "path", s.path)
+	}
+	return ""
 }
 
 func readSecret(path string) (string, error) {

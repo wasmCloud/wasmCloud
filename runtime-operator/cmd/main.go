@@ -90,7 +90,7 @@ func main() {
 	flag.StringVar(&natsClient.nkey, "nats-nkey", "", "Path to a file holding a NATS nkey seed.")
 	flag.StringVar(&natsClient.tokenFile, "nats-token-file", "",
 		"Path to a file holding a NATS auth token, read again on every connect.")
-	flag.StringVar(&natsClient.user, "nats-user", "", "NATS user name.")
+	flag.StringVar(&natsClient.user, "nats-user", "", "NATS user name. Requires -nats-password-file.")
 	flag.StringVar(&natsClient.passwordFile, "nats-password-file", "",
 		"Path to a file holding the password for -nats-user, read again on every connect.")
 	flag.StringVar(&natsClient.name, "nats-name", "runtime-operator",

@@ -12,7 +12,14 @@ requires authentication, the operator presents one of:
 | `-nats-token-file` | a file holding a token |
 | `-nats-user`, `-nats-password-file` | a user name, and a file holding its password |
 
-Credentials, token, and password files are reread on every connect.
+The operator refuses to start with more than one of these, and requires
+`-nats-user` and `-nats-password-file` together. The NATS client would send
+every credential it is given, and the server authenticates with only one.
+
+Credentials, token, and password files are reread on every connect. When the
+server rejects the operator's credential, as when the server rotates a token
+before the kubelet refreshes the mounted Secret, the operator keeps
+reconnecting with whatever the file holds until the server accepts it.
 Token and password files may end with one LF or CRLF line ending, which is
 removed. All other whitespace is preserved.
 Restart the operator after replacing a bare nkey seed: the NATS client

@@ -1,11 +1,11 @@
 package main
 
 import (
-	"fmt"
-	"net"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,16 +22,13 @@ const (
 // startNats starts an embedded NATS server configured by configure.
 func startNats(t *testing.T, configure func(*server.Options)) string {
 	t.Helper()
+	return startNatsServer(t, configure).ClientURL()
+}
 
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve port: %v", err)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
+func startNatsServer(t *testing.T, configure func(*server.Options)) *server.Server {
+	t.Helper()
 
-	opts := &server.Options{Host: "127.0.0.1", Port: port, NoLog: true, NoSigs: true}
-	configure(opts)
+	opts := natsServerOptions(configure)
 	s, err := server.NewServer(opts)
 	if err != nil {
 		t.Fatalf("new nats server: %v", err)
@@ -45,7 +42,13 @@ func startNats(t *testing.T, configure func(*server.Options)) string {
 		s.Shutdown()
 		s.WaitForShutdown()
 	})
-	return fmt.Sprintf("nats://127.0.0.1:%d", port)
+	return s
+}
+
+func natsServerOptions(configure func(*server.Options)) *server.Options {
+	opts := &server.Options{Host: "127.0.0.1", Port: server.RANDOM_PORT, NoLog: true, NoSigs: true}
+	configure(opts)
+	return opts
 }
 
 func writeSecret(t *testing.T, name, contents string) string {
@@ -190,14 +193,27 @@ func TestNatsInboxPrefixCarriesHostReplies(t *testing.T) {
 }
 
 func TestNatsClientFlagsRefuseContradictions(t *testing.T) {
-	const emptySecretError = "is empty"
+	const (
+		emptySecretError = "is empty"
+		credsFile        = "a.creds"
+		nkeyFile         = "a.nk"
+	)
 	for _, tc := range []struct {
 		name  string
 		flags natsClientFlags
 		want  string
 	}{
-		{"creds and nkey", natsClientFlags{creds: "a.creds", nkey: "a.nk"}, "set one"},
+		{"creds and nkey", natsClientFlags{creds: credsFile, nkey: nkeyFile}, "-nats-creds and -nats-nkey"},
+		{"creds and token", natsClientFlags{creds: credsFile, tokenFile: "t"}, "-nats-creds and -nats-token-file"},
+		{"nkey and user", natsClientFlags{nkey: nkeyFile, user: "u", passwordFile: "p"}, "-nats-nkey and -nats-user"},
+		{"token and user", natsClientFlags{tokenFile: "t", user: "u", passwordFile: "p"}, "-nats-token-file and -nats-user"},
+		{
+			"all four",
+			natsClientFlags{creds: credsFile, nkey: nkeyFile, tokenFile: "t", user: "u", passwordFile: "p"},
+			"-nats-creds and -nats-nkey and -nats-token-file and -nats-user each authenticate the operator; set one",
+		},
 		{"password without user", natsClientFlags{passwordFile: "p"}, "requires -nats-user"},
+		{"user without password", natsClientFlags{user: "u"}, "requires -nats-password-file"},
 		{"missing token file", natsClientFlags{tokenFile: "/nonexistent/token"}, "-nats-token-file"},
 		{"empty token file", natsClientFlags{tokenFile: writeSecret(t, "empty", "\n")}, emptySecretError},
 		{"zero-byte token file", natsClientFlags{tokenFile: writeSecret(t, "empty", "")}, emptySecretError},
@@ -217,7 +233,30 @@ func TestNatsClientFlagsRefuseContradictions(t *testing.T) {
 func TestNatsSecretFilesReload(t *testing.T) {
 	token := writeSecret(t, "token", "first-token\n")
 	password := writeSecret(t, "password", "first-password\n")
-	flags := natsClientFlags{tokenFile: token, user: testOperatorUser, passwordFile: password}
+	tokenOpts := clientOptions(t, natsClientFlags{tokenFile: token})
+	userOpts := clientOptions(t, natsClientFlags{user: testOperatorUser, passwordFile: password})
+	if got := tokenOpts.TokenHandler(); got != "first-token" {
+		t.Fatal("initial token was not loaded")
+	}
+	if user, pass := userOpts.UserInfo(); user != testOperatorUser || pass != "first-password" {
+		t.Fatal("initial user credentials were not loaded")
+	}
+	if err := os.WriteFile(token, []byte("second-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(password, []byte("second-password\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := tokenOpts.TokenHandler(); got != "second-token" {
+		t.Fatal("token rotation was not loaded")
+	}
+	if user, pass := userOpts.UserInfo(); user != testOperatorUser || pass != "second-password" {
+		t.Fatal("password rotation was not loaded")
+	}
+}
+
+func clientOptions(t *testing.T, flags natsClientFlags) nats.Options {
+	t.Helper()
 	options, err := flags.options()
 	if err != nil {
 		t.Fatal(err)
@@ -228,24 +267,62 @@ func TestNatsSecretFilesReload(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := opts.TokenHandler(); got != "first-token" {
-		t.Fatal("initial token was not loaded")
+	return opts
+}
+
+// The server can rotate a token before the kubelet refreshes the mounted
+// file. The client must keep reconnecting through the auth rejections in
+// between and connect once the new token arrives.
+func TestNatsTokenRotationReconnects(t *testing.T) {
+	configure := func(token string) func(*server.Options) {
+		return func(o *server.Options) { o.Authorization = token }
 	}
-	if user, pass := opts.UserInfo(); user != testOperatorUser || pass != "first-password" {
-		t.Fatal("initial user credentials were not loaded")
-	}
-	if err := os.WriteFile(token, []byte("second-token\n"), 0o600); err != nil {
+	s := startNatsServer(t, configure("first-token"))
+	tokenFile := writeSecret(t, "token", "first-token\n")
+	options, err := natsClientFlags{tokenFile: tokenFile}.options()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(password, []byte("second-password\n"), 0o600); err != nil {
+	var rejections atomic.Int32
+	nc, err := nats.Connect(s.ClientURL(), append(options,
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(20*time.Millisecond),
+		nats.ReconnectJitter(0, 0),
+		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
+			if errors.Is(err, nats.ErrAuthorization) {
+				rejections.Add(1)
+			}
+		}),
+	)...)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(nc.Close)
+
+	if err := s.ReloadOptions(natsServerOptions(configure("second-token"))); err != nil {
+		t.Fatalf("rotate the server token: %v", err)
+	}
+	// Hold the stale token through several rejections by the same server.
+	waitFor(func() bool { return rejections.Load() >= 4 || nc.IsClosed() })
+	if err := os.WriteFile(tokenFile, []byte("second-token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := opts.TokenHandler(); got != "second-token" {
-		t.Fatal("token rotation was not loaded")
+	if !waitFor(nc.IsConnected) {
+		t.Fatalf("no reconnect with the rotated token: status %v after %d auth rejections",
+			nc.Status(), rejections.Load())
 	}
-	if user, pass := opts.UserInfo(); user != testOperatorUser || pass != "second-password" {
-		t.Fatal("password rotation was not loaded")
+}
+
+// waitFor polls done for up to five seconds and reports whether it held.
+func waitFor(done func() bool) bool {
+	deadline := time.Now().Add(5 * time.Second)
+	for !done() {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+	return true
 }
 
 func TestNatsSecretFilesPreserveWhitespace(t *testing.T) {
