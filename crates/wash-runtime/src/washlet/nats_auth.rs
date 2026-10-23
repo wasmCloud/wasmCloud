@@ -22,10 +22,14 @@ pub struct NatsAuth {
     pub nkey: Option<PathBuf>,
     /// Sent as `auth_token`.
     pub token: Option<String>,
+    /// A file holding the `auth_token`, in place of `token`.
+    pub token_file: Option<PathBuf>,
     /// Sent as `user`.
     pub user: Option<String>,
     /// Sent as `pass`.
     pub password: Option<String>,
+    /// A file holding the `pass`, in place of `password`.
+    pub password_file: Option<PathBuf>,
     /// Adjusts what the client presents after the fields above are applied.
     pub hook: Option<AuthHook>,
 }
@@ -36,15 +40,19 @@ impl NatsAuth {
             credentials,
             nkey,
             token,
+            token_file,
             user,
             password,
+            password_file,
             hook,
         } = self;
         credentials.is_none()
             && nkey.is_none()
             && token.is_none()
+            && token_file.is_none()
             && user.is_none()
             && password.is_none()
+            && password_file.is_none()
             && hook.is_none()
     }
 
@@ -54,6 +62,14 @@ impl NatsAuth {
         anyhow::ensure!(
             self.credentials.is_none() || self.nkey.is_none(),
             "a NATS connection takes a credentials file or an nkey seed, not both"
+        );
+        anyhow::ensure!(
+            self.token.is_none() || self.token_file.is_none(),
+            "a NATS connection takes a token or a token file, not both"
+        );
+        anyhow::ensure!(
+            self.password.is_none() || self.password_file.is_none(),
+            "a NATS connection takes a password or a password file, not both"
         );
         if self.is_empty() {
             return Ok(async_nats::ConnectOptions::new());
@@ -78,6 +94,8 @@ struct Presenter {
     auth: NatsAuth,
     credentials: Option<SecretFile>,
     nkey: Option<SecretFile>,
+    token: Option<SecretFile>,
+    password: Option<SecretFile>,
 }
 
 impl From<NatsAuth> for Presenter {
@@ -85,6 +103,8 @@ impl From<NatsAuth> for Presenter {
         Self {
             credentials: auth.credentials.clone().map(SecretFile::new),
             nkey: auth.nkey.clone().map(SecretFile::new),
+            token: auth.token_file.clone().map(SecretFile::new),
+            password: auth.password_file.clone().map(SecretFile::new),
             auth,
         }
     }
@@ -116,9 +136,15 @@ impl Presenter {
             auth.nkey = Some(key.public_key());
             auth.signature = Some(sign(&key, nonce)?);
         }
-        auth.token = self.auth.token.clone();
+        auth.token = match &self.token {
+            Some(file) => Some(secret_line(file, "token").await?),
+            None => self.auth.token.clone(),
+        };
         auth.username = self.auth.user.clone();
-        auth.password = self.auth.password.clone();
+        auth.password = match &self.password {
+            Some(file) => Some(secret_line(file, "password").await?),
+            None => self.auth.password.clone(),
+        };
         if let Some(hook) = &self.auth.hook {
             (hook.0)(&mut auth)?;
         }
@@ -133,8 +159,10 @@ impl std::fmt::Debug for NatsAuth {
             .field("credentials", &self.credentials)
             .field("nkey", &self.nkey)
             .field("token", &redacted(&self.token))
+            .field("token_file", &self.token_file)
             .field("user", &self.user)
             .field("password", &redacted(&self.password))
+            .field("password_file", &self.password_file)
             .field("hook", &self.hook)
             .finish()
     }
@@ -263,6 +291,21 @@ impl SecretFile {
         state.pending = None;
         Ok(Some(read.context("the file reader panicked")??))
     }
+}
+
+/// A token or password file's contents, less one LF or CRLF line ending.
+async fn secret_line(file: &SecretFile, what: &str) -> anyhow::Result<String> {
+    let contents = file.read(what).await?;
+    let secret = match contents.strip_suffix('\n') {
+        Some(line) => line.strip_suffix('\r').unwrap_or(line),
+        None => &contents,
+    };
+    anyhow::ensure!(
+        !secret.is_empty(),
+        "NATS {what} file {} is empty",
+        file.path.display()
+    );
+    Ok(secret.to_string())
 }
 
 fn failed(path: &Path, what: &str) -> String {
@@ -499,6 +542,49 @@ pub(super) mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    #[tokio::test]
+    async fn token_and_password_files_lose_one_line_ending() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let token = dir.path().join("token");
+        let password = dir.path().join("password");
+        std::fs::write(&token, " the token \r\n")?;
+        std::fs::write(&password, "the password\n\n")?;
+        let presenter = Presenter::from(NatsAuth {
+            token_file: Some(token.clone()),
+            user: Some("derek".into()),
+            password_file: Some(password),
+            ..Default::default()
+        });
+        let presented = presenter.present(b"nonce").await?;
+        assert_eq!(presented.token.as_deref(), Some(" the token "));
+        assert_eq!(presented.password.as_deref(), Some("the password\n"));
+
+        std::fs::write(&token, "\n")?;
+        let error = presenter
+            .present(b"nonce")
+            .await
+            .err()
+            .context("empty token")?;
+        assert!(error.to_string().contains("is empty"), "{error:#}");
+        Ok(())
+    }
+
+    #[test]
+    fn a_value_and_its_file_are_refused_together() {
+        let token = NatsAuth {
+            token: Some("t".into()),
+            token_file: Some("t".into()),
+            ..Default::default()
+        };
+        assert!(token.connect_options().is_err());
+        let password = NatsAuth {
+            password: Some("p".into()),
+            password_file: Some("p".into()),
+            ..Default::default()
+        };
+        assert!(password.connect_options().is_err());
     }
 
     #[test]
