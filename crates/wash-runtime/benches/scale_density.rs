@@ -77,7 +77,7 @@ use wash_runtime::engine::host_memory::{HostMemoryBudgets, render_bytes};
 use wash_runtime::engine::pool_usage::{PoolUsage, pool_refusals};
 use wash_runtime::engine::process_memory::process_footprint;
 use wash_runtime::host::http::{DynamicRouter, Ingress};
-use wash_runtime::host::{HostApi, HostBuilder};
+use wash_runtime::host::{Host, HostApi, HostBuilder};
 use wash_runtime::types::{
     Component, LocalResources, Workload, WorkloadStartRequest, WorkloadState,
 };
@@ -557,7 +557,7 @@ where
 
 /// Start workloads `first..first + count`, retaining their actual indices.
 async fn start_batch(
-    host: &impl HostApi,
+    host: &Arc<Host>,
     wasm: &bytes::Bytes,
     digest: &str,
     flavour: Flavour,
@@ -586,8 +586,16 @@ async fn start_batch(
                 volumes: vec![],
             },
         };
+        // Spawned, not polled here: `buffered` drives every future it holds
+        // from this one task, so unspawned starts all run on the thread that
+        // polls it and the host's other workers sit idle. Each start runs on
+        // a worker of its own; `buffered` still caps how many are in flight.
+        let host = Arc::clone(host);
         async move {
-            let result = match host.workload_start(request).await {
+            let started = tokio::spawn(async move { host.workload_start(request).await })
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("start task failed: {e}")));
+            let result = match started {
                 Ok(response)
                     if response.workload_status.workload_state == WorkloadState::Running =>
                 {
