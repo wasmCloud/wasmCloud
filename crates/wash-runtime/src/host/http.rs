@@ -1466,7 +1466,7 @@ impl ResponseBodyCompletion {
         req.extensions().get::<Self>().copied().unwrap_or_default()
     }
 
-    pub(crate) fn is_complete<B: hyper::body::Body>(&self, body: &B) -> bool {
+    pub(crate) fn is_complete<B: hyper::body::Body>(self, body: &B) -> bool {
         body.is_end_stream() || matches!(self, Self::Http1) && body.size_hint().exact() == Some(0)
     }
 }
