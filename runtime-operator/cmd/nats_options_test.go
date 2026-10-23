@@ -313,6 +313,57 @@ func TestNatsTokenRotationReconnects(t *testing.T) {
 	}
 }
 
+func TestNatsNkeyRotationFailsLiveness(t *testing.T) {
+	newKey := func() (string, string) {
+		key, err := nkeys.CreateUser()
+		if err != nil {
+			t.Fatal(err)
+		}
+		seed, err := key.Seed()
+		if err != nil {
+			t.Fatal(err)
+		}
+		public, err := key.PublicKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(seed), public
+	}
+	seed, public := newKey()
+	configure := func(o *server.Options) {
+		o.Nkeys = []*server.NkeyUser{{Nkey: public}}
+	}
+	s := startNatsServer(t, configure)
+	path := writeSecret(t, "operator.nk", seed)
+	options, err := natsClientFlags{nkey: path}.options()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc, err := nats.Connect(s.ClientURL(), append(options,
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(20*time.Millisecond),
+		nats.ReconnectJitter(0, 0),
+	)...)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(nc.Close)
+
+	seed, public = newKey()
+	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReloadOptions(natsServerOptions(configure)); err != nil {
+		t.Fatalf("rotate the server nkey: %v", err)
+	}
+	if !waitFor(nc.IsClosed) {
+		t.Fatalf("stale public key kept reconnecting: status %v", nc.Status())
+	}
+	if err := natsLivenessCheck(nc)(nil); err == nil {
+		t.Fatal("rotated nkey did not fail liveness")
+	}
+}
+
 // waitFor polls done for up to five seconds and reports whether it held.
 func waitFor(done func() bool) bool {
 	deadline := time.Now().Add(5 * time.Second)

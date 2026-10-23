@@ -226,6 +226,11 @@ operator:
   #   extraArgs:
   #     - "-cpu-backpressure-threshold=75"
   extraArgs: []
+  # -- Additional operator pod volumes, including credential Secrets.
+  volumes: []
+  # -- Additional operator container mounts. Mount Secret directories without
+  # subPath so Kubernetes can refresh rotated credentials.
+  volumeMounts: []
   # -- How long a terminating operator pod has to shut down before it is
   # killed. On `SIGTERM` the manager stops its controllers and lets the
   # reconciles already running finish, waiting up to controller-runtime's 30s

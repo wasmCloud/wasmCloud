@@ -53,10 +53,8 @@ func (f natsClientFlags) options() ([]nats.Option, error) {
 			return f.user, password.read()
 		}))
 	}
-	// A rotated secret can reach the server before the kubelet refreshes the
-	// mounted file. Keep reconnecting through the rejections in between instead
-	// of closing once the same server rejects auth twice.
-	if f.creds != "" || f.nkey != "" || f.tokenFile != "" || f.user != "" {
+	// Reloaded credentials can recover once kubelet refreshes the mounted Secret.
+	if f.creds != "" || f.tokenFile != "" || f.user != "" {
 		opts = append(opts, nats.IgnoreAuthErrorAbort())
 	}
 	if f.name != "" {

@@ -23,8 +23,35 @@ reconnecting with whatever the file holds until the server accepts it.
 Token and password files may end with one LF or CRLF line ending, which is
 removed. All other whitespace is preserved.
 Restart the operator after replacing a bare nkey seed: the NATS client
-caches its public key when building the connection options.
+caches its public key when building the connection options. Repeated auth
+rejections close a bare-nkey connection and fail liveness so Kubernetes can
+restart the operator with the new key.
 `-nats-name` sets the connection name, `runtime-operator` by default.
+
+### Helm Secret mounts
+
+Set `operator.volumes` and `operator.volumeMounts` to mount an existing
+Kubernetes Secret, then pass the matching file flag in `operator.extraArgs`.
+For a Secret named `operator-nats-auth` with a `token` key:
+
+```yaml
+operator:
+  extraArgs:
+    - "-nats-token-file=/nats-auth/token"
+  volumes:
+    - name: nats-auth
+      secret:
+        secretName: operator-nats-auth
+  volumeMounts:
+    - name: nats-auth
+      mountPath: /nats-auth
+      readOnly: true
+```
+
+Mount the Secret directory without `subPath` so Kubernetes can refresh its
+files. These mounts work with `global.tls.enabled` set to either value and
+coexist with the chart's TLS certificate mount. The Secret must exist in the
+operator's release namespace. Hosts need their own NATS credentials.
 
 ### Permissions
 
