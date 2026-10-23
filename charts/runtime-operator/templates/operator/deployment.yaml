@@ -26,11 +26,16 @@ spec:
       automountServiceAccountToken: {{ .Values.operator.automountServiceAccountToken }}
       securityContext:
         {{- toYaml .Values.operator.podSecurityContext | nindent 8 }}
-      {{- if $.Values.global.tls.enabled }}
+      {{- if or $.Values.global.tls.enabled .Values.operator.volumes }}
       volumes:
+        {{- if $.Values.global.tls.enabled }}
         - name: operator-cert
           secret:
             secretName: {{ .Values.global.certificates.operatorCertSecretName }}
+        {{- end }}
+        {{- with .Values.operator.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       serviceAccountName: {{ include "operator.serviceAccountName" . }}
       {{- include "runtime-operator.imagePullSecrets" . | nindent 6 }}
@@ -70,11 +75,16 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           imagePullPolicy: {{ .Values.operator.image.pull_policy }}
-          {{- if $.Values.global.tls.enabled }}
+          {{- if or $.Values.global.tls.enabled .Values.operator.volumeMounts }}
           volumeMounts:
+            {{- if $.Values.global.tls.enabled }}
             - name: operator-cert
               mountPath: /operator-cert
               readOnly: true
+            {{- end }}
+            {{- with .Values.operator.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           resources:
             {{- toYaml .Values.operator.resources | nindent 12 }}
