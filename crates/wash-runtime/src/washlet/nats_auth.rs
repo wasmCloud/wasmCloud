@@ -184,7 +184,8 @@ const READ_WAIT: Duration = Duration::from_secs(2);
 /// A file reread on every connect, with at most one read in flight.
 ///
 /// A detached worker lets runtime shutdown finish even if a read stalls.
-/// Reconnects share the pending read and use cached contents while stalled.
+/// Reconnects share the pending read and use cached contents while it stalls
+/// or fails.
 struct SecretFile {
     path: PathBuf,
     state: tokio::sync::Mutex<ReadState>,
@@ -224,33 +225,43 @@ impl SecretFile {
         }
     }
 
+    /// The file's contents, or the last contents read while the file stalls
+    /// or fails to read.
     async fn read(&self, what: &str) -> anyhow::Result<String> {
         let mut state = self.state.lock().await;
-        if state.pending.is_none() {
-            state.pending = Some(
-                PendingRead::start(self.path.clone())
-                    .context("failed to start NATS secret file reader")?,
-            );
-        }
-        let pending = state.pending.as_mut().context("no NATS secret file read")?;
-        let finished = tokio::time::timeout(READ_WAIT, &mut pending.result).await;
-        match finished {
-            Ok(joined) => {
-                state.pending = None;
-                let contents = joined
-                    .context("NATS secret file read panicked")?
-                    .with_context(|| failed(&self.path, what))?;
+        let failure = match self.wait(&mut state).await {
+            Ok(Some(contents)) => {
                 state.last_read = Some(contents.clone());
-                Ok(contents)
+                return Ok(contents);
             }
-            Err(_) => match &state.last_read {
-                Some(contents) => {
-                    tracing::warn!(path = %self.path.display(), "NATS {what} file read is stalled; presenting the last contents read");
-                    Ok(contents.clone())
-                }
-                None => anyhow::bail!("timed out reading NATS {what} file {}", self.path.display()),
-            },
+            Ok(None) => {
+                anyhow::anyhow!("timed out reading NATS {what} file {}", self.path.display())
+            }
+            Err(e) => e.context(failed(&self.path, what)),
+        };
+        match &state.last_read {
+            Some(contents) => {
+                tracing::warn!(error = %format!("{failure:#}"), "presenting the last NATS {what} file contents read");
+                Ok(contents.clone())
+            }
+            None => Err(failure),
         }
+    }
+
+    /// The pending read's result, starting one if none is in flight, or
+    /// `None` while it is still stalled after [`READ_WAIT`].
+    async fn wait(&self, state: &mut ReadState) -> anyhow::Result<Option<String>> {
+        let pending = match &mut state.pending {
+            Some(pending) => pending,
+            None => state.pending.insert(
+                PendingRead::start(self.path.clone()).context("failed to start the file reader")?,
+            ),
+        };
+        let Ok(read) = tokio::time::timeout(READ_WAIT, &mut pending.result).await else {
+            return Ok(None);
+        };
+        state.pending = None;
+        Ok(Some(read.context("the file reader panicked")??))
     }
 }
 
@@ -404,6 +415,32 @@ pub(super) mod tests {
         assert_eq!(file.read("token").await?, "second");
         writer.await??;
         assert_eq!(pending(&file), None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_failed_read_presents_the_last_contents() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("token");
+        std::fs::write(&path, "first")?;
+        let file = SecretFile::new(path.clone());
+        assert_eq!(file.read("token").await?, "first");
+
+        std::fs::remove_file(&path)?;
+        assert_eq!(file.read("token").await?, "first");
+        std::fs::write(&path, "second")?;
+        assert_eq!(file.read("token").await?, "second");
+
+        let missing = SecretFile::new(dir.path().join("missing"));
+        let error = missing
+            .read("token")
+            .await
+            .err()
+            .context("missing file read")?;
+        assert!(
+            format!("{error:#}").contains("failed to read NATS token file"),
+            "{error:#}"
+        );
         Ok(())
     }
 
