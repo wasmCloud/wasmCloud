@@ -592,6 +592,10 @@ pub struct PluginBindingSet {
     plugin_id: String,
     base: HashMap<String, String>,
     bindings: BTreeMap<String, HashMap<String, String>>,
+    /// The operator's `secret:` maps: config key -> `<plugin-id>/<secret-key>`,
+    /// resolved at bind through the named plugin. Entry-wide, then per binding.
+    secret_base: HashMap<String, String>,
+    secret_bindings: BTreeMap<String, HashMap<String, String>>,
     declared_host_owned: BTreeSet<String>,
     workload_config: WorkloadConfigPolicy,
     default_bundles: Vec<DefaultBundle>,
@@ -641,6 +645,27 @@ impl PluginBindingSet {
         config: HashMap<String, String>,
     ) -> Self {
         self.bindings.insert(name.into(), config);
+        self
+    }
+
+    /// The entry's `secret:` map, applied to every binding of this plugin:
+    /// config key -> `<plugin-id>/<secret-key>`.
+    #[must_use]
+    pub fn with_secret_base(mut self, secret: HashMap<String, String>) -> Self {
+        self.secret_base = secret;
+        self
+    }
+
+    /// The `secret:` map of binding `name`, layered over the entry's.
+    #[must_use]
+    pub fn with_binding_secret(
+        mut self,
+        name: impl Into<String>,
+        secret: HashMap<String, String>,
+    ) -> Self {
+        if !secret.is_empty() {
+            self.secret_bindings.insert(name.into(), secret);
+        }
         self
     }
 
@@ -1262,6 +1287,49 @@ impl PluginBindingSet {
             self.apply_default_bundles(name, &mut layer, schema);
             (name.as_str(), layer)
         })
+    }
+
+    /// Whether the operator declared any `secret:` map for this plugin.
+    pub fn has_secret_refs(&self) -> bool {
+        !self.secret_base.is_empty() || !self.secret_bindings.is_empty()
+    }
+
+    /// The secret references that apply to `binding` (`None` for the unnamed
+    /// binding): the entry's `secret:` map with the binding's own over it.
+    pub fn secret_refs(&self, binding: Option<&str>) -> HashMap<String, String> {
+        let mut refs = self.secret_base.clone();
+        if let Some(own) = binding.and_then(|b| self.secret_bindings.get(b)) {
+            refs.extend(own.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        refs
+    }
+
+    /// Every layer the operator declared, for checking at host start: `None`
+    /// for the entry itself, then each named binding, with that level's
+    /// effective config keys (`config`/`configFrom`/`secretFrom`, merged with
+    /// the entry's) and effective `secret:` map.
+    pub fn declared_levels(
+        &self,
+    ) -> impl Iterator<Item = (Option<&str>, BTreeSet<&str>, HashMap<String, String>)> {
+        let base_keys = self.base.keys().map(String::as_str);
+        std::iter::once((None, base_keys.clone().collect(), self.secret_refs(None))).chain(
+            self.bindings.iter().map(move |(name, layer)| {
+                let keys = base_keys
+                    .clone()
+                    .chain(layer.keys().map(String::as_str))
+                    .collect();
+                (Some(name.as_str()), keys, self.secret_refs(Some(name)))
+            }),
+        )
+    }
+
+    /// The `secret:` maps of bindings the entry does not declare. A binding
+    /// exists only through `bindings`, so these could never be read.
+    pub fn undeclared_secret_bindings(&self) -> impl Iterator<Item = &str> {
+        self.secret_bindings
+            .keys()
+            .filter(|name| !self.bindings.contains_key(*name))
+            .map(String::as_str)
     }
 
     /// The base layer on its own, for a plugin checking a key that is only

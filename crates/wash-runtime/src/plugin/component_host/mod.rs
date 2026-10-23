@@ -798,6 +798,11 @@ impl HostPlugin for ComponentHostPlugin {
         self.state.failure_sink.store(Some(Arc::new(sink)));
     }
 
+    fn secret_resolver(&self) -> Option<Arc<dyn crate::plugin::SecretResolver>> {
+        ComponentSecretResolver::for_exports(&self.state, &self.exports)
+            .map(|r| Arc::new(r) as Arc<dyn crate::plugin::SecretResolver>)
+    }
+
     async fn start(&self) -> anyhow::Result<()> {
         let (tx, rx) = tokio::sync::mpsc::channel(CAPABILITY_CHANNEL_CAPACITY);
         // Publish the sender and snapshot the bound workloads atomically (see
@@ -1679,9 +1684,15 @@ async fn drop_proxy_resource(
         let res = Resource::<ProxyResource>::new_own(rep);
         Ok(access.data_mut().table.delete(res)?.proxy_id)
     })?;
+    release_proxy(state, proxy_id).await;
+    Ok(())
+}
 
-    // Best-effort: if the plugin was stopped or restarted, the real resource is
-    // already gone, so a closed channel here is not an error.
+/// Route a drop of the real resource behind `proxy_id` to the plugin store.
+///
+/// Best-effort: if the plugin was stopped or restarted, the real resource is
+/// already gone, so a closed channel here is not an error.
+async fn release_proxy(state: &ComponentHostPluginState, proxy_id: u64) {
     if let Some(sender) = state.sender() {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         if sender
@@ -1695,7 +1706,6 @@ async fn drop_proxy_resource(
             let _ = reply_rx.await;
         }
     }
-    Ok(())
 }
 
 /// Route one capability call from a workload store to the persistent plugin
@@ -1751,6 +1761,30 @@ async fn route_capability_call(
         },
     )?;
 
+    let produced =
+        dispatch_capability_call(state, interface, func, caller, args, result_tys).await?;
+
+    // Inject the relocated results into the caller store.
+    accessor.with(|mut access| -> wasmtime::Result<()> {
+        for (slot, relocated) in results.iter_mut().zip(produced) {
+            *slot = relocate::inject(access.as_context_mut(), relocated)?;
+        }
+        Ok(())
+    })
+}
+
+/// Send one capability call, with its arguments already extracted, to the
+/// current incarnation and await its relocated results — the store-free half of
+/// [`route_capability_call`], also used to call the plugin from the host itself
+/// ([`ComponentSecretResolver`]).
+async fn dispatch_capability_call(
+    state: &ComponentHostPluginState,
+    interface: Arc<str>,
+    func: Arc<str>,
+    caller: CallerIdentity,
+    args: Vec<Relocated>,
+    result_tys: Arc<[Type]>,
+) -> wasmtime::Result<Vec<Relocated>> {
     let sender = state.sender().ok_or_else(|| {
         wasmtime::format_err!("host component plugin '{}' is not running", state.id)
     })?;
@@ -1779,8 +1813,7 @@ async fn route_capability_call(
             wasmtime::format_err!("host component plugin '{}' channel closed", state.id)
         })?;
 
-    let produced = call
-        .await_reply(reply_rx)
+    call.await_reply(reply_rx)
         .await
         .ok_or_else(|| {
             wasmtime::format_err!(
@@ -1790,15 +1823,129 @@ async fn route_capability_call(
         })?
         .map_err(|_| {
             wasmtime::format_err!("host component plugin '{}' dropped the reply", state.id)
-        })??;
+        })?
+}
 
-    // Inject the relocated results into the caller store.
-    accessor.with(|mut access| -> wasmtime::Result<()> {
-        for (slot, relocated) in results.iter_mut().zip(produced) {
-            *slot = relocate::inject(access.as_context_mut(), relocated)?;
+/// Resolves secrets for the host through a host component plugin's exported
+/// `wasmcloud:secrets` `store.get` + `reveal`. The calls carry no workload
+/// identity, so the plugin answers from its host-level secrets rather than any
+/// workload's scope. The `secret` handle `get` returns stays in the plugin
+/// store and is released once revealed.
+struct ComponentSecretResolver {
+    state: Arc<ComponentHostPluginState>,
+    store: Arc<str>,
+    get_result_tys: Arc<[Type]>,
+    reveal: Arc<str>,
+    reveal_result_tys: Arc<[Type]>,
+}
+
+impl ComponentSecretResolver {
+    /// A resolver for a plugin exporting `wasmcloud:secrets` `store.get` and
+    /// `reveal.reveal`, or `None` for any other plugin.
+    fn for_exports(
+        state: &Arc<ComponentHostPluginState>,
+        exports: &[ExportedInterface],
+    ) -> Option<Self> {
+        let find = |interface: &str, func: &str| {
+            exports.iter().find_map(|exported| {
+                let wit = &exported.wit;
+                if wit.namespace != "wasmcloud"
+                    || wit.package != "secrets"
+                    || !wit.interfaces.contains(interface)
+                {
+                    return None;
+                }
+                let f = exported.funcs.iter().find(|f| &*f.name == func)?;
+                Some((Arc::clone(&exported.name), Arc::clone(&f.result_tys)))
+            })
+        };
+        let (store, get_result_tys) = find("store", "get")?;
+        let (reveal, reveal_result_tys) = find("reveal", "reveal")?;
+        Some(Self {
+            state: Arc::clone(state),
+            store,
+            get_result_tys,
+            reveal,
+            reveal_result_tys,
+        })
+    }
+
+    /// `reveal` the secret behind `proxy_id` as `caller`.
+    async fn reveal(&self, caller: CallerIdentity, proxy_id: u64) -> anyhow::Result<String> {
+        let revealed = dispatch_capability_call(
+            &self.state,
+            Arc::clone(&self.reveal),
+            Arc::from("reveal"),
+            caller,
+            vec![Relocated::Resource {
+                proxy_id,
+                owned: false,
+            }],
+            Arc::clone(&self.reveal_result_tys),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("{e:#}"))?;
+        let [Relocated::Val(Val::Variant(case, Some(payload)))] = revealed.as_slice() else {
+            anyhow::bail!("`reveal` returned an unexpected shape");
+        };
+        match (case.as_str(), payload.as_ref()) {
+            ("string", Val::String(s)) => Ok(s.clone()),
+            ("bytes", Val::List(bytes)) => {
+                let bytes = bytes
+                    .iter()
+                    .map(|b| match b {
+                        Val::U8(b) => Ok(*b),
+                        _ => Err(anyhow::anyhow!("`reveal` returned non-byte data")),
+                    })
+                    .collect::<anyhow::Result<Vec<u8>>>()?;
+                String::from_utf8(bytes).context("secret is not valid UTF-8")
+            }
+            _ => anyhow::bail!("`reveal` returned an unexpected `secret-value` case"),
         }
-        Ok(())
-    })
+    }
+}
+
+#[async_trait]
+impl crate::plugin::SecretResolver for ComponentSecretResolver {
+    async fn resolve(&self, key: &str) -> anyhow::Result<Option<String>> {
+        // The host itself, not a workload: `wasmcloud:host/identity` reports
+        // an empty workload id, so the plugin reads its host-level secrets.
+        let caller = CallerIdentity {
+            workload_id: Arc::from(""),
+            component_id: None,
+            binding: None,
+        };
+        let got = dispatch_capability_call(
+            &self.state,
+            Arc::clone(&self.store),
+            Arc::from("get"),
+            caller.clone(),
+            vec![Relocated::Val(Val::String(key.to_string()))],
+            Arc::clone(&self.get_result_tys),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("{e:#}"))?;
+        let proxy_id = match got.as_slice() {
+            [Relocated::Result(Ok(secret))] => match secret.as_ref() {
+                Relocated::Resource { proxy_id, .. } => *proxy_id,
+                _ => anyhow::bail!("`store.get` returned an unexpected shape"),
+            },
+            [Relocated::Val(Val::Result(Err(Some(error))))] => match error.as_ref() {
+                Val::Variant(case, _) if case == "not-found" => return Ok(None),
+                // The `upstream`/`io` payloads are the plugin's own messages,
+                // which never carry the value.
+                Val::Variant(case, Some(msg)) => match msg.as_ref() {
+                    Val::String(msg) => anyhow::bail!("secrets plugin {case} error: {msg}"),
+                    _ => anyhow::bail!("secrets plugin {case} error"),
+                },
+                _ => anyhow::bail!("`store.get` returned an unexpected error shape"),
+            },
+            _ => anyhow::bail!("`store.get` returned an unexpected shape"),
+        };
+        let revealed = self.reveal(caller, proxy_id).await;
+        release_proxy(&self.state, proxy_id).await;
+        revealed.map(Some)
+    }
 }
 
 /// Supervise the plugin's persistent driver: (re)build the store, spawn the
