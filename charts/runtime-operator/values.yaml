@@ -408,10 +408,12 @@ runtime:
   # host: size `limits.memory` for your expected per-host workload density, or
   # remove it to leave host memory uncapped.
   #
-  # `defaultHeapMemory`, `coreInstances`, `guestMemoryMode` and
-  # `maxConcurrentStarts` are host knobs rather than Kubernetes resource fields;
-  # the chart strips them out of the container's `resources` block and sets them
-  # as `WASH_DEFAULT_HEAP_MEMORY` / `WASH_CORE_INSTANCES` /
+  # `defaultHeapMemory`, `coreInstances`, `memoryReservation`,
+  # `memoryGuardSize`, `guestMemoryMode` and `maxConcurrentStarts` are host
+  # knobs rather than Kubernetes resource fields; the chart strips them out of
+  # the container's `resources` block and sets them as
+  # `WASH_DEFAULT_HEAP_MEMORY` / `WASH_CORE_INSTANCES` /
+  # `WASH_MEMORY_RESERVATION` / `WASH_MEMORY_GUARD_SIZE` /
   # `WASH_GUEST_MEMORY_MODE` / `WASH_MAX_CONCURRENT_STARTS` for the host.
   # Leaving them empty uses the host's own defaults.
   #
@@ -430,6 +432,14 @@ runtime:
     # -- Instance slots the pooling allocator keeps. Empty leaves wasmtime's
     # default of 1000.
     coreInstances: ""
+    # -- Address space reserved for each guest linear memory, e.g. `64MiB`.
+    # Empty leaves wasmtime's 4GiB, which caps a host at about 30,000 slots.
+    # Smaller fits far more slots, at the cost of explicit bounds checks and a
+    # hard per-guest heap cap; set `defaultHeapMemory` no larger than it.
+    memoryReservation: ""
+    # -- Unmapped address space after each guest linear memory, e.g. `2MiB`.
+    # Empty leaves wasmtime's 32MiB; `0` is allowed.
+    memoryGuardSize: ""
     # -- Whether the host's guest memory budget is enforced or only counted:
     # `enforce` (what an empty value renders) refuses growth past the budget,
     # which the guest sees as `memory.grow` returning -1; `count` charges every
@@ -1004,6 +1014,8 @@ runtime:
       #     memory: "2Gi"
       #   defaultHeapMemory: "512MiB"
       #   coreInstances: "200"
+      #   memoryReservation: "512MiB"
+      #   memoryGuardSize: "2MiB"
       #   guestMemoryMode: "count"
       #   maxConcurrentStarts: "1"
       # -- Per-host-group probes. Merged field by field over
