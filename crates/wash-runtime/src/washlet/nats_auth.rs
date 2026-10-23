@@ -183,9 +183,8 @@ const READ_WAIT: Duration = Duration::from_secs(2);
 
 /// A file reread on every connect, with at most one read in flight.
 ///
-/// A read of a hung NFS or FUSE mount never returns, and the blocking thread
-/// doing it cannot be cancelled. Later connects wait on that same read, and
-/// present the last contents read while it is stalled.
+/// A detached worker lets runtime shutdown finish even if a read stalls.
+/// Reconnects share the pending read and use cached contents while stalled.
 struct SecretFile {
     path: PathBuf,
     state: tokio::sync::Mutex<ReadState>,
@@ -193,8 +192,28 @@ struct SecretFile {
 
 #[derive(Default)]
 struct ReadState {
-    pending: Option<tokio::task::JoinHandle<std::io::Result<String>>>,
+    pending: Option<PendingRead>,
     last_read: Option<String>,
+}
+
+struct PendingRead {
+    result: tokio::sync::oneshot::Receiver<std::io::Result<String>>,
+    _worker: std::thread::JoinHandle<()>,
+}
+
+impl PendingRead {
+    fn start(path: PathBuf) -> std::io::Result<Self> {
+        let (sender, result) = tokio::sync::oneshot::channel();
+        let worker = std::thread::Builder::new()
+            .name("nats-secret-read".into())
+            .spawn(move || {
+                let _ = sender.send(std::fs::read_to_string(path));
+            })?;
+        Ok(Self {
+            result,
+            _worker: worker,
+        })
+    }
 }
 
 impl SecretFile {
@@ -207,11 +226,14 @@ impl SecretFile {
 
     async fn read(&self, what: &str) -> anyhow::Result<String> {
         let mut state = self.state.lock().await;
-        let pending = state.pending.get_or_insert_with(|| {
-            let path = self.path.clone();
-            tokio::task::spawn_blocking(move || std::fs::read_to_string(path))
-        });
-        let finished = tokio::time::timeout(READ_WAIT, pending).await;
+        if state.pending.is_none() {
+            state.pending = Some(
+                PendingRead::start(self.path.clone())
+                    .context("failed to start NATS secret file reader")?,
+            );
+        }
+        let pending = state.pending.as_mut().context("no NATS secret file read")?;
+        let finished = tokio::time::timeout(READ_WAIT, &mut pending.result).await;
         match finished {
             Ok(joined) => {
                 state.pending = None;
@@ -366,10 +388,12 @@ pub(super) mod tests {
                 .success()
         );
         let pending = |file: &SecretFile| {
-            file.state
-                .try_lock()
-                .ok()
-                .and_then(|state| state.pending.as_ref().map(|task| task.id()))
+            file.state.try_lock().ok().and_then(|state| {
+                state
+                    .pending
+                    .as_ref()
+                    .map(|read| read._worker.thread().id())
+            })
         };
         assert_eq!(file.read("token").await?, "first");
         let stalled = pending(&file).context("no read in flight")?;
@@ -381,6 +405,63 @@ pub(super) mod tests {
         writer.await??;
         assert_eq!(pending(&file), None);
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stalled_read_does_not_block_runtime_shutdown() -> anyhow::Result<()> {
+        const CHILD_PATH: &str = "WASH_NATS_SECRET_SHUTDOWN_CHILD";
+        if let Some(path) = std::env::var_os(CHILD_PATH) {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let file = SecretFile::new(path.into());
+            let error = runtime
+                .block_on(file.read("token"))
+                .err()
+                .context("stalled read did not time out")?;
+            assert!(error.to_string().contains("timed out reading"), "{error:#}");
+            drop(file);
+            drop(runtime);
+            return Ok(());
+        }
+
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("token");
+        anyhow::ensure!(
+            std::process::Command::new("mkfifo")
+                .arg(&path)
+                .status()?
+                .success()
+        );
+        let (_, module) = module_path!().split_once("::").context("no test module")?;
+        let test = format!("{module}::a_stalled_read_does_not_block_runtime_shutdown");
+        let mut child = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", &test, "--nocapture"])
+            .env(CHILD_PATH, path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if child.try_wait()?.is_some() {
+                let output = child.wait_with_output()?;
+                anyhow::ensure!(
+                    output.status.success()
+                        && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                    "shutdown child failed: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill()?;
+                child.wait()?;
+                anyhow::bail!("stalled secret read blocked runtime shutdown");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]
