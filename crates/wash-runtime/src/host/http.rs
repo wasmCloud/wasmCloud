@@ -1471,9 +1471,12 @@ impl<B: hyper::body::Body + Unpin> hyper::body::Body for WatchedBody<B> {
         // exchange broke off, and if the guest is wedged behind it, the armed
         // flag is what ends it (a completed call deregisters, so arming a
         // healthy one is harmless).
-        // `is_end_stream` too, since hyper stops polling once a declared
-        // `content-length` is written and never delivers that final `None`.
-        let ended = matches!(poll, std::task::Poll::Ready(None)) || this.inner.is_end_stream();
+        // At rest too, since hyper stops polling once a declared
+        // `content-length` is written and never delivers that final `None`;
+        // a body still owed trailers reports that as no length left.
+        let ended = matches!(poll, std::task::Poll::Ready(None))
+            || this.inner.is_end_stream()
+            || this.inner.size_hint().exact() == Some(0);
         if ended && let Some(watch) = this.watch.take() {
             watch.disarm();
         }
@@ -6889,5 +6892,67 @@ mod tests {
             None,
             "paths are case-sensitive even though hostnames are not"
         );
+    }
+
+    /// A fixed-length body: yields `data` once, then waits on trailers that
+    /// never come, reporting how much of its declared length is left.
+    struct FixedLength {
+        data: Option<bytes::Bytes>,
+        remaining: u64,
+    }
+
+    impl hyper::body::Body for FixedLength {
+        type Data = bytes::Bytes;
+        type Error = wasmtime_wasi_http::Error;
+
+        fn poll_frame(
+            mut self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+            match self.data.take() {
+                Some(data) => {
+                    self.remaining -= data.len() as u64;
+                    std::task::Poll::Ready(Some(Ok(hyper::body::Frame::data(data))))
+                }
+                None => std::task::Poll::Pending,
+            }
+        }
+
+        fn size_hint(&self) -> hyper::body::SizeHint {
+            hyper::body::SizeHint::with_exact(self.remaining)
+        }
+    }
+
+    /// Dropped with `polls` frames read, as hyper drops a body; whether the
+    /// call was left abandoned.
+    async fn abandoned_after(polls: usize, data: &'static [u8], declared: u64) -> bool {
+        let call = DispatchedCall::new("test", Duration::from_secs(60));
+        let flag = call.flag();
+        let ((), watch) = call.await_head(async {}).await.expect("a reply");
+        let mut body = WatchedBody {
+            inner: FixedLength {
+                data: Some(bytes::Bytes::from_static(data)),
+                remaining: declared,
+            },
+            watch: Some(watch),
+        };
+        for _ in 0..polls {
+            let _ = body.frame().await;
+        }
+        drop(body);
+        flag.is_armed()
+    }
+
+    /// hyper stops polling a fixed-length body once its declared length is
+    /// written, before its trailers resolve: that response was delivered.
+    #[tokio::test]
+    async fn a_spent_fixed_length_body_is_not_abandoned() {
+        assert!(!abandoned_after(1, b"hello", 5).await);
+    }
+
+    /// Dropped with bytes still owed, the exchange broke off.
+    #[tokio::test]
+    async fn a_fixed_length_body_dropped_short_is_abandoned() {
+        assert!(abandoned_after(0, b"hello", 5).await);
     }
 }

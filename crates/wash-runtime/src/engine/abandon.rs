@@ -134,6 +134,11 @@ impl AbandonFlag {
         )))
     }
 
+    #[cfg(test)]
+    pub(crate) fn is_armed(&self) -> bool {
+        self.armed_at().is_some()
+    }
+
     fn armed_at(&self) -> Option<u64> {
         match self.armed_at.load(Ordering::Relaxed) {
             0 => None,
