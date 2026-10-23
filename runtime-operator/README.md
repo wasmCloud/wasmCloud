@@ -53,6 +53,42 @@ files. These mounts work with `global.tls.enabled` set to either value and
 coexist with the chart's TLS certificate mount. The Secret must exist in the
 operator's release namespace. Hosts need their own NATS credentials.
 
+### Host NATS authentication
+
+Hosts authenticate their scheduler and data connections separately, with the
+same choice of one credential per connection:
+
+| Flag (`scheduler` or `data`) | Credential |
+| --- | --- |
+| `--<plane>-nats-creds` | a `.creds` file (user JWT and nkey seed) |
+| `--<plane>-nats-nkey` | a file holding an nkey seed |
+| `--<plane>-nats-token-file` | a file holding a token |
+| `--<plane>-nats-user`, `--<plane>-nats-password-file` | a user name, and a file holding its password |
+
+Each flag also reads `WASH_<PLANE>_NATS_<NAME>`, such as
+`WASH_SCHEDULER_NATS_CREDS`. Files are reread on every reconnect, and token
+and password files lose one LF or CRLF line ending. Mount the Secret on a host
+group and pass the flags in its `extraArgs`:
+
+```yaml
+runtime:
+  hostGroups:
+    - name: default
+      extraArgs:
+        - "--scheduler-nats-creds=/nats-auth/host.creds"
+        - "--data-nats-creds=/nats-auth/host.creds"
+      volumes:
+        - name: nats-auth
+          secret:
+            secretName: host-nats-auth
+      volumeMounts:
+        - name: nats-auth
+          mountPath: /nats-auth
+          readOnly: true
+```
+
+The host refuses workload volumes that expose these files.
+
 ### Permissions
 
 `<id>` is a host's id. The operator's replies arrive on its inbox prefix,
