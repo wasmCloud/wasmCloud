@@ -161,12 +161,9 @@ impl Drop for DeliveredBody {
                 .body
                 .as_ref()
                 .is_some_and(|b| self.completion.is_complete(b));
-        // Let the task report success, but bound any remaining request I/O.
+        // Let the task report success; it bounds its own remaining request I/O.
         if delivered && let Some(task) = self.task.take() {
-            tokio::spawn(finish_component_task(
-                task,
-                crate::timeouts::http_response(),
-            ));
+            task.detach();
         }
         self.report(if delivered {
             Ok(())
@@ -176,12 +173,24 @@ impl Drop for DeliveredBody {
     }
 }
 
-async fn finish_component_task(
-    task: tokio_util::task::AbortOnDropHandle<()>,
-    timeout: std::time::Duration,
-) {
-    if tokio::time::timeout(timeout, task).await.is_err() {
-        tracing::warn!("P3 component finalization timed out; aborting its task");
+/// Run the handler and the request's I/O together, giving the I/O at most
+/// `bound` to finish once the handler is done: a delivered response must not
+/// leave its store running on an upload nobody reads.
+async fn join_bounding_io<H: Future>(
+    handler: H,
+    io: impl Future<Output = ()>,
+    bound: std::time::Duration,
+) -> H::Output {
+    let handler = std::pin::pin!(handler);
+    let io = std::pin::pin!(io);
+    match futures::future::select(handler, io).await {
+        futures::future::Either::Left((output, io)) => {
+            if tokio::time::timeout(bound, io).await.is_err() {
+                tracing::warn!("P3 request I/O outlived its response; abandoning it");
+            }
+            output
+        }
+        futures::future::Either::Right(((), handler)) => handler.await,
     }
 }
 
@@ -353,8 +362,7 @@ pub(crate) async fn handle_component_request_p3(
                             tracing::error!(err = ?e, "P3 request I/O error");
                         }
                     };
-                    let (handler_result, ()) = tokio::join!(handler_fut, io_fut);
-                    handler_result
+                    join_bounding_io(handler_fut, io_fut, crate::timeouts::http_response()).await
                 })
                 .await;
             // This store served exactly this request: a component that keeps
@@ -563,21 +571,32 @@ mod tests {
             .expect("the task should finish, not be aborted");
     }
 
+    /// Request I/O still pending once the handler is done gets `bound`, not
+    /// forever.
     #[tokio::test]
-    async fn component_finalization_aborts_stalled_request_io() {
-        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-        let (gone_tx, gone_rx) = tokio::sync::oneshot::channel::<()>();
-        let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            let _gone = gone_tx;
-            let _ = started_tx.send(());
-            std::future::pending::<()>().await;
-        }));
-        started_rx.await.expect("task started");
-        finish_component_task(task, std::time::Duration::ZERO).await;
-        let gone = tokio::time::timeout(std::time::Duration::from_secs(1), gone_rx)
-            .await
-            .expect("task aborted after cleanup deadline");
-        assert!(gone.is_err());
+    async fn stalled_request_io_is_bounded_after_the_handler() {
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            join_bounding_io(
+                async { 7 },
+                std::future::pending::<()>(),
+                std::time::Duration::ZERO,
+            ),
+        )
+        .await
+        .expect("stalled I/O should not hold the handler's result");
+        assert_eq!(output, 7);
+    }
+
+    /// I/O finishing first leaves the handler unbounded.
+    #[tokio::test(start_paused = true)]
+    async fn finished_request_io_leaves_the_handler_unbounded() {
+        let handler = async {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            7
+        };
+        let output = join_bounding_io(handler, async {}, std::time::Duration::ZERO).await;
+        assert_eq!(output, 7);
     }
 
     /// Dropping a `DeliveredBody` must abort the component task (via the held
