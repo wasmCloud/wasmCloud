@@ -1444,6 +1444,33 @@ impl HostHandler for NullServer {
     }
 }
 
+/// How the response's consumer recognizes completion.
+#[derive(Clone, Copy, Default)]
+pub(crate) enum ResponseBodyCompletion {
+    #[default]
+    Stream,
+    Http1,
+}
+
+impl ResponseBodyCompletion {
+    fn for_network(version: hyper::Version) -> Self {
+        match version {
+            hyper::Version::HTTP_09 | hyper::Version::HTTP_10 | hyper::Version::HTTP_11 => {
+                Self::Http1
+            }
+            _ => Self::Stream,
+        }
+    }
+
+    pub(crate) fn for_request<B>(req: &hyper::Request<B>) -> Self {
+        req.extensions().get::<Self>().copied().unwrap_or_default()
+    }
+
+    pub(crate) fn is_complete<B: hyper::body::Body>(&self, body: &B) -> bool {
+        body.is_end_stream() || matches!(self, Self::Http1) && body.size_hint().exact() == Some(0)
+    }
+}
+
 /// An HTTP response body that keeps its dispatched call condemned-on-drop while
 /// it streams: dropped mid-stream (the client disconnected), the wrapped
 /// [`AbandonOnDrop`] abandons the call; ended cleanly, it disarms. Extends the
@@ -1452,6 +1479,7 @@ impl HostHandler for NullServer {
 /// reachable.
 struct WatchedBody<B> {
     inner: B,
+    completion: ResponseBodyCompletion,
     /// `None` once end-of-stream disarmed it.
     watch: Option<AbandonOnDrop>,
 }
@@ -1466,17 +1494,14 @@ impl<B: hyper::body::Body + Unpin> hyper::body::Body for WatchedBody<B> {
     ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
         let this = self.get_mut();
         let poll = std::pin::Pin::new(&mut this.inner).poll_frame(cx);
-        // Clean end of stream: the response was delivered whole, so nothing is
-        // abandoned. An *error* frame deliberately does not disarm — the
-        // exchange broke off, and if the guest is wedged behind it, the armed
-        // flag is what ends it (a completed call deregisters, so arming a
-        // healthy one is harmless).
-        // At rest too, since hyper stops polling once a declared
-        // `content-length` is written and never delivers that final `None`;
-        // a body still owed trailers reports that as no length left.
-        let ended = matches!(poll, std::task::Poll::Ready(None))
-            || this.inner.is_end_stream()
-            || this.inner.size_hint().exact() == Some(0);
+        // Errors keep abandonment armed on drop. Only HTTP/1 can finish
+        // at its declared length while trailers are still pending.
+        let ended = match &poll {
+            std::task::Poll::Ready(None) => true,
+            std::task::Poll::Ready(Some(Err(_))) => false,
+            std::task::Poll::Ready(Some(Ok(frame))) if frame.is_trailers() => true,
+            _ => this.completion.is_complete(&this.inner),
+        };
         if ended && let Some(watch) = this.watch.take() {
             watch.disarm();
         }
@@ -1501,14 +1526,19 @@ impl<B: hyper::body::Body + Unpin> hyper::body::Body for WatchedBody<B> {
 /// An already-complete body is left unwrapped and disarmed: hyper never polls
 /// one, so a wrapper would be dropped un-disarmed and arm the flag on a
 /// response that was delivered whole.
-fn watch_body(resp: hyper::Response<WasiBody>, watch: AbandonOnDrop) -> hyper::Response<WasiBody> {
-    if hyper::body::Body::is_end_stream(resp.body()) {
+fn watch_body(
+    resp: hyper::Response<WasiBody>,
+    watch: AbandonOnDrop,
+    completion: ResponseBodyCompletion,
+) -> hyper::Response<WasiBody> {
+    if completion.is_complete(resp.body()) {
         watch.disarm();
         return resp;
     }
     resp.map(|inner| {
         WatchedBody {
             inner,
+            completion,
             watch: Some(watch),
         }
         .boxed_unsync()
@@ -2446,6 +2476,9 @@ async fn dispatch_local(
     target: LocalTarget,
     guest_meter: GuestMeter,
 ) -> anyhow::Result<hyper::Response<WasiBody>> {
+    request
+        .extensions_mut()
+        .insert(ResponseBodyCompletion::Stream);
     // Mirror the wire: a network send would carry the request authority as its
     // `Host` header, and handlers routinely read it.
     if !request.headers().contains_key(hyper::header::HOST)
@@ -2477,7 +2510,9 @@ async fn dispatch_local(
                 anyhow::bail!("service HTTP instance for workload {workload_id} is not running");
             }
             return match call.await_head(resp_rx).await {
-                Some((Ok(resp), watch)) => resp.map(|resp| watch_body(resp, watch)),
+                Some((Ok(resp), watch)) => {
+                    resp.map(|resp| watch_body(resp, watch, ResponseBodyCompletion::Stream))
+                }
                 Some((Err(_), _)) => {
                     anyhow::bail!("service HTTP instance dropped the response")
                 }
@@ -3333,6 +3368,8 @@ async fn handle_http_request<T: Router>(
     service_handlers: ServiceHandlers,
     guest_meter: GuestMeter,
 ) -> Result<hyper::Response<WasiBody>, hyper::Error> {
+    let completion = ResponseBodyCompletion::for_network(req.version());
+    req.extensions_mut().insert(completion);
     // Every guest reads its scheme and authority off the URI, so they are put
     // there once, here, from this listener rather than from any header.
     if !normalize_ingress_uri(&mut req, &scheme) {
@@ -3406,7 +3443,7 @@ async fn handle_http_request<T: Router>(
             error_response(503)
         } else {
             match call.await_head(resp_rx).await {
-                Some((Ok(Ok(resp)), watch)) => watch_body(resp, watch),
+                Some((Ok(Ok(resp)), watch)) => watch_body(resp, watch, completion),
                 Some((Ok(Err(e)), _)) => {
                     error!(err = ?e, "service HTTP handler failed");
                     error_response(500)
@@ -3693,6 +3730,7 @@ async fn invoke_component_handler(
     req: hyper::Request<WasiBody>,
     guest_meter: GuestMeter,
 ) -> anyhow::Result<hyper::Response<WasiBody>> {
+    let completion = ResponseBodyCompletion::for_request(&req);
     let ComponentHandle {
         workload: workload_handle,
         instance_pre,
@@ -3731,7 +3769,7 @@ async fn invoke_component_handler(
                         .ok_or_else(|| anyhow::anyhow!("pooled instance produced no response"))?;
                     let resp =
                         resp.map_err(|_| anyhow::anyhow!("pooled instance dropped the request"))??;
-                    return Ok(watch_body(resp, watch));
+                    return Ok(watch_body(resp, watch, completion));
                 }
                 // Every warm instance was busy; serve it cold below.
                 Err(Declined {
@@ -3783,7 +3821,7 @@ async fn invoke_component_handler(
             ))
             .await
             .ok_or_else(|| anyhow::anyhow!("cold instance produced no response"))?;
-        return Ok(watch_body(resp?, watch));
+        return Ok(watch_body(resp?, watch, completion));
     }
 
     // The p2 path still builds and instantiates per request: its store is
@@ -3803,6 +3841,7 @@ pub async fn handle_component_request(
     guest_meter: GuestMeter,
     identity: &crate::observability::WorkloadIdentity,
 ) -> anyhow::Result<hyper::Response<WasiBody>> {
+    let completion = ResponseBodyCompletion::for_request(&req);
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let scheme = match req.uri().scheme() {
         Some(scheme) if scheme == &hyper::http::uri::Scheme::HTTP => Scheme::Http,
@@ -3857,7 +3896,7 @@ pub async fn handle_component_request(
     match call.await_head(receiver).await {
         // If the client calls `response-outparam::set` then one of these
         // methods will be called.
-        Some((Ok(Ok(resp)), watch)) => Ok(watch_body(resp, watch)),
+        Some((Ok(Ok(resp)), watch)) => Ok(watch_body(resp, watch, completion)),
         Some((Ok(Err(e)), _)) => Err(e.into()),
 
         // Otherwise the `sender` will get dropped along with the `Store`
@@ -6925,17 +6964,21 @@ mod tests {
 
     /// Dropped with `polls` frames read, as hyper drops a body; whether the
     /// call was left abandoned.
-    async fn abandoned_after(polls: usize, data: &'static [u8], declared: u64) -> bool {
+    async fn abandoned_after(
+        completion: ResponseBodyCompletion,
+        polls: usize,
+        data: &'static [u8],
+        declared: u64,
+    ) -> bool {
         let call = DispatchedCall::new("test", Duration::from_secs(60));
         let flag = call.flag();
         let ((), watch) = call.await_head(async {}).await.expect("a reply");
-        let mut body = WatchedBody {
-            inner: FixedLength {
-                data: Some(bytes::Bytes::from_static(data)),
-                remaining: declared,
-            },
-            watch: Some(watch),
-        };
+        let inner = FixedLength {
+            data: Some(bytes::Bytes::from_static(data)),
+            remaining: declared,
+        }
+        .boxed_unsync();
+        let mut body = watch_body(hyper::Response::new(inner), watch, completion).into_body();
         for _ in 0..polls {
             let _ = body.frame().await;
         }
@@ -6947,12 +6990,53 @@ mod tests {
     /// written, before its trailers resolve: that response was delivered.
     #[tokio::test]
     async fn a_spent_fixed_length_body_is_not_abandoned() {
-        assert!(!abandoned_after(1, b"hello", 5).await);
+        assert!(!abandoned_after(ResponseBodyCompletion::Http1, 1, b"hello", 5).await);
     }
 
     /// Dropped with bytes still owed, the exchange broke off.
     #[tokio::test]
     async fn a_fixed_length_body_dropped_short_is_abandoned() {
-        assert!(abandoned_after(0, b"hello", 5).await);
+        assert!(abandoned_after(ResponseBodyCompletion::Http1, 0, b"hello", 5).await);
+    }
+
+    #[tokio::test]
+    async fn an_empty_http1_body_is_not_abandoned_without_polling() {
+        assert!(!abandoned_after(ResponseBodyCompletion::Http1, 0, b"", 0).await);
+    }
+
+    #[tokio::test]
+    async fn http2_pending_trailers_keep_abandonment_armed() {
+        let completion = ResponseBodyCompletion::for_network(hyper::Version::HTTP_2);
+        assert!(abandoned_after(completion, 1, b"hello", 5).await);
+        assert!(abandoned_after(completion, 0, b"", 0).await);
+    }
+
+    #[tokio::test]
+    async fn local_pending_trailers_keep_abandonment_armed() {
+        let request = hyper::Request::new(());
+        let completion = ResponseBodyCompletion::for_request(&request);
+        assert!(abandoned_after(completion, 1, b"hello", 5).await);
+    }
+
+    #[tokio::test]
+    async fn completed_trailers_disarm_abandonment() {
+        let call = DispatchedCall::new("test", Duration::from_secs(60));
+        let flag = call.flag();
+        let ((), watch) = call.await_head(async {}).await.expect("a reply");
+        let inner = http_body_util::Full::new(bytes::Bytes::from_static(b"hello"))
+            .map_err(|never| match never {})
+            .with_trailers(std::future::ready(Some(Ok(hyper::HeaderMap::new()))))
+            .boxed_unsync();
+        let mut body = watch_body(
+            hyper::Response::new(inner),
+            watch,
+            ResponseBodyCompletion::Stream,
+        )
+        .into_body();
+        body.frame().await.expect("data").expect("valid frame");
+        let frame = body.frame().await.expect("trailers").expect("valid frame");
+        assert!(frame.is_trailers());
+        drop(body);
+        assert!(!flag.is_armed());
     }
 }

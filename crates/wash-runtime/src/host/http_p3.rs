@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::engine::instance_pool::ComponentInstance;
+use crate::host::http::ResponseBodyCompletion;
 use futures::task::AtomicWaker;
 use http_body_util::BodyExt;
 use tracing::Instrument;
@@ -23,6 +24,7 @@ use wasmtime_wasi_http::{Error, WasiBody};
 pub(crate) struct DeliveredBody {
     /// `None` once a cut took effect.
     body: Option<WasiBody>,
+    completion: ResponseBodyCompletion,
     cut: Arc<Cut>,
     /// `None` once the outcome was reported.
     done: Option<tokio::sync::oneshot::Sender<Result<(), Error>>>,
@@ -60,17 +62,19 @@ impl DeliveredBody {
     pub(crate) fn empty() -> Self {
         Self {
             body: Some(WasiBody::default()),
+            completion: ResponseBodyCompletion::Stream,
             cut: Arc::default(),
             done: None,
             task: None,
         }
     }
 
-    pub(crate) fn new(body: WasiBody) -> (Self, Delivery) {
+    pub(crate) fn new(body: WasiBody, completion: ResponseBodyCompletion) -> (Self, Delivery) {
         let cut = Arc::new(Cut::default());
         let (done_tx, done_rx) = tokio::sync::oneshot::channel();
         let delivered = Self {
             body: Some(body),
+            completion,
             cut: Arc::clone(&cut),
             done: Some(done_tx),
             task: None,
@@ -116,7 +120,13 @@ impl hyper::body::Body for DeliveredBody {
             return std::task::Poll::Ready(None);
         };
         let poll = std::pin::Pin::new(&mut *inner).poll_frame(cx);
-        let ended = matches!(poll, std::task::Poll::Ready(None)) || inner.is_end_stream();
+        let ended = matches!(poll, std::task::Poll::Ready(None))
+            || matches!(&poll, std::task::Poll::Ready(Some(Ok(frame))) if frame.is_trailers())
+            || inner.is_end_stream();
+        if matches!(poll, std::task::Poll::Ready(Some(Err(_)))) {
+            this.body = None;
+            return poll;
+        }
         if poll.is_pending() {
             this.cut.waker.register(cx.waker());
             // A cut that landed before the registration found no waker.
@@ -146,22 +156,32 @@ impl hyper::body::Body for DeliveredBody {
 
 impl Drop for DeliveredBody {
     fn drop(&mut self) {
-        // hyper stops polling a fixed-length body once its last byte is
-        // written, before the guest's trailers resolve, so a body with none of
-        // its declared length left counts as delivered.
-        let delivered = self.body.as_ref().is_some_and(|b| {
-            hyper::body::Body::is_end_stream(b)
-                || hyper::body::Body::size_hint(b).exact() == Some(0)
-        });
-        // A delivered body leaves the task to tell the guest so and finish.
+        let delivered = self.done.is_none()
+            || self
+                .body
+                .as_ref()
+                .is_some_and(|b| self.completion.is_complete(b));
+        // Let the task report success, but bound any remaining request I/O.
         if delivered && let Some(task) = self.task.take() {
-            task.detach();
+            tokio::spawn(finish_component_task(
+                task,
+                crate::timeouts::http_response(),
+            ));
         }
         self.report(if delivered {
             Ok(())
         } else {
             Err(Error::ConnectionTerminated)
         });
+    }
+}
+
+async fn finish_component_task(
+    task: tokio_util::task::AbortOnDropHandle<()>,
+    timeout: std::time::Duration,
+) {
+    if tokio::time::timeout(timeout, task).await.is_err() {
+        tracing::warn!("P3 component finalization timed out; aborting its task");
     }
 }
 
@@ -201,6 +221,7 @@ pub(crate) async fn handle_component_request_p3(
     req: hyper::Request<WasiBody>,
     abandoned: std::sync::Arc<crate::engine::abandon::AbandonFlag>,
 ) -> anyhow::Result<hyper::Response<WasiBody>> {
+    let completion = ResponseBodyCompletion::for_request(&req);
     // Named from the store this call was given, the same way `HttpTask` does:
     // the dispatcher does not have to know whose execution it is.
     let attributes =
@@ -318,7 +339,7 @@ pub(crate) async fn handle_component_request_p3(
                             }
                         };
                         let (head, body) = http_response.into_parts();
-                        let (body, mut delivery) = DeliveredBody::new(body);
+                        let (body, mut delivery) = DeliveredBody::new(body, completion);
                         // Wait for the body only once it is the server's: a
                         // caller that dropped the receiver dropped the body too.
                         if let Some(tx) = parts_tx.take() {
@@ -398,7 +419,8 @@ mod tests {
     /// Reading the body whole reports a delivered response.
     #[tokio::test]
     async fn delivered_body_reports_a_whole_read() {
-        let (mut body, mut delivery) = DeliveredBody::new(full(b"data"));
+        let (mut body, mut delivery) =
+            DeliveredBody::new(full(b"data"), ResponseBodyCompletion::Stream);
         let frame = body.frame().await.expect("a frame").expect("ok frame");
         assert_eq!(frame.into_data().expect("data").as_ref(), b"data");
         assert!(body.is_end_stream());
@@ -409,15 +431,66 @@ mod tests {
     /// reading to the end; with none of its length left, that is delivered.
     #[tokio::test]
     async fn delivered_body_counts_a_spent_length_as_delivered() {
-        let (body, mut delivery) = DeliveredBody::new(Stalled { remaining: 0 }.boxed_unsync());
+        let (body, mut delivery) = DeliveredBody::new(
+            Stalled { remaining: 0 }.boxed_unsync(),
+            ResponseBodyCompletion::Http1,
+        );
         drop(body);
         assert!(delivery.ended().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn pending_trailers_dropped_on_a_stream_report_termination() {
+        let (body, mut delivery) = DeliveredBody::new(
+            Stalled { remaining: 0 }.boxed_unsync(),
+            ResponseBodyCompletion::Stream,
+        );
+        drop(body);
+        assert!(matches!(
+            delivery.ended().await,
+            Err(Error::ConnectionTerminated)
+        ));
+    }
+
+    #[tokio::test]
+    async fn streamed_trailers_are_delivered_before_success() {
+        let inner = full(b"data")
+            .with_trailers(std::future::ready(Some(Ok(hyper::HeaderMap::new()))))
+            .boxed_unsync();
+        let (mut body, mut delivery) = DeliveredBody::new(inner, ResponseBodyCompletion::Stream);
+        assert!(body.frame().await.expect("data frame").is_ok());
+        assert!(matches!(
+            delivery.done.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        let frame = body.frame().await.expect("trailers").expect("valid frame");
+        assert!(frame.is_trailers());
+        drop(body);
+        assert!(delivery.ended().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_terminal_trailer_error_reports_failed_delivery() {
+        let inner = full(b"data")
+            .with_trailers(std::future::ready(Some(Err(Error::ConnectionTerminated))))
+            .boxed_unsync();
+        let (mut body, mut delivery) = DeliveredBody::new(inner, ResponseBodyCompletion::Stream);
+        assert!(body.frame().await.expect("data frame").is_ok());
+        assert!(body.frame().await.expect("error frame").is_err());
+        drop(body);
+        assert!(matches!(
+            delivery.ended().await,
+            Err(Error::ConnectionTerminated)
+        ));
     }
 
     /// Dropping the body with bytes still to come reports the delivery failed.
     #[tokio::test]
     async fn delivered_body_dropped_early_reports_termination() {
-        let (body, mut delivery) = DeliveredBody::new(Stalled { remaining: 4 }.boxed_unsync());
+        let (body, mut delivery) = DeliveredBody::new(
+            Stalled { remaining: 4 }.boxed_unsync(),
+            ResponseBodyCompletion::Stream,
+        );
         drop(body);
         assert!(matches!(
             delivery.ended().await,
@@ -429,7 +502,10 @@ mod tests {
     /// body end, and the guest's stream loses its reader.
     #[tokio::test]
     async fn dropping_the_delivery_cuts_the_body() {
-        let (mut body, delivery) = DeliveredBody::new(Stalled { remaining: 4 }.boxed_unsync());
+        let (mut body, delivery) = DeliveredBody::new(
+            Stalled { remaining: 4 }.boxed_unsync(),
+            ResponseBodyCompletion::Stream,
+        );
         drop(delivery);
         assert!(body.frame().await.is_none());
         assert!(body.is_end_stream());
@@ -446,7 +522,10 @@ mod tests {
             }
         }
 
-        let (mut body, delivery) = DeliveredBody::new(Stalled { remaining: 4 }.boxed_unsync());
+        let (mut body, delivery) = DeliveredBody::new(
+            Stalled { remaining: 4 }.boxed_unsync(),
+            ResponseBodyCompletion::Stream,
+        );
         let woken = Arc::new(Woken::default());
         let waker = std::task::Waker::from(Arc::clone(&woken));
         let mut cx = std::task::Context::from_waker(&waker);
@@ -472,7 +551,8 @@ mod tests {
             let _ = finished_tx.send(());
         });
 
-        let (mut body, _delivery) = DeliveredBody::new(full(b"data"));
+        let (mut body, _delivery) =
+            DeliveredBody::new(full(b"data"), ResponseBodyCompletion::Stream);
         body.task = Some(tokio_util::task::AbortOnDropHandle::new(task));
         let _ = body.frame().await;
         drop(body);
@@ -481,6 +561,23 @@ mod tests {
         finished_rx
             .await
             .expect("the task should finish, not be aborted");
+    }
+
+    #[tokio::test]
+    async fn component_finalization_aborts_stalled_request_io() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (gone_tx, gone_rx) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            let _gone = gone_tx;
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        }));
+        started_rx.await.expect("task started");
+        finish_component_task(task, std::time::Duration::ZERO).await;
+        let gone = tokio::time::timeout(std::time::Duration::from_secs(1), gone_rx)
+            .await
+            .expect("task aborted after cleanup deadline");
+        assert!(gone.is_err());
     }
 
     /// Dropping a `DeliveredBody` must abort the component task (via the held
@@ -497,7 +594,10 @@ mod tests {
             std::future::pending::<()>().await;
         });
 
-        let (mut body, _delivery) = DeliveredBody::new(Stalled { remaining: 4 }.boxed_unsync());
+        let (mut body, _delivery) = DeliveredBody::new(
+            Stalled { remaining: 4 }.boxed_unsync(),
+            ResponseBodyCompletion::Stream,
+        );
         body.task = Some(tokio_util::task::AbortOnDropHandle::new(task));
         started_rx.await.expect("task started");
 
