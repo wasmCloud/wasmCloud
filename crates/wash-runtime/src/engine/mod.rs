@@ -275,13 +275,19 @@ struct InstalledPool {
     memories: u32,
     max_memory_size: u64,
     totals: pool_usage::PoolTotals,
+    layout: host_memory::MemoryLayout,
 }
 
 impl InstalledPool {
     /// Address space the pool reserves. Keyed on the memory count, not the
-    /// instance count, and never less than wasmtime's reservation per slot.
+    /// instance count, and never less than the reservation per slot.
     fn reservation(&self) -> u64 {
-        host_memory::pool_slab_bytes(self.max_memory_size, self.memories)
+        self.layout.slab_bytes(self.max_memory_size, self.memories)
+    }
+
+    /// Address space one memory slot reserves.
+    fn slot_size(&self) -> u64 {
+        self.layout.slot_bytes(self.max_memory_size)
     }
 }
 
@@ -1214,6 +1220,8 @@ pub struct EngineBuilder {
     allowed_host_paths: Vec<PathBuf>,
     scratch_root: Option<PathBuf>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
+    memory_reservation: Option<u64>,
+    memory_guard_size: Option<u64>,
     max_process_memory_bytes: Option<u64>,
     max_process_memory_off: bool,
     guest_memory_mode: guest_memory::GuestMemoryMode,
@@ -1269,6 +1277,45 @@ impl EngineBuilder {
     #[must_use]
     pub fn with_socket_policy(mut self, policy: Arc<crate::sockets::policy::SocketPolicy>) -> Self {
         self.socket_policy = Some(policy);
+        self
+    }
+
+    /// Reserve `bytes` of address space for each linear memory, wasmtime's
+    /// `memory_reservation`, instead of its default 4 GiB.
+    ///
+    /// Every pooled memory slot reserves this much plus its guard, so it is
+    /// what sizes the pool's address space, and with it how many slots fit:
+    /// about 30,000 at 4 GiB in a 128 TiB address space, about 2,000,000 at
+    /// 64 MiB. It is also a hard cap on each guest's heap, because a pooled
+    /// memory never moves, so the heap ceiling (`default-heap-memory`) must be
+    /// no larger than it.
+    ///
+    /// Below 4 GiB wasmtime bounds-checks every memory access the reservation
+    /// and guard no longer cover. Guests stay isolated; they run slower, by
+    /// how much depends on how memory-bound they are.
+    ///
+    /// Must be a whole number of 64 KiB WebAssembly pages. Also read from
+    /// `WASMTIME_MEMORY_RESERVATION` (a byte size such as `64MiB`) when unset
+    /// here.
+    #[must_use]
+    pub fn with_memory_reservation(mut self, bytes: u64) -> Self {
+        self.memory_reservation = Some(bytes);
+        self
+    }
+
+    /// Leave `bytes` of unmapped address space after each linear memory,
+    /// wasmtime's `memory_guard_size`, instead of its default 32 MiB.
+    ///
+    /// The guard catches an access just past the end of a memory, and with a
+    /// 4 GiB reservation is what lets wasmtime elide bounds checks. Each slot
+    /// reserves it, so a large guard costs pool address space. Zero is allowed
+    /// and makes wasmtime check every access.
+    ///
+    /// Must be a whole number of 64 KiB WebAssembly pages. Also read from
+    /// `WASMTIME_MEMORY_GUARD_SIZE` when unset here.
+    #[must_use]
+    pub fn with_memory_guard_size(mut self, bytes: u64) -> Self {
+        self.memory_guard_size = Some(bytes);
         self
     }
 
@@ -1528,6 +1575,38 @@ impl EngineBuilder {
         let max_process_memory =
             max_process_memory_bytes.map_or_else(|| "off".to_string(), host_memory::render_bytes);
 
+        // Linear-memory layout. Applied only when named, so an unset host keeps
+        // wasmtime's defaults and a caller-supplied base config keeps its own.
+        let memory_reservation = match self.memory_reservation {
+            Some(bytes) => Some(bytes),
+            None => getenv_bytes("WASMTIME_MEMORY_RESERVATION")?,
+        };
+        let memory_guard_size = match self.memory_guard_size {
+            Some(bytes) => Some(bytes),
+            None => getenv_bytes("WASMTIME_MEMORY_GUARD_SIZE")?,
+        };
+        let defaults = host_memory::MemoryLayout::default();
+        let memory_layout = host_memory::MemoryLayout {
+            reservation: memory_reservation.unwrap_or(defaults.reservation),
+            guard: memory_guard_size.unwrap_or(defaults.guard),
+        };
+        memory_layout
+            .validate()
+            .map_err(|e| anyhow::anyhow!("invalid linear-memory layout: {e}"))?;
+        if let Some(bytes) = memory_reservation {
+            config.memory_reservation(bytes);
+        }
+        if let Some(bytes) = memory_guard_size {
+            config.memory_guard_size(bytes);
+        }
+        if memory_reservation.is_some() && memory_layout.bounds_checked() {
+            tracing::info!(
+                memory_reservation = %host_memory::render_bytes(memory_layout.reservation),
+                "memory reservation is below 4GiB: wasmtime will bounds-check guest memory \
+                 accesses explicitly, and no guest heap can grow past the reservation"
+            );
+        }
+
         // The pooling allocator can be more efficient for workloads with many short-lived instances.
         // Read back from the installed pool: the environment and a
         // caller-supplied config both override what was asked for.
@@ -1545,6 +1624,7 @@ impl EngineBuilder {
                 memories: pooling.get_total_memories(),
                 max_memory_size: u64::try_from(pooling.get_max_memory_size()).unwrap_or(u64::MAX),
                 totals: pool_usage::PoolTotals::of(&pooling),
+                layout: memory_layout,
             });
             config.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pooling));
         } else if use_pooling_allocator {
@@ -1557,14 +1637,16 @@ impl EngineBuilder {
         // or a caller's own pooling config can move its memory count and slot
         // size, and with no pool there is no reservation to warn about.
         if let Some(pool) = installed_pool {
-            for advisory in host_memory::pool_advisories(&pool.totals, pool.max_memory_size) {
+            for advisory in
+                host_memory::pool_advisories(&pool.totals, pool.max_memory_size, &pool.layout)
+            {
                 tracing::warn!("{advisory}");
             }
         }
 
         // Reported here so every embedder says what it built. The reservation
         // is `total_memories x slot_size`, not the instance count, and the slot
-        // does not shrink with the heap ceiling.
+        // does not shrink with the heap ceiling, only with the reservation.
         match installed_pool {
             Some(pool) => tracing::info!(
                 %max_process_memory,
@@ -1573,7 +1655,9 @@ impl EngineBuilder {
                 default_heap_memory = %host_memory::render_bytes(pool.max_memory_size),
                 core_instances = pool.core_instances,
                 memories = pool.memories,
-                slot_size = %host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size)),
+                memory_reservation = %host_memory::render_bytes(pool.layout.reservation),
+                memory_guard = %host_memory::render_bytes(pool.layout.guard),
+                slot_size = %host_memory::render_bytes(pool.slot_size()),
                 pool_reservation = %host_memory::render_bytes(pool.reservation()),
                 "host memory resolved"
             ),
@@ -1650,22 +1734,23 @@ impl EngineBuilder {
         // which numbers produced it. A heap ceiling past the reservation is
         // refused here too, whatever the slot count, so that is named instead.
         let inner = wasmtime::Engine::new(&config).map_err(|e| match installed_pool {
-            Some(pool) if pool.max_memory_size > host_memory::WASMTIME_MEMORY_RESERVATION => e
-                .context(format!(
-                    "building the engine failed with a pooling allocator whose heap ceiling \
-                     (default-heap-memory) of {} is past wasmtime's {} memory reservation, \
-                     which the pooling allocator refuses; set default-heap-memory to {} or less",
-                    host_memory::render_bytes(pool.max_memory_size),
-                    host_memory::render_bytes(host_memory::WASMTIME_MEMORY_RESERVATION),
-                    host_memory::render_bytes(host_memory::WASMTIME_MEMORY_RESERVATION),
-                )),
+            Some(pool) if pool.max_memory_size > pool.layout.reservation => e.context(format!(
+                "building the engine failed with a pooling allocator whose heap ceiling \
+                 (default-heap-memory) of {} is past the {} memory reservation, which the \
+                 pooling allocator refuses; set default-heap-memory to {} or less, or raise \
+                 memory-reservation",
+                host_memory::render_bytes(pool.max_memory_size),
+                host_memory::render_bytes(pool.layout.reservation),
+                host_memory::render_bytes(pool.layout.reservation),
+            )),
             Some(pool) => e.context(format!(
                 "building the engine failed with a pooling allocator reserving {} of address \
                  space ({} memories of {} each) out of the {} this process can map; if the \
-                 pool is the cause, lower core-instances or WASMTIME_POOLING_TOTAL_MEMORIES",
+                 pool is the cause, lower core-instances or WASMTIME_POOLING_TOTAL_MEMORIES, \
+                 or lower memory-reservation",
                 host_memory::render_bytes(pool.reservation()),
                 pool.memories,
-                host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size)),
+                host_memory::render_bytes(pool.slot_size()),
                 host_memory::render_bytes(host_memory::usable_address_space()),
             )),
             None => e,
@@ -1789,6 +1874,21 @@ fn is_pooling_allocator_supported() -> anyhow::Result<bool> {
     // page size here from the maximum size.
     let ty = wasmtime::MemoryType::new64(0, Some(1 << (BITS_TO_TEST - 16)));
     Ok(wasmtime::Memory::new(&mut store, ty).is_ok())
+}
+
+/// A byte-size environment variable (`64MiB`, `67108864`), `None` when unset
+/// or blank.
+///
+/// Unlike [`getenv`], a value that does not parse is an error rather than
+/// ignored: these size the pool, and silently keeping the default would build
+/// a pool the operator did not ask for.
+fn getenv_bytes(key: &str) -> anyhow::Result<Option<u64>> {
+    match std::env::var(key) {
+        Ok(raw) if !raw.trim().is_empty() => host_memory::parse_bytes(&raw)
+            .map(Some)
+            .map_err(|e| anyhow::anyhow!("{key}={raw}: {e}")),
+        _ => Ok(None),
+    }
 }
 
 fn getenv<T>(key: &str) -> Option<T>
@@ -2232,6 +2332,48 @@ mod tests {
             .with_wasm_proposal(WasmProposal::Gc)
             .build()
             .expect("custom config + GC proposal should build");
+    }
+
+    // A small reservation builds a pool once the heap ceiling fits inside it.
+    #[test]
+    fn a_small_memory_reservation_builds_with_a_heap_that_fits() {
+        let budgets = host_memory::HostMemoryBudgets::resolve(None, Some(64 << 20), Some(64))
+            .expect("valid budgets");
+        Engine::builder()
+            .with_host_memory(budgets)
+            .with_pooling_allocator(true)
+            .with_memory_reservation(64 << 20)
+            .with_memory_guard_size(2 << 20)
+            .build()
+            .expect("64 MiB reservation with a 64 MiB heap ceiling should build");
+    }
+
+    // The default 4 GiB heap ceiling does not fit a 64 MiB reservation, and
+    // the error says so in the host's terms rather than wasmtime's.
+    #[test]
+    fn a_heap_ceiling_past_the_reservation_is_refused_by_name() {
+        let budgets =
+            host_memory::HostMemoryBudgets::resolve(None, None, Some(64)).expect("valid budgets");
+        let err = Engine::builder()
+            .with_host_memory(budgets)
+            .with_pooling_allocator(true)
+            .with_memory_reservation(64 << 20)
+            .build()
+            .expect_err("a 4 GiB heap ceiling cannot fit a 64 MiB reservation");
+        let message = format!("{err:#}");
+        assert!(message.contains("64MiB memory reservation"), "{message}");
+        assert!(message.contains("raise memory-reservation"), "{message}");
+    }
+
+    // A reservation that is not a whole number of WebAssembly pages is refused
+    // before wasmtime sees it.
+    #[test]
+    fn an_unaligned_memory_reservation_is_refused() {
+        let err = Engine::builder()
+            .with_memory_reservation((64 << 20) + 1)
+            .build()
+            .expect_err("an unaligned reservation should not build");
+        assert!(format!("{err:#}").contains("memory-reservation"), "{err:#}");
     }
 
     // An externally-supplied pooling config is accepted and applied.
