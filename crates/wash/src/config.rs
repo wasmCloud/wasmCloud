@@ -449,9 +449,11 @@ pub struct DevComponent {
     /// How many warm instances a reclaim sweep never retires below.
     ///
     /// Unset (or `0`) lets a fully idle pool empty out, so the next call
-    /// after a quiet spell starts cold. Capped at `poolSize`. A floor on
-    /// reclaim, not a target to grow to: instances are still only built when
-    /// a call needs one. Only meaningful alongside `reclaimWindowSeconds`.
+    /// after a quiet spell starts cold. A value at or above `poolSize`
+    /// disables reclaim entirely, since a sweep could never find a surplus to
+    /// retire. A floor on reclaim, not a target to grow to: instances are
+    /// still only built when a call needs one. Only meaningful alongside
+    /// `reclaimWindowSeconds`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reclaim_min_instances: Option<i32>,
 }

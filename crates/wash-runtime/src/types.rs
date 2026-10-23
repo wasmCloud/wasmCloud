@@ -92,8 +92,9 @@ pub struct Component {
     pub reclaim_window_seconds: i32,
     /// How many warm instances a reclaim sweep never retires below. Unset
     /// lets an idle pool empty out, so the next call after a quiet spell
-    /// starts cold. Capped at `pool_size`, and only meaningful alongside
-    /// `reclaim_window_seconds`.
+    /// starts cold. A value at or above `pool_size` disables reclaim
+    /// entirely, since a sweep could never find a surplus to retire. Only
+    /// meaningful alongside `reclaim_window_seconds`.
     pub reclaim_min_instances: i32,
 }
 
