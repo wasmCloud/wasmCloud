@@ -280,8 +280,6 @@ impl FromSql<'_> for MacAddressEui64 {
     }
 }
 
-// ── Parameter type checks ───────────────────────────────────────────────────
-
 /// Postgres types whose binary form is a fixed-width value (or a structured
 /// one, like `uuid` or `numeric`), so the bytes of a `text` value are never a
 /// valid encoding of them.
