@@ -529,3 +529,75 @@ func TestConditionedReconcilerOptimisticLock(t *testing.T) {
 		}
 	}
 }
+
+// With TrackGeneration, each condition carries the generation it was computed
+// for, so the one a pass stopped before is told apart from the one it set.
+func TestConditionedReconcilerTrackGeneration(t *testing.T) {
+	const later ConditionType = "Later"
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add corev1 to scheme: %v", err)
+	}
+	scheme.AddKnownTypes(corev1.SchemeGroupVersion, &conditionedResource{})
+	obj := &conditionedResource{
+		ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testName, Generation: 3},
+	}
+	kubeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(obj).
+		WithStatusSubresource(obj).
+		Build()
+
+	r := NewConditionedReconciler(kubeClient, scheme, obj, time.Second)
+	r.TrackGeneration()
+	r.SetCondition(testCondition, func(context.Context, *conditionedResource) error { return nil })
+	r.SetCondition(later, func(context.Context, *conditionedResource) error { return nil })
+
+	generations := func() (int64, int64) {
+		stored := &conditionedResource{}
+		if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(obj), stored); err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		return stored.Status.GetCondition(testCondition).ObservedGeneration,
+			stored.Status.GetCondition(later).ObservedGeneration
+	}
+	req := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(obj)}
+
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	// The first condition changed, so the pass stopped before the second.
+	if first, second := generations(); first != 3 || second != 0 {
+		t.Fatalf("after one pass: generations = %d, %d; want 3, 0", first, second)
+	}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if first, second := generations(); first != 3 || second != 3 {
+		t.Fatalf("after two passes: generations = %d, %d; want 3, 3", first, second)
+	}
+
+	// A new generation that changes no condition's state restamps them all
+	// in one pass, and is not a transition.
+	stored := &conditionedResource{}
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(obj), stored); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	transitioned := stored.Status.GetCondition(testCondition).LastTransitionTime
+	stored.Generation = 4
+	if err := kubeClient.Update(context.Background(), stored); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if first, second := generations(); first != 4 || second != 4 {
+		t.Fatalf("after a spec change: generations = %d, %d; want 4, 4 in one pass", first, second)
+	}
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(obj), stored); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got := stored.Status.GetCondition(testCondition).LastTransitionTime; !got.Equal(&transitioned) {
+		t.Errorf("a restamp moved LastTransitionTime from %v to %v", transitioned, got)
+	}
+}
