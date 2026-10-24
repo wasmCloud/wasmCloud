@@ -369,22 +369,48 @@ pub struct HostCommand {
     /// wasmtime's own default of 4 GiB — which is what every host has run to
     /// date, and why an instance count has never implied a byte count.
     ///
-    /// Every slot reserves wasmtime's 4 GiB plus a 32 MiB guard whether or
-    /// not anything grows into it. Lowering this below 4 GiB caps guest heaps
-    /// but does not shrink the reservation. It cannot go past 4 GiB: the
-    /// pooling allocator refuses a ceiling larger than its reservation, and
-    /// the host will not start.
+    /// Every slot reserves `--memory-reservation` (4 GiB unless set) plus
+    /// `--memory-guard-size` whether or not anything grows into it. Lowering
+    /// this alone caps guest heaps but does not shrink the reservation. It
+    /// cannot go past the reservation: the pooling allocator refuses a ceiling
+    /// larger than its reservation, and the host will not start.
     #[arg(long = "default-heap-memory", env = "WASH_DEFAULT_HEAP_MEMORY")]
     pub default_heap_memory: Option<String>,
 
     /// Instance slots the pooling allocator keeps.
     ///
     /// Unset, this stays wasmtime's default of 1000. Multiplied by the slot
-    /// size (4 GiB plus a 32 MiB guard, whatever `--default-heap-memory` is)
-    /// it is the pool's address-space reservation, so it is the knob that
-    /// sizes the pool.
+    /// size (`--memory-reservation` plus `--memory-guard-size`, 4 GiB plus
+    /// 32 MiB unless set, whatever `--default-heap-memory` is) it is the
+    /// pool's address-space reservation, so it is the knob that sizes the
+    /// pool.
     #[arg(long = "core-instances", env = "WASH_CORE_INSTANCES")]
     pub core_instances: Option<u32>,
+
+    /// Address space reserved for each guest linear memory (e.g. `64MiB`):
+    /// wasmtime's `memory_reservation`.
+    ///
+    /// Unset, it stays wasmtime's 4 GiB, which caps a 64-bit host at about
+    /// 30,000 pool slots. Lowering it shrinks every slot, so far more fit:
+    /// about 2,000,000 at 64 MiB. Two costs come with it: below 4 GiB
+    /// wasmtime bounds-checks guest memory accesses explicitly (guests stay
+    /// isolated, but memory-heavy ones run slower), and, with the pooling
+    /// allocator this host uses, no guest heap can grow past it.
+    /// `--default-heap-memory` must be set no larger than it, or the host
+    /// will not start.
+    /// A whole number of 64 KiB pages.
+    #[arg(long = "memory-reservation", env = "WASH_MEMORY_RESERVATION")]
+    pub memory_reservation: Option<String>,
+
+    /// Unmapped address space after each guest linear memory (e.g. `2MiB`):
+    /// wasmtime's `memory_guard_size`.
+    ///
+    /// Unset, it stays wasmtime's 32 MiB. Every slot reserves it, so with a
+    /// small `--memory-reservation` a smaller guard fits more slots. Zero is
+    /// allowed and makes wasmtime check every access. A whole number of
+    /// 64 KiB pages.
+    #[arg(long = "memory-guard-size", env = "WASH_MEMORY_GUARD_SIZE")]
+    pub memory_guard_size: Option<String>,
 
     /// How long a pooled HTTP connect waits for a slot before failing with a
     /// connect timeout (e.g. `5s`, `500ms`).
@@ -774,6 +800,32 @@ fn host_plugin_registry_credentials(
 }
 
 impl HostCommand {
+    /// `--memory-reservation` and `--memory-guard-size` as bytes, each `None`
+    /// when unset or blank, so the engine keeps wasmtime's default for it.
+    ///
+    /// Validated here, before anything is connected, for the same reason the
+    /// other memory knobs are: a bad size is a typo in a flag.
+    fn memory_layout(&self) -> anyhow::Result<(Option<u64>, Option<u64>)> {
+        use wash_runtime::engine::host_memory::{MemoryLayout, parse_bytes};
+        let bytes = |value: Option<&str>, knob: &str| -> anyhow::Result<Option<u64>> {
+            value
+                .map(str::trim)
+                .filter(|raw| !raw.is_empty())
+                .map(|raw| parse_bytes(raw).map_err(|e| anyhow::anyhow!("invalid {knob}: {e}")))
+                .transpose()
+        };
+        let reservation = bytes(self.memory_reservation.as_deref(), "memory-reservation")?;
+        let guard = bytes(self.memory_guard_size.as_deref(), "memory-guard-size")?;
+        let defaults = MemoryLayout::default();
+        MemoryLayout {
+            reservation: reservation.unwrap_or(defaults.reservation),
+            guard: guard.unwrap_or(defaults.guard),
+        }
+        .validate()
+        .map_err(|e| anyhow::anyhow!(e))?;
+        Ok((reservation, guard))
+    }
+
     /// Every path this host reads credentials or configuration from, which no
     /// workload volume may expose.
     fn reserved_paths(&self, config: &crate::config::Config, ctx: &CliContext) -> Vec<PathBuf> {
@@ -960,6 +1012,7 @@ impl CliCommand for HostCommand {
             self.core_instances,
         )
         .map_err(|e| anyhow::anyhow!(e))?;
+        let (memory_reservation, memory_guard_size) = self.memory_layout()?;
         let process_memory_policy = ProcessMemoryPolicy::parse(self.max_process_memory.as_deref())?;
         anyhow::ensure!(
             self.max_http_ingress_connections != Some(0),
@@ -1102,6 +1155,12 @@ impl CliCommand for HostCommand {
         });
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         engine_builder = engine_builder.with_host_memory(host_memory);
+        if let Some(bytes) = memory_reservation {
+            engine_builder = engine_builder.with_memory_reservation(bytes);
+        }
+        if let Some(bytes) = memory_guard_size {
+            engine_builder = engine_builder.with_memory_guard_size(bytes);
+        }
         engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
         match process_memory_policy {
             ProcessMemoryPolicy::Limit(bytes) => {
@@ -1766,6 +1825,49 @@ mod policy_mode_tests {
         let host = parse(&["--guest-memory-mode=count", "--socket-egress=count"]);
         assert_eq!(host.guest_memory_mode, GuestMemoryMode::Count);
         assert_eq!(host.socket_egress, SocketEgressMode::Count);
+    }
+    #[test]
+    fn the_memory_layout_is_unset_unless_named() {
+        assert_eq!(parse(&[]).memory_layout().unwrap(), (None, None));
+        // A blank env fallback reads as unset, like the other memory knobs.
+        assert_eq!(
+            parse(&["--memory-reservation=", "--memory-guard-size="])
+                .memory_layout()
+                .unwrap(),
+            (None, None)
+        );
+        assert_eq!(
+            parse(&["--memory-reservation=64MiB", "--memory-guard-size=2MiB"])
+                .memory_layout()
+                .unwrap(),
+            (Some(64 << 20), Some(2 << 20))
+        );
+        assert_eq!(
+            parse(&["--memory-guard-size=0"]).memory_layout().unwrap(),
+            (None, Some(0))
+        );
+    }
+
+    #[test]
+    fn a_bad_memory_layout_is_refused_by_name() {
+        let err = parse(&["--memory-reservation=lots"])
+            .memory_layout()
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("invalid memory-reservation"),
+            "{err}"
+        );
+        let err = parse(&["--memory-reservation=100000"])
+            .memory_layout()
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("64KiB WebAssembly pages"),
+            "{err}"
+        );
+        let err = parse(&["--memory-guard-size=4KiB"])
+            .memory_layout()
+            .unwrap_err();
+        assert!(format!("{err}").contains("memory-guard-size"), "{err}");
     }
 }
 

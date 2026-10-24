@@ -27,15 +27,24 @@
 //! budget lets the host say, at startup, whether the pool it is about to build
 //! is one the machine could actually back.
 //!
-//! # The reservation is not a knob
+//! # The reservation is a knob with a price
 //!
 //! Lowering `default_heap_memory` below 4 GiB caps how far a guest may grow,
-//! but it does not shrink the slot: wasmtime still reserves 4 GiB for it. That
-//! reservation, with its guard, is what lets wasmtime elide bounds checks on
-//! 32-bit memories and keeps one guest's out-of-bounds access from reaching
-//! another's slot. It is an isolation boundary, so the host accounts for it
-//! rather than offering a way to shrink it; the slot count is what sizes the
-//! pool.
+//! but on its own it does not shrink the slot: wasmtime still reserves 4 GiB
+//! for it. That 4 GiB reservation, with its guard, is what lets wasmtime elide
+//! bounds checks on 32-bit memories, so the default stays.
+//!
+//! A host that wants many more slots can shrink the reservation with
+//! [`MemoryLayout`] ([`crate::engine::EngineBuilder::with_memory_reservation`],
+//! `WASMTIME_MEMORY_RESERVATION`). Isolation does not depend on it: below
+//! 4 GiB wasmtime emits an explicit bounds check on every access that the
+//! reservation and guard no longer cover, so a guest still cannot leave its
+//! own slot. What the host pays instead is speed, the cost of those checks,
+//! and, with the pooling allocator, a hard heap cap, since a pooled memory
+//! never moves and cannot grow past its reservation. (Without a pool wasmtime
+//! moves a memory that outgrows its reservation, copying it.) With a pool,
+//! `default_heap_memory` must then be no larger than the reservation, or
+//! wasmtime refuses to build the pool.
 
 use std::{
     collections::BTreeSet,
@@ -77,25 +86,107 @@ pub const WASMTIME_MEMORY_GUARD: u64 = 32 * MIB;
 #[cfg(not(target_pointer_width = "64"))]
 pub const WASMTIME_MEMORY_GUARD: u64 = 64 * 1024;
 
+/// How the engine lays out each linear memory: the address space it reserves
+/// and the unmapped guard after it.
+///
+/// Defaults to wasmtime's own, [`WASMTIME_MEMORY_RESERVATION`] and
+/// [`WASMTIME_MEMORY_GUARD`]. The module docs say what a smaller reservation
+/// costs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryLayout {
+    /// `memory_reservation`: address space reserved for each linear memory,
+    /// and so the most a pooled memory can ever grow to.
+    pub reservation: u64,
+    /// `memory_guard_size`: unmapped address space after each memory.
+    pub guard: u64,
+}
+
+impl Default for MemoryLayout {
+    fn default() -> Self {
+        Self {
+            reservation: WASMTIME_MEMORY_RESERVATION,
+            guard: WASMTIME_MEMORY_GUARD,
+        }
+    }
+}
+
+/// A WebAssembly page. The reservation must be a whole number of them, and so
+/// must the guard: wasmtime rounds both to host pages, and refusing an odd
+/// size here keeps what the host reports equal to what wasmtime maps.
+pub const WASM_PAGE: u64 = 64 * 1024;
+
+impl MemoryLayout {
+    /// Address space one pooled memory slot reserves when the heap ceiling is
+    /// `max_memory_size`: the larger of the ceiling and the reservation, plus
+    /// the guard. See [`pool_slot_bytes`].
+    pub fn slot_bytes(&self, max_memory_size: u64) -> u64 {
+        max_memory_size
+            .max(self.reservation)
+            .saturating_add(self.guard)
+    }
+
+    /// Address space a pool of `slots` memories reserves: one
+    /// [`Self::slot_bytes`] each, plus the guard wasmtime places before the
+    /// first.
+    pub fn slab_bytes(&self, max_memory_size: u64, slots: u32) -> u64 {
+        self.slot_bytes(max_memory_size)
+            .saturating_mul(u64::from(slots))
+            .saturating_add(self.guard)
+    }
+
+    /// Whether the reservation is too small for wasmtime to elide bounds
+    /// checks on 32-bit memories: on 64-bit, any reservation below the 4 GiB
+    /// a 32-bit index can reach. At or above 4 GiB most checks are elided,
+    /// though accesses with a constant offset past the guard are still
+    /// checked, so `false` does not mean no access is ever checked.
+    pub fn bounds_checked(&self) -> bool {
+        cfg!(target_pointer_width = "64") && self.reservation < 4 * 1024 * MIB
+    }
+
+    /// Check the layout on its own.
+    ///
+    /// # Errors
+    ///
+    /// A zero reservation, which leaves no memory a guest could use, or a
+    /// reservation or guard that is not a whole number of 64 KiB WebAssembly
+    /// pages.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.reservation == 0 {
+            return Err("memory-reservation must be greater than zero".to_string());
+        }
+        if !self.reservation.is_multiple_of(WASM_PAGE) {
+            return Err(format!(
+                "memory-reservation {} is not a whole number of 64KiB WebAssembly pages",
+                render_bytes(self.reservation)
+            ));
+        }
+        if !self.guard.is_multiple_of(WASM_PAGE) {
+            return Err(format!(
+                "memory-guard-size {} is not a whole number of 64KiB WebAssembly pages",
+                render_bytes(self.guard)
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Address space one pooled memory slot reserves when the heap ceiling is
-/// `max_memory_size`: the larger of the ceiling and
-/// [`WASMTIME_MEMORY_RESERVATION`], plus [`WASMTIME_MEMORY_GUARD`].
+/// `max_memory_size`, with wasmtime's default [`MemoryLayout`]: the larger of
+/// the ceiling and [`WASMTIME_MEMORY_RESERVATION`], plus
+/// [`WASMTIME_MEMORY_GUARD`]. [`MemoryLayout::slot_bytes`] is the same for a
+/// layout the engine was given.
 ///
 /// wasmtime's own slab layout without memory protection keys, which it leaves
-/// off by default. It assumes the engine's reservation and guard are
-/// wasmtime's defaults; a caller-supplied base config that changes them makes
-/// this an estimate.
+/// off by default. A caller-supplied base config that changes the reservation
+/// or guard makes this an estimate.
 ///
 /// A ceiling above the reservation does not make a bigger slot in practice:
 /// wasmtime refuses to build a pool whose `max_memory_size` exceeds its
-/// `memory_reservation`, and the engine never raises the reservation (see
-/// [`pool_heap_ceiling_advisory`]). So every pool that builds has slots of
-/// exactly the reservation plus the guard; the larger figure is only what
-/// such a pool would have needed.
+/// `memory_reservation` (see [`pool_heap_ceiling_advisory`]). So every pool
+/// that builds has slots of exactly the reservation plus the guard; the larger
+/// figure is only what such a pool would have needed.
 pub fn pool_slot_bytes(max_memory_size: u64) -> u64 {
-    max_memory_size
-        .max(WASMTIME_MEMORY_RESERVATION)
-        .saturating_add(WASMTIME_MEMORY_GUARD)
+    MemoryLayout::default().slot_bytes(max_memory_size)
 }
 
 /// Address space a pool of `slots` memories reserves: one [`pool_slot_bytes`]
@@ -103,9 +194,7 @@ pub fn pool_slot_bytes(max_memory_size: u64) -> u64 {
 ///
 /// Saturating for the reason [`HostMemoryBudgets::pool_reservation`] gives.
 pub fn pool_slab_bytes(max_memory_size: u64, slots: u32) -> u64 {
-    pool_slot_bytes(max_memory_size)
-        .saturating_mul(u64::from(slots))
-        .saturating_add(WASMTIME_MEMORY_GUARD)
+    MemoryLayout::default().slab_bytes(max_memory_size, slots)
 }
 
 /// Share of the detected memory limit that guest work may use. The rest is for
@@ -451,10 +540,19 @@ impl HostMemoryBudgets {
 /// enforces it: it is a product of two knobs an operator sets independently,
 /// and the failure it causes — the engine or instantiation refusing, with
 /// neither number in the message — is unpleasant to diagnose.
-pub(crate) fn pool_advisories(totals: &PoolTotals, max_memory_size: u64) -> Vec<String> {
+pub(crate) fn pool_advisories(
+    totals: &PoolTotals,
+    max_memory_size: u64,
+    layout: &MemoryLayout,
+) -> Vec<String> {
     [
-        pool_heap_ceiling_advisory(max_memory_size),
-        pool_reservation_advisory(totals.memories, max_memory_size, usable_address_space()),
+        pool_heap_ceiling_advisory(max_memory_size, layout),
+        pool_reservation_advisory(
+            totals.memories,
+            max_memory_size,
+            layout,
+            usable_address_space(),
+        ),
         max_map_count().and_then(|limit| pool_map_count_advisory(totals, limit)),
     ]
     .into_iter()
@@ -466,18 +564,17 @@ pub(crate) fn pool_advisories(totals: &PoolTotals, max_memory_size: u64) -> Vec<
 /// if it is.
 ///
 /// wasmtime refuses to build a pool whose `max_memory_size` exceeds its
-/// `memory_reservation`, and the engine leaves the reservation at wasmtime's
-/// default (see the module docs), so the engine will not start. The error
-/// wasmtime gives names neither knob.
-fn pool_heap_ceiling_advisory(max_memory_size: u64) -> Option<String> {
-    (max_memory_size > WASMTIME_MEMORY_RESERVATION).then(|| {
+/// `memory_reservation`, so the engine will not start. The error wasmtime
+/// gives names neither knob.
+fn pool_heap_ceiling_advisory(max_memory_size: u64, layout: &MemoryLayout) -> Option<String> {
+    (max_memory_size > layout.reservation).then(|| {
         format!(
-            "default-heap-memory {} is past wasmtime's {} memory reservation, and the pooling \
+            "default-heap-memory {} is past the {} memory reservation, and the pooling \
              allocator refuses a heap ceiling larger than the reservation, so the engine will \
-             fail to start. Set default-heap-memory to {} or less.",
+             fail to start. Set default-heap-memory to {} or less, or raise memory-reservation.",
             render_bytes(max_memory_size),
-            render_bytes(WASMTIME_MEMORY_RESERVATION),
-            render_bytes(WASMTIME_MEMORY_RESERVATION),
+            render_bytes(layout.reservation),
+            render_bytes(layout.reservation),
         )
     })
 }
@@ -517,6 +614,7 @@ fn pool_map_count_advisory(totals: &PoolTotals, max_map_count: u64) -> Option<St
 fn pool_reservation_advisory(
     memories: u32,
     max_memory_size: u64,
+    layout: &MemoryLayout,
     address_space: u64,
 ) -> Option<String> {
     // Reserving address space is not consuming memory: on 64-bit the kernel
@@ -527,21 +625,22 @@ fn pool_reservation_advisory(
     // A ceiling past the reservation is a pool wasmtime will not build at
     // all, which `pool_heap_ceiling_advisory` says; how much it would have
     // reserved is beside the point.
-    if max_memory_size > WASMTIME_MEMORY_RESERVATION {
+    if max_memory_size > layout.reservation {
         return None;
     }
-    let reservation = pool_slab_bytes(max_memory_size, memories);
+    let reservation = layout.slab_bytes(max_memory_size, memories);
     if reservation <= address_space / 100 * POOL_ADDRESS_SPACE_PERCENT {
         return None;
     }
     // The heap ceiling does not size the slot, so advising an operator to
     // lower it would change nothing.
     let remedy = format!(
-        "Lower core-instances (or WASMTIME_POOLING_TOTAL_MEMORIES). Lowering \
-         default-heap-memory will not help: every slot reserves wasmtime's {} plus a {} \
-         guard however small its heap.",
-        render_bytes(WASMTIME_MEMORY_RESERVATION),
-        render_bytes(WASMTIME_MEMORY_GUARD),
+        "Lower core-instances (or WASMTIME_POOLING_TOTAL_MEMORIES), or lower \
+         memory-reservation (with default-heap-memory no larger than it), which costs explicit \
+         bounds checks below 4GiB. Lowering default-heap-memory alone will not help: every \
+         slot reserves the {} reservation plus a {} guard however small its heap.",
+        render_bytes(layout.reservation),
+        render_bytes(layout.guard),
     );
     let consequence = if reservation > address_space {
         "The pool cannot be mapped, so the engine will fail to start."
@@ -556,7 +655,7 @@ fn pool_reservation_advisory(
          {remedy}",
         render_bytes(max_memory_size),
         render_bytes(reservation),
-        render_bytes(pool_slot_bytes(max_memory_size)),
+        render_bytes(layout.slot_bytes(max_memory_size)),
         render_bytes(address_space),
     ))
 }
@@ -831,6 +930,7 @@ mod tests {
         pool_reservation_advisory(
             budgets.core_instances,
             budgets.default_heap_memory,
+            &MemoryLayout::default(),
             address_space,
         )
     }
@@ -1160,13 +1260,20 @@ mod tests {
         // ceiling, not about how much the pool would have reserved.
         let resolved =
             HostMemoryBudgets::resolve(None, Some(16 * 1024 * MIB), Some(10_000)).unwrap();
-        let advisory = pool_heap_ceiling_advisory(resolved.default_heap_memory)
-            .expect("16 GiB is past the 4 GiB reservation");
+        let advisory =
+            pool_heap_ceiling_advisory(resolved.default_heap_memory, &MemoryLayout::default())
+                .expect("16 GiB is past the 4 GiB reservation");
         assert!(advisory.contains("default-heap-memory 16GiB"), "{advisory}");
         assert!(advisory.contains("4GiB or less"), "{advisory}");
         assert_eq!(reservation_advisory(&resolved, USER_ADDRESS_SPACE), None);
-        assert_eq!(pool_heap_ceiling_advisory(4 * 1024 * MIB), None);
-        assert_eq!(pool_heap_ceiling_advisory(128 * MIB), None);
+        assert_eq!(
+            pool_heap_ceiling_advisory(4 * 1024 * MIB, &MemoryLayout::default()),
+            None
+        );
+        assert_eq!(
+            pool_heap_ceiling_advisory(128 * MIB, &MemoryLayout::default()),
+            None
+        );
     }
 
     #[test]
@@ -1179,7 +1286,7 @@ mod tests {
         assert!(advisory.contains("may fail"), "{advisory}");
         assert!(advisory.contains("Lower core-instances"), "{advisory}");
         assert!(
-            advisory.contains("Lowering default-heap-memory will not help"),
+            advisory.contains("Lowering default-heap-memory alone will not help"),
             "{advisory}"
         );
         assert!(advisory.contains("per slot"), "{advisory}");
@@ -1370,5 +1477,87 @@ mod tests {
         let advisory = process_memory_advisory(limit.saturating_mul(2))
             .expect("twice the machine can never be reached");
         assert!(advisory.contains(&render_bytes(limit)), "{advisory}");
+    }
+
+    #[test]
+    fn the_default_layout_is_wasmtimes() {
+        let layout = MemoryLayout::default();
+        assert_eq!(layout.slot_bytes(128 * MIB), pool_slot_bytes(128 * MIB));
+        assert_eq!(
+            layout.slab_bytes(64 * MIB, 100),
+            pool_slab_bytes(64 * MIB, 100)
+        );
+        assert_eq!(layout.validate(), Ok(()));
+        if cfg!(target_pointer_width = "64") {
+            assert!(!layout.bounds_checked());
+        }
+    }
+
+    #[test]
+    fn a_smaller_reservation_shrinks_the_slot_and_the_pool() {
+        // The case the knob is for: 64 MiB slots with a 2 MiB guard put a
+        // million slots in about 63 TiB, where the default fits about 30,000 in the
+        // 128 TiB a process can map.
+        let layout = MemoryLayout {
+            reservation: 64 * MIB,
+            guard: 2 * MIB,
+        };
+        assert_eq!(layout.slot_bytes(64 * MIB), 66 * MIB);
+        assert_eq!(
+            layout.slab_bytes(64 * MIB, 1_000_000),
+            1_000_000 * 66 * MIB + 2 * MIB
+        );
+        assert_eq!(layout.validate(), Ok(()));
+        assert_eq!(
+            pool_reservation_advisory(1_000_000, 64 * MIB, &layout, USER_ADDRESS_SPACE),
+            None,
+            "a million 66 MiB slots fit"
+        );
+        if cfg!(target_pointer_width = "64") {
+            assert!(layout.bounds_checked());
+        }
+    }
+
+    #[test]
+    fn a_heap_ceiling_past_a_small_reservation_names_both_ways_out() {
+        let layout = MemoryLayout {
+            reservation: 64 * MIB,
+            guard: 2 * MIB,
+        };
+        let advisory = pool_heap_ceiling_advisory(4 * 1024 * MIB, &layout)
+            .expect("the default 4 GiB heap does not fit a 64 MiB reservation");
+        assert!(advisory.contains("64MiB memory reservation"), "{advisory}");
+        assert!(advisory.contains("64MiB or less"), "{advisory}");
+        assert!(advisory.contains("raise memory-reservation"), "{advisory}");
+        assert_eq!(pool_heap_ceiling_advisory(64 * MIB, &layout), None);
+    }
+
+    #[test]
+    fn a_layout_off_the_page_grid_is_refused() {
+        let zero = MemoryLayout {
+            reservation: 0,
+            guard: 0,
+        };
+        assert!(zero.validate().unwrap_err().contains("greater than zero"));
+        let odd = MemoryLayout {
+            reservation: 64 * MIB + 1,
+            guard: 0,
+        };
+        assert!(odd.validate().unwrap_err().contains("memory-reservation"));
+        let odd_guard = MemoryLayout {
+            reservation: 64 * MIB,
+            guard: 4096,
+        };
+        assert!(
+            odd_guard
+                .validate()
+                .unwrap_err()
+                .contains("memory-guard-size")
+        );
+        let no_guard = MemoryLayout {
+            reservation: 64 * MIB,
+            guard: 0,
+        };
+        assert_eq!(no_guard.validate(), Ok(()), "a zero guard is allowed");
     }
 }

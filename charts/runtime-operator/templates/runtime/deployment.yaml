@@ -30,8 +30,9 @@
        the ConfigMap this deployment mounts. */}}
 {{- /* A host group's own `resources` replaces the chart-wide block wholesale
        (no merge), and carries the host knobs `defaultHeapMemory`,
-       `coreInstances`, `guestMemoryMode` and `maxConcurrentStarts` alongside
-       the Kubernetes requests/limits. */}}
+       `coreInstances`, `memoryReservation`, `memoryGuardSize`,
+       `guestMemoryMode` and `maxConcurrentStarts` alongside the Kubernetes
+       requests/limits. */}}
 {{- $resources := .resources | default $top.Values.runtime.resources | default dict }}
 {{- /* Probes, unlike `resources`, merge per field: a group naming one timing
        keeps the chart-wide values for the rest. */}}
@@ -217,8 +218,9 @@ spec:
                   fieldPath: metadata.namespace
             {{- /* Host memory knobs, from the effective `resources`:
                    guestMemoryMode says whether the guest memory budget is
-                   enforced or only counted, and defaultHeapMemory/coreInstances
-                   are wasmtime knobs parked alongside it (all three stripped
+                   enforced or only counted, and defaultHeapMemory/coreInstances/
+                   memoryReservation/memoryGuardSize are wasmtime knobs parked
+                   alongside it (all of them stripped
                    back out of the `resources:` block below). An unset pool
                    knob stays at wasmtime's default. The mode is always
                    rendered, `enforce` unless named, so the budget is enforced
@@ -243,6 +245,17 @@ spec:
             {{- with $resources.coreInstances }}
             - name: WASH_CORE_INSTANCES
               value: "{{ . }}"
+            {{- end }}
+            {{- with $resources.memoryReservation }}
+            - name: WASH_MEMORY_RESERVATION
+              value: "{{ . }}"
+            {{- end }}
+            {{- /* Not `with`, for the reason maxConcurrentStarts gives below:
+                   `0` is a meaningful guard size (bounds-check every access). */}}
+            {{- $guard := $resources.memoryGuardSize }}
+            {{- if or (kindIs "int64" $guard) (kindIs "float64" $guard) (and (kindIs "string" $guard) (ne $guard "")) }}
+            - name: WASH_MEMORY_GUARD_SIZE
+              value: "{{ $guard }}"
             {{- end }}
             - name: WASH_GUEST_MEMORY_MODE
               value: "{{ $resources.guestMemoryMode | default "enforce" }}"
@@ -472,7 +485,7 @@ spec:
               readOnly: true
             {{- end }}
             {{- end }}
-          {{- with omit $resources "defaultHeapMemory" "coreInstances" "guestMemoryMode" "maxConcurrentStarts" }}
+          {{- with omit $resources "defaultHeapMemory" "coreInstances" "memoryReservation" "memoryGuardSize" "guestMemoryMode" "maxConcurrentStarts" }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
