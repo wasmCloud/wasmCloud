@@ -242,13 +242,13 @@ pub struct HostCommand {
     ///
     /// A messaging-triggered component gets a fresh instance per message, so
     /// this equally bounds instances. Unset, it is derived from the host's
-    /// instance pool: at the worst measured component shape (Componentize-Go,
-    /// 5 core instances each) a `total_core_instances` of 1000 supports 200
-    /// components, and messaging claims two thirds of that — 133 — leaving the
-    /// rest for HTTP-triggered work, warm pools, and long-lived services.
-    /// Raising `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` raises this with it;
-    /// with pooling disabled there is no budget to divide and the pinned
-    /// default of 128 stands. Set, the number given is used as-is.
+    /// instance pool: a message in flight holds one of its linear memories, so
+    /// the stock pool of 1000 holds 1000, and messaging claims two thirds of
+    /// that — 666 —
+    /// leaving the rest for HTTP-triggered work, warm pools, and long-lived
+    /// services. Raising `--core-instances` raises this with it; with pooling
+    /// disabled there is no budget to divide and the pinned default of 128
+    /// stands. Set, the number given is used as-is.
     //
     // Deliberately no `default_value_t`: a parse-time default is
     // indistinguishable downstream from an operator typing the same number, and
@@ -274,7 +274,7 @@ pub struct HostCommand {
     ///
     /// Unset, this is a quarter of whatever `--wasmcloud-messaging-max-in-flight`
     /// resolved to, so the two cannot contradict each other: the pool-derived
-    /// 133 of a stock host gives 33, and the pinned 128 of a host with pooling
+    /// 666 of a stock host gives 166, and the pinned 128 of a host with pooling
     /// disabled gives 32.
     #[arg(
         long = "wasmcloud-messaging-max-in-flight-per-component",
@@ -377,12 +377,17 @@ pub struct HostCommand {
     #[arg(long = "default-heap-memory", env = "WASH_DEFAULT_HEAP_MEMORY")]
     pub default_heap_memory: Option<String>,
 
-    /// Instance slots the pooling allocator keeps.
+    /// Linear memories the pooling allocator keeps room for, and with them
+    /// the fiber stacks and component instances it admits, one count for all
+    /// three: a component instance of the usual shape takes one of each.
     ///
-    /// Unset, this stays wasmtime's default of 1000. Multiplied by the slot
-    /// size (4 GiB plus a 32 MiB guard, whatever `--default-heap-memory` is)
-    /// it is the pool's address-space reservation, so it is the knob that
-    /// sizes the pool.
+    /// Unset, this stays wasmtime's default of 1000. Multiplied by one
+    /// memory's reservation (4 GiB plus a 32 MiB guard, whatever
+    /// `--default-heap-memory` is) it is the pool's address-space reservation,
+    /// so it is the knob that sizes the pool. The pool's core-instance and
+    /// table totals are multiples of it, since a component spends several of
+    /// each and neither reserves anything; `WASMTIME_POOLING_TOTAL_*` set any
+    /// total on its own.
     #[arg(long = "core-instances", env = "WASH_CORE_INSTANCES")]
     pub core_instances: Option<u32>,
 
@@ -1126,7 +1131,7 @@ impl CliCommand for HostCommand {
         let messaging_limits = crate::config::wasmcloud_messaging_limits(
             self.wasmcloud_messaging_max_in_flight,
             self.wasmcloud_messaging_max_in_flight_per_component,
-            engine.total_core_instances(),
+            engine.total_memories(),
         )?;
 
         if let Some(value) = &self.removed_wasmcloud_nats_workload_config {

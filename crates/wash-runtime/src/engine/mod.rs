@@ -579,13 +579,27 @@ impl Engine {
     /// from the [`PoolingAllocationConfig`] actually installed — so it reflects
     /// the `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` override and a
     /// caller-supplied pooling config alike. `None` when pooling is off or
-    /// unsupported, i.e. when there is no pool budget to divide.
+    /// unsupported.
+    ///
+    /// This is a count of live core modules, several per component, and it is
+    /// sized not to bind before the linear memories do; what the pool holds in
+    /// components is [`Self::total_memories`].
     ///
     /// Recorded rather than recomputed: re-deriving `max_instances.unwrap_or(…)`
     /// somewhere else would miss the env override (applied inside
     /// [`new_pooling_config`]) and drift the moment either side changed.
     pub fn total_core_instances(&self) -> Option<u32> {
         self.total_core_instances
+    }
+
+    /// Linear memories the pool can hold at once: the count `--core-instances`
+    /// sizes, and the one that reserves address space. The pool admits the same
+    /// number of fiber stacks and component instances, and a component instance
+    /// of the usual shape takes one of each, so this is also how many
+    /// components the pool holds and the budget to divide when a ceiling is
+    /// derived from the pool. `None` when pooling is off or unsupported.
+    pub fn total_memories(&self) -> Option<u32> {
+        Some(self.pool_totals.as_ref()?.memories)
     }
 
     /// Every pooling allocator total against what is in use now, so an
@@ -1855,12 +1869,50 @@ where
 
 /// [`pooling_env_override`] for the knobs that are plain instance counts.
 ///
-/// All of them default to the same resolved `--core-instances` and all of them
+/// All of them derive from the resolved `--core-instances` and all of them
 /// mean "this host runs nothing" at zero, so all of them want the same guard.
 fn pooling_env_instances(key: &str, resolved: u32) -> u32 {
     pooling_env_override(key, resolved, |v| v.to_string()).unwrap_or(resolved)
 }
 
+/// Core instances the pool admits per linear memory it holds.
+///
+/// A component is several core instances: a Rust HTTP handler is four (the
+/// main module, the preview1 adapter, and two wit-component glue modules),
+/// Componentize-Go five, and a composition adds every member's. With every
+/// total set to the linear-memory count, the core-instance total was the one
+/// a warm pool hit first, at a quarter of the memories the pool had reserved
+/// address space for.
+///
+/// Nothing is reserved for a core instance: wasmtime counts live ones against
+/// this total and allocates each VMContext on the heap at its own size, which
+/// the process memory guard accounts for. So the total can stand well clear of
+/// any component shape; this leaves three shapes' worth of headroom past the
+/// largest measured.
+const CORE_INSTANCES_PER_MEMORY: u32 = 16;
+
+/// Tables the pool admits per linear memory it holds. The same shapes hold one
+/// or two tables (the main module's function table and the wit-component
+/// shim's), so a total equal to the linear-memory count bound a warm pool at
+/// half its memories.
+///
+/// Each pooled table is `table_elements` pointers of address space (160 KiB at
+/// the default 20,000) in one mapping that is never split, so this costs no
+/// `vm.max_map_count` and, on Unix, no committed memory; Windows commits the
+/// mapping, so there the table pool's commit charge grows with it.
+const TABLES_PER_MEMORY: u32 = 4;
+
+/// The pooling allocator for `instances` linear memories.
+///
+/// `instances` is the resolved `--core-instances`. It is the number of linear
+/// memories, which reserve the pool's address space, and also of the fiber
+/// stacks and component instances, which a component instance of the usual
+/// shape takes one of each alongside its memory. The core instance and table
+/// totals, which reserve nothing, are multiples of it
+/// ([`CORE_INSTANCES_PER_MEMORY`], [`TABLES_PER_MEMORY`]) so that a component
+/// made of several core modules does not spend several memories' worth of
+/// them. Every total can still be set on its own through its
+/// `WASMTIME_POOLING_TOTAL_*` variable.
 fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAllocationConfig {
     let mut config = PoolingAllocationConfig::default();
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_UNUSED_WASM_SLOTS") {
@@ -1900,17 +1952,17 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
     ));
     config.total_tables(pooling_env_instances(
         "WASMTIME_POOLING_TOTAL_TABLES",
-        instances,
+        instances.saturating_mul(TABLES_PER_MEMORY),
     ));
     config.total_stacks(pooling_env_instances(
         "WASMTIME_POOLING_TOTAL_STACKS",
         instances,
     ));
-    // `--core-instances` is what `host memory resolved` reports, and this is
-    // what actually sizes the pool.
+    // A counter, not a reservation: `host memory resolved` reports it beside
+    // the memory count that actually sizes the pool.
     config.total_core_instances(pooling_env_instances(
         "WASMTIME_POOLING_TOTAL_CORE_INSTANCES",
-        instances,
+        instances.saturating_mul(CORE_INSTANCES_PER_MEMORY),
     ));
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_CORE_INSTANCE_SIZE") {
         config.max_core_instance_size(v);
@@ -2232,6 +2284,32 @@ mod tests {
             .with_wasm_proposal(WasmProposal::Gc)
             .build()
             .expect("custom config + GC proposal should build");
+    }
+
+    /// Linear memories, fiber stacks and component instances share one count;
+    /// core instances and tables, which a component spends several of and
+    /// which reserve nothing, stand clear so the linear memories are what a
+    /// warm pool fills first.
+    #[test]
+    fn pool_counters_do_not_bind_before_the_memories() {
+        let config = new_pooling_config(1000, host_memory::WASMTIME_DEFAULT_HEAP_MEMORY);
+        assert_eq!(config.get_total_memories(), 1000);
+        assert_eq!(config.get_total_stacks(), 1000);
+        assert_eq!(config.get_total_component_instances(), 1000);
+        assert_eq!(config.get_total_core_instances(), 16_000);
+        assert_eq!(config.get_total_tables(), 4000);
+
+        let engine = Engine::builder()
+            .with_max_instances(64)
+            .build()
+            .expect("pooling engine should build");
+        if engine.pool_usage().is_some() {
+            assert_eq!(engine.total_memories(), Some(64));
+            assert_eq!(
+                engine.total_core_instances(),
+                Some(64 * CORE_INSTANCES_PER_MEMORY)
+            );
+        }
     }
 
     // An externally-supplied pooling config is accepted and applied.
