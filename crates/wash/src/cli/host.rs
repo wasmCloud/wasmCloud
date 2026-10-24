@@ -835,25 +835,31 @@ fn host_plugin_registry_credentials(
     }
 }
 
-/// One connection's NATS client authentication, from its files and user.
-fn nats_auth(
-    credentials: &Option<PathBuf>,
-    nkey: &Option<PathBuf>,
-    token_file: &Option<PathBuf>,
-    user: &Option<String>,
-    password_file: &Option<PathBuf>,
-) -> wash_runtime::washlet::NatsAuth {
-    wash_runtime::washlet::NatsAuth {
-        credentials: credentials.clone(),
-        nkey: nkey.clone(),
-        token_file: token_file.clone(),
-        user: user.clone(),
-        password_file: password_file.clone(),
-        ..Default::default()
-    }
-}
-
 impl HostCommand {
+    /// How the scheduler connection authenticates.
+    fn scheduler_nats_auth(&self) -> wash_runtime::washlet::NatsAuth {
+        wash_runtime::washlet::NatsAuth {
+            credentials: self.scheduler_nats_creds.clone(),
+            nkey: self.scheduler_nats_nkey.clone(),
+            token_file: self.scheduler_nats_token_file.clone(),
+            user: self.scheduler_nats_user.clone(),
+            password_file: self.scheduler_nats_password_file.clone(),
+            ..Default::default()
+        }
+    }
+
+    /// How the data connection authenticates.
+    fn data_nats_auth(&self) -> wash_runtime::washlet::NatsAuth {
+        wash_runtime::washlet::NatsAuth {
+            credentials: self.data_nats_creds.clone(),
+            nkey: self.data_nats_nkey.clone(),
+            token_file: self.data_nats_token_file.clone(),
+            user: self.data_nats_user.clone(),
+            password_file: self.data_nats_password_file.clone(),
+            ..Default::default()
+        }
+    }
+
     /// Every path this host reads credentials or configuration from, which no
     /// workload volume may expose.
     fn reserved_paths(&self, config: &crate::config::Config, ctx: &CliContext) -> Vec<PathBuf> {
@@ -1092,13 +1098,7 @@ impl CliCommand for HostCommand {
             wash_runtime::washlet::NatsConnectionOptions {
                 request_timeout: None,
                 name: Some(format!("host:{}", cluster_host_builder.host_id())),
-                auth: nats_auth(
-                    &self.scheduler_nats_creds,
-                    &self.scheduler_nats_nkey,
-                    &self.scheduler_nats_token_file,
-                    &self.scheduler_nats_user,
-                    &self.scheduler_nats_password_file,
-                ),
+                auth: self.scheduler_nats_auth(),
                 tls_ca: self.scheduler_nats_tls_ca.clone(),
                 tls_first: self.scheduler_nats_tls_first,
                 tls_cert: self.scheduler_nats_tls_cert.clone(),
@@ -1114,13 +1114,7 @@ impl CliCommand for HostCommand {
             wash_runtime::washlet::NatsConnectionOptions {
                 request_timeout: None,
                 name: Some(format!("host:{}:data", cluster_host_builder.host_id())),
-                auth: nats_auth(
-                    &self.data_nats_creds,
-                    &self.data_nats_nkey,
-                    &self.data_nats_token_file,
-                    &self.data_nats_user,
-                    &self.data_nats_password_file,
-                ),
+                auth: self.data_nats_auth(),
                 tls_ca: self.data_nats_tls_ca.clone(),
                 tls_first: self.data_nats_tls_first,
                 tls_cert: self.data_nats_tls_cert.clone(),
