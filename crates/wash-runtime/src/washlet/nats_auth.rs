@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
+use zeroize::Zeroizing;
 
 /// How a connection opened by [`connect_nats`](super::connect_nats)
 /// authenticates.
@@ -113,38 +114,25 @@ impl From<NatsAuth> for Presenter {
 impl Presenter {
     /// What to send in `CONNECT` for a server that issued `nonce`.
     async fn present(&self, nonce: &[u8]) -> anyhow::Result<async_nats::Auth> {
+        // Read together, so files on one stalled mount cost one READ_WAIT.
+        let (credentials, nkey, token, password) = tokio::try_join!(
+            read_file(&self.credentials, "credentials", credentials_key),
+            read_file(&self.nkey, "nkey seed", nkey_key),
+            read_file(&self.token, "token", secret_line),
+            read_file(&self.password, "password", secret_line),
+        )?;
         let mut auth = async_nats::Auth::new();
-        if let Some(file) = &self.credentials {
-            let path = &file.path;
-            let contents = file.read("credentials").await?;
-            let (jwt, seed) = parse_credentials(&contents)
-                .with_context(|| format!("invalid NATS credentials file {}", path.display()))?;
-            let key = key_pair(seed)
-                .with_context(|| format!("invalid nkey seed in {}", path.display()))?;
-            auth.jwt = Some(jwt.to_string());
+        if let Some((jwt, key)) = credentials {
+            auth.jwt = Some(jwt);
             auth.signature = Some(sign(&key, nonce)?);
         }
-        if let Some(file) = &self.nkey {
-            let path = &file.path;
-            let contents = file.read("nkey seed").await?;
-            let seed = decorated_values(&contents)
-                .into_iter()
-                .find(|value| value.starts_with('S'))
-                .unwrap_or_else(|| contents.trim());
-            let key = key_pair(seed)
-                .with_context(|| format!("invalid nkey seed in {}", path.display()))?;
+        if let Some(key) = nkey {
             auth.nkey = Some(key.public_key());
             auth.signature = Some(sign(&key, nonce)?);
         }
-        auth.token = match &self.token {
-            Some(file) => Some(secret_line(file, "token").await?),
-            None => self.auth.token.clone(),
-        };
+        auth.token = token.or_else(|| self.auth.token.clone());
         auth.username = self.auth.user.clone();
-        auth.password = match &self.password {
-            Some(file) => Some(secret_line(file, "password").await?),
-            None => self.auth.password.clone(),
-        };
+        auth.password = password.or_else(|| self.auth.password.clone());
         if let Some(hook) = &self.auth.hook {
             (hook.0)(&mut auth)?;
         }
@@ -212,8 +200,8 @@ const READ_WAIT: Duration = Duration::from_secs(2);
 /// A file reread on every connect, with at most one read in flight.
 ///
 /// A detached worker lets runtime shutdown finish even if a read stalls.
-/// Reconnects share the pending read and use cached contents while it stalls
-/// or fails.
+/// Reconnects share the pending read and use the last contents that parsed
+/// while the file stalls, fails to read, or does not parse.
 struct SecretFile {
     path: PathBuf,
     state: tokio::sync::Mutex<ReadState>,
@@ -222,7 +210,9 @@ struct SecretFile {
 #[derive(Default)]
 struct ReadState {
     pending: Option<PendingRead>,
-    last_read: Option<String>,
+    last_read: Option<Zeroizing<String>>,
+    /// The failure last logged, so a lasting one is logged once.
+    last_failure: Option<String>,
 }
 
 struct PendingRead {
@@ -253,32 +243,39 @@ impl SecretFile {
         }
     }
 
-    /// The file's contents, or the last contents read while the file stalls
-    /// or fails to read.
-    async fn read(&self, what: &str) -> anyhow::Result<String> {
-        let mut state = self.state.lock().await;
-        let failure = match self.wait(&mut state).await {
-            Ok(Some(contents)) => {
-                state.last_read = Some(contents.clone());
-                return Ok(contents);
-            }
+    /// The file's contents as `parse` reads them, or the last contents that
+    /// parsed while the file stalls, fails to read, or does not parse.
+    async fn read<T>(&self, what: &str, parse: fn(&str) -> anyhow::Result<T>) -> anyhow::Result<T> {
+        let mut guard = self.state.lock().await;
+        let state = &mut *guard;
+        let failure = match self.wait(state).await {
+            Ok(Some(contents)) => match parse(&contents) {
+                Ok(value) => {
+                    state.last_read = Some(contents);
+                    state.last_failure = None;
+                    return Ok(value);
+                }
+                Err(e) => e.context(format!("invalid NATS {what} file {}", self.path.display())),
+            },
             Ok(None) => {
                 anyhow::anyhow!("timed out reading NATS {what} file {}", self.path.display())
             }
             Err(e) => e.context(failed(&self.path, what)),
         };
-        match &state.last_read {
-            Some(contents) => {
-                tracing::warn!(error = %format!("{failure:#}"), "presenting the last NATS {what} file contents read");
-                Ok(contents.clone())
-            }
-            None => Err(failure),
+        let Some(contents) = &state.last_read else {
+            return Err(failure);
+        };
+        let failure = format!("{failure:#}");
+        if state.last_failure.as_ref() != Some(&failure) {
+            tracing::warn!(error = %failure, "presenting the last NATS {what} file contents that parsed");
+            state.last_failure = Some(failure);
         }
+        parse(contents)
     }
 
     /// The pending read's result, starting one if none is in flight, or
     /// `None` while it is still stalled after [`READ_WAIT`].
-    async fn wait(&self, state: &mut ReadState) -> anyhow::Result<Option<String>> {
+    async fn wait(&self, state: &mut ReadState) -> anyhow::Result<Option<Zeroizing<String>>> {
         let pending = match &mut state.pending {
             Some(pending) => pending,
             None => state.pending.insert(
@@ -289,22 +286,45 @@ impl SecretFile {
             return Ok(None);
         };
         state.pending = None;
-        Ok(Some(read.context("the file reader panicked")??))
+        let contents = read.context("the file reader panicked")??;
+        Ok(Some(Zeroizing::new(contents)))
     }
 }
 
+/// `file` as `parse` reads it, when there is one.
+async fn read_file<T>(
+    file: &Option<SecretFile>,
+    what: &str,
+    parse: fn(&str) -> anyhow::Result<T>,
+) -> anyhow::Result<Option<T>> {
+    match file {
+        Some(file) => file.read(what, parse).await.map(Some),
+        None => Ok(None),
+    }
+}
+
+/// A `.creds` file's user JWT, and the key that signs for it.
+fn credentials_key(contents: &str) -> anyhow::Result<(String, nkeys::KeyPair)> {
+    let (jwt, seed) = parse_credentials(contents)?;
+    Ok((jwt.to_string(), key_pair(seed)?))
+}
+
+/// The key in an nkey seed file, bare or decorated.
+fn nkey_key(contents: &str) -> anyhow::Result<nkeys::KeyPair> {
+    let seed = decorated_values(contents)
+        .into_iter()
+        .find(|value| value.starts_with('S'))
+        .unwrap_or_else(|| contents.trim());
+    key_pair(seed)
+}
+
 /// A token or password file's contents, less one LF or CRLF line ending.
-async fn secret_line(file: &SecretFile, what: &str) -> anyhow::Result<String> {
-    let contents = file.read(what).await?;
+fn secret_line(contents: &str) -> anyhow::Result<String> {
     let secret = match contents.strip_suffix('\n') {
         Some(line) => line.strip_suffix('\r').unwrap_or(line),
-        None => &contents,
+        None => contents,
     };
-    anyhow::ensure!(
-        !secret.is_empty(),
-        "NATS {what} file {} is empty",
-        file.path.display()
-    );
+    anyhow::ensure!(!secret.is_empty(), "the file is empty");
     Ok(secret.to_string())
 }
 
@@ -431,7 +451,7 @@ pub(super) mod tests {
         let path = dir.path().join("token");
         std::fs::write(&path, "first")?;
         let file = SecretFile::new(path.clone());
-        assert_eq!(file.read("token").await?, "first");
+        assert_eq!(file.read("token", secret_line).await?, "first");
 
         // Opening a FIFO that has no writer blocks, the way a hung mount does.
         std::fs::remove_file(&path)?;
@@ -449,13 +469,13 @@ pub(super) mod tests {
                     .map(|read| read._worker.thread().id())
             })
         };
-        assert_eq!(file.read("token").await?, "first");
+        assert_eq!(file.read("token", secret_line).await?, "first");
         let stalled = pending(&file).context("no read in flight")?;
-        assert_eq!(file.read("token").await?, "first");
+        assert_eq!(file.read("token", secret_line).await?, "first");
         assert_eq!(pending(&file), Some(stalled));
 
         let writer = tokio::task::spawn_blocking(move || std::fs::write(path, "second"));
-        assert_eq!(file.read("token").await?, "second");
+        assert_eq!(file.read("token", secret_line).await?, "second");
         writer.await??;
         assert_eq!(pending(&file), None);
         Ok(())
@@ -467,16 +487,16 @@ pub(super) mod tests {
         let path = dir.path().join("token");
         std::fs::write(&path, "first")?;
         let file = SecretFile::new(path.clone());
-        assert_eq!(file.read("token").await?, "first");
+        assert_eq!(file.read("token", secret_line).await?, "first");
 
         std::fs::remove_file(&path)?;
-        assert_eq!(file.read("token").await?, "first");
+        assert_eq!(file.read("token", secret_line).await?, "first");
         std::fs::write(&path, "second")?;
-        assert_eq!(file.read("token").await?, "second");
+        assert_eq!(file.read("token", secret_line).await?, "second");
 
         let missing = SecretFile::new(dir.path().join("missing"));
         let error = missing
-            .read("token")
+            .read("token", secret_line)
             .await
             .err()
             .context("missing file read")?;
@@ -497,7 +517,7 @@ pub(super) mod tests {
                 .build()?;
             let file = SecretFile::new(path.into());
             let error = runtime
-                .block_on(file.read("token"))
+                .block_on(file.read("token", secret_line))
                 .err()
                 .context("stalled read did not time out")?;
             assert!(error.to_string().contains("timed out reading"), "{error:#}");
@@ -562,12 +582,68 @@ pub(super) mod tests {
         assert_eq!(presented.password.as_deref(), Some("the password\n"));
 
         std::fs::write(&token, "\n")?;
-        let error = presenter
-            .present(b"nonce")
-            .await
-            .err()
-            .context("empty token")?;
-        assert!(error.to_string().contains("is empty"), "{error:#}");
+        let presented = presenter.present(b"nonce").await?;
+        assert_eq!(presented.token.as_deref(), Some(" the token "));
+
+        let empty = Presenter::from(NatsAuth {
+            token_file: Some(token),
+            ..Default::default()
+        });
+        let error = empty.present(b"nonce").await.err().context("empty token")?;
+        assert!(format!("{error:#}").contains("is empty"), "{error:#}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_file_that_does_not_parse_presents_the_last_one_that_did() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let key = nkeys::KeyPair::new_user();
+        let path = dir.path().join("user.creds");
+        let contents = creds_file("the.user.jwt", &key.seed()?);
+        std::fs::write(&path, &contents)?;
+        let presenter = Presenter::from(NatsAuth {
+            credentials: Some(path.clone()),
+            ..Default::default()
+        });
+        assert!(presenter.present(b"nonce").await.is_ok());
+
+        // A rewrite caught halfway through.
+        std::fs::write(&path, &contents[..contents.len() / 2])?;
+        let presented = presenter.present(b"nonce").await?;
+        assert_eq!(presented.jwt.as_deref(), Some("the.user.jwt"));
+        key.verify(b"nonce", presented.signature.as_deref().unwrap_or_default())?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stalled_files_cost_one_read_wait() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = ["user.creds", "token", "password"].map(|name| dir.path().join(name));
+        for path in &paths {
+            anyhow::ensure!(
+                std::process::Command::new("mkfifo")
+                    .arg(path)
+                    .status()?
+                    .success()
+            );
+        }
+        let [credentials, token, password] = paths.clone();
+        let presenter = Presenter::from(NatsAuth {
+            credentials: Some(credentials),
+            token_file: Some(token),
+            user: Some("derek".into()),
+            password_file: Some(password),
+            ..Default::default()
+        });
+        let started = std::time::Instant::now();
+        assert!(presenter.present(b"nonce").await.is_err());
+        assert!(started.elapsed() < READ_WAIT * 2, "{:?}", started.elapsed());
+
+        // Release the stalled readers.
+        for path in paths {
+            tokio::task::spawn_blocking(move || std::fs::write(path, "")).await??;
+        }
         Ok(())
     }
 

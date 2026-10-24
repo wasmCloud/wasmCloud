@@ -67,16 +67,21 @@ same choice of one credential per connection:
 
 Each flag also reads `WASH_<PLANE>_NATS_<NAME>`, such as
 `WASH_SCHEDULER_NATS_CREDS`. Files are reread on every reconnect, and token
-and password files lose one LF or CRLF line ending. Mount the Secret on a host
-group and pass the flags in its `extraArgs`:
+and password files lose one LF or CRLF line ending. While a file stalls, fails
+to read, or does not parse, the host presents the last contents that parsed.
+
+Give each connection its own credential, so the data connection can be denied
+the control subjects under [Permissions](#permissions). Mount the Secret on a
+host group and pass the flags in its `extraArgs`. The Secret must exist in the
+host group's namespace:
 
 ```yaml
 runtime:
   hostGroups:
     - name: default
       extraArgs:
-        - "--scheduler-nats-creds=/nats-auth/host.creds"
-        - "--data-nats-creds=/nats-auth/host.creds"
+        - "--scheduler-nats-creds=/nats-auth/scheduler.creds"
+        - "--data-nats-creds=/nats-auth/data.creds"
       volumes:
         - name: nats-auth
           secret:
