@@ -93,6 +93,9 @@ func TestPlacementCarriesComponentInstanceLimits(t *testing.T) {
 
 const testWorkloadUID = "workload-uid"
 
+// hostConfigKey is the wasi:http config key naming a workload's primary host.
+const hostConfigKey = "host"
+
 // A Workload deleted mid-start has a host but no recorded workload id; it must still be stopped.
 func TestFinalizeStopsWorkloadWithoutRecordedPlacement(t *testing.T) {
 	reply, err := protojson.Marshal(&runtimev2.WorkloadStopResponse{
@@ -397,5 +400,116 @@ func TestFinalizeGivesUpFailedStopWhenHostIsGone(t *testing.T) {
 
 	if err := r.finalize(context.Background(), placedWorkload()); err != nil {
 		t.Fatalf("finalize: %v", err)
+	}
+}
+
+// TestAddServiceDNSAliases checks that the Service DNS names are appended to
+// any `host-aliases` the user set rather than replacing them.
+func TestAddServiceDNSAliases(t *testing.T) {
+	const (
+		aliasesKey  = "host-aliases"
+		userHost    = "my-app.local"
+		svcAliases  = "my-svc.my-ns,my-svc.my-ns.svc,my-svc.my-ns.svc.cluster.local"
+		userAliases = "api.example.com"
+	)
+
+	tests := []struct {
+		name   string
+		config map[string]string
+		want   string
+	}{
+		{
+			name:   "no user aliases",
+			config: map[string]string{},
+			want:   svcAliases,
+		},
+		{
+			name:   "keeps user aliases",
+			config: map[string]string{hostConfigKey: userHost, aliasesKey: userAliases},
+			want:   userAliases + "," + svcAliases,
+		},
+		{
+			name:   "drops duplicates and blanks",
+			config: map[string]string{aliasesKey: " " + userAliases + ",,my-svc.my-ns.svc"},
+			want:   userAliases + ",my-svc.my-ns.svc,my-svc.my-ns,my-svc.my-ns.svc.cluster.local",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, hadHost := tt.config[hostConfigKey]
+			addServiceDNSAliases(tt.config, "my-svc", "my-ns", DefaultClusterDomain)
+			if got := tt.config[aliasesKey]; got != tt.want {
+				t.Errorf("host-aliases = %q, want %q", got, tt.want)
+			}
+			if hadHost && tt.config[hostConfigKey] != userHost {
+				t.Errorf("host = %q, want %q", tt.config[hostConfigKey], userHost)
+			}
+		})
+	}
+}
+
+// TestPlacementInjectsServiceDNSAliases checks that a Workload with
+// `kubernetes.service` reaches the host with the Service DNS names on its p3
+// `handler` entrypoint, under the configured cluster domain, and on no other
+// interface.
+func TestPlacementInjectsServiceDNSAliases(t *testing.T) {
+	reply, err := protojson.Marshal(&runtimev2.WorkloadStartResponse{
+		WorkloadStatus: &runtimev2.WorkloadStatus{WorkloadId: "workload-1"},
+	})
+	if err != nil {
+		t.Fatalf("marshal start response: %v", err)
+	}
+
+	bus := &mockBus{reply: &wasmbus.Message{Data: reply}}
+	host := &runtimev1alpha1.Host{
+		ObjectMeta: metav1.ObjectMeta{Name: testHeartbeatHostID, Namespace: testNamespace},
+		HostID:     testHeartbeatHostID,
+	}
+	r := &WorkloadReconciler{
+		Client:            newWorkloadClient(t, host),
+		Bus:               bus,
+		OperatorNamespace: testNamespace,
+		ClusterDomain:     "corp.internal.",
+	}
+	workload := &runtimev1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{Name: "p3-http", Namespace: "my-ns"},
+		Spec: runtimev1alpha1.WorkloadSpec{
+			HostInterfaces: []runtimev1alpha1.HostInterface{
+				{
+					ConfigLayer: runtimev1alpha1.ConfigLayer{Config: map[string]string{hostConfigKey: "p3-http.local"}},
+					Namespace:   "wasi",
+					Package:     "http",
+					Version:     "0.3.0",
+					Interfaces:  []string{"handler"},
+				},
+				{Namespace: "wasi", Package: "keyvalue", Interfaces: []string{"store"}},
+			},
+			Components: []runtimev1alpha1.WorkloadComponent{{Name: "http", Image: "example.com/http:1"}},
+			Kubernetes: &runtimev1alpha1.KubernetesSpec{
+				Service: &runtimev1alpha1.KubernetesServiceRef{Name: "my-svc"},
+			},
+		},
+		Status: runtimev1alpha1.WorkloadStatus{HostID: testHeartbeatHostID},
+	}
+
+	if err := r.reconcilePlacement(context.Background(), workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
+		t.Fatalf("reconcilePlacement: %v", err)
+	}
+
+	var req runtimev2.WorkloadStartRequest
+	if err := protojson.Unmarshal(bus.gotData, &req); err != nil {
+		t.Fatalf("unmarshal start request: %v", err)
+	}
+	ifaces := req.GetWorkload().GetWitWorld().GetHostInterfaces()
+	if len(ifaces) != 2 {
+		t.Fatalf("got %d host interfaces, want 2", len(ifaces))
+	}
+	const want = "my-svc.my-ns,my-svc.my-ns.svc,my-svc.my-ns.svc.corp.internal"
+	if got := ifaces[0].GetConfig()["host-aliases"]; got != want {
+		t.Errorf("handler host-aliases = %q, want %q", got, want)
+	}
+	if got, ok := ifaces[1].GetConfig()["host-aliases"]; ok {
+		t.Errorf("keyvalue got host-aliases %q, want none", got)
 	}
 }
