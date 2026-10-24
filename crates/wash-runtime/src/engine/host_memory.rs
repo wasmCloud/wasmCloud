@@ -1496,7 +1496,7 @@ mod tests {
     #[test]
     fn a_smaller_reservation_shrinks_the_slot_and_the_pool() {
         // The case the knob is for: 64 MiB slots with a 2 MiB guard put a
-        // million slots in 66 TiB, where the default fits about 30,000 in the
+        // million slots in about 63 TiB, where the default fits about 30,000 in the
         // 128 TiB a process can map.
         let layout = MemoryLayout {
             reservation: 64 * MIB,
