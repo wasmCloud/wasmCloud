@@ -1695,6 +1695,27 @@ impl HostBuilder {
         &self.id
     }
 
+    /// Sets an ID known before the host connects to its control plane.
+    ///
+    /// The ID must be unique among every host sharing the control plane, and
+    /// never reused by a later host process: the operator may ignore heartbeats
+    /// from a removed host's ID for at least an hour. IDs must contain 1–128
+    /// ASCII letters, digits, hyphens, or underscores so they form one subject
+    /// token.
+    pub fn with_id(mut self, id: impl Into<String>) -> anyhow::Result<Self> {
+        let id = id.into();
+        anyhow::ensure!(
+            !id.is_empty()
+                && id.len() <= 128
+                && id
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_')),
+            "host ID must contain 1–128 ASCII letters, digits, hyphens, or underscores"
+        );
+        self.id = id;
+        Ok(self)
+    }
+
     pub fn with_engine(mut self, engine: Engine) -> Self {
         self.engine = Some(engine);
         self
@@ -2031,6 +2052,24 @@ fn reserve_http_ingress(
 mod tests {
     use super::*;
     use crate::types::Component;
+
+    #[test]
+    fn host_id_accepts_one_bounded_subject_token() -> anyhow::Result<()> {
+        for id in ["host-1_A".to_string(), "a".repeat(128)] {
+            assert_eq!(HostBuilder::default().with_id(id.clone())?.id(), id);
+        }
+        for id in ["", "a.b", "*", ">", "a b", "a\tb", "a\nb", "höst", "a:b"] {
+            assert!(HostBuilder::default().with_id(id).is_err(), "{id:?}");
+        }
+        assert!(HostBuilder::default().with_id("a".repeat(129)).is_err());
+        assert_ne!(HostBuilder::default().id(), HostBuilder::default().id());
+        let generated = HostBuilder::default().id().to_string();
+        assert_eq!(
+            HostBuilder::default().with_id(generated.clone())?.id(),
+            generated
+        );
+        Ok(())
+    }
 
     #[test]
     fn http_ingress_is_host_owned() {

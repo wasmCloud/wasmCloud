@@ -65,7 +65,7 @@ func main() {
 	var (
 		metricsAddr                 string
 		natsUrl                     string
-		natsCreds                   string
+		natsClient                  natsClientFlags
 		natsCa                      string
 		natsClientCert              string
 		natsClientKey               string
@@ -86,7 +86,19 @@ func main() {
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8081", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8082", "The address the probe endpoint binds to.")
-	flag.StringVar(&natsCreds, "nats-creds", "", "Path to NATS credentials file.")
+	flag.StringVar(&natsClient.creds, "nats-creds", "", "Path to NATS credentials file.")
+	flag.StringVar(&natsClient.nkey, "nats-nkey", "", "Path to a file holding a NATS nkey seed.")
+	flag.StringVar(&natsClient.tokenFile, "nats-token-file", "",
+		"Path to a file holding a NATS auth token, read again on every connect.")
+	flag.StringVar(&natsClient.user, "nats-user", "", "NATS user name. Requires -nats-password-file.")
+	flag.StringVar(&natsClient.passwordFile, "nats-password-file", "",
+		"Path to a file holding the password for -nats-user, read again on every connect.")
+	flag.StringVar(&natsClient.name, "nats-name", "runtime-operator",
+		"Connection name the operator presents to NATS.")
+	flag.StringVar(&natsClient.inboxPrefix, "nats-inbox-prefix", "",
+		"Subject prefix for the replies hosts send the operator. Empty uses the NATS default, _INBOX. "+
+			"Set one only the operator may subscribe to, so other NATS clients can neither read nor forge "+
+			"host replies.")
 	flag.StringVar(&natsCa, "nats-ca", "", "Path to TLS CA pem")
 	flag.StringVar(&natsClientCert, "nats-client-cert", "", "Path to TLS client certificate pem")
 	flag.StringVar(&natsClientKey, "nats-client-key", "", "Path to TLS client key pem")
@@ -176,9 +188,12 @@ func main() {
 		AllowSharedHosts:          allowSharedHosts,
 	}
 
-	if natsCreds != "" {
-		operatorCfg.NatsOptions = append(operatorCfg.NatsOptions, nats.UserCredentials(natsCreds))
+	clientOptions, err := natsClient.options()
+	if err != nil {
+		setupLog.Error(err, "invalid NATS client configuration")
+		os.Exit(1)
 	}
+	operatorCfg.NatsOptions = append(operatorCfg.NatsOptions, clientOptions...)
 
 	if natsCa != "" {
 		operatorCfg.NatsOptions = append(operatorCfg.NatsOptions, nats.RootCAs(natsCa))
