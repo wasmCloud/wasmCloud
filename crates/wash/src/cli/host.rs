@@ -304,13 +304,14 @@ pub struct HostCommand {
     ///
     /// A messaging-triggered component gets a fresh instance per message, so
     /// this equally bounds instances. Unset, it is derived from the host's
-    /// instance pool: a message in flight holds one of its linear memories, so
-    /// the stock pool of 1000 holds 1000, and messaging claims two thirds of
-    /// that — 666 —
-    /// leaving the rest for HTTP-triggered work, warm pools, and long-lived
-    /// services. Raising `--core-instances` raises this with it; with pooling
-    /// disabled there is no budget to divide and the pinned default of 128
-    /// stands. Set, the number given is used as-is.
+    /// installed instance and memory limits. The stock pool derives 666,
+    /// leaving capacity for HTTP-triggered work, warm pools, and long-lived
+    /// services; independent pool overrides can lower that default.
+    /// Components also acquire pool resources according to their memory and
+    /// table requirements, so compositions can reach a resource limit before
+    /// the message cap. Raising `--core-instances` raises the pool; with pooling
+    /// disabled the pinned default of 128 stands. Set, the number given is the
+    /// message cap, still subject to the installed pool's resource limits.
     //
     // Deliberately no `default_value_t`: a parse-time default is
     // indistinguishable downstream from an operator typing the same number, and
@@ -1228,7 +1229,7 @@ impl CliCommand for HostCommand {
         let messaging_limits = crate::config::wasmcloud_messaging_limits(
             self.wasmcloud_messaging_max_in_flight,
             self.wasmcloud_messaging_max_in_flight_per_component,
-            engine.total_memories(),
+            engine.pool_totals(),
         )?;
 
         if let Some(value) = &self.removed_wasmcloud_nats_workload_config {

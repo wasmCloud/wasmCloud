@@ -583,7 +583,8 @@ impl Engine {
     ///
     /// This is a count of live core modules, several per component, and it is
     /// sized not to bind before the linear memories do; what the pool holds in
-    /// components is [`Self::total_memories`].
+    /// components depends on their resource requirements and all the installed
+    /// [`Self::pool_totals`], including independent overrides.
     ///
     /// Recorded rather than recomputed: re-deriving `max_instances.unwrap_or(…)`
     /// somewhere else would miss the env override (applied inside
@@ -593,13 +594,18 @@ impl Engine {
     }
 
     /// Linear memories the pool can hold at once: the count `--core-instances`
-    /// sizes, and the one that reserves address space. The pool admits the same
-    /// number of fiber stacks and component instances, and a component instance
-    /// of the usual shape takes one of each, so this is also how many
-    /// components the pool holds and the budget to divide when a ceiling is
-    /// derived from the pool. `None` when pooling is off or unsupported.
+    /// sizes, and the one that reserves address space. A component can contain
+    /// several memories, and other pool totals can be overridden independently;
+    /// this is not a count of component instances. `None` when pooling is off
+    /// or unsupported.
     pub fn total_memories(&self) -> Option<u32> {
         Some(self.pool_totals.as_ref()?.memories)
+    }
+
+    /// All installed pooling limits, including environment and caller-supplied
+    /// overrides. `None` when pooling is off or unsupported.
+    pub fn pool_totals(&self) -> Option<pool_usage::PoolTotals> {
+        self.pool_totals
     }
 
     /// Every pooling allocator total against what is in use now, so an

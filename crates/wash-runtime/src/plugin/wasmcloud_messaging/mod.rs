@@ -48,6 +48,7 @@ pub(crate) mod multiplexed;
 #[cfg(feature = "wasm_component_model_implements")]
 pub(crate) mod multiplexed_async;
 pub(crate) mod nats;
+mod pool_admission;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -55,6 +56,9 @@ use std::time::Duration;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::Counter;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+use crate::engine::pool_usage::PoolTotals;
+use pool_admission::PoolAdmission;
 
 pub use in_memory::InMemoryMessaging;
 #[cfg(feature = "wasm_component_model_implements")]
@@ -594,8 +598,8 @@ pub(crate) use messaging_handler_dispatch;
 ///
 /// A messaging-triggered component that declared no `poolSize` gets a fresh
 /// instance per message, so for those this is equally a ceiling on instances.
-/// 32 instances is 32 of the pool's linear memories, fiber stacks and
-/// component instances — a bound on one workload's blast radius. A component
+/// A composed instance can hold several linear memories. On a pooled host,
+/// a separate resource gate accounts for that cost. A component
 /// that *did* declare `poolSize` is bounded by that
 /// instead: its deliveries run on warm instances, and only the ones arriving
 /// once every instance is busy build a store of their own.
@@ -612,16 +616,15 @@ pub const DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT: usize = 32;
 ///
 /// The per-component ceiling alone does not bound the host — forty components
 /// at 32 is 1280 in flight against a pool of 1000 linear memories
-/// ([`crate::engine`] sizes the pool from `max_instances`, default 1000; a
-/// message in flight holds one of them, with a fiber stack and a component
-/// instance from totals of the same size). 128 keeps most of
-/// the pool for HTTP-triggered work, warm pools, and long-lived services — the
-/// workloads that otherwise fail to *start* when a messaging burst drains the
-/// pool.
+/// ([`crate::engine`] sizes the pool from `max_instances`, default 1000).
+/// A composed component can spend several memories per message, so resource
+/// admission is separate from the message-count ceilings.
 ///
-/// With a pool to divide, `derive_host_ceiling` takes two thirds of the linear
-/// memories the host actually has, so resizing the pool resizes the ceiling
-/// with it. The stock pool of 1000 derives 666 host-wide and 166 per component.
+/// With a pool to divide, `derive_host_ceiling` takes two thirds of its
+/// single-memory component capacity, respecting independent core-instance,
+/// component-instance and stack overrides. The stock pool of 1000 derives 666
+/// host-wide and 166 per component. The resource gates also respect installed
+/// table limits and charge compositions for their full memory/table demand.
 /// This constant is the fallback for the one case where there is no budget to
 /// divide.
 ///
@@ -702,19 +705,12 @@ const SATURATED_COMPONENTS_PER_HOST: u32 = 4;
 const MIN_DERIVED_IN_FLIGHT: usize = 8;
 const MAX_DERIVED_IN_FLIGHT: usize = 4096;
 
-/// Derive the host-wide ceiling from the pool's linear-memory count.
-///
-/// `total_memories` is [`crate::engine::Engine::total_memories`]: how many
-/// linear memories the pool holds at once, and with them (from totals of the
-/// same size) how many fiber stacks and component instances, which is what a
-/// message in flight spends. The pool's core-instance
-/// total is deliberately not the budget: a component is several core instances
-/// and that total is sized so it never binds first. `None` when pooling is
-/// off, in which case there is no budget to divide and the pinned default
-/// stands. The §1 failure cannot happen without a pool, but the memory bound
-/// still applies, so a ceiling is still wanted.
-fn derive_host_ceiling(total_memories: Option<u32>) -> usize {
-    let Some(capacity) = total_memories else {
+/// Derive the host-wide ceiling from installed instance and memory limits.
+/// Composed components consume multiple slots of separate resource gates;
+/// the host and per-component message ceilings still count deliveries.
+/// `None` means pooling is off, so the pinned fallback stands.
+fn derive_host_ceiling(capacity: Option<u32>) -> usize {
+    let Some(capacity) = capacity else {
         return DEFAULT_MAX_IN_FLIGHT_HOST;
     };
     // Messages the pool could hold if messaging had all of it. `share` is what
@@ -756,13 +752,14 @@ fn per_component_ceiling(host_total: usize) -> usize {
 ///
 /// Both levels are needed and neither subsumes the other: the per-component
 /// ceiling stops one runaway workload taking the host, and the host-wide
-/// ceiling stops a crowd of components each sitting inside its own limit from
-/// adding up to more than the pool can carry.
+/// ceiling bounds the sum of deliveries. Shared pool resource gates account
+/// for components that require more than one memory or table per delivery.
 #[derive(Clone, Debug)]
 pub struct MessagingLimits {
     /// Shared across every component on this host. Cloned into each
     /// subscriber loop's [`Admission`].
     host: Arc<Semaphore>,
+    pool: Option<PoolAdmission>,
     host_total: usize,
     per_component_default: usize,
     admission_wait: Duration,
@@ -892,7 +889,8 @@ impl Default for MessagingLimits {
 
 impl MessagingLimits {
     /// Build the host's messaging ceilings, resolving whatever the operator did
-    /// not specify against the pool's linear-memory count.
+    /// not specify against installed instance and memory limits. Resource gates
+    /// also account for each component's memory and table requirements.
     ///
     /// `None` for either ceiling means "the operator said nothing" — which is
     /// why the flags must not carry a `default_value_t`. A CLI-parse-time
@@ -909,12 +907,17 @@ impl MessagingLimits {
     pub fn resolve(
         host_total: Option<usize>,
         per_component_default: Option<usize>,
-        total_memories: Option<u32>,
+        pool_totals: Option<PoolTotals>,
     ) -> Self {
-        let host_total = host_total.unwrap_or_else(|| derive_host_ceiling(total_memories));
+        let explicit_host_total = host_total;
+        let capacity = pool_totals.map(pool_admission::capacity);
+        let derived = derive_host_ceiling(capacity);
+        let host_total = host_total.unwrap_or(derived);
         let per_component_default =
             per_component_default.unwrap_or_else(|| per_component_ceiling(host_total));
-        Self::new(host_total, per_component_default)
+        let mut limits = Self::new(host_total, per_component_default);
+        limits.pool = pool_totals.map(|totals| PoolAdmission::new(totals, explicit_host_total));
+        limits
     }
 
     /// The largest ceiling either knob may take: what a [`Semaphore`] can hold.
@@ -949,6 +952,7 @@ impl MessagingLimits {
         }
         Self {
             host: Arc::new(Semaphore::new(host_total)),
+            pool: None,
             host_total,
             per_component_default,
             admission_wait: DEFAULT_ADMISSION_WAIT,
@@ -1040,6 +1044,7 @@ impl MessagingLimits {
         Admission {
             component,
             host: Arc::clone(&self.host),
+            pool: self.pool.clone(),
             limit,
             wait: self.admission_wait,
             timeouts: self.timeouts.clone(),
@@ -1183,6 +1188,7 @@ pub(crate) enum Admitted {
 pub(crate) struct Admission {
     component: Arc<Semaphore>,
     host: Arc<Semaphore>,
+    pool: Option<PoolAdmission>,
     limit: usize,
     wait: Duration,
     timeouts: AdmissionTimeouts,
@@ -1201,7 +1207,8 @@ pub(crate) struct Admission {
 }
 
 impl Admission {
-    /// Take one slot, parking until both levels have room.
+    /// Take one message slot and its pool resources, parking until all gates
+    /// have room.
     ///
     /// Returns `None` once either semaphore is closed, which is how a
     /// shutting-down component tells its subscriber loop to stop.
@@ -1210,19 +1217,37 @@ impl Admission {
     /// permit while it waited for a component permit would block every other
     /// component on the host; holding a component permit while waiting for the
     /// host's only throttles the component that is already at its own limit.
-    /// There is no deadlock either way — two semaphores, one consistent order,
-    /// no cycle — but only this order confines the head-of-line blocking to
-    /// the workload responsible for it.
+    /// Pool resources are taken between the component and host permits, in
+    /// the same order for every caller. A composed component waits for its
+    /// whole resource cost before any store is built.
     ///
     /// Cancel-safe: dropping the returned future before it resolves releases
     /// whichever permit it had already taken.
     pub(crate) async fn acquire(&self) -> Option<AdmissionPermit> {
         let component = Arc::clone(&self.component).acquire_owned().await.ok()?;
+        let pool = match &self.pool {
+            Some(pool) => Some(pool.acquire().await?),
+            None => None,
+        };
         let host = Arc::clone(&self.host).acquire_owned().await.ok()?;
         Some(AdmissionPermit {
             _component: component,
             _host: host,
+            _pool: pool,
         })
+    }
+
+    /// Charge the final linked component's memories and tables before admitting
+    /// a delivery. Keep message counts independent of this resource cost.
+    pub(crate) fn with_component(
+        mut self,
+        component: &wasmtime::component::Component,
+    ) -> anyhow::Result<Self> {
+        self.pool = self
+            .pool
+            .map(|pool| pool.with_component(component))
+            .transpose()?;
+        Ok(self)
     }
 
     /// [`Admission::acquire`], but giving up after [`MessagingLimits::admission_wait`]
@@ -1260,9 +1285,10 @@ impl Admission {
                     waited = ?self.wait,
                     limit = self.limit,
                     "no messaging admission slot came free before the deadline; \
-                     dropping message. The host or this component is saturated — \
+                     dropping message. The host, component or instance pool is saturated — \
                      raise --wasmcloud-messaging-max-in-flight, raise the component's \
-                     max_in_flight config, or reduce inbound rate"
+                     max_in_flight config, raise the limiting WASMTIME_POOLING_TOTAL_* \
+                     setting, or reduce inbound rate"
                 );
                 Admitted::Shed
             }
@@ -1353,7 +1379,7 @@ impl Admission {
     }
 }
 
-/// Both permits for one in-flight message, released together on drop.
+/// Message and pool resource permits, released together on drop.
 ///
 /// Held by the spawned handler task, so a slot is freed when the handler
 /// returns — whether it succeeded, failed, or trapped — and equally on the
@@ -1363,6 +1389,7 @@ impl Admission {
 pub(crate) struct AdmissionPermit {
     _component: OwnedSemaphorePermit,
     _host: OwnedSemaphorePermit,
+    _pool: Option<[OwnedSemaphorePermit; 5]>,
 }
 
 /// Returns `true` if the world exports the `wasmcloud:messaging/handler`
@@ -1700,6 +1727,17 @@ mod tests {
         assert_eq!(parse_admission_group(None), None);
     }
 
+    fn messaging_pool(memories: u32) -> Option<crate::engine::pool_usage::PoolTotals> {
+        Some(crate::engine::pool_usage::PoolTotals {
+            memories,
+            core_instances: memories.saturating_mul(16),
+            tables: memories.saturating_mul(4),
+            component_instances: memories,
+            stacks: memories,
+            gc_heaps: memories,
+        })
+    }
+
     // --- Admission ceilings -------------------------------------------------
 
     use super::{
@@ -1743,7 +1781,7 @@ mod tests {
         // pool independently made `--wasmcloud-messaging-max-in-flight` a no-op
         // for any individual component: the host ceiling rose and every
         // component stayed pinned at the pool-derived per-component default.
-        let raised = MessagingLimits::resolve(Some(1024), None, Some(1000));
+        let raised = MessagingLimits::resolve(Some(1024), None, messaging_pool(1000));
         assert_eq!(raised.host_total(), 1024);
         assert!(
             raised.per_component_default() > DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT,
@@ -1753,7 +1791,7 @@ mod tests {
 
         // And in the other direction: lowering the host total must not leave a
         // per-component default sitting above it.
-        let lowered = MessagingLimits::resolve(Some(4), None, Some(1000));
+        let lowered = MessagingLimits::resolve(Some(4), None, messaging_pool(1000));
         assert_eq!(lowered.host_total(), 4);
         assert!(
             lowered.per_component_default() <= lowered.host_total(),
@@ -1769,7 +1807,7 @@ mod tests {
         // operator said something" and "the operator said nothing".
         for host in [None, Some(1), Some(4), Some(128), Some(1024)] {
             for pool in [None, Some(16), Some(1000), Some(64_000)] {
-                let limits = MessagingLimits::resolve(host, None, pool);
+                let limits = MessagingLimits::resolve(host, None, pool.and_then(messaging_pool));
                 assert!(
                     limits.per_component_default() <= limits.host_total(),
                     "host={host:?} pool={pool:?} produced per_component {} > host {}",
@@ -1788,7 +1826,7 @@ mod tests {
         // memories holds 4 components, so the ceiling may not be the unclamped
         // floor of 8.
         for memories in [1u32, 4, 5, 16, 32] {
-            let limits = MessagingLimits::resolve(None, None, Some(memories));
+            let limits = MessagingLimits::resolve(None, None, messaging_pool(memories));
             assert!(
                 limits.host_total() <= memories as usize,
                 "pool of {memories} linear memories derived a ceiling of {} messages",
@@ -1801,7 +1839,7 @@ mod tests {
     fn a_stock_pool_is_unaffected_by_the_floor() {
         // The floor only ever binds on a small pool; the stock 1000 must still
         // derive from its share, not from either bound.
-        let limits = MessagingLimits::resolve(None, None, Some(1000));
+        let limits = MessagingLimits::resolve(None, None, messaging_pool(1000));
         assert!(
             limits.host_total() > super::MIN_DERIVED_IN_FLIGHT
                 && limits.host_total() < super::MAX_DERIVED_IN_FLIGHT,
@@ -1821,7 +1859,7 @@ mod tests {
         // actually runs with, so it is the one prose is most likely to get
         // wrong. Both are pinned here: changing the derivation, the pool share,
         // or either constant without rewriting the docs fails this test.
-        let stock_pool = MessagingLimits::resolve(None, None, Some(1000));
+        let stock_pool = MessagingLimits::resolve(None, None, messaging_pool(1000));
         assert_eq!(stock_pool.host_total(), 666);
         assert_eq!(stock_pool.per_component_default(), 166);
 

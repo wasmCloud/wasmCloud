@@ -526,6 +526,11 @@ impl HostPlugin for NatsMessaging {
             }
         };
 
+        let admission = match &pre {
+            Some(pre) => admission.with_component(pre.instance_pre().component())?,
+            None => admission,
+        };
+
         let workload = workload.clone();
         let component_id = component_id.to_string();
         let tracker_component_id = component_id.clone();

@@ -650,6 +650,11 @@ impl HostPlugin for InMemoryMessaging {
             }
         };
 
+        let admission = match &pre {
+            Some(pre) => admission.with_component(pre.instance_pre().component())?,
+            None => admission,
+        };
+
         let workload = workload.clone();
         let component_id = component_id.to_string();
 

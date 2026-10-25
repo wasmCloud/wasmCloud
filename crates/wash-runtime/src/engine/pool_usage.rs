@@ -38,17 +38,18 @@ impl PoolSlots {
 /// The totals a pool was built with, read back from the installed
 /// [`PoolingAllocationConfig`] so environment overrides are reflected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PoolTotals {
-    core_instances: u32,
-    component_instances: u32,
-    pub(super) memories: u32,
-    pub(super) tables: u32,
-    pub(super) stacks: u32,
-    gc_heaps: u32,
+pub struct PoolTotals {
+    pub core_instances: u32,
+    pub component_instances: u32,
+    pub memories: u32,
+    pub tables: u32,
+    pub stacks: u32,
+    pub gc_heaps: u32,
 }
 
 impl PoolTotals {
-    pub(crate) fn of(config: &PoolingAllocationConfig) -> Self {
+    /// Read every total from a pooling configuration, including overrides.
+    pub fn of(config: &PoolingAllocationConfig) -> Self {
         Self {
             core_instances: config.get_total_core_instances(),
             component_instances: config.get_total_component_instances(),
