@@ -198,7 +198,7 @@ mod tests {
     /// Hold real stores and admission permits until the next delivery queues.
     /// Dropping a completed delivery must let that queued delivery instantiate.
     async fn fill(engine: &Engine, component: &Component, explicit_host: Option<usize>) -> usize {
-        let limits = MessagingLimits::resolve(explicit_host, None, engine.pool_totals());
+        let limits = MessagingLimits::resolve(explicit_host, None, engine);
         let linker = Linker::<()>::new(engine.inner());
         let mut held = Vec::new();
         for i in 0..=limits.host_total() {
@@ -243,7 +243,7 @@ mod tests {
         config.total_core_instances(32);
         let engine = engine(config);
         let component = component(&engine, 1, 0, 4);
-        let limits = MessagingLimits::resolve(None, None, engine.pool_totals());
+        let limits = MessagingLimits::resolve(None, None, &engine);
         assert_eq!(limits.host_total(), 6);
         // Previously the ninth of 21 admitted messages failed; the core gate
         // now queues even when an explicit message ceiling is larger.
@@ -350,7 +350,7 @@ mod tests {
         let engine = engine(config());
         let small = component(&engine, 1, 0, 1);
         let composed = component(&engine, 2, 0, 2);
-        let limits = MessagingLimits::resolve(None, None, engine.pool_totals());
+        let limits = MessagingLimits::resolve(None, None, &engine);
         let other_backend = limits.clone();
         let mut held = Vec::new();
         for i in 0..14 {
@@ -393,8 +393,8 @@ mod tests {
 
         let engine = engine(config());
         let component = component(&engine, 2, 1, 4);
-        let limits = MessagingLimits::resolve(None, None, engine.pool_totals())
-            .with_admission_wait(Duration::ZERO);
+        let limits =
+            MessagingLimits::resolve(None, None, &engine).with_admission_wait(Duration::ZERO);
         let identity = AdmissionIdentity::new("review", "timeout", "component");
         let admission = limits
             .admission(&identity, None)

@@ -93,6 +93,7 @@ tokio = { version = "1.45.1", default-features = false, features = ["full"] }
 tokio-rustls = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 wash-runtime = { workspace = true, features = ["wasi-keyvalue", "wasi-blobstore"] }
+wasmtime = { workspace = true }
 testcontainers = { workspace = true }
 wat = { workspace = true }
 

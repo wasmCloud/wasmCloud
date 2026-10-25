@@ -1229,7 +1229,7 @@ impl CliCommand for HostCommand {
         let messaging_limits = crate::config::wasmcloud_messaging_limits(
             self.wasmcloud_messaging_max_in_flight,
             self.wasmcloud_messaging_max_in_flight_per_component,
-            engine.pool_totals(),
+            &engine,
         )?;
 
         if let Some(value) = &self.removed_wasmcloud_nats_workload_config {

@@ -268,11 +268,10 @@ pub(crate) const EPOCH_TICK: Duration = Duration::from_millis(10);
 /// [`PoolingAllocationConfig`].
 ///
 /// [`host_memory::HostMemoryBudgets`] holds what was asked for. The environment
-/// moves each of these three independently, so the two can disagree.
+/// moves every total and the heap ceiling independently, so the two can
+/// disagree.
 #[derive(Debug, Clone, Copy)]
 struct InstalledPool {
-    core_instances: u32,
-    memories: u32,
     max_memory_size: u64,
     totals: pool_usage::PoolTotals,
 }
@@ -281,7 +280,7 @@ impl InstalledPool {
     /// Address space the pool reserves. Keyed on the memory count, not the
     /// instance count, and never less than wasmtime's reservation per slot.
     fn reservation(&self) -> u64 {
-        host_memory::pool_slab_bytes(self.max_memory_size, self.memories)
+        host_memory::pool_slab_bytes(self.max_memory_size, self.totals.memories)
     }
 }
 
@@ -354,28 +353,26 @@ pub struct Engine {
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
-    /// Core instances the pooling allocator was configured to admit, captured
-    /// from the [`PoolingAllocationConfig`] actually installed — so it reflects
-    /// the `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` override and a
-    /// caller-supplied pooling config alike. `None` when pooling is off or
-    /// unsupported, i.e. when there is no pool budget to divide.
-    ///
-    /// Recorded rather than recomputed: re-deriving `max_instances.unwrap_or(…)`
-    /// somewhere else would miss the env override (applied inside
-    /// [`new_pooling_config`]) and drift the moment either side changed.
-    total_core_instances: Option<u32>,
     /// Linear memory the pooling allocator actually admits per memory, read
     /// back from the installed [`PoolingAllocationConfig`]. `None` when
     /// pooling is off, i.e. when no ceiling is enforced.
     ///
-    /// Captured for the same reason as `total_core_instances`:
+    /// Captured for the same reason as `pool_totals`:
     /// `--default-heap-memory` is only the *requested* size, and
     /// `WASMTIME_POOLING_MAX_MEMORY_SIZE` or a caller-supplied pooling config
     /// replaces it outright. Quoting the flag in a refusal that the installed
     /// ceiling caused produces advice that cannot work.
     installed_heap_memory: Option<u64>,
-    /// Every total the installed pool was built with, for
-    /// [`Engine::pool_usage`]. `None` when pooling is off.
+    /// Every total the installed pool was built with, read back from the
+    /// [`PoolingAllocationConfig`] actually installed so it reflects the
+    /// `WASMTIME_POOLING_TOTAL_*` overrides and a caller-supplied pooling
+    /// config alike. `None` when pooling is off or unsupported.
+    ///
+    /// Recorded rather than recomputed: re-deriving `max_instances.unwrap_or(…)`
+    /// somewhere else would miss the env override (applied inside
+    /// [`new_pooling_config`]) and drift the moment either side changed. The
+    /// one copy: [`Engine::total_core_instances`], [`Engine::total_memories`],
+    /// [`Engine::pool_totals`] and [`Engine::pool_usage`] all read from it.
     pool_totals: Option<pool_usage::PoolTotals>,
     /// The linkers every workload component starts from, built once and
     /// shared (see [`BaseLinkers`]).
@@ -584,13 +581,10 @@ impl Engine {
     /// This is a count of live core modules, several per component, and it is
     /// sized not to bind before the linear memories do; what the pool holds in
     /// components depends on their resource requirements and all the installed
-    /// [`Self::pool_totals`], including independent overrides.
+    /// limits reported by [`Self::pool_usage`], including independent overrides.
     ///
-    /// Recorded rather than recomputed: re-deriving `max_instances.unwrap_or(…)`
-    /// somewhere else would miss the env override (applied inside
-    /// [`new_pooling_config`]) and drift the moment either side changed.
     pub fn total_core_instances(&self) -> Option<u32> {
-        self.total_core_instances
+        Some(self.pool_totals.as_ref()?.core_instances)
     }
 
     /// Linear memories the pool can hold at once: the count `--core-instances`
@@ -604,7 +598,7 @@ impl Engine {
 
     /// All installed pooling limits, including environment and caller-supplied
     /// overrides. `None` when pooling is off or unsupported.
-    pub fn pool_totals(&self) -> Option<pool_usage::PoolTotals> {
+    pub(crate) fn pool_totals(&self) -> Option<pool_usage::PoolTotals> {
         self.pool_totals
     }
 
@@ -1561,8 +1555,6 @@ impl EngineBuilder {
                 )
             });
             installed_pool = Some(InstalledPool {
-                core_instances: pooling.get_total_core_instances(),
-                memories: pooling.get_total_memories(),
                 max_memory_size: u64::try_from(pooling.get_max_memory_size()).unwrap_or(u64::MAX),
                 totals: pool_usage::PoolTotals::of(&pooling),
             });
@@ -1570,7 +1562,6 @@ impl EngineBuilder {
         } else if use_pooling_allocator {
             tracing::warn!("pooling allocator requested but not supported");
         }
-        let total_core_instances = installed_pool.map(|pool| pool.core_instances);
         let installed_heap_memory = installed_pool.map(|pool| pool.max_memory_size);
         let pool_totals = installed_pool.map(|pool| pool.totals);
         // Against the pool that was installed, not the knobs: the environment
@@ -1591,8 +1582,8 @@ impl EngineBuilder {
                 max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
                 guest_memory_mode = self.guest_memory_mode.as_str(),
                 default_heap_memory = %host_memory::render_bytes(pool.max_memory_size),
-                core_instances = pool.core_instances,
-                memories = pool.memories,
+                core_instances = pool.totals.core_instances,
+                memories = pool.totals.memories,
                 slot_size = %host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size)),
                 pool_reservation = %host_memory::render_bytes(pool.reservation()),
                 "host memory resolved"
@@ -1684,7 +1675,7 @@ impl EngineBuilder {
                  space ({} memories of {} each) out of the {} this process can map; if the \
                  pool is the cause, lower core-instances or WASMTIME_POOLING_TOTAL_MEMORIES",
                 host_memory::render_bytes(pool.reservation()),
-                pool.memories,
+                pool.totals.memories,
                 host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size)),
                 host_memory::render_bytes(host_memory::usable_address_space()),
             )),
@@ -1758,7 +1749,6 @@ impl EngineBuilder {
             process_memory,
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
-            total_core_instances,
             installed_heap_memory,
             pool_totals,
         })
@@ -1908,7 +1898,8 @@ const CORE_INSTANCES_PER_MEMORY: u32 = 16;
 /// mapping, so there the table pool's commit charge grows with it.
 const TABLES_PER_MEMORY: u32 = 4;
 
-/// The pooling allocator for `instances` linear memories.
+/// The pool totals `instances` linear memories resolve to, before the
+/// environment is consulted.
 ///
 /// `instances` is the resolved `--core-instances`. It is the number of linear
 /// memories, which reserve the pool's address space, and also of the fiber
@@ -1917,9 +1908,35 @@ const TABLES_PER_MEMORY: u32 = 4;
 /// totals, which reserve nothing, are multiples of it
 /// ([`CORE_INSTANCES_PER_MEMORY`], [`TABLES_PER_MEMORY`]) so that a component
 /// made of several core modules does not spend several memories' worth of
-/// them. Every total can still be set on its own through its
-/// `WASMTIME_POOLING_TOTAL_*` variable.
+/// them.
+///
+/// Apart from [`new_pooling_config`] so the derivation can be pinned by a test
+/// that no exported `WASMTIME_POOLING_TOTAL_*` override can disturb.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DerivedPoolTotals {
+    memories: u32,
+    stacks: u32,
+    component_instances: u32,
+    core_instances: u32,
+    tables: u32,
+}
+
+fn derived_pool_totals(instances: u32) -> DerivedPoolTotals {
+    DerivedPoolTotals {
+        memories: instances,
+        stacks: instances,
+        component_instances: instances,
+        core_instances: instances.saturating_mul(CORE_INSTANCES_PER_MEMORY),
+        tables: instances.saturating_mul(TABLES_PER_MEMORY),
+    }
+}
+
+/// The pooling allocator for `instances` linear memories: the totals of
+/// [`derived_pool_totals`], each of which can still be set on its own through
+/// its `WASMTIME_POOLING_TOTAL_*` variable, and the per-slot limits the
+/// environment names.
 fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAllocationConfig {
+    let derived = derived_pool_totals(instances);
     let mut config = PoolingAllocationConfig::default();
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_UNUSED_WASM_SLOTS") {
         config.max_unused_warm_slots(v);
@@ -1938,7 +1955,7 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
     }
     config.total_component_instances(pooling_env_instances(
         "WASMTIME_POOLING_TOTAL_COMPONENT_INSTANCES",
-        instances,
+        derived.component_instances,
     ));
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_COMPONENT_INSTANCE_SIZE") {
         config.max_component_instance_size(v);
@@ -1954,21 +1971,21 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
     }
     config.total_memories(pooling_env_instances(
         "WASMTIME_POOLING_TOTAL_MEMORIES",
-        instances,
+        derived.memories,
     ));
     config.total_tables(pooling_env_instances(
         "WASMTIME_POOLING_TOTAL_TABLES",
-        instances.saturating_mul(TABLES_PER_MEMORY),
+        derived.tables,
     ));
     config.total_stacks(pooling_env_instances(
         "WASMTIME_POOLING_TOTAL_STACKS",
-        instances,
+        derived.stacks,
     ));
     // A counter, not a reservation: `host memory resolved` reports it beside
     // the memory count that actually sizes the pool.
     config.total_core_instances(pooling_env_instances(
         "WASMTIME_POOLING_TOTAL_CORE_INSTANCES",
-        instances.saturating_mul(CORE_INSTANCES_PER_MEMORY),
+        derived.core_instances,
     ));
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_CORE_INSTANCE_SIZE") {
         config.max_core_instance_size(v);
@@ -2298,22 +2315,48 @@ mod tests {
     /// warm pool fills first.
     #[test]
     fn pool_counters_do_not_bind_before_the_memories() {
-        let config = new_pooling_config(1000, host_memory::WASMTIME_DEFAULT_HEAP_MEMORY);
-        assert_eq!(config.get_total_memories(), 1000);
-        assert_eq!(config.get_total_stacks(), 1000);
-        assert_eq!(config.get_total_component_instances(), 1000);
-        assert_eq!(config.get_total_core_instances(), 16_000);
-        assert_eq!(config.get_total_tables(), 4000);
+        // The derivation, before the environment has its say.
+        let derived = derived_pool_totals(1000);
+        assert_eq!(derived.memories, 1000);
+        assert_eq!(derived.stacks, 1000);
+        assert_eq!(derived.component_instances, 1000);
+        assert_eq!(derived.core_instances, 16_000);
+        assert_eq!(derived.tables, 4000);
+        assert_eq!(derived_pool_totals(u32::MAX).core_instances, u32::MAX);
+
+        // What the config and then the engine install is the derivation with
+        // the environment applied, so this half holds in a shell that exports
+        // a `WASMTIME_POOLING_TOTAL_*` override too: the expectation is read
+        // through the same override the code is.
+        let installed = |key, resolved| pooling_env_instances(key, resolved);
+        let derived = derived_pool_totals(64);
+        let config = new_pooling_config(64, host_memory::WASMTIME_DEFAULT_HEAP_MEMORY);
+        assert_eq!(
+            config.get_total_memories(),
+            installed("WASMTIME_POOLING_TOTAL_MEMORIES", derived.memories)
+        );
+        assert_eq!(
+            config.get_total_core_instances(),
+            installed(
+                "WASMTIME_POOLING_TOTAL_CORE_INSTANCES",
+                derived.core_instances
+            )
+        );
+        assert_eq!(
+            config.get_total_tables(),
+            installed("WASMTIME_POOLING_TOTAL_TABLES", derived.tables)
+        );
 
         let engine = Engine::builder()
             .with_max_instances(64)
             .build()
             .expect("pooling engine should build");
-        if engine.pool_usage().is_some() {
-            assert_eq!(engine.total_memories(), Some(64));
+        if let Some(totals) = engine.pool_totals() {
+            assert_eq!(totals, pool_usage::PoolTotals::of(&config));
+            assert_eq!(engine.total_memories(), Some(config.get_total_memories()));
             assert_eq!(
                 engine.total_core_instances(),
-                Some(64 * CORE_INSTANCES_PER_MEMORY)
+                Some(config.get_total_core_instances())
             );
         }
     }
