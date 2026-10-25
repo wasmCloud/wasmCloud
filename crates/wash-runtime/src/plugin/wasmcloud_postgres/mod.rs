@@ -510,7 +510,12 @@ impl<'a> prepared::Host for ActiveCtx<'a> {
         match client.execute_raw(&stmt, param_refs).await {
             Ok(n) => Ok(Ok(n)),
             Err(e) => Ok(Err(PreparedStatementExecError::QueryError(
-                QueryError::Unexpected(format!("execute failed: {}", pg_error_string(&e))),
+                match wrong_type_message(&e) {
+                    Some(msg) => QueryError::InvalidParams(msg),
+                    None => {
+                        QueryError::Unexpected(format!("execute failed: {}", pg_error_string(&e)))
+                    }
+                },
             ))),
         }
     }
@@ -529,6 +534,18 @@ fn pg_error_string(e: &tokio_postgres::Error) -> String {
     }
 }
 
+/// The `WrongType` a parameter encoder raised, if that is why `e` happened.
+///
+/// `tokio_postgres` wraps an encoder failure as a `ToSql` error whose `Display`
+/// drops the cause, so the guest would see only "error serializing parameter N".
+/// Returns the full message, naming the parameter and the types involved.
+fn wrong_type_message(e: &tokio_postgres::Error) -> Option<String> {
+    let cause = std::error::Error::source(e)?;
+    cause
+        .is::<postgres_types::WrongType>()
+        .then(|| format!("{e}: {cause}"))
+}
+
 /// Run a parameterized query on a connection and map rows to WIT result rows.
 /// Shared by the legacy per-component path and the named per-credential path.
 async fn execute_query(
@@ -540,10 +557,14 @@ async fn execute_query(
         .iter()
         .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
         .collect();
-    let stream = client
-        .query_raw(q, param_refs)
-        .await
-        .map_err(|e| QueryError::InvalidQuery(format!("query failed: {}", pg_error_string(&e))))?;
+    let stream =
+        client
+            .query_raw(q, param_refs)
+            .await
+            .map_err(|e| match wrong_type_message(&e) {
+                Some(msg) => QueryError::InvalidParams(msg),
+                None => QueryError::InvalidQuery(format!("query failed: {}", pg_error_string(&e))),
+            })?;
     let rows = stream.try_collect::<Vec<_>>().await.map_err(|e| {
         QueryError::Unexpected(format!("failed to collect rows: {}", pg_error_string(&e)))
     })?;

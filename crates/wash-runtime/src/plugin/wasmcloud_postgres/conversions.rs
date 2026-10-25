@@ -301,6 +301,26 @@ const NON_TEXT_TYPES: [PgType; 15] = [
     PgType::UUID,
 ];
 
+/// `oid` and the `reg*` aliases share `int4`'s four-byte encoding, so an `int4`
+/// value can stand in for them (`WHERE oid = $1`).
+fn is_oid_like(ty: &PgType) -> bool {
+    [
+        PgType::OID,
+        PgType::REGCLASS,
+        PgType::REGCOLLATION,
+        PgType::REGCONFIG,
+        PgType::REGDICTIONARY,
+        PgType::REGNAMESPACE,
+        PgType::REGOPER,
+        PgType::REGOPERATOR,
+        PgType::REGPROC,
+        PgType::REGPROCEDURE,
+        PgType::REGROLE,
+        PgType::REGTYPE,
+    ]
+    .contains(ty)
+}
+
 /// Refuse a scalar value bound to a parameter of a type it could be misread as.
 ///
 /// The inner encoders do not look at the parameter type, so without this check
@@ -329,7 +349,10 @@ fn check_scalar_type(value: &PgValue, ty: &PgType) -> Result<(), Box<dyn Error +
         | PgValue::Int(_)
         | PgValue::Int4(_)
         | PgValue::Serial(_)
-        | PgValue::Serial4(_) => wrong(<i32 as ToSql>::accepts(base), WrongType::new::<i32>),
+        | PgValue::Serial4(_) => wrong(
+            <i32 as ToSql>::accepts(base) || is_oid_like(base),
+            WrongType::new::<i32>,
+        ),
         PgValue::SmallInt(_) | PgValue::Int2(_) | PgValue::SmallSerial(_) | PgValue::Serial2(_) => {
             wrong(<i16 as ToSql>::accepts(base), WrongType::new::<i16>)
         }
@@ -1141,6 +1164,14 @@ mod tests {
         assert!(bind(&PgValue::Bool(true), &PgType::BOOL).is_ok());
         assert!(bind(&PgValue::Date(Date::Ymd((2000, 1, 2))), &PgType::DATE).is_ok());
         assert!(bind(&PgValue::Null, &PgType::INT8).is_ok());
+    }
+
+    #[test]
+    fn int4_binds_to_oid_like_types() {
+        for ty in [PgType::OID, PgType::REGCLASS, PgType::REGTYPE] {
+            assert!(bind(&PgValue::Int4(1259), &ty).is_ok(), "{ty}");
+        }
+        assert!(bind(&PgValue::Int8(1259), &PgType::OID).is_err());
     }
 
     #[test]
