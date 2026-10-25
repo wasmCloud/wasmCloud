@@ -8,7 +8,7 @@
 //! | --- | --- | --- |
 //! | [`HostMemoryBudgets::max_guest_memory`] | Total guest memory this host may use | Derived from the cgroup limit that would OOM-kill this process |
 //! | [`HostMemoryBudgets::default_heap_memory`] | How large any single linear memory may grow | wasmtime's own default (4 GiB) |
-//! | [`HostMemoryBudgets::core_instances`] | Instance slots the pooling allocator keeps | wasmtime's own default (1000) |
+//! | [`HostMemoryBudgets::core_instances`] | Linear memories the pooling allocator keeps room for, and with them the fiber stacks and component instances it admits | wasmtime's own default (1000) |
 //!
 //! Both pool knobs fall through to exactly the values wasmtime has always
 //! used when unset. The budget is derived when unset, never absent, and
@@ -280,10 +280,9 @@ pub fn render_bytes(bytes: u64) -> String {
 
 /// The host's resolved memory budgets.
 ///
-/// Every field bounds memory: `core_instances` is a count of WebAssembly
-/// *core* instances (pool slots), each sized by [`pool_slot_bytes`], not a
-/// CPU-side knob. Compute is metered separately via
-/// [`EngineBuilder::with_fuel_consumption`].
+/// Every field bounds memory: `core_instances` is a count of pool memory
+/// slots, each sized by [`pool_slot_bytes`], not a CPU-side knob. Compute is
+/// metered separately via [`EngineBuilder::with_fuel_consumption`].
 ///
 /// [`EngineBuilder::with_fuel_consumption`]: crate::engine::EngineBuilder::with_fuel_consumption
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,7 +292,15 @@ pub struct HostMemoryBudgets {
     /// Ceiling on any single linear memory — `max_memory_size` on the pooling
     /// allocator.
     pub default_heap_memory: u64,
-    /// Instance slots the pooling allocator keeps.
+    /// Linear memories the pooling allocator keeps room for, and with them
+    /// the fiber stacks and component instances it admits: one count for all
+    /// three, since a component instance of the usual shape takes one of
+    /// each. Each memory is a slot of [`pool_slot_bytes`].
+    ///
+    /// Named for the flag it comes from, `--core-instances`, which predates
+    /// the pool having a separate core-instance total. That total is now a
+    /// multiple of this count (see [`crate::engine`]), so this is *not* how
+    /// many core instances the pool admits.
     pub core_instances: u32,
 }
 

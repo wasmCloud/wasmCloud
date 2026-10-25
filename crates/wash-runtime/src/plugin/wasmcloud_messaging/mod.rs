@@ -889,8 +889,9 @@ impl Default for MessagingLimits {
 
 impl MessagingLimits {
     /// Build the host's messaging ceilings, resolving whatever the operator did
-    /// not specify against installed instance and memory limits. Resource gates
-    /// also account for each component's memory and table requirements.
+    /// not specify against the engine's installed instance and memory limits.
+    /// Resource gates also account for each component's memory and table
+    /// requirements. With pooling disabled, the pinned defaults apply.
     ///
     /// `None` for either ceiling means "the operator said nothing" — which is
     /// why the flags must not carry a `default_value_t`. A CLI-parse-time
@@ -905,6 +906,14 @@ impl MessagingLimits {
     /// component, and `--wasmcloud-messaging-max-in-flight 4` produce a
     /// per-component default above the host total the operator just set.
     pub fn resolve(
+        host_total: Option<usize>,
+        per_component_default: Option<usize>,
+        engine: &crate::engine::Engine,
+    ) -> Self {
+        Self::resolve_with_pool_totals(host_total, per_component_default, engine.pool_totals())
+    }
+
+    fn resolve_with_pool_totals(
         host_total: Option<usize>,
         per_component_default: Option<usize>,
         pool_totals: Option<PoolTotals>,
@@ -1781,7 +1790,8 @@ mod tests {
         // pool independently made `--wasmcloud-messaging-max-in-flight` a no-op
         // for any individual component: the host ceiling rose and every
         // component stayed pinned at the pool-derived per-component default.
-        let raised = MessagingLimits::resolve(Some(1024), None, messaging_pool(1000));
+        let raised =
+            MessagingLimits::resolve_with_pool_totals(Some(1024), None, messaging_pool(1000));
         assert_eq!(raised.host_total(), 1024);
         assert!(
             raised.per_component_default() > DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT,
@@ -1791,7 +1801,8 @@ mod tests {
 
         // And in the other direction: lowering the host total must not leave a
         // per-component default sitting above it.
-        let lowered = MessagingLimits::resolve(Some(4), None, messaging_pool(1000));
+        let lowered =
+            MessagingLimits::resolve_with_pool_totals(Some(4), None, messaging_pool(1000));
         assert_eq!(lowered.host_total(), 4);
         assert!(
             lowered.per_component_default() <= lowered.host_total(),
@@ -1807,7 +1818,11 @@ mod tests {
         // operator said something" and "the operator said nothing".
         for host in [None, Some(1), Some(4), Some(128), Some(1024)] {
             for pool in [None, Some(16), Some(1000), Some(64_000)] {
-                let limits = MessagingLimits::resolve(host, None, pool.and_then(messaging_pool));
+                let limits = MessagingLimits::resolve_with_pool_totals(
+                    host,
+                    None,
+                    pool.and_then(messaging_pool),
+                );
                 assert!(
                     limits.per_component_default() <= limits.host_total(),
                     "host={host:?} pool={pool:?} produced per_component {} > host {}",
@@ -1826,7 +1841,8 @@ mod tests {
         // memories holds 4 components, so the ceiling may not be the unclamped
         // floor of 8.
         for memories in [1u32, 4, 5, 16, 32] {
-            let limits = MessagingLimits::resolve(None, None, messaging_pool(memories));
+            let limits =
+                MessagingLimits::resolve_with_pool_totals(None, None, messaging_pool(memories));
             assert!(
                 limits.host_total() <= memories as usize,
                 "pool of {memories} linear memories derived a ceiling of {} messages",
@@ -1839,7 +1855,7 @@ mod tests {
     fn a_stock_pool_is_unaffected_by_the_floor() {
         // The floor only ever binds on a small pool; the stock 1000 must still
         // derive from its share, not from either bound.
-        let limits = MessagingLimits::resolve(None, None, messaging_pool(1000));
+        let limits = MessagingLimits::resolve_with_pool_totals(None, None, messaging_pool(1000));
         assert!(
             limits.host_total() > super::MIN_DERIVED_IN_FLIGHT
                 && limits.host_total() < super::MAX_DERIVED_IN_FLIGHT,
@@ -1859,11 +1875,12 @@ mod tests {
         // actually runs with, so it is the one prose is most likely to get
         // wrong. Both are pinned here: changing the derivation, the pool share,
         // or either constant without rewriting the docs fails this test.
-        let stock_pool = MessagingLimits::resolve(None, None, messaging_pool(1000));
+        let stock_pool =
+            MessagingLimits::resolve_with_pool_totals(None, None, messaging_pool(1000));
         assert_eq!(stock_pool.host_total(), 666);
         assert_eq!(stock_pool.per_component_default(), 166);
 
-        let unpooled = MessagingLimits::resolve(None, None, None);
+        let unpooled = MessagingLimits::resolve_with_pool_totals(None, None, None);
         assert_eq!(unpooled.host_total(), 128);
         assert_eq!(unpooled.per_component_default(), 32);
     }

@@ -38,18 +38,18 @@ impl PoolSlots {
 /// The totals a pool was built with, read back from the installed
 /// [`PoolingAllocationConfig`] so environment overrides are reflected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PoolTotals {
-    pub core_instances: u32,
-    pub component_instances: u32,
-    pub memories: u32,
-    pub tables: u32,
-    pub stacks: u32,
-    pub gc_heaps: u32,
+pub(crate) struct PoolTotals {
+    pub(crate) core_instances: u32,
+    pub(crate) component_instances: u32,
+    pub(crate) memories: u32,
+    pub(crate) tables: u32,
+    pub(crate) stacks: u32,
+    pub(crate) gc_heaps: u32,
 }
 
 impl PoolTotals {
     /// Read every total from a pooling configuration, including overrides.
-    pub fn of(config: &PoolingAllocationConfig) -> Self {
+    pub(crate) fn of(config: &PoolingAllocationConfig) -> Self {
         Self {
             core_instances: config.get_total_core_instances(),
             component_instances: config.get_total_component_instances(),
@@ -137,16 +137,36 @@ const EXHAUSTED: &str = exhausted!("");
 
 /// The context naming the knob that raises the total wasmtime names in a
 /// refusal. Whole static strings, so annotating a refusal allocates nothing.
+///
+/// `--core-instances` sizes the memories, stacks and component instances
+/// together, so each of those names it first: raising only the one total that
+/// was hit moves the refusal to the next of the three. The core-instance and
+/// table totals are multiples of it that a component of the usual shape never
+/// fills, so a refusal there points at the shape rather than the flag.
 fn remedy(kind: &str) -> &'static str {
     match kind {
         "core instances" => exhausted!(
-            "Raise --core-instances (or WASMTIME_POOLING_TOTAL_CORE_INSTANCES), or give this \
-             host fewer warm instances"
+            "Raise WASMTIME_POOLING_TOTAL_CORE_INSTANCES: --core-instances sets it to a \
+             multiple of the memory count that a component of the usual shape never fills, \
+             so a component made of many core modules, or many warm instances of one, is \
+             what filled it"
         ),
-        "component instances" => exhausted!("Raise WASMTIME_POOLING_TOTAL_COMPONENT_INSTANCES"),
-        "memories" => exhausted!("Raise WASMTIME_POOLING_TOTAL_MEMORIES"),
-        "tables" => exhausted!("Raise WASMTIME_POOLING_TOTAL_TABLES"),
-        "fibers" | "stacks" => exhausted!("Raise WASMTIME_POOLING_TOTAL_STACKS"),
+        "component instances" => exhausted!(
+            "Raise --core-instances (or WASMTIME_POOLING_TOTAL_COMPONENT_INSTANCES), or give \
+             this host fewer warm instances"
+        ),
+        "memories" => exhausted!(
+            "Raise --core-instances (or WASMTIME_POOLING_TOTAL_MEMORIES), or give this host \
+             fewer warm instances"
+        ),
+        "tables" => exhausted!(
+            "Raise WASMTIME_POOLING_TOTAL_TABLES: --core-instances sets it to a multiple of \
+             the memory count that a component of the usual shape never fills"
+        ),
+        "fibers" | "stacks" => exhausted!(
+            "Raise --core-instances (or WASMTIME_POOLING_TOTAL_STACKS), or give this host \
+             fewer warm instances"
+        ),
         "GC heaps" => exhausted!("Raise WASMTIME_POOLING_TOTAL_GC_HEAPS"),
         _ => exhausted!("Raise the matching WASMTIME_POOLING_TOTAL_* setting"),
     }
@@ -219,6 +239,29 @@ mod tests {
             ..roomy
         };
         assert!(full.is_exhausted());
+    }
+
+    #[test]
+    fn the_totals_sized_together_name_the_flag_that_sizes_them() {
+        // The refusal an operator sees once the memories are full must name
+        // the knob that raises all three of the totals `--core-instances`
+        // sizes, not only the one that happened to bind: raising that one
+        // alone moves the refusal to the next.
+        for kind in ["memories", "fibers", "stacks", "component instances"] {
+            assert!(
+                remedy(kind).contains("--core-instances"),
+                "{kind}: {}",
+                remedy(kind)
+            );
+        }
+        // The multiples a component never fills point elsewhere.
+        for kind in ["core instances", "tables"] {
+            assert!(
+                !remedy(kind).starts_with(exhausted!("Raise --core-instances")),
+                "{kind}: {}",
+                remedy(kind)
+            );
+        }
     }
 
     #[test]

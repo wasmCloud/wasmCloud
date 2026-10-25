@@ -6213,6 +6213,7 @@ dependencies = [
  "wasm-metadata 0.259.0",
  "wasm-pkg-client",
  "wasm-pkg-core",
+ "wasmtime",
  "wat",
  "windows-sys 0.61.2",
  "wit-component 0.259.0",
