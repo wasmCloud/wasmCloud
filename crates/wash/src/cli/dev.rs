@@ -173,7 +173,7 @@ impl CliCommand for DevCommand {
         // host`, so a limit reproduced in dev is the limit production applies.
         // Dev takes no messaging flags, hence `None` for both knobs.
         let messaging_limits =
-            crate::config::wasmcloud_messaging_limits(None, None, engine.total_memories())?;
+            crate::config::wasmcloud_messaging_limits(None, None, engine.pool_totals())?;
 
         // Enable wasmcloud:messaging — NATS when data_nats_url is configured,
         // otherwise the in-memory backend.
