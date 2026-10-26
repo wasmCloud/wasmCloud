@@ -1512,8 +1512,23 @@ fn watch_body(resp: hyper::Response<WasiBody>, watch: AbandonOnDrop) -> hyper::R
     })
 }
 
-/// A map from workload id to the component serving its HTTP requests.
-pub type WorkloadHandles = Arc<RwLock<HashMap<String, Arc<ComponentHandle>>>>;
+/// A map from workload id to the component serving its HTTP requests. A sync
+/// lock: no critical section awaits, and every request takes it.
+pub type WorkloadHandles = Arc<std::sync::RwLock<HandleMap>>;
+
+type HandleMap = HashMap<String, Arc<ComponentHandle>>;
+
+/// Read the handle map, ignoring poison as the tokio lock it replaced did.
+fn read_handles(map: &std::sync::RwLock<HandleMap>) -> std::sync::RwLockReadGuard<'_, HandleMap> {
+    map.read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Write the handle map, ignoring poison as the tokio lock it replaced did.
+fn write_handles(map: &std::sync::RwLock<HandleMap>) -> std::sync::RwLockWriteGuard<'_, HandleMap> {
+    map.write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// What serving a request on a workload's HTTP component needs, settled when
 /// the component is bound so a request only reads it: the pre-linked
@@ -1926,7 +1941,7 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
                      releasing its routes anyway"
                 );
             }
-            workload_handles.write().await.clear();
+            write_handles(&workload_handles).clear();
             service_handlers.write().await.clear();
             messaging_handlers.write().await.clear();
         });
@@ -1941,7 +1956,8 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
     /// [`HostHandler::on_service_http_resolved`] and never appears among the
     /// component handles.
     pub async fn routed_workloads(&self) -> usize {
-        self.workload_handles.read().await.len()
+        let handles = read_handles(&self.workload_handles).len();
+        handles
             + self.service_handlers.read().await.len()
             + self.messaging_handlers.read().await.len()
     }
@@ -2040,10 +2056,9 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
     /// existed; a handle still present under a withdrawn route is simply never
     /// reached from here.
     ///
-    /// `try_read`, not `read`: this runs on the sync egress path. The maps are
-    /// written only on workload start/stop, so contention is rare; treating it
-    /// as "not resolvable" costs one request the short-circuit and never
-    /// correctness.
+    /// `try_read` for the async `service_handlers`: this runs on the sync egress
+    /// path, and contention costs one request the short-circuit, never
+    /// correctness. The handle map is a sync lock, so it is simply read.
     fn resolve_local_target(&self, target: &str) -> Option<LocalTarget> {
         if let Ok(handlers) = self.service_handlers.try_read()
             && let Some(sender) = handlers.get(target)
@@ -2052,8 +2067,10 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
             // and then fail the send; skip it while the body can still egress.
             return (!sender.is_closed()).then(|| LocalTarget::Service(sender.clone()));
         }
-        let handles = self.workload_handles.try_read().ok()?;
-        handles.get(target).cloned().map(LocalTarget::Component)
+        read_handles(&self.workload_handles)
+            .get(target)
+            .cloned()
+            .map(LocalTarget::Component)
     }
 
     /// The co-located workload to serve `uri` in-memory and where to dispatch
@@ -2646,9 +2663,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 identity,
                 pool,
             };
-            self.workload_handles
-                .write()
-                .await
+            write_handles(&self.workload_handles)
                 .insert(resolved_handle.id().to_string(), Arc::new(handle));
         }
 
@@ -2660,7 +2675,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         // its state alive too.
         let routed = self.router.on_workload_unbind(workload_id).await;
 
-        self.workload_handles.write().await.remove(workload_id);
+        write_handles(&self.workload_handles).remove(workload_id);
         self.service_handlers.write().await.remove(workload_id);
         self.messaging_handlers.write().await.remove(workload_id);
         // Drop the stopped workload's egress state (pooled connections, TLS
@@ -3426,7 +3441,7 @@ async fn handle_http_request<T: Router>(
 
     // Look up workload handle for this host, with wildcard fallback
     let workload_handle = {
-        let handles = workload_handles.read().await;
+        let handles = read_handles(&workload_handles);
         debug!(host = %workload_id, "looking up workload handle for host header");
         handles.get(&workload_id).cloned()
     };
