@@ -1,13 +1,15 @@
 // Package natsclient configures how a NATS client identifies itself from
-// command-line flags.
+// command-line flags, and reports when its connection cannot recover.
 package natsclient
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -27,6 +29,9 @@ type Flags struct {
 	PasswordFile string
 	Name         string
 	InboxPrefix  string
+	// AuthFailureGrace is how long the server may refuse the credential before
+	// Liveness fails. Zero means DefaultAuthFailureGrace.
+	AuthFailureGrace time.Duration
 
 	prefix string
 }
@@ -35,6 +40,9 @@ type Flags struct {
 // on, such as -nats-creds for the prefix "nats".
 func (f *Flags) Register(fs *flag.FlagSet, prefix string) {
 	f.prefix = prefix
+	if f.AuthFailureGrace == 0 {
+		f.AuthFailureGrace = DefaultAuthFailureGrace
+	}
 	fs.StringVar(&f.Creds, f.flag("creds"), f.Creds, "Path to NATS credentials file.")
 	fs.StringVar(&f.Nkey, f.flag("nkey"), f.Nkey, "Path to a file holding a NATS nkey seed.")
 	fs.StringVar(&f.TokenFile, f.flag("token-file"), f.TokenFile,
@@ -48,6 +56,9 @@ func (f *Flags) Register(fs *flag.FlagSet, prefix string) {
 		"Subject prefix for the replies to this client's requests. Empty uses the NATS default, _INBOX. "+
 			"Set one only this client may subscribe to, so other NATS clients can neither read nor forge "+
 			"its replies.")
+	fs.DurationVar(&f.AuthFailureGrace, f.flag("auth-failure-grace"), f.AuthFailureGrace,
+		"How long the NATS server may refuse the credential before liveness fails. "+
+			"Longer than the kubelet takes to refresh a mounted Secret.")
 }
 
 // flag is the name of one of the flags, without its leading dash.
@@ -92,7 +103,8 @@ func (f Flags) Options() ([]nats.Option, error) {
 			return f.User, password.read()
 		}))
 	}
-	// Reloaded credentials can recover once kubelet refreshes the mounted Secret.
+	// Reloaded credentials can recover once kubelet refreshes the mounted
+	// Secret. Liveness fails if they have not within AuthFailureGrace.
 	if f.Creds != "" || f.TokenFile != "" || f.User != "" {
 		opts = append(opts, nats.IgnoreAuthErrorAbort())
 	}
@@ -186,4 +198,12 @@ func validInboxPrefix(prefix string) error {
 		}
 	}
 	return nil
+}
+
+// isAuthError reports whether the server refused the client's credential.
+func isAuthError(err error) bool {
+	return errors.Is(err, nats.ErrAuthorization) ||
+		errors.Is(err, nats.ErrAuthExpired) ||
+		errors.Is(err, nats.ErrAuthRevoked) ||
+		errors.Is(err, nats.ErrAccountAuthExpired)
 }

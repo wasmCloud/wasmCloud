@@ -208,6 +208,15 @@ func TestNatsClientFlagsRegisterUnderAPrefix(t *testing.T) {
 	if fs.Lookup("nats-creds") != nil {
 		t.Fatal("registered a flag outside the prefix")
 	}
+	if flags.AuthFailureGrace != DefaultAuthFailureGrace {
+		t.Fatalf("auth failure grace %v", flags.AuthFailureGrace)
+	}
+	if err := fs.Parse([]string{"-hub-nats-auth-failure-grace=2m"}); err != nil {
+		t.Fatal(err)
+	}
+	if flags.AuthFailureGrace != 2*time.Minute {
+		t.Fatalf("auth failure grace %v", flags.AuthFailureGrace)
+	}
 	_, err := flags.Options()
 	if want := "-hub-nats-creds and -hub-nats-token-file"; err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("got %v, want an error containing %q", err, want)
@@ -381,7 +390,9 @@ func TestNatsNkeyRotationFailsLiveness(t *testing.T) {
 	if !waitFor(nc.IsClosed) {
 		t.Fatalf("stale public key kept reconnecting: status %v", nc.Status())
 	}
-	if err := LivenessCheck(nc)(nil); err == nil {
+	liveness := NewLiveness(DefaultAuthFailureGrace)
+	liveness.Watch(nc)
+	if err := liveness.Check(nil); err == nil {
 		t.Fatal("rotated nkey did not fail liveness")
 	}
 }
