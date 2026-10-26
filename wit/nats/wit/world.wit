@@ -480,6 +480,7 @@ interface kv {
     /// conflict, carrying the current revision so a retry needs no re-read.
     update: async func(key: string, value: list<u8>, expected-revision: u64) -> result<u64, nats-error>;
     /// Create an absent key with a per-key TTL of at least 1000ms.
+    /// Rounded up to whole seconds to match the server's TTL precision.
     /// Requires NATS 2.11+ and a bucket that allows message TTLs.
     create-with-ttl: async func(key: string, value: list<u8>, ttl-ms: u64) -> result<u64, nats-error>;
     /// Delete only at the expected revision. `revision-mismatch` on conflict.

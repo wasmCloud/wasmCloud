@@ -34,6 +34,15 @@ const KV_KEYS_BATCH: usize = 1000;
 /// Bounds host memory per poll; the drain as a whole stays unbounded.
 const DEFAULT_SELECT_BATCH: usize = 1024;
 
+/// NATS truncates message TTLs to whole seconds. Round up before publishing so
+/// a lease cannot expire early just because its requested TTL was fractional.
+fn message_ttl_seconds(ttl_ms: u64) -> Option<u64> {
+    let seconds = ttl_ms.div_ceil(1_000);
+    // Check the rounded duration: rounding the largest millisecond duration
+    // up would otherwise overflow the server's signed nanosecond duration.
+    (ttl_ms >= 1_000 && seconds <= i64::MAX as u64 / 1_000_000_000).then_some(seconds)
+}
+
 /// Refuses a `keys` filter that could not be a KV subject pattern.
 ///
 /// It is concatenated onto the bucket's subject prefix, so an empty token or
@@ -463,11 +472,12 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
                 "per-key TTL requires NATS server 2.11 or newer".to_string(),
             )));
         }
-        if ttl_ms < 1_000 || ttl_ms > i64::MAX as u64 / 1_000_000 {
+        let Some(ttl_seconds) = message_ttl_seconds(ttl_ms) else {
             return Ok(Err(types::NatsError::Jetstream(
-                "per-key TTL must be at least 1000ms and fit a NATS duration".to_string(),
+                "per-key TTL must be at least 1000ms and fit a NATS duration after rounding up to whole seconds"
+                    .to_string(),
             )));
-        }
+        };
         if key.is_empty()
             || key.starts_with('.')
             || key.ends_with('.')
@@ -481,7 +491,10 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
         }
         let mut headers = async_nats::HeaderMap::new();
         headers.insert(async_nats::header::NATS_EXPECTED_LAST_SUBJECT_SEQUENCE, "0");
-        headers.insert(async_nats::header::NATS_MESSAGE_TTL, format!("{ttl_ms}ms"));
+        headers.insert(
+            async_nats::header::NATS_MESSAGE_TTL,
+            format!("{ttl_seconds}s"),
+        );
         if let Err(e) = check_payload(value.len(), Some(&headers), &conn) {
             return Ok(Err(e));
         }
@@ -973,5 +986,30 @@ impl kv::HostBucket for ActiveCtx<'_> {
     async fn drop(&mut self, rep: Resource<BucketHandle>) -> wasmtime::Result<()> {
         self.table.delete(rep)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::message_ttl_seconds;
+
+    #[test]
+    fn ttl_rounds_up_to_whole_seconds() {
+        for (millis, seconds) in [(1_000, 1), (1_001, 2), (1_999, 2), (2_000, 2), (2_001, 3)] {
+            assert_eq!(message_ttl_seconds(millis), Some(seconds));
+        }
+    }
+
+    #[test]
+    fn ttl_validates_the_rounded_duration() {
+        let max_seconds = i64::MAX as u64 / 1_000_000_000;
+        assert_eq!(message_ttl_seconds(max_seconds * 1_000), Some(max_seconds));
+        assert_eq!(
+            message_ttl_seconds(max_seconds * 1_000 - 1),
+            Some(max_seconds)
+        );
+        for millis in [0, 999, max_seconds * 1_000 + 1, u64::MAX] {
+            assert_eq!(message_ttl_seconds(millis), None);
+        }
     }
 }
