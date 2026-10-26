@@ -765,14 +765,9 @@ impl HostPlugin for InMemoryMessaging {
                         // a loop parked forever lets the inbox reach
                         // `MAX_QUEUE_SIZE`, at which point a guest's `publish`
                         // starts failing with "message queue full".
-                        // Looked up before admission so the message permits
-                        // know whether this delivery builds a store of its own
-                        // (and must reserve its pool cost first) or goes to a
-                        // warm instance that already holds its slot. See
-                        // `PoolCharge`. A pool closed while this message waits
-                        // declines the dispatch, and the delivery then builds
-                        // and reserves a store of its own as any declined one
-                        // does.
+                        // Looked up before admission: a warm instance already
+                        // holds its pool slots, so only a store of this
+                        // delivery's own reserves them (see `PoolCharge`).
                         let pool = if pre.serves_async() {
                             workload.instance_pool_for_component(&component_id).await
                         } else {

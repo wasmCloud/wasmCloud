@@ -371,9 +371,7 @@ pub struct Engine {
     ///
     /// Recorded rather than recomputed: re-deriving `max_instances.unwrap_or(…)`
     /// somewhere else would miss the env override (applied inside
-    /// [`new_pooling_config`]) and drift the moment either side changed. The
-    /// one copy: [`Engine::total_core_instances`], [`Engine::total_memories`],
-    /// [`Engine::pool_totals`] and [`Engine::pool_usage`] all read from it.
+    /// [`new_pooling_config`]) and drift the moment either side changed.
     pool_totals: Option<pool_usage::PoolTotals>,
     /// The linkers every workload component starts from, built once and
     /// shared (see [`BaseLinkers`]).
@@ -1874,12 +1872,10 @@ fn pooling_env_instances(key: &str, resolved: u32) -> u32 {
 
 /// Core instances the pool admits per linear memory it holds.
 ///
-/// A component is several core instances: a Rust HTTP handler is four (the
-/// main module, the preview1 adapter, and two wit-component glue modules),
-/// Componentize-Go five, and a composition adds every member's. With every
-/// total set to the linear-memory count, the core-instance total was the one
-/// a warm pool hit first, at a quarter of the memories the pool had reserved
-/// address space for.
+/// A component is several core instances ([`pool_share::PoolCost::USUAL`]
+/// measures the shapes), so with every total set to the linear-memory count
+/// the core-instance total was the one a warm pool hit first, at a quarter of
+/// the memories the pool had reserved address space for.
 ///
 /// Nothing is reserved for a core instance: wasmtime counts live ones against
 /// this total and allocates each VMContext on the heap at its own size, which
@@ -1912,9 +1908,9 @@ const TABLES_PER_MEMORY: u32 = 4;
 /// does not spend several memories' worth of them.
 ///
 /// Apart from [`new_pooling_config`] so the derivation can be pinned by a test
-/// that no exported `WASMTIME_POOLING_TOTAL_*` override can disturb, and
-/// reached by every test that needs a stock pool's shape through
-/// [`pool_usage::PoolTotals::derived_from`], so none hard-codes the multiples.
+/// that no exported `WASMTIME_POOLING_TOTAL_*` override can disturb, and so
+/// a test that needs a stock pool's shape takes it from here rather than
+/// hard-coding the multiples.
 pub(crate) fn derived_pool_totals(instances: u32) -> pool_usage::PoolTotals {
     pool_usage::PoolTotals {
         memories: instances,
@@ -2319,7 +2315,6 @@ mod tests {
         assert_eq!(derived.core_instances, 16_000);
         assert_eq!(derived.tables, 4000);
         assert_eq!(derived_pool_totals(u32::MAX).core_instances, u32::MAX);
-        assert_eq!(pool_usage::PoolTotals::derived_from(1000), derived);
 
         // What the config and then the engine install is the derivation with
         // the environment applied, so this half holds in a shell that exports
