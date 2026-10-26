@@ -3087,7 +3087,7 @@ mod tests {
     /// the next reconnect presents, and the connection keeps its name.
     #[tokio::test]
     async fn a_rotated_credentials_file_is_presented_on_reconnect() -> anyhow::Result<()> {
-        use super::nats_auth::tests::creds_file;
+        use crate::nats_credentials::tests::creds_file;
 
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("host.creds");
