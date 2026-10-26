@@ -765,8 +765,26 @@ impl HostPlugin for InMemoryMessaging {
                         // a loop parked forever lets the inbox reach
                         // `MAX_QUEUE_SIZE`, at which point a guest's `publish`
                         // starts failing with "message queue full".
+                        // Looked up before admission so the message permits
+                        // know whether this delivery builds a store of its own
+                        // (and must reserve its pool cost first) or goes to a
+                        // warm instance that already holds its slot. See
+                        // `PoolCharge`. A pool closed while this message waits
+                        // declines the dispatch, and the delivery then builds
+                        // and reserves a store of its own as any declined one
+                        // does.
+                        let pool = if pre.serves_async() {
+                            workload.instance_pool_for_component(&component_id).await
+                        } else {
+                            None
+                        };
+                        let charge = if pool.is_some() {
+                            super::PoolCharge::Defer
+                        } else {
+                            super::PoolCharge::Reserve
+                        };
                         let permit = tokio::select! {
-                            admitted = admission.acquire_before_deadline(&component_id, &msg.subject) => {
+                            admitted = admission.acquire_before_deadline(&component_id, &msg.subject, charge) => {
                                 match admitted {
                                     super::Admitted::Slot(permit) => permit,
                                     // Already logged and counted; drop this
@@ -816,12 +834,6 @@ impl HostPlugin for InMemoryMessaging {
                         // a component that opted into pooling is served on a
                         // warm instance, honouring the limits it declared.
                         // Everything else keeps a store per message.
-                        let pool = if pre.serves_async() {
-                            workload.instance_pool_for_component(&component_id).await
-                        } else {
-                            None
-                        };
-
                         if let Some(pool) = pool {
                             let broker = crate::host::trigger_service::BrokerMessage {
                                 subject: msg.subject,
@@ -832,15 +844,19 @@ impl HostPlugin for InMemoryMessaging {
                             let workload = workload.clone();
                             let component_id = component_id.clone();
                             let instance_pre = pre.instance_pre().clone();
+                            let admission = admission.clone();
                             tokio::spawn(async move {
-                                // Released on completion, trap or not — which
-                                // is what frees the slot this message holds.
-                                let _permit = permit;
+                                // The permit goes along: released on
+                                // completion, trap or not — which is what
+                                // frees the slot this message holds — and
+                                // reserved against if a store gets built.
                                 let result = super::deliver_pooled(
                                     &workload,
                                     &component_id,
                                     &instance_pre,
                                     &pool,
+                                    &admission,
+                                    permit,
                                     broker,
                                     attributes,
                                 )

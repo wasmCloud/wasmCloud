@@ -48,6 +48,17 @@ pub(crate) struct PoolTotals {
 }
 
 impl PoolTotals {
+    /// The totals `--core-instances instances` installs before the
+    /// environment overrides any of them: `instances` memories, stacks,
+    /// component instances and GC heaps, and the engine's multiples of it for
+    /// core instances and tables. What a stock host of 1000 runs with, and
+    /// the one place a test that needs that shape should take it from, so
+    /// none hard-codes the multiples.
+    #[cfg(test)]
+    pub(crate) fn derived_from(instances: u32) -> Self {
+        crate::engine::derived_pool_totals(instances)
+    }
+
     /// Read every total from a pooling configuration, including overrides.
     pub(crate) fn of(config: &PoolingAllocationConfig) -> Self {
         Self {
