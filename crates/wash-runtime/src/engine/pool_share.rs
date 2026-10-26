@@ -112,20 +112,13 @@ impl PoolCost {
     }
 }
 
-/// The fraction of each installed pool total a [`PoolShare`] may hold, and
-/// the bounds on the resulting count.
-///
-/// The floor and cap are counts of instances of the usual shape
-/// ([`PoolCost::USUAL`]), not of slots: a total an instance takes five of is
-/// floored and capped at five times the number, so the cap binds every total
-/// at the same number of instances and no total runs out before the count of
-/// work derived beside it. The floor keeps the count usable on a tiny pool,
-/// but never raises it past the installed total: a host that can run two
-/// instances should say two and queue the rest, not admit eight and fail at
-/// instantiation. The cap stops the count on an enormous pool growing so
-/// large it stops being a bound at all. One `Share` sizes every pool total of
-/// one [`PoolShare`] and the ceiling on work derived beside it, so the two
-/// cannot drift.
+/// The fraction of each installed pool total a [`PoolShare`] may hold,
+/// floored and capped in instances of the usual shape ([`PoolCost::USUAL`]):
+/// a total an instance takes five of is floored and capped at five times the
+/// number, so every total binds at the same number of instances. The floor
+/// never raises a count past the installed total. One `Share` sizes every
+/// total of one [`PoolShare`] and the ceiling on work derived beside it, so
+/// the two cannot drift.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Share {
     pub numerator: u32,
@@ -341,8 +334,7 @@ impl PoolShare {
     ///
     /// The totals are taken in one order for every caller — memories, tables,
     /// core instances, component instances, stacks — so two reservations
-    /// cannot wait on each other. Each gate serves waiters in arrival order,
-    /// a large cost at the head holding the smaller ones behind it (see the
+    /// cannot wait on each other; each is served in arrival order (see the
     /// module docs). Cancel-safe: dropping the future before it resolves
     /// releases whatever it had already taken. `None` only if a gate was
     /// closed, which nothing does.
@@ -448,23 +440,13 @@ mod tests {
 
     use super::test_support::{component, config, engine, hidden_component};
     use super::*;
-    use crate::engine::Engine;
-
-    /// Two thirds of each pool total, floored at 8, capped at 4096: the
-    /// fraction messaging claims.
-    const TWO_THIRDS_OF_EACH_TOTAL: Share = Share {
-        numerator: 2,
-        denominator: 3,
-        floor: 8,
-        cap: 4096,
-    };
+    use crate::engine::{Engine, derived_pool_totals};
+    // Two thirds of each total, floored at 8 and capped at 4096: the numbers
+    // below are a stock host's.
+    use crate::plugin::wasmcloud_messaging::MESSAGING_SHARE;
 
     fn pool_share(engine: &Engine) -> PoolShare {
-        PoolShare::new(
-            engine.pool_totals().unwrap(),
-            TWO_THIRDS_OF_EACH_TOTAL,
-            "the test",
-        )
+        PoolShare::new(engine.pool_totals().unwrap(), MESSAGING_SHARE, "the test")
     }
 
     /// Reserve and instantiate until a reservation queues, holding every
@@ -512,7 +494,7 @@ mod tests {
 
     #[test]
     fn a_share_of_a_pool_total_is_the_fraction_floored_and_capped_within_it() {
-        let share = TWO_THIRDS_OF_EACH_TOTAL;
+        let share = MESSAGING_SHARE;
         assert_eq!(share.of(1000), 666);
         assert_eq!(share.of(32), 21);
         // The floor binds on a small total but never exceeds it.
@@ -534,8 +516,8 @@ mod tests {
         let usual = PoolCost::USUAL;
         for core_instances in [1000u32, 2000, 10_000, 100_000] {
             let budget = PoolShare::new(
-                PoolTotals::derived_from(core_instances),
-                TWO_THIRDS_OF_EACH_TOTAL,
+                derived_pool_totals(core_instances),
+                MESSAGING_SHARE,
                 "the test",
             )
             .budget();
@@ -554,19 +536,13 @@ mod tests {
         }
         // And the floor scales the same way: a tiny pool's eight instances
         // are forty core instances.
-        assert_eq!(
-            TWO_THIRDS_OF_EACH_TOTAL.of_slots(100, usual.core_instances),
-            66
-        );
-        assert_eq!(
-            TWO_THIRDS_OF_EACH_TOTAL.of_slots(50, usual.core_instances),
-            40
-        );
+        assert_eq!(MESSAGING_SHARE.of_slots(100, usual.core_instances), 66);
+        assert_eq!(MESSAGING_SHARE.of_slots(50, usual.core_instances), 40);
     }
 
     #[test]
     fn the_usual_shape_fits_a_stock_pool_once_per_memory() {
-        let stock = PoolTotals::derived_from(1000);
+        let stock = derived_pool_totals(1000);
         assert_eq!(PoolCost::USUAL.fits_in(&stock), 1000);
         // Tables are left to the reservation.
         let mut few_tables = stock;
