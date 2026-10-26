@@ -21,7 +21,7 @@ async fn density_fixture_retains_warm_instances_and_releases_cold_ones() -> Resu
     for pool_size in [1, 0] {
         let engine = Engine::builder()
             .with_host_memory(
-                HostMemoryBudgets::resolve(Some(1 << 30), None, Some(64))
+                HostMemoryBudgets::resolve(Some(1 << 30), None, Some(64), None)
                     .map_err(anyhow::Error::msg)?,
             )
             .build()?;

@@ -309,7 +309,7 @@ pub struct HostCommand {
     /// services; independent pool overrides can lower that default.
     /// Components also acquire pool resources according to their memory and
     /// table requirements, so compositions can reach a resource limit before
-    /// the message cap. Raising `--core-instances` raises the pool; with pooling
+    /// the message cap. Raising `--max-memories` raises the pool; with pooling
     /// disabled the pinned default of 128 stands. Set, the number given is the
     /// message cap, still subject to the installed pool's resource limits.
     //
@@ -357,7 +357,7 @@ pub struct HostCommand {
     ///
     /// What this bounds is the *total* of every guest's linear memory, which
     /// no other knob does: `--default-heap-memory` bounds one memory and
-    /// `--core-instances` bounds a count of slots. Whether it is enforced or
+    /// `--max-memories` bounds a count of slots. Whether it is enforced or
     /// only accounted is `--guest-memory-mode`, which enforces by default.
     //
     // Deliberately no `default_value_t`: a parse-time default is
@@ -440,36 +440,37 @@ pub struct HostCommand {
     #[arg(long = "default-heap-memory", env = "WASH_DEFAULT_HEAP_MEMORY")]
     pub default_heap_memory: Option<String>,
 
-    /// Component instances the pooling allocator keeps room for, whatever
-    /// triggers them: a linear memory, a fiber stack and a component instance
-    /// each, one count for all three, since an instance of the usual shape
-    /// takes one of each.
+    /// Linear memories the pooling allocator keeps room for, whatever
+    /// triggers them, and with them the fiber stacks, component instances and
+    /// GC heaps it admits, one count for all: a component instance of the
+    /// usual shape takes one of each.
     ///
-    /// Unset, this stays wasmtime's default of 1000. Multiplied by one
+    /// Unset, this is wasmtime's default of 1000, or the memories
+    /// `--core-instances` fits in when only that is given. Multiplied by one
     /// memory's reservation (4 GiB plus a 32 MiB guard, whatever
     /// `--default-heap-memory` is) it is the pool's address-space reservation,
-    /// so it is the knob that sizes the pool. Despite the name, it is not the
-    /// pool's core-instance total: that and the table total are multiples of
-    /// it, since a component spends several of each and neither reserves
-    /// anything. `--total-core-instances` sets the first on its own, and
-    /// `WASMTIME_POOLING_TOTAL_*` set any total.
-    #[arg(long = "core-instances", env = "WASH_CORE_INSTANCES")]
-    pub core_instances: Option<u32>,
+    /// so it is the knob that sizes the pool. The core-instance and table
+    /// totals are multiples of it, since a component spends several of each
+    /// and neither reserves anything; `WASMTIME_POOLING_TOTAL_*` set any
+    /// total on its own.
+    #[arg(long = "max-memories", env = "WASH_MAX_MEMORIES")]
+    pub max_memories: Option<u32>,
 
     /// Core instances (WebAssembly core modules) the pooling allocator admits
     /// at once. A component is several: a Rust HTTP handler is four, a
     /// Componentize-Go one five, and a composition adds every member's.
     ///
-    /// Unset, this is sixteen per instance of `--core-instances`, which a
+    /// Unset, this is sixteen per memory of `--max-memories`, which a
     /// component of the usual shape never fills, so that the linear memories
-    /// are what a full pool runs out of first. Set it for a host that runs
-    /// components of many core modules, or to bound them more tightly. A
-    /// core instance reserves nothing, so this is a counter, not a memory
-    /// budget: it does not move the memories, stacks or component instances,
-    /// which `--core-instances` sizes. `WASMTIME_POOLING_TOTAL_CORE_INSTANCES`
-    /// overrides it, as it does every total.
-    #[arg(long = "total-core-instances", env = "WASH_TOTAL_CORE_INSTANCES")]
-    pub total_core_instances: Option<u32>,
+    /// are what a full pool runs out of first. Set alone, `--max-memories` is
+    /// the memories this many core instances fit in at the same ratio. Set
+    /// beside `--max-memories`, both are installed as given, with a warning
+    /// at startup when they do not match. A core instance reserves nothing,
+    /// so this is a counter, not a memory budget.
+    /// `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` overrides it, as it does every
+    /// total.
+    #[arg(long = "core-instances", env = "WASH_CORE_INSTANCES")]
+    pub core_instances: Option<u32>,
 
     /// How long a pooled HTTP connect waits for a slot before failing with a
     /// connect timeout (e.g. `5s`, `500ms`).
@@ -1074,13 +1075,10 @@ impl CliCommand for HostCommand {
         let host_memory = wash_runtime::engine::host_memory::HostMemoryBudgets::resolve_strs(
             self.max_guest_memory.as_deref(),
             self.default_heap_memory.as_deref(),
+            self.max_memories,
             self.core_instances,
         )
         .map_err(|e| anyhow::anyhow!(e))?;
-        anyhow::ensure!(
-            self.total_core_instances != Some(0),
-            "total-core-instances must be at least 1"
-        );
         let process_memory_policy = ProcessMemoryPolicy::parse(self.max_process_memory.as_deref())?;
         anyhow::ensure!(
             self.max_http_ingress_connections != Some(0),
@@ -1226,9 +1224,6 @@ impl CliCommand for HostCommand {
         });
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         engine_builder = engine_builder.with_host_memory(host_memory);
-        if let Some(total) = self.total_core_instances {
-            engine_builder = engine_builder.with_total_core_instances(total);
-        }
         engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
         match process_memory_policy {
             ProcessMemoryPolicy::Limit(bytes) => {
