@@ -2370,16 +2370,23 @@ async fn kv_ttl_and_conditional_delete() -> Result<()> {
     .await?;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(
-        api_probe(&h, format!("kv-api:delete-if:{COUNTS_BUCKET}:lock:{old}")).await?,
+        api_probe(
+            &h,
+            format!("kv-api:delete-by-revision:{COUNTS_BUCKET}:lock:{old}")
+        )
+        .await?,
         format!("revision-mismatch:{current}")
     );
     // Zero is refused before it reaches the server: there it would match an
     // absent key and tombstone one that was never written.
     for key in ["lock", "never-written"] {
         assert!(
-            api_probe(&h, format!("kv-api:delete-if:{COUNTS_BUCKET}:{key}:0"))
-                .await?
-                .starts_with("jetstream:")
+            api_probe(
+                &h,
+                format!("kv-api:delete-by-revision:{COUNTS_BUCKET}:{key}:0")
+            )
+            .await?
+            .starts_with("jetstream:")
         );
     }
     assert!(store.entry("never-written").await?.is_none());
@@ -2390,7 +2397,7 @@ async fn kv_ttl_and_conditional_delete() -> Result<()> {
     assert_eq!(
         api_probe(
             &h,
-            format!("kv-api:delete-if:{COUNTS_BUCKET}:lock:{current}")
+            format!("kv-api:delete-by-revision:{COUNTS_BUCKET}:lock:{current}")
         )
         .await?,
         "ok"

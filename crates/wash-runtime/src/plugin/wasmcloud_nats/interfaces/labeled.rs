@@ -165,14 +165,20 @@ impl<T: 'static + Send> labeled_kv::HostBucketWithStore<T> for SharedCtx {
         <Self as kv::HostBucketWithStore<T>>::create_with_ttl(accessor, rep, key, value, ttl_ms)
             .await
     }
-    async fn delete_if(
+    async fn delete_by_revision(
         accessor: &Accessor<T, Self>,
         _id: NatsId,
         rep: Resource<BucketHandle>,
         key: String,
         expected_revision: u64,
     ) -> wasmtime::Result<Result<(), types::NatsError>> {
-        <Self as kv::HostBucketWithStore<T>>::delete_if(accessor, rep, key, expected_revision).await
+        <Self as kv::HostBucketWithStore<T>>::delete_by_revision(
+            accessor,
+            rep,
+            key,
+            expected_revision,
+        )
+        .await
     }
     async fn update(
         accessor: &Accessor<T, Self>,

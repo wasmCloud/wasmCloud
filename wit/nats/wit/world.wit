@@ -496,7 +496,7 @@ interface kv {
     /// `expected-revision` must be at least 1: revisions start at 1, and 0 is
     /// refused rather than sent to the server, where it would match an absent
     /// key and tombstone one that was never written.
-    delete-if: async func(key: string, expected-revision: u64) -> result<_, nats-error>;
+    delete-by-revision: async func(key: string, expected-revision: u64) -> result<_, nats-error>;
     /// Delete a key (tombstone, keeps history).
     delete: async func(key: string) -> result<_, nats-error>;
     /// Purge a key (removes history as well).
