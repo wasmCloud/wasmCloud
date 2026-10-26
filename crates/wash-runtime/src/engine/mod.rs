@@ -371,7 +371,7 @@ pub struct Engine {
     /// `WASMTIME_POOLING_TOTAL_*` overrides and a caller-supplied pooling
     /// config alike. `None` when pooling is off or unsupported.
     ///
-    /// Recorded rather than recomputed: re-deriving `max_instances.unwrap_or(…)`
+    /// Recorded rather than recomputed: re-deriving `max_memories.unwrap_or(…)`
     /// somewhere else would miss the env override (applied inside
     /// [`new_pooling_config`]) and drift the moment either side changed.
     pool_totals: Option<pool_usage::PoolTotals>,
@@ -543,7 +543,7 @@ impl Engine {
     /// host_memory has the memory budgets this engine was built with including max host
     /// memory available, default component heap limit, and number of core instances available.
     /// Read back rather than recomputed, so what a caller reports is what the engine actually
-    /// installed — including an embedder's `max_instances` winning over the flag-driven count.
+    /// installed — including an embedder's `max_memories` winning over the flag-driven count.
     pub fn host_memory(&self) -> host_memory::HostMemoryBudgets {
         self.host_memory
     }
@@ -1226,7 +1226,8 @@ impl FromStr for WasmProposal {
 pub struct EngineBuilder {
     config: Option<wasmtime::Config>,
     use_pooling_allocator: Option<bool>,
-    max_instances: Option<u32>,
+    max_memories: Option<u32>,
+    max_core_instances: Option<u32>,
     pooling_config: Option<PoolingAllocationConfig>,
     proposals: std::collections::BTreeSet<WasmProposal>,
     compilation_cache_size: Option<u64>,
@@ -1360,18 +1361,38 @@ impl EngineBuilder {
         self
     }
 
-    /// Sets the maximum number of instances for the pooling allocator: its
-    /// linear memories, and with them every total derived from that count
-    /// ([`derived_pool_totals`]), the core-instance total included. This is a
-    /// 'hint' and can be overridden by environment variables. For a
-    /// core-instance total of its own, set
-    /// [`host_memory::HostMemoryBudgets::core_instances`] through
-    /// [`with_host_memory`](Self::with_host_memory) instead.
-    ///
-    /// Ignored when a full [`PoolingAllocationConfig`] is supplied via
+    /// Linear memories the pooling allocator keeps room for, and with them
+    /// every total derived from that count ([`derived_pool_totals`]); the
+    /// core-instance total follows at [`CORE_INSTANCES_PER_MEMORY`] per
+    /// memory unless [`with_max_core_instances`](Self::with_max_core_instances)
+    /// sets it. A hint the `WASMTIME_POOLING_TOTAL_*` environment can
+    /// override. Wins over the count in
+    /// [`with_host_memory`](Self::with_host_memory), and is ignored when a
+    /// full [`PoolingAllocationConfig`] is supplied via
     /// [`with_pooling_config`](Self::with_pooling_config).
-    pub fn with_max_instances(mut self, max: u32) -> Self {
-        self.max_instances = Some(max);
+    pub fn with_max_memories(mut self, memories: u32) -> Self {
+        self.max_memories = Some(memories);
+        self
+    }
+
+    /// The old name for [`with_max_memories`](Self::with_max_memories), from
+    /// when one count sized every pool total.
+    #[deprecated(since = "2.12.0", note = "use with_max_memories")]
+    pub fn with_max_instances(self, max: u32) -> Self {
+        self.with_max_memories(max)
+    }
+
+    /// Core instances the pooling allocator admits at once, in place of the
+    /// [`CORE_INSTANCES_PER_MEMORY`] per memory it would derive. A counter,
+    /// not a reservation: a core instance costs the pool nothing but a count,
+    /// so this bounds how many core modules may be live without moving the
+    /// memories, stacks or component instances. The environment's
+    /// `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` still overrides it, as it does
+    /// every total. Wins over the total in
+    /// [`with_host_memory`](Self::with_host_memory), and is ignored when a
+    /// full [`PoolingAllocationConfig`] is supplied.
+    pub fn with_max_core_instances(mut self, core_instances: u32) -> Self {
+        self.max_core_instances = Some(core_instances);
         self
     }
 
@@ -1380,7 +1401,7 @@ impl EngineBuilder {
     /// only the `WASMTIME_POOLING_*` environment variables.
     ///
     /// Supplying a pooling config implies the pooling allocator is enabled and
-    /// takes precedence over [`with_max_instances`](Self::with_max_instances).
+    /// takes precedence over [`with_max_memories`](Self::with_max_memories).
     /// It is still only applied when the host supports the pooling allocator.
     pub fn with_pooling_config(mut self, config: PoolingAllocationConfig) -> Self {
         self.pooling_config = Some(config);
@@ -1441,7 +1462,7 @@ impl EngineBuilder {
     /// settings — pooling allocator, fuel consumption, and
     /// [`WasmProposal`]s — are layered on top of it. This means a custom config
     /// can be combined with [`with_pooling_allocator`](Self::with_pooling_allocator),
-    /// [`with_max_instances`](Self::with_max_instances), and
+    /// [`with_max_memories`](Self::with_max_memories), and
     /// [`with_wasm_proposal`](Self::with_wasm_proposal) rather than being
     /// mutually exclusive with them.
     ///
@@ -1565,18 +1586,22 @@ impl EngineBuilder {
         if use_pooling_allocator && let Ok(true) = is_pooling_allocator_supported() {
             tracing::debug!("using pooling allocator by default");
             let pooling = self.pooling_config.take().unwrap_or_else(|| {
-                // An embedder's `max_instances` re-derives the core total from
-                // its own count; the budgets carry one that was set or
-                // derived beside their memory count.
-                let (memories, core_instances) = match self.max_instances {
-                    Some(memories) => (memories, derived_pool_totals(memories).core_instances),
-                    None => {
-                        if let Some(advisory) = host_memory.core_instance_advisory() {
-                            tracing::warn!("{advisory}");
-                        }
-                        (host_memory.max_memories, host_memory.core_instances)
+                // The builder's own knobs win over the budgets'. A memory
+                // count set here re-derives the core total, since the
+                // budgets' was derived beside a different memory count.
+                let memories = self.max_memories.unwrap_or(host_memory.max_memories);
+                let core_instances = self.max_core_instances.unwrap_or_else(|| {
+                    if self.max_memories.is_some() {
+                        derived_pool_totals(memories).core_instances
+                    } else {
+                        host_memory.core_instances
                     }
-                };
+                });
+                if let Some(advisory) =
+                    host_memory::core_instance_mismatch(memories, core_instances)
+                {
+                    tracing::warn!("{advisory}");
+                }
                 new_pooling_config(memories, core_instances, host_memory.default_heap_memory)
             });
             installed_pool = Some(InstalledPool {
@@ -2353,7 +2378,7 @@ mod tests {
         Engine::builder()
             .with_config(cfg)
             .with_pooling_allocator(true)
-            .with_max_instances(64)
+            .with_max_memories(64)
             .build()
             .expect("custom config + pooling should build");
     }
@@ -2414,7 +2439,7 @@ mod tests {
         );
 
         let engine = Engine::builder()
-            .with_max_instances(64)
+            .with_max_memories(64)
             .build()
             .expect("pooling engine should build");
         if let Some(totals) = engine.pool_totals() {
@@ -2449,10 +2474,9 @@ mod tests {
             installed("WASMTIME_POOLING_TOTAL_TABLES", derived.tables)
         );
 
-        let budgets = host_memory::HostMemoryBudgets::resolve(None, None, Some(64), Some(100))
-            .expect("both counts are valid");
         let engine = Engine::builder()
-            .with_host_memory(budgets)
+            .with_max_memories(64)
+            .with_max_core_instances(100)
             .without_max_process_memory()
             .build()
             .expect("pooling engine should build");

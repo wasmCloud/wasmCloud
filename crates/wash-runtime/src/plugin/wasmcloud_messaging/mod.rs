@@ -663,7 +663,7 @@ pub const DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT: usize = 32;
 ///
 /// The per-component ceiling alone does not bound the host: forty components
 /// at 32 is 1280 in flight against a pool of 1000 linear memories
-/// ([`crate::engine`] sizes the pool from `max_instances`, default 1000).
+/// ([`crate::engine`] sizes the pool from `max_memories`, default 1000).
 ///
 /// With a pool to divide, `derive_host_ceiling` takes [`MESSAGING_SHARE`] of
 /// the instances of the usual shape the pool holds: the stock pool of 1000
