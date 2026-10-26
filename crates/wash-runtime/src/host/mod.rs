@@ -1028,17 +1028,24 @@ impl Host {
         let engine = self.engine.clone();
         let init_id = request.workload_id;
         let workload = request.workload;
-        let span = tracing::Span::current();
-        let unresolved_workload = tokio::task::spawn_blocking(move || {
-            let _entered = span.enter();
-            // The blocking executor can queue this after the check above.
-            if let Some(guard) = engine.process_memory() {
-                guard.admit_start().map_err(anyhow::Error::msg)?;
+        let unresolved_workload = match engine.pin_compiled_components(&workload) {
+            // Nothing to compile and no files to open: cheaper here than the
+            // blocking pool's two thread handoffs.
+            Some(_pinned) => engine.initialize_workload(&init_id, workload)?,
+            None => {
+                let span = tracing::Span::current();
+                tokio::task::spawn_blocking(move || {
+                    let _entered = span.enter();
+                    // The blocking executor can queue this after the check above.
+                    if let Some(guard) = engine.process_memory() {
+                        guard.admit_start().map_err(anyhow::Error::msg)?;
+                    }
+                    engine.initialize_workload(&init_id, workload)
+                })
+                .await
+                .context("workload initialization task failed")??
             }
-            engine.initialize_workload(&init_id, workload)
-        })
-        .await
-        .context("workload initialization task failed")??;
+        };
 
         // Native rollback uses the start's journal, including partially bound
         // plugins, so a cancellation can resume the same teardown.
