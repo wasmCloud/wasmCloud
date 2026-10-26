@@ -327,6 +327,8 @@ fn spawn_epoch_ticker(engine: &wasmtime::Engine) -> anyhow::Result<()> {
 /// is built on a thread with every signal blocked: the handler never takes
 /// a process-directed signal, and the kernel delivers it elsewhere.
 /// Elsewhere `f` runs inline. Remove once the workspace is on wasmtime 50.
+// The signal mask is set with libc, as the process footprint is read.
+#[allow(unsafe_code)]
 fn on_signal_quiet_thread<T: Send>(
     f: impl FnOnce() -> anyhow::Result<T> + Send,
 ) -> anyhow::Result<T> {
