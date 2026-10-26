@@ -166,7 +166,12 @@ fn derived_core_instances(memories: u32) -> u32 {
 /// builder resolved from its own knobs rather than the budgets.
 pub(crate) fn core_instance_mismatch(max_memories: u32, core_instances: u32) -> Option<String> {
     let derived = derived_core_instances(max_memories);
-    (core_instances != derived).then(|| {
+    // Coherent when derived in either direction: a core-instance count set
+    // alone takes the memories it fits in, rounded up, so it is rarely the
+    // exact multiple those memories derive.
+    let coherent = core_instances == derived
+        || super::memories_for_core_instances(core_instances) == max_memories;
+    (!coherent).then(|| {
         format!(
             "core-instances {core_instances} does not match max-memories {max_memories}, which \
              would derive {derived} core instances at {} per memory; both are installed as \
@@ -1483,9 +1488,13 @@ mod tests {
                 .max_memories,
             1
         );
-        // Both set: both stand, and a mismatch is said, with both numbers.
+        // Both set: both stand, and a mismatch is said, with both numbers. A
+        // pair that derives either way is not a mismatch.
         let both = HostMemoryBudgets::resolve(None, None, Some(100), Some(100 * per)).unwrap();
         assert!(both.core_instance_advisory().is_none());
+        let rounded =
+            HostMemoryBudgets::resolve(None, None, Some(101), Some(100 * per + 1)).unwrap();
+        assert!(rounded.core_instance_advisory().is_none());
         let apart = HostMemoryBudgets::resolve(None, None, Some(100), Some(500)).unwrap();
         assert_eq!((apart.max_memories, apart.core_instances), (100, 500));
         let advisory = apart
