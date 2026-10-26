@@ -190,7 +190,7 @@ impl Gate {
             anyhow::bail!(
                 "a component of this shape needs {required} {kind} per instance, but {holder} \
                  may hold at most {budget} of the pool's {installed} at once; raise \
-                 --core-instances (or {knob}) until {holder}'s share of the pool's {kind} \
+                 --max-memories (or {knob}) until {holder}'s share of the pool's {kind} \
                  holds one",
                 kind = self.kind,
                 budget = self.budget,
@@ -524,12 +524,12 @@ mod tests {
             let instances = budget.memories;
             assert!(
                 budget.core_instances / usual.core_instances >= instances,
-                "--core-instances {core_instances}: {} core instances for {instances} memories",
+                "--max-memories {core_instances}: {} core instances for {instances} memories",
                 budget.core_instances
             );
             assert!(
                 budget.tables / usual.tables >= instances,
-                "--core-instances {core_instances}: {} tables for {instances} memories",
+                "--max-memories {core_instances}: {} tables for {instances} memories",
                 budget.tables
             );
             assert!(budget.stacks >= instances && budget.component_instances >= instances);
@@ -673,7 +673,7 @@ mod tests {
         let text = format!("{err:#}");
         assert!(text.contains("25 memories"), "{text}");
         assert!(text.contains("the test may hold at most 21"), "{text}");
-        assert!(text.contains("--core-instances"), "{text}");
+        assert!(text.contains("--max-memories"), "{text}");
         assert!(text.contains("WASMTIME_POOLING_TOTAL_MEMORIES"), "{text}");
         // Exactly the share of memories fits.
         pool_share.admit(&component(&engine, 21, 0, 21)).unwrap();

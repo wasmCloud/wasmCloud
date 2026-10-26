@@ -59,7 +59,7 @@ fn a_built_engine_publishes_its_guest_memory_budget() {
     // an engine that went away before the flush would export nothing and this
     // test would pass for the wrong reason.
     let engine = Engine::builder()
-        .with_host_memory(HostMemoryBudgets::resolve(Some(BUDGET), None, None).unwrap())
+        .with_host_memory(HostMemoryBudgets::resolve(Some(BUDGET), None, None, None).unwrap())
         .with_guest_memory_mode(GuestMemoryMode::Enforce)
         .build()
         .expect("engine builds");

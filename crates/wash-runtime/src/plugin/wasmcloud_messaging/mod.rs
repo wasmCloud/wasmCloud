@@ -1308,12 +1308,12 @@ impl ShedOn {
             Self::MessageSlotsAndPoolShare => {
                 "The host or component message ceiling, or messaging's share of the instance \
                  pool, is saturated — raise --wasmcloud-messaging-max-in-flight, raise the \
-                 component's max_in_flight config, raise --core-instances (or the limiting \
+                 component's max_in_flight config, raise --max-memories (or the limiting \
                  WASMTIME_POOLING_TOTAL_* setting), or reduce inbound rate"
             }
             Self::PoolShareAndHostSlot => {
                 "Messaging's share of the instance pool, or the host message ceiling, is \
-                 saturated — raise --core-instances (or the limiting WASMTIME_POOLING_TOTAL_* \
+                 saturated — raise --max-memories (or the limiting WASMTIME_POOLING_TOTAL_* \
                  setting), raise --wasmcloud-messaging-max-in-flight, or reduce inbound rate"
             }
         }
@@ -1954,7 +1954,7 @@ mod tests {
         assert_eq!(parse_admission_group(None), None);
     }
 
-    /// The pool `--core-instances memories` installs, as the engine derives it.
+    /// The pool `--max-memories memories` installs, as the engine derives it.
     fn messaging_pool(memories: u32) -> Option<crate::engine::pool_usage::PoolTotals> {
         Some(crate::engine::derived_pool_totals(memories))
     }

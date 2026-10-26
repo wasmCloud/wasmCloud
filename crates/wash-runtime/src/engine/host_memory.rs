@@ -8,7 +8,8 @@
 //! | --- | --- | --- |
 //! | [`HostMemoryBudgets::max_guest_memory`] | Total guest memory this host may use | Derived from the cgroup limit that would OOM-kill this process |
 //! | [`HostMemoryBudgets::default_heap_memory`] | How large any single linear memory may grow | wasmtime's own default (4 GiB) |
-//! | [`HostMemoryBudgets::core_instances`] | Linear memories the pooling allocator keeps room for, and with them the fiber stacks and component instances it admits | wasmtime's own default (1000) |
+//! | [`HostMemoryBudgets::max_memories`] | Linear memories the pooling allocator keeps room for, and with them the fiber stacks and component instances it admits | wasmtime's own default (1000) |
+//! | [`HostMemoryBudgets::core_instances`] | Core instances (live core modules) the pool admits, a counter that reserves nothing | [`crate::engine::CORE_INSTANCES_PER_MEMORY`] per memory |
 //!
 //! Both pool knobs fall through to exactly the values wasmtime has always
 //! used when unset. The budget is derived when unset, never absent, and
@@ -55,10 +56,15 @@ pub const MIB: u64 = 1024 * 1024;
 /// linear memory get".
 pub const WASMTIME_DEFAULT_HEAP_MEMORY: u64 = 4 * 1024 * MIB;
 
-/// wasmtime's default for the pooling allocator's instance counts, and what
+/// wasmtime's default for the pooling allocator's memory count, and what
 /// [`crate::engine::EngineBuilder`] has always passed when `max_instances` is
 /// unset.
-pub const WASMTIME_DEFAULT_CORE_INSTANCES: u32 = 1000;
+pub const WASMTIME_DEFAULT_MEMORIES: u32 = 1000;
+
+/// The old name for [`WASMTIME_DEFAULT_MEMORIES`], from when one count sized
+/// every pool total.
+#[deprecated(since = "2.12.0", note = "use WASMTIME_DEFAULT_MEMORIES")]
+pub const WASMTIME_DEFAULT_CORE_INSTANCES: u32 = WASMTIME_DEFAULT_MEMORIES;
 
 /// wasmtime's default `memory_reservation`: the address space each pooled
 /// linear memory slot reserves, however low its heap ceiling.
@@ -139,6 +145,11 @@ pub fn pool_table_bytes(tables: u32, table_elements: usize) -> u64 {
         .div_ceil(page)
         .saturating_mul(page);
     table.saturating_mul(u64::from(tables))
+}
+
+/// Core instances `memories` memories derive, at the engine's ratio.
+fn derived_core_instances(memories: u32) -> u32 {
+    super::derived_pool_totals(memories).core_instances
 }
 
 /// Share of the detected memory limit that guest work may use. The rest is for
@@ -313,9 +324,10 @@ pub fn render_bytes(bytes: u64) -> String {
 
 /// The host's resolved memory budgets.
 ///
-/// Every field bounds memory: `core_instances` is a count of pool memory
-/// slots, each sized by [`pool_slot_bytes`], not a CPU-side knob. Compute is
-/// metered separately via [`EngineBuilder::with_fuel_consumption`].
+/// Every field bounds memory: `max_memories` is a count of pool memory
+/// slots, each sized by [`pool_slot_bytes`], and `core_instances` a count of
+/// live core modules, not a CPU-side knob. Compute is metered separately via
+/// [`EngineBuilder::with_fuel_consumption`].
 ///
 /// [`EngineBuilder::with_fuel_consumption`]: crate::engine::EngineBuilder::with_fuel_consumption
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,14 +338,18 @@ pub struct HostMemoryBudgets {
     /// allocator.
     pub default_heap_memory: u64,
     /// Linear memories the pooling allocator keeps room for, and with them
-    /// the fiber stacks and component instances it admits: one count for all
-    /// three, since a component instance of the usual shape takes one of
-    /// each. Each memory is a slot of [`pool_slot_bytes`].
-    ///
-    /// Named for the flag it comes from, `--core-instances`, which predates
-    /// the pool having a separate core-instance total. That total is now a
-    /// multiple of this count (see [`crate::engine`]), so this is *not* how
-    /// many core instances the pool admits.
+    /// the fiber stacks, component instances and GC heaps it admits: one
+    /// count for all, since a component instance of the usual shape takes one
+    /// of each. Each memory is a slot of [`pool_slot_bytes`], so this is the
+    /// count that sizes the pool. `--max-memories`.
+    pub max_memories: u32,
+    /// Core instances (live core modules) the pool admits at once: a counter
+    /// that reserves nothing. `--core-instances`. Unset, it is
+    /// [`crate::engine::CORE_INSTANCES_PER_MEMORY`] per memory, so a
+    /// component made of several core modules does not fill it before the
+    /// memories run out; set alone, `max_memories` is derived from it by the
+    /// same ratio; set beside `max_memories`, both stand as given and
+    /// [`Self::core_instance_advisory`] says so when they disagree.
     pub core_instances: u32,
 }
 
@@ -349,26 +365,35 @@ impl HostMemoryBudgets {
         Self {
             max_guest_memory: derive_max_guest_memory_within(memory_limit),
             default_heap_memory: WASMTIME_DEFAULT_HEAP_MEMORY,
-            core_instances: WASMTIME_DEFAULT_CORE_INSTANCES,
+            max_memories: WASMTIME_DEFAULT_MEMORIES,
+            core_instances: derived_core_instances(WASMTIME_DEFAULT_MEMORIES),
         }
     }
 }
 
 impl HostMemoryBudgets {
-    /// Resolve the three knobs, falling back to the derived budget and to
+    /// Resolve the four knobs, falling back to the derived budget and to
     /// wasmtime's own defaults.
+    ///
+    /// `max_memories` and `core_instances` derive from each other at
+    /// [`crate::engine::CORE_INSTANCES_PER_MEMORY`] when only one is given:
+    /// a memory count takes that many core instances per memory, and a
+    /// core-instance count the memories that many fit in. Given both, both
+    /// stand as the operator set them, whether or not they agree; see
+    /// [`Self::core_instance_advisory`].
     ///
     /// # Errors
     ///
-    /// Rejects a zero for any of the three: each would mean "this host runs
-    /// nothing", which is never what an operator meant, and two of them would
-    /// panic or misbehave inside wasmtime rather than saying so.
+    /// Rejects a zero for any of them: each would mean "this host runs
+    /// nothing", which is never what an operator meant, and some would panic
+    /// or misbehave inside wasmtime rather than saying so.
     ///
     /// Errors name knobs canonically (`max-guest-memory`), not as flags. A
     /// value may arrive from YAML or the environment, never from a flag.
     pub fn resolve(
         max_guest_memory: Option<u64>,
         default_heap_memory: Option<u64>,
+        max_memories: Option<u32>,
         core_instances: Option<u32>,
     ) -> Result<Self, String> {
         if max_guest_memory == Some(0) {
@@ -377,13 +402,46 @@ impl HostMemoryBudgets {
         if default_heap_memory == Some(0) {
             return Err("default-heap-memory must be greater than zero".to_string());
         }
+        if max_memories == Some(0) {
+            return Err("max-memories must be at least 1".to_string());
+        }
         if core_instances == Some(0) {
             return Err("core-instances must be at least 1".to_string());
         }
+        let (max_memories, core_instances) = match (max_memories, core_instances) {
+            (None, None) => (
+                WASMTIME_DEFAULT_MEMORIES,
+                derived_core_instances(WASMTIME_DEFAULT_MEMORIES),
+            ),
+            (Some(memories), None) => (memories, derived_core_instances(memories)),
+            (None, Some(core)) => (super::memories_for_core_instances(core), core),
+            (Some(memories), Some(core)) => (memories, core),
+        };
         Ok(Self {
             max_guest_memory: max_guest_memory.unwrap_or_else(derive_max_guest_memory),
             default_heap_memory: default_heap_memory.unwrap_or(WASMTIME_DEFAULT_HEAP_MEMORY),
-            core_instances: core_instances.unwrap_or(WASMTIME_DEFAULT_CORE_INSTANCES),
+            max_memories,
+            core_instances,
+        })
+    }
+
+    /// What to say when `core_instances` is not what `max_memories` would
+    /// derive, if anything: an operator set both, and they disagree. Both are
+    /// installed as given, so the pool runs out of whichever is spent first.
+    pub fn core_instance_advisory(&self) -> Option<String> {
+        let derived = derived_core_instances(self.max_memories);
+        (self.core_instances != derived).then(|| {
+            format!(
+                "core-instances {} does not match max-memories {}, which would derive {derived} \
+                 core instances at {} per memory; both are installed as given, so the pool holds \
+                 {} memories and {} core instances and refuses an instantiation once either is \
+                 spent. Set one and let the other derive, or set both to match",
+                self.core_instances,
+                self.max_memories,
+                super::CORE_INSTANCES_PER_MEMORY,
+                self.max_memories,
+                self.core_instances,
+            )
         })
     }
 
@@ -399,6 +457,7 @@ impl HostMemoryBudgets {
     pub fn resolve_strs(
         max_guest_memory: Option<&str>,
         default_heap_memory: Option<&str>,
+        max_memories: Option<u32>,
         core_instances: Option<u32>,
     ) -> Result<Self, String> {
         let parse = |value: Option<&str>, knob: &str| -> Result<Option<u64>, String> {
@@ -411,6 +470,7 @@ impl HostMemoryBudgets {
         Self::resolve(
             parse(max_guest_memory, "max-guest-memory")?,
             parse(default_heap_memory, "default-heap-memory")?,
+            max_memories,
             core_instances,
         )
     }
@@ -423,7 +483,7 @@ impl HostMemoryBudgets {
     /// the same as the answer to a merely enormous number — refuse it — and a
     /// saturated `u64` is still comfortably past any real limit.
     pub fn pool_reservation(&self) -> u64 {
-        pool_slab_bytes(self.default_heap_memory, self.core_instances)
+        pool_slab_bytes(self.default_heap_memory, self.max_memories)
     }
 
     /// What the host should say about these knobs at startup, if anything.
@@ -608,7 +668,7 @@ const TABLE_COMMIT_PERCENT: u64 = 10;
 /// [`table_commit_ceiling`]'s.
 ///
 /// The table total is a multiple of the memory count (see
-/// [`crate::engine`]), so it grows with `--core-instances` though that flag
+/// [`crate::engine`]), so it grows with `--max-memories` though that flag
 /// says nothing about tables, and nothing else bounds it: the memory
 /// reservation is address space, which the reservation advisory covers, and
 /// the table pool is one mapping, which the map-count advisory ignores. A
@@ -622,7 +682,7 @@ fn pool_table_commit_advisory(
 ) -> Option<String> {
     let ceiling = ceiling?;
     let mapped = pool_table_bytes(tables, table_elements);
-    let remedy = "Lower core-instances, which sizes the table total from the memory count, or set \
+    let remedy = "Lower max-memories, which sizes the table total from the memory count, or set \
                   WASMTIME_POOLING_TOTAL_TABLES (or WASMTIME_POOLING_TABLE_ELEMENTS) on its own.";
     match charge {
         TableMappingCharge::Committed if mapped > ceiling / 100 * TABLE_COMMIT_PERCENT => {
@@ -692,7 +752,7 @@ fn pool_map_count_advisory(totals: &PoolTotals, max_map_count: u64) -> Option<St
              mappings once every memory is live, past this kernel's vm.max_map_count of \
              {max_map_count}. Engine startup or later instantiation may fail. Raise \
              vm.max_map_count (sysctl), reduce the installed WASMTIME_POOLING_TOTAL_MEMORIES \
-             and WASMTIME_POOLING_TOTAL_STACKS overrides, or lower core-instances when no \
+             and WASMTIME_POOLING_TOTAL_STACKS overrides, or lower max-memories when no \
              overrides are set. Aim for fewer than {} pool mappings to leave room for \
              libraries, thread stacks and compiled code.",
             max_map_count / 10 * 9,
@@ -726,7 +786,7 @@ fn pool_reservation_advisory(
     // The heap ceiling does not size the slot, so advising an operator to
     // lower it would change nothing.
     let remedy = format!(
-        "Lower core-instances (or WASMTIME_POOLING_TOTAL_MEMORIES). Lowering \
+        "Lower max-memories (or WASMTIME_POOLING_TOTAL_MEMORIES). Lowering \
          default-heap-memory will not help: every slot reserves wasmtime's {} plus a {} \
          guard however small its heap.",
         render_bytes(WASMTIME_MEMORY_RESERVATION),
@@ -739,7 +799,7 @@ fn pool_reservation_advisory(
          to start, or later mappings may."
     };
     Some(format!(
-        "default-heap-memory {} across {memories} pool memories (core-instances, or \
+        "default-heap-memory {} across {memories} pool memories (max-memories, or \
          WASMTIME_POOLING_TOTAL_MEMORIES) would reserve {} of address space ({} per slot), \
          past {POOL_ADDRESS_SPACE_PERCENT}% of the {} this process can map. {consequence} \
          {remedy}",
@@ -1001,9 +1061,11 @@ impl fmt::Display for HostMemoryBudgets {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "max_guest_memory={} default_heap_memory={} core_instances={} pool_reservation={}",
+            "max_guest_memory={} default_heap_memory={} max_memories={} core_instances={} \
+             pool_reservation={}",
             render_bytes(self.max_guest_memory),
             render_bytes(self.default_heap_memory),
+            self.max_memories,
             self.core_instances,
             render_bytes(self.pool_reservation()),
         )
@@ -1018,7 +1080,7 @@ mod tests {
     /// one memory per core instance.
     fn reservation_advisory(budgets: &HostMemoryBudgets, address_space: u64) -> Option<String> {
         pool_reservation_advisory(
-            budgets.core_instances,
+            budgets.max_memories,
             budgets.default_heap_memory,
             address_space,
         )
@@ -1026,9 +1088,9 @@ mod tests {
 
     fn map_count_advisory(budgets: &HostMemoryBudgets, max_map_count: u64) -> Option<String> {
         let mut config = wasmtime::PoolingAllocationConfig::default();
-        config.total_memories(budgets.core_instances);
-        config.total_stacks(budgets.core_instances);
-        config.total_tables(budgets.core_instances);
+        config.total_memories(budgets.max_memories);
+        config.total_stacks(budgets.max_memories);
+        config.total_tables(budgets.max_memories);
         pool_map_count_advisory(&PoolTotals::of(&config), max_map_count)
     }
 
@@ -1056,13 +1118,13 @@ mod tests {
         let limit = Some(8 * 1024 * MIB);
         // Where mappings are committed, the stock host's 4000 tables commit
         // 625 MiB: within a tenth of 8 GiB, so nothing is said; a host told
-        // --core-instances 10000 commits 6.25 GiB, which an 8 GiB box must
+        // --max-memories 10000 commits 6.25 GiB, which an 8 GiB box must
         // hear about.
         assert!(pool_table_commit_advisory(4000, 20_000, limit, Committed).is_none());
         let advisory = pool_table_commit_advisory(40_000, 20_000, limit, Committed)
             .expect("6.25 GiB of tables is most of an 8 GiB limit");
         assert!(advisory.contains("40000 pooled tables"), "{advisory}");
-        assert!(advisory.contains("core-instances"), "{advisory}");
+        assert!(advisory.contains("max-memories"), "{advisory}");
         assert!(
             advisory.contains("WASMTIME_POOLING_TOTAL_TABLES"),
             "{advisory}"
@@ -1073,7 +1135,7 @@ mod tests {
         let advisory = pool_table_commit_advisory(120_000, 20_000, limit, Heuristic)
             .expect("one 18.75 GiB mapping is refused on an 8 GiB box");
         assert!(advisory.contains("overcommit_memory=0"), "{advisory}");
-        assert!(advisory.contains("core-instances"), "{advisory}");
+        assert!(advisory.contains("max-memories"), "{advisory}");
         // Where it is free there is nothing to say, however large.
         assert!(pool_table_commit_advisory(120_000, 20_000, limit, Free).is_none());
         // No limit to compare against, nothing to say.
@@ -1312,9 +1374,15 @@ mod tests {
     fn unset_knobs_resolve_to_wasmtimes_own_defaults() {
         // The whole safety property of this change: setting nothing must leave
         // the host exactly as it was.
-        let resolved = HostMemoryBudgets::resolve(None, None, None).expect("defaults are valid");
+        let resolved =
+            HostMemoryBudgets::resolve(None, None, None, None).expect("defaults are valid");
         assert_eq!(resolved.default_heap_memory, WASMTIME_DEFAULT_HEAP_MEMORY);
-        assert_eq!(resolved.core_instances, WASMTIME_DEFAULT_CORE_INSTANCES);
+        assert_eq!(resolved.max_memories, WASMTIME_DEFAULT_MEMORIES);
+        assert_eq!(
+            resolved.core_instances,
+            derived_core_instances(WASMTIME_DEFAULT_MEMORIES)
+        );
+        assert!(resolved.core_instance_advisory().is_none());
         assert!(
             resolved.max_guest_memory >= MIN_DERIVED_MAX_GUEST_MEMORY,
             "an unset budget is derived, never zero or unbounded"
@@ -1325,22 +1393,22 @@ mod tests {
     fn string_knobs_resolve_the_same_as_parsed_ones() {
         // The string form is `resolve` plus a parse, nothing more.
         assert_eq!(
-            HostMemoryBudgets::resolve_strs(Some("8GiB"), Some("128MiB"), Some(100)),
-            HostMemoryBudgets::resolve(Some(8 * 1024 * MIB), Some(128 * MIB), Some(100))
+            HostMemoryBudgets::resolve_strs(Some("8GiB"), Some("128MiB"), Some(100), None),
+            HostMemoryBudgets::resolve(Some(8 * 1024 * MIB), Some(128 * MIB), Some(100), None)
         );
         // `2G` and `2Gi` are different numbers and stay different here.
-        let decimal = HostMemoryBudgets::resolve_strs(Some("2G"), None, None).unwrap();
-        let binary = HostMemoryBudgets::resolve_strs(Some("2Gi"), None, None).unwrap();
+        let decimal = HostMemoryBudgets::resolve_strs(Some("2G"), None, None, None).unwrap();
+        let binary = HostMemoryBudgets::resolve_strs(Some("2Gi"), None, None, None).unwrap();
         assert_eq!(decimal.max_guest_memory, 2_000_000_000);
         assert_eq!(binary.max_guest_memory, 2 * 1024 * MIB);
         // The zero checks apply to a parsed size too, not just a passed one.
-        assert!(HostMemoryBudgets::resolve_strs(Some("0"), None, None).is_err());
+        assert!(HostMemoryBudgets::resolve_strs(Some("0"), None, None, None).is_err());
     }
 
     #[test]
     fn a_blank_knob_is_unset_rather_than_a_parse_failure() {
         // An empty ConfigMap key or `value: ""` reaches clap as `Some("")`.
-        let blank = HostMemoryBudgets::resolve_strs(Some(""), Some("   "), None)
+        let blank = HostMemoryBudgets::resolve_strs(Some(""), Some("   "), None, None)
             .expect("a blank knob is unset, not a bad size");
         // Compared against the fixed defaults, not a second `resolve(None, ..)`:
         // the derived budget re-reads the cgroup and could differ.
@@ -1352,14 +1420,14 @@ mod tests {
     fn an_unparseable_size_names_the_knob_it_came_from() {
         // Two of the three knobs are sizes; the parse error alone does not say
         // which one failed.
-        let err = HostMemoryBudgets::resolve_strs(None, Some("512 gigabytes"), None)
+        let err = HostMemoryBudgets::resolve_strs(None, Some("512 gigabytes"), None, None)
             .expect_err("an unparseable size is refused");
         assert!(
             err.contains("default-heap-memory"),
             "the error must name the knob: {err}"
         );
 
-        let err = HostMemoryBudgets::resolve_strs(Some("lots"), None, None)
+        let err = HostMemoryBudgets::resolve_strs(Some("lots"), None, None, None)
             .expect_err("an unparseable size is refused");
         assert!(
             err.contains("max-guest-memory"),
@@ -1372,9 +1440,47 @@ mod tests {
         // Zero means "this host runs nothing" in every case, which is never
         // what was meant — and two of the three would misbehave inside
         // wasmtime rather than saying so.
-        assert!(HostMemoryBudgets::resolve(Some(0), None, None).is_err());
-        assert!(HostMemoryBudgets::resolve(None, Some(0), None).is_err());
-        assert!(HostMemoryBudgets::resolve(None, None, Some(0)).is_err());
+        assert!(HostMemoryBudgets::resolve(Some(0), None, None, None).is_err());
+        assert!(HostMemoryBudgets::resolve(None, Some(0), None, None).is_err());
+        assert!(HostMemoryBudgets::resolve(None, None, Some(0), None).is_err());
+        assert!(HostMemoryBudgets::resolve(None, None, None, Some(0)).is_err());
+    }
+
+    #[test]
+    fn memories_and_core_instances_derive_from_each_other_unless_both_are_set() {
+        let per = super::super::CORE_INSTANCES_PER_MEMORY;
+        // Memories alone take the ratio's core instances per memory.
+        let memories = HostMemoryBudgets::resolve(None, None, Some(100), None).unwrap();
+        assert_eq!(memories.max_memories, 100);
+        assert_eq!(memories.core_instances, 100 * per);
+        assert!(memories.core_instance_advisory().is_none());
+        // Core instances alone take the memories they fit in, rounded up and
+        // never zero: the flag keeps meaning core instances, and the pool is
+        // sized to run that many of the usual shape.
+        let cores = HostMemoryBudgets::resolve(None, None, None, Some(100 * per + 1)).unwrap();
+        assert_eq!(cores.core_instances, 100 * per + 1);
+        assert_eq!(cores.max_memories, 101);
+        assert!(cores.core_instance_advisory().is_none());
+        assert_eq!(
+            HostMemoryBudgets::resolve(None, None, None, Some(1))
+                .unwrap()
+                .max_memories,
+            1
+        );
+        // Both set: both stand, and a mismatch is said, with both numbers.
+        let both = HostMemoryBudgets::resolve(None, None, Some(100), Some(100 * per)).unwrap();
+        assert!(both.core_instance_advisory().is_none());
+        let apart = HostMemoryBudgets::resolve(None, None, Some(100), Some(500)).unwrap();
+        assert_eq!((apart.max_memories, apart.core_instances), (100, 500));
+        let advisory = apart
+            .core_instance_advisory()
+            .expect("500 is not 100 memories' worth");
+        assert!(advisory.contains("core-instances 500"), "{advisory}");
+        assert!(advisory.contains("max-memories 100"), "{advisory}");
+        assert!(
+            advisory.contains(&format!("derive {} core instances", 100 * per)),
+            "{advisory}"
+        );
     }
 
     #[test]
@@ -1382,7 +1488,8 @@ mod tests {
         // A 128 MiB heap ceiling still reserves 4 GiB per slot: multiplying
         // the ceiling by the count would report 12.5 GiB for what is 403 GiB.
         let resolved =
-            HostMemoryBudgets::resolve(Some(8 * 1024 * MIB), Some(128 * MIB), Some(100)).unwrap();
+            HostMemoryBudgets::resolve(Some(8 * 1024 * MIB), Some(128 * MIB), Some(100), None)
+                .unwrap();
         assert_eq!(pool_slot_bytes(128 * MIB), 4096 * MIB + 32 * MIB);
         assert_eq!(
             resolved.pool_reservation(),
@@ -1396,7 +1503,7 @@ mod tests {
         // wasmtime refuses this pool outright, so the advice is about the
         // ceiling, not about how much the pool would have reserved.
         let resolved =
-            HostMemoryBudgets::resolve(None, Some(16 * 1024 * MIB), Some(10_000)).unwrap();
+            HostMemoryBudgets::resolve(None, Some(16 * 1024 * MIB), Some(10_000), None).unwrap();
         let advisory = pool_heap_ceiling_advisory(resolved.default_heap_memory)
             .expect("16 GiB is past the 4 GiB reservation");
         assert!(advisory.contains("default-heap-memory 16GiB"), "{advisory}");
@@ -1410,11 +1517,12 @@ mod tests {
     fn a_small_heap_over_the_address_space_is_told_to_lower_the_count() {
         // The trap this is here for: lowering the heap ceiling to fit more
         // slots, and finding the reservation unchanged.
-        let resolved = HostMemoryBudgets::resolve(None, Some(64 * MIB), Some(30_000)).unwrap();
+        let resolved =
+            HostMemoryBudgets::resolve(None, Some(64 * MIB), Some(30_000), None).unwrap();
         let advisory = reservation_advisory(&resolved, USER_ADDRESS_SPACE)
             .expect("30,000 slots of 4 GiB are 118.6 TiB, past 90% of 128 TiB");
         assert!(advisory.contains("may fail"), "{advisory}");
-        assert!(advisory.contains("Lower core-instances"), "{advisory}");
+        assert!(advisory.contains("Lower max-memories"), "{advisory}");
         assert!(
             advisory.contains("Lowering default-heap-memory will not help"),
             "{advisory}"
@@ -1426,7 +1534,7 @@ mod tests {
     fn the_stock_defaults_are_named_and_quiet() {
         // Worth pinning, because it is the number nobody is told today: 4 GiB
         // and a 32 MiB guard per slot across 1000 slots is 3.9 TiB.
-        let stock = HostMemoryBudgets::resolve(None, None, None).unwrap();
+        let stock = HostMemoryBudgets::resolve(None, None, None, None).unwrap();
         assert_eq!(
             stock.pool_reservation(),
             1000 * (4096 * MIB + 32 * MIB) + 32 * MIB
@@ -1443,7 +1551,7 @@ mod tests {
     fn a_pool_well_past_the_old_probe_is_quiet_while_it_fits() {
         // 20,000 slots is 78.8 TiB: far past the 4 TiB the support probe maps,
         // and comfortably inside what the process can.
-        let resolved = HostMemoryBudgets::resolve(None, None, Some(20_000)).unwrap();
+        let resolved = HostMemoryBudgets::resolve(None, None, Some(20_000), None).unwrap();
         assert_eq!(reservation_advisory(&resolved, USER_ADDRESS_SPACE), None);
         // Under an address-space limit of 64 TiB, the same pool cannot map.
         let advisory = reservation_advisory(&resolved, 64 * 1024 * 1024 * MIB)
@@ -1456,7 +1564,7 @@ mod tests {
         // 20,000 slots fit the address space but not Linux's default 65530
         // mappings: 20,000 stack guards split 40,000 at startup and 20,000 live
         // memories another 80,000.
-        let resolved = HostMemoryBudgets::resolve(None, None, Some(20_000)).unwrap();
+        let resolved = HostMemoryBudgets::resolve(None, None, Some(20_000), None).unwrap();
         let advisory =
             map_count_advisory(&resolved, 65_530).expect("120,000 mappings are past 65530");
         assert!(advisory.contains("vm.max_map_count"), "{advisory}");
@@ -1465,7 +1573,7 @@ mod tests {
             "names a mapping target with headroom: {advisory}"
         );
         assert_eq!(map_count_advisory(&resolved, 1_048_576), None);
-        let stock = HostMemoryBudgets::resolve(None, None, None).unwrap();
+        let stock = HostMemoryBudgets::resolve(None, None, None, None).unwrap();
         assert_eq!(map_count_advisory(&stock, 65_530), None);
     }
 
@@ -1512,7 +1620,7 @@ mod tests {
 
     #[test]
     fn an_unreservable_combination_is_reported_with_both_numbers() {
-        let resolved = HostMemoryBudgets::resolve(None, None, Some(35_000)).unwrap();
+        let resolved = HostMemoryBudgets::resolve(None, None, Some(35_000), None).unwrap();
         let advisory = reservation_advisory(&resolved, USER_ADDRESS_SPACE)
             .expect("137.8 TiB is past the 128 TiB a process can map");
         assert!(advisory.contains("cannot be mapped"), "{advisory}");
@@ -1525,10 +1633,10 @@ mod tests {
             "names the instance count: {advisory}"
         );
         assert!(
-            advisory.contains("default-heap-memory") && advisory.contains("core-instances"),
+            advisory.contains("default-heap-memory") && advisory.contains("max-memories"),
             "names both knobs so it is actionable: {advisory}"
         );
-        assert!(advisory.contains("Lower core-instances"), "{advisory}");
+        assert!(advisory.contains("Lower max-memories"), "{advisory}");
     }
 
     /// A budget set to the pod's own `resources.limits.memory` is a ceiling
@@ -1540,7 +1648,7 @@ mod tests {
         let limit = detected_memory_limit().expect("a test machine has a readable memory limit");
 
         // The whole limit.
-        let whole = HostMemoryBudgets::resolve(Some(limit), None, None).unwrap();
+        let whole = HostMemoryBudgets::resolve(Some(limit), None, None, None).unwrap();
         let advisory = whole
             .enforcement_advisory()
             .expect("a budget equal to the real limit leaves the host nothing");
@@ -1550,7 +1658,7 @@ mod tests {
         );
 
         // Half of it: room to spare, nothing to say.
-        let modest = HostMemoryBudgets::resolve(Some(limit / 2), None, None).unwrap();
+        let modest = HostMemoryBudgets::resolve(Some(limit / 2), None, None, None).unwrap();
         assert_eq!(modest.enforcement_advisory(), None);
     }
 
@@ -1559,7 +1667,7 @@ mod tests {
     /// warned, by default, about a number it did not choose.
     #[test]
     fn a_derived_budget_is_never_warned_about() {
-        let derived = HostMemoryBudgets::resolve(None, None, None).unwrap();
+        let derived = HostMemoryBudgets::resolve(None, None, None, None).unwrap();
         // Only meaningful where the derivation was not clamped: the 256MiB
         // floor can legitimately exceed a tiny container's limit, and being
         // told so is correct.
@@ -1582,7 +1690,8 @@ mod tests {
         // Not an error — reserving is not consuming — but an operator who has
         // done this has almost certainly mis-set one of the two.
         let resolved =
-            HostMemoryBudgets::resolve(Some(512 * MIB), Some(2 * 1024 * MIB), Some(4)).unwrap();
+            HostMemoryBudgets::resolve(Some(512 * MIB), Some(2 * 1024 * MIB), Some(4), None)
+                .unwrap();
         let advisory = resolved.advisory().expect("a guest can exhaust the host");
         assert!(advisory.contains("2GiB") && advisory.contains("512MiB"));
     }
@@ -1591,7 +1700,7 @@ mod tests {
     /// pool, and how many memories it holds, is only known once it is built.
     #[test]
     fn the_knobs_advisory_leaves_the_reservation_to_the_installed_pool() {
-        let resolved = HostMemoryBudgets::resolve(None, None, Some(30_000)).unwrap();
+        let resolved = HostMemoryBudgets::resolve(None, None, Some(30_000), None).unwrap();
         assert_eq!(resolved.advisory(), None);
         assert!(reservation_advisory(&resolved, USER_ADDRESS_SPACE).is_some());
         assert!(map_count_advisory(&resolved, 65_530).is_some());

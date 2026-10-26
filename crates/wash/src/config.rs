@@ -2111,7 +2111,7 @@ mod tests {
         let big = wasmcloud_messaging_limits(None, None, &big_engine).expect("valid");
         assert!(
             big.host_total() > stock.host_total(),
-            "raising --core-instances must raise the messaging ceiling: \
+            "raising --max-memories must raise the messaging ceiling: \
              {} vs {}",
             big.host_total(),
             stock.host_total()

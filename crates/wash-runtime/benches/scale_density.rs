@@ -292,10 +292,12 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
     // the run; set lower, the run shows where it binds instead.
     let engine = Engine::builder()
         .with_host_memory(
+            // The bench's count is pool slots, which are memories.
             HostMemoryBudgets::resolve(
                 Some(settings.guest_memory),
                 None,
                 Some(settings.core_instances),
+                None,
             )
             .map_err(|e| anyhow::anyhow!(e))?,
         )

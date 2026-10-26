@@ -138,7 +138,7 @@ const EXHAUSTED: &str = exhausted!("");
 /// The context naming the knob that raises the total wasmtime names in a
 /// refusal. Whole static strings, so annotating a refusal allocates nothing.
 ///
-/// `--core-instances` sizes the memories, stacks and component instances
+/// `--max-memories` sizes the memories, stacks and component instances
 /// together, so each of those names it first: raising only the one total that
 /// was hit moves the refusal to the next of the three. The core-instance and
 /// table totals are multiples of it that a component of the usual shape never
@@ -153,25 +153,25 @@ fn remedy(kind: &str) -> &'static str {
     };
     match kind {
         "core instances" => exhausted!(
-            "Raise --total-core-instances (or WASMTIME_POOLING_TOTAL_CORE_INSTANCES): unset, \
-             --core-instances sets it to a multiple of the memory count that a component of \
-             the usual shape never fills, so a component made of many core modules, or many \
-             warm instances of one, is what filled it"
+            "Raise --core-instances (or WASMTIME_POOLING_TOTAL_CORE_INSTANCES): unset, it is \
+             a multiple of --max-memories that a component of the usual shape never fills, \
+             so a component made of many core modules, or many warm instances of one, is \
+             what filled it"
         ),
         "component instances" => exhausted!(
-            "Raise --core-instances (or WASMTIME_POOLING_TOTAL_COMPONENT_INSTANCES), or give \
+            "Raise --max-memories (or WASMTIME_POOLING_TOTAL_COMPONENT_INSTANCES), or give \
              this host fewer warm instances"
         ),
         "memories" => exhausted!(
-            "Raise --core-instances (or WASMTIME_POOLING_TOTAL_MEMORIES), or give this host \
+            "Raise --max-memories (or WASMTIME_POOLING_TOTAL_MEMORIES), or give this host \
              fewer warm instances"
         ),
         "tables" => exhausted!(
-            "Raise WASMTIME_POOLING_TOTAL_TABLES: --core-instances sets it to a multiple of \
+            "Raise WASMTIME_POOLING_TOTAL_TABLES: --max-memories sets it to a multiple of \
              the memory count that a component of the usual shape never fills"
         ),
         "fibers" | "stacks" => exhausted!(
-            "Raise --core-instances (or WASMTIME_POOLING_TOTAL_STACKS), or give this host \
+            "Raise --max-memories (or WASMTIME_POOLING_TOTAL_STACKS), or give this host \
              fewer warm instances"
         ),
         "GC heaps" => exhausted!("Raise WASMTIME_POOLING_TOTAL_GC_HEAPS"),
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn the_totals_sized_together_name_the_flag_that_sizes_them() {
         // The refusal an operator sees once the memories are full must name
-        // the knob that raises all three of the totals `--core-instances`
+        // the knob that raises all three of the totals `--max-memories`
         // sizes, not only the one that happened to bind: raising that one
         // alone moves the refusal to the next.
         for kind in [
@@ -263,7 +263,7 @@ mod tests {
             "component instances",
         ] {
             assert!(
-                remedy(kind).contains("--core-instances"),
+                remedy(kind).contains("--max-memories"),
                 "{kind}: {}",
                 remedy(kind)
             );
@@ -271,7 +271,7 @@ mod tests {
         // The multiples a component never fills point elsewhere.
         for kind in ["core instances", "tables"] {
             assert!(
-                !remedy(kind).starts_with(exhausted!("Raise --core-instances")),
+                !remedy(kind).starts_with(exhausted!("Raise --max-memories")),
                 "{kind}: {}",
                 remedy(kind)
             );
@@ -387,7 +387,7 @@ mod tests {
             .await
             .expect_err("a pool of one memory is full");
         let text = format!("{:#}", explain_instantiate_failure(second.data(), err));
-        assert!(text.contains("--core-instances"), "{text}");
+        assert!(text.contains("--max-memories"), "{text}");
         assert!(text.contains("WASMTIME_POOLING_TOTAL_MEMORIES"), "{text}");
         assert!(
             text.contains("maximum concurrent limit of 1 for memory stripe 0 reached"),

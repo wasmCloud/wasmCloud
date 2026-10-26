@@ -57,7 +57,9 @@ async fn start_host(
     mode: GuestMemoryMode,
 ) -> Result<(std::net::SocketAddr, impl HostApi, Arc<GuestMemoryBudget>)> {
     let engine = Engine::builder()
-        .with_host_memory(HostMemoryBudgets::resolve(Some(BUDGET_MIB * MIB), None, None).unwrap())
+        .with_host_memory(
+            HostMemoryBudgets::resolve(Some(BUDGET_MIB * MIB), None, None, None).unwrap(),
+        )
         .with_guest_memory_mode(mode)
         .build()?;
     let budget = Arc::clone(engine.guest_memory());
