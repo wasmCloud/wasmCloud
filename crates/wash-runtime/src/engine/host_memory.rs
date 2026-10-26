@@ -56,15 +56,25 @@ pub const MIB: u64 = 1024 * 1024;
 /// linear memory get".
 pub const WASMTIME_DEFAULT_HEAP_MEMORY: u64 = 4 * 1024 * MIB;
 
-/// wasmtime's default for the pooling allocator's memory count, and what
-/// [`crate::engine::EngineBuilder`] has always passed when `max_instances` is
-/// unset.
-pub const WASMTIME_DEFAULT_MEMORIES: u32 = 1000;
+/// wasmtime's own default for the pooling allocator's `total_core_instances`:
+/// what a pool admits in live core modules when nothing sets the total. Not
+/// what this host installs when `--core-instances` is unset, which is
+/// [`WASMTIME_DEFAULT_MAX_CORE_INSTANCES`]; until the pool totals were
+/// derived from the memory count, this one number sized every total.
+pub const WASMTIME_DEFAULT_CORE_INSTANCES: u32 = 1000;
 
-/// The old name for [`WASMTIME_DEFAULT_MEMORIES`], from when one count sized
-/// every pool total.
-#[deprecated(since = "2.12.0", note = "use WASMTIME_DEFAULT_MEMORIES")]
-pub const WASMTIME_DEFAULT_CORE_INSTANCES: u32 = WASMTIME_DEFAULT_MEMORIES;
+/// wasmtime's default for the pooling allocator's memory count, and what the
+/// host keeps room for when `--max-memories` is unset: the count that sizes
+/// the pool, and what [`crate::engine::EngineBuilder`] has always passed as
+/// its instance count when nothing set one.
+pub const WASMTIME_DEFAULT_MAX_MEMORIES: u32 = 1000;
+
+/// Core instances the host admits when `--core-instances` is unset:
+/// [`crate::engine::CORE_INSTANCES_PER_MEMORY`] per default memory, above
+/// wasmtime's own [`WASMTIME_DEFAULT_CORE_INSTANCES`] so that the memories
+/// are what a full pool runs out of.
+pub const WASMTIME_DEFAULT_MAX_CORE_INSTANCES: u32 =
+    super::CORE_INSTANCES_PER_MEMORY * WASMTIME_DEFAULT_MAX_MEMORIES;
 
 /// wasmtime's default `memory_reservation`: the address space each pooled
 /// linear memory slot reserves, however low its heap ceiling.
@@ -150,6 +160,22 @@ pub fn pool_table_bytes(tables: u32, table_elements: usize) -> u64 {
 /// Core instances `memories` memories derive, at the engine's ratio.
 fn derived_core_instances(memories: u32) -> u32 {
     super::derived_pool_totals(memories).core_instances
+}
+
+/// [`HostMemoryBudgets::core_instance_advisory`] for a pair the engine
+/// builder resolved from its own knobs rather than the budgets.
+pub(crate) fn core_instance_mismatch(max_memories: u32, core_instances: u32) -> Option<String> {
+    let derived = derived_core_instances(max_memories);
+    (core_instances != derived).then(|| {
+        format!(
+            "core-instances {core_instances} does not match max-memories {max_memories}, which \
+             would derive {derived} core instances at {} per memory; both are installed as \
+             given, so the pool holds {max_memories} memories and {core_instances} core \
+             instances and refuses an instantiation once either is spent. Set one and let the \
+             other derive, or set both to match",
+            super::CORE_INSTANCES_PER_MEMORY,
+        )
+    })
 }
 
 /// Share of the detected memory limit that guest work may use. The rest is for
@@ -365,8 +391,8 @@ impl HostMemoryBudgets {
         Self {
             max_guest_memory: derive_max_guest_memory_within(memory_limit),
             default_heap_memory: WASMTIME_DEFAULT_HEAP_MEMORY,
-            max_memories: WASMTIME_DEFAULT_MEMORIES,
-            core_instances: derived_core_instances(WASMTIME_DEFAULT_MEMORIES),
+            max_memories: WASMTIME_DEFAULT_MAX_MEMORIES,
+            core_instances: WASMTIME_DEFAULT_MAX_CORE_INSTANCES,
         }
     }
 }
@@ -410,8 +436,8 @@ impl HostMemoryBudgets {
         }
         let (max_memories, core_instances) = match (max_memories, core_instances) {
             (None, None) => (
-                WASMTIME_DEFAULT_MEMORIES,
-                derived_core_instances(WASMTIME_DEFAULT_MEMORIES),
+                WASMTIME_DEFAULT_MAX_MEMORIES,
+                WASMTIME_DEFAULT_MAX_CORE_INSTANCES,
             ),
             (Some(memories), None) => (memories, derived_core_instances(memories)),
             (None, Some(core)) => (super::memories_for_core_instances(core), core),
@@ -429,20 +455,7 @@ impl HostMemoryBudgets {
     /// derive, if anything: an operator set both, and they disagree. Both are
     /// installed as given, so the pool runs out of whichever is spent first.
     pub fn core_instance_advisory(&self) -> Option<String> {
-        let derived = derived_core_instances(self.max_memories);
-        (self.core_instances != derived).then(|| {
-            format!(
-                "core-instances {} does not match max-memories {}, which would derive {derived} \
-                 core instances at {} per memory; both are installed as given, so the pool holds \
-                 {} memories and {} core instances and refuses an instantiation once either is \
-                 spent. Set one and let the other derive, or set both to match",
-                self.core_instances,
-                self.max_memories,
-                super::CORE_INSTANCES_PER_MEMORY,
-                self.max_memories,
-                self.core_instances,
-            )
-        })
+        core_instance_mismatch(self.max_memories, self.core_instances)
     }
 
     /// [`Self::resolve`] over the strings a host's configuration holds.
@@ -1377,11 +1390,14 @@ mod tests {
         let resolved =
             HostMemoryBudgets::resolve(None, None, None, None).expect("defaults are valid");
         assert_eq!(resolved.default_heap_memory, WASMTIME_DEFAULT_HEAP_MEMORY);
-        assert_eq!(resolved.max_memories, WASMTIME_DEFAULT_MEMORIES);
+        assert_eq!(resolved.max_memories, WASMTIME_DEFAULT_MAX_MEMORIES);
+        assert_eq!(resolved.core_instances, WASMTIME_DEFAULT_MAX_CORE_INSTANCES);
+        // The host's default stands clear of wasmtime's own by the ratio.
         assert_eq!(
-            resolved.core_instances,
-            derived_core_instances(WASMTIME_DEFAULT_MEMORIES)
+            WASMTIME_DEFAULT_MAX_CORE_INSTANCES,
+            derived_core_instances(WASMTIME_DEFAULT_MAX_MEMORIES)
         );
+        assert!(WASMTIME_DEFAULT_MAX_CORE_INSTANCES > WASMTIME_DEFAULT_CORE_INSTANCES);
         assert!(resolved.core_instance_advisory().is_none());
         assert!(
             resolved.max_guest_memory >= MIN_DERIVED_MAX_GUEST_MEMORY,
