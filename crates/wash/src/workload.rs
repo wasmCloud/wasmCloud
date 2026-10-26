@@ -32,21 +32,24 @@ use wash_runtime::host::allowed_loopback::AllowedLoopbackPort;
 
 use wash_runtime::config_source::resolve_environment_layer;
 
-use crate::config::{Config, DevComponent};
+use crate::config::{Config, DevComponent, WorkloadConfig};
 
 /// Resolved workload values ready to be applied to a runtime `LocalResources`.
-#[derive(Debug, Default, Clone)]
+///
+/// `Default` is what [`resolve_workload`] yields for a config with no
+/// `workload:` section, the same values `workload: {}` resolves to.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedWorkload {
     /// Environment variables (wasi:cli/env), merged from inline + configFrom + secretFrom.
     pub environment: HashMap<String, String>,
     /// Opaque key-value config delivered to the component.
     pub config: HashMap<String, String>,
-    /// Outbound HTTP allowlist (typed). When the wash YAML omitted
-    /// `allowedHosts`, this is `[AllowedHost::Any]` (allow-all) — the
-    /// serde default fires at deserialize time. An explicit
-    /// `allowedHosts: []` in YAML stays empty here, and the runtime
-    /// (see [`wash_runtime::host::http::check_allowed_hosts`]) interprets
-    /// empty as deny-all.
+    /// Outbound allowlist (typed) for HTTP requests and `wasi:sockets`
+    /// connections. When the wash YAML omitted `allowedHosts`, or the whole
+    /// `workload:` section, this is `[AllowedHost::Any]` (allow-all). An
+    /// explicit `allowedHosts: []` stays empty here, and the runtime (see
+    /// [`wash_runtime::host::http::check_allowed_hosts`]) treats empty as
+    /// deny-all.
     pub allowed_hosts: Vec<AllowedHost>,
     /// Names the component may resolve through
     /// `wasi:sockets/ip-name-lookup`. Empty denies every lookup, which is
@@ -55,6 +58,27 @@ pub struct ResolvedWorkload {
     /// Host-loopback ports this workload may reach through
     /// `host.wasmcloud.internal`. Empty denies every one.
     pub allowed_host_loopback_ports: Vec<AllowedLoopbackPort>,
+}
+
+impl ResolvedWorkload {
+    /// `workload`'s values, with `environment` already resolved from its
+    /// `environment` layer.
+    fn from_workload(workload: &WorkloadConfig, environment: HashMap<String, String>) -> Self {
+        Self {
+            environment,
+            config: workload.config.clone(),
+            allowed_hosts: workload.allowed_hosts.clone(),
+            allowed_ip_name_lookups: workload.allowed_ip_name_lookups.clone(),
+            allowed_host_loopback_ports: workload.allowed_host_loopback_ports.clone(),
+        }
+    }
+}
+
+impl Default for ResolvedWorkload {
+    fn default() -> Self {
+        // An omitted section has no `environment` layer to resolve.
+        Self::from_workload(&WorkloadConfig::omitted(), HashMap::new())
+    }
 }
 
 /// Resolves the workload section of a [`Config`], pulling in named entries
@@ -89,18 +113,10 @@ pub fn resolve_workload(
         repo_root,
     )?;
 
-    // `workload.allowed_hosts` is whatever serde produced: `[Any]` when the
-    // YAML omitted `allowedHosts` (via `default_allow_all_hosts`), or the
-    // user's explicit list (including an explicit empty list, which the
-    // runtime treats as deny-all). Either way, pass through unchanged.
-    // The substitution lives on the serde default, not here.
-    Ok(ResolvedWorkload {
-        environment,
-        config: workload.config.clone(),
-        allowed_hosts: workload.allowed_hosts.clone(),
-        allowed_ip_name_lookups: workload.allowed_ip_name_lookups.clone(),
-        allowed_host_loopback_ports: workload.allowed_host_loopback_ports.clone(),
-    })
+    // `workload.allowed_hosts` is `[Any]` when the YAML omitted `allowedHosts`,
+    // or the user's explicit list (an explicit empty list is deny-all in the
+    // runtime). Either way, pass through unchanged.
+    Ok(ResolvedWorkload::from_workload(workload, environment))
 }
 
 /// Resolves a `dev.components` entry's overrides on top of the resolved
@@ -170,7 +186,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::config::{ConfigSource, EnvironmentLayer, SecretSource, WorkloadConfig};
+    use crate::config::{ConfigSource, EnvironmentLayer, SecretSource};
 
     #[test]
     #[allow(unsafe_code)]
@@ -444,12 +460,34 @@ mod tests {
     }
 
     #[test]
-    fn workload_config_default_is_empty_allowed_hosts_for_deny_close() {
-        // Programmatic `WorkloadConfig::default()` is fail-closed: empty
-        // `allowed_hosts`. Only the serde deserialize path substitutes
-        // `[Any]` when the YAML omits the field.
+    fn workload_config_default_has_deny_all_allowed_hosts() {
+        // Programmatic `WorkloadConfig::default()` grants no egress: empty
+        // `allowed_hosts`. Only YAML that omits the field or the section
+        // gets `[Any]`.
         let cfg = WorkloadConfig::default();
         assert!(cfg.allowed_hosts.is_empty());
+    }
+
+    #[test]
+    fn omitted_workload_section_resolves_like_empty_workload() {
+        use wash_runtime::host::http::check_allowed_hosts;
+        let project = TempDir::new().unwrap();
+        let resolve = |config: &Config| resolve_workload(config, project.path(), None).unwrap();
+        let parse = |yaml: &str| serde_saphyr::from_str::<Config>(yaml).unwrap();
+        let req = hyper::Request::builder()
+            .uri("http://127.0.0.1:8080/")
+            .body(())
+            .unwrap();
+
+        let empty = resolve(&parse("workload: {}\n"));
+        assert_eq!(empty.allowed_hosts, vec![AllowedHost::Any]);
+        assert!(check_allowed_hosts(&req, &empty.allowed_hosts).is_ok());
+
+        let absent = parse("build:\n  command: cargo build\ndev:\n  address: 127.0.0.1:8000\n");
+        assert_eq!(resolve(&absent), empty);
+        assert_eq!(resolve(&parse("workload:\n")), empty);
+        assert_eq!(resolve(&Config::default()), empty);
+        assert_eq!(ResolvedWorkload::default(), empty);
     }
 
     #[test]

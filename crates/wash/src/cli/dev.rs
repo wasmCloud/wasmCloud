@@ -471,6 +471,15 @@ impl CliCommand for DevCommand {
         // gitignored-secret warning.
         let resolved_workload = resolve_workload(&config, project_dir, Some(project_dir))
             .context("failed to resolve workload-level configuration")?;
+        if resolved_workload
+            .allowed_hosts
+            .contains(&wash_runtime::host::allowed_hosts::AllowedHost::Any)
+        {
+            info!(
+                "workload allowedHosts admits every host; set workload.allowedHosts in \
+                 .wash/config.yaml to restrict outbound HTTP and socket connections"
+            );
+        }
         let workload = create_workload(
             &host,
             &config,
