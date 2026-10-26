@@ -1158,7 +1158,7 @@ pub fn wasmcloud_messaging_limits(
         per_component_default = limits.per_component_default(),
         host_total_source = if max_in_flight.is_some() {
             "flag"
-        } else if engine.total_core_instances().is_some() {
+        } else if engine.total_memories().is_some() {
             "derived from the instance pool"
         } else {
             "built-in default (pooling disabled)"
