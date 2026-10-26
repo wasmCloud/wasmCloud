@@ -560,6 +560,14 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
         key: String,
         expected_revision: u64,
     ) -> wasmtime::Result<Result<(), types::NatsError>> {
+        // Revisions start at 1, so zero is not a revision a guest could have
+        // read. Sent to the server as the expected last sequence it would
+        // succeed on an absent key and tombstone one that was never written.
+        if expected_revision == 0 {
+            return Ok(Err(types::NatsError::Jetstream(
+                "delete-if requires an expected revision of at least 1".to_string(),
+            )));
+        }
         let store = accessor.with(|mut a| store_ref(&mut a, &rep))?;
         match store
             .delete_expect_revision(&key, Some(expected_revision))

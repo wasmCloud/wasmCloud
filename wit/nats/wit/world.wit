@@ -345,13 +345,22 @@ interface jetstream {
   /// client-managed reply subject.
   publish: async func(msg: nats-message) -> result<publish-ack, nats-error>;
 
-  /// Fetch a single message by its stream sequence number (direct-get).
+  /// Fetch a single message by its stream sequence number.
+  ///
+  /// A direct get: the request is answered by any server holding the stream
+  /// rather than routed to its leader, so the stream must have `allow-direct`
+  /// enabled and the server must be NATS 2.9 or newer. Without `allow-direct`
+  /// nothing answers the request, which surfaces as a `jetstream` error rather
+  /// than `not-found`. `get-last-by-subject` goes through the stream API and
+  /// has no such requirement.
   get-by-sequence: async func(stream-name: string, sequence: u64) -> result<stored-message, nats-error>;
 
   /// The last message on a literal subject. `not-found` when none exists.
   get-last-by-subject: async func(stream-name: string, subject: string) -> result<stored-message-at, nats-error>;
 
-  /// Fetch a message by sequence, including its stored time.
+  /// Fetch a message by sequence, including its stored time. A direct get,
+  /// with the same `allow-direct` and NATS 2.9+ requirements as
+  /// `get-by-sequence`.
   get-by-sequence-at: async func(stream-name: string, sequence: u64) -> result<stored-message-at, nats-error>;
 
   /// Purge a subject pattern, keeping the newest `keep` messages when given.
@@ -484,6 +493,9 @@ interface kv {
     /// Requires NATS 2.11+ and a bucket that allows message TTLs.
     create-with-ttl: async func(key: string, value: list<u8>, ttl-ms: u64) -> result<u64, nats-error>;
     /// Delete only at the expected revision. `revision-mismatch` on conflict.
+    /// `expected-revision` must be at least 1: revisions start at 1, and 0 is
+    /// refused rather than sent to the server, where it would match an absent
+    /// key and tombstone one that was never written.
     delete-if: async func(key: string, expected-revision: u64) -> result<_, nats-error>;
     /// Delete a key (tombstone, keeps history).
     delete: async func(key: string) -> result<_, nats-error>;
