@@ -584,6 +584,16 @@ impl Engine {
     /// components depends on their resource requirements and all the installed
     /// limits reported by [`Self::pool_usage`], including independent overrides.
     ///
+    /// Deprecated because its meaning moved under the same name: until the
+    /// pool totals were derived from the memory count this was also the
+    /// number of instances the pool held, and a caller still sizing work from
+    /// it now reads sixteen times that. [`Self::total_memories`] is the count
+    /// that reserves the pool and bounds instances of the usual shape.
+    #[deprecated(
+        since = "2.12.0",
+        note = "a counter sixteen times the memory count, not the pool's instance capacity; \
+                use `total_memories` for the count that sizes the pool"
+    )]
     pub fn total_core_instances(&self) -> Option<u32> {
         Some(self.pool_totals.as_ref()?.core_instances)
     }
@@ -1217,6 +1227,7 @@ pub struct EngineBuilder {
     config: Option<wasmtime::Config>,
     use_pooling_allocator: Option<bool>,
     max_instances: Option<u32>,
+    total_core_instances: Option<u32>,
     pooling_config: Option<PoolingAllocationConfig>,
     proposals: std::collections::BTreeSet<WasmProposal>,
     compilation_cache_size: Option<u64>,
@@ -1357,6 +1368,21 @@ impl EngineBuilder {
     /// [`with_pooling_config`](Self::with_pooling_config).
     pub fn with_max_instances(mut self, max: u32) -> Self {
         self.max_instances = Some(max);
+        self
+    }
+
+    /// Sets the pooling allocator's core-instance total on its own, in place
+    /// of the multiple of the instance count it is derived as (see
+    /// [`derived_pool_totals`]). A counter, not a reservation: a core
+    /// instance costs the pool nothing but a count, so this bounds how many
+    /// core modules may be live at once without moving the memories, stacks
+    /// or component instances. `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` still
+    /// overrides it, as it does every total.
+    ///
+    /// Ignored when a full [`PoolingAllocationConfig`] is supplied via
+    /// [`with_pooling_config`](Self::with_pooling_config).
+    pub fn with_total_core_instances(mut self, total: u32) -> Self {
+        self.total_core_instances = Some(total);
         self
     }
 
@@ -1552,6 +1578,7 @@ impl EngineBuilder {
             let pooling = self.pooling_config.take().unwrap_or_else(|| {
                 new_pooling_config(
                     self.max_instances.unwrap_or(host_memory.core_instances),
+                    self.total_core_instances,
                     host_memory.default_heap_memory,
                 )
             });
@@ -1900,7 +1927,8 @@ fn pooling_env_instances(key: &str, resolved: u32) -> u32 {
 /// this total and allocates each VMContext on the heap at its own size, which
 /// the process memory guard accounts for. So the total can stand well clear of
 /// any component shape; this leaves three shapes' worth of headroom past the
-/// largest measured.
+/// largest measured. A host that wants the total somewhere else sets it with
+/// `--total-core-instances` ([`EngineBuilder::with_total_core_instances`]).
 const CORE_INSTANCES_PER_MEMORY: u32 = 16;
 
 /// Tables the pool admits per linear memory it holds. The same shapes hold one
@@ -1942,11 +1970,19 @@ pub(crate) fn derived_pool_totals(instances: u32) -> pool_usage::PoolTotals {
 }
 
 /// The pooling allocator for `instances` linear memories: the totals of
-/// [`derived_pool_totals`], each of which can still be set on its own through
-/// its `WASMTIME_POOLING_TOTAL_*` variable, and the per-slot limits the
-/// environment names.
-fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAllocationConfig {
-    let derived = derived_pool_totals(instances);
+/// [`derived_pool_totals`], with `total_core_instances` in place of the
+/// derived core-instance total when a host set one, each of which can still
+/// be set on its own through its `WASMTIME_POOLING_TOTAL_*` variable, and the
+/// per-slot limits the environment names.
+fn new_pooling_config(
+    instances: u32,
+    total_core_instances: Option<u32>,
+    default_heap_memory: u64,
+) -> PoolingAllocationConfig {
+    let mut derived = derived_pool_totals(instances);
+    if let Some(total) = total_core_instances {
+        derived.core_instances = total;
+    }
     let mut config = PoolingAllocationConfig::default();
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_UNUSED_WASM_SLOTS") {
         config.max_unused_warm_slots(v);
@@ -2324,6 +2360,7 @@ mod tests {
     /// which reserve nothing, stand clear so the linear memories are what a
     /// warm pool fills first.
     #[test]
+    #[allow(deprecated)]
     fn pool_counters_do_not_bind_before_the_memories() {
         // The derivation, before the environment has its say.
         let derived = derived_pool_totals(1000);
@@ -2341,7 +2378,7 @@ mod tests {
         // through the same override the code is.
         let installed = |key, resolved| pooling_env_instances(key, resolved);
         let derived = derived_pool_totals(64);
-        let config = new_pooling_config(64, host_memory::WASMTIME_DEFAULT_HEAP_MEMORY);
+        let config = new_pooling_config(64, None, host_memory::WASMTIME_DEFAULT_HEAP_MEMORY);
         assert_eq!(
             config.get_total_memories(),
             installed("WASMTIME_POOLING_TOTAL_MEMORIES", derived.memories)
@@ -2369,6 +2406,42 @@ mod tests {
                 engine.total_core_instances(),
                 Some(config.get_total_core_instances())
             );
+        }
+    }
+
+    /// `--total-core-instances` moves the core-instance total alone, leaving
+    /// the memories and the other totals derived from `--core-instances`, and
+    /// the environment still has the last word over it.
+    #[test]
+    #[allow(deprecated)]
+    fn an_explicit_core_instance_total_moves_only_that_total() {
+        let installed = |key, resolved| pooling_env_instances(key, resolved);
+        let derived = derived_pool_totals(64);
+        let config = new_pooling_config(64, Some(100), host_memory::WASMTIME_DEFAULT_HEAP_MEMORY);
+        assert_eq!(
+            config.get_total_core_instances(),
+            installed("WASMTIME_POOLING_TOTAL_CORE_INSTANCES", 100)
+        );
+        assert_eq!(
+            config.get_total_memories(),
+            installed("WASMTIME_POOLING_TOTAL_MEMORIES", derived.memories)
+        );
+        assert_eq!(
+            config.get_total_tables(),
+            installed("WASMTIME_POOLING_TOTAL_TABLES", derived.tables)
+        );
+
+        let engine = Engine::builder()
+            .with_max_instances(64)
+            .with_total_core_instances(100)
+            .build()
+            .expect("pooling engine should build");
+        if engine.pool_totals().is_some() {
+            assert_eq!(
+                engine.total_core_instances(),
+                Some(installed("WASMTIME_POOLING_TOTAL_CORE_INSTANCES", 100))
+            );
+            assert_eq!(engine.total_memories(), Some(config.get_total_memories()));
         }
     }
 

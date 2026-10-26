@@ -146,10 +146,10 @@ const EXHAUSTED: &str = exhausted!("");
 fn remedy(kind: &str) -> &'static str {
     match kind {
         "core instances" => exhausted!(
-            "Raise WASMTIME_POOLING_TOTAL_CORE_INSTANCES: --core-instances sets it to a \
-             multiple of the memory count that a component of the usual shape never fills, \
-             so a component made of many core modules, or many warm instances of one, is \
-             what filled it"
+            "Raise --total-core-instances (or WASMTIME_POOLING_TOTAL_CORE_INSTANCES): unset, \
+             --core-instances sets it to a multiple of the memory count that a component of \
+             the usual shape never fills, so a component made of many core modules, or many \
+             warm instances of one, is what filled it"
         ),
         "component instances" => exhausted!(
             "Raise --core-instances (or WASMTIME_POOLING_TOTAL_COMPONENT_INSTANCES), or give \
