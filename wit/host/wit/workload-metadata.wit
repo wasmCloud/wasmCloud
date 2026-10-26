@@ -1,0 +1,16 @@
+package wasmcloud:host@0.1.5;
+
+/// Metadata for workloads bound to this component plugin.
+interface workload-metadata {
+    use types.{workload-id};
+
+    /// The annotations the orchestrator gave the workload, as the host
+    /// received them. Valid from `on-workload-bind` until `on-workload-unbind`
+    /// for that id; an id the plugin does not serve returns `none`.
+    /// A failed bind or eviction also revokes access.
+    /// A bound workload with no annotations returns `some` with an empty list.
+    ///
+    /// Annotations reflect the orchestrator's trust boundary. They are not
+    /// host-verified ownership or authorization claims.
+    annotations: func(id: workload-id) -> option<list<tuple<string, string>>>;
+}

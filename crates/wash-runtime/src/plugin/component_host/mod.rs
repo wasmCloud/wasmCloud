@@ -45,7 +45,9 @@
 //! workload-matchable capabilities. The whole hook path — signature check,
 //! delivery, post-restart replay, and quarantine — lives in the `lifecycle`
 //! submodule; this module drives it from `ComponentHostPlugin`'s `HostPlugin`
-//! impl.
+//! impl. A plugin importing `wasmcloud:host/workload-metadata` can read the
+//! orchestrator annotations of its bound workloads, including inside a bind
+//! hook. Unbinding, failed binds, and eviction revoke that access.
 //!
 //! Calls also run the other way. A plugin that imports
 //! `wasmcloud:host/workload-call` may *import* an interface no host built-in
@@ -104,6 +106,7 @@ use crate::wit::{WitInterface, WitWorld, versions_compatible};
 
 mod lifecycle;
 mod workload_call;
+mod workload_metadata;
 
 use lifecycle::{
     BindReply, HOST_LIFECYCLE_EXPORT, LifecycleFuncs, POISON_EVICT_STRIKES, attribute_replay_fault,
@@ -111,6 +114,7 @@ use lifecycle::{
     report_workload_failed, send_lifecycle_job, spawn_deferred_unbind, workload_info_val,
 };
 use workload_call::{WorkloadCalls, add_workload_calls_to_linker, install_host_workload};
+use workload_metadata::install_host_workload_metadata;
 
 /// Capacity of a plugin incarnation's capability-call channel. Bounds queued
 /// (not-yet-served) calls; in-flight (being-served) calls are separately capped
@@ -168,6 +172,11 @@ fn is_reserved(wit: &WitInterface) -> bool {
     wit.namespace == "wasmcloud" && wit.package == "host"
 }
 
+struct BoundWorkload {
+    info: Val,
+    annotations: Arc<HashMap<String, String>>,
+}
+
 /// Runtime state shared between the plugin, the linker shims it installs, and
 /// its supervisor task.
 struct ComponentHostPluginState {
@@ -185,11 +194,9 @@ struct ComponentHostPluginState {
     /// linker at construction — read it from here so they reach the live store's
     /// registry. Lock-free reads for the same reason as `tx`.
     registry: ArcSwapOption<JobRegistry>,
-    /// Workloads currently bound to this plugin, as workload id → the
-    /// `workload-info` value delivered to `on-workload-bind`. The supervisor
-    /// snapshots it on each (re)start to replay binds into the fresh
-    /// incarnation. Empty unless the plugin exports the lifecycle interface.
-    bound: Mutex<BTreeMap<Arc<str>, Val>>,
+    /// Workloads this plugin serves. Annotations share the replay entry
+    /// lifetime, including rollback and eviction.
+    bound: Mutex<BTreeMap<Arc<str>, BoundWorkload>>,
     /// Consecutive `on-workload-bind` traps attributed to each workload since it
     /// last bound cleanly — the quarantine strike count. Harvested from the
     /// faulted incarnation's registry after each fault; a workload reaching
@@ -532,8 +539,8 @@ impl ComponentHostPlugin {
             .collect()
     }
 
-    /// Whether `workload_id` is still bound (present in the replay set). A
-    /// workload evicted for a crash-looping bind is no longer bound.
+    /// Whether this plugin still serves `workload_id`. Eviction removes
+    /// the binding.
     pub fn is_bound(&self, workload_id: &str) -> bool {
         self.state
             .bound
@@ -836,9 +843,6 @@ impl HostPlugin for ComponentHostPlugin {
         workload: &UnresolvedWorkload,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        let Some(lifecycle) = &self.lifecycle else {
-            return Ok(());
-        };
         let info = workload_info_val(workload, &interfaces);
         let workload_id: Arc<str> = Arc::from(workload.id());
         // Record the workload and read the current sender (as an incarnation
@@ -855,8 +859,17 @@ impl HostPlugin for ComponentHostPlugin {
                 .bound
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            bound.insert(Arc::clone(&workload_id), info.clone());
+            bound.insert(
+                Arc::clone(&workload_id),
+                BoundWorkload {
+                    info: info.clone(),
+                    annotations: Arc::clone(&workload.annotations),
+                },
+            );
             self.state.sender_arc()
+        };
+        let Some(lifecycle) = &self.lifecycle else {
+            return Ok(());
         };
         let Some(sender_arc) = sender_arc else {
             self.state.forget_workload(&workload_id);
@@ -957,15 +970,17 @@ impl HostPlugin for ComponentHostPlugin {
         // undone, the workload stays in the replay set and its bind is
         // re-delivered to every later incarnation of a plugin it never
         // deployed against.
-        if let Some(lifecycle) = &self.lifecycle
-            && let Err(unbind_err) = remove_and_unbind(&self.state, lifecycle, &workload_id).await
-        {
-            warn!(
-                id = self.id,
-                %workload_id,
-                err = %unbind_err,
-                "item-bind rollback unbind not delivered"
-            );
+        if let Some(lifecycle) = &self.lifecycle {
+            if let Err(unbind_err) = remove_and_unbind(&self.state, lifecycle, &workload_id).await {
+                warn!(
+                    id = self.id,
+                    %workload_id,
+                    err = %unbind_err,
+                    "item-bind rollback unbind not delivered"
+                );
+            }
+        } else {
+            self.state.forget_workload(&workload_id);
         }
         Err(e)
     }
@@ -995,6 +1010,7 @@ impl HostPlugin for ComponentHostPlugin {
         self.state.workload_calls.unregister(workload_id);
 
         let Some(lifecycle) = &self.lifecycle else {
+            self.state.forget_workload(workload_id);
             return Ok(());
         };
         // Best-effort by design: the workload is going away regardless, and if
@@ -1355,6 +1371,8 @@ async fn build_plugin_linker(
     native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
     config: &HashMap<String, String>,
 ) -> anyhow::Result<InstancePre<SharedCtx>> {
+    install_host_workload_metadata(&mut linker, state)
+        .with_context(|| format!("failed to install host workload metadata on plugin '{id}'"))?;
     install_host_identity(&mut linker, state)
         .with_context(|| format!("failed to install host identity on plugin '{id}'"))?;
     install_host_cancel(&mut linker, state)

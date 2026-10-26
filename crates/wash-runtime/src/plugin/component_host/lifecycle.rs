@@ -46,7 +46,9 @@ use crate::host::trigger_service::{CapabilityCall, CapabilityJob, LifecycleRepla
 use crate::plugin::WitInterfaces;
 use crate::wit::WitInterface;
 
-use super::{CapabilitySender, ComponentHostPluginState, ExportedFunc, ExportedInterface};
+use super::{
+    BoundWorkload, CapabilitySender, ComponentHostPluginState, ExportedFunc, ExportedInterface,
+};
 
 /// Interface name of the optional lifecycle export a plugin may provide to
 /// hear about the workloads binding to (and unbinding from) it. Bare name,
@@ -179,7 +181,7 @@ pub(super) fn lifecycle_funcs(
 /// the swap, its own send targeting the previous, now-dead channel) or
 /// delivered through the new channel — never both, so no double delivery.
 pub(super) fn replay_snapshot(
-    bound: &BTreeMap<Arc<str>, Val>,
+    bound: &BTreeMap<Arc<str>, BoundWorkload>,
     lifecycle: Option<&LifecycleFuncs>,
 ) -> Vec<LifecycleReplay> {
     let Some(lifecycle) = lifecycle else {
@@ -187,7 +189,7 @@ pub(super) fn replay_snapshot(
     };
     bound
         .iter()
-        .map(|(workload_id, info)| LifecycleReplay {
+        .map(|(workload_id, workload)| LifecycleReplay {
             interface: Arc::clone(&lifecycle.interface),
             func: Arc::clone(&lifecycle.bind.name),
             // A replayed bind is about the workload, not any component of it
@@ -198,7 +200,7 @@ pub(super) fn replay_snapshot(
                 component_id: None,
                 binding: None,
             },
-            args: vec![Relocated::Val(info.clone())],
+            args: vec![Relocated::Val(workload.info.clone())],
             result_tys: Arc::clone(&lifecycle.bind.result_tys),
         })
         .collect()
