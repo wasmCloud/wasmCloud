@@ -5,6 +5,8 @@ pub mod engine;
 #[cfg(test)]
 mod env_guard;
 pub mod host;
+#[cfg(any(feature = "washlet", feature = "wasmcloud-nats"))]
+mod nats_credentials;
 pub mod observability;
 pub mod plugin;
 pub mod sockets;
