@@ -170,12 +170,3 @@ ignored = [
     "tonic",
     "tonic-prost",
 ]
-
-# wasi-gfx 0.3.0 is the first release to build against wasmtime 48, and the
-# released 0.2.0 requires 47. This pins its release commit until 0.3.0 reaches
-# crates.io, at which point both lines are replaced by a version bump: a git
-# `[patch]` is not resolvable by `cargo publish`, so wash-runtime cannot be
-# released while it stands.
-[patch.crates-io]
-wasi-webgpu-wasmtime = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime", rev = "c27ddeb95a94c0c5d778de0a58aec96289ee5727" }
-wasi-gfx-runtime-shared = { git = "https://github.com/wasi-gfx/wasi-gfx-runtime", rev = "c27ddeb95a94c0c5d778de0a58aec96289ee5727" }

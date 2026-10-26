@@ -171,7 +171,7 @@ libc = { workspace = true }
 # fails to build on Windows and s390x, so the deps are gated to match the
 # `#[cfg]` on `plugin::wasi_webgpu`.
 [target.'cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))'.dependencies]
-wasi-webgpu-wasmtime = { version = "0.3", optional = true }
+wasi-webgpu-wasmtime = { version = "0.3.1", optional = true }
 
 [dev-dependencies]
 bench-tools = { path = "../bench-tools" }
