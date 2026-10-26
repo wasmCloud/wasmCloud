@@ -1356,7 +1356,12 @@ pub async fn run_cluster_host(
 }
 
 /// Configuration options for NATS connections
+///
+/// `#[non_exhaustive]`: build one with [`Default`] and the `with_*` methods
+/// rather than a struct literal, so that adding an option later is not a
+/// breaking change for callers outside this crate.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct NatsConnectionOptions {
     /// Request timeout for NATS operations
     pub request_timeout: Option<Duration>,
@@ -1389,6 +1394,69 @@ pub struct NatsConnectionOptions {
     /// The prefix of the inboxes the client creates for request replies, in
     /// place of `_INBOX`.
     pub inbox_prefix: Option<String>,
+}
+
+impl NatsConnectionOptions {
+    /// Bound every request on the connection by `timeout`.
+    #[must_use]
+    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = Some(timeout);
+        self
+    }
+
+    /// Trust the CA certificate at `path`.
+    #[must_use]
+    pub fn with_tls_ca(mut self, path: impl Into<PathBuf>) -> Self {
+        self.tls_ca = Some(path.into());
+        self
+    }
+
+    /// Start TLS before the server's `INFO`.
+    #[must_use]
+    pub fn with_tls_first(mut self, tls_first: bool) -> Self {
+        self.tls_first = tls_first;
+        self
+    }
+
+    /// Present the client certificate at `cert` with its key at `key`.
+    #[must_use]
+    pub fn with_tls_client_cert(
+        mut self,
+        cert: impl Into<PathBuf>,
+        key: impl Into<PathBuf>,
+    ) -> Self {
+        self.tls_cert = Some(cert.into());
+        self.tls_key = Some(key.into());
+        self
+    }
+
+    /// See [`NatsConnectionOptions::connect_retry`].
+    #[must_use]
+    pub fn with_connect_retry(mut self, window: Duration) -> Self {
+        self.connect_retry = Some(window);
+        self
+    }
+
+    /// See [`NatsConnectionOptions::name`].
+    #[must_use]
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// See [`NatsConnectionOptions::auth`].
+    #[must_use]
+    pub fn with_auth(mut self, auth: NatsAuth) -> Self {
+        self.auth = auth;
+        self
+    }
+
+    /// See [`NatsConnectionOptions::inbox_prefix`].
+    #[must_use]
+    pub fn with_inbox_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.inbox_prefix = Some(prefix.into());
+        self
+    }
 }
 
 #[instrument(skip_all)]
@@ -3132,11 +3200,9 @@ mod tests {
         use crate::nats_credentials::tests::accept_connect;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let options = NatsConnectionOptions {
-            name: Some("host:test".into()),
-            inbox_prefix: Some("runtime.inbox".into()),
-            ..Default::default()
-        };
+        let options = NatsConnectionOptions::default()
+            .with_name("host:test")
+            .with_inbox_prefix("runtime.inbox");
         let (connect, client) = tokio::try_join!(
             accept_connect(&listener, "nonce"),
             connect_nats(format!("nats://{}", listener.local_addr()?), options),
