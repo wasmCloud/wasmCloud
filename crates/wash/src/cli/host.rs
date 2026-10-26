@@ -1174,46 +1174,37 @@ impl CliCommand for HostCommand {
             (!self.nats_connect_timeout.is_zero()).then_some(self.nats_connect_timeout);
 
         let cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default();
-        let scheduler_nats_client = wash_runtime::washlet::connect_nats(
-            self.scheduler_nats_url.clone(),
-            wash_runtime::washlet::NatsConnectionOptions {
-                request_timeout: None,
-                name: Some(format!("host:{}", cluster_host_builder.host_id())),
-                auth: self.scheduler_nats_auth(),
-                tls_ca: self.scheduler_nats_tls_ca.clone(),
-                tls_first: self.scheduler_nats_tls_first,
-                tls_cert: self.scheduler_nats_tls_cert.clone(),
-                tls_key: self.scheduler_nats_tls_key.clone(),
-                connect_retry,
-                inbox_prefix: None,
-            },
-        )
-        .await
-        .context("failed to connect to NATS Scheduler URL")?;
+        let mut scheduler_options = wash_runtime::washlet::NatsConnectionOptions::default()
+            .with_name(format!("host:{}", cluster_host_builder.host_id()))
+            .with_auth(self.scheduler_nats_auth())
+            .with_tls_first(self.scheduler_nats_tls_first);
+        scheduler_options.tls_ca = self.scheduler_nats_tls_ca.clone();
+        scheduler_options.tls_cert = self.scheduler_nats_tls_cert.clone();
+        scheduler_options.tls_key = self.scheduler_nats_tls_key.clone();
+        scheduler_options.connect_retry = connect_retry;
+        let scheduler_nats_client =
+            wash_runtime::washlet::connect_nats(self.scheduler_nats_url.clone(), scheduler_options)
+                .await
+                .context("failed to connect to NATS Scheduler URL")?;
 
-        let data_nats_client = wash_runtime::washlet::connect_nats(
-            self.data_nats_url.clone(),
-            wash_runtime::washlet::NatsConnectionOptions {
-                request_timeout: None,
-                name: Some(format!("host:{}:data", cluster_host_builder.host_id())),
-                auth: self.data_nats_auth(),
-                tls_ca: self.data_nats_tls_ca.clone(),
-                tls_first: self.data_nats_tls_first,
-                tls_cert: self.data_nats_tls_cert.clone(),
-                tls_key: self.data_nats_tls_key.clone(),
-                // Whatever the scheduler connection left of the budget. A
-                // budget already spent becomes `None`, so the failure reads as
-                // the refusal it is rather than as a timeout of no length.
-                connect_retry: connect_retry.and_then(|_| {
-                    let left =
-                        connect_deadline.saturating_duration_since(tokio::time::Instant::now());
-                    (!left.is_zero()).then_some(left)
-                }),
-                inbox_prefix: None,
-            },
-        )
-        .await
-        .context("failed to connect to NATS")?;
+        let mut data_options = wash_runtime::washlet::NatsConnectionOptions::default()
+            .with_name(format!("host:{}:data", cluster_host_builder.host_id()))
+            .with_auth(self.data_nats_auth())
+            .with_tls_first(self.data_nats_tls_first);
+        data_options.tls_ca = self.data_nats_tls_ca.clone();
+        data_options.tls_cert = self.data_nats_tls_cert.clone();
+        data_options.tls_key = self.data_nats_tls_key.clone();
+        // Whatever the scheduler connection left of the budget. A budget
+        // already spent becomes `None`, so the failure reads as the refusal it
+        // is rather than as a timeout of no length.
+        data_options.connect_retry = connect_retry.and_then(|_| {
+            let left = connect_deadline.saturating_duration_since(tokio::time::Instant::now());
+            (!left.is_zero()).then_some(left)
+        });
+        let data_nats_client =
+            wash_runtime::washlet::connect_nats(self.data_nats_url.clone(), data_options)
+                .await
+                .context("failed to connect to NATS")?;
         let data_nats_client = Arc::new(data_nats_client);
 
         let host_config = wash_runtime::host::HostConfig {
