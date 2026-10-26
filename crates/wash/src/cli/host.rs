@@ -56,6 +56,20 @@ pub struct HostCommand {
     )]
     pub scheduler_nats_password_file: Option<PathBuf>,
 
+    /// Also send the credentials file's user JWT as the token, for an auth
+    /// callout on a NATS server without trusted operators, which drops the
+    /// JWT before the callout sees it
+    //
+    // clap waives `requires` when the required arg conflicts with one that is
+    // present, as members of one group do, so the others are refused here.
+    #[arg(
+        long,
+        env = "WASH_SCHEDULER_NATS_JWT_AS_TOKEN",
+        requires = "scheduler_nats_creds",
+        conflicts_with_all = ["scheduler_nats_nkey", "scheduler_nats_token_file", "scheduler_nats_user"]
+    )]
+    pub scheduler_nats_jwt_as_token: bool,
+
     /// How long to keep retrying NATS at startup before giving up, across both
     /// the scheduler and data connections together.
     ///
@@ -115,6 +129,17 @@ pub struct HostCommand {
         requires = "data_nats_user"
     )]
     pub data_nats_password_file: Option<PathBuf>,
+
+    /// Also send the credentials file's user JWT as the token, for an auth
+    /// callout on a NATS server without trusted operators, which drops the
+    /// JWT before the callout sees it
+    #[arg(
+        long,
+        env = "WASH_DATA_NATS_JWT_AS_TOKEN",
+        requires = "data_nats_creds",
+        conflicts_with_all = ["data_nats_nkey", "data_nats_token_file", "data_nats_user"]
+    )]
+    pub data_nats_jwt_as_token: bool,
 
     /// The path to TLS CA certificate file for NATS Data connection
     #[arg(long = "data-nats-tls-ca")]
@@ -869,6 +894,9 @@ impl HostCommand {
             token_file: self.scheduler_nats_token_file.clone(),
             user: self.scheduler_nats_user.clone(),
             password_file: self.scheduler_nats_password_file.clone(),
+            hook: self
+                .scheduler_nats_jwt_as_token
+                .then(wash_runtime::washlet::AuthHook::jwt_as_token),
             ..Default::default()
         }
     }
@@ -881,6 +909,9 @@ impl HostCommand {
             token_file: self.data_nats_token_file.clone(),
             user: self.data_nats_user.clone(),
             password_file: self.data_nats_password_file.clone(),
+            hook: self
+                .data_nats_jwt_as_token
+                .then(wash_runtime::washlet::AuthHook::jwt_as_token),
             ..Default::default()
         }
     }
@@ -1651,6 +1682,39 @@ mod nats_tests {
             ] {
                 let args = std::iter::once("wash-host").chain(args.iter().map(|a| a.as_str()));
                 assert!(TestCli::try_parse_from(args).is_err(), "{plane}");
+            }
+        }
+    }
+
+    #[test]
+    fn host_nats_jwt_as_token_is_per_connection() {
+        let host = parse(&[
+            "--scheduler-nats-creds=scheduler.creds",
+            "--scheduler-nats-jwt-as-token",
+            "--data-nats-creds=data.creds",
+        ]);
+        assert!(host.scheduler_nats_jwt_as_token);
+        assert!(!host.data_nats_jwt_as_token);
+        assert!(host.scheduler_nats_auth().hook.is_some());
+        assert!(host.data_nats_auth().hook.is_none());
+    }
+
+    /// Only a credentials file carries a JWT to repeat.
+    #[test]
+    fn host_nats_jwt_as_token_requires_credentials() {
+        for plane in ["scheduler", "data"] {
+            let jwt_as_token = format!("--{plane}-nats-jwt-as-token");
+            let nkey = format!("--{plane}-nats-nkey=a.nk");
+            let token = format!("--{plane}-nats-token-file=a.token");
+            for args in [
+                vec![&jwt_as_token],
+                vec![&jwt_as_token, &nkey],
+                vec![&jwt_as_token, &token],
+            ] {
+                let argv: Vec<&str> = std::iter::once("wash-host")
+                    .chain(args.iter().map(|a| a.as_str()))
+                    .collect();
+                assert!(TestCli::try_parse_from(&argv).is_err(), "{argv:?}");
             }
         }
     }
