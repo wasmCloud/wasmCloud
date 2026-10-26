@@ -1,4 +1,4 @@
-//! `wasmcloud:nats/kv@0.1.2` — the JetStream KV store, and the `bucket`
+//! `wasmcloud:nats/kv@0.1.3` — the JetStream KV store, and the `bucket`
 //! resource an `open` hands back.
 
 use core::future::Future as _;
@@ -21,8 +21,8 @@ use wasmtime::component::{
 use crate::engine::ctx::{ActiveCtx, SharedCtx};
 
 use crate::plugin::wasmcloud_nats::interfaces::{
-    NatsId, bucket_lookup_err, chain_timed_out, check_bucket, check_payload, jetstream_err, kv,
-    kv_err, labeled_kv, types, with_deadline,
+    NatsId, bucket_lookup_err, chain_timed_out, check_bucket, check_payload, jetstream_err,
+    js_publish_err, kv, kv_err, labeled_kv, types, with_deadline,
 };
 use crate::plugin::wasmcloud_nats::jetstream::BucketHandle;
 
@@ -446,6 +446,126 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
             .create(&key, value.into())
             .await
             .map_err(|e| kv_err("kv create failed", chain_timed_out(&e), e)))
+    }
+
+    async fn create_with_ttl(
+        accessor: &Accessor<T, Self>,
+        rep: Resource<BucketHandle>,
+        key: String,
+        value: Vec<u8>,
+        ttl_ms: u64,
+    ) -> wasmtime::Result<Result<u64, types::NatsError>> {
+        let (store, conn) = accessor.with(|mut a| {
+            Ok::<_, wasmtime::Error>((store_ref(&mut a, &rep)?, conn_ref(&mut a, &rep)?))
+        })?;
+        if !conn.server_at_least(2, 11) {
+            return Ok(Err(types::NatsError::UnsupportedByServer(
+                "per-key TTL requires NATS server 2.11 or newer".to_string(),
+            )));
+        }
+        if ttl_ms < 1_000 || ttl_ms > i64::MAX as u64 / 1_000_000 {
+            return Ok(Err(types::NatsError::Jetstream(
+                "per-key TTL must be at least 1000ms and fit a NATS duration".to_string(),
+            )));
+        }
+        if key.is_empty()
+            || key.starts_with('.')
+            || key.ends_with('.')
+            || !key
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-/_=.".contains(&b))
+        {
+            return Ok(Err(types::NatsError::Jetstream(
+                "invalid KV key".to_string(),
+            )));
+        }
+        let mut headers = async_nats::HeaderMap::new();
+        headers.insert(async_nats::header::NATS_EXPECTED_LAST_SUBJECT_SEQUENCE, "0");
+        headers.insert(async_nats::header::NATS_MESSAGE_TTL, format!("{ttl_ms}ms"));
+        if let Err(e) = check_payload(value.len(), Some(&headers), &conn) {
+            return Ok(Err(e));
+        }
+        let prefix = store.put_prefix.as_ref().unwrap_or(&store.prefix);
+        let subject = if store.use_jetstream_prefix {
+            format!("{}.{prefix}{key}", conn.jetstream_prefix)
+        } else {
+            format!("{prefix}{key}")
+        };
+        let value = bytes::Bytes::from(value);
+        let publish = async |headers: async_nats::HeaderMap| {
+            conn.jetstream
+                .publish_with_headers(subject.clone(), headers, value.clone())
+                .await?
+                .await
+                .map(|ack| ack.sequence)
+        };
+        match publish(headers.clone()).await {
+            Ok(revision) => Ok(Ok(revision)),
+            Err(e) if e.kind() == jetstream::context::PublishErrorKind::WrongLastSequence => {
+                // A tombstone's revision guards recreation, with the TTL on the same write.
+                let revision = match store.entry(&key).await {
+                    Ok(Some(entry)) if entry.operation != jetstream::kv::Operation::Put => {
+                        entry.revision
+                    }
+                    Ok(_) => {
+                        return Ok(Err(js_publish_err(
+                            "kv create-with-ttl failed",
+                            e,
+                            conn.max_payload(),
+                        )));
+                    }
+                    Err(e) => {
+                        return Ok(Err(kv_err(
+                            "kv create-with-ttl lookup failed",
+                            chain_timed_out(&e),
+                            e,
+                        )));
+                    }
+                };
+                headers.insert(
+                    async_nats::header::NATS_EXPECTED_LAST_SUBJECT_SEQUENCE,
+                    revision.to_string(),
+                );
+                if let Err(e) = check_payload(value.len(), Some(&headers), &conn) {
+                    return Ok(Err(e));
+                }
+                Ok(publish(headers).await.map_err(|e| {
+                    js_publish_err("kv create-with-ttl failed", e, conn.max_payload())
+                }))
+            }
+            Err(e) => Ok(Err(js_publish_err(
+                "kv create-with-ttl failed",
+                e,
+                conn.max_payload(),
+            ))),
+        }
+    }
+
+    async fn delete_if(
+        accessor: &Accessor<T, Self>,
+        rep: Resource<BucketHandle>,
+        key: String,
+        expected_revision: u64,
+    ) -> wasmtime::Result<Result<(), types::NatsError>> {
+        let store = accessor.with(|mut a| store_ref(&mut a, &rep))?;
+        match store
+            .delete_expect_revision(&key, Some(expected_revision))
+            .await
+        {
+            Ok(()) => Ok(Ok(())),
+            Err(e) if is_revision_mismatch(&e) => {
+                if let Some(actual) = parse_wrong_last_sequence(&e.to_string()) {
+                    return Ok(Err(types::NatsError::RevisionMismatch(actual)));
+                }
+                match store.entry(&key).await {
+                    Ok(entry) => Ok(Err(types::NatsError::RevisionMismatch(
+                        entry.map_or(0, |e| e.revision),
+                    ))),
+                    Err(_) => Ok(Err(kv_err("kv delete-if failed", chain_timed_out(&e), e))),
+                }
+            }
+            Err(e) => Ok(Err(kv_err("kv delete-if failed", chain_timed_out(&e), e))),
+        }
     }
 
     async fn update(

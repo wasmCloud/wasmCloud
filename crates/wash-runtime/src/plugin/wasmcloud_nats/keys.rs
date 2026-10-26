@@ -97,6 +97,7 @@ pub const KEYS: &[Key] = &[
     // Grants — what it may reach.
     ceiling("subject-allow"),
     ceiling("stream-allow"),
+    ceiling("stream-delete-allow"),
     ceiling("bucket-allow"),
     // The workload's own behaviour within that grant.
     workload("ack-mode"),

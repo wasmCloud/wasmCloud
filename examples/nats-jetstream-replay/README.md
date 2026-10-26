@@ -110,7 +110,7 @@ spec:
   hostInterfaces:
     - namespace: wasmcloud
       package: nats
-      version: "0.1.2"
+      version: "0.1.3"
       interfaces: [types, jetstream, kv, jetstream-handler]
       config:
         # STREAM:filter[:policy[:queue]] — an empty policy slot is the
@@ -120,11 +120,17 @@ spec:
         max-in-flight: "32"
 ```
 
-`subject-allow`, `stream-allow`, and `bucket-allow` are the capability boundary.
+`subject-allow`, `stream-allow`, `stream-delete-allow`, and `bucket-allow`
+are the capability boundary.
 They are separate on purpose: permission to publish to `orders.processed` does
 not carry permission to read or delete the `ORDERS` stream. A `wash host`
-refuses a manifest that sets any of them, or one that names a binding it does
-not serve — a workload can ask for a capability, never widen one.
+accepts a manifest that narrows its declared grants and refuses requests
+that widen them or name a binding it does not serve.
+
+`stream-delete-allow` is required in addition to `stream-allow` to purge or
+delete stream messages. Purge patterns must be contained in `subject-allow`;
+deleting a sequence checks the stored message's subject. All grants default to
+deny and a workload may only narrow an operator's declared ceiling.
 
 Credentials never appear in `config`. The host merges
 `config` → `configFrom` → `secretFrom` (later wins) before the plugin sees them,
@@ -134,7 +140,7 @@ resolved. An nkey seed is signed host-side and never crosses into the sandbox.
 ### Under `wash dev`
 
 `wash dev` leaves the manifest free to describe its own binding, so a project
-stays runnable on its own: put the same keys — `servers` and the three grants —
+stays runnable on its own: put the same keys — `servers` and the grants —
 straight in the interface's `config`, or declare them once under
 `dev.wasmcloud_nats` in `.wash/config.yaml`. `dev.data_nats_url` is the address
 a binding that names no `servers` of its own falls back to.

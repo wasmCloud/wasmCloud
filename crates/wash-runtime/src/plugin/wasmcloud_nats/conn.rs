@@ -65,6 +65,7 @@ pub struct ConnHandle {
     pub subscription_denials: tokio::sync::broadcast::Sender<String>,
     pub client: async_nats::Client,
     pub jetstream: async_nats::jetstream::Context,
+    pub(super) jetstream_prefix: String,
     pub policy: Arc<PolicyEngine>,
     pub ack_mode: super::config::AckMode,
     pub limits: super::config::Limits,
@@ -476,6 +477,10 @@ impl ConnectionRegistry {
             subscription_denials,
             client,
             jetstream,
+            jetstream_prefix: config.jetstream_domain.as_ref().map_or_else(
+                || "$JS.API".to_string(),
+                |domain| format!("$JS.{domain}.API"),
+            ),
             policy: Arc::new(PolicyEngine::new(&config.policy, lattice_prefixes)),
             ack_mode: config.ack_mode,
             limits: config.limits.clone(),

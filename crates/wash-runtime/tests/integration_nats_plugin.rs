@@ -41,7 +41,7 @@ async fn expect_refused(host: &impl HostApi, request: WorkloadStartRequest) -> R
 
 /// A P3 guest exporting the JetStream and core handlers.
 const NATS_HANDLER_WASM: &[u8] = include_bytes!("wasm/nats_async_handler_p3.wasm");
-/// Imports `wasmcloud:nats/core@0.1.2` twice, under `hub` and `leaf`.
+/// Imports `wasmcloud:nats/core@0.1.3` twice, under `hub` and `leaf`.
 const NATS_BRIDGE_WASM: &[u8] = include_bytes!("wasm/nats_implements_p3.wasm");
 
 const STREAM: &str = "TESTS";
@@ -55,12 +55,16 @@ struct Harness {
 }
 
 async fn start_nats() -> Result<Harness> {
+    start_nats_version("2.12.8-alpine", true).await
+}
+
+async fn start_nats_version(version: &str, with_kv: bool) -> Result<Harness> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init()
         .ok();
 
-    let container = GenericImage::new("nats", "2.12.8-alpine")
+    let container = GenericImage::new("nats", version)
         .with_exposed_port(4222.tcp())
         .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
         .with_cmd(["-js"])
@@ -91,13 +95,15 @@ async fn start_nats() -> Result<Harness> {
     .await
     .map_err(|e| anyhow::anyhow!("failed to create stream: {e}"))?;
 
-    js.create_key_value(async_nats::jetstream::kv::Config {
-        bucket: COUNTS_BUCKET.to_string(),
-        history: 10,
-        ..Default::default()
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("failed to create kv bucket: {e}"))?;
+    if with_kv {
+        js.create_key_value(async_nats::jetstream::kv::Config {
+            bucket: COUNTS_BUCKET.to_string(),
+            history: 10,
+            ..Default::default()
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to create kv bucket: {e}"))?;
+    }
 
     Ok(Harness {
         nats_url,
@@ -139,7 +145,7 @@ fn nats_interface(config: &[(&str, &str)]) -> WitInterface {
         ]
         .into_iter()
         .collect(),
-        version: Some(semver::Version::new(0, 1, 2)),
+        version: Some(semver::Version::new(0, 1, 3)),
         config: config
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -164,7 +170,7 @@ fn nats_async_interface(config: &[(&str, &str)]) -> WitInterface {
         ]
         .into_iter()
         .collect(),
-        version: Some(semver::Version::new(0, 1, 2)),
+        version: Some(semver::Version::new(0, 1, 3)),
         config: config
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -1071,7 +1077,7 @@ fn named_nats_interface(name: &str, interfaces: &[&str], config: &[(&str, &str)]
         namespace: "wasmcloud".to_string(),
         package: "nats".to_string(),
         interfaces: interfaces.iter().map(|i| (*i).to_string()).collect(),
-        version: Some(semver::Version::new(0, 1, 2)),
+        version: Some(semver::Version::new(0, 1, 3)),
         config: config
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -1967,5 +1973,403 @@ async fn kv_select_streams_entries_with_values() -> Result<()> {
         deadline.starts_with("select:deadline:err:timeout:"),
         "a lapsed timeout-ms must resolve the future with timeout, not ok, got {deadline:?}"
     );
+    Ok(())
+}
+
+async fn api_probe(h: &Harness, spec: impl Into<String>) -> Result<String> {
+    let response = timeout(
+        Duration::from_secs(20),
+        h.client.request("test.api", spec.into().into()),
+    )
+    .await??;
+    Ok(String::from_utf8(response.payload.to_vec())?)
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn jetstream_message_operations_and_timestamps() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+    let stream = h.js.get_stream(STREAM).await?;
+    let created = stream.cached_info().created.unix_timestamp_nanos() as u64;
+    let mut config = stream.cached_info().config.clone();
+    let first =
+        h.js.publish("test.orders.mine", "first".into())
+            .await?
+            .await?
+            .sequence;
+    let last =
+        h.js.publish("test.orders.mine", "last".into())
+            .await?
+            .await?
+            .sequence;
+    let other =
+        h.js.publish("other.secret", "secret".into())
+            .await?
+            .await?
+            .sequence;
+    let stored = stream.get_raw_message(last).await?;
+    let stored_at = stored.time.unix_timestamp_nanos() as u64;
+
+    let protected =
+        h.js.create_stream(async_nats::jetstream::stream::Config {
+            name: "PROTECTED".into(),
+            subjects: vec!["test.protected".into()],
+            deny_delete: true,
+            deny_purge: true,
+            ..Default::default()
+        })
+        .await?;
+    let protected_seq =
+        h.js.publish("test.protected", "protected".into())
+            .await?
+            .await?
+            .sequence;
+    let response = host
+        .workload_start(workload_request(
+            "wl-js-api",
+            nats_async_interface(&[
+                ("servers", &h.nats_url),
+                ("subject-allow", "test.>"),
+                ("stream-allow", "TESTS,PROTECTED"),
+                ("stream-delete-allow", "TESTS,PROTECTED"),
+                ("core-subscriptions", "test.api"),
+                ("jetstream-subscriptions", "TESTS:test.orders.push:all"),
+            ]),
+        ))
+        .await?;
+    anyhow::ensure!(
+        response.workload_status.workload_state != WorkloadState::Error,
+        "{:?}",
+        response.workload_status
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let expected = format!("test.orders.mine:{last}:{stored_at}:last");
+    assert_eq!(
+        api_probe(&h, format!("js-api:last:{STREAM}:test.orders.mine")).await?,
+        expected
+    );
+    config.allow_direct = true;
+    h.js.update_stream(config).await?;
+    assert_eq!(
+        api_probe(&h, format!("js-api:at:{STREAM}:{last}")).await?,
+        expected
+    );
+    assert_eq!(
+        api_probe(&h, format!("js-api:created:{STREAM}")).await?,
+        created.to_string()
+    );
+    assert!(
+        api_probe(&h, format!("js-api:last:{STREAM}:test.orders.absent"))
+            .await?
+            .starts_with("not-found:")
+    );
+    assert!(
+        api_probe(&h, format!("js-api:at:{STREAM}:{other}"))
+            .await?
+            .starts_with(&format!("denied:not-granted:message#{other}:"))
+    );
+    assert!(
+        api_probe(&h, format!("js-api:delete:{STREAM}:{other}"))
+            .await?
+            .starts_with(&format!("denied:not-granted:message#{other}:"))
+    );
+    assert!(stream.get_raw_message(other).await.is_ok());
+    for subject in ["test.orders.*", "$KV.secrets.key", "runtime.host.events"] {
+        assert!(
+            api_probe(&h, format!("js-api:last:{STREAM}:{subject}"))
+                .await?
+                .starts_with("denied:")
+        );
+    }
+    for pattern in [
+        ">",
+        "*.orders.>",
+        "$KV.>",
+        "runtime.host.>",
+        "",
+        "test.orders.foo*",
+        "test.orders. bad",
+    ] {
+        assert!(
+            api_probe(&h, format!("js-api:purge:{STREAM}:{pattern}"))
+                .await?
+                .starts_with("denied:"),
+            "{pattern}"
+        );
+    }
+    assert_eq!(
+        api_probe(&h, format!("js-api:purge:{STREAM}:test.orders.mine:1")).await?,
+        "1"
+    );
+    assert!(stream.get_raw_message(first).await.is_err());
+    assert!(stream.get_raw_message(last).await.is_ok());
+    assert_eq!(
+        api_probe(&h, format!("js-api:delete:{STREAM}:{last}")).await?,
+        "ok"
+    );
+    assert!(
+        api_probe(&h, format!("js-api:delete:{STREAM}:{last}"))
+            .await?
+            .starts_with("not-found:")
+    );
+    assert!(
+        api_probe(&h, format!("js-api:at:{STREAM}:{last}"))
+            .await?
+            .starts_with("not-found:")
+    );
+
+    for spec in [
+        format!("js-api:delete:PROTECTED:{protected_seq}"),
+        "js-api:purge:PROTECTED:test.protected".into(),
+    ] {
+        assert!(api_probe(&h, spec).await?.starts_with("jetstream:"));
+    }
+    assert!(protected.get_raw_message(protected_seq).await.is_ok());
+    for subject in ["test.orders.removable.a", "test.orders.removable.b"] {
+        h.js.publish(subject, "remove".into()).await?.await?;
+    }
+    assert_eq!(
+        api_probe(&h, format!("js-api:purge:{STREAM}:test.orders.removable.*")).await?,
+        "2"
+    );
+    assert!(stream.get_raw_message(other).await.is_ok());
+
+    let seq =
+        h.js.publish("test.orders.pull", "clock".into())
+            .await?
+            .await?
+            .sequence;
+    let time = stream
+        .get_raw_message(seq)
+        .await?
+        .time
+        .unix_timestamp_nanos() as u64;
+    stream
+        .create_consumer(async_nats::jetstream::consumer::pull::Config {
+            durable_name: Some("clock".into()),
+            filter_subject: "test.orders.pull".into(),
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(
+        api_probe(&h, format!("js-api:pull-time:{STREAM}:clock")).await?,
+        format!("{seq}:{time}")
+    );
+    let mut results = h.client.subscribe("test.results").await?;
+    h.client.flush().await?;
+    let push_seq =
+        h.js.publish("test.orders.push", "stored-time:push".into())
+            .await?
+            .await?
+            .sequence;
+    let push_time = stream
+        .get_raw_message(push_seq)
+        .await?
+        .time
+        .unix_timestamp_nanos() as u64;
+    let result = timeout(Duration::from_secs(10), results.next())
+        .await?
+        .context("missing push timestamp")?;
+    assert_eq!(
+        String::from_utf8(result.payload.to_vec())?,
+        format!("stored-time:push:{push_seq}:{push_time}")
+    );
+    host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+        workload_id: "wl-js-api".into(),
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn destructive_stream_calls_require_a_host_owned_ceiling() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host_with(
+        PluginBindingSet::new(PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Deny)
+            .with_base(declared(&[
+                ("servers", &h.nats_url),
+                ("subject-allow", "test.>"),
+                ("stream-allow", STREAM),
+            ])),
+    )
+    .await?;
+    let message = expect_refused(
+        &host,
+        workload_request(
+            "wl-escalate-delete",
+            nats_async_interface(&[
+                ("stream-delete-allow", STREAM),
+                ("core-subscriptions", "test.api"),
+            ]),
+        ),
+    )
+    .await?;
+    assert!(message.contains("stream-delete-allow"), "{message}");
+
+    let seq =
+        h.js.publish("test.orders.mine", "keep".into())
+            .await?
+            .await?
+            .sequence;
+    host.workload_start(workload_request(
+        "wl-no-delete",
+        nats_async_interface(&[("core-subscriptions", "test.api")]),
+    ))
+    .await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    for spec in [
+        format!("js-api:delete:{STREAM}:{seq}"),
+        format!("js-api:purge:{STREAM}:test.orders.mine"),
+    ] {
+        assert_eq!(
+            api_probe(&h, spec).await?,
+            format!("denied:not-granted:stream:{STREAM}")
+        );
+    }
+    assert!(
+        h.js.get_stream(STREAM)
+            .await?
+            .get_raw_message(seq)
+            .await
+            .is_ok()
+    );
+    host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+        workload_id: "wl-no-delete".into(),
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn kv_ttl_and_conditional_delete() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+    let store = h.js.get_key_value(COUNTS_BUCKET).await?;
+    h.js.create_key_value(async_nats::jetstream::kv::Config {
+        bucket: "no-ttl".into(),
+        ..Default::default()
+    })
+    .await?;
+    let mut config = store.stream.cached_info().config.clone();
+    config.allow_message_ttl = true;
+    h.js.update_stream(config).await?;
+    let old = store.create("lock", "old".into()).await?;
+    let current = store.update("lock", "new".into(), old).await?;
+    host.workload_start(workload_request(
+        "wl-kv-api",
+        nats_async_interface(&[
+            ("servers", &h.nats_url),
+            ("subject-allow", "test.>"),
+            ("bucket-allow", "test-counts,no-ttl"),
+            ("core-subscriptions", "test.api"),
+        ]),
+    ))
+    .await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        api_probe(&h, format!("kv-api:delete-if:{COUNTS_BUCKET}:lock:{old}")).await?,
+        format!("revision-mismatch:{current}")
+    );
+    assert_eq!(
+        store.get("lock").await?,
+        Some(bytes::Bytes::from_static(b"new"))
+    );
+    assert_eq!(
+        api_probe(
+            &h,
+            format!("kv-api:delete-if:{COUNTS_BUCKET}:lock:{current}")
+        )
+        .await?,
+        "ok"
+    );
+    assert_eq!(store.get("lock").await?, None);
+    for key in ["fresh", "lock"] {
+        let revision: u64 = api_probe(&h, format!("kv-api:ttl:{COUNTS_BUCKET}:{key}:2000"))
+            .await?
+            .parse()?;
+        let message = store.stream.get_raw_message(revision).await?;
+        assert_eq!(message.headers.get("Nats-TTL").unwrap().as_str(), "2000ms");
+        assert_eq!(
+            store.get(key).await?,
+            Some(bytes::Bytes::from_static(b"lease"))
+        );
+        assert!(
+            api_probe(&h, format!("kv-api:ttl:{COUNTS_BUCKET}:{key}:2000"))
+                .await?
+                .starts_with("jetstream:")
+        );
+    }
+    assert!(
+        api_probe(&h, "kv-api:ttl:no-ttl:lock:2000")
+            .await?
+            .starts_with("jetstream:")
+    );
+    for key in ["$JS.API", "*", ">", ".bad", "bad.", "bad key"] {
+        assert!(
+            api_probe(&h, format!("kv-api:ttl:{COUNTS_BUCKET}:{key}:2000"))
+                .await?
+                .starts_with("jetstream:")
+        );
+    }
+    for ttl in [0, 999, u64::MAX] {
+        assert!(
+            api_probe(&h, format!("kv-api:ttl:{COUNTS_BUCKET}:invalid:{ttl}"))
+                .await?
+                .starts_with("jetstream:")
+        );
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(store.get("fresh").await?, None);
+    assert_eq!(store.get("lock").await?, None);
+    host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+        workload_id: "wl-kv-api".into(),
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn filtered_purge_refuses_servers_with_unsafe_purge_replay() -> Result<()> {
+    let h = start_nats_version("2.9.17-alpine", false).await?;
+    let host = start_host().await?;
+    let seq =
+        h.js.publish("test.orders.mine", "keep".into())
+            .await?
+            .await?
+            .sequence;
+    host.workload_start(workload_request(
+        "wl-old-purge",
+        nats_async_interface(&[
+            ("servers", &h.nats_url),
+            ("subject-allow", "test.>"),
+            ("stream-allow", STREAM),
+            ("stream-delete-allow", STREAM),
+            ("core-subscriptions", "test.api"),
+        ]),
+    ))
+    .await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        api_probe(&h, format!("js-api:purge:{STREAM}:test.orders.mine"))
+            .await?
+            .starts_with("unsupported-by-server:")
+    );
+    assert!(
+        h.js.get_stream(STREAM)
+            .await?
+            .get_raw_message(seq)
+            .await
+            .is_ok()
+    );
+    host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+        workload_id: "wl-old-purge".into(),
+    })
+    .await?;
     Ok(())
 }

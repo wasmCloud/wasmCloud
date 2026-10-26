@@ -1,4 +1,4 @@
-package wasmcloud:nats@0.1.2;
+package wasmcloud:nats@0.1.3;
 
 /// Shared types and errors used across the wasmcloud:nats interfaces.
 ///
@@ -42,9 +42,8 @@ interface types {
   }
 
   /// What kind of name was refused, and so which grant the binding would need:
-  /// `subject-allow`, `stream-allow`, or `bucket-allow`. Those are declared by
-  /// whoever configured the host, not by the workload, so a refusal here is
-  /// something to take to an operator.
+  /// `subject-allow`, `stream-allow`, `stream-delete-allow`, or `bucket-allow`.
+  /// The host operator owns these grants.
   ///
   /// Subscription patterns are not here: they are checked once at bind time,
   /// where a refusal fails the deployment rather than reaching a guest.
@@ -95,8 +94,7 @@ interface types {
     jetstream(string),
     /// The key was not found in a KV bucket.
     key-not-found,
-    /// CAS `update` failed. Payload carries the actual current revision, so a
-    /// retry does not need a re-read.
+    /// A conditional KV write failed. Carries the current revision.
     revision-mismatch(u64),
     /// A pull-consumer `fetch` returned empty within the timeout: the
     /// consumer had nothing to give. Compare `limit-exceeded`, where the
@@ -199,6 +197,12 @@ interface jetstream {
     headers: option<list<header-entry>>,
   }
 
+  /// A stored message with the time the server stored it.
+  record stored-message-at {
+    message: stored-message,
+    stored-at-unix-nanos: u64,
+  }
+
   /// One subject a stream currently holds messages on, with its message count.
   record subject-count {
     subject: string,
@@ -282,9 +286,8 @@ interface jetstream {
   /// under `ack-mode: auto` too, where the host owns the settle and every
   /// other method here returns `ack-owned-by-host`.
   ///
-  /// `message`, `sequence`, and `delivery-count` are sync: they read state
-  /// the handle already holds and make no wire round trip. The settle
-  /// operations are async.
+  /// Data accessors read the handle without a wire round trip.
+  /// Settlement operations are async.
   resource message-handle {
     /// Borrow the underlying message.
     message: func() -> nats-message;
@@ -292,6 +295,8 @@ interface jetstream {
     sequence: func() -> u64;
     /// Number of times this message has been delivered (1 on first delivery).
     delivery-count: func() -> u32;
+    /// When the server stored this message, from its delivery metadata.
+    stored-at-unix-nanos: func() -> u64;
 
     /// Acknowledge successful processing. Fire-and-forget: it resolves once
     /// the ack is written, not once the server has recorded it.
@@ -342,6 +347,24 @@ interface jetstream {
 
   /// Fetch a single message by its stream sequence number (direct-get).
   get-by-sequence: async func(stream-name: string, sequence: u64) -> result<stored-message, nats-error>;
+
+  /// The last message on a literal subject. `not-found` when none exists.
+  get-last-by-subject: async func(stream-name: string, subject: string) -> result<stored-message-at, nats-error>;
+
+  /// Fetch a message by sequence, including its stored time.
+  get-by-sequence-at: async func(stream-name: string, sequence: u64) -> result<stored-message-at, nats-error>;
+
+  /// Purge a subject pattern, keeping the newest `keep` messages when given.
+  /// Requires `stream-delete-allow` and containment within `subject-allow`.
+  /// Returns the number removed. Requires NATS 2.9.18+ for safe filtered purges.
+  purge-subject: async func(stream-name: string, subject: string, keep: option<u64>) -> result<u64, nats-error>;
+
+  /// Delete one message. `not-found` when it is already gone.
+  /// Requires `stream-delete-allow` and the message's subject in `subject-allow`.
+  delete-message: async func(stream-name: string, sequence: u64) -> result<_, nats-error>;
+
+  /// When the server created the stream, in Unix nanoseconds.
+  get-stream-created: async func(stream-name: string) -> result<u64, nats-error>;
 
   /// Sequential replay: read up to `max-count` messages starting from
   /// `start-sequence`. Stateless — does not create a durable consumer.
@@ -456,6 +479,11 @@ interface kv {
     /// Compare-and-swap on revision. Fails with `revision-mismatch` on
     /// conflict, carrying the current revision so a retry needs no re-read.
     update: async func(key: string, value: list<u8>, expected-revision: u64) -> result<u64, nats-error>;
+    /// Create an absent key with a per-key TTL of at least 1000ms.
+    /// Requires NATS 2.11+ and a bucket that allows message TTLs.
+    create-with-ttl: async func(key: string, value: list<u8>, ttl-ms: u64) -> result<u64, nats-error>;
+    /// Delete only at the expected revision. `revision-mismatch` on conflict.
+    delete-if: async func(key: string, expected-revision: u64) -> result<_, nats-error>;
     /// Delete a key (tombstone, keeps history).
     delete: async func(key: string) -> result<_, nats-error>;
     /// Purge a key (removes history as well).
@@ -530,8 +558,8 @@ interface kv-handler {
 }
 
 /// Every interface a workload can import. The grant — `subject-allow`,
-/// `stream-allow`, `bucket-allow`, all deny-by-default — is what bounds what a
-/// workload reaches, not which of these it imports, so this is one set rather
+/// `stream-allow`, `stream-delete-allow`, `bucket-allow`, all deny-by-default —
+/// bounds what a workload reaches, so this is one set rather
 /// than three. Imports a component never calls are dropped at build time by
 /// both toolchains, so the generous surface costs it nothing.
 ///
