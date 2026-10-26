@@ -646,8 +646,11 @@ runtime:
       # `wasmcloudNatsUrl` above, which brings the data plane's TLS with it.
       #
       # A workload may narrow the host's grant ceilings. All deny by default.
-      # Stored messages also require `subject-allow`; grant the subjects those
-      # streams store. The host warns when a binding has streams but no subjects.
+      # Stored messages also require `subject-allow`, so `stream-allow` on its
+      # own reaches nothing readable: a binding granted streams and no subjects
+      # gets empty results rather than an error. Grant the subjects those
+      # streams store alongside the stream itself. (The host warns at bind
+      # when a binding has streams but no subjects.)
       # Purge and delete also require `stream-delete-allow` for the stream.
       # Purge filters must fit inside `subject-allow`; deleting a sequence
       # checks its stored subject. All grants are host-owned ceilings.
