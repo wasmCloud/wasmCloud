@@ -312,6 +312,52 @@ fn spawn_epoch_ticker(engine: &wasmtime::Engine) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Runs `f`, which builds a `wasmtime::Engine`, where the process-wide trap
+/// handler that the first engine installs cannot be killed by a signal.
+///
+/// On macOS wasmtime handles traps with Mach ports: building the first
+/// engine spawns a thread that blocks in `mach_msg` for exceptions, and in
+/// wasmtime 48 that receive aborts the process on any result it does not
+/// expect, which a signal delivered to that thread produces (`SIGCHLD` from
+/// a child this host spawned, say). The abort prints nothing a test harness
+/// shows (<https://github.com/bytecodealliance/wasmtime/issues/14393>;
+/// wasmtime 50 drops the interruptible receive). A thread inherits the
+/// signal mask of the thread that spawns it, and wasmtime spawns the
+/// handler from the thread building the first engine, so every engine here
+/// is built on a thread with every signal blocked: the handler never takes
+/// a process-directed signal, and the kernel delivers it elsewhere.
+/// Elsewhere `f` runs inline. Remove once the workspace is on wasmtime 50.
+fn on_signal_quiet_thread<T: Send>(
+    f: impl FnOnce() -> anyhow::Result<T> + Send,
+) -> anyhow::Result<T> {
+    #[cfg(target_os = "macos")]
+    {
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("wasmtime-engine-build".to_string())
+                .spawn_scoped(scope, || {
+                    // SAFETY: `sigfillset` and `pthread_sigmask` only read
+                    // and write the set on this thread's stack, and the
+                    // mask applies to this thread alone, plus whatever it
+                    // spawns.
+                    unsafe {
+                        let mut all: libc::sigset_t = std::mem::zeroed();
+                        libc::sigfillset(&mut all);
+                        libc::pthread_sigmask(libc::SIG_BLOCK, &all, std::ptr::null_mut());
+                    }
+                    f()
+                })
+                .context("failed to spawn the engine build thread")?
+                .join()
+                .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        f()
+    }
+}
+
 /// The core WebAssembly engine for executing components and workloads.
 ///
 /// The `Engine` is responsible for compiling WebAssembly components, managing
@@ -1583,7 +1629,9 @@ impl EngineBuilder {
         // Read back from the installed pool: the environment and a
         // caller-supplied config both override what was asked for.
         let mut installed_pool: Option<InstalledPool> = None;
-        if use_pooling_allocator && let Ok(true) = is_pooling_allocator_supported() {
+        if use_pooling_allocator
+            && let Ok(true) = on_signal_quiet_thread(is_pooling_allocator_supported)
+        {
             tracing::debug!("using pooling allocator by default");
             let pooling = self.pooling_config.take().unwrap_or_else(|| {
                 // The builder's own knobs win over the budgets'. A memory
@@ -1719,7 +1767,8 @@ impl EngineBuilder {
         // Where mappings are committed the table pool is charged here as
         // well, and it is a multiple of the memory count, so a build that
         // fails there must not send the operator to the reservation alone.
-        let inner = wasmtime::Engine::new(&config).map_err(|e| match installed_pool {
+        let inner = on_signal_quiet_thread(|| Ok(wasmtime::Engine::new(&config)?));
+        let inner = inner.map_err(|e| match installed_pool {
             Some(pool) if pool.max_memory_size > host_memory::WASMTIME_MEMORY_RESERVATION => e
                 .context(format!(
                     "building the engine failed with a pooling allocator whose heap ceiling \
