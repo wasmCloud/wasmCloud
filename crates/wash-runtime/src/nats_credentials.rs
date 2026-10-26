@@ -132,6 +132,17 @@ impl AuthHook {
     ) -> Self {
         Self(Arc::new(hook))
     }
+
+    /// Repeats the user JWT as `auth_token`, the agreement described above.
+    /// A connection that presents no JWT is left as it is.
+    pub fn jwt_as_token() -> Self {
+        Self::new(|auth| {
+            if let Some(jwt) = &auth.jwt {
+                auth.token = Some(jwt.clone());
+            }
+            Ok(())
+        })
+    }
 }
 
 impl std::fmt::Debug for AuthHook {
