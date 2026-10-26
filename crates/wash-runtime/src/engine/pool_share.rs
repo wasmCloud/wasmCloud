@@ -20,6 +20,13 @@
 //! A second trigger that admits bursts builds a `PoolShare` of its own, with
 //! its own fraction of each total, rather than a second mechanism; the two
 //! then bound each other through the fractions they claim.
+//!
+//! One share serves every component its holder admits, and hands slots out
+//! in arrival order: a reservation parked for a composed component's several
+//! memories holds the single-memory reservations behind it until it is
+//! served, though each of those would fit. That is the cost of not starving
+//! the composed component behind a steady stream of smaller ones, and it is
+//! confined to the holder's share, since nothing else reserves through it.
 
 use std::sync::Arc;
 
@@ -299,18 +306,33 @@ impl PoolShare {
         }
     }
 
-    /// Check that `cost` fits the holder's budget of every pool total at all,
-    /// once per component rather than per reservation. Returns it for the
-    /// caller to keep.
-    pub fn admit(&self, cost: PoolCost) -> anyhow::Result<PoolCost> {
+    /// Check that `component`'s cost ([`PoolCost::of`]) fits the holder's
+    /// budget of every pool total at all, once per component rather than per
+    /// reservation, and return what each reservation should take.
+    ///
+    /// What is read off the component — its memories, and its tables when
+    /// wasmtime reports them — is refused when the budget can never hold it;
+    /// see [`Gate::admit`]. What is estimated — core instances always, tables
+    /// for a component that hides its requirements — is clamped to the budget
+    /// instead: a refusal there would turn away a component the pool may well
+    /// hold, over a number nothing measured, and the pool itself still
+    /// refuses one that truly does not fit.
+    pub fn admit(&self, component: &Component) -> anyhow::Result<PoolCost> {
         let g = &*self.gates;
+        let cost = PoolCost::of(component);
+        let measured = component.resources_required().is_some();
         g.memories.admit(self.holder, cost.memories)?;
-        g.tables.admit(self.holder, cost.tables)?;
-        g.core_instances.admit(self.holder, cost.core_instances)?;
         g.component_instances
             .admit(self.holder, cost.component_instances)?;
         g.stacks.admit(self.holder, cost.stacks)?;
-        Ok(cost)
+        if measured {
+            g.tables.admit(self.holder, cost.tables)?;
+        }
+        Ok(PoolCost {
+            tables: cost.tables.min(g.tables.budget),
+            core_instances: cost.core_instances.min(g.core_instances.budget),
+            ..cost
+        })
     }
 
     /// Hold `cost` out of the holder's share of each pool total until the
@@ -319,9 +341,11 @@ impl PoolShare {
     ///
     /// The totals are taken in one order for every caller — memories, tables,
     /// core instances, component instances, stacks — so two reservations
-    /// cannot wait on each other. Cancel-safe: dropping the future before it
-    /// resolves releases whatever it had already taken. `None` only if a gate
-    /// was closed, which nothing does.
+    /// cannot wait on each other. Each gate serves waiters in arrival order,
+    /// a large cost at the head holding the smaller ones behind it (see the
+    /// module docs). Cancel-safe: dropping the future before it resolves
+    /// releases whatever it had already taken. `None` only if a gate was
+    /// closed, which nothing does.
     pub async fn reserve(&self, cost: PoolCost) -> Option<PoolReservation> {
         let g = &*self.gates;
         Some(PoolReservation {
@@ -399,6 +423,20 @@ pub(crate) mod test_support {
         source.push(')');
         Component::new(engine.inner(), wat::parse_str(source).unwrap()).unwrap()
     }
+
+    /// A component that imports its core module, which hides its resource
+    /// requirements from wasmtime (`resources_required` is `None`).
+    pub(crate) fn hidden_component(engine: &Engine) -> Component {
+        let bytes = wat::parse_str(
+            r#"(component
+            (core type $m (module))
+            (import "module" (core module $m (type $m)))
+            (core instance (instantiate $m))
+        )"#,
+        )
+        .unwrap();
+        Component::new(engine.inner(), bytes).unwrap()
+    }
 }
 
 #[cfg(test)]
@@ -408,7 +446,7 @@ mod tests {
     use wasmtime::Store;
     use wasmtime::component::Linker;
 
-    use super::test_support::{component, config, engine};
+    use super::test_support::{component, config, engine, hidden_component};
     use super::*;
     use crate::engine::Engine;
 
@@ -435,7 +473,7 @@ mod tests {
     /// the queued reservation through and its instantiation succeed.
     async fn fill(engine: &Engine, component: &Component) -> usize {
         let pool_share = pool_share(engine);
-        let cost = pool_share.admit(PoolCost::of(component)).unwrap();
+        let cost = pool_share.admit(component).unwrap();
         let linker = Linker::<()>::new(engine.inner());
         let mut held = Vec::new();
         for _ in 0..=u32::MAX {
@@ -569,17 +607,38 @@ mod tests {
         // every pool slot the holder may have would serialize every delivery
         // on the host behind this one component's; the usual shape bounds it.
         let engine = engine(config());
-        let bytes = wat::parse_str(
-            r#"(component
-            (core type $m (module))
-            (import "module" (core module $m (type $m)))
-            (core instance (instantiate $m))
-        )"#,
-        )
-        .unwrap();
-        let component = Component::new(engine.inner(), bytes).unwrap();
+        let component = hidden_component(&engine);
         assert!(component.resources_required().is_none());
         assert_eq!(PoolCost::of(&component), PoolCost::USUAL);
+    }
+
+    #[test]
+    fn estimated_costs_are_clamped_to_the_budget_rather_than_refused() {
+        // A total nothing measured must not refuse a binding: core instances
+        // are always estimated, and tables are for a component that hides
+        // its requirements. A share of one table and four core instances
+        // admits the usual shape's two and five, clamped, and the pool
+        // refuses the component at instantiation if it truly does not fit.
+        let mut config = config();
+        config.total_tables(1).total_core_instances(4);
+        let engine = engine(config);
+        let pool_share = pool_share(&engine);
+        let cost = pool_share.admit(&hidden_component(&engine)).unwrap();
+        assert_eq!(cost.memories, 1);
+        assert_eq!(cost.tables, 1);
+        assert_eq!(cost.core_instances, 4);
+        // Tables wasmtime did measure are refused where the share can never
+        // hold them, since a reservation capped at the share would hold
+        // every table permit and still fail at instantiation.
+        let err = pool_share
+            .admit(&component(&engine, 1, 2, 2))
+            .expect_err("two measured tables do not fit a share of one");
+        let text = format!("{err:#}");
+        assert!(text.contains("2 tables"), "{text}");
+        assert!(text.contains("WASMTIME_POOLING_TOTAL_TABLES"), "{text}");
+        // And a measured table within the share is charged as measured.
+        let cost = pool_share.admit(&component(&engine, 1, 1, 2)).unwrap();
+        assert_eq!(cost.tables, 1);
     }
 
     #[tokio::test]
@@ -633,7 +692,7 @@ mod tests {
         let engine = engine(config());
         let pool_share = pool_share(&engine);
         let err = pool_share
-            .admit(PoolCost::of(&component(&engine, 25, 0, 25)))
+            .admit(&component(&engine, 25, 0, 25))
             .expect_err("25 memories do not fit a share of 21 memories");
         let text = format!("{err:#}");
         assert!(text.contains("25 memories"), "{text}");
@@ -641,18 +700,14 @@ mod tests {
         assert!(text.contains("--core-instances"), "{text}");
         assert!(text.contains("WASMTIME_POOLING_TOTAL_MEMORIES"), "{text}");
         // Exactly the share of memories fits.
-        pool_share
-            .admit(PoolCost::of(&component(&engine, 21, 0, 21)))
-            .unwrap();
+        pool_share.admit(&component(&engine, 21, 0, 21)).unwrap();
     }
 
     #[tokio::test]
     async fn cancelling_a_reservation_returns_every_earlier_permit() {
         let engine = engine(config());
         let pool_share = pool_share(&engine);
-        let cost = pool_share
-            .admit(PoolCost::of(&component(&engine, 1, 1, 4)))
-            .unwrap();
+        let cost = pool_share.admit(&component(&engine, 1, 1, 4)).unwrap();
         let g = &*pool_share.gates;
         for blocked in [
             &g.memories,
@@ -685,12 +740,8 @@ mod tests {
         let engine = engine(config());
         let pool_share = pool_share(&engine);
         let other = pool_share.clone();
-        let small = pool_share
-            .admit(PoolCost::of(&component(&engine, 1, 0, 1)))
-            .unwrap();
-        let composed = other
-            .admit(PoolCost::of(&component(&engine, 2, 0, 2)))
-            .unwrap();
+        let small = pool_share.admit(&component(&engine, 1, 0, 1)).unwrap();
+        let composed = other.admit(&component(&engine, 2, 0, 2)).unwrap();
         let mut held = Vec::new();
         for i in 0..14 {
             let (pool_share, cost) = if i < 7 {

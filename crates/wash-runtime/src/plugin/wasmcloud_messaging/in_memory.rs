@@ -835,6 +835,11 @@ impl HostPlugin for InMemoryMessaging {
                         // warm instance, honouring the limits it declared.
                         // Everything else keeps a store per message.
                         if let Some(pool) = pool {
+                            // Kept for the shed below, when this component is
+                            // the only one that could have answered.
+                            let shed_reply_to = sole_subscriber
+                                .then(|| msg.reply_to.clone())
+                                .flatten();
                             let broker = crate::host::trigger_service::BrokerMessage {
                                 subject: msg.subject,
                                 body: msg.body,
@@ -845,6 +850,7 @@ impl HostPlugin for InMemoryMessaging {
                             let component_id = component_id.clone();
                             let instance_pre = pre.instance_pre().clone();
                             let admission = admission.clone();
+                            let pending_requests = pending_requests.clone();
                             tokio::spawn(async move {
                                 // The permit goes along: released on
                                 // completion, trap or not — which is what
@@ -863,6 +869,18 @@ impl HostPlugin for InMemoryMessaging {
                                 .instrument(span)
                                 .await;
                                 super::log_delivery(&result);
+                                // A message shed while a store was being
+                                // reserved for it never reached the guest, so
+                                // its requester is failed now, as a shed at
+                                // admission fails it above, rather than left
+                                // to wait out its own timeout.
+                                if result.as_ref().is_err_and(|e| e.is::<super::AlreadyShed>())
+                                    && let (Some(reply_to), Some(pending)) =
+                                        (&shed_reply_to, &pending_requests)
+                                    && let Some(sender) = pending.write().await.remove(reply_to)
+                                {
+                                    let _ = sender.send(Err(super::shed_error()));
+                                }
                             });
                             continue;
                         }
