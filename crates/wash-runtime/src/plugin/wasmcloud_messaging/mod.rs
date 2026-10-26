@@ -384,7 +384,11 @@ pub(crate) async fn deliver_pooled(
         // Reserved above, before it was built.
         Some(built) => built,
         None => {
-            // Held, with its reservation, until this delivery ends.
+            // Reserved afresh, held until this delivery ends. A `NeedsInstance`
+            // reservation the permit may still carry is not this store's: the
+            // pool declines without an instance only once it has taken the
+            // one built for it, so those slots are the pool's now and the
+            // reservation is given back as this one is taken.
             permit = match admission
                 .reserve_store_before_deadline(permit, component_id, &job.msg.subject)
                 .await
@@ -1366,15 +1370,21 @@ impl Admission {
     /// caller — including a store reserved after a `Defer` admission, which
     /// gives its host permit back first; see
     /// [`Admission::reserve_store_before_deadline`]. A composed component
-    /// waits for its whole cost before any store is built.
+    /// waits for its whole cost before any store is built. That wait is the
+    /// one place the blocking is not confined to the component responsible:
+    /// the pool share is one for every component, served in arrival order, so
+    /// a composed component parked for several memories holds the
+    /// single-memory deliveries of other components behind it until it is
+    /// served. Accepted so that a steady stream of small deliveries cannot
+    /// starve it; see [`crate::engine::pool_share`].
     ///
     /// Cancel-safe: dropping the returned future before it resolves releases
     /// whichever permit it had already taken.
     pub(crate) async fn acquire(&self, charge: PoolCharge) -> Option<AdmissionPermit> {
         let deadline = tokio::time::Instant::now() + self.wait;
         let component = Arc::clone(&self.component).acquire_owned().await.ok()?;
-        let pool = match (charge, &self.pool, self.cost) {
-            (PoolCharge::Reserve, Some(pool), Some(cost)) => Some(pool.reserve(cost).await?),
+        let pool = match (charge, self.costed()) {
+            (PoolCharge::Reserve, Some((pool, cost))) => Some(pool.reserve(cost).await?),
             _ => None,
         };
         let host = Arc::clone(&self.host).acquire_owned().await.ok()?;
@@ -1399,9 +1409,15 @@ impl Admission {
         self.cost = self
             .pool
             .as_ref()
-            .map(|pool| pool.admit(PoolCost::of(component)))
+            .map(|pool| pool.admit(component))
             .transpose()?;
         Ok(self)
+    }
+
+    /// The share and the cost to reserve from it, which only mean anything
+    /// together: a pool with no costed component reserves nothing.
+    fn costed(&self) -> Option<(&PoolShare, PoolCost)> {
+        Some((self.pool.as_ref()?, self.cost?))
     }
 
     /// Reserve the pool cost of a store built after a [`PoolCharge::Defer`]
@@ -1428,7 +1444,7 @@ impl Admission {
         component_id: &str,
         subject: &str,
     ) -> Admitted {
-        let (Some(pool), Some(cost)) = (&self.pool, self.cost) else {
+        let Some((pool, cost)) = self.costed() else {
             return Admitted::Slot(permit);
         };
         let AdmissionPermit {
@@ -1479,7 +1495,7 @@ impl Admission {
             Ok(None) => Admitted::Closed,
             Err(_) => {
                 let on = match charge {
-                    PoolCharge::Reserve if self.pool.is_some() && self.cost.is_some() => {
+                    PoolCharge::Reserve if self.costed().is_some() => {
                         ShedOn::MessageSlotsAndPoolShare
                     }
                     PoolCharge::Reserve | PoolCharge::Defer => ShedOn::MessageSlots,
