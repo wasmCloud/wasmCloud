@@ -99,6 +99,7 @@ pub struct TlsConfig {
 pub struct PolicySpec {
     pub subject_allow: Vec<String>,
     pub stream_allow: Vec<String>,
+    pub stream_delete_allow: Vec<String>,
     pub bucket_allow: Vec<String>,
 }
 
@@ -454,6 +455,7 @@ impl NatsConfig {
             policy: PolicySpec {
                 subject_allow: list(cfg, "subject-allow"),
                 stream_allow: list(cfg, "stream-allow"),
+                stream_delete_allow: list(cfg, "stream-delete-allow"),
                 bucket_allow: list(cfg, "bucket-allow"),
             },
             limits,
@@ -517,6 +519,7 @@ impl NatsConfig {
         for allow in [
             &self.policy.subject_allow,
             &self.policy.stream_allow,
+            &self.policy.stream_delete_allow,
             &self.policy.bucket_allow,
         ] {
             let mut sorted = allow.clone();
@@ -786,6 +789,19 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn stream_delete_grant_is_deny_by_default_and_part_of_connection_identity() {
+        let base = NatsConfig::from_map(&map(&[("servers", "nats://localhost:4222")])).unwrap();
+        assert!(base.policy.stream_delete_allow.is_empty());
+        let grant = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("stream-delete-allow", "ORDERS"),
+        ]))
+        .unwrap();
+        assert_eq!(grant.policy.stream_delete_allow, ["ORDERS"]);
+        assert_ne!(base.connection_key(), grant.connection_key());
     }
 
     #[test]

@@ -41,6 +41,7 @@ pub struct PolicyEngine {
     /// carries — see [`PolicyEngine::publishable_literal_subjects`].
     subject_allow_raw: Vec<String>,
     stream_allow: Vec<NatsSubjectPattern>,
+    stream_delete_allow: Vec<NatsSubjectPattern>,
     bucket_allow: Vec<NatsSubjectPattern>,
     /// Lattice subjects to deny when the host is lattice-connected.
     lattice_prefixes: Vec<String>,
@@ -82,7 +83,15 @@ impl NatsSubjectPattern {
                 }
                 "*" => tokens.push(Token::Any),
                 "" => valid = false,
-                literal => tokens.push(Token::Literal(literal.to_string())),
+                literal => {
+                    if literal
+                        .chars()
+                        .any(|c| c.is_whitespace() || c == '*' || c == '>')
+                    {
+                        valid = false;
+                    }
+                    tokens.push(Token::Literal(literal.to_string()));
+                }
             }
         }
         Self {
@@ -238,6 +247,11 @@ impl PolicyEngine {
             subject_allow_raw: spec.subject_allow.clone(),
             stream_allow: spec
                 .stream_allow
+                .iter()
+                .map(|s| NatsSubjectPattern::parse(s))
+                .collect(),
+            stream_delete_allow: spec
+                .stream_delete_allow
                 .iter()
                 .map(|s| NatsSubjectPattern::parse(s))
                 .collect(),
@@ -399,6 +413,24 @@ impl PolicyEngine {
         }
     }
 
+    /// Destructive stream calls require both stream grants. Bucket streams stay reserved.
+    pub fn check_stream_delete(&self, stream: &str) -> Result<(), Denied> {
+        if stream.starts_with('$')
+            || BUCKET_BACKING_STREAM_PREFIXES
+                .iter()
+                .any(|p| stream.starts_with(p))
+            || self.is_reserved(stream)
+        {
+            return Err(Denied::Reserved);
+        }
+        self.check_stream(stream)?;
+        if self.stream_delete_allow.iter().any(|p| p.matches(stream)) {
+            Ok(())
+        } else {
+            Err(Denied::NotGranted)
+        }
+    }
+
     /// Checks a KV bucket name.
     pub fn check_bucket(&self, bucket: &str) -> Result<(), Denied> {
         if self.bucket_allow.iter().any(|p| p.matches(bucket)) {
@@ -418,10 +450,59 @@ mod tests {
             &PolicySpec {
                 subject_allow: subjects.iter().map(|s| s.to_string()).collect(),
                 stream_allow: streams.iter().map(|s| s.to_string()).collect(),
+                stream_delete_allow: vec![],
                 bucket_allow: buckets.iter().map(|s| s.to_string()).collect(),
             },
             Vec::new(),
         )
+    }
+
+    #[test]
+    fn stream_deletion_requires_both_grants_and_refuses_reserved_streams() {
+        for (reads, deletes, allowed) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (true, true, true),
+        ] {
+            let p = PolicyEngine::new(
+                &PolicySpec {
+                    stream_allow: if reads { vec![">".into()] } else { vec![] },
+                    stream_delete_allow: if deletes { vec![">".into()] } else { vec![] },
+                    bucket_allow: vec![">".into()],
+                    ..Default::default()
+                },
+                vec!["runtime.host.".into()],
+            );
+            assert_eq!(p.check_stream_delete("ORDERS").is_ok(), allowed);
+            for stream in [
+                "KV_secrets",
+                "OBJ_files",
+                "$JS.internal",
+                "runtime.host.events",
+            ] {
+                assert_eq!(p.check_stream_delete(stream), Err(Denied::Reserved));
+            }
+        }
+    }
+
+    #[test]
+    fn purge_pattern_must_be_contained_and_avoid_reserved_subjects() {
+        let p = engine(&["orders.mine.>", "$KV.>", "*.*"], &["ORDERS"], &[]);
+        assert!(p.check_subscription("orders.mine.*").is_ok());
+        for pattern in [
+            "orders.>",
+            "orders.*.>",
+            ">",
+            "",
+            "$KV.>",
+            "*.>",
+            "orders.mine.foo*",
+            "orders.mine.foo>",
+            "orders.mine. bad",
+        ] {
+            assert!(p.check_subscription(pattern).is_err(), "{pattern}");
+        }
     }
 
     #[test]

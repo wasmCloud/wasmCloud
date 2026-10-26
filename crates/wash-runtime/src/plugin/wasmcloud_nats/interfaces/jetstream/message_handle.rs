@@ -1,4 +1,4 @@
-//! `wasmcloud:nats/jetstream@0.1.2#message-handle` — one delivered message and
+//! `wasmcloud:nats/jetstream@0.1.3#message-handle` — one delivered message and
 //! the settlement operations over it.
 
 use std::sync::Arc;
@@ -178,6 +178,13 @@ impl js::HostMessageHandle for ActiveCtx<'_> {
 
     async fn sequence(&mut self, rep: Resource<MessageHandle>) -> wasmtime::Result<u64> {
         Ok(self.table.get(&rep)?.sequence)
+    }
+
+    async fn stored_at_unix_nanos(
+        &mut self,
+        rep: Resource<MessageHandle>,
+    ) -> wasmtime::Result<u64> {
+        Ok(self.table.get(&rep)?.stored_at_unix_nanos)
     }
 
     async fn delivery_count(&mut self, rep: Resource<MessageHandle>) -> wasmtime::Result<u32> {

@@ -1,4 +1,4 @@
-//! `wasmcloud:nats/jetstream@0.1.2` — the stream-level operations.
+//! `wasmcloud:nats/jetstream@0.1.3` — the stream-level operations.
 //!
 //! The interface's two resources and the KV interface built on the same
 //! JetStream context live beside this one: [`message_handle`],
@@ -185,6 +185,167 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
                 }))
             }
             Err(e) => Ok(Err(jetstream_err("get-by-sequence failed", e))),
+        }
+    }
+
+    async fn get_last_by_subject(
+        _accessor: &Accessor<T, Self>,
+        conn: NatsId,
+        stream_name: String,
+        subject: String,
+    ) -> wasmtime::Result<Result<js::StoredMessageAt, types::NatsError>> {
+        if let Err(e) =
+            check_stream(&conn, &stream_name).and_then(|()| check_subject(&conn, &subject))
+        {
+            return Ok(Err(e));
+        }
+        let stream = match conn.jetstream.get_stream(&stream_name).await {
+            Ok(s) => s,
+            Err(e) => return Ok(Err(stream_lookup_err(format!("stream '{stream_name}'"), e))),
+        };
+        match stream.get_last_raw_message_by_subject(&subject).await {
+            Ok(m) => Ok(stored_message_at(&conn, &stream_name, m)),
+            Err(e) => Ok(Err(raw_message_err("get-last-by-subject failed", e))),
+        }
+    }
+
+    async fn get_by_sequence_at(
+        _accessor: &Accessor<T, Self>,
+        conn: NatsId,
+        stream_name: String,
+        sequence: u64,
+    ) -> wasmtime::Result<Result<js::StoredMessageAt, types::NatsError>> {
+        if let Err(e) = check_stream(&conn, &stream_name) {
+            return Ok(Err(e));
+        }
+        if !conn.server_at_least(2, 9) {
+            return Ok(Err(types::NatsError::UnsupportedByServer(
+                "direct get requires NATS server 2.9 or newer".to_string(),
+            )));
+        }
+        let stream = match conn.jetstream.get_stream(&stream_name).await {
+            Ok(s) => s,
+            Err(e) => return Ok(Err(stream_lookup_err(format!("stream '{stream_name}'"), e))),
+        };
+        match stream.direct_get(sequence).await {
+            Ok(m) => Ok(stored_message_at(&conn, &stream_name, m)),
+            Err(e) => Ok(Err(match e.kind() {
+                jetstream::stream::DirectGetErrorKind::NotFound => types::NatsError::NotFound(
+                    format!("message {sequence} on stream '{stream_name}'"),
+                ),
+                jetstream::stream::DirectGetErrorKind::TimedOut => {
+                    types::NatsError::Timeout(e.to_string())
+                }
+                _ => jetstream_err("get-by-sequence-at failed", e),
+            })),
+        }
+    }
+
+    async fn purge_subject(
+        _accessor: &Accessor<T, Self>,
+        conn: NatsId,
+        stream_name: String,
+        subject: String,
+        keep: Option<u64>,
+    ) -> wasmtime::Result<Result<u64, types::NatsError>> {
+        if let Err(reason) = conn.policy.check_stream_delete(&stream_name) {
+            return Ok(Err(denied(
+                reason,
+                types::DeniedResource::Stream,
+                &stream_name,
+            )));
+        }
+        if let Err(reason) = conn.policy.check_subscription(&subject) {
+            return Ok(Err(denied(
+                reason,
+                types::DeniedResource::Subject,
+                &subject,
+            )));
+        }
+        // Older servers can replay a filtered purge as a full purge after restart.
+        if !server_at_least(&conn.server_version(), (2, 9, 18)) {
+            return Ok(Err(types::NatsError::UnsupportedByServer(
+                "filtered purge requires NATS server 2.9.18 or newer".to_string(),
+            )));
+        }
+        let stream = match conn.jetstream.get_stream(&stream_name).await {
+            Ok(s) => s,
+            Err(e) => return Ok(Err(stream_lookup_err(format!("stream '{stream_name}'"), e))),
+        };
+        let purge = stream.purge().filter(subject);
+        let result = match keep {
+            Some(keep) => purge.keep(keep).await,
+            None => purge.await,
+        };
+        Ok(result.map(|r| r.purged).map_err(|e| match e.kind() {
+            jetstream::stream::PurgeErrorKind::TimedOut => types::NatsError::Timeout(e.to_string()),
+            _ => jetstream_err("purge-subject failed", e),
+        }))
+    }
+
+    async fn delete_message(
+        _accessor: &Accessor<T, Self>,
+        conn: NatsId,
+        stream_name: String,
+        sequence: u64,
+    ) -> wasmtime::Result<Result<(), types::NatsError>> {
+        if let Err(reason) = conn.policy.check_stream_delete(&stream_name) {
+            return Ok(Err(denied(
+                reason,
+                types::DeniedResource::Stream,
+                &stream_name,
+            )));
+        }
+        let stream = match conn.jetstream.get_stream(&stream_name).await {
+            Ok(s) => s,
+            Err(e) => return Ok(Err(stream_lookup_err(format!("stream '{stream_name}'"), e))),
+        };
+        // Sequences are immutable. Authorize the stored subject before deleting it.
+        let message = match stream.get_raw_message(sequence).await {
+            Ok(m) => m,
+            Err(e) => return Ok(Err(raw_message_err("delete-message lookup failed", e))),
+        };
+        if conn.policy.check_subject(&message.subject).is_err() {
+            return Ok(Err(denied(
+                Denied::NotGranted,
+                types::DeniedResource::Message(sequence),
+                &stream_name,
+            )));
+        }
+        Ok(match stream.delete_message(sequence).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(types::NatsError::NotFound(format!(
+                "message {sequence} on stream '{stream_name}'"
+            ))),
+            Err(e) => Err(match e.kind() {
+                jetstream::stream::DeleteMessageErrorKind::JetStream(ref error)
+                    if error.error_code() == jetstream::ErrorCode::SEQUENCE_NOT_FOUND =>
+                {
+                    types::NatsError::NotFound(format!(
+                        "message {sequence} on stream '{stream_name}'"
+                    ))
+                }
+                jetstream::stream::DeleteMessageErrorKind::TimedOut => {
+                    types::NatsError::Timeout(e.to_string())
+                }
+                _ => jetstream_err("delete-message failed", e),
+            }),
+        })
+    }
+
+    async fn get_stream_created(
+        _accessor: &Accessor<T, Self>,
+        conn: NatsId,
+        stream_name: String,
+    ) -> wasmtime::Result<Result<u64, types::NatsError>> {
+        if let Err(e) = check_stream(&conn, &stream_name) {
+            return Ok(Err(e));
+        }
+        match conn.jetstream.get_stream(&stream_name).await {
+            Ok(stream) => Ok(Ok(unix_nanos(
+                stream.cached_info().created.unix_timestamp_nanos(),
+            ))),
+            Err(e) => Ok(Err(stream_lookup_err(format!("stream '{stream_name}'"), e))),
         }
     }
 
@@ -658,5 +819,42 @@ fn consumer_info_to_wit(info: &jetstream::consumer::Info) -> js::ConsumerInfo {
         num_ack_pending: info.num_ack_pending as u64,
         num_pending: info.num_pending,
         num_redelivered: info.num_redelivered as u64,
+    }
+}
+
+fn stored_message_at(
+    conn: &NatsId,
+    stream: &str,
+    message: jetstream::message::StreamMessage,
+) -> Result<js::StoredMessageAt, types::NatsError> {
+    if conn.policy.check_subject(&message.subject).is_err() {
+        return Err(denied(
+            Denied::NotGranted,
+            types::DeniedResource::Message(message.sequence),
+            stream,
+        ));
+    }
+    Ok(js::StoredMessageAt {
+        stored_at_unix_nanos: unix_nanos(message.time.unix_timestamp_nanos()),
+        message: js::StoredMessage {
+            subject: message.subject.to_string(),
+            sequence: message.sequence,
+            data: message.payload.to_vec(),
+            headers: Some(nats_headers_to_wit(&message.headers)),
+        },
+    })
+}
+
+pub(super) fn unix_nanos(nanos: i128) -> u64 {
+    nanos.clamp(0, u64::MAX as i128) as u64
+}
+
+fn raw_message_err(ctx: &str, error: jetstream::stream::RawMessageError) -> types::NatsError {
+    match error.kind() {
+        jetstream::stream::RawMessageErrorKind::NoMessageFound => {
+            types::NatsError::NotFound(ctx.to_string())
+        }
+        _ if super::chain_timed_out(&error) => types::NatsError::Timeout(format!("{ctx}: {error}")),
+        _ => jetstream_err(ctx, error),
     }
 }

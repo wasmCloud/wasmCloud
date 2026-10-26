@@ -53,6 +53,72 @@ impl<T: 'static + Send> js::HostWithStore<T> for SharedCtx {
         )
         .await
     }
+    async fn get_last_by_subject(
+        accessor: &Accessor<T, Self>,
+        stream_name: String,
+        subject: String,
+    ) -> wasmtime::Result<Result<js::StoredMessageAt, types::NatsError>> {
+        let conn = conn_or_return!(accessor);
+        <Self as labeled_js::HostWithStore<T>>::get_last_by_subject(
+            accessor,
+            conn,
+            stream_name,
+            subject,
+        )
+        .await
+    }
+    async fn get_by_sequence_at(
+        accessor: &Accessor<T, Self>,
+        stream_name: String,
+        sequence: u64,
+    ) -> wasmtime::Result<Result<js::StoredMessageAt, types::NatsError>> {
+        let conn = conn_or_return!(accessor);
+        <Self as labeled_js::HostWithStore<T>>::get_by_sequence_at(
+            accessor,
+            conn,
+            stream_name,
+            sequence,
+        )
+        .await
+    }
+    async fn purge_subject(
+        accessor: &Accessor<T, Self>,
+        stream_name: String,
+        subject: String,
+        keep: Option<u64>,
+    ) -> wasmtime::Result<Result<u64, types::NatsError>> {
+        let conn = conn_or_return!(accessor);
+        <Self as labeled_js::HostWithStore<T>>::purge_subject(
+            accessor,
+            conn,
+            stream_name,
+            subject,
+            keep,
+        )
+        .await
+    }
+    async fn delete_message(
+        accessor: &Accessor<T, Self>,
+        stream_name: String,
+        sequence: u64,
+    ) -> wasmtime::Result<Result<(), types::NatsError>> {
+        let conn = conn_or_return!(accessor);
+        <Self as labeled_js::HostWithStore<T>>::delete_message(
+            accessor,
+            conn,
+            stream_name,
+            sequence,
+        )
+        .await
+    }
+    async fn get_stream_created(
+        accessor: &Accessor<T, Self>,
+        stream_name: String,
+    ) -> wasmtime::Result<Result<u64, types::NatsError>> {
+        let conn = conn_or_return!(accessor);
+        <Self as labeled_js::HostWithStore<T>>::get_stream_created(accessor, conn, stream_name)
+            .await
+    }
     async fn scan(
         accessor: &Accessor<T, Self>,
         stream_name: String,

@@ -1,4 +1,4 @@
-//! Real-guest fixture for the `wasmcloud:nats@0.1.2` surface.
+//! Real-guest fixture for the `wasmcloud:nats@0.1.3` surface.
 //!
 //! Both handlers are `async fn`s that await imported NATS calls from inside
 //! the delivery — the shape a sync-signature package cannot express, since a
@@ -133,6 +133,18 @@ impl JsGuest for Component {
         let msg = handle.message();
         let body = String::from_utf8_lossy(&msg.body).to_string();
         let delivery = handle.delivery_count();
+        if let Some(tag) = body.strip_prefix("stored-time:") {
+            return core::publish(message(
+                "test.results",
+                format!(
+                    "stored-time:{tag}:{}:{}",
+                    handle.sequence(),
+                    handle.stored_at_unix_nanos()
+                ),
+            ))
+            .await
+            .map_err(|e| label(&e));
+        }
 
         // Awaiting a P3 import from inside the handler is the whole point of
         // the async package; without it `wasi:clocks@0.3.0` tree-shakes away.
@@ -321,12 +333,92 @@ async fn select_probe(spec: &str) -> String {
     }
 }
 
+async fn js_api_probe(spec: &str) -> Result<String, NatsError> {
+    let parts: Vec<_> = spec.split(':').collect();
+    let op = parts[0];
+    let stream = parts[1].to_string();
+    match op {
+        "last" => {
+            let m = jetstream::get_last_by_subject(stream, parts[2].to_string()).await?;
+            Ok(format!(
+                "{}:{}:{}:{}",
+                m.message.subject,
+                m.message.sequence,
+                m.stored_at_unix_nanos,
+                String::from_utf8_lossy(&m.message.data)
+            ))
+        }
+        "at" => {
+            let m = jetstream::get_by_sequence_at(stream, parts[2].parse().unwrap()).await?;
+            Ok(format!(
+                "{}:{}:{}:{}",
+                m.message.subject,
+                m.message.sequence,
+                m.stored_at_unix_nanos,
+                String::from_utf8_lossy(&m.message.data)
+            ))
+        }
+        "created" => Ok(jetstream::get_stream_created(stream).await?.to_string()),
+        "purge" => Ok(jetstream::purge_subject(
+            stream,
+            parts[2].to_string(),
+            parts.get(3).and_then(|v| v.parse().ok()),
+        )
+        .await?
+        .to_string()),
+        "delete" => jetstream::delete_message(stream, parts[2].parse().unwrap())
+            .await
+            .map(|()| "ok".to_string()),
+        "pull-time" => {
+            let consumer = jetstream::open_pull_consumer(stream, parts[2].to_string()).await?;
+            let batch = consumer.fetch(1, PULL_TIMEOUT_MS).await?;
+            let m = &batch.messages[0];
+            let result = format!("{}:{}", m.sequence(), m.stored_at_unix_nanos());
+            m.ack_sync().await?;
+            Ok(result)
+        }
+        _ => panic!("unknown JS probe"),
+    }
+}
+
+async fn kv_api_probe(spec: &str) -> Result<String, NatsError> {
+    let parts: Vec<_> = spec.split(':').collect();
+    let bucket = kv::open(parts[1].to_string()).await?;
+    match parts[0] {
+        "ttl" => bucket
+            .create_with_ttl(
+                parts[2].to_string(),
+                b"lease".to_vec(),
+                parts[3].parse().unwrap(),
+            )
+            .await
+            .map(|r| r.to_string()),
+        "delete-if" => bucket
+            .delete_if(parts[2].to_string(), parts[3].parse().unwrap())
+            .await
+            .map(|()| "ok".to_string()),
+        _ => panic!("unknown KV probe"),
+    }
+}
+
 impl CoreGuest for Component {
     /// Echoes onto `reply-to` when there is one — a request/reply round trip
     /// driven entirely from inside an async export.
     async fn handle_message(msg: NatsMessage) -> Result<(), String> {
         monotonic_clock::wait_for(YIELD_NANOS).await;
         let body = String::from_utf8_lossy(&msg.body).to_string();
+        if let Some(spec) = body.strip_prefix("js-api:") {
+            let outcome = js_api_probe(spec).await.unwrap_or_else(|e| label(&e));
+            return core::publish(message(&msg.reply_to.unwrap(), outcome))
+                .await
+                .map_err(|e| label(&e));
+        }
+        if let Some(spec) = body.strip_prefix("kv-api:") {
+            let outcome = kv_api_probe(spec).await.unwrap_or_else(|e| label(&e));
+            return core::publish(message(&msg.reply_to.unwrap(), outcome))
+                .await
+                .map_err(|e| label(&e));
+        }
         if let Some(spec) = body.strip_prefix(PULL_MARKER) {
             let outcome = pull_probe(spec).await;
             return js_publish("test.results", outcome)
