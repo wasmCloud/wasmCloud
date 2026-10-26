@@ -28,7 +28,7 @@ use crate::wit::WitInterface;
 use super::{
     DEFAULT_POOL_SIZE, PLUGIN_POSTGRES_ID, PgValue, PreparedEntry, PreparedStatementExecError,
     QueryError, ResultRow, StatementPrepareError, WasmcloudPostgres, bindings, execute_query,
-    extract_pool_size, extract_tls_requirement, pg_error_string,
+    extract_pool_size, extract_tls_requirement, pg_error_string, wrong_type_message,
 };
 
 /// The single `wasmcloud:postgres` backend type. Unlike `wasi:keyvalue` (which
@@ -180,10 +180,10 @@ impl PgId {
             .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
             .collect();
         client.execute_raw(&stmt, param_refs).await.map_err(|e| {
-            PreparedStatementExecError::QueryError(QueryError::Unexpected(format!(
-                "execute failed: {}",
-                pg_error_string(&e)
-            )))
+            PreparedStatementExecError::QueryError(match wrong_type_message(&e) {
+                Some(msg) => QueryError::InvalidParams(msg),
+                None => QueryError::Unexpected(format!("execute failed: {}", pg_error_string(&e))),
+            })
         })
     }
 }

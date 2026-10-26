@@ -28,7 +28,7 @@ use chrono::{
 use cidr::IpCidr;
 use geo_types::{LineString, Point, Rect, coord};
 use pg_bigdecimal::PgNumeric;
-use postgres_types::{FromSql, IsNull, PgLsn, ToSql, Type as PgType};
+use postgres_types::{FromSql, IsNull, Kind, PgLsn, ToSql, Type as PgType, WrongType};
 use tokio_postgres::Row;
 use uuid::Uuid;
 
@@ -280,6 +280,109 @@ impl FromSql<'_> for MacAddressEui64 {
     }
 }
 
+/// Postgres types whose binary form is a fixed-width value (or a structured
+/// one, like `uuid` or `numeric`), so the bytes of a `text` value are never a
+/// valid encoding of them.
+const NON_TEXT_TYPES: [PgType; 15] = [
+    PgType::BOOL,
+    PgType::INT2,
+    PgType::INT4,
+    PgType::INT8,
+    PgType::OID,
+    PgType::FLOAT4,
+    PgType::FLOAT8,
+    PgType::MONEY,
+    PgType::DATE,
+    PgType::TIME,
+    PgType::TIMESTAMP,
+    PgType::TIMESTAMPTZ,
+    PgType::INTERVAL,
+    PgType::NUMERIC,
+    PgType::UUID,
+];
+
+/// `oid` and the `reg*` aliases share `int4`'s four-byte encoding, so an `int4`
+/// value can stand in for them (`WHERE oid = $1`).
+fn is_oid_like(ty: &PgType) -> bool {
+    [
+        PgType::OID,
+        PgType::REGCLASS,
+        PgType::REGCOLLATION,
+        PgType::REGCONFIG,
+        PgType::REGDICTIONARY,
+        PgType::REGNAMESPACE,
+        PgType::REGOPER,
+        PgType::REGOPERATOR,
+        PgType::REGPROC,
+        PgType::REGPROCEDURE,
+        PgType::REGROLE,
+        PgType::REGTYPE,
+    ]
+    .contains(ty)
+}
+
+/// Refuse a scalar value bound to a parameter of a type it could be misread as.
+///
+/// The inner encoders do not look at the parameter type, so without this check
+/// Postgres would read, for example, the eight bytes of an `int8` as a `float8`
+/// (or fail with an error that does not name the parameter's type). A domain
+/// is checked as its base type. Values that are not simple scalars are left to
+/// their own encoders.
+fn check_scalar_type(value: &PgValue, ty: &PgType) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let mut base = ty;
+    while let Kind::Domain(inner) = base.kind() {
+        base = inner;
+    }
+    let wrong =
+        |fits: bool, rust: fn(PgType) -> WrongType| -> Result<(), Box<dyn Error + Sync + Send>> {
+            if fits {
+                Ok(())
+            } else {
+                Err(Box::new(rust(ty.clone())))
+            }
+        };
+    match value {
+        PgValue::BigInt(_) | PgValue::Int8(_) | PgValue::BigSerial(_) | PgValue::Serial8(_) => {
+            wrong(<i64 as ToSql>::accepts(base), WrongType::new::<i64>)
+        }
+        PgValue::Integer(_)
+        | PgValue::Int(_)
+        | PgValue::Int4(_)
+        | PgValue::Serial(_)
+        | PgValue::Serial4(_) => wrong(
+            <i32 as ToSql>::accepts(base) || is_oid_like(base),
+            WrongType::new::<i32>,
+        ),
+        PgValue::SmallInt(_) | PgValue::Int2(_) | PgValue::SmallSerial(_) | PgValue::Serial2(_) => {
+            wrong(<i16 as ToSql>::accepts(base), WrongType::new::<i16>)
+        }
+        PgValue::Double(_) | PgValue::Float8(_) => {
+            wrong(<f64 as ToSql>::accepts(base), WrongType::new::<f64>)
+        }
+        PgValue::Real(_) | PgValue::Float4(_) => {
+            wrong(<f32 as ToSql>::accepts(base), WrongType::new::<f32>)
+        }
+        PgValue::Bool(_) | PgValue::Boolean(_) => {
+            wrong(<bool as ToSql>::accepts(base), WrongType::new::<bool>)
+        }
+        PgValue::Date(_) => wrong(*base == PgType::DATE, WrongType::new::<NaiveDate>),
+        PgValue::Time(_) => wrong(*base == PgType::TIME, WrongType::new::<NaiveTime>),
+        // `timestamp` and `timestamptz` share one binary encoding (microseconds
+        // since 2000-01-01), so a value of either binds to either.
+        PgValue::Timestamp(_) => wrong(
+            matches!(*base, PgType::TIMESTAMP | PgType::TIMESTAMPTZ),
+            WrongType::new::<NaiveDateTime>,
+        ),
+        PgValue::TimestampTz(_) => wrong(
+            matches!(*base, PgType::TIMESTAMP | PgType::TIMESTAMPTZ),
+            WrongType::new::<DateTime<Utc>>,
+        ),
+        // `json`, `xml`, enums and domains over text still read text as is.
+        PgValue::Text(_) => wrong(!NON_TEXT_TYPES.contains(base), WrongType::new::<String>),
+        _ => Ok(()),
+    }
+}
+
 // ── ToSql for PgValue ───────────────────────────────────────────────────────
 
 impl ToSql for PgValue {
@@ -288,6 +391,7 @@ impl ToSql for PgValue {
         ty: &PgType,
         out: &mut BytesMut,
     ) -> Result<IsNull, Box<dyn Error + Sync + Send>> {
+        check_scalar_type(self, ty)?;
         match self {
             PgValue::Null => Ok(IsNull::Yes),
             // Numeric
@@ -618,7 +722,8 @@ impl ToSql for PgValue {
     }
 
     fn accepts(_ty: &PgType) -> bool {
-        // Accept all types and provide specific error messages in to_sql
+        // Accept all types; `to_sql` refuses a scalar whose type does not match
+        // the parameter (see `check_scalar_type`) and gives specific errors
         true
     }
 
@@ -993,5 +1098,91 @@ impl FromSql<'_> for PgValue {
 
     fn from_sql_null(_ty: &PgType) -> Result<Self, Box<dyn Error + Sync + Send>> {
         Ok(PgValue::Null)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bind(value: &PgValue, ty: &PgType) -> Result<(), Box<dyn Error + Sync + Send>> {
+        value.to_sql_checked(ty, &mut BytesMut::new()).map(|_| ())
+    }
+
+    #[test]
+    fn scalar_bound_to_a_different_type_is_refused() {
+        // Same width, different meaning: used to be read as `5e-324`.
+        let err = bind(&PgValue::Int8(1), &PgType::FLOAT8).unwrap_err();
+        assert!(err.is::<WrongType>(), "{err}");
+        assert!(err.to_string().contains("float8"), "{err}");
+        // Different width: used to fail with an error that names no type.
+        assert!(bind(&PgValue::Int4(1), &PgType::INT8).is_err());
+        assert!(bind(&PgValue::Int8(1), &PgType::INT4).is_err());
+        assert!(bind(&PgValue::Int8(1), &PgType::TIMESTAMPTZ).is_err());
+        assert!(bind(&PgValue::Int4(1), &PgType::DATE).is_err());
+        assert!(bind(&PgValue::Bool(true), &PgType::INT2).is_err());
+        assert!(bind(&PgValue::Date(Date::Ymd((2000, 1, 2))), &PgType::INT4).is_err());
+        assert!(
+            bind(
+                &PgValue::Time(Time {
+                    hour: 1,
+                    min: 2,
+                    sec: 3,
+                    micro: 4
+                }),
+                &PgType::INT8
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn text_is_refused_for_fixed_width_types_only() {
+        for ty in [
+            PgType::INT8,
+            PgType::FLOAT8,
+            PgType::UUID,
+            PgType::NUMERIC,
+            PgType::BOOL,
+        ] {
+            assert!(
+                bind(&PgValue::Text("12345678".into()), &ty).is_err(),
+                "{ty}"
+            );
+        }
+        for ty in [PgType::TEXT, PgType::VARCHAR, PgType::JSON, PgType::UNKNOWN] {
+            assert!(bind(&PgValue::Text("x".into()), &ty).is_ok(), "{ty}");
+        }
+    }
+
+    #[test]
+    fn matching_scalars_still_bind() {
+        assert!(bind(&PgValue::Int8(1), &PgType::INT8).is_ok());
+        assert!(bind(&PgValue::BigSerial(1), &PgType::INT8).is_ok());
+        assert!(bind(&PgValue::Int4(1), &PgType::INT4).is_ok());
+        assert!(bind(&PgValue::Int2(1), &PgType::INT2).is_ok());
+        assert!(bind(&PgValue::Bool(true), &PgType::BOOL).is_ok());
+        assert!(bind(&PgValue::Date(Date::Ymd((2000, 1, 2))), &PgType::DATE).is_ok());
+        assert!(bind(&PgValue::Null, &PgType::INT8).is_ok());
+    }
+
+    #[test]
+    fn int4_binds_to_oid_like_types() {
+        for ty in [PgType::OID, PgType::REGCLASS, PgType::REGTYPE] {
+            assert!(bind(&PgValue::Int4(1259), &ty).is_ok(), "{ty}");
+        }
+        assert!(bind(&PgValue::Int8(1259), &PgType::OID).is_err());
+    }
+
+    #[test]
+    fn domain_is_checked_as_its_base_type() {
+        let domain = PgType::new(
+            "positive_id".into(),
+            0,
+            Kind::Domain(PgType::INT8),
+            "public".into(),
+        );
+        assert!(bind(&PgValue::Int8(1), &domain).is_ok());
+        assert!(bind(&PgValue::Int4(1), &domain).is_err());
     }
 }
