@@ -70,6 +70,10 @@ Each flag also reads `WASH_<PLANE>_NATS_<NAME>`, such as
 and password files lose one LF or CRLF line ending. While a file stalls, fails
 to read, or does not parse, the host presents the last contents that parsed.
 
+`--<plane>-nats-jwt-as-token` sends a `.creds` file's user JWT a second time,
+as the token. A NATS server without trusted operators drops the JWT before
+an auth callout sees it, so a callout that authorizes by JWT reads this copy.
+
 Give each connection its own credential, so the data connection can be denied
 the control subjects under [Permissions](#permissions). Mount the Secret on a
 host group and pass the flags in its `extraArgs`. The Secret must exist in the
