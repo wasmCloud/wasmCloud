@@ -648,7 +648,9 @@ runtime:
       # `nkey-seed-file`, `password-file` and `token-file` name files in place
       # of those values. The host rereads them, like `creds`, on every
       # reconnect, so a Secret mounted into the host pod rotates without a
-      # redeploy.
+      # redeploy. `jwt-as-token: "true"` also sends the `creds` or `jwt` user
+      # JWT as the token, for an auth callout on a server without trusted
+      # operators, which drops the JWT before the callout sees it.
       #
       # A workload may narrow the host's grant ceilings. All deny by default.
       # Stored messages also require `subject-allow`, so `stream-allow` on its

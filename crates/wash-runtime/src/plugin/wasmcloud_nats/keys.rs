@@ -93,6 +93,7 @@ pub const KEYS: &[Key] = &[
     host("password-file"),
     host("token"),
     host("token-file"),
+    host("jwt-as-token"),
     host("tls-ca"),
     host("tls-cert"),
     host("tls-key"),

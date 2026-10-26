@@ -704,6 +704,43 @@ mod tests {
         Ok(())
     }
 
+    /// `jwt-as-token` repeats whichever JWT the creds file holds on each
+    /// connect, so the token follows a rotation too.
+    #[tokio::test]
+    async fn jwt_as_token_repeats_the_current_jwt() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::{accept_connect, creds_file};
+
+        let dir = tempfile::tempdir()?;
+        let creds = dir.path().join("user.creds");
+        let key = nkeys::KeyPair::new_user();
+        std::fs::write(&creds, creds_file("first.jwt", &key.seed()?))?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let config = NatsConfig::from_map(
+            &[
+                ("servers", format!("nats://{}", listener.local_addr()?)),
+                ("creds", creds.display().to_string()),
+                ("jwt-as-token", "true".to_string()),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+        )?;
+
+        let registry = ConnectionRegistry::default();
+        let (first, _handle) = tokio::try_join!(
+            accept_connect(&listener, "first-nonce"),
+            registry.acquire("wl", UNNAMED_BINDING, &config, Vec::new(), true),
+        )?;
+        assert_eq!(first["jwt"], "first.jwt");
+        assert_eq!(first["auth_token"], "first.jwt");
+
+        std::fs::write(&creds, creds_file("rotated.jwt", &key.seed()?))?;
+        let second = accept_connect(&listener, "second-nonce").await?;
+        assert_eq!(second["jwt"], "rotated.jwt");
+        assert_eq!(second["auth_token"], "rotated.jwt");
+        Ok(())
+    }
+
     #[test]
     fn server_version_comparison() {
         assert!(server_at_least("2.11.0", (2, 10, 0)));
