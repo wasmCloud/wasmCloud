@@ -194,10 +194,15 @@ impl<T: 'static + Send> labeled_js::HostWithStore<T> for SharedCtx {
         stream_name: String,
         subject: String,
     ) -> wasmtime::Result<Result<js::StoredMessageAt, types::NatsError>> {
-        if let Err(e) =
-            check_stream(&conn, &stream_name).and_then(|()| check_subject(&conn, &subject))
-        {
+        if let Err(e) = check_stream(&conn, &stream_name) {
             return Ok(Err(e));
+        }
+        if let Err(reason) = conn.policy.check_stored_subject_query(&subject) {
+            return Ok(Err(denied(
+                reason,
+                types::DeniedResource::Subject,
+                &subject,
+            )));
         }
         let stream = match conn.jetstream.get_stream(&stream_name).await {
             Ok(s) => s,
@@ -827,7 +832,7 @@ fn stored_message_at(
     stream: &str,
     message: jetstream::message::StreamMessage,
 ) -> Result<js::StoredMessageAt, types::NatsError> {
-    if conn.policy.check_subject(&message.subject).is_err() {
+    if conn.policy.check_stored_subject(&message.subject).is_err() {
         return Err(denied(
             Denied::NotGranted,
             types::DeniedResource::Message(message.sequence),

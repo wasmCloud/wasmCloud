@@ -2185,6 +2185,104 @@ async fn jetstream_message_operations_and_timestamps() -> Result<()> {
 
 #[tokio::test]
 #[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn timestamped_reads_preserve_bucket_grants() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+    let store = h.js.get_key_value(COUNTS_BUCKET).await?;
+    let allowed = store.put("allowed", "visible".into()).await?;
+    let hidden = store.put("hidden", "secret".into()).await?;
+    let stored = store.stream.get_raw_message(allowed).await?;
+    let stream = &store.stream_name;
+    let subject = format!("$KV.{COUNTS_BUCKET}.allowed");
+    let expected = format!(
+        "{subject}:{allowed}:{}:visible",
+        stored.time.unix_timestamp_nanos()
+    );
+    let private =
+        h.js.create_key_value(async_nats::jetstream::kv::Config {
+            bucket: "private-counts".into(),
+            ..Default::default()
+        })
+        .await?;
+    let private_revision = private.put("key", "private".into()).await?;
+
+    let response = host
+        .workload_start(workload_request(
+            "wl-bucket-reads",
+            nats_async_interface(&[
+                ("servers", &h.nats_url),
+                (
+                    "subject-allow",
+                    "test.api,$KV.test-counts.allowed,$KV.private-counts.>",
+                ),
+                ("bucket-allow", COUNTS_BUCKET),
+                // Broad stream grants cannot bypass the separate bucket grant or
+                // enable destructive stream calls on a bucket's backing stream.
+                ("stream-allow", ">"),
+                ("stream-delete-allow", ">"),
+                ("core-subscriptions", "test.api"),
+            ]),
+        ))
+        .await?;
+    anyhow::ensure!(
+        response.workload_status.workload_state != WorkloadState::Error,
+        "{:?}",
+        response.workload_status
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    for spec in [
+        format!("js-api:last:{stream}:{subject}"),
+        format!("js-api:at:{stream}:{allowed}"),
+    ] {
+        assert_eq!(api_probe(&h, spec).await?, expected);
+    }
+    // Knowing a sequence must not expose the name of a denied subject.
+    assert_eq!(
+        api_probe(&h, format!("js-api:at:{stream}:{hidden}")).await?,
+        format!("denied:not-granted:message#{hidden}:{stream}")
+    );
+    for subject in [
+        "$KV.test-counts.hidden",
+        "$KV.test-counts.*",
+        "$KV.test-counts.>",
+        "$KV.test-counts.allow*",
+        "$KV.test-counts. allowed",
+    ] {
+        assert!(
+            api_probe(&h, format!("js-api:last:{stream}:{subject}"))
+                .await?
+                .starts_with("denied:")
+        );
+    }
+    for spec in [
+        "js-api:last:KV_private-counts:$KV.private-counts.key".to_string(),
+        format!("js-api:at:KV_private-counts:{private_revision}"),
+    ] {
+        assert_eq!(
+            api_probe(&h, spec).await?,
+            "denied:reserved:stream:KV_private-counts"
+        );
+    }
+    for spec in [
+        format!("js-api:purge:{stream}:{subject}"),
+        format!("js-api:delete:{stream}:{allowed}"),
+    ] {
+        assert_eq!(
+            api_probe(&h, spec).await?,
+            format!("denied:reserved:stream:{stream}")
+        );
+    }
+    assert!(store.stream.get_raw_message(allowed).await.is_ok());
+    host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+        workload_id: "wl-bucket-reads".into(),
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
 async fn destructive_stream_calls_require_a_host_owned_ceiling() -> Result<()> {
     let h = start_nats().await?;
     let host = start_host_with(

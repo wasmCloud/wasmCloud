@@ -385,6 +385,22 @@ impl PolicyEngine {
         }
     }
 
+    /// Checks a guest-supplied literal subject for a stored-message lookup.
+    ///
+    /// The caller must authorize the stream first. Reserved subjects can be
+    /// read within a granted stream, but a lookup must not expand a wildcard
+    /// into subjects outside the grant.
+    pub fn check_stored_subject_query(&self, subject: &str) -> Result<(), Denied> {
+        let requested = NatsSubjectPattern::parse(subject);
+        if !requested.valid {
+            return Err(Denied::NotGranted);
+        }
+        if requested.trailing || requested.tokens.contains(&Token::Any) {
+            return Err(Denied::WildcardNotAllowed);
+        }
+        self.check_stored_subject(subject)
+    }
+
     /// Checks a stream name for read or management access.
     ///
     /// A bucket's backing stream is reachable here only when the bucket itself
@@ -798,6 +814,62 @@ mod tests {
         let p = engine(&[">"], &[], &["config"]);
         assert!(p.check_stored_subject("$KV.config.key").is_ok());
         assert_eq!(p.check_subject("$KV.config.key"), Err(Denied::Reserved));
+    }
+
+    #[test]
+    fn stored_subject_queries_follow_the_stored_message_grant() {
+        let p = engine(
+            &["$KV.config.allowed", "$OBJ.files.>"],
+            &[],
+            &["config", "files"],
+        );
+        for (stream, subject) in [
+            ("KV_config", "$KV.config.allowed"),
+            ("OBJ_files", "$OBJ.files.chunk"),
+        ] {
+            assert!(p.check_stream(stream).is_ok());
+            assert!(p.check_stored_subject_query(subject).is_ok());
+            assert_eq!(p.check_subject(subject), Err(Denied::Reserved));
+            assert_eq!(p.check_stream_delete(stream), Err(Denied::Reserved));
+        }
+        assert_eq!(
+            p.check_stored_subject_query("$KV.config.hidden"),
+            Err(Denied::NotGranted)
+        );
+        assert_eq!(p.check_stream("KV_private"), Err(Denied::Reserved));
+    }
+
+    #[test]
+    fn stored_subject_queries_reject_patterns_and_malformed_literals() {
+        let p = engine(&[">"], &[">"], &["config"]);
+        for subject in [
+            "*",
+            ">",
+            "$KV.config.*",
+            "$KV.config.>",
+            "orders.*.received",
+        ] {
+            assert_eq!(
+                p.check_stored_subject_query(subject),
+                Err(Denied::WildcardNotAllowed),
+                "{subject}"
+            );
+        }
+        for subject in [
+            "",
+            ".orders",
+            "orders.",
+            "orders..new",
+            "orders.new*",
+            "orders.new>",
+            "orders. new",
+        ] {
+            assert_eq!(
+                p.check_stored_subject_query(subject),
+                Err(Denied::NotGranted),
+                "{subject}"
+            );
+        }
     }
 
     #[test]
