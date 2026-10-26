@@ -2289,11 +2289,13 @@ async fn kv_ttl_and_conditional_delete() -> Result<()> {
     );
     assert_eq!(store.get("lock").await?, None);
     for key in ["fresh", "lock"] {
-        let revision: u64 = api_probe(&h, format!("kv-api:ttl:{COUNTS_BUCKET}:{key}:2000"))
+        // Cover both a fresh key and recreation over a tombstone. Sending
+        // 1999ms unchanged would let NATS truncate the lease to one second.
+        let revision: u64 = api_probe(&h, format!("kv-api:ttl:{COUNTS_BUCKET}:{key}:1999"))
             .await?
             .parse()?;
         let message = store.stream.get_raw_message(revision).await?;
-        assert_eq!(message.headers.get("Nats-TTL").unwrap().as_str(), "2000ms");
+        assert_eq!(message.headers.get("Nats-TTL").unwrap().as_str(), "2s");
         assert_eq!(
             store.get(key).await?,
             Some(bytes::Bytes::from_static(b"lease"))
