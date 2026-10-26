@@ -645,6 +645,11 @@ runtime:
       # `bindings` layers over it. Leave `servers` out to take
       # `wasmcloudNatsUrl` above, which brings the data plane's TLS with it.
       #
+      # `nkey-seed-file`, `password-file` and `token-file` name files in place
+      # of those values. The host rereads them, like `creds`, on every
+      # reconnect, so a Secret mounted into the host pod rotates without a
+      # redeploy.
+      #
       # A workload may narrow the host's grant ceilings. All deny by default.
       # Stored messages also require `subject-allow`, so `stream-allow` on its
       # own reaches nothing readable: a binding granted streams and no subjects

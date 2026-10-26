@@ -19,6 +19,17 @@ pub(super) mod warm;
 
 pub use plugin::{ComponentData, WasmcloudNats};
 
+/// The host files a binding's config names, which no workload volume may
+/// expose.
+#[must_use]
+pub fn host_paths(config: &std::collections::HashMap<String, String>) -> Vec<std::path::PathBuf> {
+    keys::FILES
+        .iter()
+        .filter_map(|key| keys::get(config, key))
+        .map(std::path::PathBuf::from)
+        .collect()
+}
+
 /// How this plugin classifies its config keys, built from the one table that
 /// also drives the reader — see [`keys`].
 ///

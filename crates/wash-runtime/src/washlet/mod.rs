@@ -3047,47 +3047,11 @@ mod tests {
         );
     }
 
-    /// Answer one connection's handshake with `nonce` and hand back the
-    /// `CONNECT` it sent, then close it so the client has to reconnect.
-    async fn accept_connect(
-        listener: &tokio::net::TcpListener,
-        nonce: &str,
-    ) -> anyhow::Result<serde_json::Value> {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
-            let (socket, _) = listener.accept().await?;
-            let (reader, mut writer) = socket.into_split();
-            writer
-                .write_all(
-                    format!(
-                        "INFO {{\"max_payload\":1048576,\"auth_required\":true,\"nonce\":\"{nonce}\"}}\r\n"
-                    )
-                    .as_bytes(),
-                )
-                .await?;
-            let mut reader = BufReader::new(reader);
-            let mut connect = None;
-            loop {
-                let mut line = String::new();
-                anyhow::ensure!(reader.read_line(&mut line).await? > 0, "closed before PING");
-                if let Some(json) = line.strip_prefix("CONNECT ") {
-                    connect = Some(serde_json::from_str(json.trim())?);
-                } else if line.starts_with("PING") {
-                    writer.write_all(b"PONG\r\n").await?;
-                    break;
-                }
-            }
-            connect.context("no CONNECT before PING")
-        })
-        .await
-        .context("NATS handshake timed out")?
-    }
-
     /// The credentials file is read on every connect, so a rotated one is what
     /// the next reconnect presents, and the connection keeps its name.
     #[tokio::test]
     async fn a_rotated_credentials_file_is_presented_on_reconnect() -> anyhow::Result<()> {
-        use crate::nats_credentials::tests::creds_file;
+        use crate::nats_credentials::tests::{accept_connect, creds_file};
 
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("host.creds");
@@ -3130,6 +3094,8 @@ mod tests {
     /// so it is reported at once rather than retried for the whole window.
     #[tokio::test]
     async fn an_unreadable_credentials_file_is_not_retried() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::accept_connect;
+
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
         let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {

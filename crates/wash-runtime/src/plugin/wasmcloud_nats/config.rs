@@ -11,6 +11,8 @@ use std::time::Duration;
 use anyhow::{Context as _, bail};
 use zeroize::Zeroizing;
 
+use crate::nats_credentials::{Credentials, Secret};
+
 /// Default per-consumer in-flight limit.
 const DEFAULT_MAX_IN_FLIGHT: usize = 64;
 /// Default subscription channel capacity.
@@ -48,21 +50,16 @@ const MIN_DERIVED_MAX_ACK_PENDING: usize = 16;
 /// How a workload authenticates to NATS.
 ///
 /// Seeds are held in `Zeroizing` so they are wiped when the config is dropped.
-/// The signing callback built from `JwtNkey` stays host-side; the seed never
-/// crosses the sandbox boundary.
+/// The signing callback built from them stays host-side; the seed never
+/// crosses the sandbox boundary. A secret given as a file is reread on every
+/// connect, so a rotated one is presented on the next reconnect.
 pub enum NatsAuth {
     Anonymous,
     CredsFile(PathBuf),
-    JwtNkey {
-        jwt: String,
-        seed: Zeroizing<String>,
-    },
-    NkeySeed(Zeroizing<String>),
-    UserPassword {
-        username: String,
-        password: Zeroizing<String>,
-    },
-    Token(Zeroizing<String>),
+    JwtNkey { jwt: String, seed: Secret },
+    NkeySeed(Secret),
+    UserPassword { username: String, password: Secret },
+    Token(Secret),
 }
 
 impl NatsAuth {
@@ -72,9 +69,40 @@ impl NatsAuth {
             Self::Anonymous => "anonymous",
             Self::CredsFile(_) => "creds-file",
             Self::JwtNkey { .. } => "jwt+nkey",
-            Self::NkeySeed(_) => "nkey",
+            Self::NkeySeed(Secret::Value(_)) => "nkey",
+            Self::NkeySeed(Secret::File(_)) => "nkey-file",
             Self::UserPassword { .. } => "user-password",
-            Self::Token(_) => "token",
+            Self::Token(Secret::Value(_)) => "token",
+            Self::Token(Secret::File(_)) => "token-file",
+        }
+    }
+
+    /// What a connection on this binding presents.
+    pub fn credentials(&self) -> Credentials {
+        match self {
+            Self::Anonymous => Credentials::default(),
+            Self::CredsFile(path) => Credentials {
+                credentials: Some(path.clone()),
+                ..Default::default()
+            },
+            Self::JwtNkey { jwt, seed } => Credentials {
+                jwt: Some(jwt.clone()),
+                nkey: Some(seed.clone()),
+                ..Default::default()
+            },
+            Self::NkeySeed(seed) => Credentials {
+                nkey: Some(seed.clone()),
+                ..Default::default()
+            },
+            Self::UserPassword { username, password } => Credentials {
+                user: Some(username.clone()),
+                password: Some(password.clone()),
+                ..Default::default()
+            },
+            Self::Token(token) => Credentials {
+                token: Some(token.clone()),
+                ..Default::default()
+            },
         }
     }
 }
@@ -290,6 +318,21 @@ fn parse_bool(cfg: &HashMap<String, String>, key: &str) -> anyhow::Result<bool> 
     }
 }
 
+/// A secret given inline as `key` or as a file named by `file_key`, but not
+/// both.
+fn secret(
+    cfg: &HashMap<String, String>,
+    key: &str,
+    file_key: &str,
+) -> anyhow::Result<Option<Secret>> {
+    match (get(cfg, key), get(cfg, file_key)) {
+        (Some(_), Some(_)) => bail!("`{key}` and `{file_key}` were both supplied; set one"),
+        (Some(value), None) => Ok(Some(Secret::Value(Zeroizing::new(value.to_string())))),
+        (None, Some(path)) => Ok(Some(Secret::File(PathBuf::from(path)))),
+        (None, None) => Ok(None),
+    }
+}
+
 /// Selects exactly one auth mechanism, or fails.
 ///
 /// Silently preferring one when several are set hides a misconfiguration until
@@ -299,10 +342,10 @@ fn parse_auth(cfg: &HashMap<String, String>) -> anyhow::Result<NatsAuth> {
     // `creds-file` and `creds` are the same lookup rather than two.
     let creds = get(cfg, "creds");
     let jwt = get(cfg, "jwt");
-    let seed = get(cfg, "nkey-seed");
+    let seed = secret(cfg, "nkey-seed", "nkey-seed-file")?;
     let username = get(cfg, "username");
-    let password = get(cfg, "password");
-    let token = get(cfg, "token");
+    let password = secret(cfg, "password", "password-file")?;
+    let token = secret(cfg, "token", "token-file")?;
 
     let mut selected: Vec<&str> = Vec::new();
     if creds.is_some() {
@@ -332,26 +375,26 @@ fn parse_auth(cfg: &HashMap<String, String>) -> anyhow::Result<NatsAuth> {
         (Some(jwt), Some(seed)) => {
             return Ok(NatsAuth::JwtNkey {
                 jwt: jwt.to_string(),
-                seed: Zeroizing::new(seed.to_string()),
+                seed,
             });
         }
-        (Some(_), None) => bail!("`jwt` requires `nkey-seed`"),
-        (None, Some(seed)) => return Ok(NatsAuth::NkeySeed(Zeroizing::new(seed.to_string()))),
+        (Some(_), None) => bail!("`jwt` requires `nkey-seed` or `nkey-seed-file`"),
+        (None, Some(seed)) => return Ok(NatsAuth::NkeySeed(seed)),
         (None, None) => {}
     }
     match (username, password) {
         (Some(username), Some(password)) => {
             return Ok(NatsAuth::UserPassword {
                 username: username.to_string(),
-                password: Zeroizing::new(password.to_string()),
+                password,
             });
         }
-        (Some(_), None) => bail!("`username` requires `password`"),
+        (Some(_), None) => bail!("`username` requires `password` or `password-file`"),
         (None, Some(_)) => bail!("`password` requires `username`"),
         (None, None) => {}
     }
     if let Some(token) = token {
-        return Ok(NatsAuth::Token(Zeroizing::new(token.to_string())));
+        return Ok(NatsAuth::Token(token));
     }
     Ok(NatsAuth::Anonymous)
 }
@@ -368,7 +411,7 @@ impl NatsConfig {
                 bail!(
                     "credentials embedded in `servers` are not applied by the NATS client and \
                      would connect unauthenticated; use `creds`, `jwt`/`nkey-seed`, \
-                     `username`/`password`, or `token` instead"
+                     `username`/`password`, `token`, or their `-file` keys instead"
                 );
             }
         }
@@ -487,20 +530,20 @@ impl NatsConfig {
             NatsAuth::JwtNkey { jwt, seed } => {
                 2u8.hash(&mut hasher);
                 jwt.hash(&mut hasher);
-                seed.as_str().hash(&mut hasher);
+                hash_secret(seed, &mut hasher);
             }
             NatsAuth::NkeySeed(seed) => {
                 3u8.hash(&mut hasher);
-                seed.as_str().hash(&mut hasher);
+                hash_secret(seed, &mut hasher);
             }
             NatsAuth::UserPassword { username, password } => {
                 4u8.hash(&mut hasher);
                 username.hash(&mut hasher);
-                password.as_str().hash(&mut hasher);
+                hash_secret(password, &mut hasher);
             }
             NatsAuth::Token(token) => {
                 5u8.hash(&mut hasher);
-                token.as_str().hash(&mut hasher);
+                hash_secret(token, &mut hasher);
             }
         }
         self.tls.ca.hash(&mut hasher);
@@ -540,6 +583,22 @@ impl NatsConfig {
             jetstream_domain: self.jetstream_domain.clone(),
             inbox_prefix: self.inbox_prefix.clone(),
             credential_fingerprint: hasher.finish(),
+        }
+    }
+}
+
+/// A file's path stands in for its contents, which change under rotation
+/// without changing the binding.
+fn hash_secret(secret: &Secret, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash as _;
+    match secret {
+        Secret::Value(value) => {
+            0u8.hash(hasher);
+            value.as_str().hash(hasher);
+        }
+        Secret::File(path) => {
+            1u8.hash(hasher);
+            path.hash(hasher);
         }
     }
 }
@@ -859,6 +918,79 @@ mod tests {
         ]))
         .unwrap_err();
         assert!(err.to_string().contains("requires `password`"));
+    }
+
+    /// Each inline secret has a `-file` key, so a Secret can be mounted and
+    /// rotated rather than resolved into the binding once.
+    #[test]
+    fn secrets_may_be_files() {
+        let auth = |pairs: &[(&str, &str)]| {
+            let mut pairs = pairs.to_vec();
+            pairs.push(("servers", "nats://localhost:4222"));
+            NatsConfig::from_map(&map(&pairs)).map(|cfg| cfg.auth)
+        };
+        let file = |secret: &Secret| match secret {
+            Secret::File(path) => Some(path.clone()),
+            Secret::Value(_) => None,
+        };
+
+        let token = auth(&[("token-file", "/s/token")]).unwrap();
+        assert_eq!(token.kind(), "token-file");
+        assert!(matches!(&token, NatsAuth::Token(t) if file(t) == Some("/s/token".into())));
+
+        let seed = auth(&[("nkey-file", "/s/seed")]).unwrap();
+        assert_eq!(seed.kind(), "nkey-file");
+        assert!(matches!(&seed, NatsAuth::NkeySeed(s) if file(s) == Some("/s/seed".into())));
+
+        let jwt = auth(&[("jwt", "eyJ0"), ("nkey-seed-file", "/s/seed")]).unwrap();
+        assert!(matches!(&jwt, NatsAuth::JwtNkey { seed, .. } if file(seed).is_some()));
+
+        let user = auth(&[("username", "u"), ("password-file", "/s/pass")]).unwrap();
+        assert!(
+            matches!(&user, NatsAuth::UserPassword { password, .. } if file(password).is_some())
+        );
+    }
+
+    #[test]
+    fn a_secret_and_its_file_conflict() {
+        for (key, file_key) in [
+            ("token", "token-file"),
+            ("password", "password-file"),
+            ("nkey-seed", "nkey-seed-file"),
+        ] {
+            let err = NatsConfig::from_map(&map(&[
+                ("servers", "nats://localhost:4222"),
+                ("username", "u"),
+                (key, "inline"),
+                (file_key, "/s/file"),
+            ]))
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("were both supplied"),
+                "{key}: {err}"
+            );
+        }
+        let err = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("creds", "/s/creds"),
+            ("token-file", "/s/token"),
+        ]))
+        .unwrap_err();
+        assert!(err.to_string().contains("conflicting NATS credentials"));
+    }
+
+    /// A file's path is its identity: two bindings reading one file share a
+    /// connection, and a value is never mistaken for a path that spells it.
+    #[test]
+    fn connection_key_separates_secret_files() {
+        let key = |pairs: &[(&str, &str)]| {
+            let mut pairs = pairs.to_vec();
+            pairs.push(("servers", "nats://localhost:4222"));
+            NatsConfig::from_map(&map(&pairs)).unwrap().connection_key()
+        };
+        assert_eq!(key(&[("token-file", "/a")]), key(&[("token-file", "/a")]));
+        assert_ne!(key(&[("token-file", "/a")]), key(&[("token-file", "/b")]));
+        assert_ne!(key(&[("token-file", "/a")]), key(&[("token", "/a")]));
     }
 
     #[test]

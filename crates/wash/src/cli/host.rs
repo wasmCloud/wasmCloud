@@ -939,6 +939,17 @@ impl HostCommand {
                     }
                 }),
         );
+        // A credential file a `wasmcloud:nats` binding names, so a workload
+        // cannot mount the Secret the binding authenticates with.
+        if let Ok(bindings) = self.plugin_bindings(config, project_dir) {
+            let nats = bindings.for_plugin(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID);
+            let names: Vec<&str> = std::iter::once("").chain(nats.binding_names()).collect();
+            for name in names {
+                paths.extend(wash_runtime::plugin::wasmcloud_nats::host_paths(
+                    &nats.host_layer(name),
+                ));
+            }
+        }
         paths.extend(
             self.host_plugins
                 .iter()
@@ -1665,6 +1676,39 @@ mod nats_tests {
         let paths = host.reserved_paths(&crate::config::Config::default(), &ctx);
         assert!(paths.contains(&std::path::PathBuf::from("scheduler.nk")));
         assert!(paths.contains(&std::path::PathBuf::from("data.token")));
+        Ok(())
+    }
+
+    /// The files a `wasmcloud:nats` binding authenticates with are reserved,
+    /// from the base config and from each named binding.
+    #[tokio::test]
+    async fn reserved_paths_cover_nats_binding_files() -> anyhow::Result<()> {
+        let config = config_from(
+            r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+      config:
+        creds: /secrets/base.creds
+      bindings:
+        orders:
+          config:
+            token-file: /secrets/orders.token
+            password-file: /secrets/orders.password
+"#,
+        );
+        let ctx = crate::cli::CliContextBuilder::default()
+            .keep_working_dir()
+            .build()
+            .await?;
+        let paths = parse(&[]).reserved_paths(&config, &ctx);
+        for path in [
+            "/secrets/base.creds",
+            "/secrets/orders.token",
+            "/secrets/orders.password",
+        ] {
+            assert!(paths.contains(&std::path::PathBuf::from(path)), "{path}");
+        }
         Ok(())
     }
 
