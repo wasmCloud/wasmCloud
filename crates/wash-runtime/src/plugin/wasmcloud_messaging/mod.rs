@@ -48,7 +48,8 @@ pub(crate) mod multiplexed;
 #[cfg(feature = "wasm_component_model_implements")]
 pub(crate) mod multiplexed_async;
 pub(crate) mod nats;
-mod pool_admission;
+#[cfg(test)]
+mod pool_share_tests;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -57,8 +58,8 @@ use opentelemetry::KeyValue;
 use opentelemetry::metrics::Counter;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+use crate::engine::pool_share::{PoolCost, PoolReservation, PoolShare, Share};
 use crate::engine::pool_usage::PoolTotals;
-use pool_admission::PoolAdmission;
 
 pub use in_memory::InMemoryMessaging;
 #[cfg(feature = "wasm_component_model_implements")]
@@ -248,6 +249,8 @@ pub(crate) fn log_delivery(result: &anyhow::Result<Result<(), String>>) {
         Ok(Err(handler_err)) => {
             tracing::warn!("messaging handler returned an error: {handler_err}")
         }
+        // Already a warning and a count, at the wait that shed it.
+        Err(e) if e.is::<AlreadyShed>() => tracing::debug!("{e}"),
         Err(e) => tracing::warn!("message delivery failed: {e:#}"),
     }
 }
@@ -270,11 +273,26 @@ pub(crate) fn log_delivery(result: &anyhow::Result<Result<(), String>>) {
 /// Only `@0.3.0` reaches here. The sync `@0.2.0` handler takes `&mut Store` for
 /// the length of its call, so it cannot share an instance and keeps a store per
 /// message.
+///
+/// The caller admitted this message with [`PoolCharge::Defer`] and hands its
+/// permit in: a delivery a warm instance takes costs the pool nothing more,
+/// since that instance holds its slots already. A store built here reserves
+/// its cost from messaging's share of the pool totals first, through
+/// [`Admission::reserve_store_before_deadline`], whichever of two reasons it
+/// is built for: an instance the pool asked for (`NeedsInstance`) is the
+/// pool's own once installed, and gives the reservation back then, but if the
+/// pool declines it after all it runs this one delivery as a store of its own
+/// and keeps the reservation; a store built because every warm instance was
+/// busy keeps it for as long as it runs. A message shed by that reservation
+/// ends in [`AlreadyShed`], which [`log_delivery`] does not report again.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn deliver_pooled(
     workload: &crate::engine::workload::ResolvedWorkload,
     component_id: &str,
     pre: &wasmtime::component::InstancePre<crate::engine::ctx::SharedCtx>,
     pool: &Arc<crate::engine::instance_pool::InstancePool>,
+    admission: &Admission,
+    permit: AdmissionPermit,
     msg: crate::host::trigger_service::BrokerMessage,
     attributes: std::sync::Arc<[KeyValue]>,
 ) -> anyhow::Result<Result<(), String>> {
@@ -282,6 +300,17 @@ pub(crate) async fn deliver_pooled(
     use crate::engine::instance_pool::{ComponentInstance, Declined, Dispatch};
     use crate::host::trigger_service::{MessagingJob, MessagingTask};
 
+    /// The subject a shed is attributed to, read back off the job.
+    fn subject_of(job: &InstanceJob) -> &str {
+        match job {
+            InstanceJob::Messaging(job) => &job.msg.subject,
+            _ => "",
+        }
+    }
+
+    // Held, with the reservation it may come to carry, until this delivery
+    // ends, which is how long any store built here lives.
+    let mut permit = permit;
     let (result_tx, result_rx) = tokio::sync::oneshot::channel();
     // Enforced out here, outside the store the guest runs in, so a guest that
     // never yields cannot hold off its own deadline.
@@ -302,12 +331,29 @@ pub(crate) async fn deliver_pooled(
         // fails to instantiate reports it to this delivery rather than only to
         // the log.
         Dispatch::NeedsInstance(job) => {
+            permit = match admission
+                .reserve_store_before_deadline(permit, component_id, subject_of(&job))
+                .await
+            {
+                Admitted::Slot(permit) => permit,
+                Admitted::Shed => return Err(AlreadyShed.into()),
+                Admitted::Closed => anyhow::bail!(
+                    "messaging admission closed while a store was being reserved; the \
+                     component is shutting down"
+                ),
+            };
             let mut store = workload.new_store(component_id).await?;
             let instance = pre.instantiate_async(&mut store).await.map_err(|e| {
                 crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
             })?;
-            pool.dispatch_on_new(ComponentInstance { store, instance }, job)
-                .err()
+            match pool.dispatch_on_new(ComponentInstance { store, instance }, job) {
+                // The pool's now, and its slots the pool's to account for.
+                Ok(()) => {
+                    permit.release_store_reservation();
+                    None
+                }
+                Err(declined) => Some(declined),
+            }
         }
         Dispatch::Saturated(job) => Some(Declined::without_instance(job)),
     };
@@ -335,8 +381,21 @@ pub(crate) async fn deliver_pooled(
         mut store,
         instance,
     } = match reclaimed {
+        // Reserved above, before it was built.
         Some(built) => built,
         None => {
+            // Held, with its reservation, until this delivery ends.
+            permit = match admission
+                .reserve_store_before_deadline(permit, component_id, &job.msg.subject)
+                .await
+            {
+                Admitted::Slot(permit) => permit,
+                Admitted::Shed => return Err(AlreadyShed.into()),
+                Admitted::Closed => anyhow::bail!(
+                    "messaging admission closed while a store was being reserved; the \
+                     component is shutting down"
+                ),
+            };
             let mut store = workload.new_store(component_id).await?;
             let instance = pre.instantiate_async(&mut store).await.map_err(|e| {
                 crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
@@ -377,9 +436,13 @@ pub(crate) async fn deliver_pooled(
     .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e))
     .map_err(|e| anyhow::anyhow!("{e:#}"))?
     .map_err(|e| anyhow::anyhow!("{e:#}"))?;
-    result_rx
+    let reply = result_rx
         .await
-        .map_err(|_| anyhow::anyhow!("delivery task dropped the message response"))
+        .map_err(|_| anyhow::anyhow!("delivery task dropped the message response"));
+    // The store lived to here, and so did the message permits and whatever
+    // pool cost they came to carry for it.
+    drop(permit);
+    reply
 }
 
 /// The WIT export a delivery invokes, and what its measurements are grouped by.
@@ -599,7 +662,7 @@ pub(crate) use messaging_handler_dispatch;
 /// A messaging-triggered component that declared no `poolSize` gets a fresh
 /// instance per message, so for those this is equally a ceiling on instances.
 /// A composed instance can hold several linear memories. On a pooled host,
-/// a separate resource gate accounts for that cost. A component
+/// messaging's share of the pool totals ([`PoolShare`]) accounts for that cost. A component
 /// that *did* declare `poolSize` is bounded by that
 /// instead: its deliveries run on warm instances, and only the ones arriving
 /// once every instance is busy build a store of their own.
@@ -623,9 +686,9 @@ pub const DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT: usize = 32;
 /// With a pool to divide, `derive_host_ceiling` takes two thirds of its
 /// single-memory component capacity, respecting independent core-instance,
 /// component-instance and stack overrides. The stock pool of 1000 derives 666
-/// host-wide and 166 per component. The resource gates also respect installed
+/// host-wide and 166 per component. Messaging's share of each pool total also respects installed
 /// table limits and charge compositions for their full memory/table demand.
-/// This constant is the fallback for the one case where there is no budget to
+/// This constant is the fallback for the one case where there is no pool to
 /// divide.
 ///
 /// `the_documented_defaults_are_what_the_host_uses` pins both pairs, so the
@@ -705,28 +768,30 @@ const SATURATED_COMPONENTS_PER_HOST: u32 = 4;
 const MIN_DERIVED_IN_FLIGHT: usize = 8;
 const MAX_DERIVED_IN_FLIGHT: usize = 4096;
 
+/// The one fraction messaging claims: of the components the pool holds, which
+/// gives the host-wide message ceiling, and of every pool total alike, which
+/// gives the memories, tables, core instances, component instances and stacks
+/// messaging may hold at once, so the two cannot drift apart.
+const MESSAGING_SHARE: Share = Share {
+    numerator: MESSAGING_POOL_SHARE_NUM,
+    denominator: MESSAGING_POOL_SHARE_DEN,
+    floor: MIN_DERIVED_IN_FLIGHT as u32,
+    cap: MAX_DERIVED_IN_FLIGHT as u32,
+};
+
 /// Derive the host-wide ceiling from installed instance and memory limits.
-/// Composed components consume multiple slots of separate resource gates;
+/// Composed components consume multiple memories of messaging's share of the pool totals;
 /// the host and per-component message ceilings still count deliveries.
 /// `None` means pooling is off, so the pinned fallback stands.
 fn derive_host_ceiling(capacity: Option<u32>) -> usize {
     let Some(capacity) = capacity else {
         return DEFAULT_MAX_IN_FLIGHT_HOST;
     };
-    // Messages the pool could hold if messaging had all of it. `share` is what
-    // messaging may actually claim; `capacity` is the hard wall behind it.
-    let share = u64::from(capacity) * u64::from(MESSAGING_POOL_SHARE_NUM)
-        / u64::from(MESSAGING_POOL_SHARE_DEN);
-    let capacity = usize::try_from(capacity).unwrap_or(MAX_DERIVED_IN_FLIGHT);
-    let share = usize::try_from(share).unwrap_or(MAX_DERIVED_IN_FLIGHT);
-    // The floor may not raise the ceiling past what the pool actually holds.
-    // On a small pool the honest answer is a small number: a host that cannot
-    // run more than two messages at once should say two and shed the rest,
-    // not admit eight and fail at instantiation. `max(1)` because a pool too
-    // small for even one component still has to name some ceiling, and one is
-    // the least wrong of the available answers.
-    let floor = MIN_DERIVED_IN_FLIGHT.min(capacity).max(1);
-    share.clamp(floor, MAX_DERIVED_IN_FLIGHT)
+    // `max(1)` because a pool too small for even one component still has to
+    // name some ceiling, and one is the least wrong of the available answers;
+    // the floor and cap are `MESSAGING_SHARE`'s, the floor never raising the
+    // ceiling past what the pool actually holds.
+    (MESSAGING_SHARE.of(capacity) as usize).max(1)
 }
 
 /// The per-component ceiling implied by a host-wide one.
@@ -752,14 +817,14 @@ fn per_component_ceiling(host_total: usize) -> usize {
 ///
 /// Both levels are needed and neither subsumes the other: the per-component
 /// ceiling stops one runaway workload taking the host, and the host-wide
-/// ceiling bounds the sum of deliveries. Shared pool resource gates account
+/// ceiling bounds the sum of deliveries. Messaging's share of the pool totals ([`PoolShare`]) accounts
 /// for components that require more than one memory or table per delivery.
 #[derive(Clone, Debug)]
 pub struct MessagingLimits {
     /// Shared across every component on this host. Cloned into each
     /// subscriber loop's [`Admission`].
     host: Arc<Semaphore>,
-    pool: Option<PoolAdmission>,
+    pool: Option<PoolShare>,
     host_total: usize,
     per_component_default: usize,
     admission_wait: Duration,
@@ -890,8 +955,9 @@ impl Default for MessagingLimits {
 impl MessagingLimits {
     /// Build the host's messaging ceilings, resolving whatever the operator did
     /// not specify against the engine's installed instance and memory limits.
-    /// Resource gates also account for each component's memory and table
-    /// requirements. With pooling disabled, the pinned defaults apply.
+    /// Messaging's share of the pool totals ([`PoolShare`]) also accounts for
+    /// each component's memory and table requirements. With pooling disabled,
+    /// the pinned defaults apply.
     ///
     /// `None` for either ceiling means "the operator said nothing" — which is
     /// why the flags must not carry a `default_value_t`. A CLI-parse-time
@@ -918,14 +984,19 @@ impl MessagingLimits {
         per_component_default: Option<usize>,
         pool_totals: Option<PoolTotals>,
     ) -> Self {
-        let explicit_host_total = host_total;
-        let capacity = pool_totals.map(pool_admission::capacity);
-        let derived = derive_host_ceiling(capacity);
-        let host_total = host_total.unwrap_or(derived);
+        // Components of the usual shape the whole pool holds; messaging's
+        // fraction of that is the message ceiling. The same fraction of each
+        // pool total, charged per component by its cost, is what those
+        // messages may hold of the pool: an explicit message cap moves the
+        // message count, never the fraction of the pool totals, which is what
+        // keeps the rest of the pool for the work messaging does not admit.
+        let capacity = pool_totals.map(|totals| PoolCost::USUAL.fits_in(&totals));
+        let host_total = host_total.unwrap_or_else(|| derive_host_ceiling(capacity));
         let per_component_default =
             per_component_default.unwrap_or_else(|| per_component_ceiling(host_total));
         let mut limits = Self::new(host_total, per_component_default);
-        limits.pool = pool_totals.map(|totals| PoolAdmission::new(totals, explicit_host_total));
+        limits.pool =
+            pool_totals.map(|totals| PoolShare::new(totals, MESSAGING_SHARE, "messaging"));
         limits
     }
 
@@ -1054,6 +1125,7 @@ impl MessagingLimits {
             component,
             host: Arc::clone(&self.host),
             pool: self.pool.clone(),
+            cost: None,
             limit,
             wait: self.admission_wait,
             timeouts: self.timeouts.clone(),
@@ -1197,7 +1269,11 @@ pub(crate) enum Admitted {
 pub(crate) struct Admission {
     component: Arc<Semaphore>,
     host: Arc<Semaphore>,
-    pool: Option<PoolAdmission>,
+    /// Messaging's share of the pool totals, when there is a pool.
+    pool: Option<PoolShare>,
+    /// What one instance of the bound component takes from it, once
+    /// [`Admission::with_component`] has read it; nothing is reserved before.
+    cost: Option<PoolCost>,
     limit: usize,
     wait: Duration,
     timeouts: AdmissionTimeouts,
@@ -1215,9 +1291,69 @@ pub(crate) struct Admission {
     gates: ComponentGates,
 }
 
+/// Whether a delivery's pool cost is reserved with its message permits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PoolCharge {
+    /// The delivery builds a store of its own, so its cost is reserved from
+    /// messaging's share of the pool totals before the host permit, and held
+    /// with it.
+    Reserve,
+    /// The delivery goes to the component's instance pool, whose warm
+    /// instances hold their slots already; nothing is reserved now, and
+    /// [`deliver_pooled`] reserves through
+    /// [`Admission::reserve_store_before_deadline`] only if it ends up
+    /// building a store.
+    Defer,
+}
+
+/// Which wait shed a message, for the warning that says what to raise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShedOn {
+    /// The component or host message ceiling.
+    MessageSlots,
+    /// Those, or messaging's share of the instance pool's totals.
+    MessageSlotsAndPoolShare,
+    /// Messaging's share of the instance pool's totals, or the host message
+    /// ceiling taken again after it, for a store built after admission.
+    PoolShareAndHostSlot,
+}
+
+impl ShedOn {
+    fn what(self) -> &'static str {
+        match self {
+            Self::MessageSlots => "admission slot",
+            Self::MessageSlotsAndPoolShare => "admission slot or instance pool resources",
+            Self::PoolShareAndHostSlot => "instance pool resources for a store",
+        }
+    }
+
+    /// Only the knobs that can have mattered: a host without a pool, or a
+    /// wait the pool share took no part in, is not told to resize the pool.
+    fn remedy(self) -> &'static str {
+        match self {
+            Self::MessageSlots => {
+                "The host or component message ceiling is saturated — raise \
+                 --wasmcloud-messaging-max-in-flight, raise the component's max_in_flight \
+                 config, or reduce inbound rate"
+            }
+            Self::MessageSlotsAndPoolShare => {
+                "The host or component message ceiling, or messaging's share of the instance \
+                 pool, is saturated — raise --wasmcloud-messaging-max-in-flight, raise the \
+                 component's max_in_flight config, raise --core-instances (or the limiting \
+                 WASMTIME_POOLING_TOTAL_* setting), or reduce inbound rate"
+            }
+            Self::PoolShareAndHostSlot => {
+                "Messaging's share of the instance pool, or the host message ceiling, is \
+                 saturated — raise --core-instances (or the limiting WASMTIME_POOLING_TOTAL_* \
+                 setting), raise --wasmcloud-messaging-max-in-flight, or reduce inbound rate"
+            }
+        }
+    }
+}
+
 impl Admission {
-    /// Take one message slot and its pool resources, parking until all gates
-    /// have room.
+    /// Take one message slot and, with [`PoolCharge::Reserve`], the pool cost
+    /// of a store of its own, parking until there is room for all of it.
     ///
     /// Returns `None` once either semaphore is closed, which is how a
     /// shutting-down component tells its subscriber loop to stop.
@@ -1226,37 +1362,100 @@ impl Admission {
     /// permit while it waited for a component permit would block every other
     /// component on the host; holding a component permit while waiting for the
     /// host's only throttles the component that is already at its own limit.
-    /// Pool resources are taken between the component and host permits, in
-    /// the same order for every caller. A composed component waits for its
-    /// whole resource cost before any store is built.
+    /// The pool cost is taken between the two, in the same order for every
+    /// caller — including a store reserved after a `Defer` admission, which
+    /// gives its host permit back first; see
+    /// [`Admission::reserve_store_before_deadline`]. A composed component
+    /// waits for its whole cost before any store is built.
     ///
     /// Cancel-safe: dropping the returned future before it resolves releases
     /// whichever permit it had already taken.
-    pub(crate) async fn acquire(&self) -> Option<AdmissionPermit> {
+    pub(crate) async fn acquire(&self, charge: PoolCharge) -> Option<AdmissionPermit> {
+        let deadline = tokio::time::Instant::now() + self.wait;
         let component = Arc::clone(&self.component).acquire_owned().await.ok()?;
-        let pool = match &self.pool {
-            Some(pool) => Some(pool.acquire().await?),
-            None => None,
+        let pool = match (charge, &self.pool, self.cost) {
+            (PoolCharge::Reserve, Some(pool), Some(cost)) => Some(pool.reserve(cost).await?),
+            _ => None,
         };
         let host = Arc::clone(&self.host).acquire_owned().await.ok()?;
         Some(AdmissionPermit {
-            _component: component,
-            _host: host,
-            _pool: pool,
+            component,
+            host,
+            pool,
+            deadline,
         })
     }
 
-    /// Charge the final linked component's memories and tables before admitting
-    /// a delivery. Keep message counts independent of this resource cost.
+    /// Read what one instance of the final linked component takes from the
+    /// pool, so each delivery that builds a store reserves exactly that.
+    /// Message counts stay independent of this cost.
+    ///
+    /// Fails for a component that messaging's share of some pool total can
+    /// never hold one of, naming the knob; see [`PoolShare::admit`].
     pub(crate) fn with_component(
         mut self,
         component: &wasmtime::component::Component,
     ) -> anyhow::Result<Self> {
-        self.pool = self
+        self.cost = self
             .pool
-            .map(|pool| pool.with_component(component))
+            .as_ref()
+            .map(|pool| pool.admit(PoolCost::of(component)))
             .transpose()?;
         Ok(self)
+    }
+
+    /// Reserve the pool cost of a store built after a [`PoolCharge::Defer`]
+    /// admission — the pooled path, once the instance pool asked for a store
+    /// — keeping the one lock order, and shedding like
+    /// [`Admission::acquire_before_deadline`] does.
+    ///
+    /// The order is component permit, pool cost, host permit. A delivery that
+    /// waited for the pool cost while holding a host permit, beside
+    /// deliveries holding their pool cost while waiting for a host permit,
+    /// would leave the two sides waiting on each other until both shed. So
+    /// this gives the host permit back, reserves, and takes a host permit
+    /// again, in that order; the component permit is kept throughout, which
+    /// only throttles the component whose warm pool is saturated.
+    ///
+    /// All of it before the deadline the message was admitted with: a
+    /// message waits one [`MessagingLimits::admission_wait`] in total,
+    /// however that is split between admission and this. `Slot` carries the
+    /// reservation inside the permit; `Shed` has counted and logged the
+    /// message; `Closed` means the component is going away.
+    pub(crate) async fn reserve_store_before_deadline(
+        &self,
+        permit: AdmissionPermit,
+        component_id: &str,
+        subject: &str,
+    ) -> Admitted {
+        let (Some(pool), Some(cost)) = (&self.pool, self.cost) else {
+            return Admitted::Slot(permit);
+        };
+        let AdmissionPermit {
+            component,
+            host,
+            pool: _,
+            deadline,
+        } = permit;
+        drop(host);
+        let reserve_then_readmit = async {
+            let reservation = pool.reserve(cost).await?;
+            let host = Arc::clone(&self.host).acquire_owned().await.ok()?;
+            Some((reservation, host))
+        };
+        match tokio::time::timeout_at(deadline, reserve_then_readmit).await {
+            Ok(Some((reservation, host))) => Admitted::Slot(AdmissionPermit {
+                component,
+                host,
+                pool: Some(reservation),
+                deadline,
+            }),
+            Ok(None) => Admitted::Closed,
+            Err(_) => {
+                self.shed(component_id, subject, ShedOn::PoolShareAndHostSlot);
+                Admitted::Shed
+            }
+        }
     }
 
     /// [`Admission::acquire`], but giving up after [`MessagingLimits::admission_wait`]
@@ -1273,35 +1472,46 @@ impl Admission {
         &self,
         component_id: &str,
         subject: &str,
+        charge: PoolCharge,
     ) -> Admitted {
-        match tokio::time::timeout(self.wait, self.acquire()).await {
+        match tokio::time::timeout(self.wait, self.acquire(charge)).await {
             Ok(Some(permit)) => Admitted::Slot(permit),
             Ok(None) => Admitted::Closed,
             Err(_) => {
-                self.timeouts
-                    .record(&self.identity, self.subscription_for(subject));
-                // The component id stays here rather than on the counter:
-                // per-event identity is free, and it joins this line to the
-                // `wasmcloud.messaging.on_workload_resolved` span. The manifest
-                // names come along so the warning names the same thing the
-                // metric does.
-                tracing::warn!(
-                    %component_id,
-                    workload.namespace = %self.identity.namespace,
-                    workload.name = %self.identity.workload,
-                    component = %self.identity.component,
-                    %subject,
-                    waited = ?self.wait,
-                    limit = self.limit,
-                    "no messaging admission slot came free before the deadline; \
-                     dropping message. The host, component or instance pool is saturated — \
-                     raise --wasmcloud-messaging-max-in-flight, raise the component's \
-                     max_in_flight config, raise the limiting WASMTIME_POOLING_TOTAL_* \
-                     setting, or reduce inbound rate"
-                );
+                let on = match charge {
+                    PoolCharge::Reserve if self.pool.is_some() && self.cost.is_some() => {
+                        ShedOn::MessageSlotsAndPoolShare
+                    }
+                    PoolCharge::Reserve | PoolCharge::Defer => ShedOn::MessageSlots,
+                };
+                self.shed(component_id, subject, on);
                 Admitted::Shed
             }
         }
+    }
+
+    /// Count and log a message dropped because what `on` names did not come
+    /// free in time. One place, so every wait that can shed does so
+    /// identically.
+    fn shed(&self, component_id: &str, subject: &str, on: ShedOn) {
+        self.timeouts
+            .record(&self.identity, self.subscription_for(subject));
+        // The component id stays here rather than on the counter: per-event
+        // identity is free, and it joins this line to the
+        // `wasmcloud.messaging.on_workload_resolved` span. The manifest names
+        // come along so the warning names the same thing the metric does.
+        tracing::warn!(
+            %component_id,
+            workload.namespace = %self.identity.namespace,
+            workload.name = %self.identity.workload,
+            component = %self.identity.component,
+            %subject,
+            waited = ?self.wait,
+            limit = self.limit,
+            "no messaging {} came free before the deadline; dropping message. {}",
+            on.what(),
+            on.remedy(),
+        );
     }
 
     /// The resolved per-component ceiling, after defaulting and clamping.
@@ -1396,10 +1606,38 @@ impl Admission {
 /// falls out of scope.
 #[derive(Debug)]
 pub(crate) struct AdmissionPermit {
-    _component: OwnedSemaphorePermit,
-    _host: OwnedSemaphorePermit,
-    _pool: Option<[OwnedSemaphorePermit; 5]>,
+    component: OwnedSemaphorePermit,
+    host: OwnedSemaphorePermit,
+    /// The pool cost of a store of this message's own, once reserved.
+    pool: Option<PoolReservation>,
+    /// When the message this admitted must be delivering or shed by: one
+    /// [`MessagingLimits::admission_wait`] from when its wait for admission
+    /// began. A store reserved after a [`PoolCharge::Defer`] admission waits
+    /// out what is left of it, not a second whole wait.
+    deadline: tokio::time::Instant,
 }
+
+impl AdmissionPermit {
+    /// Give back the pool cost of a store that the instance pool took as a
+    /// warm instance of its own, keeping the message permits.
+    pub(crate) fn release_store_reservation(&mut self) {
+        self.pool = None;
+    }
+}
+
+/// The error a delivery ends with when its message was shed by an admission
+/// wait that already counted and logged it, so [`log_delivery`] does not
+/// report it a second time.
+#[derive(Debug)]
+pub(crate) struct AlreadyShed;
+
+impl std::fmt::Display for AlreadyShed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("message shed; counted and logged by its admission wait")
+    }
+}
+
+impl std::error::Error for AlreadyShed {}
 
 /// Returns `true` if the world exports the `wasmcloud:messaging/handler`
 /// interface at any version. Matches via [`WitInterface::contains`] rather
@@ -1736,21 +1974,19 @@ mod tests {
         assert_eq!(parse_admission_group(None), None);
     }
 
+    /// The pool `--core-instances memories` installs, in the shape the engine
+    /// derives rather than a copy of its multiples.
     fn messaging_pool(memories: u32) -> Option<crate::engine::pool_usage::PoolTotals> {
-        Some(crate::engine::pool_usage::PoolTotals {
+        Some(crate::engine::pool_usage::PoolTotals::derived_from(
             memories,
-            core_instances: memories.saturating_mul(16),
-            tables: memories.saturating_mul(4),
-            component_instances: memories,
-            stacks: memories,
-            gc_heaps: memories,
-        })
+        ))
     }
 
     // --- Admission ceilings -------------------------------------------------
 
     use super::{
         Admitted, DEFAULT_MAX_IN_FLIGHT_HOST, DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT, MessagingLimits,
+        PoolCharge,
     };
     use futures::FutureExt as _;
     use std::sync::Arc;
@@ -2017,7 +2253,7 @@ mod tests {
         // once, and the release below must drop exactly one of them.
         let admit = || {
             admission
-                .acquire()
+                .acquire(PoolCharge::Reserve)
                 .now_or_never()
                 .flatten()
                 .expect("a free slot should admit immediately")
@@ -2028,14 +2264,21 @@ mod tests {
 
         // Fourth must park rather than admit.
         assert!(
-            admission.acquire().now_or_never().is_none(),
+            admission
+                .acquire(PoolCharge::Reserve)
+                .now_or_never()
+                .is_none(),
             "the ceiling must bind at 3"
         );
 
         // Releasing ONE frees exactly one slot.
         drop(first);
         assert!(
-            admission.acquire().now_or_never().flatten().is_some(),
+            admission
+                .acquire(PoolCharge::Reserve)
+                .now_or_never()
+                .flatten()
+                .is_some(),
             "a completed handler must free its slot"
         );
     }
@@ -2054,7 +2297,7 @@ mod tests {
         for round in 0..4 {
             let a = &components[round % components.len()];
             held.push(
-                a.acquire()
+                a.acquire(PoolCharge::Reserve)
                     .now_or_never()
                     .flatten()
                     .expect("within the host total"),
@@ -2063,7 +2306,7 @@ mod tests {
 
         for (i, a) in components.iter().enumerate() {
             assert!(
-                a.acquire().now_or_never().is_none(),
+                a.acquire(PoolCharge::Reserve).now_or_never().is_none(),
                 "component {i} must be blocked by the exhausted host total, \
                  despite having its own slots free"
             );
@@ -2071,7 +2314,11 @@ mod tests {
 
         drop(held.pop());
         assert!(
-            components[0].acquire().now_or_never().flatten().is_some(),
+            components[0]
+                .acquire(PoolCharge::Reserve)
+                .now_or_never()
+                .flatten()
+                .is_some(),
             "freeing a host slot must admit again"
         );
     }
@@ -2084,15 +2331,18 @@ mod tests {
         let a = limits.admission(&unique_identity(), Some(1));
         let b = limits.admission(&unique_identity(), Some(1));
 
-        let permit = a.acquire().await.expect("first admits");
+        let permit = a.acquire(PoolCharge::Reserve).await.expect("first admits");
         assert!(
-            b.acquire().now_or_never().is_none(),
+            b.acquire(PoolCharge::Reserve).now_or_never().is_none(),
             "the host total is exhausted by the other component"
         );
 
         drop(permit);
         assert!(
-            b.acquire().now_or_never().flatten().is_some(),
+            b.acquire(PoolCharge::Reserve)
+                .now_or_never()
+                .flatten()
+                .is_some(),
             "dropping the permit must free the host slot too, not just the component one"
         );
     }
@@ -2113,13 +2363,19 @@ mod tests {
         assert_eq!(waiter.limit(), 2, "clamped to the host total");
 
         let held: Vec<_> = (0..2)
-            .map(|_| blocker.acquire().now_or_never().flatten().expect("admits"))
+            .map(|_| {
+                blocker
+                    .acquire(PoolCharge::Reserve)
+                    .now_or_never()
+                    .flatten()
+                    .expect("admits")
+            })
             .collect();
 
         // Box::pin, not tokio::pin!: the latter rebinds the name to a
         // `Pin<&mut F>`, so dropping it would drop the *reference* and leave
         // the future — and its permit — alive on the stack.
-        let mut parked = Box::pin(waiter.acquire());
+        let mut parked = Box::pin(waiter.acquire(PoolCharge::Reserve));
         assert!(
             futures::poll!(parked.as_mut()).is_pending(),
             "the waiter has its own slots free, so it must be the host level parking it"
@@ -2131,7 +2387,7 @@ mod tests {
         drop(held);
         let leak_check = || {
             waiter
-                .acquire()
+                .acquire(PoolCharge::Reserve)
                 .now_or_never()
                 .flatten()
                 .expect("no permit should have leaked from the cancelled acquire")
@@ -2148,7 +2404,7 @@ mod tests {
         let admission = limits.admission(&unique_identity(), Some(4));
         admission.component.close();
         assert!(
-            admission.acquire().await.is_none(),
+            admission.acquire(PoolCharge::Reserve).await.is_none(),
             "a closed component semaphore must report None, not park forever"
         );
     }
@@ -2188,9 +2444,14 @@ mod tests {
         // loss countable.
         let limits = MessagingLimits::new(1, 1).with_admission_wait(Duration::from_secs(5));
         let admission = limits.admission(&unique_identity(), Some(1));
-        let _held = admission.acquire().await.expect("first admits");
+        let _held = admission
+            .acquire(PoolCharge::Reserve)
+            .await
+            .expect("first admits");
 
-        let outcome = admission.acquire_before_deadline("comp", "subj").await;
+        let outcome = admission
+            .acquire_before_deadline("comp", "subj", PoolCharge::Reserve)
+            .await;
         assert!(
             matches!(outcome, Admitted::Shed),
             "a gate that never frees must shed, not park"
@@ -2203,14 +2464,19 @@ mod tests {
         // clears within the wait has to be processed, not shed.
         let limits = MessagingLimits::new(1, 1).with_admission_wait(Duration::from_secs(30));
         let admission = limits.admission(&unique_identity(), Some(1));
-        let held = admission.acquire().await.expect("first admits");
+        let held = admission
+            .acquire(PoolCharge::Reserve)
+            .await
+            .expect("first admits");
 
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(1)).await;
             drop(held);
         });
 
-        let outcome = admission.acquire_before_deadline("comp", "subj").await;
+        let outcome = admission
+            .acquire_before_deadline("comp", "subj", PoolCharge::Reserve)
+            .await;
         assert!(
             matches!(outcome, Admitted::Slot(_)),
             "a slot freed well inside the deadline must be admitted"
@@ -2231,7 +2497,9 @@ mod tests {
         admission.close();
         assert!(
             matches!(
-                in_loop.acquire_before_deadline("comp", "subj").await,
+                in_loop
+                    .acquire_before_deadline("comp", "subj", PoolCharge::Reserve)
+                    .await,
                 Admitted::Closed
             ),
             "a closed semaphore must end the loop, not be mistaken for saturation"
@@ -2245,11 +2513,18 @@ mod tests {
         // away. The 30s wait would make that obvious if it were still in force.
         let limits = MessagingLimits::new(1, 1).with_admission_wait(Duration::from_secs(30));
         let admission = limits.admission(&unique_identity(), Some(1));
-        let _held = admission.acquire().await.expect("first admits");
+        let _held = admission
+            .acquire(PoolCharge::Reserve)
+            .await
+            .expect("first admits");
 
         let parked = {
             let admission = admission.clone();
-            tokio::spawn(async move { admission.acquire_before_deadline("comp", "subj").await })
+            tokio::spawn(async move {
+                admission
+                    .acquire_before_deadline("comp", "subj", PoolCharge::Reserve)
+                    .await
+            })
         };
         // Let it reach the semaphore before closing underneath it.
         tokio::task::yield_now().await;
@@ -2278,7 +2553,10 @@ mod tests {
         let replica_a = limits.admission(&identity, Some(1));
         let replica_b = limits.admission(&identity, Some(1));
 
-        let _held = replica_a.acquire().await.expect("first replica admits");
+        let _held = replica_a
+            .acquire(PoolCharge::Reserve)
+            .await
+            .expect("first replica admits");
         assert!(
             replica_b.component.try_acquire().is_err(),
             "a second replica must contend for the same one-message ceiling, \
@@ -2305,7 +2583,7 @@ mod tests {
             Some(1),
         );
 
-        let _held = ingester.acquire().await.expect("admits");
+        let _held = ingester.acquire(PoolCharge::Reserve).await.expect("admits");
         assert!(
             indexer.component.try_acquire().is_ok(),
             "a different component in the same workload must have its own gate"
@@ -2331,7 +2609,7 @@ mod tests {
         replica_a.close();
         assert_eq!(limits.gates.bindings(&identity), 1);
         assert!(
-            replica_b.acquire().await.is_some(),
+            replica_b.acquire(PoolCharge::Reserve).await.is_some(),
             "a surviving replica must still be admitted after a sibling tears down"
         );
 
@@ -2346,7 +2624,7 @@ mod tests {
         // rather than shedding.
         let rebound = limits.admission(&identity, Some(2));
         assert!(
-            rebound.acquire().await.is_some(),
+            rebound.acquire(PoolCharge::Reserve).await.is_some(),
             "a later binding must get a fresh, open gate"
         );
     }
@@ -2543,7 +2821,10 @@ mod tests {
     async fn permits_are_handed_out_in_arrival_order() {
         let limits = MessagingLimits::new(8, 1);
         let admission = limits.admission(&unique_identity(), Some(1));
-        let held = admission.acquire().await.expect("first admits");
+        let held = admission
+            .acquire(PoolCharge::Reserve)
+            .await
+            .expect("first admits");
 
         let order = Arc::new(AtomicUsize::new(0));
         let mut handles = Vec::new();
@@ -2553,7 +2834,10 @@ mod tests {
             // Stagger so the waiters queue in a known order.
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             handles.push(tokio::spawn(async move {
-                let _p = admission.acquire().await.expect("eventually admitted");
+                let _p = admission
+                    .acquire(PoolCharge::Reserve)
+                    .await
+                    .expect("eventually admitted");
                 (i, order.fetch_add(1, Ordering::SeqCst))
             }));
         }

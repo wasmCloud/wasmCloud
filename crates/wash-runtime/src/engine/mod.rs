@@ -247,6 +247,7 @@ pub mod stream_payload;
 pub use instance_pool::{InstancePolicy, ReclaimPolicy};
 pub mod host_memory;
 pub(crate) mod linked_call;
+pub mod pool_share;
 pub mod pool_usage;
 pub mod process_memory;
 mod scratch;
@@ -1903,29 +1904,23 @@ const TABLES_PER_MEMORY: u32 = 4;
 ///
 /// `instances` is the resolved `--core-instances`. It is the number of linear
 /// memories, which reserve the pool's address space, and also of the fiber
-/// stacks and component instances, which a component instance of the usual
-/// shape takes one of each alongside its memory. The core instance and table
-/// totals, which reserve nothing, are multiples of it
-/// ([`CORE_INSTANCES_PER_MEMORY`], [`TABLES_PER_MEMORY`]) so that a component
-/// made of several core modules does not spend several memories' worth of
-/// them.
+/// stacks, component instances and GC heaps, which a component instance of
+/// the usual shape ([`pool_share::PoolCost::USUAL`]) takes one of each
+/// alongside its memory. The core instance and table totals, which reserve
+/// nothing, are multiples of it ([`CORE_INSTANCES_PER_MEMORY`],
+/// [`TABLES_PER_MEMORY`]) so that a component made of several core modules
+/// does not spend several memories' worth of them.
 ///
 /// Apart from [`new_pooling_config`] so the derivation can be pinned by a test
-/// that no exported `WASMTIME_POOLING_TOTAL_*` override can disturb.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DerivedPoolTotals {
-    memories: u32,
-    stacks: u32,
-    component_instances: u32,
-    core_instances: u32,
-    tables: u32,
-}
-
-fn derived_pool_totals(instances: u32) -> DerivedPoolTotals {
-    DerivedPoolTotals {
+/// that no exported `WASMTIME_POOLING_TOTAL_*` override can disturb, and
+/// reached by every test that needs a stock pool's shape through
+/// [`pool_usage::PoolTotals::derived_from`], so none hard-codes the multiples.
+pub(crate) fn derived_pool_totals(instances: u32) -> pool_usage::PoolTotals {
+    pool_usage::PoolTotals {
         memories: instances,
         stacks: instances,
         component_instances: instances,
+        gc_heaps: instances,
         core_instances: instances.saturating_mul(CORE_INSTANCES_PER_MEMORY),
         tables: instances.saturating_mul(TABLES_PER_MEMORY),
     }
@@ -2016,7 +2011,7 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
     #[cfg(not(windows))]
     config.total_gc_heaps(pooling_env_instances(
         "WASMTIME_POOLING_TOTAL_GC_HEAPS",
-        instances,
+        derived.gc_heaps,
     ));
     config
 }
@@ -2320,9 +2315,11 @@ mod tests {
         assert_eq!(derived.memories, 1000);
         assert_eq!(derived.stacks, 1000);
         assert_eq!(derived.component_instances, 1000);
+        assert_eq!(derived.gc_heaps, 1000);
         assert_eq!(derived.core_instances, 16_000);
         assert_eq!(derived.tables, 4000);
         assert_eq!(derived_pool_totals(u32::MAX).core_instances, u32::MAX);
+        assert_eq!(pool_usage::PoolTotals::derived_from(1000), derived);
 
         // What the config and then the engine install is the derivation with
         // the environment applied, so this half holds in a shell that exports
