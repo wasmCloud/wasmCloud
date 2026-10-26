@@ -38,7 +38,12 @@ pub struct NatsAuth {
 impl NatsAuth {
     /// The options to build a connection on: plain ones when there is nothing
     /// to present, so an unauthenticated connection is unchanged.
-    pub(super) fn connect_options(self) -> anyhow::Result<async_nats::ConnectOptions> {
+    ///
+    /// [`connect_nats`](super::connect_nats) starts from these. An embedder
+    /// that opens its own connection can start from them too, and keeps the
+    /// rereading of every file on each connect. Anything to present is sent by
+    /// an auth callback, which replaces credentials set on the result.
+    pub fn into_connect_options(self) -> anyhow::Result<async_nats::ConnectOptions> {
         let Self {
             credentials,
             nkey,
@@ -104,13 +109,13 @@ mod tests {
             token_file: Some("t".into()),
             ..Default::default()
         };
-        assert!(token.connect_options().is_err());
+        assert!(token.into_connect_options().is_err());
         let password = NatsAuth {
             password: Some("p".into()),
             password_file: Some("p".into()),
             ..Default::default()
         };
-        assert!(password.connect_options().is_err());
+        assert!(password.into_connect_options().is_err());
     }
 
     #[test]
@@ -120,7 +125,7 @@ mod tests {
             nkey: Some("a.nk".into()),
             ..Default::default()
         };
-        assert!(auth.connect_options().is_err());
+        assert!(auth.into_connect_options().is_err());
     }
 
     #[test]

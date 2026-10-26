@@ -1386,6 +1386,9 @@ pub struct NatsConnectionOptions {
     pub name: Option<String>,
     /// What the connection presents to a server that requires authentication.
     pub auth: NatsAuth,
+    /// The prefix of the inboxes the client creates for request replies, in
+    /// place of `_INBOX`.
+    pub inbox_prefix: Option<String>,
 }
 
 #[instrument(skip_all)]
@@ -1393,10 +1396,14 @@ pub async fn connect_nats(
     addr: impl async_nats::ToServerAddrs,
     options: NatsConnectionOptions,
 ) -> Result<async_nats::Client, anyhow::Error> {
-    let mut opts = options.auth.connect_options()?;
+    let mut opts = options.auth.into_connect_options()?;
 
     if let Some(name) = options.name {
         opts = opts.name(name);
+    }
+
+    if let Some(prefix) = options.inbox_prefix {
+        opts = opts.custom_inbox_prefix(prefix);
     }
 
     if let Some(timeout) = options.request_timeout {
@@ -3087,6 +3094,57 @@ mod tests {
         assert_eq!(second["name"], "host:test");
         assert_eq!(second["jwt"], "rotated.jwt");
         assert_eq!(second["auth_token"], "rotated.jwt");
+        Ok(())
+    }
+
+    /// An embedder that opens its own connection keeps the rereading of
+    /// credential files, and the inbox prefix it sets on top.
+    #[tokio::test]
+    async fn an_embedder_connection_rereads_credentials() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::accept_connect;
+
+        let dir = tempfile::tempdir()?;
+        let token = dir.path().join("token");
+        std::fs::write(&token, "first")?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let options = NatsAuth {
+            token_file: Some(token.clone()),
+            ..Default::default()
+        }
+        .into_connect_options()?
+        .custom_inbox_prefix("agent.inbox");
+
+        let (first, client) = tokio::try_join!(accept_connect(&listener, "first-nonce"), async {
+            options
+                .connect(format!("nats://{}", listener.local_addr()?))
+                .await
+                .map_err(anyhow::Error::new)
+        },)?;
+        assert_eq!(first["auth_token"], "first");
+        assert!(client.new_inbox().starts_with("agent.inbox."));
+
+        std::fs::write(&token, "second")?;
+        let second = accept_connect(&listener, "second-nonce").await?;
+        assert_eq!(second["auth_token"], "second");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn connect_nats_sets_the_inbox_prefix() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::accept_connect;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let options = NatsConnectionOptions {
+            name: Some("host:test".into()),
+            inbox_prefix: Some("runtime.inbox".into()),
+            ..Default::default()
+        };
+        let (connect, client) = tokio::try_join!(
+            accept_connect(&listener, "nonce"),
+            connect_nats(format!("nats://{}", listener.local_addr()?), options),
+        )?;
+        assert_eq!(connect["name"], "host:test");
+        assert!(client.new_inbox().starts_with("runtime.inbox."));
         Ok(())
     }
 
