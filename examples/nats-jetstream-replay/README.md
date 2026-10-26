@@ -136,6 +136,9 @@ Credentials never appear in `config`. The host merges
 `config` → `configFrom` → `secretFrom` (later wins) before the plugin sees them,
 so a creds file, JWT + nkey seed, username/password, or token arrives already
 resolved. An nkey seed is signed host-side and never crosses into the sandbox.
+`nkey-seed-file`, `password-file` and `token-file` take a path on the host in
+place of the value. The host rereads those files and `creds` on every reconnect,
+so a rotated credential is picked up without redeploying.
 
 ### Under `wash dev`
 

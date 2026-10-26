@@ -13,6 +13,7 @@ use anyhow::Context as _;
 use zeroize::Zeroizing;
 
 /// A secret given as a value, or as a file read on every connect.
+#[derive(Clone)]
 pub(crate) enum Secret {
     Value(Zeroizing<String>),
     File(PathBuf),
@@ -65,6 +66,28 @@ impl Credentials {
     /// The options to build a connection on: plain ones when there is nothing
     /// to present, so an unauthenticated connection is unchanged.
     pub(crate) fn connect_options(self) -> anyhow::Result<async_nats::ConnectOptions> {
+        Ok(match self.presenter()? {
+            Some(presenter) => presenter.connect_options(),
+            None => async_nats::ConnectOptions::new(),
+        })
+    }
+
+    /// [`Self::connect_options`], with each file read once beforehand within
+    /// [`FIRST_READ_WAIT`]. A slow mount then fails here, legibly, rather
+    /// than as a connect timeout, and later connects fall back on what was read.
+    pub(crate) async fn primed_connect_options(self) -> anyhow::Result<async_nats::ConnectOptions> {
+        Ok(match self.presenter()? {
+            Some(presenter) => {
+                presenter.prime().await?;
+                presenter.connect_options()
+            }
+            None => async_nats::ConnectOptions::new(),
+        })
+    }
+
+    /// `None` when there is nothing to present, so an unauthenticated
+    /// connection is unchanged.
+    fn presenter(self) -> anyhow::Result<Option<Presenter>> {
         anyhow::ensure!(
             self.credentials.is_none() || self.nkey.is_none(),
             "a NATS connection takes a credentials file or an nkey seed, not both"
@@ -74,20 +97,9 @@ impl Credentials {
             "a NATS user JWT needs the nkey seed that signs for it"
         );
         if self.is_empty() {
-            return Ok(async_nats::ConnectOptions::new());
+            return Ok(None);
         }
-        let presenter = Arc::new(Presenter::new(self)?);
-        Ok(async_nats::ConnectOptions::with_auth_callback(
-            move |nonce| {
-                let presenter = Arc::clone(&presenter);
-                async move {
-                    presenter
-                        .present(&nonce)
-                        .await
-                        .map_err(|e| async_nats::AuthError::new(format!("{e:#}")))
-                }
-            },
-        ))
+        Presenter::new(self).map(Some)
     }
 }
 
@@ -162,6 +174,30 @@ impl Presenter {
         })
     }
 
+    fn connect_options(self) -> async_nats::ConnectOptions {
+        let presenter = Arc::new(self);
+        async_nats::ConnectOptions::with_auth_callback(move |nonce| {
+            let presenter = Arc::clone(&presenter);
+            async move {
+                presenter
+                    .present(&nonce)
+                    .await
+                    .map_err(|e| async_nats::AuthError::new(format!("{e:#}")))
+            }
+        })
+    }
+
+    /// Reads and parses every file once, waiting up to [`FIRST_READ_WAIT`].
+    async fn prime(&self) -> anyhow::Result<()> {
+        tokio::try_join!(
+            prime(self.credentials.as_ref(), "credentials", credentials_key),
+            prime(Source::file(&self.nkey), "nkey seed", nkey_key),
+            prime(Source::file(&self.token), "token", secret_line),
+            prime(Source::file(&self.password), "password", secret_line),
+        )?;
+        Ok(())
+    }
+
     /// What to send in `CONNECT` for a server that issued `nonce`.
     async fn present(&self, nonce: &[u8]) -> anyhow::Result<async_nats::Auth> {
         // Read together, so files on one stalled mount cost one READ_WAIT.
@@ -212,6 +248,13 @@ impl<T: Clone> Source<T> {
         })
     }
 
+    fn file(source: &Option<Self>) -> Option<&SecretFile> {
+        match source {
+            Some(Self::File(file)) => Some(file),
+            Some(Self::Value(_)) | None => None,
+        }
+    }
+
     async fn read(
         source: &Option<Self>,
         what: &str,
@@ -228,6 +271,9 @@ impl<T: Clone> Source<T> {
 /// How long a connect waits on a file read. Shorter than async-nats' default
 /// 5s connection timeout, so a stalled read is reported rather than dropped.
 const READ_WAIT: Duration = Duration::from_secs(2);
+
+/// How long the read before a connection's first connect may take.
+const FIRST_READ_WAIT: Duration = Duration::from_secs(10);
 
 /// A file reread on every connect, with at most one read in flight.
 ///
@@ -278,9 +324,18 @@ impl SecretFile {
     /// The file's contents as `parse` reads them, or the last contents that
     /// parsed while the file stalls, fails to read, or does not parse.
     async fn read<T>(&self, what: &str, parse: fn(&str) -> anyhow::Result<T>) -> anyhow::Result<T> {
+        self.read_within(READ_WAIT, what, parse).await
+    }
+
+    async fn read_within<T>(
+        &self,
+        wait: Duration,
+        what: &str,
+        parse: fn(&str) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
         let mut guard = self.state.lock().await;
         let state = &mut *guard;
-        let failure = match self.wait(state).await {
+        let failure = match self.wait(state, wait).await {
             Ok(Some(contents)) => match parse(&contents) {
                 Ok(value) => {
                     state.last_read = Some(contents);
@@ -306,15 +361,19 @@ impl SecretFile {
     }
 
     /// The pending read's result, starting one if none is in flight, or
-    /// `None` while it is still stalled after [`READ_WAIT`].
-    async fn wait(&self, state: &mut ReadState) -> anyhow::Result<Option<Zeroizing<String>>> {
+    /// `None` while it is still stalled after `wait`.
+    async fn wait(
+        &self,
+        state: &mut ReadState,
+        wait: Duration,
+    ) -> anyhow::Result<Option<Zeroizing<String>>> {
         let pending = match &mut state.pending {
             Some(pending) => pending,
             None => state.pending.insert(
                 PendingRead::start(self.path.clone()).context("failed to start the file reader")?,
             ),
         };
-        let Ok(read) = tokio::time::timeout(READ_WAIT, &mut pending.result).await else {
+        let Ok(read) = tokio::time::timeout(wait, &mut pending.result).await else {
             return Ok(None);
         };
         state.pending = None;
@@ -333,6 +392,17 @@ async fn read_file<T>(
         Some(file) => file.read(what, parse).await.map(Some),
         None => Ok(None),
     }
+}
+
+async fn prime<T>(
+    file: Option<&SecretFile>,
+    what: &str,
+    parse: fn(&str) -> anyhow::Result<T>,
+) -> anyhow::Result<()> {
+    if let Some(file) = file {
+        file.read_within(FIRST_READ_WAIT, what, parse).await?;
+    }
+    Ok(())
 }
 
 /// A `.creds` file's user JWT, and the key that signs for it.
@@ -414,6 +484,42 @@ pub(crate) mod tests {
              -----BEGIN USER NKEY SEED-----\n{seed}\n------END USER NKEY SEED------\n\n\
              *************************************************************\n"
         )
+    }
+
+    /// Answer one connection's handshake with `nonce` and hand back the
+    /// `CONNECT` it sent, then close it so the client has to reconnect.
+    pub(crate) async fn accept_connect(
+        listener: &tokio::net::TcpListener,
+        nonce: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+            let (socket, _) = listener.accept().await?;
+            let (reader, mut writer) = socket.into_split();
+            writer
+                .write_all(
+                    format!(
+                        "INFO {{\"max_payload\":1048576,\"auth_required\":true,\"nonce\":\"{nonce}\"}}\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await?;
+            let mut reader = BufReader::new(reader);
+            let mut connect = None;
+            loop {
+                let mut line = String::new();
+                anyhow::ensure!(reader.read_line(&mut line).await? > 0, "closed before PING");
+                if let Some(json) = line.strip_prefix("CONNECT ") {
+                    connect = Some(serde_json::from_str(json.trim())?);
+                } else if line.starts_with("PING") {
+                    writer.write_all(b"PONG\r\n").await?;
+                    break;
+                }
+            }
+            connect.context("no CONNECT before PING")
+        })
+        .await
+        .context("NATS handshake timed out")?
     }
 
     fn file(path: &Path) -> Option<Secret> {
@@ -556,6 +662,39 @@ pub(crate) mod tests {
         assert_eq!(*file.read("token", secret_line).await?, "second");
         writer.await??;
         assert_eq!(pending(&file), None);
+        Ok(())
+    }
+
+    /// The read before the first connect outlasts a connect's own read, and
+    /// leaves contents for a connect whose read then stalls.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn priming_waits_out_a_slow_first_read() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("token");
+        anyhow::ensure!(
+            std::process::Command::new("mkfifo")
+                .arg(&path)
+                .status()?
+                .success()
+        );
+        let presenter = Presenter::new(Credentials {
+            token: file(&path),
+            ..Default::default()
+        })?;
+        let slow = READ_WAIT + Duration::from_secs(1);
+        let writer = tokio::task::spawn_blocking({
+            let path = path.clone();
+            move || {
+                std::thread::sleep(slow);
+                std::fs::write(path, "primed")
+            }
+        });
+        presenter.prime().await?;
+        writer.await??;
+
+        let presented = presenter.present(b"nonce").await?;
+        assert_eq!(presented.token.as_deref(), Some("primed"));
         Ok(())
     }
 
