@@ -393,8 +393,8 @@ async fn kv_api_probe(spec: &str) -> Result<String, NatsError> {
             )
             .await
             .map(|r| r.to_string()),
-        "delete-if" => bucket
-            .delete_if(parts[2].to_string(), parts[3].parse().unwrap())
+        "delete-by-revision" => bucket
+            .delete_by_revision(parts[2].to_string(), parts[3].parse().unwrap())
             .await
             .map(|()| "ok".to_string()),
         _ => panic!("unknown KV probe"),

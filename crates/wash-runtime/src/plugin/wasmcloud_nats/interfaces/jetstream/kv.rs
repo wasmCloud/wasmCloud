@@ -43,6 +43,16 @@ fn message_ttl_seconds(ttl_ms: u64) -> Option<u64> {
     (ttl_ms >= 1_000 && seconds <= i64::MAX as u64 / 1_000_000_000).then_some(seconds)
 }
 
+/// KV keys use ASCII letters, digits, and `-/_=.`, with no leading or trailing dot.
+fn is_valid_key(key: &str) -> bool {
+    !key.is_empty()
+        && !key.starts_with('.')
+        && !key.ends_with('.')
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-/_=.".contains(&b))
+}
+
 /// Refuses a `keys` filter that could not be a KV subject pattern.
 ///
 /// It is concatenated onto the bucket's subject prefix, so an empty token or
@@ -478,13 +488,7 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
                     .to_string(),
             )));
         };
-        if key.is_empty()
-            || key.starts_with('.')
-            || key.ends_with('.')
-            || !key
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"-/_=.".contains(&b))
-        {
+        if !is_valid_key(&key) {
             return Ok(Err(types::NatsError::Jetstream(
                 "invalid KV key".to_string(),
             )));
@@ -554,18 +558,16 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
         }
     }
 
-    async fn delete_if(
+    async fn delete_by_revision(
         accessor: &Accessor<T, Self>,
         rep: Resource<BucketHandle>,
         key: String,
         expected_revision: u64,
     ) -> wasmtime::Result<Result<(), types::NatsError>> {
-        // Revisions start at 1, so zero is not a revision a guest could have
-        // read. Sent to the server as the expected last sequence it would
-        // succeed on an absent key and tombstone one that was never written.
+        // Revision zero must not create a tombstone for an absent key.
         if expected_revision == 0 {
             return Ok(Err(types::NatsError::Jetstream(
-                "delete-if requires an expected revision of at least 1".to_string(),
+                "delete-by-revision requires an expected revision of at least 1".to_string(),
             )));
         }
         let store = accessor.with(|mut a| store_ref(&mut a, &rep))?;
@@ -582,10 +584,18 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
                     Ok(entry) => Ok(Err(types::NatsError::RevisionMismatch(
                         entry.map_or(0, |e| e.revision),
                     ))),
-                    Err(_) => Ok(Err(kv_err("kv delete-if failed", chain_timed_out(&e), e))),
+                    Err(_) => Ok(Err(kv_err(
+                        "kv delete-by-revision failed",
+                        chain_timed_out(&e),
+                        e,
+                    ))),
                 }
             }
-            Err(e) => Ok(Err(kv_err("kv delete-if failed", chain_timed_out(&e), e))),
+            Err(e) => Ok(Err(kv_err(
+                "kv delete-by-revision failed",
+                chain_timed_out(&e),
+                e,
+            ))),
         }
     }
 
