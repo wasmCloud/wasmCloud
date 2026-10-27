@@ -3107,12 +3107,10 @@ mod tests {
         let token = dir.path().join("token");
         std::fs::write(&token, "first")?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let options = NatsAuth {
-            token_file: Some(token.clone()),
-            ..Default::default()
-        }
-        .into_connect_options()?
-        .custom_inbox_prefix("agent.inbox");
+        let options = NatsAuth::default()
+            .with_token_file(&token)
+            .into_connect_options()?
+            .custom_inbox_prefix("agent.inbox");
 
         let (first, client) = tokio::try_join!(accept_connect(&listener, "first-nonce"), async {
             options
