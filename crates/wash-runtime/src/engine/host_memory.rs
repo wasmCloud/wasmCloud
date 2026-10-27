@@ -166,21 +166,26 @@ fn derived_core_instances(memories: u32) -> u32 {
 /// builder resolved from its own knobs rather than the budgets.
 pub(crate) fn core_instance_mismatch(max_memories: u32, core_instances: u32) -> Option<String> {
     let derived = derived_core_instances(max_memories);
-    // Coherent when derived in either direction: a core-instance count set
-    // alone takes the memories it fits in, rounded up, so it is rarely the
-    // exact multiple those memories derive.
-    let coherent = core_instances == derived
-        || super::memories_for_core_instances(core_instances) == max_memories;
-    (!coherent).then(|| {
-        format!(
-            "core-instances {core_instances} does not match max-memories {max_memories}, which \
-             would derive {derived} core instances at {} per memory; both are installed as \
-             given, so the pool holds {max_memories} memories and {core_instances} core \
-             instances and refuses an instantiation once either is spent. Set one and let the \
-             other derive, or set both to match",
+    if core_instances == derived {
+        return None;
+    }
+    if core_instances == max_memories {
+        return Some(format!(
+            "core-instances {core_instances} also sizes the pool's {max_memories} memories, as \
+             it did before max-memories existed, so the pool runs out of core instances at \
+             about a fifth of its memories for components of four or five core modules. Set \
+             max-memories {max_memories} instead and core instances derive at {} per memory",
             super::CORE_INSTANCES_PER_MEMORY,
-        )
-    })
+        ));
+    }
+    Some(format!(
+        "core-instances {core_instances} does not match max-memories {max_memories}, which \
+         would derive {derived} core instances at {} per memory; both are installed as \
+         given, so the pool holds {max_memories} memories and {core_instances} core \
+         instances and refuses an instantiation once either is spent. Set one and let the \
+         other derive, or set both to match",
+        super::CORE_INSTANCES_PER_MEMORY,
+    ))
 }
 
 /// Share of the detected memory limit that guest work may use. The rest is for
@@ -378,9 +383,10 @@ pub struct HostMemoryBudgets {
     /// that reserves nothing. `--core-instances`. Unset, it is
     /// [`crate::engine::CORE_INSTANCES_PER_MEMORY`] per memory, so a
     /// component made of several core modules does not fill it before the
-    /// memories run out; set alone, `max_memories` is derived from it by the
-    /// same ratio; set beside `max_memories`, both stand as given and
-    /// [`Self::core_instance_advisory`] says so when they disagree.
+    /// memories run out; set alone, `max_memories` takes the same count, so a
+    /// host configured before `max_memories` existed keeps the pool it had;
+    /// set beside `max_memories`, both stand as given.
+    /// [`Self::core_instance_advisory`] says when the two disagree.
     pub core_instances: u32,
 }
 
@@ -406,12 +412,11 @@ impl HostMemoryBudgets {
     /// Resolve the four knobs, falling back to the derived budget and to
     /// wasmtime's own defaults.
     ///
-    /// `max_memories` and `core_instances` derive from each other at
-    /// [`crate::engine::CORE_INSTANCES_PER_MEMORY`] when only one is given:
-    /// a memory count takes that many core instances per memory, and a
-    /// core-instance count the memories that many fit in. Given both, both
-    /// stand as the operator set them, whether or not they agree; see
-    /// [`Self::core_instance_advisory`].
+    /// `max_memories` alone derives `core_instances` at
+    /// [`crate::engine::CORE_INSTANCES_PER_MEMORY`] per memory.
+    /// `core_instances` alone also sets `max_memories` to the same count, the
+    /// pool it sized before `max_memories` existed. Given both, both stand as
+    /// the operator set them; see [`Self::core_instance_advisory`].
     ///
     /// # Errors
     ///
@@ -445,7 +450,7 @@ impl HostMemoryBudgets {
                 WASMTIME_DEFAULT_MAX_CORE_INSTANCES,
             ),
             (Some(memories), None) => (memories, derived_core_instances(memories)),
-            (None, Some(core)) => (super::memories_for_core_instances(core), core),
+            (None, Some(core)) => (core, core),
             (Some(memories), Some(core)) => (memories, core),
         };
         Ok(Self {
@@ -1475,26 +1480,17 @@ mod tests {
         assert_eq!(memories.max_memories, 100);
         assert_eq!(memories.core_instances, 100 * per);
         assert!(memories.core_instance_advisory().is_none());
-        // Core instances alone take the memories they fit in, rounded up and
-        // never zero: the flag keeps meaning core instances, and the pool is
-        // sized to run that many of the usual shape.
-        let cores = HostMemoryBudgets::resolve(None, None, None, Some(100 * per + 1)).unwrap();
-        assert_eq!(cores.core_instances, 100 * per + 1);
-        assert_eq!(cores.max_memories, 101);
-        assert!(cores.core_instance_advisory().is_none());
-        assert_eq!(
-            HostMemoryBudgets::resolve(None, None, None, Some(1))
-                .unwrap()
-                .max_memories,
-            1
-        );
-        // Both set: both stand, and a mismatch is said, with both numbers. A
-        // pair that derives either way is not a mismatch.
+        // Core instances alone size the memories to the same count, the pool
+        // they sized before max-memories existed, and say how to move off it.
+        let cores = HostMemoryBudgets::resolve(None, None, None, Some(200)).unwrap();
+        assert_eq!((cores.max_memories, cores.core_instances), (200, 200));
+        let advisory = cores
+            .core_instance_advisory()
+            .expect("core instances alone run out before the memories");
+        assert!(advisory.contains("max-memories 200"), "{advisory}");
+        // Both set: both stand, and a mismatch is said, with both numbers.
         let both = HostMemoryBudgets::resolve(None, None, Some(100), Some(100 * per)).unwrap();
         assert!(both.core_instance_advisory().is_none());
-        let rounded =
-            HostMemoryBudgets::resolve(None, None, Some(101), Some(100 * per + 1)).unwrap();
-        assert!(rounded.core_instance_advisory().is_none());
         let apart = HostMemoryBudgets::resolve(None, None, Some(100), Some(500)).unwrap();
         assert_eq!((apart.max_memories, apart.core_instances), (100, 500));
         let advisory = apart

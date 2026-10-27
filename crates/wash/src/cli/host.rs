@@ -445,8 +445,8 @@ pub struct HostCommand {
     /// GC heaps it admits, one count for all: a component instance of the
     /// usual shape takes one of each.
     ///
-    /// Unset, this is wasmtime's default of 1000, or the memories
-    /// `--core-instances` fits in when only that is given. Multiplied by one
+    /// Unset, this is wasmtime's default of 1000, or the `--core-instances`
+    /// count when only that is given. Multiplied by one
     /// memory's reservation (4 GiB plus a 32 MiB guard, whatever
     /// `--default-heap-memory` is) it is the pool's address-space reservation,
     /// so it is the knob that sizes the pool. The core-instance and table
@@ -462,8 +462,9 @@ pub struct HostCommand {
     ///
     /// Unset, this is sixteen per memory of `--max-memories`, which a
     /// component of the usual shape never fills, so that the linear memories
-    /// are what a full pool runs out of first. Set alone, `--max-memories` is
-    /// the memories this many core instances fit in at the same ratio. Set
+    /// are what a full pool runs out of first. Set alone, it sizes
+    /// `--max-memories` to the same count, the pool it sized before that flag
+    /// existed, with a warning at startup to move to `--max-memories`. Set
     /// beside `--max-memories`, both are installed as given, with a warning
     /// at startup when they do not match. A core instance reserves nothing,
     /// so this is a counter, not a memory budget.

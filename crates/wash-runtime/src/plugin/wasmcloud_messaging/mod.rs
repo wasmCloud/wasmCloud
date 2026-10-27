@@ -1412,10 +1412,10 @@ impl Admission {
         let AdmissionPermit {
             component,
             host,
-            pool: _,
+            pool: stale,
             deadline,
         } = permit;
-        drop(host);
+        drop((host, stale));
         let reserve_then_readmit = async {
             let reservation = pool.reserve(cost).await?;
             let host = Arc::clone(&self.host).acquire_owned().await.ok()?;
