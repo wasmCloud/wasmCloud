@@ -2,6 +2,8 @@
 
 `scale_density` ramps HTTP workloads onto one host until something refuses
 them, and prints, beside what it served, the count each constraint predicts.
+Its messaging flavours ramp in-flight messages the same way; see
+[Messaging](#messaging).
 How to run it and every knob are in the module docs of `scale_density.rs`.
 The report is a `bench_tools::density::Report` per flavour, shared with
 `bench-scale`. In the text report, `?` means there is not enough measurement
@@ -75,6 +77,54 @@ footprint there.
   32 MiB slot each, capped at `vm.max_map_count / 5`. That is 13,106 slots
   on a default Linux. A warm workload holds four core instances, so the pool
   fits about 3,276 of them.
+
+## Messaging
+
+The `messaging` and `messaging-pooled` flavours measure how many deliveries
+one host holds in flight, not how many workloads. Each starts
+`WASH_SCALE_MSG_COMPONENTS` copies of `messaging-sleeper-p3` on the in-memory
+backend and publishes a burst `WASH_SCALE_MSG_STEP` messages larger each step,
+round-robin across them. Every delivery sleeps `WASH_SCALE_MSG_HOLD_MS`, and
+admission waits half of that, so a burst past the ceiling sheds before any
+slot it waits for comes free.
+
+| | `messaging` (`pool_size: 0`) | `messaging-pooled` (`pool_size: 4`) |
+| --- | --- | --- |
+| where a delivery runs | a store of its own, built in the receive loop | a warm instance, or a store of its own from the pooled path once all four are busy |
+| when it takes its pool cost | at admission | at admission, or when its store is built, where the runtime defers it |
+
+The host is built the way `wash host` builds one with no messaging flags: the
+stock pool, and the ceilings `MessagingLimits::resolve` derives from it.
+`WASH_SCALE_CORE_INSTANCES` does not apply. Deliveries are counted from the
+messaging plugin's own tracing: a delivery is in flight while the span it
+opens on admission is open, and the plugin's log line says whether it
+completed, failed, or was shed.
+
+Each step records:
+
+| Column | Meaning |
+| --- | --- |
+| offered | messages published in the burst |
+| in flight | the most deliveries admitted and not yet finished at once |
+| completed, shed, failed | how the burst ended; a message not published, or neither completed nor shed by the end of the step, counts as failed |
+| footprint, guest mem, memories, core inst | the highest readings while the burst was in flight |
+| refused | instantiations the pool refused, plus anything the memory guard or guest budget refused |
+
+The run stops at the first burst that is not clean, and names why:
+
+- **pool refused**: the pool refused an instantiation, with the count shed at
+  admission in the same burst. A pool refusal here means admission let in more
+  than the pool could build.
+- **admission shed**: admission shed messages and the pool refused nothing.
+  The in-flight count is the ceiling that held.
+- the memory guard, the guest budget, a publish or a delivery failing,
+  `WASH_SCALE_MSG_MAX` or the time budget.
+
+Its limits are message counts: the host ceiling, the per-component ceiling
+times the components, and the pool's linear memories, since every delivery
+holds at least one. The published figures are `served_in_flight` (in flight
+at the last clean step), `peak_in_flight` (at any step),
+`baseline_footprint_bytes` and `served_footprint_bytes`.
 
 ## The memory guard
 
