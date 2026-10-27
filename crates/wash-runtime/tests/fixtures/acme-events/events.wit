@@ -8,7 +8,7 @@ package acme:events@0.1.0;
 interface handler {
     /// The host's failure type, so a call it could not complete comes back as a
     /// value rather than trapping the plugin that made it.
-    use wasmcloud:host/types@0.1.4.{call-error};
+    use wasmcloud:host/types@0.1.5.{call-error};
 
     /// Handle one event. Exported by a workload; called by the plugin across
     /// the store boundary. The reply carries the handling workload's own tag,
@@ -46,7 +46,7 @@ interface metrics {
 /// Only the service fixture exports it. The component fixture beside it does
 /// not, which keeps the two shapes of callee distinguishable in one workload.
 interface bulk {
-    use wasmcloud:host/types@0.1.4.{call-error};
+    use wasmcloud:host/types@0.1.5.{call-error};
 
     /// Drain a stream the plugin opened and answer how many bytes it carried:
     /// the argument direction, pumped out of the plugin's store and into the

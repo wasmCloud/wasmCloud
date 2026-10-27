@@ -353,7 +353,9 @@ impl WorkloadFailureSink {
 ///
 /// Served by the plugin the reference names ([`HostPlugin::secret_resolver`]).
 /// The lookup is made as the host, not as any workload, so a backend scopes it
-/// to its host-level secrets rather than to the binding workload's.
+/// to its host-level secrets rather than to the binding workload's. A component
+/// plugin recognizes it by `wasmcloud:host/identity#is-host-call`, never by an
+/// empty workload id.
 #[async_trait::async_trait]
 pub trait SecretResolver: Send + Sync {
     /// The host-level value at `key`, or `None` when there is no such key.
