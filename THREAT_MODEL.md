@@ -56,15 +56,19 @@ The wasmtime sandbox, plus the interfaces the host links into it. A component ho
 - **Malformed binaries.** A component arrives as untrusted bytes. The host validates, compiles and instantiates it, and may refuse it, but no binary may crash the host or corrupt its memory.
 - **Resource use.** A component consumes CPU, memory, connections, file descriptors, instance slots and scratch disk. Memory, connections and file descriptors have per-workload and host-wide limits; CPU, instance slots and scratch size do not yet (see [Known limitations](#known-limitations)).
 
-### 2. Workload ↔ workload
+### 2. Component ↔ component (within a workload)
+
+A workload's components and service share one spec author, so they are one tenant. Each component is its own instance with its own memory, environment, config, `allowedHosts` and plugin identity. Components reach each other only through WIT interfaces: an import links to the one component in the workload that exports it, or to the one its `(implements <label>)` names. They share the workload's loopback network, where the service listens, its connection allowance, and its outbound HTTP connection pool.
+
+### 3. Workload ↔ workload
 
 Each workload has its own stores, memory and virtual network: `127.0.0.1` inside a workload reaches only that workload. Workloads interact only through interfaces the host links between them.
 
-### 3. Workload ↔ plugin
+### 4. Workload ↔ plugin
 
 The host asserts the caller's workload identity to the plugin, and a guest cannot set or forge it. A plugin must authorize on that identity, never on an identity passed in a call's arguments.
 
-### 4. Workload ↔ network (through the host)
+### 5. Workload ↔ network (through the host)
 
 Egress a workload originates is limited by its `allowedHosts` and by the host's address policy. Ingress reaches only the workloads that declared a route. Native plugins are host code: their own connections follow their configuration, not any workload's grants.
 
@@ -144,6 +148,8 @@ For example:
 - **Wasm host component plugins are shared.** A bug in one is a cross-tenant bug. A plugin that fails restarts, but calls in flight at the time are lost.
 - **Guest output reaches host logs.** Treat log content written by a guest as untrusted.
 - **Workload IDs come from the control plane.** The host relies on each being unique. Reusing an ID would let a new workload inherit the old one's pooled connections.
+- **Linked components see each other's volume mounts.** Components linked into one call share a store, and each gets every mount in it (goal 2).
+- **Concurrent linked calls can use a sibling's grants.** Two linked calls in flight on one store can judge a host call under the wrong component's environment, `allowedHosts`, config, secrets or plugin identity (goal 2).
 
 ## Operator responsibilities
 
