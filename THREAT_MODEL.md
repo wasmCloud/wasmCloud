@@ -62,9 +62,9 @@ Each workload has its own stores, memory and virtual network: `127.0.0.1` inside
 
 The host asserts the caller's workload identity to the plugin, and a guest cannot set or forge it. A plugin must authorize on that identity, never on an identity passed in a call's arguments.
 
-### 4. Host ↔ network
+### 4. Workload ↔ network (through the host)
 
-Egress is limited by the workload's `allowedHosts` and by the host's address policy. Ingress reaches only the workloads that declared a route.
+Egress a workload originates is limited by its `allowedHosts` and by the host's address policy. Ingress reaches only the workloads that declared a route. Native plugins are host code: their own connections follow their configuration, not any workload's grants.
 
 Every peer is untrusted, in both directions. The host parses HTTP, TLS, NATS and OCI registry traffic from peers, and no malformed request or response may crash it or corrupt its memory. Request, response and message bodies pass to the component unparsed; how it handles their content (XML, JSON or anything else) is its own concern, confined to its sandbox.
 
